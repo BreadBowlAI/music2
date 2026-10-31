@@ -69,8 +69,8 @@ crate::api::routes! {
         "End a knob drag without saving, so the code's value plays again",
         r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
     POST "/api/graph/set" => graph_set; writes, agents,
-        "Write a knob's value into the code, as one undo step (for an agent, never a drag's commit)",
-        r#"{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}"#;
+        "Write a knob's value, or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step (for an agent, never a drag's commit)",
+        r#"{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}"#;
     GET "/api/graph/leases" => graph_leases; reads, agents,
         "The drags in progress: knobs, clips and the tempo",
         r#"{}"#;
@@ -433,16 +433,18 @@ struct SetReq {
     revision: u64,
     id: String,
     gesture: String,
-    value: f64,
+    /// A knob's number, or a setting's value: a number, a string or a boolean (CARD-4).
+    value: Value,
     #[serde(default)]
-    expect: Option<f64>,
+    expect: Option<Value>,
 }
 
-/// Commit a value: the gesture's lease when it has one, else a plain value edit. While the draft
-/// doesn't compile a gesture's commit is pending: `{"pending": true, "errors": …}` (C5).
+/// Commit a value: the gesture's lease when it has one, else a plain value edit; a setting's value
+/// is one Tx on its call (CARD-4). While the draft doesn't compile a gesture's commit is pending:
+/// `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
+    let result = blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -50,6 +50,7 @@ pub mod fpenv;
 pub mod gauge;
 mod keep;
 pub mod latency;
+pub(crate) mod limit;
 mod offline;
 mod overlay;
 pub mod packages;
@@ -80,6 +81,7 @@ pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
+pub use limit::TooSlow;
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet, View};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
@@ -105,6 +107,44 @@ pub const BLOCK: usize = 128;
 
 /// Bytes of one kernel port buffer: `PORT_CHANNELS` (2) channels of [`BLOCK`] floats.
 pub(crate) const PORT_BYTES: usize = 2 * BLOCK * 4;
+
+/// An events input's header, `{count, cap, events}` and 4 bytes to keep its events 16-aligned, and
+/// the bytes of one event (`docs/kernel-abi.md`).
+pub(crate) const NOTES_HEAD: usize = 16;
+pub(crate) const EVENT_BYTES: usize = 24;
+
+/// The events a kernel's `events<note>` input holds in one block (ABI-8): all its lane's buffer can
+/// bring, so none is ever left out. A lane's own room; twice that through a note delay, whose buffer
+/// holds the notes of two blocks (RENDER-18).
+pub(crate) fn events_room(caps: Caps, late: bool) -> usize {
+    note_delay_room(caps) * if late { 2 } else { 1 }
+}
+
+/// What an `events<note>` input of a kernel reads (ABI-8): its place among the inputs, its lane
+/// (module and key), and the note delay it reads that lane through, with its length, when it is late
+/// (RENDER-18).
+pub(crate) type EventsSource<'a> = (usize, &'a str, &'a str, Option<(usize, u32)>);
+
+/// What each `events<note>` input of kernel node `n` reads.
+pub(crate) fn events_sources<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Vec<EventsSource<'a>> {
+    let FOp::Kernel { kernel, inputs, .. } = &n.op else { return vec![] };
+    let Some(sig) = m2_ir::Kernels::kernel(packages, kernel) else { return vec![] };
+    let mut found = vec![];
+    for (i, (port, input)) in sig.inputs.iter().zip(inputs).enumerate() {
+        let Input::Port { src, .. } = input else { continue };
+        if !matches!(port.kind, m2_ir::PortKind::Events(_)) {
+            continue;
+        }
+        let (lane, late) = match nodes.get(src.node).map(|x| &x.op) {
+            Some(FOp::NoteDelay { lane, frames }) => (*lane, Some((src.node, *frames))),
+            _ => (src.node, None),
+        };
+        if let Some(FOp::Lane { module, lane, .. }) = nodes.get(lane).map(|x| &x.op) {
+            found.push((i, module.as_str(), lane.as_str(), late));
+        }
+    }
+    found
+}
 
 /// A node's version when its output must be copied into the kernels it feeds at every call: it
 /// isn't a constant, or it is a cell that ramps this block.
@@ -241,6 +281,38 @@ struct KernelNode {
     seen: Vec<u64>,
     /// Empty only while its instance moves between plans: it plays silence then.
     inst: Option<Box<KernelInst>>,
+    /// Its `events<note>` inputs (ABI-8).
+    notes: Vec<NotesIn>,
+}
+
+/// One `events<note>` input of a kernel (ABI-8): its place among the inputs, its lane's slot with
+/// the note delay it reads that lane through when it is late (RENDER-18), none for a ghost, which
+/// reads no notes; and its room, all its source's buffer holds.
+struct NotesIn {
+    input: usize,
+    from: Option<(usize, Option<usize>)>,
+    room: usize,
+}
+
+/// Write this block's events into each events input's memory, from `p`: the count, then the events,
+/// in order. Each input has room for all its lane's (or note delay's) buffer holds, so none is left
+/// out (ABI-8). Never allocates.
+fn give(ins: &[NotesIn], r: &impl Reads, lanes: &[LaneSlot], p: &mut Ports) {
+    for NotesIn { input, from, room } in ins {
+        let events = match *from {
+            Some((_, Some(d))) => r.events(d),
+            Some((slot, None)) => lanes[slot].events(),
+            None => &[],
+        };
+        debug_assert!(events.len() <= *room, "an events input smaller than its lane's buffer");
+        let events = &events[..events.len().min(*room)];
+        let head = p.ins[*input];
+        for (k, e) in events.iter().enumerate() {
+            let at = head + NOTES_HEAD + k * EVENT_BYTES;
+            p.data[at..at + EVENT_BYTES].copy_from_slice(bytemuck::cast_slice(&e.words()));
+        }
+        p.data[head..head + 4].copy_from_slice(&(events.len() as u32).to_le_bytes());
+    }
 }
 
 /// The channel count of each port of kernel `sig` in node `n`, inputs first, as its port table has
@@ -257,10 +329,11 @@ fn port_channels(sig: &m2_ir::KernelSig, n: &FNode, channels: u8, inputs: &[Inpu
 
 impl KernelInst {
     /// Kernel `k` for node `n` outside an instrument, in a sandbox of its own: born, and sealed.
-    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+    /// Each call into it may run as `deadline` says (ABI-6).
+    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64, deadline: limit::Deadline) -> Result<KernelInst> {
         let id = k.id;
         let (module, prefix, _) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let mut sandbox = Sandbox::new(&packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+        let mut sandbox = Sandbox::new(module, deadline).with_context(|| format!("{}: `{id}`", n.name))?;
         let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, k, shape)?;
         sandbox.seal().with_context(|| n.name.clone())?;
         k.own = Some(sandbox);
@@ -291,12 +364,13 @@ impl KernelInst {
             values: k.values,
             assets: k.assets,
             offline: None,
+            notes: k.notes,
         };
         let state = match sandbox.state(prefix, &spec) {
             Ok(s) => s,
             Err(e) => {
                 let e = sandbox.ran_out(&n.name, e);
-                return Err(if e.is::<OutOfMemory>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
+                return Err(if e.is::<OutOfMemory>() || e.is::<TooSlow>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
             }
         };
         // Unconnected and constant inputs are written once; kernels never write inputs.
@@ -309,6 +383,8 @@ impl KernelInst {
         #[cfg(debug_assertions)]
         let names: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
         LIVE_KERNELS.fetch_add(1, Ordering::Relaxed);
+        #[cfg(debug_assertions)]
+        let in_bytes: usize = state.in_len.iter().sum();
         Ok(KernelInst {
             own: None,
             at,
@@ -318,7 +394,7 @@ impl KernelInst {
             name: n.name.clone(),
             out_channels: n.outputs.iter().map(|k| k.channels()).collect(),
             #[cfg(debug_assertions)]
-            before: vec![0; n_in * PORT_BYTES],
+            before: vec![0; in_bytes],
             #[cfg(debug_assertions)]
             kernel: id.to_string(),
             #[cfg(debug_assertions)]
@@ -399,8 +475,10 @@ impl KernelInst {
         let mut before = std::mem::take(&mut self.before);
         let (sb, state) = self.sandbox(pool);
         let data = sb.bytes();
-        for (k, &ptr) in state.ins.iter().enumerate() {
-            before[k * PORT_BYTES..(k + 1) * PORT_BYTES].copy_from_slice(&data[ptr..ptr + PORT_BYTES]);
+        let mut at = 0;
+        for (&ptr, &len) in state.ins.iter().zip(&state.in_len) {
+            before[at..at + len].copy_from_slice(&data[ptr..ptr + len]);
+            at += len;
         }
         self.before = before;
     }
@@ -410,8 +488,11 @@ impl KernelInst {
         let before = std::mem::take(&mut self.before);
         let (sb, state) = self.sandbox(pool);
         let data = sb.bytes();
-        let changed =
-            state.ins.iter().enumerate().position(|(k, &ptr)| data[ptr..ptr + PORT_BYTES] != before[k * PORT_BYTES..(k + 1) * PORT_BYTES]);
+        let mut at = 0;
+        let changed = state.ins.iter().zip(&state.in_len).position(|(&ptr, &len)| {
+            at += len;
+            data[ptr..ptr + len] != before[at - len..at]
+        });
         self.before = before;
         if let Some(k) = changed {
             let (kernel, port) = (&self.kernel, &self.in_names[k]);
@@ -429,7 +510,7 @@ impl KernelInst {
 impl KernelNode {
     /// Frames `seg` of block `b`: its inputs copied into its memory as they change, the call, and
     /// its outputs copied out. Never allocates.
-    fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf], pool: &mut [Sandbox]) -> Result<()> {
+    fn process(&mut self, b: &Block, seg: Seg, r: &impl Reads, out: &mut [Buf], pool: &mut [Sandbox], lanes: &[LaneSlot]) -> Result<()> {
         let n = seg.n;
         let Some(k) = self.inst.as_deref_mut().filter(|k| !k.stopped) else {
             for o in out.iter_mut() {
@@ -439,8 +520,12 @@ impl KernelNode {
             }
             return Ok(());
         };
-        let p = k.ports(pool);
-        for ((inp, &ptr), seen) in self.inputs.iter().zip(p.ins).zip(&mut self.seen) {
+        let mut p = k.ports(pool);
+        give(&self.notes, r, lanes, &mut p);
+        for (i, ((inp, &ptr), seen)) in self.inputs.iter().zip(p.ins).zip(&mut self.seen).enumerate() {
+            if self.notes.iter().any(|x| x.input == i) {
+                continue;
+            }
             if let Input::Port { src, src_channels, channels } = inp {
                 let s = r.buf(src.node, src.port);
                 // A steady constant is written over the whole block, once per value, so every
@@ -484,6 +569,33 @@ struct VoiceNote {
     velocity: f32,
     on: u64,
     off: u64,
+    /// Its key's count in its lane, itself included (RENDER-39).
+    count: u32,
+    /// Its Off came while its lane's pedal was down: held until the pedal lifts (RENDER-38).
+    held: bool,
+}
+
+impl poly::Pedalled for VoiceNote {
+    fn id(&self) -> u32 {
+        self.id
+    }
+
+    fn pitch(&self) -> f32 {
+        self.pitch
+    }
+
+    /// Never later than an end it has: a lift never opens an ended note's gate again.
+    fn end(&mut self, at: u64) {
+        self.off = self.off.min(at);
+    }
+
+    fn ended(&self) -> bool {
+        self.off != u64::MAX
+    }
+
+    fn held(&mut self) -> &mut bool {
+        &mut self.held
+    }
 }
 
 /// What a voice's note fields read: its note, or in a one-note poly (`"mono"`, `"legato"`) the
@@ -527,6 +639,10 @@ struct VoicePool {
     mono: Option<Box<poly::Mono>>,
     /// Its lane's pitch wheel and mod wheel, as the lane last sent them: reset with the pool.
     wheels: poly::Wheels,
+    /// How many notes have started on each key of its lane (RENDER-39): reset with the pool.
+    keys: Box<poly::KeyCounts>,
+    /// Its lane's sustain pedal is down (RENDER-38): reset with the pool.
+    pedal: bool,
     /// Its voices' kernel states, one sandbox for each package they use (RENDER-32): born with the
     /// pool, sealed, and dropped with it.
     sandboxes: Vec<Sandbox>,
@@ -581,6 +697,9 @@ struct PluginNode {
     /// next call: it replaced a node at an activation (a ghost), or was rewired to another lane
     /// (RENDER-26a). As big as `keys`, or as the node it took the instance from could hold.
     release: Vec<(u32, i16)>,
+    /// With `release`, the wheels and the pedal its old lane moved go back to rest: its new lane
+    /// sends its own (RENDER-26a, RENDER-37).
+    rest: bool,
     /// (parameter id, input, value last sent).
     params: Vec<(u32, Input, Option<f32>)>,
     /// Beside each parameter: whether a lane or a cable drives it (a gesture latches it, MON-6),
@@ -646,7 +765,7 @@ const OUT_EVENTS: usize = 256;
 #[allow(clippy::too_many_arguments)]
 fn plugin_events(
     ended: &[(u32, i16)],
-    release: &[(u32, i16)],
+    (release, rest): (&[(u32, i16)], bool),
     again: Option<&sched::NoteScheduler>,
     notes: &[Event],
     next: &mut usize,
@@ -670,6 +789,13 @@ fn plugin_events(
     for &(id, key) in release {
         out.push(P::NoteOff { time: 0, id: id as i32, key });
         (offs, last) = (offs + 1, Some(0));
+    }
+    // And the old lane's wheels and pedal at rest, so a pedal its old lane held down holds nothing
+    // now (RENDER-26a, RENDER-37): the new lane sends its own after.
+    if rest {
+        for bytes in [[0xE0, 0, 0x40], [0xB0, 1, 0], [0xB0, 64, 0]] {
+            out.push(P::Midi { time: 0, bytes });
+        }
     }
     // Back from an export, which ended them (RENDER-1): the notes the song still holds start
     // again, with their own ids, so their Offs end them. One the lane let go at this block line,
@@ -809,7 +935,7 @@ impl PluginNode {
         };
         for (ri, run) in runs.iter().enumerate() {
             let (lo, hi) = (run.off as usize, (run.off + run.n) as usize);
-            let (ended, release) = if ri == 0 { (&self.ended[..], &self.release[..]) } else { (&[][..], &[][..]) };
+            let (ended, release) = if ri == 0 { (&self.ended[..], (&self.release[..], self.rest)) } else { (&[][..], (&[][..], false)) };
             let (offs, last) = plugin_events(
                 ended,
                 release,
@@ -884,6 +1010,7 @@ impl PluginNode {
             if ri == 0 {
                 self.ended.clear();
                 self.release.clear();
+                self.rest = false;
             }
             if b.live {
                 heard(&self.out, &mut self.params, &mut self.over, &self.driven, inst, quiet);
@@ -1068,10 +1195,30 @@ impl Exec {
         }
     }
 
+    /// Whether a call into its box ran past its deadline: it is called no more in this plan (ABI-7).
+    fn stuck(&self) -> bool {
+        match self {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.own.as_ref().is_some_and(Sandbox::stuck),
+            Exec::Poly(p) => p.pool.as_ref().is_some_and(|p| p.sandboxes.iter().any(Sandbox::stuck)),
+            _ => false,
+        }
+    }
+
+    /// Mark its box stopped, or playing again; one playing again may be called again (ABI-7).
     fn set_stopped(&mut self, stopped: bool) {
         match self {
-            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.stopped = stopped,
-            Exec::Poly(p) => p.pool.iter_mut().for_each(|p| p.stopped = stopped),
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => {
+                k.stopped = stopped;
+                if !stopped {
+                    k.own.iter_mut().for_each(Sandbox::unstick);
+                }
+            }
+            Exec::Poly(p) => p.pool.iter_mut().for_each(|p| {
+                p.stopped = stopped;
+                if !stopped {
+                    p.sandboxes.iter_mut().for_each(Sandbox::unstick);
+                }
+            }),
             _ => {}
         }
     }
@@ -1141,6 +1288,12 @@ struct Graph {
     poisoned: Vec<bool>,
 }
 
+/// The top-level node of `flat` whose box node `name` is: itself, or the instrument whose voice it
+/// is in.
+fn box_of(flat: &Flat, name: &str) -> Option<usize> {
+    flat.nodes.iter().position(|n| n.name == name || matches!(&n.op, FOp::Poly { voice, .. } if voice.nodes.iter().any(|v| v.name == name)))
+}
+
 /// The sandboxes a renderer of `flat` holds, its top-level nodes `used` (RENDER-32): one for each
 /// kernel outside an instrument, and one for each package an instrument's voices run kernels of.
 fn sandboxes(flat: &Flat, used: &[bool], packages: &PackageSet) -> usize {
@@ -1197,6 +1350,8 @@ struct Kernel<'a> {
     values: &'a [f64],
     assets: &'a [Option<sandbox::Held>],
     sample_rate: f64,
+    /// Its `events<note>` inputs, by place, and the events each holds (ABI-8).
+    notes: &'a [(usize, usize)],
 }
 
 /// What a node's box is made of.
@@ -1213,6 +1368,21 @@ enum Make {
 type Boxed<'a> = &'a dyn Fn(usize) -> Make;
 
 impl Builder<'_> {
+    /// How long each call into the sandboxes it makes may run (ABI-6): a plan for the live engine
+    /// (realtime) has the live limit once it plays.
+    fn deadline(&self) -> limit::Deadline {
+        self.packages.limits.of(self.mode == m2_plugins::RenderMode::Realtime)
+    }
+
+    /// A new box of shape `shape` may be made: not when one of that shape got stuck being born
+    /// before, which is refused at once, in the same words (ABI-7).
+    fn unstuck(&self, shape: u64) -> Result<()> {
+        match self.packages.stuck.get(shape) {
+            Some(slow) => Err(slow.into()),
+            None => Ok(()),
+        }
+    }
+
     fn slot(&self, module: &str, lane: &str) -> Result<usize> {
         self.slots.iter().position(|r| r.module == module && r.lane == lane).with_context(|| format!("lane {module}/{lane} has no slot"))
     }
@@ -1270,13 +1440,19 @@ impl Builder<'_> {
             FOp::Const(v) => Exec::Const(*v as f32),
             FOp::Kernel { kernel, channels, inputs, assets, values } => {
                 let read: Vec<Option<sandbox::Held>> = assets.iter().map(|a| self.assets.get(a).map(sandbox::Held::Whole)).collect();
-                let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
+                let notes = self.notes_of(nodes, n, ghost)?;
+                let rooms: Vec<(usize, usize)> = notes.iter().map(|x| (x.input, x.room)).collect();
+                let k =
+                    Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate, notes: &rooms };
                 let inst = match boxed {
                     Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
-                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape)?)),
+                    Make::New(shape) => {
+                        self.unstuck(shape)?;
+                        Some(Box::new(KernelInst::new(self.packages, n, &k, shape, self.deadline())?))
+                    }
                     _ => None,
                 };
-                Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
+                Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst, notes })
             }
             FOp::Plugin { plugin, inputs, .. } if self.packages.plugin_missing(plugin) => {
                 // Typed with `in` first (see `PackageSet::bind_plugins`).
@@ -1301,6 +1477,7 @@ impl Builder<'_> {
                 };
                 let pool = match boxed {
                     Make::New(shape) => {
+                        self.unstuck(shape)?;
                         // Its voices' states are born in sandboxes of its own, sealed once all are born.
                         let outer = std::mem::take(&mut self.pool);
                         let mut built = || -> Result<Vec<VoiceSlot>> {
@@ -1324,6 +1501,8 @@ impl Builder<'_> {
                             alloc: *alloc,
                             mono,
                             wheels: poly::Wheels::default(),
+                            keys: Box::new(poly::KeyCounts::NONE),
+                            pedal: false,
                             sandboxes,
                             born: 0,
                             shape,
@@ -1362,6 +1541,20 @@ impl Builder<'_> {
         })
     }
 
+    /// Where each `events<note>` input of kernel node `n` reads its lane (ABI-8), straight or through
+    /// its note delay (RENDER-18), and its room: what that buffer holds. A ghost reads none: its
+    /// state keeps the room it was born with.
+    fn notes_of(&self, nodes: &[FNode], n: &FNode, ghost: bool) -> Result<Vec<NotesIn>> {
+        events_sources(nodes, n, self.packages)
+            .into_iter()
+            .map(|(input, module, lane, late)| {
+                let slot = self.slot(module, lane)?;
+                let room = events_room(self.caps(slot), late.is_some());
+                Ok(NotesIn { input, from: (!ghost).then_some((slot, late.map(|(d, _)| d))), room })
+            })
+            .collect()
+    }
+
     /// Kernel `k` for node `n` in a voice: its state born in the pool's sandbox for its package,
     /// made when the pool's first kernel of that package is.
     fn in_pool(&mut self, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
@@ -1370,7 +1563,7 @@ impl Builder<'_> {
         let at = match self.pool.iter().position(|(p, _)| p == package) {
             Some(at) => at,
             None => {
-                let sb = Sandbox::new(&self.packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+                let sb = Sandbox::new(module, self.deadline()).with_context(|| format!("{}: `{id}`", n.name))?;
                 self.pool.push((package.to_string(), sb));
                 self.pool.len() - 1
             }
@@ -1443,7 +1636,8 @@ impl Builder<'_> {
         let caps = notes.map_or(Caps::default(), |s| self.caps(s));
         let held = |c: Caps| c.sounding + 2 * c.ons + 8 + sched::LIVE_ROOM;
         let held = held(caps).max(room.map_or(0, held));
-        let events = caps.events() + caps.ons + 2 * sched::LIVE_ROOM + sched::WHEELS + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
+        let events =
+            caps.events() + caps.ons + 2 * sched::LIVE_ROOM + 2 * sched::WHEEL_EVENTS + (BLOCK / PARAM_STEP) * params.len() + 8 + 5 * held;
         // A call crosses to the plugin host process in shared memory, which can't grow (HOST-3).
         if events > m2_plugins::MAX_CALL_EVENTS {
             bail!(
@@ -1464,6 +1658,7 @@ impl Builder<'_> {
             keys: Vec::with_capacity(held),
             ended: Vec::with_capacity(held),
             release: Vec::with_capacity(held),
+            rest: false,
             over: vec![None; params.len()],
             quiet: 0,
             params,
@@ -1564,7 +1759,7 @@ fn continue_delays(cont: &Continues, checked: usize, l: &latency::Latency, old: 
 
 /// Note events a note delay holds per block of its length: its lane's room, live notes too.
 fn note_delay_room(caps: Caps) -> usize {
-    caps.events() + sched::LIVE_ROOM + sched::WHEELS
+    caps.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS
 }
 
 /// The verified state blob plugin node `n` loads, read: only a blob whose sidecar names its plugin
@@ -1704,7 +1899,7 @@ fn step<R: Reads>(
             }
             Ok(())
         }
-        Exec::Kernel(k) => k.process(b, seg, r, out, pool),
+        Exec::Kernel(k) => k.process(b, seg, r, out, pool, lanes),
         Exec::Poly(p) => p.process(b, r, &mut out[0], lanes),
         Exec::Plugin(p) => p.process(b, r, &mut out[0], lanes),
         Exec::Missing(input) => {
@@ -1741,6 +1936,7 @@ fn step<R: Reads>(
                         NoteField::Velocity => o.copy_from_slice(&cv.velocity[at]),
                         NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
                         NoteField::ModWheel => o.fill(wheels.wheel),
+                        NoteField::KeyCount => o.copy_from_slice(&cv.count[at]),
                     }
                 }
                 Voiced::Note(note, _) => match field {
@@ -1748,6 +1944,7 @@ fn step<R: Reads>(
                     NoteField::Velocity => o.fill(note.velocity),
                     NoteField::Pressure | NoteField::Timbre => o.fill(0.0),
                     NoteField::ModWheel => o.fill(wheels.wheel),
+                    NoteField::KeyCount => o.fill(note.count as f32),
                     NoteField::Gate => {
                         // Open from the note's On until its Off, on the engine clock (RENDER-13).
                         for (k, x) in o.iter_mut().enumerate() {
@@ -1826,8 +2023,8 @@ fn run_graph(
 /// export too, strict or not), false when a node failed, its error kept in `parts` as a
 /// [`fault::Failed`] naming the node (RENDER-1). Live, played by
 /// the [`Engine`], a node that fails stops alone (RENDER-25):
-/// it is silent from then on, what reads it reads silence, `sound.stopped` is reported for the
-/// session to tell, and the partition goes on.
+/// it is silent from then on, what reads it reads silence, `sound.stopped` (`sound.too-slow` for
+/// a call past its deadline, ABI-7) is reported for the session to tell, and the partition goes on.
 fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], report: &Reporter) -> bool {
     // Whatever ran on this thread before, this partition computes in the one mode.
     fpenv::canon();
@@ -1949,12 +2146,16 @@ impl Graph {
     }
 
     /// [`Graph::reset`] for a panic (RENDER-10, RENDER-25): a node whose reset fails stops alone,
-    /// reported through `report`, and the rest is reset all the same. Never allocates while every
-    /// reset succeeds.
+    /// reported through `report`, and the rest is reset all the same. A box that ran past its
+    /// deadline isn't called: it stays silent until the next plan (ABI-7). Never allocates while
+    /// every reset succeeds.
     fn panic(&mut self, report: &Reporter) {
         self.resets += 1;
         self.poisoned.iter_mut().for_each(|p| *p = false);
         for i in 0..self.exec.len() {
+            if self.exec[i].stuck() {
+                continue;
+            }
             // Its error allocated: this path only.
             if let Err(e) = self.reset_node(i) {
                 self.stop(i);
@@ -2017,6 +2218,7 @@ impl Graph {
                 let Some(pool) = p.pool.as_deref_mut() else { return };
                 for n in pool.voices.iter_mut().filter_map(|v| v.note.as_mut()) {
                     n.off = n.off.min(clock);
+                    n.held = false;
                 }
                 // A one-note pool's held notes are its own: dropped, so none sounds again.
                 if let Some(m) = &mut pool.mono {
@@ -2026,10 +2228,14 @@ impl Graph {
                 // them through its release).
                 if !p.ghost {
                     pool.wheels = poly::Wheels::default();
+                    // And its pedal: a pedal the old lane held down holds nothing on the new one,
+                    // which resends its own if it is down (RENDER-38).
+                    pool.pedal = false;
                 }
             }
             Exec::Plugin(p) => {
-                let PluginNode { keys, release, .. } = &mut **p;
+                let PluginNode { keys, release, rest, .. } = &mut **p;
+                *rest = true;
                 for k in keys.drain(..) {
                     if release.len() < release.capacity() {
                         release.push(k);
@@ -2071,7 +2277,8 @@ impl Graph {
 
     /// Reset every kernel once, in voices too, after its sandbox is sealed: a reset that would take
     /// memory fails here, off the audio thread, naming its node (RENDER-28). A reset leaves a state
-    /// as it was born, so nothing sounds different.
+    /// as it was born, so nothing sounds different. It runs with the birth's limit; then each
+    /// sandbox plays, with its plan's (ABI-6).
     fn prewarm(&mut self) -> Result<()> {
         self.prewarm_in(&mut [])
     }
@@ -2080,12 +2287,16 @@ impl Graph {
     fn prewarm_in(&mut self, pool: &mut [Sandbox]) -> Result<()> {
         for e in &mut self.exec {
             match e {
-                Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.prewarm(pool)?,
+                Exec::Kernel(KernelNode { inst: Some(k), .. }) => {
+                    k.prewarm(pool)?;
+                    k.own.iter_mut().for_each(Sandbox::play);
+                }
                 Exec::Poly(p) => {
                     if let Some(p) = p.pool.as_deref_mut() {
                         for v in &mut p.voices {
                             v.graph.prewarm_in(&mut p.sandboxes)?;
                         }
+                        p.sandboxes.iter_mut().for_each(Sandbox::play);
                     }
                 }
                 _ => {}
@@ -2213,6 +2424,8 @@ impl PolyNode {
                 m.reset();
             }
             pool.wheels = poly::Wheels::default();
+            *pool.keys = poly::KeyCounts::NONE;
+            pool.pedal = false;
         }
         Ok(())
     }
@@ -2232,7 +2445,7 @@ impl PolyNode {
             out.fill(0.0);
             return Ok(());
         };
-        let VoicePool { voices, born, sandboxes, alloc, mono, wheels, .. } = pool;
+        let VoicePool { voices, born, sandboxes, alloc, mono, wheels, keys, pedal, .. } = pool;
         let alloc = *alloc;
         // The lane's wheels, for the whole block: they come at its first frame (D8).
         wheels.read(events);
@@ -2260,7 +2473,7 @@ impl PolyNode {
         // voice runs every block, reset where a note starts again when `retrigger` says so.
         if let Some(m) = mono.as_deref_mut() {
             let was = m.started;
-            m.block(events, glide, alloc);
+            m.block(events, start, keys, pedal, glide, alloc);
             if !m.started {
                 return Ok(());
             }
@@ -2287,7 +2500,7 @@ impl PolyNode {
             v.note = match (m.sounding(), v.note) {
                 (Some((id, pitch, velocity)), n) => {
                     let on = n.filter(|n| n.id == id).map_or(start, |n| n.on);
-                    Some(VoiceNote { id, pitch, velocity, on, off: u64::MAX })
+                    Some(VoiceNote { id, pitch, velocity, on, off: u64::MAX, count: 0, held: false })
                 }
                 (None, Some(n)) if peak >= QUIET || v.graph.active_in(sandboxes)? => Some(VoiceNote { off: n.off.min(start), ..n }),
                 (None, _) => None,
@@ -2295,14 +2508,14 @@ impl PolyNode {
             return Ok(());
         }
 
-        // Offs for notes already in voices. A stolen note's Off finds nothing.
-        for e in events {
-            if let Event::Off { frame, id, .. } = *e
-                && let Some(n) = voices.iter_mut().find_map(|v| v.note.as_mut().filter(|n| n.id == id))
-            {
-                n.off = start + frame as u64;
+        // Offs for notes already in voices, or the pedal holds them (RENDER-38). A stolen note's Off
+        // finds nothing.
+        let was = *pedal;
+        *pedal = poly::hold(events, was, start, &mut |f: &mut dyn FnMut(&mut VoiceNote)| {
+            for n in voices.iter_mut().filter_map(|v| v.note.as_mut()) {
+                f(n);
             }
-        }
+        });
         // A note whose Off landed on this block line ends where the last block would have ended
         // it: same peak, same `active`, as nothing ran in between.
         for v in voices.iter_mut() {
@@ -2318,6 +2531,8 @@ impl PolyNode {
         plan.clear();
         for e in events {
             if let Event::On { frame, id, pitch, velocity, .. } = *e {
+                // Counted on its key whether or not a voice takes it (RENDER-39).
+                let count = keys.count(start + frame as u64, pitch);
                 let Some(slot) = poly::pick(voices, alloc.steal) else { continue };
                 if plan.len() == plan.capacity() {
                     debug_assert!(false, "more notes start than the lane holds");
@@ -2330,18 +2545,16 @@ impl PolyNode {
                 plan.push(Planned {
                     voice: slot as u16,
                     frame: frame as u16,
-                    note: VoiceNote { id, pitch, velocity, on: at, off: u64::MAX },
+                    note: VoiceNote { id, pitch, velocity, on: at, off: u64::MAX, count, held: false },
                 });
             }
         }
-        // Offs for notes that started this block.
-        for e in events {
-            if let Event::Off { frame, id, .. } = *e
-                && let Some(p) = plan.iter_mut().find(|p| p.note.id == id)
-            {
-                p.note.off = start + frame as u64;
+        // Offs for notes that started this block, or the pedal holds them.
+        poly::hold(events, was, start, &mut |f: &mut dyn FnMut(&mut VoiceNote)| {
+            for p in plan.iter_mut() {
+                f(&mut p.note);
             }
-        }
+        });
 
         for (vi, v) in voices.iter_mut().enumerate() {
             let taken = std::mem::take(&mut v.taken);
@@ -2672,13 +2885,31 @@ impl Renderer {
         let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();
         // A note delay's room is its lane's.
+        let caps_of = |module: &str, id: &str| {
+            let slot = lanes.lanes.refs.iter().position(|r| r.module == module && r.lane == id)?;
+            Some(lanes.caps.get(slot).copied().unwrap_or_default())
+        };
         for (i, n) in flat.nodes.iter().enumerate() {
             if let FOp::NoteDelay { lane, .. } = n.op
                 && let FOp::Lane { module, lane: id, .. } = &flat.nodes[lane].op
-                && let Some(slot) = lanes.lanes.refs.iter().position(|r| r.module == *module && r.lane == *id)
+                && let Some(caps) = caps_of(module, id)
             {
-                let room = note_delay_room(lanes.caps.get(slot).copied().unwrap_or_default());
-                shapes[i] = shapes[i].take().map(|s| s.with_room(room));
+                shapes[i] = shapes[i].take().map(|s| s.with_room(note_delay_room(caps)));
+            }
+        }
+        // A kernel's lanes, how late each comes and its room are its shape (ABI-8): rewired to
+        // another lane, late by another delay, or its lane outgrowing its room, it is new, and the
+        // one replaced plays out the window reading no notes (RENDER-26a).
+        for (i, n) in flat.nodes.iter().enumerate() {
+            let notes: Vec<(String, String, u32, usize)> = events_sources(&flat.nodes, n, packages)
+                .into_iter()
+                .map(|(_, module, lane, late)| {
+                    let room = events_room(caps_of(module, lane).unwrap_or_default(), late.is_some());
+                    (module.to_string(), lane.to_string(), late.map_or(0, |(_, f)| f), room)
+                })
+                .collect();
+            if !notes.is_empty() {
+                shapes[i] = shapes[i].take().map(|s| s.with_notes(notes));
             }
         }
         let blobs: Vec<Option<m2_song::Sha>> = flat.nodes.iter().map(|n| plan::blob(n, data)).collect();
@@ -2709,8 +2940,15 @@ impl Renderer {
         if needed > SANDBOX_LIMIT {
             return Err(TooManySounds { needed, limit: SANDBOX_LIMIT }.into());
         }
-        let mut graph = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room)?;
-        graph.prewarm()?;
+        let born = b.graph(&flat.nodes, &flat.order, false, &boxed, &w.room).and_then(|mut g| g.prewarm().map(|()| g));
+        // A box whose birth or prewarm ran past its limit is refused at once from now on (ABI-7).
+        if let Err(e) = &born
+            && let Some(slow) = e.downcast_ref::<TooSlow>()
+            && let Some(at) = box_of(flat, &slow.node)
+        {
+            packages.stuck.insert(shapes[at].as_ref().map_or(0, Shape::hash64), slow);
+        }
+        let mut graph = born?;
         // Ghosts, then fade nodes, after the new graph's nodes (RENDER-25a).
         let n = flat.nodes.len();
         b.at = None;
@@ -3576,7 +3814,8 @@ impl Renderer {
 
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
     /// chasing. A node that stopped plays again, reset; one whose reset fails stops alone, marked,
-    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works.
+    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works. One that ran
+    /// past its deadline isn't called: it stays silent until the next plan (ABI-7).
     pub fn panic(&mut self) {
         // Plugins are reset here, between blocks (RENDER-2a).
         let _mode = fpenv::Canon::enter();

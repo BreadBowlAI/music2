@@ -314,6 +314,13 @@ pub(crate) struct Open {
     /// The accepted revision whose renderer didn't build, once the user was told: the catch-up
     /// tries it again every 300 ms, and says so once.
     told_unbuilt: Option<u64>,
+    /// The accepted revision whose renderer didn't build because a kernel took too long to get
+    /// ready (ABI-7): the catch-up doesn't try it again. (A later change that would make that
+    /// kernel again is refused at once by the runtime, which remembers it.)
+    slow_build: Option<u64>,
+    /// What the user was told of the last sound too slow to get ready: said once, whichever later
+    /// change meets it again, until a change builds.
+    told_slow: Option<String>,
     /// Plugin nodes, by name, whose instance failed: when it was started again, or None once the
     /// new one failed too, within [`REVIVED`], and was left silent. So one that fails at every
     /// call is started again once, not every 300 ms, until the song is opened again (HOST-5).
@@ -593,6 +600,17 @@ pub(super) fn unbuilt(e: &anyhow::Error) -> String {
              names; music2 keeps trying. (In detail: {e:#})"
         ),
     }
+}
+
+/// What the user is told when the accepted revision's renderer didn't build because a kernel of
+/// `rev` took too long to get ready (ABI-7): which sound, whose, and that the version before plays
+/// on; no node's or rule's id. Said once; the catch-up doesn't try it again.
+pub(super) fn too_slow(slow: &m2_runtime::TooSlow, rev: &Arc<Revision>, packages: &PackageSet) -> String {
+    let namer = m2_editor::faults::Namer::new(0, rev.clone(), packages);
+    format!(
+        "Your last change is saved, but {}, so the version before it keeps playing. Take the sound out, or undo the change.",
+        namer.too_slow(slow)
+    )
 }
 
 /// A plan for `rev` (the accepted revision, or Compare's Before) at the project's rate
@@ -1030,6 +1048,12 @@ impl Actor {
             Err(e) => (Way::Failed(anyhow!("{e:#}")), Prepared::default()),
         };
         o.prepared = prepared;
+        if let Way::Unbuilt(e) = &way
+            && hear.is_none()
+            && e.downcast_ref::<m2_runtime::TooSlow>().is_some()
+        {
+            o.slow_build = Some(number);
+        }
         // A state load that changed a plugin's latency has the next activation, made at once,
         // compensate it (RENDER-17); one that failed leaves the plugin as it was, and says why
         // (RENDER-26b). Each plugin is named as the user knows it. A refused state isn't loaded
@@ -1062,10 +1086,21 @@ impl Actor {
         // for each revision, though the catch-up tries again every 300 ms. Compare's Before that
         // didn't is said by V's answer instead.
         let unbuilt_now = matches!(way, Way::Unbuilt(_)) && o.told_unbuilt != Some(number) && hear.is_none();
+        let mut slow_said = None;
         if let Way::Unbuilt(e) = &way
             && unbuilt_now
         {
-            said.push(unbuilt(e));
+            match e.downcast_ref::<m2_runtime::TooSlow>() {
+                // Said once for each sound too slow to get ready, whichever change met it (ABI-7).
+                Some(slow) => {
+                    let words = too_slow(slow, &target, &o.session.packages);
+                    if o.told_slow.as_ref() != Some(&words) {
+                        said.push(words.clone());
+                    }
+                    slow_said = Some(words);
+                }
+                None => said.push(unbuilt(e)),
+            }
         }
         // When the old build plays on, where the accepted revision's controls are in it: a carry
         // per control, done once here rather than under the lock.
@@ -1164,6 +1199,10 @@ impl Actor {
         }
         if unbuilt_now {
             o.told_unbuilt = Some(number);
+            o.told_slow = slow_said.or(o.told_slow.take());
+        }
+        if !matches!(way, Way::Unbuilt(_)) {
+            o.told_slow = None;
         }
         inner.notices.lock().extend(said);
         if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
@@ -1436,6 +1475,8 @@ impl Actor {
             told_feedback: vec![],
             exporting: false,
             told_unbuilt: None,
+            slow_build: None,
+            told_slow: None,
             revived: HashMap::new(),
             prepared: Prepared::default(),
             timeline: Arc::default(),
@@ -1896,6 +1937,30 @@ impl Actor {
         }
     }
 
+    /// A plain write of any value, with no gesture lease (CARD-4): a setting's, one Tx on its call;
+    /// else a knob's number, as [`Actor::set_value`] writes it.
+    pub(super) fn set_any(
+        &mut self,
+        token: u64,
+        revision: u64,
+        id: &str,
+        gesture: &str,
+        value: Value,
+        expect: Option<Value>,
+    ) -> Result<Value> {
+        let o = self.open.as_ref().context("no project is open")?;
+        if m2_editor::settings::names(&o.session, revision, id) {
+            let id = id.to_string();
+            return self.edit(token, move |s| m2_editor::settings::set(s, revision, &id, &value, expect.as_ref()));
+        }
+        let number = value.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: its value is a number, not {value}"))?;
+        let expect = match expect {
+            None => None,
+            Some(e) => Some(e.as_f64().ok_or_else(|| anyhow!("`{id}` is a knob: expect a number, not {e}"))?),
+        };
+        self.set_value(token, revision, id, gesture, number, expect)
+    }
+
     /// An edit through the session; whatever happened, the accepted revision plays after it.
     pub(super) fn edit(&mut self, token: u64, edit: impl FnOnce(&mut Session) -> Result<Edited, EditError>) -> Result<Value> {
         self.edit_and(token, |s| edit(s).map(|e| (e, json!({}))))
@@ -2040,6 +2105,8 @@ impl Actor {
         let behind = match self.inner.device() {
             // An export's end settles what waited for it.
             Ok(_) if o.exporting => false,
+            // A build a kernel too slow to get ready stopped isn't tried again (ABI-7).
+            Ok(_) if o.slow_build == Some(o.session.accepted().number) => false,
             Ok(d) => has_code && o.behind(&d, super::compare::hearing(&self.inner, o).as_ref()),
             // Let go of: the settle starts a new one, and loads the project into it where it was,
             // stopped. Let go of here, no action failed to say why: if it played, the user is told.

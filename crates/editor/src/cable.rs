@@ -115,11 +115,17 @@ fn consts_at(compiled: &Compiled, file: &str, start: u32, end: u32) -> Vec<(Stri
     let mut found = vec![];
     for m in &compiled.ir.modules {
         walk(&m.nodes, &mut |n| {
-            let (Op::Const { value, .. }, Some(o)) = (&n.op, &n.origin) else { return };
+            let (Op::Const { value, unit }, Some(o)) = (&n.op, &n.origin) else { return };
             let Some(site) = sites.get(&o.site).filter(|s| s.file == file) else { return };
-            if let Some(Arg::Number { start: at, .. }) = site.arg(&o.arg)
-                && start <= *at
-                && *at < end
+            // A number, or a choice's name or a switch's boolean (CARD-10, CARD-11).
+            let at = match site.arg(&o.arg) {
+                Some(Arg::Number { start, .. }) => Some(*start),
+                Some(a) if unit.is_some_and(|u| !u.is_number()) => Some(a.span().0),
+                _ => None,
+            };
+            if let Some(at) = at
+                && start <= at
+                && at < end
             {
                 found.push((m.key.clone(), n.id.clone(), *value));
             }
@@ -472,6 +478,23 @@ pub fn connect(s: &mut Session, at: u64, from: &str, to: &str) -> Result<Edited,
     Ok(Edited { revision: done.number, file: control.file, before: label.0, after: label.1 })
 }
 
+/// The unit of the choice or the switch the cable `outlet` carries, when it is one: a lane of
+/// names (CARD-14) or a choice's constant.
+fn steps_of(s: &Session, outlet: &Outlet) -> Option<Unit> {
+    let rev = s.accepted();
+    let m = rev.compiled.ir.modules.iter().find(|m| m.key == outlet.module)?;
+    let (id, _) = split_ref(&outlet.port);
+    let unit = match &m.nodes.iter().find(|n| n.id == id)?.op {
+        Op::Lane { lane } => match m.lanes.iter().find(|l| &l.key == lane)?.kind {
+            m2_ir::Kind::Control(u) => u,
+            _ => None,
+        },
+        Op::Const { unit, .. } => *unit,
+        _ => None,
+    };
+    unit.filter(|u| !u.is_number())
+}
+
 /// Disconnect inlet `id`: write the default in place of the name, as the receiving control's
 /// descriptor spells it (PKG-4), or else as the ports it feeds declare it; never a remembered or
 /// guessed value.
@@ -488,14 +511,28 @@ pub fn disconnect(s: &mut Session, at: u64, id: &str) -> Result<Edited, EditErro
     let old = s.accepted().snapshot.files[Path::new(&inlet.file)].clone();
 
     // Which controls or ports the input feeds decides the default: a plain number written there,
-    // checked and never committed (R26: a check on `Seen` never refuses on its expectation).
+    // checked and never committed (R26: a check on `Seen` never refuses on its expectation). A
+    // choice's or a switch's cable is a lane of names, whose slot takes a name or a boolean (CARD-14).
+    let steps = steps_of(s, &outlet);
+    let probe_text = match steps {
+        Some(Unit::Switch) => "false".to_string(),
+        Some(Unit::Choice(n)) => serde_json::to_string(n.name(0).unwrap_or_default()).expect("a string serialises"),
+        _ => "0".into(),
+    };
     let probe = plan::planned(
         s,
         (String::new(), String::new()),
-        vec![plan::text_edit(&file, &old, &[(inlet.start, inlet.end, "0".into())])],
+        vec![plan::text_edit(&file, &old, &[(inlet.start, inlet.end, probe_text)])],
         Expect::Seen(Sha::of(b"probe")),
     );
-    let checked = s.check(&probe).map_err(|r| crate::refused(s, r))?;
+    let checked = s.check(&probe).map_err(|r| match (steps, crate::refused(s, r)) {
+        (Some(Unit::Choice(_)), e) if e.to_string().contains("but it feeds no choice") => EditError::Rejected(format!(
+            "{} is a lane of names, and this is the only choice it feeds: without it the lane would have no names. \
+             Take its automation out instead, or remove {} in the code",
+            outlet.name, outlet.name
+        )),
+        (_, e) => e,
+    })?;
     unmoved(s, &checked)?;
     let candidate = &checked.candidate().compiled;
     let consts = consts_at(candidate, &inlet.file, inlet.start, inlet.start + 1);
@@ -504,12 +541,15 @@ pub fn disconnect(s: &mut Session, at: u64, id: &str) -> Result<Edited, EditErro
     }
     let imported = imported_names(&old, "@m2/core");
     let units = candidate.units.clone();
-    let (default, text, import) = match descriptor_default(candidate, &consts) {
-        Some(d) => {
+    let (default, text, import) = match (steps, descriptor_default(candidate, &consts)) {
+        // A choice's default by its name, a switch's as true or false (CARD-10, CARD-11).
+        (Some(u), Some(d)) => (d.value, crate::controls::written_as(u, d.value).ok_or_else(refuse)?, None),
+        (Some(_), None) => return Err(refuse()),
+        (None, Some(d)) => {
             let (text, import) = spelled(&d, &imported, &units);
             (d.value, text, import)
         }
-        None => {
+        (None, None) => {
             let (default, unit) = declared_default(&candidate.ir, &consts, &s.packages.viewing(&candidate.view)).ok_or_else(refuse)?;
             (default, written(default, unit, &imported, &units), None)
         }

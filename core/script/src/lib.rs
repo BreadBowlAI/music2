@@ -44,7 +44,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.7.0";
+pub const SDK_VERSION: &str = "1.9.0";
 
 const CORE: &str = "@m2/core";
 
@@ -1330,6 +1330,8 @@ fn frame_at(line: &str) -> Option<String> {
 mod bus_tests;
 #[cfg(test)]
 mod kernel_settings_tests;
+#[cfg(test)]
+mod kinds_tests;
 #[cfg(test)]
 mod mute_tests;
 #[cfg(test)]

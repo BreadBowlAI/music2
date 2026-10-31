@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! music2.toml                  [project] name, entry, format = 1, sample_rate = 48000
-//!                              [dependencies] "@m2/core" = "1", std = "0.5"
+//!                              [dependencies] "@m2/core" = "1", std = "0.6"
 //! song.ts  tracks/*.ts  lib/   code
 //! data/arrangement.json        the tempo and the meter
 //! data/<module>/<lane>.json    one lane's clips
@@ -41,7 +41,7 @@ pub use diag::{Diagnostic, Fix, Severity};
 pub use hash::{HashCache, Hashing, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
-    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,
+    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, StepsOf, canonical, parse_pitch,
 };
 pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, Version};
 pub use pack::{Lock, PackName};

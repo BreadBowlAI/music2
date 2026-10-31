@@ -11,6 +11,7 @@ use serde::Deserialize;
 use wasmtime::{Engine, ExternType, Module, ValType};
 
 use crate::WasmContext;
+use crate::limit::Limits;
 
 /// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
 /// `m2_song::pack::PkgManifest`'s.
@@ -112,9 +113,6 @@ impl View {
 /// session shows its accepted revision's (PACK-9).
 #[derive(Clone)]
 pub struct PackageSet {
-    /// Always [`engine`]'s, whose memories never move: each sandbox keeps its memory's address from
-    /// its seal (RENDER-32), so no other engine may be put here.
-    pub(crate) engine: Engine,
     /// What its lookups see.
     view: Arc<View>,
     /// Every version loaded and still held by a view, by what it is known by: a build that resolves
@@ -126,16 +124,39 @@ pub struct PackageSet {
     /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
     /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
     store: Option<m2_song::pack::Store>,
+    /// How long each call into its kernels may run (ABI-6).
+    pub(crate) limits: Limits,
+    /// The boxes whose birth ran past its limit (ABI-7): refused at once after.
+    pub(crate) stuck: crate::limit::Stuck,
 }
 
 /// A hosted plugin as the last build found it.
 #[derive(Clone)]
 enum Hosted {
-    /// Instantiated once to read its ports and parameters.
-    Installed(KernelSig, m2_plugins::Info),
+    /// Instantiated once to read its ports, its parameters and their steps' names.
+    Installed(KernelSig, Box<(m2_plugins::Info, Steps)>),
     /// Not installed, or not loadable (FMT-18a): typed from the code as written, played as
     /// silence or as its input passed through. Its ports are those of the last build.
     Missing(KernelSig),
+}
+
+/// What a plugin calls each step of its stepped parameters, by parameter id: for each one of at
+/// most [`MOST_STEPS`] steps that names every step (CARD-6). Asked once, when it is described.
+type Steps = BTreeMap<u32, Vec<String>>;
+
+/// The most steps a stepped parameter's names are asked for: one with more is a number to every
+/// editor (CARD-6), and asking would cost a call to the plugin for each step.
+pub const MOST_STEPS: u32 = 64;
+
+/// The most names asked of one plugin, all its parameters together: a plugin with thousands of
+/// stepped parameters is described in a moment still, and those past it are numbers (CARD-6).
+pub const MOST_NAMES: u32 = 4096;
+
+/// Whether package `package`'s kernels run with the time limit (ABI-6): every pack's, a stranger's
+/// code; not std's, music2's own, shipped with the app, reviewed and tested, which runs with no
+/// checks. The one place this is decided.
+pub fn checked(package: &str) -> bool {
+    package != m2_song::pack::STD
 }
 
 /// The engine every kernel runs in.
@@ -151,32 +172,51 @@ enum Hosted {
 /// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
 /// never moves, and a sandbox keeps its address.
 ///
-/// One engine for the process, as wasmtime intends: a module one package set loaded can be played
+/// Two engines, the same but for one switch (ABI-6): a `checked` one compiles the time checks into
+/// a pack's kernels, at each function's start and each loop's turn, and has a ticker
+/// ([`crate::limit::start`]) that starts with it, on the first pack loaded, and lives as long as it
+/// does; std's has none, so std's kernels cost what they did before the limit. [`checked`] says which
+/// a package's module is compiled by, and a sandbox runs on its module's own engine.
+///
+/// One of each for the process, as wasmtime intends: a module one package set loaded can be played
 /// through any other (a render of a revision plays its view through a copy of the session's set,
-/// and the gates' lab compiles with one set and plays with another). Two engines refuse each
-/// other's modules.
-pub fn engine() -> Engine {
-    static ENGINE: std::sync::OnceLock<Engine> = std::sync::OnceLock::new();
-    ENGINE
+/// and the gates' lab compiles with one set and plays with another).
+pub fn engine(checked: bool) -> Engine {
+    ENGINES[checked as usize]
         .get_or_init(|| {
             let mut config = wasmtime::Config::new();
             config.cranelift_nan_canonicalization(false);
             config.wasm_relaxed_simd(false);
             config.memory_may_move(false);
-            Engine::new(&config).expect("wasmtime engine")
+            config.epoch_interruption(checked);
+            let engine = Engine::new(&config).expect("wasmtime engine");
+            if checked {
+                crate::limit::start(&engine);
+            }
+            engine
         })
         .clone()
+}
+
+/// The two [`engine`]s, std's first, each made when first asked for.
+static ENGINES: [std::sync::OnceLock<Engine>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
+
+/// Whether `module` was compiled with the time checks: by the [`engine`] of a pack's modules (none
+/// was, while no pack has been loaded).
+pub(crate) fn checks(module: &Module) -> bool {
+    ENGINES[1].get().is_some_and(|e| Engine::same(e, module.engine()))
 }
 
 impl Default for PackageSet {
     fn default() -> Self {
         PackageSet {
-            engine: engine(),
             view: Arc::default(),
             loaded: HashMap::new(),
             plugins: HashMap::new(),
             host: m2_plugins::host(),
             store: None,
+            limits: Limits::default(),
+            stuck: Default::default(),
         }
     }
 }
@@ -196,6 +236,13 @@ impl PackageSet {
     /// Find installed packs in `store` (PACK-6): this computer's is `m2_os::dirs::packs()`.
     pub fn with_store(mut self, store: PathBuf) -> PackageSet {
         self.store = Some(m2_song::pack::Store::at(store));
+        self
+    }
+
+    /// Give each call into its kernels `limits` instead of the default (ABI-6): tests shorten them.
+    #[cfg(test)]
+    pub(crate) fn with_limits(mut self, limits: Limits) -> PackageSet {
+        self.limits = limits;
         self
     }
 
@@ -259,8 +306,10 @@ impl PackageSet {
                 let sha = m2_song::Sha::of(&bytes);
                 files.insert(format!("{name}/{w}"), sha.hex());
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
-                let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&self.engine, &module, &kernels).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                let engine = engine(checked(&name));
+                let module = Module::new(&engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
+                let verified = verify_module(&module, &kernels, self.limits.offline);
+                verified.with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
             None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
@@ -384,8 +433,8 @@ impl PackageSet {
                 continue;
             }
             match describe_plugin(&*self.host, id) {
-                Ok((sig, info)) => {
-                    self.plugins.insert(id.to_string(), Hosted::Installed(sig, info));
+                Ok((sig, info, steps)) => {
+                    self.plugins.insert(id.to_string(), Hosted::Installed(sig, Box::new((info, steps))));
                 }
                 Err(e) => errors.push(format!("{e:#}")),
             }
@@ -396,9 +445,19 @@ impl PackageSet {
     /// An installed plugin's ports and parameters, once described.
     pub fn plugin_info(&self, id: &str) -> Option<&m2_plugins::Info> {
         match self.plugins.get(id)? {
-            Hosted::Installed(_, info) => Some(info),
+            Hosted::Installed(_, described) => Some(&described.0),
             Hosted::Missing(_) => None,
         }
+    }
+
+    /// The parameter of installed plugin `plugin` that port `port` addresses (`<name>_<id>`,
+    /// FMT-18), by its id alone, and what the plugin calls each of its steps when it named them
+    /// all (CARD-6).
+    pub fn plugin_param(&self, plugin: &str, port: &str) -> Option<(&m2_plugins::Param, Option<&[String]>)> {
+        let Hosted::Installed(_, described) = self.plugins.get(plugin)? else { return None };
+        let (info, steps) = &**described;
+        let (_, id) = m2_plugins::param_address(port)?;
+        Some((info.params.iter().find(|p| p.id == id)?, steps.get(&id).map(Vec::as_slice)))
     }
 
     /// Whether the last build found `id` missing, so its node plays silence or its input (FMT-18a).
@@ -451,7 +510,7 @@ impl PackageSet {
                 let Op::Plugin { plugin, inputs, .. } = &mut n.op else { return };
                 let at = |d: Diagnostic| d.module(key.clone()).at(n.src.clone());
                 match self.plugins.get(plugin.as_str()) {
-                    Some(Hosted::Installed(sig, _)) => {
+                    Some(Hosted::Installed(sig, ..)) => {
                         let (bound, found) = bind(plugin, sig, std::mem::take(inputs));
                         *inputs = bound;
                         diags.extend(found.into_iter().map(at));
@@ -497,7 +556,7 @@ impl Kernels for PackageSet {
 
     fn plugin(&self, id: &str) -> Option<&KernelSig> {
         match self.plugins.get(id)? {
-            Hosted::Installed(sig, _) | Hosted::Missing(sig) => Some(sig),
+            Hosted::Installed(sig, ..) | Hosted::Missing(sig) => Some(sig),
         }
     }
 }
@@ -590,7 +649,7 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// instance created and activated through the host (on the plugin main thread), then destroyed:
 /// activating is what measures its latency at its default state, which the check refuses inside a
 /// `poly` voice only (RENDER-21); a node's own instance measures its own (RENDER-17).
-fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info)> {
+fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info, Steps)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
     // Found by the host, which loads plugin code: the app never does (HOST-3).
     let (found, _) = host.scan();
@@ -599,10 +658,44 @@ fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plu
         .find(|f| f.id == clap_id)
         .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
+    // Here, off the audio thread, once for the plugin: never while a card is drawn (CARD-6).
+    let steps = steps_of(&info.params, &mut |id, v| match host.main_call(h, m2_plugins::MainCall::Text(id, v)) {
+        Ok(m2_plugins::Reply::Text(Some(t))) => Some(t.trim().to_string()),
+        _ => None,
+    });
     let latency = host.activate(h, 48_000, 128);
     host.destroy(h);
     info.latency = latency?;
-    Ok((plugin_sig(id, &info)?, info))
+    Ok((plugin_sig(id, &info)?, info, steps))
+}
+
+/// What the plugin calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by
+/// parameter id, `name(id, value)` asking it one; in their order, while the names asked stay within
+/// [`MOST_NAMES`]. A parameter with a step it gives no name is left out (CARD-6).
+fn steps_of(params: &[m2_plugins::Param], name: &mut dyn FnMut(u32, f64) -> Option<String>) -> Steps {
+    let stepped = |p: &&m2_plugins::Param| {
+        p.stepped && p.min.fract() == 0.0 && p.max.fract() == 0.0 && p.max > p.min && p.max - p.min < f64::from(MOST_STEPS)
+    };
+    let mut left = MOST_NAMES;
+    let mut out = Steps::new();
+    for p in params.iter().filter(stepped) {
+        let steps = (p.max - p.min) as u32 + 1;
+        if steps > left {
+            break;
+        }
+        let mut names = vec![];
+        for i in 0..steps {
+            left -= 1;
+            match name(p.id, p.min + f64::from(i)) {
+                Some(n) => names.push(n),
+                None => break,
+            }
+        }
+        if names.len() == steps as usize {
+            out.insert(p.id, names);
+        }
+    }
+    out
 }
 
 /// The ports of an installed plugin: `in`, `notes`, each parameter by its address (FMT-18), `out`.
@@ -706,8 +799,9 @@ fn check_abi(bytes: &[u8]) -> Result<()> {
 /// A package's module, built for this ABI ([`check_abi`], before it was compiled), checked before
 /// any kernel of it is made (ABI-3): its one import, if any, is `m2.asset_read`; its memory is a
 /// defined 32-bit memory of 64 KiB pages, not shared, which the hardware checks can guard
-/// (RENDER-32); and it has the ABI's exports, with their signatures.
-fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
+/// (RENDER-32); and it has the ABI's exports, with their signatures. Its start function, if any,
+/// may run for `limit` (ABI-6).
+fn verify_module(module: &Module, kernels: &[KernelDecl], limit: std::time::Duration) -> Result<()> {
     let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
     let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
         match exports.get(name) {
@@ -731,7 +825,7 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         Some(ExternType::Memory(_)) => {}
         _ => bail!("missing export `memory`"),
     }
-    crate::sandbox::instantiate(engine, module)?;
+    crate::sandbox::instantiate(module, limit)?;
     func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     for k in kernels {
         let n = &k.name;
@@ -746,15 +840,54 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
 
 #[cfg(test)]
 mod tests {
+    // CARD-6: the names of a plugin's stepped parameters are asked once each, for one of 2 to 64
+    // steps only, and at most MOST_NAMES of them for one plugin: past that a parameter has none (and
+    // is a number on its card). A parameter with a step the plugin gives no name has none.
+    #[test]
+    fn a_plugins_step_names_are_asked_within_the_budget() {
+        let param = |id: u32, max: f64, stepped: bool| m2_plugins::Param {
+            id,
+            name: format!("p{id}"),
+            module: String::new(),
+            min: 0.0,
+            max,
+            default: 0.0,
+            stepped,
+        };
+        let mut asked = 0u32;
+        let mut name = |id: u32, v: f64| {
+            asked += 1;
+            (id != 7).then(|| format!("{id}:{v}"))
+        };
+        // 5000 parameters of two steps, after one of 65 steps, one not stepped and one unnamed.
+        let mut params = vec![param(1, 64.0, true), param(2, 3.0, false), param(7, 1.0, true)];
+        params.extend((100..5100).map(|id| param(id, 1.0, true)));
+        let steps = super::steps_of(&params, &mut name);
+        // The unnamed one stops at its first step: 1 asked; then 2 for each that fits in what is left.
+        assert_eq!(asked, 1 + 2 * ((super::MOST_NAMES - 1) / 2), "the names it may ask, and no more");
+        assert!(!steps.contains_key(&1) && !steps.contains_key(&2) && !steps.contains_key(&7));
+        assert_eq!(steps.len() as u32, (super::MOST_NAMES - 1) / 2, "the parameters that fit, each named");
+        assert_eq!(steps[&100], ["100:0", "100:1"]);
+        assert!(!steps.contains_key(&5099), "the last are past the budget");
+    }
+
     use super::*;
 
-    // One engine for the process: a view one set loaded can be played by any other set, as the
-    // gates' lab compiles with one set and plays with another, and a render of a revision plays its
-    // view through a copy of the session's set. Two engines refuse each other's modules.
+    // One engine of each kind for the process (ABI-6): a view one set loaded can be played by any
+    // other set, as the gates' lab compiles with one set and plays with another, and a render of a
+    // revision plays its view through a copy of the session's set. Two engines refuse each other's
+    // modules, so each set compiles std with std's one engine, and a pack with the packs' one.
     #[test]
     fn every_set_shares_one_engine() {
-        let (a, b) = (PackageSet::default(), PackageSet::default());
-        assert!(Engine::same(&a.engine, &b.engine), "two package sets, two engines");
+        let (a, b) = (std_set(), std_set());
+        let engine = |set: &PackageSet, id| set.module_for(id).unwrap().0.engine().clone();
+        assert!(Engine::same(&engine(&a, "std:sine"), &engine(&b, "std:sine")), "two package sets, two engines");
+        assert!(Engine::same(&engine(&a, "std:sine"), &super::engine(false)) && !checks(a.module_for("std:sine").unwrap().0));
+        let mut a = a;
+        a.load(&pack("@test/a", "1.0.0", "")).unwrap();
+        let mut b = b;
+        b.load(&pack("@test/a", "1.0.0", "")).unwrap();
+        assert!(Engine::same(&engine(&a, "@test/a:k"), &engine(&b, "@test/a:k")) && checks(a.module_for("@test/a:k").unwrap().0));
     }
 
     fn manifest(effect: &str) -> Result<PackageSet> {
@@ -798,7 +931,7 @@ mod tests {
             latency: 0,
             gui: false,
         };
-        set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), info));
+        set.plugins.insert(id.into(), Hosted::Installed(plugin_sig(id, &info).unwrap(), Box::new((info, Steps::new()))));
     }
 
     /// One plugin after a sine, with `ports` written as `port: constant`.

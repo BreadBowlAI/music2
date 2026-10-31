@@ -151,6 +151,8 @@ impl DataSet {
     pub fn control(&self, module: &str, lane: &str) -> ControlLane {
         match self.lane(module, lane).map(|d| &**d) {
             Some(LaneData::Control { clips, .. }) => ControlLane::new(clips.clone()),
+            // Names become places here, off the audio thread (CARD-15).
+            Some(LaneData::Steps { of, clips }) => ControlLane::steps(clips, of),
             _ => ControlLane::default(),
         }
     }
@@ -278,11 +280,14 @@ impl Project {
                             if let LaneData::Audio(clips) = &*data {
                                 diags.extend(self.assets(addr, &file, text, clips, &data));
                             }
+                            if let LaneData::Steps { of: lane::StepsOf::Choice(options), clips } = &*data {
+                                diags.extend(unknown_options(addr, &file, options, clips));
+                            }
                             lanes.insert(addr.clone(), data);
                             read.insert(addr.clone(), (kind.clone(), source));
                             continue;
                         }
-                        Err(e) => lane_error(addr, &file, text, e, then),
+                        Err(e) => lane_error(addr, kind, &file, text, e, then),
                     }
                 }
                 // A file that can't be read at all fails as one that doesn't parse (FMT-9).
@@ -323,6 +328,8 @@ impl Project {
             let kind = match Holds::of(text) {
                 Holds::Notes => LaneKind::Notes,
                 Holds::Control => LaneKind::Control { unit: None },
+                Holds::Choice => LaneKind::Choice { options: vec![] },
+                Holds::Switch => LaneKind::Switch,
                 Holds::Audio => LaneKind::Audio,
                 Holds::Empty | Holds::Unknown => return None,
             };
@@ -782,8 +789,40 @@ fn unknown_file(file: &str) -> String {
     m
 }
 
+/// `lane.unknown-option` (CARD-15): a warning for each name the lane's points give that its
+/// choice doesn't have, naming the first clip it is in. The lane plays its fallback there.
+fn unknown_options(addr: &LaneAddr, file: &str, options: &[String], clips: &[lane::StepClip]) -> Vec<Diagnostic> {
+    let mut seen = BTreeSet::new();
+    let names = options.iter().map(|o| format!("{o:?}")).collect::<Vec<_>>().join(", ");
+    let mut out = vec![];
+    for (i, c) in clips.iter().enumerate() {
+        for (beat, p) in &c.points {
+            let lane::Step::Name(n) = p else { continue };
+            if options.contains(n) || !seen.insert(n.clone()) {
+                continue;
+            }
+            out.push(
+                Diagnostic::warning(
+                    "lane.unknown-option",
+                    format!(
+                        "{file}: at beat {}, clip {} names {n:?}, which isn't one of the options of lane `{}` of {}: {names}. \
+                         Until the next point it plays the lane's fallback. Name one of those options there, or take the point out",
+                        number(c.start + beat),
+                        i + 1,
+                        addr.lane,
+                        addr.module
+                    ),
+                )
+                .file(file)
+                .module(&addr.module),
+            );
+        }
+    }
+    out
+}
+
 /// `lane.invalid` or `lane.unit-mismatch` (FMT-9, FMT-10), naming the file, the field and the fix.
-fn lane_error(addr: &LaneAddr, file: &str, text: &str, e: LaneError, then: &str) -> Diagnostic {
+fn lane_error(addr: &LaneAddr, kind: &LaneKind, file: &str, text: &str, e: LaneError, then: &str) -> Diagnostic {
     match e {
         LaneError::Invalid(why) => Diagnostic::error(
             "lane.invalid",
@@ -792,19 +831,38 @@ fn lane_error(addr: &LaneAddr, file: &str, text: &str, e: LaneError, then: &str)
         .file(file)
         .module(&addr.module),
         LaneError::Unit { found, declared } => {
-            let was = found.as_ref().map_or_else(|| "records no unit".to_string(), |u| format!("is automation in `{u}`"));
-            let mut d = Diagnostic::error(
-                "lane.unit-mismatch",
-                format!(
-                    "{file} {was}, but lane `{}` of {} is declared in `{declared}`. Retag the file if its values are in `{declared}`. \
-                     {then}",
-                    addr.lane, addr.module
+            // What the file holds: a lane of names records `choice` or `switch` (CARD-15), not a unit.
+            let was = match found.as_deref() {
+                None => "records no unit".to_string(),
+                Some("choice") => "holds a choice's names".to_string(),
+                Some("switch") => "holds true and false".to_string(),
+                Some(u) => format!("holds automation in `{u}`"),
+            };
+            let (lane, module) = (&addr.lane, &addr.module);
+            // What the lane needs, and how to give it that: only numbers can be retagged.
+            let numbers = found.as_deref().is_none_or(|u| !matches!(u, "choice" | "switch"));
+            let needs = match kind {
+                LaneKind::Choice { options } => {
+                    let names = options.iter().map(|o| format!("{o:?}")).collect::<Vec<_>>().join(", ");
+                    format!("lane `{lane}` of {module} feeds a choice of {names}: write its points as those names, or delete the file")
+                }
+                LaneKind::Switch => {
+                    format!("lane `{lane}` of {module} feeds a switch: write its points as true or false, or delete the file")
+                }
+                _ if numbers => {
+                    format!("lane `{lane}` of {module} is declared in `{declared}`. Retag the file if its values are in `{declared}`")
+                }
+                _ => format!(
+                    "lane `{lane}` of {module} is declared in `{declared}`: write its points as numbers in `{declared}`, or delete the file"
                 ),
-            )
-            .file(file)
-            .module(&addr.module);
-            // Retag: the same points, recorded in the declared unit.
-            if let Ok(LaneData::Control { clips, .. }) = LaneData::read(text, &LaneKind::Control { unit: None }) {
+            };
+            let mut d =
+                Diagnostic::error("lane.unit-mismatch", format!("{file} {was}, but {needs}. {then}")).file(file).module(&addr.module);
+            // Retag: the same points, recorded in the declared unit. A lane of names holds no numbers.
+            let numbers = numbers && !matches!(kind, LaneKind::Choice { .. } | LaneKind::Switch);
+            if let Ok(LaneData::Control { clips, .. }) = LaneData::read(text, &LaneKind::Control { unit: None })
+                && numbers
+            {
                 let fixed = LaneData::Control { unit: Some(declared.clone()), clips };
                 d = d.fix(rewrite("retag", format!("Record it in `{declared}`"), found.is_none(), file, text, &fixed));
             }
