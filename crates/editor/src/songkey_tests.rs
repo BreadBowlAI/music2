@@ -117,7 +117,7 @@ fn the_timeline_publishes_what_the_key_means() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     set(&mut s, key("A", "minor")).unwrap();
-    let v = serde_json::to_value(&s.timeline()).unwrap()["key"].clone();
+    let v = serde_json::to_value(s.timeline()).unwrap()["key"].clone();
     assert_eq!(
         (&v["root"], &v["scale"], &v["name"]),
         (&serde_json::json!("A"), &serde_json::json!("minor"), &serde_json::json!("A minor"))
@@ -134,7 +134,7 @@ fn the_timeline_publishes_what_the_key_means() {
     assert_eq!(kinds, ["add9", "seventh", "sus2", "sus4", "triad"]);
     // No key, nothing published.
     set(&mut s, None).unwrap();
-    assert_eq!(serde_json::to_value(&s.timeline()).unwrap()["key"], serde_json::Value::Null);
+    assert_eq!(serde_json::to_value(s.timeline()).unwrap()["key"], serde_json::Value::Null);
 }
 
 #[test]

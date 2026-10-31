@@ -33,22 +33,24 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘R or ⇧Return | Ctrl+R or Shift+Enter | Rename the selected track |
 | ⌘D | Ctrl+D | Duplicate the selected notes, or with none, the selected track (in the code editor, its own: the next match) |
 | ⌘A | Ctrl+A | Select all notes in the open clip |
-| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead) |
+| ⌘X / ⌘C / ⌘V | Ctrl+X / Ctrl+C / Ctrl+V | Cut / copy / paste clips (at the playhead); in Notes, the selected notes, pasted into the clip shown |
 | ⌘E | Ctrl+E | Split the selected clips at the playhead |
 | ⌘J | Ctrl+J | Join the selected clips |
 | ← → (⇧: a bar) | ← → (Shift: a bar) | Move the selected clips or notes by the grid |
-| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone |
+| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone (with **In key** on, to the next note of the key) |
 | ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
 | Delete | Backspace | Remove the selected clip or notes |
 | Escape | Escape | Deselect |
 | ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
 | Z | Z | Fit the selected clips, or the song; again to go back |
-| ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all |
+| ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all; in Notes, its rows |
 | ⇧⌘F | Ctrl+Shift+F | Follow the playhead on or off |
 | ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
 | Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
 | B | B | Draw mode: notes, and automation points |
 | ⌥-drag | Alt-drag | In Draw mode in Notes: paint a note in each grid step |
+| ⌘-drag | Ctrl-drag | In Notes: place a note off the grid while drawing, dragging or resizing it |
+| I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
 | E | E | Show or hide the dock |

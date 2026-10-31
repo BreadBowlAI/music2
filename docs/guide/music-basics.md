@@ -39,16 +39,24 @@ This is the most important difference in music software.
 - A **bar** (or measure) is a group of beats. Almost all pop uses **4/4 time**: 4 beats per bar. Song parts are counted in bars ("an 8-bar chorus").
 - The **grid** splits beats into smaller steps for placing notes. **1/16** means four steps per beat; that's where hi-hats and fast patterns live. **Quantize** snaps notes onto the grid, and **humanize** nudges them a little so they sound less robotic.
 
-**In music2:** the tempo and the time signature are in the top bar. Drag the tempo up or down, or double-click it and type. Click the time signature to pick another. To change them partway through the song, right-click the ruler. The grid goes from 1/4 to 1/64, and ⌘3 makes it triplets (three notes in the space of two). Right-click a note for **Quantize** (or press Q), **Humanize** and **Swing**. The **metronome** (K) clicks on each beat while the song plays, a higher click on each bar's first beat.
+**In music2:** the tempo and the time signature are in the top bar. Drag the tempo up or down, or double-click it and type. Click the time signature to pick another. To change them partway through the song, right-click the ruler. The grid goes from 1/4 to 1/64, and ⌘3 makes it triplets (three notes in the space of two). Right-click a note for **Quantize** (or press Q), **Humanize**, **Swing** (50% is straight, 66% nearly a triplet) and the **grooves**: Shuffle, Laid back, Pushed and Accents, each giving the notes a feel. The **metronome** (K) clicks on each beat while the song plays, a higher click on each bar's first beat.
 
 ## Key, scale and chords
 
-- A **scale** is a set of 7 of the 12 notes that sound good together. **Major** sounds bright and happy; **minor** sounds emotional and moody. A lot of dance-pop is in minor, which is how it sounds happy and sad at once.
+- A **scale** is the set of notes that sound right together, usually 7 of the 12. **Major** sounds bright and happy; **minor** sounds emotional and moody. A lot of dance-pop is in minor, which is how it sounds happy and sad at once.
+- Other scales change one or two notes for another mood: **Dorian** (minor, but brighter), **Mixolydian** (major, but bluesy), **Harmonic minor** (classical, Middle Eastern). A **pentatonic** scale keeps only 5 notes, so almost nothing you play sounds wrong; **blues** adds one note to minor pentatonic.
 - The **key** is a scale plus its home note, such as "A minor". A minor uses only the white keys: A B C D E F G.
 - A **chord** is several notes played together, usually 3 (a **triad**).
 - A **chord progression** is the order of chords, usually one per bar, repeating. Chords are named by their place in the scale with Roman numerals. The most famous pop progression is **I–V–vi–IV** (in C major: C, G, Am, F). In minor keys, **i–VI–III–VII** is a classic.
 
-**In music2:** click **Key** in the top bar and pick the song's key, such as A minor. The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. More scales ([gap #6](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)), chord stamps and an arpeggiator ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)) are still to come.
+**In music2:** click **Key** in the top bar and pick the song's root (A) and its scale (Minor, or one of 13 scales). The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. In Notes:
+
+| To | Do this |
+|---|---|
+| Only ever play notes of the key | Turn on **In key**. A note you draw, drag or paste goes to the nearest note of the key; a note exactly between two goes down. ↑ and ↓ move to the next note of the key. |
+| Place a whole chord at once | Pick one in **Chord ▾** (Triad, 7th, Sus2, Sus4, Add9). In Draw mode (B) a click places it, and a drag sets how long it lasts; in Select mode, double-click. The chord is built on the row you click, from the key's own notes, so it always fits. The pointer shows its name and numeral first ("Dm · ii"). Press I for the next inversion (the lowest notes moved up an octave). |
+
+An arpeggiator (a chord played one note at a time) is still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)).
 
 ## The parts of a pop song
 

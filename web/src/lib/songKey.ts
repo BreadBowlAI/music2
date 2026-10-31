@@ -64,20 +64,23 @@ export const inKey = (k: KeyView): Set<number> => new Set(k.notes);
 const TOP = 127;
 const pc = (p: number) => ((p % 12) + 12) % 12;
 
-/**
- * Pitch `p` at the nearest note of key `k` (NOTE-3), by the key's own table: a pitch exactly between
- * two notes of the key goes down. It stays on the keyboard.
- */
-export function fit(k: KeyView, p: number): number {
-  const q = Math.round(p);
-  return Math.min(TOP, Math.max(0, q + k.snap[pc(q)]));
-}
-
 /** The note of key `k` next above (`dir` 1) or below (-1) pitch `p`, for ↑ and ↓ with Lock to key on; `p` itself at the keyboard's end. */
 export function stepIn(k: KeyView, p: number, dir: 1 | -1): number {
   const notes = inKey(k);
   for (let q = p + dir; q >= 0 && q <= TOP; q += dir) if (notes.has(pc(q))) return q;
   return p;
+}
+
+/**
+ * Pitch `p` at the nearest note of key `k` (NOTE-3), by the key's own table: a pitch exactly between
+ * two notes of the key goes down. Where the table points past an end of the keyboard, the key's
+ * nearest note on it, the other way, as the server's snap does.
+ */
+export function fit(k: KeyView, p: number): number {
+  const q = Math.round(p);
+  const to = q + k.snap[pc(q)];
+  if (to >= 0 && to <= TOP) return to;
+  return to > TOP ? stepIn(k, TOP + 1, -1) : stepIn(k, -1, 1);
 }
 
 /**
