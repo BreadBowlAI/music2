@@ -494,6 +494,8 @@ fn sampler_controls_are_stds() {
     assert_eq!(setting("voices").default, Some(serde_json::json!(m2_song::instrument::VOICES as i64)));
     assert_eq!(setting("mode").default, Some(serde_json::json!(m2_song::instrument::MODE)));
     assert_eq!(setting("mode").options, Some(m2_song::instrument::MODES.iter().map(|m| m.to_string()).collect()));
+    assert_eq!(setting("turns").default, Some(serde_json::json!(m2_song::instrument::TURN)));
+    assert_eq!(setting("turns").options, Some(m2_song::instrument::TURNS.iter().map(|m| m.to_string()).collect()));
 }
 
 // PACK-11, REG-15: a pack installed while a song is open (a Get) is offered once the session is
@@ -639,7 +641,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [

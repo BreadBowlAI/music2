@@ -17,7 +17,7 @@ use crate::{Running, ServeOptions, start_with};
 const PAGE: &str = "t0k";
 const TOOLS: &str = "t00ls";
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n";
 const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 

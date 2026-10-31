@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! music2.toml                  [project] name, entry, format = 1, sample_rate = 48000
-//!                              [dependencies] "@m2/core" = "1", std = "0.5"
+//!                              [dependencies] "@m2/core" = "1", std = "0.6"
 //! song.ts  tracks/*.ts  lib/   code
 //! data/arrangement.json        the tempo and the meter
 //! data/<module>/<lane>.json    one lane's clips

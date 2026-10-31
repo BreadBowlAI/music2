@@ -3,7 +3,7 @@
 // controls left out written back in, positionally or in the options object (D5). A line that
 // should fail carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
 
-import { db, hz, khz, ms, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
+import { db, hz, khz, kernel, ms, poly, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
@@ -99,6 +99,11 @@ export const instruments: Audio[] = [
   }),
   sampler(notes, { regions: [take("C4-1.wav", 60, 2, 1), take("C4-2.wav", 60, 2, 2), ...piano, ...keyUps] }),
   sampler(notes, { regions: piano }),
+  // A turn for each key (PKG-16 §3, std 0.6.0), and a voice that reads its note's key count.
+  sampler(notes, { regions: piano, turns: "key" }),
+  poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, count: n.keyCount })),
+  // @ts-expect-error: turns are "lane" or "key".
+  sampler(notes, { regions: piano, turns: "note" }),
   // @ts-expect-error: a region needs a file.
   sampler(notes, { regions: [{ root: 60 }] }),
   // @ts-expect-error: a trigger is "attack" or "release".

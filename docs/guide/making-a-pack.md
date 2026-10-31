@@ -145,6 +145,8 @@ export const wobble = component(
 
 A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. The card doesn't draw menus, switches, views or groups yet: a later version of music2 does.
 
+A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
+
 ## An instrument written as data
 
 An instrument that plays recordings needs no code. Write it as a file, `instruments/<id>.toml`: which recording plays for which notes, how hard, and when. music2 makes it into the same kind of instrument as one written in code.
@@ -159,6 +161,7 @@ mode = "gate"              # stop with the note ("oneshot" plays each recording 
 release = 0.4              # seconds to fade out when the note ends
 velocity = 0.7             # how much playing harder makes it louder, 0 to 1
 voices = 16                # how many notes sound at once
+turns = "key"              # round robin: each key takes its own turns ("lane", the default, counts the lane's notes)
 
 [[region]]                 # one recording
 file = "samples/C4-soft.wav"
@@ -186,7 +189,7 @@ volume = -20               # dB
 | `description`, `tags` | one line about it; words for search (kept for later) | none |
 | `engine` | `"std:sampler"` | must be there |
 | `tune`, `level`, `attack`, `release`, `velocity` | the Sampler's knobs where they start: semitones (-24 to 24), dB (-24 to 12), seconds (0 to 2), seconds (0 to 5), 0 to 1 | the Sampler's |
-| `mode`, `voices` | `"oneshot"` or `"gate"`; notes at once, 1 to 128 | `"oneshot"`, 8 |
+| `mode`, `voices`, `turns` | `"oneshot"` or `"gate"`; notes at once, 1 to 128; whose count a round robin follows, `"lane"` or `"key"` ([Sounds](sounds.md)) | `"oneshot"`, 8, `"lane"` |
 
 Each `[[region]]` takes the Sampler's region fields: `file` (a path in the pack), `root`, `keys`, `velocity`, `round_robin` (`[1, 3]`: take 1 of 3, played in turn), `trigger` (`"attack"` or `"release"`), `loop` (`[start, end]` in frames, played while the note is held), `tune` (cents), `volume` (dB), `pan` (-1 to 1) and `offset` (frames). [Sounds](sounds.md) says what each does.
 
@@ -210,7 +213,7 @@ m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano --label 
 
 | It writes | From |
 |---|---|
-| `instruments/felt-piano.toml` | every region of the SFZ music2 can play |
+| `instruments/felt-piano.toml` | every region of the SFZ music2 can play, with `turns = "key"`: SFZ counts a round robin's turns by key |
 | `samples/` | the recordings those regions play, copied |
 | `m2pkg.toml` | the name you give; the licence from `--license`, or from the licence file beside the SFZ when it is clear |
 | `README.md` | the credits in the SFZ's first comments, and what the import couldn't keep |

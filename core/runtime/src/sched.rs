@@ -12,9 +12,10 @@
 //! release or a panic: a jump or a swap never touches them.
 //!
 //! And its lane's pitch wheel and mod wheel, as live input last set them (RENDER-14, D8 of track
-//! pm): one slot each, the latest wins, sent at the next block's first frame before the notes. A
-//! source's release or a panic puts back at rest what it moved; a new plan's consumers hear them
-//! again at its first block.
+//! pm), and its sustain pedal (RENDER-35): one slot each, the latest wins, sent at the next block's
+//! first frame before the notes. A source's release or a panic puts back at rest what it moved; a
+//! new plan's consumers hear them again at its first block. A seek or a Stop lets the pedal up
+//! (RENDER-36).
 
 use std::sync::Arc;
 
@@ -235,18 +236,24 @@ pub enum LiveEv {
     },
 }
 
-/// The wheels a lane keeps: the pitch wheel and the mod wheel. A block sends at most one event for
-/// each, so a buffer has this much more room.
-pub const WHEELS: usize = 2;
+/// The controllers a lane keeps, its "wheels": the pitch wheel, the mod wheel and the sustain pedal
+/// (RENDER-35).
+pub const WHEELS: usize = 3;
+/// The events a block's controllers may take: one for each wheel, and the pedal let up by a seek or
+/// a Stop (RENDER-36). A buffer has this much more room.
+pub const WHEEL_EVENTS: usize = WHEELS + 1;
 
-/// Whether `bytes` is a wheel a lane keeps (D8): pitch bend, CC 1 or CC 121, on any channel, with
-/// 7-bit data.
+/// The pedal's slot among the wheels.
+const PEDAL: usize = 2;
+
+/// Whether `bytes` is a wheel a lane keeps (D8, RENDER-35): pitch bend, CC 1, CC 64 (the sustain
+/// pedal) or CC 121, on any channel, with 7-bit data.
 pub fn is_wheel([status, d1, d2]: [u8; 3]) -> bool {
-    (d1 | d2) < 0x80 && (status & 0xF0 == 0xE0 || (status & 0xF0 == 0xB0 && matches!(d1, 1 | 121)))
+    (d1 | d2) < 0x80 && (status & 0xF0 == 0xE0 || (status & 0xF0 == 0xB0 && matches!(d1, 1 | 64 | 121)))
 }
 
 /// A wheel as live input last set it, and the source that did: its raw value (pitch bend's 14 bits,
-/// centred at 8192; the mod wheel's 7, at rest at 0).
+/// centred at 8192; the mod wheel's and the pedal's 7, at rest at 0).
 #[derive(Clone, Copy, Debug)]
 struct Wheel {
     value: u16,
@@ -257,8 +264,11 @@ struct Wheel {
 }
 
 impl Wheel {
-    const AT_REST: [Wheel; WHEELS] =
-        [Wheel { value: 8192, rest: 8192, source: 0, send: false }, Wheel { value: 0, rest: 0, source: 0, send: false }];
+    const AT_REST: [Wheel; WHEELS] = [
+        Wheel { value: 8192, rest: 8192, source: 0, send: false },
+        Wheel { value: 0, rest: 0, source: 0, send: false },
+        Wheel { value: 0, rest: 0, source: 0, send: false },
+    ];
 
     fn set(&mut self, source: u32, value: u16) {
         (self.value, self.source, self.send) = (value, source, true);
@@ -272,6 +282,7 @@ impl Wheel {
     fn bytes(&self, k: usize) -> [u8; 3] {
         match k {
             0 => [0xE0, (self.value & 0x7F) as u8, (self.value >> 7) as u8],
+            PEDAL => [0xB0, 64, self.value as u8],
             _ => [0xB0, 1, self.value as u8],
         }
     }
@@ -302,7 +313,7 @@ pub struct NoteScheduler {
     caps: Caps,
     /// Notes played live (MON-7). Boxed: a lane slot stays small.
     live: Box<[Option<LiveNote>; LIVE_ROOM]>,
-    /// The pitch wheel and the mod wheel, as live input last set them.
+    /// The pitch wheel, the mod wheel and the pedal, as live input last set them.
     wheels: [Wheel; WHEELS],
 }
 
@@ -315,7 +326,7 @@ impl NoteScheduler {
             cursor: 0,
             sounding: Vec::with_capacity(caps.sounding),
             swapped: false,
-            events: Events::with_capacity(caps.events() + LIVE_ROOM + WHEELS),
+            events: Events::with_capacity(caps.events() + LIVE_ROOM + WHEEL_EVENTS),
             caps,
             live: Box::new([None; LIVE_ROOM]),
             wheels: Wheel::AT_REST,
@@ -345,7 +356,7 @@ impl NoteScheduler {
         self.live.iter().flatten().count()
     }
 
-    /// Whether a wheel is away from rest: the bend off centre, or the mod wheel above 0.
+    /// Whether a wheel is away from rest: the bend off centre, or the mod wheel or the pedal above 0.
     pub fn wheels_moved(&self) -> bool {
         self.wheels.iter().any(Wheel::moved)
     }
@@ -386,6 +397,7 @@ impl NoteScheduler {
             LiveEv::Midi { source, bytes: [status, d1, d2] } => match (status & 0xF0, d1) {
                 (0xE0, _) => self.wheels[0].set(source, u16::from(d1) | u16::from(d2) << 7),
                 (0xB0, 1) => self.wheels[1].set(source, u16::from(d2)),
+                (0xB0, 64) => self.wheels[PEDAL].set(source, u16::from(d2)),
                 (0xB0, 121) => {
                     for w in &mut self.wheels {
                         w.set(source, w.rest);
@@ -494,6 +506,12 @@ impl NoteScheduler {
                     for s in self.sounding.drain(..) {
                         self.events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
                     }
+                }
+                // RENDER-36: a seek or a Stop lets the pedal up, there, before the Offs.
+                let pedal = &mut self.wheels[PEDAL];
+                if matches!(run.jump, Jump::Seek | Jump::Stop) && pedal.moved() {
+                    (pedal.value, pedal.send) = (pedal.rest, false);
+                    self.events.push(Event::Midi { frame: run.off, bytes: pedal.bytes(PEDAL) });
                 }
                 self.cursor = self.data.seek(run.at);
             }
@@ -839,5 +857,84 @@ mod tests {
             engine += 128;
         }
         assert_eq!(&frames[..4], [(12_000, true), (24_000, false), (36_000, true), (48_000, false)].as_slice());
+    }
+}
+
+#[cfg(test)]
+mod pedal_tests {
+    use super::*;
+    use crate::transport::{Cmd, Transport};
+
+    const PEDAL_UP: Event = Event::Midi { frame: 0, bytes: [0xB0, 64, 0] };
+
+    fn pedal(v: u8) -> LiveEv {
+        LiveEv::Midi { source: 1, bytes: [0xB3, 64, v] }
+    }
+
+    /// The events of the next block, from `t`.
+    fn block(s: &mut NoteScheduler, t: &mut Transport) -> Vec<Event> {
+        s.run(&t.advance(), &mut 1);
+        s.events().as_slice().to_vec()
+    }
+
+    // RENDER-35: the sustain pedal is the lane's, as its wheels are: CC 64 on any channel, sent at the
+    // next block's first frame on channel 1, the latest value; CC 121, its source's release and a
+    // panic put it back up, and it is sent again where it isn't up.
+    #[test]
+    fn the_pedal_reaches_the_lane_as_the_wheels_do() {
+        assert!(is_wheel([0xB5, 64, 127]) && !is_wheel([0xB0, 64, 128]) && !is_wheel([0xB0, 65, 127]));
+        let mut s = NoteScheduler::new(Arc::new(NotesData::empty()));
+        let mut t = Transport::new(0, false);
+        s.live(pedal(20), &mut 1);
+        s.live(pedal(127), &mut 1);
+        assert_eq!(block(&mut s, &mut t), [Event::Midi { frame: 0, bytes: [0xB0, 64, 127] }], "the latest, on channel 1");
+        assert!(s.wheels_moved());
+        assert!(block(&mut s, &mut t).is_empty(), "once");
+        s.live(LiveEv::Midi { source: 1, bytes: [0xB0, 121, 0] }, &mut 1);
+        assert!(block(&mut s, &mut t).contains(&PEDAL_UP), "reset all controllers");
+        s.live(pedal(100), &mut 1);
+        s.live(LiveEv::Release { source: 1 }, &mut 1);
+        assert!(block(&mut s, &mut t).contains(&PEDAL_UP), "its source let go");
+        assert!(!s.wheels_moved());
+        s.live(pedal(100), &mut 1);
+        block(&mut s, &mut t);
+        s.resend_wheels();
+        assert_eq!(block(&mut s, &mut t), [Event::Midi { frame: 0, bytes: [0xB0, 64, 100] }], "a new plan hears it");
+        s.reset();
+        assert_eq!(block(&mut s, &mut t), [PEDAL_UP], "a panic");
+    }
+
+    // RENDER-36: a seek or a Stop lets the pedal up at the jump's frame, before the Offs there; a
+    // loop's wrap and Play leave it down.
+    #[test]
+    fn a_seek_or_stop_lets_the_pedal_up() {
+        let clips = m2_song::LaneData::read(
+            &serde_json::json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 4}]}]}).to_string(),
+            &m2_song::LaneKind::Notes,
+        )
+        .unwrap();
+        let m2_song::LaneData::Notes(clips) = clips else { unreachable!() };
+        let tempo = m2_song::TempoMap::constant(120.0);
+        let mut s = NoteScheduler::new(Arc::new(NotesData::build(&clips, &tempo, 48_000.0)));
+        let mut t = Transport::new(0, false);
+        s.live(pedal(127), &mut 1);
+        t.apply(Cmd::Play, &tempo, 48_000.0);
+        assert!(block(&mut s, &mut t).contains(&Event::Midi { frame: 0, bytes: [0xB0, 64, 127] }), "Play leaves it down");
+        t.apply(Cmd::Loop(Some((0.0, 0.01))), &tempo, 48_000.0);
+        for _ in 0..4 {
+            let ev = block(&mut s, &mut t);
+            assert!(!ev.iter().any(|e| matches!(e, Event::Midi { .. })), "a wrap leaves it down: {ev:?}");
+        }
+        t.apply(Cmd::Loop(None), &tempo, 48_000.0);
+        t.apply(Cmd::Seek(0.5), &tempo, 48_000.0);
+        let ev = block(&mut s, &mut t);
+        assert_eq!(ev[0], PEDAL_UP, "first at the jump's frame: {ev:?}");
+        assert!(matches!(ev[1], Event::Off { frame: 0, .. }), "then the Offs: {ev:?}");
+        assert!(!s.wheels_moved());
+        s.live(pedal(127), &mut 1);
+        block(&mut s, &mut t);
+        t.apply(Cmd::Stop, &tempo, 48_000.0);
+        assert_eq!(block(&mut s, &mut t), [PEDAL_UP], "a Stop");
+        assert!(block(&mut s, &mut t).is_empty());
     }
 }

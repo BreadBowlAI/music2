@@ -107,7 +107,7 @@ fn bucket(root: &Path, newer: bool) -> (PathBuf, PathBuf) {
     write(
         &keys.join("m2pkg.toml"),
         "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
-         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+         repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.6\"\n",
     );
     write(&keys.join("src/index.ts"), KEYS);
     write(
