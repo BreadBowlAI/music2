@@ -66,6 +66,9 @@ impl Scratch {
         let after = self.files();
         let changed: Vec<_> = after.keys().chain(before.keys()).filter(|p| before.get(*p) != after.get(*p)).collect();
         assert!(changed.is_empty(), "m2 {args:?} wrote {changed:?}");
+        // The review's W7: the words that say why are plain: no `[…]`, `|` or `…` of the usage's.
+        let why = err.lines().next().unwrap_or_default();
+        assert!(!why.contains(['[', ']', '|', '…']), "m2 {args:?} says why in the usage's notation: {why}");
         err
     }
 }
@@ -92,7 +95,7 @@ const RENDER: &str = "m2 render <project> <out.wav> [--from S | --from-bar N] [-
 fn m2_render_refuses_a_flag_it_doesnt_know_and_writes_nothing() {
     let s = Scratch::new("render-o");
     let err = s.refused(&["render", &s.song(), "-o", "mix.wav"]);
-    assert!(err.contains("-o isn't something m2 render takes"), "{err}");
+    assert!(err.contains("`-o` isn't a flag of m2 render"), "{err}");
     assert!(err.contains(&format!("usage: {RENDER}")), "it shows how m2 render is called: {err}");
 }
 
@@ -129,7 +132,7 @@ fn every_command_refuses_a_flag_it_doesnt_know() {
     for (name, forms) in table(&s) {
         for args in [vec![name.as_str(), "--nope"], vec![name.as_str(), song.as_str(), "--nope", "x"]] {
             let err = s.refused(&args);
-            assert!(err.contains(&format!("--nope isn't something m2 {name}")), "m2 {args:?}: {err}");
+            assert!(err.contains(&format!("`--nope` isn't a flag of m2 {name}")), "m2 {args:?}: {err}");
             assert!(err.contains(&format!("usage: m2 {name}")), "m2 {args:?}: {err}");
         }
         let before = s.files();
@@ -150,11 +153,14 @@ fn a_flag_without_its_value_is_refused() {
     let s = Scratch::new("value");
     let song = s.song();
     for (args, says) in [
-        (&["render", &song, "out.wav", "--seconds"][..], "--seconds needs a value"),
-        (&["render", &song, "out.wav", "--from", "--seconds", "2"], "--from needs a value"),
-        (&["listen", &song, "--bars", "2", "--png", "--json"], "--png needs a value"),
-        (&["edit", &song, "song.ts", "--old", "x", "--new"], "--new needs a value"),
-        (&["clips", &song, "move", "kick/hits:my53vvkc", "--by"], "--by needs a value"),
+        (&["render", &song, "out.wav", "--seconds"][..], "`--seconds` needs a value"),
+        (&["render", &song, "out.wav", "--from", "--seconds", "2"], "`--from` needs a value"),
+        (&["listen", &song, "--bars", "2", "--png", "--json"], "`--png` needs a value"),
+        (&["edit", &song, "song.ts", "--old", "x", "--new"], "`--new` needs a value"),
+        (&["clips", &song, "move", "kick/hits:my53vvkc", "--by"], "`--by` needs a value"),
+        // The review's W2: --help where a value goes is no help, and exit 0 would say it was done.
+        (&["render", &song, "out.wav", "--seconds", "--help"], "`--seconds` needs a value"),
+        (&["render", &song, "out.wav", "--seconds", "-h"], "`--seconds` needs a value"),
     ] {
         let err = s.refused(args);
         assert!(err.contains(says), "m2 {args:?}: {err}");
@@ -169,12 +175,17 @@ fn a_word_that_starts_with_a_dash_is_refused_where_it_isnt_taken() {
     let s = Scratch::new("dash");
     let song = s.song();
     for (args, says) in [
-        (&["new", "-x"][..], "-x isn't something m2 new takes"),
+        (&["new", "-x"][..], "`-x` isn't a flag of m2 new"),
         (&["render", &song, "-"], "`-` can't be <out.wav>"),
-        (&["import", &song, "-"], "`-` can't be <file.wav|file.flac>…"),
-        (&["render", &song, "a.wav", "--seconds", "1", "--seconds", "2"], "--seconds is named twice"),
-        (&["render", &song, "a.wav", "--from", "1", "--from-bar", "2"], "--from and --from-bar"),
-        (&["new", "x", "--template", "empty", "--example", "first-song"], "--template and --example"),
+        (&["import", &song, "-"], "`-` can't be <file.wav or file.flac>"),
+        (&["search", "-"], "`-` can't be <words>"),
+        (&["render", &song, "a.wav", "--seconds", "1", "--seconds", "2"], "`--seconds` is given twice"),
+        (&["render", &song, "a.wav", "--from", "1", "--from-bar", "2"], "`--from` and `--from-bar` are one or the other"),
+        (&["new", "x", "--template", "empty", "--example", "first-song"], "`--template` and `--example` are one or the other"),
+        // The review's W3: `-` as a flag's value is standard input only where the usage says so.
+        (&["listen", &song, "--bars", "1", "--png", "-"], "`-` can't be the value of `--png`"),
+        (&["bounce", &song, "name", "--export", "-"], "`-` can't be the value of `--export`"),
+        (&["registry", "pending", "r", "--out", "-"], "`-` can't be the value of `--out`"),
     ] {
         let err = s.refused(args);
         assert!(err.contains(says), "m2 {args:?}: {err}");
@@ -193,13 +204,24 @@ fn too_many_or_too_few_words_are_refused() {
         (&["point", &song, "bars:9", "listen", "here"], "`here` is one word too many for m2 point"),
         (&["mute-in-song", &song, "kick"], "m2 mute-in-song needs on or off"),
         (&["mute-in-song", &song, "kick", "hats"], "m2 mute-in-song ends with on or off, not `hats`"),
-        (&["pack"], "m2 pack needs new|import-sfz|check|build|install|get|list|remove|lock|update"),
-        (&["pack", "frob", "x"], "m2 pack takes new|import-sfz|check|build|install|get|list|remove|lock|update next, not `frob`"),
+        (&["pack"], "m2 pack needs new, import-sfz, check, build, install, get, list, remove, lock or update"),
+        (
+            &["pack", "frob", "x"],
+            "m2 pack takes new, import-sfz, check, build, install, get, list, remove, lock or update next, not `frob`",
+        ),
+        (&["clips"], "m2 clips needs <project> then create, move, resize, split, join, duplicate, quantize, delete or json"),
         (&["pack", "list", "x"], "`x` is one word too many for m2 pack list"),
-        (&["pack", "new", "x"], "m2 pack new needs --name @owner/name"),
-        (&["clips", &song, "fold", "kick/hits:x"], "create|move|resize|split|join|duplicate|quantize|delete|json"),
-        (&["clips", &song, "delete", "kick/hits@9.3.2", "--copy"], "--copy isn't something m2 clips <project> delete takes"),
+        (&["pack", "new", "x"], "m2 pack new needs `--name`"),
+        (
+            &["clips", &song, "fold", "kick/hits:x"],
+            "create, move, resize, split, join, duplicate, quantize, delete or json next, not `fold`",
+        ),
+        (&["clips", &song, "delete", "kick/hits@9.3.2", "--copy"], "`--copy` isn't a flag of m2 clips <project> delete"),
         (&["docs", "window", "shortcuts"], "`shortcuts` is one word too many for m2 docs"),
+        // The review's W7: the command named as it was typed.
+        (&["build", &song, "--nope"], "`--nope` isn't a flag of m2 build"),
+        // The review's W6: the flag that doesn't go with the other words is the one named.
+        (&["point", &song, "bars:9", "look", "--clear"], "`--clear` doesn't go with `bars:9`"),
     ] {
         let err = s.refused(args);
         assert!(err.contains(says), "m2 {args:?}: {err}");
@@ -220,4 +242,95 @@ fn numbers_and_flags_in_any_order_are_read() {
     assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
     assert!(String::from_utf8_lossy(&o.stdout).starts_with("rendered "), "{}", String::from_utf8_lossy(&o.stdout));
     assert!(out.is_file());
+}
+
+// The review's W1: `--beats` says how every `@place` of a clip gesture reads, so each gesture that
+// names clips by place takes it, as it did before AGENT-13. (`words.rs` asserts, in a debug build,
+// that a command asks only for flags its form shows: tests/clips.rs runs each gesture.)
+#[test]
+fn every_clip_gesture_reads_places_in_beats() {
+    let s = Scratch::new("beats");
+    let song = s.song();
+    let hits = || std::fs::read_to_string(s.0.join("song/data/kick/hits.json")).unwrap();
+    assert!(hits().contains("my53vvkc"));
+    let o = s.m2(&["clips", &song, "delete", "kick/hits@0", "--beats"]);
+    assert!(o.status.success(), "{}", String::from_utf8_lossy(&o.stderr));
+    assert!(!hits().contains("my53vvkc"), "deleted by its place in beats");
+    for gesture in
+        [&["join", "kick/hits@0", "kick/hits@64"][..], &["duplicate", "kick/hits@0"], &["quantize", "kick/hits@0", "--grid", "1"]]
+    {
+        let o = s.m2(&[&["clips", &song][..], gesture, &["--beats"]].concat());
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_ne!(o.status.code(), Some(2), "m2 clips {gesture:?} --beats: {err}");
+        assert!(err.to_lowercase().contains("no clip"), "m2 clips {gesture:?} --beats reads its places, and finds none there: {err}");
+    }
+}
+
+// The review's W2: `m2 edit`'s texts (`<text>`) take the next word whatever it is (review F9), the
+// command's own flags and -h included.
+#[test]
+fn m2_edit_takes_any_text() {
+    let s = Scratch::new("text");
+    let song = s.song();
+    let read = || std::fs::read_to_string(s.0.join("song/song.ts")).unwrap();
+    for (old, new) in [("The root module", "--all"), ("--all", "-h"), ("-h", "--old"), ("--old", "The root module")] {
+        let o = s.m2(&["edit", &song, "song.ts", "--old", old, "--new", new]);
+        assert!(o.status.success(), "--old {old} --new {new}: {}", String::from_utf8_lossy(&o.stderr));
+        assert!(String::from_utf8_lossy(&o.stdout).contains("replaced 1 place"), "{}", String::from_utf8_lossy(&o.stdout));
+        assert!(read().starts_with(&format!("// {new}: whatever")), "{}", &read()[..40]);
+    }
+}
+
+// The review's W3: `m2 listen --with -` reads the Tx from standard input, as its usage now says.
+#[test]
+fn listen_with_reads_standard_input() {
+    let s = Scratch::new("with");
+    let o = s.m2(&["listen", &s.song(), "--bars", "1", "--with", "-"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("--with - isn't a Tx"), "standard input was read, and it was empty: {err}");
+}
+
+// The review's W4: a word with a space in it is text, not a flag, though it starts with `-`; a new
+// song's folder still can't start with `-` (`-5` reads as a number).
+#[test]
+fn text_that_starts_with_a_dash_and_a_new_folder() {
+    let s = Scratch::new("text-dash");
+    let o = s.m2(&["point", &s.song(), "bars:9", "- check the kick"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("music2 doesn't have this song open"), "taken, then refused for the app: {err}");
+    // `-5` reads as a number, so m2 new's own words refuse it; `-.x` doesn't, so it is a flag.
+    for (name, says) in [("-5", "can't start with `-`"), ("-.x", "`-.x` isn't a flag of m2 new")] {
+        let before = s.files();
+        let o = s.m2(&["new", name]);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert!(!o.status.success() && err.contains(says), "m2 new {name}: {err}");
+        assert_eq!(s.files(), before, "m2 new {name} made something");
+    }
+}
+
+// The review's W5: a flag that is gone reaches its command, with a value or none, given once or
+// more, which says why it is gone.
+#[test]
+fn a_gone_flag_is_said_gone_however_it_is_given() {
+    let s = Scratch::new("gone");
+    let song = s.song();
+    for args in [&["bounce", &song, "name", "--sr"][..], &["render", &song, "out.wav", "--sr", "1", "--sr", "2"]] {
+        let o = s.m2(args);
+        let err = String::from_utf8_lossy(&o.stderr);
+        assert_eq!(o.status.code(), Some(1), "m2 {args:?}: {err}");
+        assert!(err.contains("--sr is gone"), "m2 {args:?}: {err}");
+    }
+}
+
+// The review's W6: `--as` where a flag goes, before the end, is said to go at the end, as anywhere
+// else (AGENT-10): the flag before it takes no value.
+#[test]
+fn as_where_a_flag_goes_is_said_to_go_last() {
+    let s = Scratch::new("as");
+    let o = s.m2(&["listen", &s.song(), "--as-heard", "--as", "claude", "--json"]);
+    let err = String::from_utf8_lossy(&o.stderr);
+    assert_eq!(o.status.code(), Some(1), "{err}");
+    assert!(err.contains("--as and --why go at the end"), "{err}");
 }

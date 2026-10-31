@@ -49,9 +49,10 @@ from.
 `m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. \
 `m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command \
 doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, \
-a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`) or `-` alone \
-(standard input, where a command reads it). Flags can go anywhere after the command. `m2 docs` prints the guide, \
-built into this `m2`.";
+a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`), has a space in it, \
+or is `-` alone: standard input, where the usage says `| -`. A flag's value is the next word, unless that is a flag; \
+a `<text>` is the next word whatever it is. Flags can go anywhere after the command, but `--as` and `--why` go last. \
+`m2 docs` prints the guide, built into this `m2`.";
 
 /// The guide's page only: commands to try, on a copy of an example.
 pub const EXAMPLES: &str = "\
@@ -105,12 +106,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "listen",
         also: &[],
-        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]",
+        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]",
         words: "measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, \
                 stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars \
                 count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` \
-                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked \
-                and never written, before and after; `--png` draws the bands over time. Its own process, at \
+                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx (from a file, or \
+                standard input) checked and never written, before and after; `--png` draws the bands over time. Its own process, at \
                 background priority, one at a time; it writes nothing into the song",
         more: "It works with the app open or closed. [Listening](listening.md) says what each number means.",
     },
@@ -395,10 +396,10 @@ pub const COMMANDS: &[Command] = &[
                 m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]\n\
                 m2 clips <project> resize <clip> --start <place> --length B [--beats]\n\
                 m2 clips <project> split <clip>… --at <place> [--beats]\n\
-                m2 clips <project> join <clip>…\n\
-                m2 clips <project> duplicate <clip>… [--grid B]\n\
-                m2 clips <project> quantize <clip>… --grid B [--ends]\n\
-                m2 clips <project> delete <clip>…\n\
+                m2 clips <project> join <clip>… [--beats]\n\
+                m2 clips <project> duplicate <clip>… [--grid B] [--beats]\n\
+                m2 clips <project> quantize <clip>… --grid B [--ends] [--beats]\n\
+                m2 clips <project> delete <clip>… [--beats]\n\
                 m2 clips <project> json <gesture.json | ->",
         words: "one clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), \
                 or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or \
@@ -535,7 +536,9 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 /// Flags that are gone: never shown, but still known, so that the command says why, in words that
-/// need the song read first (`--sr`: it renders at the song's own rate, which it names).
+/// need the song read first (`--sr`: it renders at the song's own rate, which it names). One
+/// written with a value (`--sr N`) takes the next word when it isn't a flag; any may be given
+/// more than once: whatever is given, the command says it is gone.
 pub const GONE: &[(&str, &str)] = &[("render", "--sr N"), ("bounce", "--sr N"), ("plugin-state", "--force")];
 
 /// The command `word` runs, by its name or another word for it.

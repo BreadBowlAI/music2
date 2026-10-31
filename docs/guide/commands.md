@@ -16,7 +16,7 @@ One program writes a project at a time (its lock is `.music2/lock`). While the a
 
 std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. `m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`) or `-` alone (standard input, where a command reads it). Flags can go anywhere after the command. `m2 docs` prints the guide, built into this `m2`.
+`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. `m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`), has a space in it, or is `-` alone: standard input, where the usage says `| -`. A flag's value is the next word, unless that is a flag; a `<text>` is the next word whatever it is. Flags can go anywhere after the command, but `--as` and `--why` go last. `m2 docs` prints the guide, built into this `m2`.
 
 ## m2 new
 
@@ -45,10 +45,10 @@ Render to a 24-bit WAV, as the app's Export Audio does: to the last clip's end a
 ## m2 listen
 
 ```
-m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]
+m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]
 ```
 
-Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked and never written, before and after; `--png` draws the bands over time. Its own process, at background priority, one at a time; it writes nothing into the song. It works with the app open or closed. [Listening](listening.md) says what each number means.
+Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx (from a file, or standard input) checked and never written, before and after; `--png` draws the bands over time. Its own process, at background priority, one at a time; it writes nothing into the song. It works with the app open or closed. [Listening](listening.md) says what each number means.
 
 ## m2 kernels
 
@@ -320,10 +320,10 @@ m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]
 m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]
 m2 clips <project> resize <clip> --start <place> --length B [--beats]
 m2 clips <project> split <clip>… --at <place> [--beats]
-m2 clips <project> join <clip>…
-m2 clips <project> duplicate <clip>… [--grid B]
-m2 clips <project> quantize <clip>… --grid B [--ends]
-m2 clips <project> delete <clip>…
+m2 clips <project> join <clip>… [--beats]
+m2 clips <project> duplicate <clip>… [--grid B] [--beats]
+m2 clips <project> quantize <clip>… --grid B [--ends] [--beats]
+m2 clips <project> delete <clip>… [--beats]
 m2 clips <project> json <gesture.json | ->
 ```
 

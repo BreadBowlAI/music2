@@ -134,8 +134,14 @@ fn usage_of(word: &str) -> String {
     commands::find(word).map_or_else(String::new, |c| c.usage.replace('\n', "\n  "))
 }
 
+/// The value of flag `name`, in words `words::read` handed on (AGENT-13).
 fn flag(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    words::value(args, name)
+}
+
+/// Whether flag `name` was given, in words `words::read` handed on (AGENT-13).
+fn on(args: &[String], name: &str) -> bool {
+    words::on(args, name)
 }
 
 /// How many threads `m2 render` and `m2 bounce` use on the project in `dir` (8a): `--threads`, else
@@ -156,7 +162,7 @@ fn threads(args: &[String], dir: &Path, range: bool) -> Result<render::Threads> 
 /// the plugins at another rate would sound different, and the converter for exporting at
 /// another rate isn't built, so `--sr` is refused rather than honoured.
 fn render_rate(args: &[String], project: &Project) -> Result<u32> {
-    if args.iter().any(|a| a == "--sr") {
+    if on(args, "--sr") {
         bail!("--sr is gone: a song renders at its own sample_rate ({} Hz, in music2.toml)", project.sample_rate());
     }
     Ok(project.sample_rate())
@@ -361,6 +367,9 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("new") => {
             use m2_server::project::{self, Source};
             let dir = arg(1)?;
+            if dir.starts_with('-') {
+                bail!("a new song's folder can't start with `-`, which reads as a flag or a number: name it another way");
+            }
             let (source, what, ids) = match flag(&args, "--example") {
                 Some(id) => (Source::Example(id), "example", project::examples()),
                 None => {
@@ -378,7 +387,7 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("check" | "build") => {
             let mut pk = packages()?;
             let (project, c) = compile(Path::new(&arg(1)?), &mut pk)?;
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&c.ir)?);
                 return Ok(());
             }
@@ -392,7 +401,7 @@ fn run(args: Vec<String>) -> Result<()> {
             let out = PathBuf::from(arg(2)?);
             let sr = render_rate(&args, &project)?;
             let from = match (flag(&args, "--from"), flag(&args, "--from-bar")) {
-                (Some(_), Some(_)) => bail!("say where to start once: --from (seconds) or --from-bar (a bar, from 1)"),
+                (Some(_), Some(_)) => unreachable!("its usage takes one of them at most"),
                 (None, Some(bar)) => {
                     let bar: u64 = bar.parse().ok().filter(|&b| b >= 1).with_context(|| format!("--from-bar {bar}: bars count from 1"))?;
                     c.data.tempo().seconds_at(bar_start(&project.arrangement, bar - 1))
@@ -458,7 +467,7 @@ fn run(args: Vec<String>) -> Result<()> {
                         })
                         .collect::<Vec<_>>()
                 };
-                if args.iter().any(|a| a == "--json") {
+                if on(&args, "--json") {
                     println!(
                         "{}",
                         serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)})
@@ -628,7 +637,7 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("graph") => {
             let s = reader(Path::new(&arg(1)?))?;
             let v = s.view();
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&v)?);
                 return Ok(());
             }
@@ -736,19 +745,7 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);
-            let mut files = vec![];
-            let mut i = 2;
-            while i < args.len() {
-                if args[i].starts_with("--") {
-                    i += 2;
-                    continue;
-                }
-                files.push(PathBuf::from(&args[i]));
-                i += 1;
-            }
-            if files.is_empty() {
-                bail!("m2 import names the WAV or FLAC files to bring in: {}", usage_of("import"));
-            }
+            let files: Vec<PathBuf> = words::places(&args)[1..].iter().map(PathBuf::from).collect();
             // While the app has the song open, the app's own import brings the files in, so they
             // come into the song only inside the change that lands (AGENT-1, AGENT-3).
             if let Some(holder) = app::holder(&dir) {
@@ -820,7 +817,7 @@ fn run(args: Vec<String>) -> Result<()> {
         Some("delete-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let track = arg(2)?;
-            let cascade = args.iter().any(|a| a == "--cascade");
+            let cascade = on(&args, "--cascade");
             let shown = |d: &m2_editor::Dependent| format!("  {} in {} ({}, line {})", d.component, d.label, d.file, d.line);
             match s.delete_track(&track, cascade).map_err(|e| anyhow!("{e}"))? {
                 m2_editor::Deleted::Done { edited, excised } => {
@@ -861,7 +858,7 @@ change that code first",
                 "order" => s.reorder(&args[3..]),
                 "colour" | "color" => s.recolour(&arg(3)?, &arg(4)?),
                 "reset" => m2_editor::layout::reset(&mut s),
-                other => bail!("m2 layout <project> order <IDs…> | colour <ID> <colour> | reset, not `{other}`"),
+                _ => unreachable!("its usage takes only these"),
             }
             .map_err(|e| anyhow!("{e}"))?;
             println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
@@ -1065,7 +1062,7 @@ change that code first",
             }
         },
         Some("plugin-state") => {
-            if args.iter().any(|a| a == "--force") {
+            if on(&args, "--force") {
                 bail!("--force is gone: saving a plugin's state replaces what is there as one edit, which undo puts back (WRITE-1)");
             }
             let dir = PathBuf::from(arg(1)?);
@@ -1224,7 +1221,7 @@ fn pack(args: &[String]) -> Result<()> {
             let only = args.get(3).map(|n| PackName::new(n).map_err(|e| anyhow!(e))).transpose()?;
             let moving = match (command, &only) {
                 ("lock", None) => m2_song::pack::Move::Needed,
-                ("lock", Some(_)) => bail!("{}", usage_of("pack")),
+                ("lock", Some(_)) => unreachable!("its usage takes one word"),
                 (_, None) => m2_song::pack::Move::All,
                 (_, Some(name)) => m2_song::pack::Move::Only(name),
             };
@@ -1234,7 +1231,7 @@ fn pack(args: &[String]) -> Result<()> {
                 None => println!("{} says that already", m2_song::path::LOCK),
             }
         }
-        _ => bail!("{}", usage_of("pack")),
+        _ => unreachable!("its usage takes only these"),
     }
     Ok(())
 }
@@ -1348,7 +1345,7 @@ fn registry(args: &[String]) -> Result<()> {
                 bail!("{n} version{s} not built: {it} pending, and the rest are in the catalog");
             }
         }
-        _ => bail!("{}", usage_of("registry")),
+        _ => unreachable!("its usage takes only these"),
     }
     Ok(())
 }
@@ -1549,7 +1546,7 @@ fn tx(args: &[String]) -> Result<()> {
         let hash = m2_song::Sha::parse_prefixed(&h).with_context(|| format!("--seen {h}: a hash is `sha256:` and 64 hex digits"))?;
         tx.expect = m2_song::Expect::Seen(hash);
     }
-    let check = args.iter().any(|a| a == "--check");
+    let check = on(args, "--check");
     // Whatever the code says: the session refuses what needs it to compile, in JSON, and a
     // recovery fix's Tx needs it not (P3).
     let mut s = match check {
