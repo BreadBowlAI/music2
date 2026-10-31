@@ -118,6 +118,7 @@ export const SUITES = [
   ["nx-midi", "fix", { expect: 25, s: 3 }],
   ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["io-record", "fix", { expect: 38, s: 7 }],
+  ["rec-takes", "fix", { expect: 41, s: 12 }],
   ["pl-notes", "fix", { expect: 102, s: 16 }],
   ["pl-lanes", "fix", { expect: 28, s: 4 }],
   ["ports", "proj", { expect: 46, s: 5 }],

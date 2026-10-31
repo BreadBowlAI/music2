@@ -22,8 +22,9 @@ const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } fro
                     const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// What AGENT-11 names as the musician's: each is in the table, and not for agents.
-const THE_MUSICIANS: [(&str, &str); 45] = [
+const THE_MUSICIANS: [(&str, &str); 46] = [
     ("POST", "/api/graph/transport"),
+    ("POST", "/api/graph/arm"),
     ("POST", "/api/graph/seek"),
     ("POST", "/api/graph/loop"),
     ("POST", "/api/graph/panic"),
@@ -73,6 +74,7 @@ const THE_MUSICIANS: [(&str, &str); 45] = [
 /// Every song change the page makes, which stays open to agents (AGENT-11), and is a write.
 const SONG_CHANGES: [(&str, &str); 41] = [
     ("POST", "/api/tx/commit"),
+    ("POST", "/api/graph/take"),
     ("POST", "/api/graph/set"),
     ("POST", "/api/graph/connect"),
     ("POST", "/api/graph/disconnect"),

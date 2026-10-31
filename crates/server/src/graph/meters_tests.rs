@@ -361,3 +361,15 @@ fn meters_that_cant_be_laid_out_fall_back_and_say_so() {
     let words = rig.graph.activity().meters.unwrap_or_default();
     assert!(words.starts_with("The meters show each track before its fader for now"), "the status says why: {words}");
 }
+
+// MON-13 (review Q7): the take's level bar of a track that records one channel is that channel's,
+// never the louder of its pair.
+#[test]
+fn a_mono_takes_input_level_is_its_own_channel() {
+    let ring = m2_play::ring::Ring::new(4800);
+    ring.write(&[[0.9, 0.1]; 480], Some(0));
+    let mut m = Meters::default();
+    assert_eq!(m.input_level(&ring, m2_play::Channels::One(1)), 0.1, "channel 2 alone");
+    ring.write(&[[0.9, 0.1]; 480], Some(480));
+    assert_eq!(m.input_level(&ring, m2_play::Channels::Pair(0)), 0.9, "a pair: the louder");
+}

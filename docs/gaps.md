@@ -13,9 +13,17 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal (it needs controller data in a notes lane, a format bump: today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); recording over a clip into it (overdub), and one clip for each time round a loop; the computer keyboard's velocity and sustain. | Expressive parts use the wheels; loop recording builds a part in layers. | No | medium |
-| 25 | **The rest of recording audio**: an arm button (hear yourself without recording); takes stacked per loop pass; punch in and out; inputs 3 and 4 (only the first two channels record); a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers). | Singers stack takes and fix one line by punching in. | No | medium |
+| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal into a clip (it needs controller data in a notes lane, a format bump: left for later on purpose; today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); the computer keyboard's sustain. Overdub, a clip for each time round a loop and the keyboard piano's velocity are built (track `recording`, MON-11, MON-12, MON-15). | Expressive parts use the wheels and the pedal. | No | medium |
+| 25 | **The rest of recording audio**: a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers); comping (a clip plays one whole take, not parts of several). Arm, takes for each time round a loop, punch in and out, and inputs 3 and 4 are built (track `recording`, MON-9 to MON-14). | A singer builds the best take from the best lines. | No | medium |
 
+- **Arms and each track's input channels last only while the song is open**: they aren't kept with it, and every window shares them.
+- **One notes track records at a time**: the keyboards play one track, so arming a second notes track disarms the first. Audio tracks, any number.
+- **A key held over a loop's wrap** ends at the loop's end, and isn't carried into the next pass.
+- **The loop moved, turned off or on after a take's first pass** ends the take where it is heard.
+- **An audio clip that can't be cut** (its pitch changed, or reversed and warped) stays whole under a punch: the take plays over it.
+- **The take's level bar** shows the first armed audio track's input only.
+- **An armed track stops hearing its input when the sound output changes** (a new player), until it is armed again or a take starts.
+- **An input with many channels** keeps 4 s of each pair in memory, ready for any track: a 64-channel one takes about 50 MB.
 - **A take waits while the code doesn't compile.** It is written once the code compiles; closing the song first loses it (a message says so).
 - **Sound made during the count-in** isn't kept in the take.
 - **An input on its own clock** (not the output's device) can drift a little against the song in a long take.

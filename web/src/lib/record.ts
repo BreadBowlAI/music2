@@ -11,11 +11,17 @@
 // does) or `error` (a toast). The count's beats left are this window's own, from the answer's
 // `{beats, ms}` and its clock. While counting, Space, Return, Esc and R cancel it, and nothing plays
 // (D6). While the code doesn't compile, R says so and starts nothing (the review's R1).
+//
+// Since track recording (MON-9 to MON-15): Record records into the armed tracks (each header's R;
+// one notes track at a time, any number of audio tracks, each from its own input channels), or the
+// selected one when none is armed. Punch (Record's menu) records only between the loop's edges and
+// replaces what was there; over the loop, each pass is a take; Overdub puts notes into the clip
+// under them. An audio clip over a loop has a Takes menu (Wave.tsx).
 
 import { create } from "zustand";
 import { on } from "./events";
 import { useClipSelection } from "./clips";
-import { findLane, clipIndex, lockReason, type GraphState } from "./graph";
+import { findLane, clipIndex, lockReason, type ClipRef, type GraphState, type TimelineTrack } from "./graph";
 import { useGrid } from "./grid";
 import { holdTarget, currentRecordTarget } from "./playTarget";
 import { request } from "./projects";
@@ -31,27 +37,49 @@ export interface TakeNote {
   held?: boolean;
 }
 
+/** A lane a take records on: where its clip starts, and an audio lane's input channels ("3-4"). */
+export interface TakeLane {
+  module: string;
+  lane: string;
+  kind: "notes" | "audio";
+  start: number;
+  channels?: string;
+}
+
 /** The take as the server says it. */
 export interface Take {
   phase: "count" | "take";
+  /** Its first lane; every lane it records on (MON-9). */
   module: string;
   lane: string;
+  lanes?: TakeLane[];
+  /** The pass of the loop it records now, from 0 (MON-11); Punch and Overdub (MON-10, MON-12). */
+  pass?: number;
+  punch?: boolean;
+  overdub?: boolean;
   /** A notes take, or an audio take from the sound input (io); `hear`: the input plays on the track while it records. */
   kind?: "notes" | "audio";
   hear?: boolean;
   /** The bar line the clip starts on, and where recording started. */
   start: number;
   from: number;
-  /** The loop's end, when the take ends there (the first pass only). */
+  /** The loop's end (each pass ends there), or a punch's. */
   until: number | null;
   count_in: { beats: number; ms: number } | null;
   notes: TakeNote[];
+}
+
+/** The armed tracks, each with the lane it records on, and each track's input channels (MON-9, MON-13). */
+export interface Arms {
+  armed: Record<string, string>;
+  channels: Record<string, string>;
 }
 
 declare module "./graph" {
   interface GraphState {
     /** The take recording, or null (lane B). */
     record?: Take | null;
+    arm?: Arms;
   }
 }
 
@@ -65,13 +93,15 @@ interface Recording {
 
 export const useRecord = create<Recording>(() => ({ take: null, counted: null, asking: false }));
 
-/** Record's two options, this machine's (`settings.json` `record`). */
+/** Record's options, this machine's (`settings.json` `record`): Punch and Overdub since track recording. */
 export interface RecordOptions {
   count_in: boolean;
   quantize: boolean;
+  punch: boolean;
+  overdub: boolean;
 }
 
-export const useRecordOptions = create<RecordOptions & { read: boolean }>(() => ({ count_in: true, quantize: false, read: false }));
+export const useRecordOptions = create<RecordOptions & { read: boolean }>(() => ({ count_in: true, quantize: false, punch: false, overdub: false, read: false }));
 
 /** The options as kept, read once. */
 export async function loadRecordOptions(): Promise<RecordOptions> {
@@ -79,7 +109,7 @@ export async function loadRecordOptions(): Promise<RecordOptions> {
   if (o.read) return o;
   try {
     const s = await settingsApi.get();
-    if (s.record) useRecordOptions.setState({ ...s.record, read: true });
+    if (s.record) useRecordOptions.setState({ punch: false, overdub: false, ...s.record, read: true });
   } catch {
     // The defaults: count in, don't snap.
   }
@@ -89,9 +119,10 @@ export async function loadRecordOptions(): Promise<RecordOptions> {
 /** Change an option: kept at once. */
 export async function setRecordOption(change: Partial<RecordOptions>) {
   const now = { ...(await loadRecordOptions()), ...change };
-  useRecordOptions.setState({ count_in: now.count_in, quantize: now.quantize, read: true });
+  const kept = { count_in: now.count_in, quantize: now.quantize, punch: now.punch, overdub: now.overdub };
+  useRecordOptions.setState({ ...kept, read: true });
   try {
-    await settingsApi.set({ record: { count_in: now.count_in, quantize: now.quantize } });
+    await settingsApi.set({ record: kept });
   } catch (error) {
     useStore.getState().toast(error instanceof Error ? error.message : String(error));
   }
@@ -118,7 +149,8 @@ function show(take: Take | null) {
   const was = useRecord.getState();
   const counted = take?.phase === "count" ? (was.take?.phase === "count" ? was.counted : performance.now()) : null;
   useRecord.setState({ take, counted });
-  holdTarget(take && take.kind !== "audio" ? { module: take.module, lane: take.lane } : null);
+  const notes = take?.lanes?.find((l) => l.kind === "notes") ?? (take && take.kind !== "audio" ? take : null);
+  holdTarget(notes ? { module: notes.module, lane: notes.lane } : null);
   listen(take?.phase === "count");
 }
 
@@ -137,7 +169,9 @@ export async function startRecording() {
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return toast(`${why}.`);
-  const t = currentRecordTarget();
+  // The armed tracks, else the selected one (MON-9): the server records into the armed ones.
+  const armed = Object.entries(graph.arm?.armed ?? {})[0];
+  const t = armed ? { module: armed[0], lane: armed[1] } : currentRecordTarget();
   if (!t) return toast("Select a notes track or an audio track to record on it.");
   useRecord.setState({ asking: true });
   try {
@@ -148,6 +182,8 @@ export async function startRecording() {
       lane: t.lane,
       count_in: o.count_in,
       quantize: o.quantize ? notesGrid() : null,
+      punch: o.punch,
+      overdub: o.overdub,
     });
     show(take);
   } catch (error) {
@@ -275,3 +311,50 @@ useStore.subscribe((s) => {
   }
   selectWritten(s.graph);
 });
+
+/**
+ * The lane a track's R arms (MON-9): its notes lane, else its audio lane; of several, the one of the
+ * clip the Notes view shows for that track (`shown`), as what plays chooses (playTarget.ts), else the
+ * first.
+ */
+export function armLane(track: TimelineTrack, shown?: ClipRef): { lane: string; audio: boolean } | null {
+  const pick = (kind: "notes" | "audio") => {
+    const lanes = track.lanes.filter((l) => l.kind === kind);
+    return (shown?.module === track.module ? lanes.find((l) => l.key === shown.lane) : undefined) ?? lanes[0];
+  };
+  const notes = pick("notes");
+  const audio = pick("audio");
+  return notes ? { lane: notes.key, audio: false } : audio ? { lane: audio.key, audio: true } : null;
+}
+
+/** Arm a track on `lane`, or disarm it; or choose the input channels it records ("3-4", "2"). No undo step. */
+export async function arm(module: string, change: { lane?: string; armed?: boolean; channels?: string }) {
+  const { graph } = useStore.getState();
+  if (!graph) return;
+  try {
+    await request("/api/graph/arm", { session: graph.session, module, ...change });
+  } catch (error) {
+    toastError(error);
+  }
+}
+
+/** How many channels the sound input Settings chose has: what a track's R menu lists. */
+export async function inputChannels(): Promise<{ name: string; channels: number }> {
+  try {
+    const [s, inputs] = await Promise.all([settingsApi.get(), settingsApi.inputs()]);
+    const id = s.input?.device ?? null;
+    const input = inputs.find((i) => i.id === id) ?? inputs.find((i) => i.default) ?? inputs[0];
+    return input ? { name: input.name, channels: Math.max(1, input.channels) } : { name: "The input", channels: 2 };
+  } catch {
+    return { name: "The input", channels: 2 };
+  }
+}
+
+/** The channels an input of `n` offers: its pairs ("1-2", "3-4", …), then each one alone. */
+export function channelChoices(n: number): string[] {
+  const pairs = Array.from({ length: Math.floor(n / 2) }, (_, i) => `${2 * i + 1}-${2 * i + 2}`);
+  return [...pairs, ...Array.from({ length: n }, (_, i) => `${i + 1}`)];
+}
+
+/** "3–4" for "3-4": a range as the window says it. */
+export const channelsSaid = (c: string) => c.replace("-", "–");
