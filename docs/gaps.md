@@ -22,6 +22,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The loop moved, turned off or on after a take's first pass** ends the take where it is heard.
 - **An audio clip that can't be cut** (its pitch changed, or reversed and warped) stays whole under a punch: the take plays over it.
 - **The take's level bar** shows the first armed audio track's input only.
+- **An armed track stops hearing its input when the sound output changes** (a new player), until it is armed again or a take starts.
 - **An input with many channels** keeps 4 s of each pair in memory, ready for any track: a 64-channel one takes about 50 MB.
 - **A take waits while the code doesn't compile.** It is written once the code compiles; closing the song first loses it (a message says so).
 - **Sound made during the count-in** isn't kept in the take.

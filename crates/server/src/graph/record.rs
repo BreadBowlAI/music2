@@ -221,8 +221,9 @@ pub(super) struct Ended {
 enum Part {
     /// A notes clip, in the lane format.
     Notes { module: String, lane: String, clip: Value, how: How },
-    /// An audio take: its file, being written or written, and where it goes.
-    Audio { module: String, lane: String, how: How, at: Placing, file: Audio },
+    /// An audio take: its file, being written or written (boxed: far larger than a notes part),
+    /// and where it goes.
+    Audio { module: String, lane: String, how: How, at: Placing, file: Box<Audio> },
 }
 
 /// Where an audio take's clip goes: its start (beats), where it starts in the file (seconds), how
@@ -484,7 +485,7 @@ impl Take {
             let Some(w) = p.writer.take() else { continue };
             w.end(frames);
             let at = self.placing(at, p.lead);
-            parts.push(Part::Audio { module: p.module, lane: p.lane, how, at, file: Audio::Writing(w) });
+            parts.push(Part::Audio { module: p.module, lane: p.lane, how, at, file: Box::new(Audio::Writing(w)) });
         }
         Ended { token: self.token, tempo: self.tempo, parts }
     }
@@ -1377,18 +1378,18 @@ impl Graph {
         // Each file, written.
         for part in &mut e.parts {
             if let Part::Audio { file, .. } = part
-                && let Audio::Writing(_) = file
+                && let Audio::Writing(_) = **file
             {
-                let Audio::Writing(w) = std::mem::replace(file, Audio::Empty) else { unreachable!("writing") };
+                let Audio::Writing(w) = std::mem::replace(&mut **file, Audio::Empty) else { unreachable!("writing") };
                 match w.done() {
-                    Ok(Some(w)) => *file = Audio::Written(w),
+                    Ok(Some(w)) => **file = Audio::Written(w),
                     Ok(None) => {}
                     Err(err) => return Ok(lost(&format!("{err:#}"))),
                 }
             }
         }
         // A file with no frame was nothing played.
-        e.parts.retain(|p| !matches!(p, Part::Audio { file: Audio::Empty, .. }));
+        e.parts.retain(|p| !matches!(p, Part::Audio { file, .. } if matches!(**file, Audio::Empty)));
         if e.parts.is_empty() {
             return Ok(json!({"t": "take", "empty": true}));
         }
@@ -1407,14 +1408,16 @@ impl Graph {
             let Ok(lane) = LaneAddr::new(part.module(), part.lane()) else { return Ok(lost(&format!("{label} is gone."))) };
             match part {
                 Part::Notes { clip, how, .. } => takes.push(Taken { lane, clip: clip.clone(), how: *how }),
-                Part::Audio { how, at, file: Audio::Written(w), .. } => {
+                Part::Audio { how, at, file, .. } => {
+                    let Audio::Written(w) = &**file else { unreachable!("written or gone above") };
                     let f = &w.0;
                     // A take over a loop: its note first, durable before the Tx names the file. One
                     // there already was written before a Tx that didn't land: it is this file's.
-                    if !at.takes.is_empty() && m2_editor::take::takes_of(&dir, f.asset.as_str()).is_empty() {
-                        if let Err(err) = m2_editor::take::note_takes(&dir, f.asset.as_str(), &at.takes) {
-                            return Ok(lost(&format!("{err}")));
-                        }
+                    if !at.takes.is_empty()
+                        && m2_editor::take::takes_of(&dir, f.asset.as_str()).is_empty()
+                        && let Err(err) = m2_editor::take::note_takes(&dir, f.asset.as_str(), &at.takes)
+                    {
+                        return Ok(lost(&format!("{err}")));
                     }
                     let length =
                         at.length.unwrap_or_else(|| m2_editor::import::length_at(&e.tempo, at.start, (f.seconds - at.offset).max(0.0)));
@@ -1427,7 +1430,6 @@ impl Graph {
                         notes.push(take_audio::TOO_SLOW.into());
                     }
                 }
-                Part::Audio { .. } => unreachable!("written or gone above"),
             }
         }
         match self.place_takes(e.token, files, takes) {
@@ -1438,7 +1440,9 @@ impl Graph {
                 }
                 let first = &e.parts[0];
                 let mut w = json!({"revision": revision, "made": v["made"], "module": first.module(), "lane": first.lane()});
-                if let Some(Part::Audio { file: Audio::Written(f), .. }) = e.parts.iter().find(|p| matches!(p, Part::Audio { .. })) {
+                if let Some(Part::Audio { file, .. }) = e.parts.iter().find(|p| matches!(p, Part::Audio { .. }))
+                    && let Audio::Written(f) = &**file
+                {
                     w["asset"] = json!(f.0.asset.as_str());
                 }
                 notes.dedup();
