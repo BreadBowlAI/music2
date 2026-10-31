@@ -220,6 +220,16 @@ An example body:
 
 The drags in progress: knobs, clips and the tempo.
 
+### `POST /api/graph/loudness`
+
+Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop.
+
+An example body:
+
+```json
+{"session": 7, "client": "w1", "on": true}
+```
+
 ### `POST /api/graph/markers`
 
 Write the ruler's markers, the whole list, into layout.json. It writes the song: one undo step.
@@ -352,7 +362,7 @@ An example body:
 
 ### `POST /api/graph/scope`
 
-Show a box's sound as it plays: its last frames in every meters message while you ask (again within 10 s), or stop.
+Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop.
 
 An example body:
 
