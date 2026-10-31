@@ -350,7 +350,7 @@ fn a_lane_of_names_resizes_and_pastes_by_its_names() {
         edit(&mut s, &Gesture::Move { clips: vec![clip.clone()], by: 0.0, to: Some(mode.clone()), copy: true }).unwrap_err().to_string();
     assert!(e.contains("can't share clips: their choices have other names"), "{e}");
     let copied = Copied { from: shape.clone(), clip: json!({"start": 0, "length": 4, "points": [[0, "sine"]]}) };
-    let e = edit(&mut s, &Gesture::Paste { clips: vec![copied], to: Some(mode), at: 0.0 }).unwrap_err().to_string();
+    let e = edit(&mut s, &Gesture::Paste { clips: vec![copied], to: Some(mode), at: 0.0, into: None, fit: false }).unwrap_err().to_string();
     assert!(e.contains("can't share clips: their choices have other names"), "{e}");
 }
 
