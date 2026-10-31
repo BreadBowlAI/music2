@@ -12,6 +12,7 @@ use anyhow::{Context, Result};
 use m2_song::Sha;
 use wasmtime::{Engine, Module};
 
+use crate::limit::Deadline;
 use crate::packages::PackageSet;
 use crate::sandbox::{Held, Sandbox, Spec};
 use crate::{BLOCK, WasmContext, fpenv};
@@ -27,6 +28,8 @@ pub(crate) struct Kernel {
     module: Module,
     prefix: String,
     pub(crate) sha: Sha,
+    /// How long each call may run: the offline limit, live too, off the audio thread (ABI-6).
+    deadline: Deadline,
 }
 
 impl Kernel {
@@ -36,7 +39,8 @@ impl Kernel {
             return None;
         }
         let (module, prefix, _) = packages.module_for(id)?;
-        Some(Kernel { engine: packages.engine.clone(), module: module.clone(), prefix: prefix.to_string(), sha: packages.module_sha(id)? })
+        let (engine, module, prefix) = (packages.engine.clone(), module.clone(), prefix.to_string());
+        Some(Kernel { engine, module, prefix, sha: packages.module_sha(id)?, deadline: packages.limits.of(false) })
     }
 }
 
@@ -52,13 +56,13 @@ pub(crate) struct Run<'a> {
 }
 
 /// Run `k` as `r` says, each block of its output in turn into `sink`, a slice a channel, each of the
-/// block's frames (at most [`BLOCK`]). A kernel that traps, a file that can't be read and a sink
-/// that fails each stop it, with why.
+/// block's frames (at most [`BLOCK`]). A kernel that traps or runs past its deadline (ABI-6), a
+/// file that can't be read and a sink that fails each stop it, with why.
 pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result<()>) -> Result<()> {
     let _mode = fpenv::Canon::enter();
     let ch = r.channels.clamp(1, 2);
     let name = &k.prefix;
-    let mut sb = Sandbox::new(&k.engine, &k.module).with_context(|| format!("`{name}`"))?;
+    let mut sb = Sandbox::new(&k.engine, &k.module, k.deadline).with_context(|| format!("`{name}`"))?;
     let assets = [Some(r.source.clone())];
     let spec = Spec {
         inputs: 0,
@@ -82,7 +86,8 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     let mut done = 0;
     while done < r.frames {
         let n = (r.frames - done).min(BLOCK);
-        state.process(&mut sb, n).wctx(|| format!("`{name}` crashed at frame {done}"))?;
+        let made = state.process(&mut sb, n).wctx(|| format!("`{name}` crashed at frame {done}"));
+        made.map_err(|e| sb.ran_out(name, e))?;
         let data = sb.data();
         for (c, b) in block[..ch].iter_mut().enumerate() {
             let at = out + 4 * c * BLOCK;

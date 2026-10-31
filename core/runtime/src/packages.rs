@@ -11,6 +11,7 @@ use serde::Deserialize;
 use wasmtime::{Engine, ExternType, Module, ValType};
 
 use crate::WasmContext;
+use crate::limit::Limits;
 
 /// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
 /// `m2_song::pack::PkgManifest`'s.
@@ -126,6 +127,8 @@ pub struct PackageSet {
     /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
     /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
     store: Option<m2_song::pack::Store>,
+    /// How long each call into its kernels may run (ABI-6).
+    pub(crate) limits: Limits,
 }
 
 /// A hosted plugin as the last build found it.
@@ -151,6 +154,9 @@ enum Hosted {
 /// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
 /// never moves, and a sandbox keeps its address.
 ///
+/// Every call into a kernel runs with a deadline (ABI-6): epoch interruption is on, and the
+/// engine's ticker ([`crate::limit::start`]) starts with it and lives as long as it does.
+///
 /// One engine for the process, as wasmtime intends: a module one package set loaded can be played
 /// through any other (a render of a revision plays its view through a copy of the session's set,
 /// and the gates' lab compiles with one set and plays with another). Two engines refuse each
@@ -163,7 +169,11 @@ pub fn engine() -> Engine {
             config.cranelift_nan_canonicalization(false);
             config.wasm_relaxed_simd(false);
             config.memory_may_move(false);
-            Engine::new(&config).expect("wasmtime engine")
+            // Every call into a kernel runs with a deadline, which one ticker moves toward (ABI-6).
+            config.epoch_interruption(true);
+            let engine = Engine::new(&config).expect("wasmtime engine");
+            crate::limit::start(&engine);
+            engine
         })
         .clone()
 }
@@ -177,6 +187,7 @@ impl Default for PackageSet {
             plugins: HashMap::new(),
             host: m2_plugins::host(),
             store: None,
+            limits: Limits::default(),
         }
     }
 }
@@ -196,6 +207,12 @@ impl PackageSet {
     /// Find installed packs in `store` (PACK-6): this computer's is `m2_os::dirs::packs()`.
     pub fn with_store(mut self, store: PathBuf) -> PackageSet {
         self.store = Some(m2_song::pack::Store::at(store));
+        self
+    }
+
+    /// Give each call into its kernels `limits` instead of the default (ABI-6): tests shorten them.
+    pub fn with_limits(mut self, limits: Limits) -> PackageSet {
+        self.limits = limits;
         self
     }
 
@@ -260,7 +277,8 @@ impl PackageSet {
                 files.insert(format!("{name}/{w}"), sha.hex());
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 let module = Module::new(&self.engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                verify_module(&self.engine, &module, &kernels).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
+                let checked = verify_module(&self.engine, &module, &kernels, self.limits.offline);
+                checked.with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
             None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
@@ -706,8 +724,9 @@ fn check_abi(bytes: &[u8]) -> Result<()> {
 /// A package's module, built for this ABI ([`check_abi`], before it was compiled), checked before
 /// any kernel of it is made (ABI-3): its one import, if any, is `m2.asset_read`; its memory is a
 /// defined 32-bit memory of 64 KiB pages, not shared, which the hardware checks can guard
-/// (RENDER-32); and it has the ABI's exports, with their signatures.
-fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Result<()> {
+/// (RENDER-32); and it has the ABI's exports, with their signatures. Its start function, if any,
+/// may run for `limit` (ABI-6).
+fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl], limit: std::time::Duration) -> Result<()> {
     let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
     let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
         match exports.get(name) {
@@ -731,7 +750,7 @@ fn verify_module(engine: &Engine, module: &Module, kernels: &[KernelDecl]) -> Re
         Some(ExternType::Memory(_)) => {}
         _ => bail!("missing export `memory`"),
     }
-    crate::sandbox::instantiate(engine, module)?;
+    crate::sandbox::instantiate(engine, module, limit)?;
     func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
     for k in kernels {
         let n = &k.name;

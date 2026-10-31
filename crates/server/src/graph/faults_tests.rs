@@ -98,6 +98,7 @@ pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>,
     let text = |v: &Value| v.as_str().map(str::to_string);
     let codes = [
         "sound.stopped",
+        "sound.too-slow",
         "plugin.failed",
         "plugin.crashed",
         "asset.unreadable",
@@ -168,6 +169,130 @@ fn out_of_memory_is_told_as_memory() {
         rig.told(),
         [format!("The delay on Bass ran out of memory (a sound may use up to 256 MB), so music2 made it silent. {AGAIN}")]
     );
+}
+
+// ABI-7, DIAG-4: a sound whose kernel took too long is `sound.too-slow`, named as the song's code
+// wrote it, by its component's label, with its track and the package it is from: a kernel by the
+// component that made it, an instrument by its own. It is toasted once. Stop All Sound doesn't
+// call it again, so it stays listed; the next plan plays it again, so it goes.
+#[test]
+fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
+    let mut rig = Rig::new();
+    let slow = |what: &str| {
+        format!("{what} took too long and was stopped. It stays silent until the song is built again. The rest of the song plays on.")
+    };
+    rig.report(Code::TooSlow, rig.node("bass", delay));
+    rig.report(Code::TooSlow, rig.node("hats", |op| matches!(op, FOp::Poly { .. })));
+    let said = [slow("Delay on Bass, from std,"), slow("Hat on Hats, from std,")];
+    assert_eq!(rig.told(), said);
+    let listed: Vec<_> =
+        said.iter().zip(["bass", "hats"]).map(|(w, k)| ("sound.too-slow".to_string(), Some(k.to_string()), w.clone())).collect();
+    assert_eq!(rig.problems(), listed);
+    rig.graph.panic().unwrap();
+    rig.fill(2);
+    assert_eq!(rig.problems(), listed, "Stop All Sound leaves it silent, and listed");
+    assert!(rig.told().is_empty(), "toasted once");
+    rig.fixture.put("song.ts", &SONG.replace("osc.saw(110)", "osc.square(110)"));
+    assert!(rig.graph.poll());
+    assert!(rig.problems().is_empty(), "the next plan plays it again");
+    assert!(rig.graph.status().playing, "the song plays on");
+}
+
+/// The module of `@test/stuck` ([`stuck_at`]), from this text: a kernel `stuck` whose `k_new`
+/// never returns.
+///
+/// ```wat
+/// (module
+///   (@custom "m2_abi" "\01\00\00\00")
+///   (memory (export "memory") 1)
+///   (func (export "m2_alloc") (param i32 i32) (result i32) (i32.const 8192))
+///   (func (export "stuck_ports") (result i32) (i32.const 1))
+///   (func (export "stuck_new") (param i32) (result i32) (loop $forever (br $forever)) (i32.const 4096))
+///   (func (export "stuck_reset") (param i32))
+///   (func (export "stuck_active") (param i32) (result i32) (i32.const 0))
+///   (func (export "stuck_process") (param i32 i32 i32 i32)))
+/// ```
+const STUCK: &[u8] = &[
+    0, 97, 115, 109, 1, 0, 0, 0, 1, 27, 5, 96, 2, 127, 127, 1, 127, 96, 0, 1, 127, 96, 1, 127, 1, 127, 96, 1, 127, 0, 96, 4, 127, 127, 127,
+    127, 0, 3, 7, 6, 0, 1, 2, 3, 2, 4, 5, 3, 1, 0, 1, 7, 92, 7, 6, 109, 101, 109, 111, 114, 121, 2, 0, 8, 109, 50, 95, 97, 108, 108, 111,
+    99, 0, 0, 11, 115, 116, 117, 99, 107, 95, 112, 111, 114, 116, 115, 0, 1, 9, 115, 116, 117, 99, 107, 95, 110, 101, 119, 0, 2, 11, 115,
+    116, 117, 99, 107, 95, 114, 101, 115, 101, 116, 0, 3, 12, 115, 116, 117, 99, 107, 95, 97, 99, 116, 105, 118, 101, 0, 4, 13, 115, 116,
+    117, 99, 107, 95, 112, 114, 111, 99, 101, 115, 115, 0, 5, 10, 35, 6, 6, 0, 65, 128, 192, 0, 11, 4, 0, 65, 1, 11, 10, 0, 3, 64, 12, 0,
+    11, 65, 128, 32, 11, 2, 0, 11, 4, 0, 65, 0, 11, 2, 0, 11, 0, 11, 6, 109, 50, 95, 97, 98, 105, 1, 0, 0, 0, 0, 19, 4, 110, 97, 109, 101,
+    3, 12, 1, 2, 1, 0, 7, 102, 111, 114, 101, 118, 101, 114,
+];
+
+/// A pack `@test/stuck` at `dir`: one instrument, Stuck, made of its one kernel, which never gets
+/// ready.
+fn stuck_at(dir: &std::path::Path) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("k.wasm"), STUCK).unwrap();
+    let manifest = "[package]\nname = \"@test/stuck\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
+                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"stuck\"\noutputs = [\"out: audio<1>\"]\n";
+    std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+    let code = "import { component, kernel, port, signature, type Audio, type Events } from \"@m2/core\";\n\
+                export const stuck = component(\n  { id: \"stuck\", label: \"Stuck\", signature: signature<(notes: Events) => Audio>(), \
+                inputs: { notes: port.notes() }, output: port.audio(), editor: { category: \"Keys\", description: \"Never gets ready\" } },\n  \
+                (_notes: Events): Audio => kernel(\"@test/stuck:stuck\", {}),\n);\n";
+    std::fs::write(dir.join("src/index.ts"), code).unwrap();
+}
+
+// ABI-7: a change whose sound's kernel never gets ready (its `k_new` never returns) isn't made: it
+// is stopped at the limit, the version before plays on, and the user is told once which sound
+// and whose. The catch-up doesn't try that revision again, which would wait the limit each time.
+// Taking the sound out plays the change.
+#[test]
+fn a_sound_too_slow_to_get_ready_is_said_once_and_not_tried_again() {
+    let mut rig = Rig::new();
+    let pack = std::path::PathBuf::from(format!("{}-stuck", rig.fixture.0.display()));
+    stuck_at(&pack);
+    let manifest = std::fs::read_to_string(rig.fixture.0.join("music2.toml")).unwrap();
+    let name = pack.file_name().unwrap().to_str().unwrap();
+    rig.fixture.put("music2.toml", &format!("{manifest}\"@test/stuck\" = {{ path = \"../{name}\" }}\n"));
+    let with = SONG
+        .replace("import { mixer }", "import { stuck } from '@test/stuck';\nimport { mixer }")
+        .replace("export default", "const keys = track('keys', { name: 'Keys' }, ({ lane }) => stuck(lane.notes('k')));\nexport default")
+        .replace("hats: hats.out", "hats: hats.out, keys: keys.out");
+    rig.fixture.put("song.ts", &with);
+    let t = std::time::Instant::now();
+    assert!(rig.graph.poll());
+    let took = t.elapsed();
+    assert!(took >= std::time::Duration::from_secs(2) && took < std::time::Duration::from_secs(10), "stopped at its limit: {took:?}");
+    let told: Vec<String> = rig.graph.expire().into_iter().filter(|t| t.contains("took too long")).collect();
+    let said = "Your last change is saved, but Stuck on Keys, from @test/stuck, took too long to get ready and was stopped, so the \
+                version before it keeps playing. Take the sound out, or undo the change. (In detail: keys/";
+    assert!(told.len() == 1 && told[0].starts_with(said), "{told:?}");
+    assert!(told[0].ends_with("took too long and was stopped: one call into it ran past 2 s (ABI-6))"), "{told:?}");
+    rig.fill(2);
+    assert!(rig.graph.status().playing, "the version before plays on");
+    let t = std::time::Instant::now();
+    assert!(!rig.graph.catch_up(), "not tried again");
+    assert!(t.elapsed() < std::time::Duration::from_secs(1), "{:?}", t.elapsed());
+    assert!(rig.graph.expire().iter().all(|t| !t.contains("took too long")), "said once");
+    rig.fixture.put("song.ts", SONG);
+    assert!(rig.graph.poll());
+    rig.fill(2);
+    assert!(rig.graph.status().playing && rig.graph.expire().iter().all(|t| !t.contains("took too long")));
+    std::fs::remove_dir_all(&pack).ok();
+}
+
+// ABI-7, LIB-3: ⌘F's preview of a sound whose kernel never gets ready stops at the limit and says
+// so, naming the sound and its pack: what the panel shows in place of playing it.
+#[test]
+fn a_preview_of_a_sound_too_slow_stops_and_says_so() {
+    let fixture = Fixture::new();
+    let pack = fixture.0.join("stuck");
+    stuck_at(&pack);
+    let std = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let packages = [("std".to_string(), std), ("@test/stuck".to_string(), pack)];
+    let t = std::time::Instant::now();
+    let e = crate::library::preview(&Default::default(), "@test/stuck:stuck", &packages, None, &fixture.0.join("previews"))
+        .map(drop)
+        .unwrap_err();
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+    // The preview's song plays it on its one track, Play.
+    let said = "Stuck on Play, from @test/stuck, took too long to get ready and was stopped, so the file wasn't made.";
+    assert_eq!(format!("{e:#}"), said);
 }
 
 // RENDER-25, RENDER-10, D3: a problem goes when its part plays again: Stop All Sound resets every

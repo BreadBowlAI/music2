@@ -50,6 +50,7 @@ pub mod fpenv;
 pub mod gauge;
 mod keep;
 pub mod latency;
+pub mod limit;
 mod offline;
 mod overlay;
 pub mod packages;
@@ -80,6 +81,7 @@ pub use cells::{CellAt, CellId, CellInfo, CellMap, CellSlots, CellTarget};
 pub use data::{decls, lane_kind};
 pub use engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Msg, Retired};
 pub use event::{Event, Events};
+pub use limit::{Limits, TooSlow};
 pub use m2_pool::{Counters, ENTRY_BUCKETS, Meter, Pool, Runner, Setup, Trip};
 pub use packages::{Package, PackageSet, View};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
@@ -257,10 +259,11 @@ fn port_channels(sig: &m2_ir::KernelSig, n: &FNode, channels: u8, inputs: &[Inpu
 
 impl KernelInst {
     /// Kernel `k` for node `n` outside an instrument, in a sandbox of its own: born, and sealed.
-    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64) -> Result<KernelInst> {
+    /// Each call into it may run as `deadline` says (ABI-6).
+    fn new(packages: &PackageSet, n: &FNode, k: &Kernel, shape: u64, deadline: limit::Deadline) -> Result<KernelInst> {
         let id = k.id;
         let (module, prefix, _) = packages.module_for(id).with_context(|| format!("{}: kernel `{id}` is not loaded", n.name))?;
-        let mut sandbox = Sandbox::new(&packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+        let mut sandbox = Sandbox::new(&packages.engine, module, deadline).with_context(|| format!("{}: `{id}`", n.name))?;
         let mut k = KernelInst::born(&mut sandbox, 0, prefix, packages, n, k, shape)?;
         sandbox.seal().with_context(|| n.name.clone())?;
         k.own = Some(sandbox);
@@ -296,7 +299,7 @@ impl KernelInst {
             Ok(s) => s,
             Err(e) => {
                 let e = sandbox.ran_out(&n.name, e);
-                return Err(if e.is::<OutOfMemory>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
+                return Err(if e.is::<OutOfMemory>() || e.is::<TooSlow>() { e } else { e.context(format!("{}: `{id}`", n.name)) });
             }
         };
         // Unconnected and constant inputs are written once; kernels never write inputs.
@@ -1068,10 +1071,30 @@ impl Exec {
         }
     }
 
+    /// Whether a call into its box ran past its deadline: it is called no more in this plan (ABI-7).
+    fn stuck(&self) -> bool {
+        match self {
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.own.as_ref().is_some_and(Sandbox::stuck),
+            Exec::Poly(p) => p.pool.as_ref().is_some_and(|p| p.sandboxes.iter().any(Sandbox::stuck)),
+            _ => false,
+        }
+    }
+
+    /// Mark its box stopped, or playing again; one playing again may be called again (ABI-7).
     fn set_stopped(&mut self, stopped: bool) {
         match self {
-            Exec::Kernel(KernelNode { inst: Some(k), .. }) => k.stopped = stopped,
-            Exec::Poly(p) => p.pool.iter_mut().for_each(|p| p.stopped = stopped),
+            Exec::Kernel(KernelNode { inst: Some(k), .. }) => {
+                k.stopped = stopped;
+                if !stopped {
+                    k.own.iter_mut().for_each(Sandbox::unstick);
+                }
+            }
+            Exec::Poly(p) => p.pool.iter_mut().for_each(|p| {
+                p.stopped = stopped;
+                if !stopped {
+                    p.sandboxes.iter_mut().for_each(Sandbox::unstick);
+                }
+            }),
             _ => {}
         }
     }
@@ -1213,6 +1236,12 @@ enum Make {
 type Boxed<'a> = &'a dyn Fn(usize) -> Make;
 
 impl Builder<'_> {
+    /// How long each call into the sandboxes it makes may run (ABI-6): a plan for the live engine
+    /// (realtime) has the live limit once sealed.
+    fn deadline(&self) -> limit::Deadline {
+        self.packages.limits.of(self.mode == m2_plugins::RenderMode::Realtime)
+    }
+
     fn slot(&self, module: &str, lane: &str) -> Result<usize> {
         self.slots.iter().position(|r| r.module == module && r.lane == lane).with_context(|| format!("lane {module}/{lane} has no slot"))
     }
@@ -1273,7 +1302,7 @@ impl Builder<'_> {
                 let k = Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate };
                 let inst = match boxed {
                     Make::New(shape) if in_voice => Some(Box::new(self.in_pool(n, &k, shape)?)),
-                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape)?)),
+                    Make::New(shape) => Some(Box::new(KernelInst::new(self.packages, n, &k, shape, self.deadline())?)),
                     _ => None,
                 };
                 Exec::Kernel(KernelNode { inputs: inputs.to_vec(), seen: vec![COPY; inputs.len()], inst })
@@ -1370,7 +1399,7 @@ impl Builder<'_> {
         let at = match self.pool.iter().position(|(p, _)| p == package) {
             Some(at) => at,
             None => {
-                let sb = Sandbox::new(&self.packages.engine, module).with_context(|| format!("{}: `{id}`", n.name))?;
+                let sb = Sandbox::new(&self.packages.engine, module, self.deadline()).with_context(|| format!("{}: `{id}`", n.name))?;
                 self.pool.push((package.to_string(), sb));
                 self.pool.len() - 1
             }
@@ -1826,8 +1855,8 @@ fn run_graph(
 /// export too, strict or not), false when a node failed, its error kept in `parts` as a
 /// [`fault::Failed`] naming the node (RENDER-1). Live, played by
 /// the [`Engine`], a node that fails stops alone (RENDER-25):
-/// it is silent from then on, what reads it reads silence, `sound.stopped` is reported for the
-/// session to tell, and the partition goes on.
+/// it is silent from then on, what reads it reads silence, `sound.stopped` (`sound.too-slow` for
+/// a call past its deadline, ABI-7) is reported for the session to tell, and the partition goes on.
 fn run_part(view: &GraphView, parts: &parts::Parts, p: u32, b: &Block, lanes: &[LaneSlot], report: &Reporter) -> bool {
     // Whatever ran on this thread before, this partition computes in the one mode.
     fpenv::canon();
@@ -1949,12 +1978,16 @@ impl Graph {
     }
 
     /// [`Graph::reset`] for a panic (RENDER-10, RENDER-25): a node whose reset fails stops alone,
-    /// reported through `report`, and the rest is reset all the same. Never allocates while every
-    /// reset succeeds.
+    /// reported through `report`, and the rest is reset all the same. A box that ran past its
+    /// deadline isn't called: it stays silent until the next plan (ABI-7). Never allocates while
+    /// every reset succeeds.
     fn panic(&mut self, report: &Reporter) {
         self.resets += 1;
         self.poisoned.iter_mut().for_each(|p| *p = false);
         for i in 0..self.exec.len() {
+            if self.exec[i].stuck() {
+                continue;
+            }
             // Its error allocated: this path only.
             if let Err(e) = self.reset_node(i) {
                 self.stop(i);
@@ -3576,7 +3609,8 @@ impl Renderer {
 
     /// Panic (RENDER-10): every note off, every instance reset. The next block seeks without
     /// chasing. A node that stopped plays again, reset; one whose reset fails stops alone, marked,
-    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works.
+    /// and the rest is reset all the same (RENDER-25): Stop All Sound always works. One that ran
+    /// past its deadline isn't called: it stays silent until the next plan (ABI-7).
     pub fn panic(&mut self) {
         // Plugins are reset here, between blocks (RENDER-2a).
         let _mode = fpenv::Canon::enter();

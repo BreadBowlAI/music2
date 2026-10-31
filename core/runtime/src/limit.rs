@@ -1,0 +1,104 @@
+//! The time limit on every call into a kernel (ABI-6, ABI-7, `docs/kernel-abi.md`): wasmtime's
+//! epoch interruption. The compiled code checks, at each function's start and each loop's turn,
+//! whether the engine's epoch has reached the deadline its store was given, and traps once it
+//! has. One thread, the ticker, moves the epoch on every [`TICK`]. Each call into a kernel is given
+//! its deadline just before it starts ([`crate::sandbox`]), so a call still running at it stops,
+//! wherever it is; until then the checks cost a load and a compare.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
+
+use wasmtime::Engine;
+
+/// How often the ticker moves the epoch on.
+pub const TICK: Duration = Duration::from_millis(10);
+
+/// How long one call into a kernel may run (ABI-6). A call is never stopped before its limit,
+/// and is stopped within a [`TICK`] after it while the ticker keeps time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Limits {
+    /// A call the live engine makes into a sealed sandbox of a plan prepared for it: `k_process`,
+    /// `k_reset`, `k_active`.
+    pub live: Duration,
+    /// Every other call: a sandbox's birth and prewarm (live too), an offline render's, an offline
+    /// kernel's.
+    pub offline: Duration,
+}
+
+impl Default for Limits {
+    /// 100 ms live: about 37 blocks at 48 kHz, which no working kernel's call comes near, and short
+    /// enough that the song is heard again at once. 2 s for the rest, which wait for no device.
+    fn default() -> Limits {
+        Limits { live: Duration::from_millis(100), offline: Duration::from_secs(2) }
+    }
+}
+
+impl Limits {
+    /// The limits of a sandbox: of a plan the live engine plays (`live`), or of any other.
+    pub(crate) fn of(self, live: bool) -> Deadline {
+        Deadline { born: self.offline, sealed: if live { self.live } else { self.offline } }
+    }
+}
+
+/// A sandbox's limits: for each call while it is born, and once it is sealed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Deadline {
+    pub(crate) born: Duration,
+    pub(crate) sealed: Duration,
+}
+
+/// The ticks a call is given so that it is never stopped before `limit`: one more than the
+/// limit's, as the epoch may move on just after the call starts.
+pub fn ticks(limit: Duration) -> u64 {
+    (limit.as_nanos().div_ceil(TICK.as_nanos()) as u64).saturating_add(1)
+}
+
+/// Ticks so far: the engine's epoch, as the ticker counts it. Wasmtime keeps its own, which it
+/// doesn't show; the two move on together.
+static EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// The epoch now, by [`EPOCH`].
+pub(crate) fn epoch() -> u64 {
+    EPOCH.load(Ordering::Relaxed)
+}
+
+/// Start `engine`'s ticker: a thread that moves its epoch on every [`TICK`], for as long as the
+/// engine lives.
+pub(crate) fn start(engine: &Engine) {
+    let engine = engine.weak();
+    let ticker = std::thread::Builder::new().name("m2-kernel-ticker".into()).spawn(move || {
+        loop {
+            std::thread::sleep(TICK);
+            let Some(engine) = engine.upgrade() else { return };
+            engine.increment_epoch();
+            EPOCH.fetch_add(1, Ordering::Relaxed);
+        }
+    });
+    ticker.expect("a thread for the kernels' ticker");
+}
+
+/// A call into a kernel ran past its limit and was stopped (ABI-6): told as `sound.too-slow`
+/// (ABI-7).
+#[derive(Debug)]
+pub struct TooSlow {
+    /// The node, `<module>/<id>`.
+    pub node: String,
+    /// The limit it ran past.
+    pub limit: Duration,
+}
+
+impl std::fmt::Display for TooSlow {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{} took too long and was stopped: one call into it ran past {} (ABI-6)", self.node, said(self.limit))
+    }
+}
+
+impl std::error::Error for TooSlow {}
+
+/// `d` in words: `100 ms`, `2 s`.
+pub(crate) fn said(d: Duration) -> String {
+    match d.as_millis() {
+        ms if ms < 1000 || !ms.is_multiple_of(1000) => format!("{ms} ms"),
+        ms => format!("{} s", ms / 1000),
+    }
+}
