@@ -16,7 +16,7 @@ One program writes a project at a time (its lock is `.music2/lock`). While the a
 
 std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit status 2. `m2 docs` prints the guide, built into this `m2`.
+`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. `m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`) or `-` alone (standard input, where a command reads it). Flags can go anywhere after the command. `m2 docs` prints the guide, built into this `m2`.
 
 ## m2 new
 
@@ -150,7 +150,7 @@ Take a track out: its file, its imports, its channel, its data and its layout; `
 
 ```
 m2 layout <project> order <IDs…>
-m2 layout <project> colour <ID> <colour>
+m2 layout <project> colour|color <ID> <colour>
 m2 layout <project> reset
 ```
 
@@ -317,7 +317,7 @@ Mute tracks, named by their keys, in the song (every render and export), or unmu
 
 ```
 m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]
-m2 clips <project> move <clip>… --by B [--to <track>/<lane>] [--copy] [--beats]
+m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]
 m2 clips <project> resize <clip> --start <place> --length B [--beats]
 m2 clips <project> split <clip>… --at <place> [--beats]
 m2 clips <project> join <clip>…
@@ -380,7 +380,7 @@ Follow the open app: each change, undo, toast, focus, pointer and transport chan
 ## m2 point
 
 ```
-m2 point <project> <target> <words>
+m2 point <project> <target> [<words>]
 m2 point <project> --clear
 ```
 
@@ -405,7 +405,7 @@ Send one route's request to the open app, as an agent (by `--as`): song changes 
 ## m2 search
 
 ```
-m2 search <words…> [--kind <kind>] [--json]
+m2 search [<words…>] [--kind <kind>] [--json]
 ```
 
 Find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where it is from, and its id, which adding it names. With the app open it asks the app, whose list has the open song's own instruments and the plugins it has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and your sample folders itself. Every word must match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track takes), and a sound's `preset`. After what you have come the library's items of packs you haven't got (when a registry is set), each marked `library`, its id `library:<id>`, with `library`: its pack, version, licence and the bytes `m2 pack get` fetches; the search runs on this computer and sends nothing. [Finding sounds](finding-sounds.md) says more.
