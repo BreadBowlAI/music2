@@ -722,7 +722,6 @@ mod sampler;
 mod synth;
 #[cfg(test)]
 mod testkit;
-mod voice;
 
 // ---------------------------------------------------------------- offline kernels
 

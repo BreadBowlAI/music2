@@ -314,6 +314,62 @@ fn feedback_delays_one_block() {
     assert!(peak(&out) < 2.5 && peak(&out) > 1.0);
 }
 
+/// The initial value of `module`'s first global, wasm-ld's stack pointer, which starts at the top
+/// of the stack: the stack's size, in bytes.
+fn stack_size(module: &[u8]) -> u32 {
+    fn leb(b: &[u8], at: &mut usize) -> u64 {
+        let (mut v, mut shift) = (0u64, 0);
+        loop {
+            let x = b[*at];
+            *at += 1;
+            v |= u64::from(x & 0x7f) << shift;
+            shift += 7;
+            if x < 0x80 {
+                return v;
+            }
+        }
+    }
+    let mut at = 8;
+    while at < module.len() {
+        let id = module[at];
+        at += 1;
+        let len = leb(module, &mut at) as usize;
+        if id == 6 {
+            let mut g = at;
+            assert!(leb(module, &mut g) > 0, "a global");
+            // i32, mutable, then `i32.const <value>` (a signed LEB, positive here).
+            assert_eq!(module[g..g + 3], [0x7f, 0x01, 0x41], "the stack pointer is the first global");
+            g += 3;
+            return leb(module, &mut g) as u32;
+        }
+        at += len;
+    }
+    panic!("no global section")
+}
+
+// ABI-10, RENDER-32: every module music2 ships is built with the kernels' own stack, the size their
+// `.cargo/config.toml` sets (64 KiB): each sandbox touches all of its memory once at its seal, so a
+// build that left the flag out (wasm-ld's 1 MiB) costs every sandbox a megabyte, and no render
+// would show it.
+#[test]
+fn every_module_music2_ships_has_the_kernels_stack() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = std::fs::read_to_string(root.join("std/kernels-src/.cargo/config.toml")).unwrap();
+    let flag = config.split("-zstack-size=").nth(1).expect("the config sets the stack's size");
+    let want: u32 = flag[..flag.find(|c: char| !c.is_ascii_digit()).unwrap()].parse().unwrap();
+    assert_eq!(want, 65_536, "the kernels' stack is 64 KiB (RENDER-32)");
+    let mut modules = vec![root.join("std/kernels/std.wasm")];
+    for dir in m2_song::pack::bundled(&root.join("packs")) {
+        if let Some(w) = m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm {
+            modules.push(dir.join(w));
+        }
+    }
+    assert!(modules.len() >= 2, "std's and @m2/effects' at least: {modules:?}");
+    for m in modules {
+        assert_eq!(stack_size(&std::fs::read(&m).unwrap()), want, "{}: its stack", m.display());
+    }
+}
+
 #[test]
 fn std_manifest_matches_its_kernels() {
     // Instantiating every kernel checks its port counts against the manifest: std's, and those of

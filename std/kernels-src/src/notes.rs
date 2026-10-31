@@ -3,9 +3,8 @@
 //! own. Port order must match `std/m2pkg.toml`. (std's one note at a time, `mono()`, is the
 //! `poly` op's `"legato"` mode since std 0.3.0: `std:notecv` and `std:mono` are gone.)
 
+use m2_dsp::kit::{Kind, kind_of};
 use m2_kernel::{Cfg, Io, Kernel, export};
-
-use crate::drums::{Kind, kind_of};
 
 /// Where `drumhit` marks every hit, above the five choke groups' fields: 16^5.
 pub(crate) const HIT_FIELD: u32 = 1 << 20;

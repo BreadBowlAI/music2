@@ -1,45 +1,11 @@
-//! Native tests for the effects: first what every effect guarantees, then what each one
-//! is for.
+//! Native tests for std's effects: first what every effect guarantees (m2-dsp's harness, shared
+//! with the effects of music2's own packs), then what each one is for.
 
-use m2_kernel::{Host, PORT_CHANNELS};
+use m2_dsp::fx::{Phase, clampf};
+use m2_dsp::testing::effects::{self, BLOCK, Fx, Input, SR, db, noise, peak, rms, run, saw, with};
+use m2_kernel::Host;
 
 use super::*;
-
-const SR: f32 = 48_000.0;
-const BLOCK: usize = 128;
-
-/// `input(port, channel, t)`: every input sample a kernel sees.
-type Input<'a> = &'a dyn Fn(usize, usize, usize) -> f32;
-
-/// Output port 0 of kernel `K` over `frames` samples, processed `split` frames at a time.
-fn run<K: Kernel>(channels: usize, frames: usize, split: usize, input: Input<'_>) -> Vec<[f32; 2]> {
-    let mut host = Host::<K>::new(SR, BLOCK as u32, channels as u32);
-    let mut out = Vec::with_capacity(frames);
-    let mut t = 0;
-    while t < frames {
-        let n = split.clamp(1, BLOCK).min(frames - t);
-        for p in 0..K::INPUTS {
-            let buf = host.port_mut(p);
-            for c in 0..PORT_CHANNELS {
-                for k in 0..n {
-                    buf[c * BLOCK + k] = input(p, c, t + k);
-                }
-            }
-        }
-        host.process(n as u32);
-        let o = host.port_mut(K::INPUTS);
-        out.extend((0..n).map(|k| [o[k], o[BLOCK + k]]));
-        t += n;
-    }
-    out
-}
-
-/// One effect under test: how to run it, and its controls' values.
-struct Fx {
-    name: &'static str,
-    run: fn(usize, usize, usize, Input<'_>) -> Vec<[f32; 2]>,
-    controls: &'static [f32],
-}
 
 /// Every effect at the settings the effect menu starts it with (the EQ gets some boost and
 /// cut, since flat it does nothing), and playing: the last of chorus's, phaser's and tremolo's is
@@ -54,167 +20,42 @@ const ALL: [Fx; 7] = [
     Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
 ];
 
-/// Inputs: `audio(channel, t)` on port 0 and constant `controls` on the rest.
-fn with<'a>(audio: &'a dyn Fn(usize, usize) -> f32, controls: &'a [f32]) -> impl Fn(usize, usize, usize) -> f32 + 'a {
-    move |p, c, t| if p == 0 { audio(c, t) } else { controls[p - 1] }
-}
-
-/// Naive saws, full scale: 110 Hz on the left, 165 Hz on the right.
-fn saw(c: usize, t: usize) -> f32 {
-    let f = if c == 0 { 110.0 } else { 165.0 };
-    2.0 * (t as f32 * f / SR).fract() - 1.0
-}
-
-/// Deterministic white noise in -1..1, different on each channel.
-fn noise(c: usize, t: usize) -> f32 {
-    let mut x = (t as u32).wrapping_mul(0x9E37_79B9) ^ (c as u32 + 1).wrapping_mul(0x85EB_CA6B);
-    x ^= x >> 16;
-    x = x.wrapping_mul(0x7FEB_352D);
-    x ^= x >> 15;
-    x = x.wrapping_mul(0x846C_A68B);
-    x ^= x >> 16;
-    x as f32 / u32::MAX as f32 * 2.0 - 1.0
-}
-
-fn peak(x: &[[f32; 2]]) -> f32 {
-    x.iter().fold(0.0, |m, f| m.max(f[0].abs()).max(f[1].abs()))
-}
-
-fn rms(x: &[[f32; 2]], c: usize) -> f32 {
-    (x.iter().map(|f| f[c] as f64 * f[c] as f64).sum::<f64>() / x.len() as f64).sqrt() as f32
-}
-
-fn db(x: f32) -> f32 {
-    20.0 * x.log10()
-}
-
 // ---------------------------------------------------------------- every effect
 
 #[test]
 fn silence_in_silence_out() {
-    for fx in &ALL {
-        for channels in [1, 2] {
-            let out = (fx.run)(channels, 24_000, BLOCK, &with(&|_, _| 0.0, fx.controls));
-            assert!(out.iter().all(|f| f[0] == 0.0 && f[1] == 0.0), "{} ({channels} ch) makes sound from silence", fx.name);
-        }
-    }
+    effects::silence_in_silence_out(&ALL);
 }
 
 #[test]
 fn tails_end_in_exact_silence() {
-    // A 100 ms burst, then nothing: every effect must settle to exact zeros (not a crawl
-    // through denormals) a few seconds later.
-    let burst = |c, t| if t < 4_800 { saw(c, t) } else { 0.0 };
-    for fx in &ALL {
-        let out = (fx.run)(2, 48_000 * 12, BLOCK, &with(&burst, fx.controls));
-        let last = out.iter().rposition(|f| f[0] != 0.0 || f[1] != 0.0).unwrap_or(0);
-        assert!(last < 48_000 * 10, "{} is still not silent {:.1} s after its input stopped", fx.name, last as f32 / SR);
-    }
-}
-
-/// Values no control should break on.
-const EXTREMES: [f32; 11] = [f32::NAN, f32::NEG_INFINITY, f32::MIN, -1e9, -1.0, 0.0, 1e-9, 0.5, 1e9, f32::MAX, f32::INFINITY];
-
-/// Control settings to torture `fx` with: all at each extreme together, each alone at each
-/// extreme with the rest as usual, and pseudo-random mixes of extremes.
-fn torture(fx: &Fx) -> Vec<Vec<f32>> {
-    let n = fx.controls.len();
-    let mut sets: Vec<Vec<f32>> = EXTREMES.iter().map(|&v| vec![v; n]).collect();
-    for k in 0..n {
-        for &v in &EXTREMES {
-            let mut s = fx.controls.to_vec();
-            s[k] = v;
-            sets.push(s);
-        }
-    }
-    let mut seed = 1u32;
-    for _ in 0..40 {
-        sets.push(
-            (0..n)
-                .map(|_| {
-                    seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
-                    EXTREMES[(seed >> 16) as usize % EXTREMES.len()]
-                })
-                .collect(),
-        );
-    }
-    sets
+    effects::tails_end_in_exact_silence(&ALL);
 }
 
 #[test]
 fn extreme_settings_and_broken_input_never_make_nan() {
-    // Noise broken by samples no effect should ever see.
-    let hostile = |c, t| match t % 3_001 {
-        1_000 => f32::NAN,
-        2_000 => f32::INFINITY,
-        3_000 => -1e30,
-        _ => noise(c, t),
-    };
-    for fx in &ALL {
-        for set in torture(fx) {
-            for channels in [1, 2] {
-                let out = (fx.run)(channels, 7_000, BLOCK, &with(&hostile, &set));
-                let bad = out.iter().position(|f| !f[0].is_finite() || !f[1].is_finite());
-                assert_eq!(bad, None, "{} ({channels} ch) with controls {set:?}", fx.name);
-            }
-        }
-    }
+    effects::extreme_settings_and_broken_input_never_make_nan(&ALL);
 }
 
 #[test]
 fn output_stays_bounded() {
-    // At their starting settings, full-scale input stays near full scale.
-    for fx in &ALL {
-        for input in [saw as fn(usize, usize) -> f32, noise] {
-            let p = peak(&(fx.run)(2, 48_000, BLOCK, &with(&input, fx.controls)));
-            assert!(p < 2.5, "{} peaks at {p}", fx.name);
-        }
-    }
-    // At any setting, the worst is three EQ bands boosting the same frequencies by 24 dB
-    // each (+72 dB).
-    for fx in &ALL {
-        for set in torture(fx) {
-            let p = peak(&(fx.run)(2, 7_000, BLOCK, &with(&noise, &set)));
-            assert!(p < 1e4, "{} peaks at {p} with controls {set:?}", fx.name);
-        }
-    }
+    effects::output_stays_bounded(&ALL);
 }
 
 #[test]
 fn deterministic_whatever_the_block_size() {
-    for fx in &ALL {
-        // Controls that jump around every 1000 samples, to exercise the smoothing too.
-        let moving = |p: usize, c, t: usize| if p == 0 { noise(c, t) } else { fx.controls[p - 1] * (0.6 + 0.3 * ((t / 1_000) % 3) as f32) };
-        for channels in [1, 2] {
-            let reference = (fx.run)(channels, 12_000, BLOCK, &moving);
-            assert!((fx.run)(channels, 12_000, BLOCK, &moving) == reference, "{} differs between runs", fx.name);
-            for split in [1, 7, 100] {
-                let out = (fx.run)(channels, 12_000, split, &moving);
-                let diff = out.iter().zip(&reference).position(|(a, b)| a != b);
-                assert_eq!(diff, None, "{} ({channels} ch) in blocks of {split} differs", fx.name);
-            }
-        }
-    }
+    effects::deterministic_whatever_the_block_size(&ALL);
 }
 
 #[test]
 fn mono_stays_mono() {
-    // Everything but the widener works on one channel too, so it fits wherever a mono
-    // sound goes (a panned mixer channel).
-    for fx in ALL.iter().filter(|fx| fx.name != "widen") {
-        let out = (fx.run)(1, 24_000, BLOCK, &with(&saw, fx.controls));
-        assert!(peak(&out) > 0.1 && out.iter().all(|f| f[1] == 0.0), "{} doesn't process mono on its own", fx.name);
-    }
+    // Everything but the widener works on one channel too.
+    effects::mono_stays_mono(ALL.iter().filter(|fx| fx.name != "widen"));
 }
 
 #[test]
 fn every_effect_changes_the_sound() {
-    let dry = |c, t| 0.5 * saw(c, t);
-    for fx in &ALL {
-        let out = (fx.run)(2, 48_000, BLOCK, &with(&dry, fx.controls));
-        let diff = out.iter().enumerate().map(|(t, f)| (f[0] - dry(0, t)).abs().max((f[1] - dry(1, t)).abs())).fold(0.0, f32::max);
-        assert!(diff > 0.05, "{} barely changes a saw (by {diff})", fx.name);
-    }
+    effects::every_effect_changes_the_sound(&ALL);
 }
 
 // ---------------------------------------------------------------- each effect
@@ -366,7 +207,7 @@ fn widen_keeps_mono_compatibility() {
 
 #[test]
 fn pan_places_a_mono_sound_and_balances_a_stereo_one() {
-    use std::f32::consts::SQRT_2;
+    use std::f32::consts::{PI, SQRT_2};
 
     use crate::Pan;
     let pan = |channels: usize, at: f32| run::<Pan>(channels, 512, BLOCK, &with(&saw, &[at]));
@@ -414,42 +255,9 @@ fn playing_the_lfo_steps_as_it_always_did() {
     }
 }
 
-/// `fx` on `channels`: silence for `pre` samples, then `stopped` samples with `playing` at `wait`
-/// (and silence), then a saw. Played on through, `wait` is 1.
-fn stopped(fx: &Fx, channels: usize, pre: usize, stopped: usize, wait: f32) -> Vec<[f32; 2]> {
-    let n = fx.controls.len();
-    let start = pre + stopped;
-    (fx.run)(channels, start + 24_000, BLOCK, &|p, c, t| {
-        if p == 0 {
-            if t < start { 0.0 } else { saw(c, t - start) }
-        } else if p == n && (pre..start).contains(&t) {
-            wait
-        } else {
-            fx.controls[p - 1]
-        }
-    })
-}
-
 // Stopped (`playing` 0, or NaN), each LFO waits where it is: played on, the effect is what it is
 // with no stop at all, bit for bit. A fresh one that sat stopped plays as one made at Play.
 #[test]
 fn stopped_the_effects_wait_and_play_on_where_they_were() {
-    // 20 003 samples: no whole number of any of their cycles.
-    let pause = 20_003;
-    for fx in ALL.iter().filter(|fx| FOLLOW.contains(&fx.name)) {
-        for channels in [1, 2] {
-            // Stops a sample apart, as @m2/effects' bitcrusher is tried (its clock steps by 1/4).
-            for pre in [0, 30_000, 30_001] {
-                let straight = stopped(fx, channels, pre, 0, 1.0);
-                let free = stopped(fx, channels, pre, pause, 1.0);
-                assert!(free[pre + pause..] != straight[pre..], "{}: what its LFO did while stopped can't be heard", fx.name);
-                for wait in [0.0, f32::NAN] {
-                    let out = stopped(fx, channels, pre, pause, wait);
-                    let diff =
-                        out[pre + pause..].iter().zip(&straight[pre..]).position(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits));
-                    assert_eq!(diff, None, "{} ({channels} ch), after {pre} samples, stopped with playing {wait}", fx.name);
-                }
-            }
-        }
-    }
+    effects::stopped_they_wait_and_play_on_where_they_were(ALL.iter().filter(|fx| FOLLOW.contains(&fx.name)));
 }

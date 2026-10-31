@@ -7,18 +7,25 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 # Built for wasm32-unknown-unknown by std/build.sh, separately from the main workspace. The one
-# workspace of every kernel module music2 ships (ABI-10): the kit, std's crate and each of its own
-# packs' crates, each beside its pack (PACK-20).
+# workspace of every kernel module music2 ships (ABI-10): the kit, the shared blocks (dsp/), std's
+# crate, and a crate for each of music2's own packs with kernels, packs/<owner>/<name>/, whose
+# source is beside its pack (packs/@m2/effects/kernels-src, PACK-20). Every manifest lives in this
+# folder: cargo hashes a crate's place into its `-C metadata`, and so into its symbols' order and its
+# module's bytes, by a path relative to here only for a crate inside it.
 [workspace]
-members = ["../../packs/*/*/kernels-src"]
+members = ["dsp", "packs/*/*"]
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-# A member of this workspace, so cargo hashes a relative path and std.wasm rebuilds to the same
+# Members of this workspace, so cargo hashes relative paths and std.wasm rebuilds to the same
 # bytes in any folder (PLAT-5).
 m2-kernel = { path = "kernel" }
+m2-dsp = { path = "dsp" }
+
+[dev-dependencies]
+m2-dsp = { path = "dsp", features = ["testing"] }
 
 [profile.release]
 opt-level = 3

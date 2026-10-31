@@ -221,11 +221,12 @@ A module is built with the Rust kit from one crate, compiled for `wasm32-unknown
 | Module | Its source | Its file |
 |---|---|---|
 | std's | `std/kernels-src` | `std/kernels/std.wasm` |
-| a pack music2 ships, with kernels of its own | the pack's `kernels-src/`, such as `packs/@m2/effects/kernels-src` | where the pack's `m2pkg.toml` says, `wasm = "kernels/effects.wasm"` |
+| a pack music2 ships, with kernels of its own | the pack's `kernels-src/`, such as `packs/@m2/effects/kernels-src`; its crate's manifest is `std/kernels-src/packs/@m2/effects/Cargo.toml` | where the pack's `m2pkg.toml` says, `wasm = "kernels/effects.wasm"` |
 
-- They are one Cargo workspace, `std/kernels-src`: the kit, std's crate and each pack's crate, with one `Cargo.lock` and one release profile (`opt-level = 3`, `lto`, one codegen unit, `panic = "abort"`, `strip`). A pack's crate joins it with `package.workspace = "../../../../std/kernels-src"`.
+- They are one Cargo workspace, `std/kernels-src`: the kit, the blocks more than one module is made of (`dsp/`, the crate `m2-dsp`), std's crate and each pack's crate, with one `Cargo.lock`, one release profile (`opt-level = 3`, `lto`, one codegen unit, `panic = "abort"`, `strip`) and one `.cargo/config.toml`, which gives every module a 64 KiB stack (wasm-ld's own is 1 MiB, and a sandbox touches all its memory once).
+- A pack's crate is `std/kernels-src/packs/<owner>/<name>/Cargo.toml`, and its `[lib] path` names the source beside the pack. The manifest must be inside the workspace's folder: cargo hashes a crate's place into its `-C metadata`, which orders the module's functions, and only inside the folder is that place a relative path. Outside it, the same source would build to bytes that hang on the folder the repo is in.
 - `std/build.sh` builds them all and copies each module to its file. `std/build.sh --check` builds a copy in a temporary folder and compares each with the committed file, byte for byte. CI runs it on every pull request.
-- The bytes depend only on the sources and the pinned toolchain (`rust-toolchain.toml`). Paths reach the build relative to the repo (`--remap-path-prefix`): cargo names a file outside the workspace's folder (a pack's crate) by its whole path, which would put the machine's folder into the module.
+- The bytes depend only on the sources and the pinned toolchain (`rust-toolchain.toml`): every file reaches the build by a path relative to the workspace, so no machine's folder is in a module, and the script sets no flags of its own (flags given that way would replace the config's).
 - A pack's `kernels-src/` is no part of the pack (PACK-20): the store, the listing and its hash see only the module.
 - Writing a pack of your own: the guide's [Making a pack](guide/making-a-pack.md#kernels-of-its-own) has the steps.
 

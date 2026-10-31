@@ -167,7 +167,7 @@ A *kernel* is the code that makes the sound, compiled to WebAssembly (wasm). Mos
 | Step | What to do |
 |---|---|
 | 1. The source | a Rust crate in the pack's folder, `kernels-src/`: a `Cargo.toml` and `src/lib.rs`. It is no part of the pack: only the wasm you build from it ships, and a build left in it changes nothing |
-| 2. The kit | in its `Cargo.toml`: `[lib] crate-type = ["cdylib"]`, and under `[dependencies]` the kit from a copy of music2's source: `m2-kernel = { path = "<music2>/std/kernels-src/kernel" }` |
+| 2. The kit | in its `Cargo.toml`: `[lib] crate-type = ["cdylib"]`, and under `[dependencies]` the kit from a copy of music2's source: `m2-kernel = { path = "<music2>/std/kernels-src/kernel" }`. Copy music2's `std/kernels-src/.cargo/config.toml` to `kernels-src/.cargo/config.toml`: it gives the wasm a small stack, so each use of your sound takes 1 MB less memory |
 | 3. A kernel | a `struct` that implements the kit's `Kernel` (how many inputs and outputs, `new` and `process`), then `export!(crush, Crush);`. Write `abi!();` once in the crate |
 | 4. Build it | `rustup target add wasm32-unknown-unknown` once, then `cargo build --release --target wasm32-unknown-unknown` in `kernels-src/`, and copy `target/wasm32-unknown-unknown/release/<crate>.wasm` (the crate's name with `_` for `-`) to `kernels/<name>.wasm` |
 | 5. Say so | in `m2pkg.toml`, under `[package]`: `wasm = "kernels/<name>.wasm"`; and a `[[kernel]]` for each kernel, its ports in the order its code reads them |
@@ -181,10 +181,10 @@ inputs = ["in: audio<*>", "bits: control<scalar> = 8 in 1..16"]
 outputs = ["out: audio<*>"]
 ```
 
-- music2's own `@m2/effects` is built this way: its bitcrusher's source is `packs/@m2/effects/kernels-src` in music2's repository, its `[[kernel]]` is in the pack's `m2pkg.toml`, and `src/index.ts` calls it.
+- music2's own `@m2/effects` is built this way: its bitcrusher's source is `packs/@m2/effects/kernels-src` in music2's repository (its crate's `Cargo.toml` is with std's, in `std/kernels-src/packs/@m2/effects`, so it builds to the same bytes in any folder), its `[[kernel]]` is in the pack's `m2pkg.toml`, and `src/index.ts` calls it.
 - The kit's rules, byte by byte, are in [Kernel ABI v1](https://github.com/BreadBowlAI/music2/blob/main/docs/kernel-abi.md). Above all: take memory only when the kernel is made (`new`), never in `process`.
 - Your pack's kernels run with a time limit on every call (Quick code, [below](#listing-it-in-the-registry)). music2's own packs' run without one, as std's do: their files are a version music2 ships, built from its own source.
-- A wasm file keeps the paths of the files it was built from, for its error messages. To leave your computer's folder names out, build with `RUSTFLAGS="--remap-path-prefix=$HOME=~"`.
+- A wasm file keeps the paths of the files it was built from, for its error messages. To leave your computer's folder names out, add `"--remap-path-prefix=/home/you=~"` (your home folder) to the `rustflags` in that `config.toml`. Don't set `RUSTFLAGS` instead: it replaces the file's flags, the stack's too.
 - A change to a kernel is a change to the pack: raise its version.
 
 ## An instrument written as data

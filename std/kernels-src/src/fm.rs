@@ -5,7 +5,7 @@
 
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
-use crate::voice::{DcBlock, Env, Glide, Halfband, Memo, Ramp, Stage, TICK, clampf, hash, hz, pitch_of, sin2pi};
+use m2_dsp::voice::{DcBlock, Env, Glide, Halfband, Memo, Ramp, Stage, TICK, clampf, hash, hz, pitch_of, sin2pi};
 
 // Inputs, in manifest order.
 const PITCH: usize = 0;

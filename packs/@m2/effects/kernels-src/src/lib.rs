@@ -1,8 +1,9 @@
 //! The kernels of the pack `@m2/effects`, its own sound code (PACK-21): each is called by the
 //! pack's id, `kernel("@m2/effects:bitcrush", …)`. Port order must match the pack's `m2pkg.toml`.
-//! Written with std's kit, built with std's kernels by `std/build.sh` into
-//! `packs/@m2/effects/kernels/effects.wasm` (ABI-10). This folder is no part of the pack
-//! (PACK-20): only the module built from it is.
+//! Written with std's kit and the blocks std's kernels share (`m2_dsp`), built with std's kernels by
+//! `std/build.sh` into `packs/@m2/effects/kernels/effects.wasm` (ABI-10); its crate's manifest is
+//! `std/kernels-src/packs/@m2/effects/Cargo.toml`. This folder is no part of the pack (PACK-20): only
+//! the module built from it is.
 //!
 //! Each is safe to feed anything, as std's effects are: audio that isn't finite counts as silence
 //! and absurd levels are capped before they reach any state; controls are clamped to their useful
@@ -15,50 +16,10 @@
 //! Play to where it was at Stop, so after the engine sat stopped it plays the export, bit for bit
 //! (RENDER-33). It was std's `std:bitcrush` until std 0.8, and plays the same bits.
 
+use m2_dsp::fx::{Glide, clampf, sane};
 use m2_kernel::{Cfg, Io, Kernel, abi, export};
 
 abi!();
-
-// ---------------------------------------------------------------- helpers
-
-/// `clamp` that maps NaN to `lo` (`f32::clamp` passes NaN through, and a NaN in a
-/// feedback path never leaves).
-fn clampf(x: f32, lo: f32, hi: f32) -> f32 {
-    x.max(lo).min(hi)
-}
-
-/// Audio about to enter an effect: non-finite samples become silence, and anything
-/// beyond +80 dBFS is capped so no state can overflow.
-fn sane(x: f32) -> f32 {
-    if x.is_finite() { x.clamp(-1e4, 1e4) } else { 0.0 }
-}
-
-/// One-pole smoother for controls. It starts at its first target and lands exactly on a
-/// target once it is close, so a settled control costs nothing to compare against.
-struct Glide {
-    value: f32,
-    coef: f32,
-    primed: bool,
-}
-
-impl Glide {
-    fn new(time: f32, sr: f32) -> Self {
-        Glide { value: 0.0, coef: (-1.0 / (time * sr)).exp(), primed: false }
-    }
-
-    fn next(&mut self, target: f32) -> f32 {
-        if !self.primed {
-            self.primed = true;
-            self.value = target;
-        } else if self.value != target {
-            self.value = target + (self.value - target) * self.coef;
-            if (self.value - target).abs() <= 1e-6 * (1.0 + target.abs()) {
-                self.value = target;
-            }
-        }
-        self.value
-    }
-}
 
 // ---------------------------------------------------------------- lo-fi
 

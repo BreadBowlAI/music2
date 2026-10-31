@@ -105,8 +105,9 @@ fn long_tail() -> (Ir, DataSet) {
 }
 
 // OS-49 (8a, Decision 12): subnormal numbers are slow on x86, so std flushes its recursive state
-// below about 1e-15 (`fx.rs`), and so does the bitcrusher, `@m2/effects`' own kernel since std 0.8.
-// One note, then five minutes of silence, through every std kernel that keeps state and the
+// below about 1e-15 (`fx.rs`). The bitcrusher, `@m2/effects`' own kernel since std 0.8, makes none
+// either: the only state of it that settles is its mix's smoothing, which lands exactly on its
+// target. One note, then five minutes of silence, through every std kernel that keeps state and the
 // bitcrusher, counting the subnormal samples in every node's output: counted, not timed.
 // std 0.2's filter, delay and envelope follower still let theirs through (a sum of subnormals is
 // one too, so the adds after them are left out). This test names them: when a std bump flushes

@@ -11,7 +11,8 @@
 
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
-use crate::voice::{Clip, DcBlock, Decay, Drive, Noise, Square, Steps, Svf, clampf, hash, pitch_of, sin2pi, soft};
+use m2_dsp::kit::{Kind, kind_of};
+use m2_dsp::voice::{Clip, DcBlock, Decay, Drive, Noise, Square, Steps, Svf, clampf, hash, pitch_of, sin2pi, soft};
 
 // Inputs, in manifest order.
 const PITCH: usize = 0;
@@ -44,100 +45,15 @@ const TOM_LEVEL: usize = 26;
 const PERC_LEVEL: usize = 27;
 const INPUTS: usize = 28;
 
-/// The drums. The hats share one choke group; a crash chokes the crash, a ride doesn't.
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum Kind {
-    Silent,
-    Kick,
-    Snare,
-    Clap,
-    ClosedHat,
-    PedalHat,
-    OpenHat,
-    Crash,
-    Ride,
-    Tom,
-    Rim,
-    Claves,
-    Cowbell,
-    Shaker,
-    Tambourine,
-}
-
-impl Kind {
-    /// The input that sets this drum's level in the kit, by group: kick; snare, clap and rim;
-    /// hats; toms; cymbals and percussion.
-    fn level(self) -> usize {
-        match self {
-            Kind::Kick => KICK_LEVEL,
-            Kind::Snare | Kind::Clap | Kind::Rim => SNARE_LEVEL,
-            Kind::ClosedHat | Kind::PedalHat | Kind::OpenHat => HAT_LEVEL,
-            Kind::Tom => TOM_LEVEL,
-            _ => PERC_LEVEL,
-        }
-    }
-
-    /// The choke group: a hit of the same group fades this drum out.
-    pub(crate) fn group(self) -> Option<u32> {
-        match self {
-            Kind::Kick => Some(0),
-            Kind::Snare => Some(1),
-            Kind::Clap => Some(2),
-            Kind::ClosedHat | Kind::PedalHat | Kind::OpenHat => Some(3),
-            Kind::Crash => Some(4),
-            _ => None,
-        }
-    }
-}
-
-/// What a note plays: the drum, its tuning in semitones from the drum's own, and whether
-/// it is the drum's variant (a softer kick, a snappier snare).
-pub(crate) fn kind_of(model: f32, pitch: f32) -> (Kind, f32, bool) {
-    let key = pitch_of(pitch).round() as i32;
-    let model = if model.is_nan() { -1 } else { clampf(model.round(), -1.0, 99.0) as i32 };
-    match model {
-        0 => (Kind::Kick, 0.0, false),
-        1 => (Kind::Snare, 0.0, false),
-        2 => (Kind::Clap, 0.0, false),
-        3 => (
-            match key {
-                44 => Kind::PedalHat,
-                46 => Kind::OpenHat,
-                _ => Kind::ClosedHat,
-            },
-            0.0,
-            false,
-        ),
-        // Chromatic, A2 (45) at the tune.
-        4 => (Kind::Tom, (pitch_of(pitch) - 45.0).clamp(-36.0, 36.0), false),
-        5 => (Kind::Rim, 0.0, false),
-        6 => (Kind::Cowbell, 0.0, false),
-        7 => (Kind::Crash, 0.0, false),
-        8 => (Kind::Shaker, 0.0, false),
-        m if m >= 0 => (Kind::Silent, 0.0, false),
-        // The General MIDI kit.
-        _ => match key {
-            35 => (Kind::Kick, -2.0, true),
-            36 => (Kind::Kick, 0.0, false),
-            37 => (Kind::Rim, 0.0, false),
-            38 => (Kind::Snare, 0.0, false),
-            39 => (Kind::Clap, 0.0, false),
-            40 => (Kind::Snare, 2.0, true),
-            41 | 43 | 45 | 47 | 48 | 50 => (Kind::Tom, (key - 45) as f32 * 1.5, false),
-            42 => (Kind::ClosedHat, 0.0, false),
-            44 => (Kind::PedalHat, 0.0, false),
-            46 => (Kind::OpenHat, 0.0, false),
-            49 => (Kind::Crash, 0.0, false),
-            57 => (Kind::Crash, 2.0, false),
-            51 => (Kind::Ride, 0.0, false),
-            59 => (Kind::Ride, 2.0, false),
-            54 => (Kind::Tambourine, 0.0, false),
-            56 => (Kind::Cowbell, 0.0, false),
-            69 => (Kind::Shaker, 0.0, false),
-            70 => (Kind::Shaker, 3.0, false),
-            75 => (Kind::Claves, 0.0, false),
-            _ => (Kind::Silent, 0.0, false),
-        },
+/// The input that sets drum `kind`'s level in the kit, by group: kick; snare, clap and rim; hats;
+/// toms; cymbals and percussion.
+fn level(kind: Kind) -> usize {
+    match kind {
+        Kind::Kick => KICK_LEVEL,
+        Kind::Snare | Kind::Clap | Kind::Rim => SNARE_LEVEL,
+        Kind::ClosedHat | Kind::PedalHat | Kind::OpenHat => HAT_LEVEL,
+        Kind::Tom => TOM_LEVEL,
+        _ => PERC_LEVEL,
     }
 }
 
@@ -303,7 +219,7 @@ impl Drum {
         self.kind = kind;
         let velocity = clampf(at(VELOCITY), 0.0, 1.0);
         // About -2 dB at 0.8, -12 dB at 0.3, then the kit's level for the drum's group.
-        self.gain = velocity.powf(1.1) * db_to_gain(clampf(at(kind.level()), -60.0, 12.0));
+        self.gain = velocity.powf(1.1) * db_to_gain(clampf(at(level(kind)), -60.0, 12.0));
         // A seed of the hit's own: the same in every render, but not for every hit. The count
         // is of hits, never of samples, so it doesn't follow how long the engine has run (a
         // float to int cast saturates: NaN and negatives are 0).
@@ -596,7 +512,7 @@ fn free_squares<const N: usize>(seed: u32) -> [Square; N] {
 
 /// A unit-peak bandpass at `f` Hz that rings for `t60` seconds.
 fn resonator(sr: f32, f: f32, t60: f32) -> Svf {
-    let q = (t60 * std::f32::consts::PI * f / crate::voice::T60).max(0.5);
+    let q = (t60 * std::f32::consts::PI * f / m2_dsp::voice::T60).max(0.5);
     Svf::bandpass(sr, f, q)
 }
 
