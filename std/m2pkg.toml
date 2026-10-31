@@ -5,7 +5,8 @@
 # effects mixing needs) are declared in TypeScript in src/, each with a descriptor that gives
 # its controls, their defaults and ranges, and how the editor offers it. std is the toolbox
 # (PKG-17): the sounds made from these kernels are the packs @m2/synths, @m2/drums and
-# @m2/effects (packs/@m2/), which call them by id.
+# @m2/effects (packs/@m2/), which call them by id. A kernel only one pack's sounds play is that
+# pack's own, built beside it (PACK-21): @m2/effects' bitcrusher since std 0.8.
 #
 # Port syntax: "name: kind [= default] [in lo..hi]".
 #   kinds: audio<1|2|*>, control<unit|*>, events<note>, and * (any kind).
@@ -18,9 +19,9 @@
 
 [package]
 name = "std"
-version = "0.7.0"
+version = "0.8.0"
 license = "MIT OR Apache-2.0"
-description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and every kernel"
+description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and the kernels they are built on"
 wasm = "kernels/std.wasm"
 
 # ---------------------------------------------------------------- oscillators
@@ -186,11 +187,12 @@ inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
 
 # ---------------------------------------------------------------- more effects
-# The kernels of @m2/effects' reverb, modulation, lo-fi and width, and std/fx's compression and EQ.
+# The kernels of @m2/effects' reverb, modulation and width, and std/fx's compression and EQ.
 # Each kernel is safe with any input or setting: no NaN, no runaway feedback, and
-# tails that end in exact silence. Chorus, phaser, tremolo and bitcrush follow the song
+# tails that end in exact silence. Chorus, phaser and tremolo follow the song
 # through their last input, `playing`: @m2/effects connects it to `time.playing`. Left out, it
-# is 1, as if the song always played.
+# is 1, as if the song always played. The bitcrusher is @m2/effects' own kernel since std 0.8
+# (`@m2/effects:bitcrush`, PACK-21).
 
 [[kernel]]
 name = "reverb"
@@ -258,18 +260,6 @@ inputs = [
   "low_freq: control<hz> = 200",
   "mid_freq: control<hz> = 1000",
   "high_freq: control<hz> = 4000",
-]
-outputs = ["out: audio<*>"]
-
-[[kernel]]
-name = "bitcrush"
-description = "Bitcrusher: rounds to `bits` and holds samples at `rate` Hz. When playing goes to 1, its sample clock is put back to where it was when playing went to 0 (left out, playing is always 1)"
-inputs = [
-  "in: audio<*>",
-  "bits: control<scalar> = 8 in 1..16",
-  "rate: control<hz> = 12000",
-  "mix: control<unit01> = 1",
-  "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]
 

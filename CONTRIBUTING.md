@@ -65,7 +65,7 @@ cargo run --locked --release -p music2-desktop
 
 | Tier | When | What |
 |---|---|---|
-| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 14 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
+| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, the kernels and every committed `.wasm` (std's and music2's own packs'), the browser suites in 2 parts, the 14 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
 | **Nightly** | every day on `main`, on GitHub's machines, once the repository is public | the full check without the timing gates: every pull request check, with the browser suites one at a time, the tests the pull request tier leaves out, and the security advisories. On macOS too: the Rust tests, the pool's models, the browser suites and the renders, less the few whose clock is a sleep (GitHub's Mac's sleeps run long: `ci/sleeps-tests.txt`, and the suites `e2e/run.mjs` tags `sleeps`). |
 | **Timing gates** | every night on a quiet machine of a maintainer's | the gates that time real-time audio. A shared cloud machine can't judge them. |
 
@@ -97,7 +97,7 @@ cargo run --locked --release -p music2-desktop
 - `cargo test --workspace` runs the Rust tests. Tests that play plugins need the plugin program built first: `cargo build -p m2-plugins --bin m2-plugin-host`.
 - To test the UI with no window and no sound: `M2_AUDIO=none cargo run -p m2-server --example headless -- <song-folder | -> <session.json> <token>`, then point a headless browser at the URL in the session file. `-` opens no song, for the start screen. `<token>` is the page's key, which the session file names `page_token` beside the tools key (`token`, an agent's). Outside the app, the UI reads its key from `window.__M2__ = {native: false, token}`.
 - The browser suites are in `e2e/`: each drives the UI in headless Chrome against the headless server, on a fresh copy of a song ([e2e/README.md](e2e/README.md)).
-- `std/build.sh` rebuilds std's kernels (it needs the `wasm32-unknown-unknown` Rust target, which `rust-toolchain.toml` adds). The built `std/kernels/std.wasm` is checked in; `std/build.sh --check` proves it rebuilds to the same bytes.
+- `std/build.sh` rebuilds every kernel module music2 ships: std's, from `std/kernels-src`, and those of music2's own packs, from each pack's `kernels-src/` (`packs/@m2/effects/kernels-src`). It needs the `wasm32-unknown-unknown` Rust target, which `rust-toolchain.toml` adds. The built modules (`std/kernels/std.wasm`, `packs/@m2/effects/kernels/effects.wasm`) are checked in; `std/build.sh --check` proves each rebuilds to the same bytes (ABI-10).
 - `cargo run --release -p m2-runtime --example bench` compares WebAssembly and native speed.
 
 ## Repository layout
@@ -106,6 +106,8 @@ cargo run --locked --release -p music2-desktop
 |---|---|
 | `core/ir` | The graph's compiled form, signal kinds and units, and the checker |
 | `std/kernels-src/kernel` | The kit for writing kernels in Rust (`m2-kernel`), a member of the kernels' own workspace |
+| `std/kernels-src/dsp` | What more than one kernel module is made of (`m2-dsp`): effect helpers, voice blocks, the drum kit's map, and the kernels' test harness |
+| `std/kernels-src/packs` | The crate of each of music2's own packs with kernels (`packs/@m2/effects/Cargo.toml`); its source is beside the pack, in its `kernels-src/` |
 | `core/song` | The song folder (format 1): the manifest, `DataPath` (every project path), keys, lane and arrangement files in their canonical form, asset hashes, and the problems data can have |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |

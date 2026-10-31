@@ -44,6 +44,9 @@ pub struct Package {
     pub needs: BTreeMap<String, m2_song::Requirement>,
     /// Its licence, as `m2pkg.toml` names it.
     pub license: Option<String>,
+    /// Whether its kernels run with the time checks (ABI-6): [`checked`]'s answer as it loaded, which
+    /// chose the engine that compiled its module.
+    pub checked: bool,
     /// The files the runtime read to load it (`std/m2pkg.toml`, `std/kernels/std.wasm`), by the
     /// SHA-256 of their bytes: with the TypeScript the build read, what a render's provenance
     /// names as the package contents that ran (RENDER-2).
@@ -152,11 +155,32 @@ pub const MOST_STEPS: u32 = 64;
 /// stepped parameters is described in a moment still, and those past it are numbers (CARD-6).
 pub const MOST_NAMES: u32 = 4096;
 
-/// Whether package `package`'s kernels run with the time limit (ABI-6): every pack's, a stranger's
-/// code; not std's, music2's own, shipped with the app, reviewed and tested, which runs with no
-/// checks. The one place this is decided.
-pub fn checked(package: &str) -> bool {
-    package != m2_song::pack::STD
+/// Whether the kernels of version `version` of package `name`, with these files (`hash`, its
+/// listing's), run with the time limit (ABI-6, ABI-11): every pack's, a stranger's code; not std's,
+/// nor those of a pack music2 ships (`m2_song::pack::own`, PACK-19), music2's own code, shipped
+/// with the app, reviewed, tested and built from source in the repo (ABI-10), which run with no
+/// checks. By the files, never the name alone: a pack with no hash (a pack in a folder) is checked.
+/// The one place this is decided.
+pub fn checked(name: &str, version: &str, hash: Option<&m2_song::Sha>) -> bool {
+    if name == m2_song::pack::STD {
+        return false;
+    }
+    let own = || {
+        let (name, version) = (m2_song::pack::PackName::new(name).ok()?, m2_song::Version::parse(version)?);
+        Some(m2_song::pack::own(&name, &version, hash?))
+    };
+    own() != Some(true)
+}
+
+/// The hash of the version in `dir` (its listing's, `m2pack.json`, PACK-6) when its listing names
+/// each of `read`, the files the runtime read from it, by its path and the SHA-256 of the very bytes
+/// read: the hash [`checked`] asks about is that of the code that runs. None when it has no listing
+/// (a pack in a folder), or its listing names other bytes for one of them.
+fn listed(dir: &Path, read: &[(&str, m2_song::Sha)]) -> Option<m2_song::Sha> {
+    let text = std::fs::read(dir.join(m2_song::pack::LISTING)).ok()?;
+    let listing = m2_song::pack::Listing::read(std::str::from_utf8(&text).ok()?).ok()?;
+    let names = |(path, sha): &(&str, m2_song::Sha)| listing.files.iter().any(|f| f.path == *path && f.sha256 == *sha);
+    read.iter().all(names).then(|| m2_song::Sha::of(&text))
 }
 
 /// The engine every kernel runs in.
@@ -252,9 +276,22 @@ impl PackageSet {
     }
 
     /// Load the package in `dir` (which holds `m2pkg.toml`, read strictly: PACK-2) and show it
-    /// beside what the set shows: how a host loads std.
+    /// beside what the set shows: how a host loads std, the one folder whose name `std` is trusted
+    /// (ABI-11). A pack is loaded with [`PackageSet::load_pack`].
     pub fn load(&mut self, dir: &Path) -> Result<&Package> {
-        let p = self.loaded_at(dir)?;
+        let p = self.loaded_at(dir, None)?;
+        self.show_loaded(p)
+    }
+
+    /// Load pack `name` from `dir` and show it beside what the set shows, as [`PackageSet::load`]
+    /// does: a pack is never std, and a folder whose `m2pkg.toml` names another package, or says
+    /// `std`, is refused before anything of it is compiled or run (ABI-11).
+    pub fn load_pack(&mut self, dir: &Path, name: &str) -> Result<&Package> {
+        let p = self.loaded_at(dir, Some(name))?;
+        self.show_loaded(p)
+    }
+
+    fn show_loaded(&mut self, p: Arc<Package>) -> Result<&Package> {
         let name = p.name.clone();
         if self.view.packages.contains_key(&name) {
             bail!("package `{name}` is loaded twice");
@@ -267,11 +304,21 @@ impl PackageSet {
     /// whose `m2pkg.toml` and wasm are unchanged is shared, and one whose either file changed is
     /// loaded again (PACK-9). The wasm's hash comes from the hash cache (FMT-16), a stat when it
     /// is unchanged.
-    fn loaded_at(&mut self, dir: &Path) -> Result<Arc<Package>> {
+    ///
+    /// A pack (`pack`, its name as the caller found it) is checked against the manifest read here,
+    /// before anything is compiled: never std, and never another package. So std's trust (no time
+    /// checks, ABI-11) goes only to the folder a host loads as std.
+    fn loaded_at(&mut self, dir: &Path, pack: Option<&str>) -> Result<Arc<Package>> {
+        if pack == Some(m2_song::pack::STD) {
+            bail!("{}: std comes with music2: a pack is named @owner/name", dir.display());
+        }
         let path = dir.join(m2_song::pack::PKG_MANIFEST);
         let text = std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
         let m =
             m2_song::pack::PkgManifest::read(&text).map_err(anyhow::Error::msg).with_context(|| format!("reading {}", path.display()))?;
+        if let Some(pack) = pack.filter(|p| *p != m.package.name.as_str()) {
+            bail!("{} holds {}, not {pack}", dir.display(), m.package.name);
+        }
         let wasm = match &m.package.wasm {
             Some(w) => {
                 let p = dir.join(w);
@@ -298,21 +345,33 @@ impl PackageSet {
             .iter()
             .map(|k| KernelDecl::deserialize(k.clone()).map_err(|e| anyhow::anyhow!("package `{name}`: a [[kernel]]: {e}")))
             .collect::<Result<_>>()?;
-        let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), m2_song::Sha::of(text.as_bytes()).hex())]);
-        let (module, module_sha) = match &m.package.wasm {
+        let manifest_sha = m2_song::Sha::of(text.as_bytes());
+        let mut files = BTreeMap::from([(format!("{name}/m2pkg.toml"), manifest_sha.hex())]);
+        let version = m.package.version.to_string();
+        let wasm = match &m.package.wasm {
             Some(w) => {
                 let wasm_path = dir.join(w);
                 let bytes = std::fs::read(&wasm_path).with_context(|| format!("reading {}", wasm_path.display()))?;
                 let sha = m2_song::Sha::of(&bytes);
                 files.insert(format!("{name}/{w}"), sha.hex());
+                Some((w.as_str(), wasm_path, bytes, sha))
+            }
+            None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
+            None => None,
+        };
+        // Asked of the very bytes read, and compiled (ABI-11).
+        let read: Vec<(&str, m2_song::Sha)> =
+            [(m2_song::pack::PKG_MANIFEST, manifest_sha)].into_iter().chain(wasm.as_ref().map(|(w, .., sha)| (*w, *sha))).collect();
+        let is_checked = checked(&name, &version, listed(dir, &read).as_ref());
+        let (module, module_sha) = match wasm {
+            Some((_, wasm_path, bytes, sha)) => {
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
-                let engine = engine(checked(&name));
+                let engine = engine(is_checked);
                 let module = Module::new(&engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
                 let verified = verify_module(&module, &kernels, self.limits.offline);
                 verified.with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
-            None if !kernels.is_empty() => bail!("package `{name}` declares kernels but no `wasm` file"),
             None => (None, None),
         };
         let (mut sigs, mut offline) = (HashMap::new(), BTreeSet::new());
@@ -328,11 +387,12 @@ impl PackageSet {
         }
         Ok(Package {
             name,
-            version: m.package.version.to_string(),
+            version,
             description: m.package.description,
             dir: dir.to_path_buf(),
             needs: m.dependencies,
             license: m.package.license,
+            checked: is_checked,
             files,
             module,
             module_sha,
@@ -350,10 +410,7 @@ impl PackageSet {
             view.packages.insert(m2_song::pack::STD.to_string(), std.clone());
         }
         for (name, dir) in packs {
-            let p = self.loaded_at(dir).with_context(|| format!("loading {name}"))?;
-            if p.name != *name {
-                bail!("{} holds {}, not {name}", dir.display(), p.name);
-            }
+            let p = self.loaded_at(dir, Some(name)).with_context(|| format!("loading {name}"))?;
             view.packages.insert(name.clone(), p);
         }
         // The very view shown, when it holds the same versions: a plan of it borrows the set.

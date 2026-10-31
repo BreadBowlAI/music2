@@ -355,6 +355,53 @@ struct Checker<'a> {
     diags: Vec<Diagnostic>,
 }
 
+/// A kernel that left std for a pack music2 ships, to be that pack's own (PACK-21).
+pub struct Moved {
+    /// Its id in std: `std:bitcrush`.
+    pub from: &'static str,
+    /// Its id now: `@m2/effects:bitcrush`.
+    pub to: &'static str,
+    /// The std that no longer has it: `0.8`.
+    pub std: &'static str,
+    /// The pack's first version with it: `1.1`.
+    pub since: &'static str,
+    /// The pack's component that plays it: `bitcrush`.
+    pub component: &'static str,
+}
+
+/// Every kernel that left std for a pack music2 ships (PACK-21): the one table, so a song (or an
+/// older pack's code) that calls one by its old id is told where it went.
+pub const MOVED_KERNELS: &[Moved] =
+    &[Moved { from: "std:bitcrush", to: "@m2/effects:bitcrush", std: "0.8", since: "1.1", component: "bitcrush" }];
+
+/// Why kernel `id` isn't there, when it left std for a pack ([`MOVED_KERNELS`]): what to do first,
+/// in the words the user wrote (the call is inside `component`, the innermost ComponentId whose
+/// code made it, or in the song's own code), then where the kernel is now. The app shows a
+/// message on one line, cut at the window's edge, so the fix comes first.
+fn moved_from_std(id: &str, component: Option<&str>) -> Option<String> {
+    let Moved { from, to, std, since, component: effect } = MOVED_KERNELS.iter().find(|m| m.from == id)?;
+    let pack = to.split_once(':')?.0;
+    let now = format!("(`{from}` is now `{to}`.)");
+    let (by, name) = component.and_then(|c| c.split_once(':')).filter(|(p, _)| *p != "std").unzip();
+    Some(match (by, name) {
+        // An older version of the pack the kernel went to.
+        (Some(by), Some(name)) if by == pack => format!(
+            "Move this song to {pack} {since} or later: run `m2 pack update <song> {pack}`. Its `{name}` is from an older {pack}, \
+             which needs a kernel std {std} no longer has; {pack} {since} has its own, and sounds the same. {now}"
+        ),
+        // Another pack's sound: its author must move it.
+        (Some(by), Some(name)) => format!(
+            "`{name}`, from {by}, calls a kernel std {std} no longer has, so it can't play: its author must move it to `{to}`. \
+             Until then, play `{effect}` from \"{pack}\" in its place. {now}"
+        ),
+        // The song's own code.
+        _ => format!(
+            "Play `{effect}` from \"{pack}\" instead: import it from \"{pack}\", and add \"{pack}\" = \"{since}\" under [dependencies] \
+             in music2.toml. This song's code calls a kernel std {std} no longer has; the effect sounds the same. {now}"
+        ),
+    })
+}
+
 /// A `code.check` error at a node, or at the module.
 fn diag(m: &Module, n: Option<&Node>, message: impl Into<String>) -> Diagnostic {
     coded("code.check", m, n, message)
@@ -977,6 +1024,11 @@ impl<'a> Checker<'a> {
                                 "`{kernel}` is an offline kernel: music2 runs it to make a clip's render, and song code can't call it"
                             );
                             self.diags.push(coded("kernel.offline", m, Some(node), message));
+                            continue;
+                        }
+                        let component = m.chain(node.frame).into_iter().rev().find_map(|f| f.component.as_deref());
+                        if let Some(why) = moved_from_std(kernel, component).filter(|_| !is_plugin) {
+                            self.diags.push(coded("pkg.missing", m, Some(node), why));
                             continue;
                         }
                         let what = if is_plugin { "plugin (is it installed?)" } else { "kernel" };

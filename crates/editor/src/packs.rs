@@ -319,7 +319,8 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     }
     // Its kernels load, each module checked as a song would load it.
     let mut set = m2_runtime::PackageSet::default();
-    let loaded = set.load(std).map(drop).and_then(|()| set.load(dir).map(drop));
+    // As a pack: a folder that says it is std now (it didn't above) is refused before it runs (ABI-11).
+    let loaded = set.load(std).map(drop).and_then(|()| set.load_pack(dir, name.as_str()).map(drop));
     if let Err(e) = loaded {
         out.push(format!("{e:#}"));
         return out;

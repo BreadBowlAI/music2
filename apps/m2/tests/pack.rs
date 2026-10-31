@@ -166,13 +166,19 @@ fn m2_installs_the_bundled_packs_and_a_template_song_builds_offline() {
     assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
     ok(t.m2(&["check", song.to_str().unwrap()]));
     let listed = ok(t.m2(&["pack", "list"]));
-    for pack in ["@m2/drums 1.0.0", "@m2/effects 1.0.0", "@m2/synths 1.0.0"] {
-        assert!(listed.contains(pack), "{pack} in {listed}");
+    for pack in bundled_versions() {
+        assert!(listed.contains(&pack), "{pack} in {listed}");
     }
     let before = stamps(&t.store());
     std::thread::sleep(std::time::Duration::from_millis(20));
     ok(t.m2(&["check", song.to_str().unwrap()]));
     assert_eq!(stamps(&t.store()), before, "a second m2 writes nothing in the store");
+}
+
+/// Each pack the source tree bundles, as `<name> <version>`: `@m2/effects 1.1.0`.
+fn bundled_versions() -> Vec<String> {
+    let packs = m2_song::pack::bundled(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs"));
+    packs.iter().map(|d| m2_song::pack::PkgManifest::at(d).unwrap()).map(|m| format!("{} {}", m.package.name, m.package.version)).collect()
 }
 
 // PACK-19 (review S9): `m2 pack install` takes a folder's pack named in music2's own scope only as
@@ -181,15 +187,16 @@ fn m2_installs_the_bundled_packs_and_a_template_song_builds_offline() {
 fn a_folders_m2_pack_installs_only_as_music2s_own() {
     let t = Temp::new("scope");
     let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/effects");
+    let effects = bundled_versions().into_iter().find(|p| p.starts_with("@m2/effects ")).unwrap();
     let same = t.0.join("same");
     copy(&ours, &same);
     let said = ok(t.m2(&["pack", "install", same.to_str().unwrap()]));
-    assert!(said.contains("@m2/effects 1.0.0 is already installed"), "{said}");
+    assert!(said.contains(&format!("{effects} is already installed")), "{said}");
     let changed = t.0.join("changed");
     copy(&ours, &changed);
     std::fs::write(changed.join("README.md"), "# Not music2's\n").unwrap();
     let said = failed(t.m2(&["pack", "install", changed.to_str().unwrap()]));
-    assert!(said.contains("@m2/ is music2's own scope: @m2/effects 1.0.0") && said.contains("`@you/effects`"), "{said}");
+    assert!(said.contains(&format!("@m2/ is music2's own scope: {effects}")) && said.contains("`@you/effects`"), "{said}");
     let new = t.0.join("new");
     copy(&fixtures().join("tiny"), &new);
     let toml = std::fs::read_to_string(new.join("m2pkg.toml")).unwrap().replace("name = \"@test/tiny\"", "name = \"@m2/free-synths\"");
@@ -652,7 +659,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"1\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );

@@ -60,7 +60,7 @@ use std::f32::consts::FRAC_PI_2;
 
 use m2_kernel::{Asset, Cfg, Io, Kernel, db_to_gain, export};
 
-use crate::voice::{Memo, clampf, pitch_of};
+use m2_dsp::voice::{Memo, clampf, pitch_of};
 
 // Inputs, in manifest order: `sampler` has the first 9, `regions` all 10.
 const PITCH: usize = 0;

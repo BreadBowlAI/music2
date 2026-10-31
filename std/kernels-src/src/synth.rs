@@ -5,7 +5,7 @@
 
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
-use crate::voice::{
+use m2_dsp::voice::{
     Clip, DcBlock, Drive, Env, Glide, Halfband, Ladder, LadderCoefs, Memo, Noise, Ramp, Stage, Steps, TICK, clampf, hash, hz, one_pole,
     pan, pitch_of, sin2pi,
 };

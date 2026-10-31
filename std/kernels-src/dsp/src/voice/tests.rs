@@ -3,7 +3,7 @@
 use std::f64::consts::TAU;
 
 use super::*;
-use crate::testkit::{SR, db, peak, peak_hz, rms};
+use crate::testing::{SR, db, peak, peak_hz, rms};
 
 #[test]
 fn sine_is_within_2e7_everywhere() {
@@ -213,7 +213,7 @@ fn noise_is_uniform_and_seeded() {
     let mut n = Noise::new(hash(1, 2));
     let x: Vec<f32> = (0..100_000).map(|_| n.next()).collect();
     assert!(x.iter().all(|v| (-1.0..1.0).contains(v)));
-    assert!(crate::testkit::mean(&x).abs() < 0.01 && (rms(&x) - 0.577).abs() < 0.01);
+    assert!(crate::testing::mean(&x).abs() < 0.01 && (rms(&x) - 0.577).abs() < 0.01);
     let mut m = Noise::new(hash(1, 2));
     assert!(x.iter().all(|&v| v == m.next()));
 }

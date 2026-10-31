@@ -9,7 +9,7 @@ use super::*;
 use crate::testing::Fixture;
 
 /// A song's manifest that needs std alone: these songs play `@test/tiny` from a store of their own.
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n";
 
 /// The fixture pack `@test/tiny`.
 fn tiny() -> PathBuf {
@@ -77,7 +77,7 @@ fn adding_a_pack_instrument_writes_its_dependency_and_lock_in_one_undo() {
     let (mut s, hash) = song_and_store(&f);
     let made = crate::tracks::add(&mut s, "@test/tiny:tiny-keys", None, None, None).unwrap_or_else(|e| panic!("{e}"));
     let manifest = f.read("music2.toml");
-    assert!(manifest.ends_with("std = \"0.7\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
+    assert!(manifest.ends_with("std = \"0.8\"\n\"@test/tiny\" = \"0.1\"\n"), "{manifest}");
     let lock = Lock::read(&f.read("music2.lock")).unwrap();
     assert_eq!(lock.get(&PackName::new("@test/tiny").unwrap()).map(|l| (l.version, l.hash)), Some((Version(0, 1, 0), hash)));
     let track = f.read(&format!("tracks/{}.ts", made.module));
@@ -423,6 +423,38 @@ fn the_bundled_packs_pass_check() {
         assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "{}", dir.display());
         assert!(!dir.join(LISTING).exists(), "{}: checking writes nothing where it ships", dir.display());
     }
+}
+
+// PACK-20 (review X4): a pack's `kernels-src/` is never installed, so nothing of the pack is read
+// from it: `m2 pack check` refuses a module there, and code that imports from there, as a song
+// would once the pack is installed.
+#[test]
+fn check_refuses_a_pack_that_reads_its_kernel_source() {
+    let f = Fixture::new();
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    // Its module in kernels-src/.
+    let fx = f.0.join("fx");
+    copy(&m2_song::pack::source_packs().join("@m2/effects"), &fx);
+    std::fs::rename(fx.join("kernels/effects.wasm"), fx.join("kernels-src/fx.wasm")).unwrap();
+    std::fs::remove_dir_all(fx.join("presets")).unwrap();
+    let toml = std::fs::read_to_string(fx.join("m2pkg.toml")).unwrap();
+    let toml = toml.replace("name = \"@m2/effects\"", "name = \"@alice/fx\"").replace("kernels/effects.wasm", "kernels-src/fx.wasm");
+    std::fs::write(fx.join("m2pkg.toml"), toml).unwrap();
+    let said = check(&fx, &std_dir).join("\n");
+    assert!(said.contains("`kernels-src/fx.wasm`") && said.contains("kernels-src/ is no part of the pack"), "{said}");
+    // Code that imports from it.
+    let small = f.0.join("tiny");
+    copy(&tiny(), &small);
+    std::fs::create_dir_all(small.join("kernels-src")).unwrap();
+    std::fs::write(small.join("kernels-src/extra.ts"), "export const extra = 1;\n").unwrap();
+    let code = std::fs::read_to_string(small.join("src/index.ts")).unwrap();
+    std::fs::write(
+        small.join("src/index.ts"),
+        format!("import {{ extra }} from \"../kernels-src/extra\";\nexport const e = extra;\n{code}"),
+    )
+    .unwrap();
+    let said = check(&small, &std_dir).join("\n");
+    assert!(said.contains("../kernels-src/extra") && said.contains("kernels-src/ is no part of the pack"), "{said}");
 }
 
 // PACK-12, PKG-7: a component with no category is named, as one its author forgot; one that says

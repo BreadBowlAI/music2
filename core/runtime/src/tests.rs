@@ -118,6 +118,20 @@ fn std_packages() -> PackageSet {
     p
 }
 
+/// std and every pack music2 ships with kernels of its own (PACK-21), installed as the app installs
+/// them (the tests' store): every kernel music2 ships, run as the app runs it, with no time checks
+/// (ABI-11). The tests of every kernel play them.
+fn own_packages() -> PackageSet {
+    let mut p = std_packages();
+    for (name, dir) in m2_song::pack::test_packs() {
+        if m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm.is_some() {
+            let pack = p.load_pack(&dir, &name).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+            assert!(!pack.checked, "{name} runs as music2's own");
+        }
+    }
+    p
+}
+
 fn song(nodes: Value, out: &str, lanes: Value) -> Ir {
     serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}))
@@ -302,10 +316,67 @@ fn feedback_delays_one_block() {
     assert!(peak(&out) < 2.5 && peak(&out) > 1.0);
 }
 
+/// The initial value of `module`'s first global, wasm-ld's stack pointer, which starts at the top
+/// of the stack: the stack's size, in bytes.
+fn stack_size(module: &[u8]) -> u32 {
+    fn leb(b: &[u8], at: &mut usize) -> u64 {
+        let (mut v, mut shift) = (0u64, 0);
+        loop {
+            let x = b[*at];
+            *at += 1;
+            v |= u64::from(x & 0x7f) << shift;
+            shift += 7;
+            if x < 0x80 {
+                return v;
+            }
+        }
+    }
+    let mut at = 8;
+    while at < module.len() {
+        let id = module[at];
+        at += 1;
+        let len = leb(module, &mut at) as usize;
+        if id == 6 {
+            let mut g = at;
+            assert!(leb(module, &mut g) > 0, "a global");
+            // i32, mutable, then `i32.const <value>` (a signed LEB, positive here).
+            assert_eq!(module[g..g + 3], [0x7f, 0x01, 0x41], "the stack pointer is the first global");
+            g += 3;
+            return leb(module, &mut g) as u32;
+        }
+        at += len;
+    }
+    panic!("no global section")
+}
+
+// ABI-10, RENDER-32: every module music2 ships is built with the kernels' own stack, the size their
+// `.cargo/config.toml` sets (64 KiB): each sandbox touches all of its memory once at its seal, so a
+// build that left the flag out (wasm-ld's 1 MiB) costs every sandbox a megabyte, and no render
+// would show it.
+#[test]
+fn every_module_music2_ships_has_the_kernels_stack() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = std::fs::read_to_string(root.join("std/kernels-src/.cargo/config.toml")).unwrap();
+    let flag = config.split("-zstack-size=").nth(1).expect("the config sets the stack's size");
+    let want: u32 = flag[..flag.find(|c: char| !c.is_ascii_digit()).unwrap()].parse().unwrap();
+    assert_eq!(want, 65_536, "the kernels' stack is 64 KiB (RENDER-32)");
+    let mut modules = vec![root.join("std/kernels/std.wasm")];
+    for dir in m2_song::pack::bundled(&root.join("packs")) {
+        if let Some(w) = m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm {
+            modules.push(dir.join(w));
+        }
+    }
+    assert!(modules.len() >= 2, "std's and @m2/effects' at least: {modules:?}");
+    for m in modules {
+        assert_eq!(stack_size(&std::fs::read(&m).unwrap()), want, "{}: its stack", m.display());
+    }
+}
+
 #[test]
 fn std_manifest_matches_its_kernels() {
-    // Instantiating every kernel checks its port counts against the manifest.
-    let pk = std_packages();
+    // Instantiating every kernel checks its port counts against the manifest: std's, and those of
+    // music2's own packs (PACK-21).
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -324,15 +395,15 @@ fn std_manifest_matches_its_kernels() {
     }
 }
 
-// RENDER-32: every std kernel fits under the 256 MiB a sandbox may take at its birth, at the highest
-// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
+// RENDER-32: every std kernel, and every kernel of music2's own packs (PACK-21), fits under the 256
+// MiB a sandbox may take at its birth, at the highest rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
 // (delay lines and reverbs sized by the rate), and never after, so born, one block played and reset
 // is the most an instance ever holds. A kernel added later is checked too. Prints the one that holds
 // the most.
 #[test]
 fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     const RATE: f64 = 384_000.0;
-    let pk = std_packages();
+    let pk = own_packages();
     let mut held: Vec<(usize, String)> = vec![];
     for sig in pk.kernel_sigs() {
         let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
@@ -374,13 +445,13 @@ fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
     plain_kernel(pk, &node, id, 2, &inputs, rate).unwrap_or_else(|e| panic!("{id}: {e:#}"))
 }
 
-// ABI v1 (rules 1 and 2), RENDER-28: every std kernel resets in its sealed sandbox, taking no
-// memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
+// ABI v1 (rules 1 and 2), RENDER-28: every std kernel, and every kernel of music2's own packs
+// (PACK-21), resets in its sealed sandbox, taking no memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
 // block again, bit for bit, its memory as big as at its seal. A kernel whose state holds a `Vec` and
 // built it again at a reset would ask for memory there, and trap.
 #[test]
 fn every_std_kernel_resets_in_a_sealed_sandbox() {
-    let pk = std_packages();
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -1378,6 +1449,52 @@ fn song_code_cannot_call_an_offline_kernel() {
     assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("kernel.offline", Some("song.ts:3:5"))], "{e:?}");
     assert!(e[0].message.starts_with("`std:stretch` is an offline kernel"), "{}", e[0].message);
     assert!(m2_ir::Kernels::kernel(&pk, "std:stretch").is_none() && pk.kernel_sigs().all(|s| s.id != "std:stretch"));
+}
+
+// PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and whatever calls it
+// by its old id is told, at the call, in `pkg.missing`'s words, what to do first, in the words the
+// user wrote (the review's X8): a song locked to an older version of the pack it went to (its
+// `bitcrush`) moves the song on; another pack's sound waits for its author; the song's own code
+// plays the pack's effect instead. Each then names the new id.
+#[test]
+fn a_kernel_that_left_std_says_where_it_went() {
+    let pk = std_packages();
+    assert!(m2_ir::Kernels::kernel(&pk, "std:bitcrush").is_none(), "std has no bitcrusher");
+    // The call, made inside `component` (a ComponentId), or in the song's own code.
+    let said = |component: Option<&str>| {
+        let frames = match component {
+            Some(c) => json!([{"site": 1, "component": c}]),
+            None => json!([]),
+        };
+        let node = json!({"id": "c", "op": "kernel", "kernel": "std:bitcrush", "src": "song.ts:4:3", "frame": component.map(|_| 0)});
+        let mut ir = song(json!([node]), "c", json!([]));
+        ir.modules[0].frames = serde_json::from_value(frames).unwrap();
+        let e = check(&ir, &pk).expect_err("refused");
+        assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("pkg.missing", Some("song.ts:4:3"))], "{e:?}");
+        e[0].message.clone()
+    };
+    assert_eq!(
+        said(Some("@m2/effects:bitcrush")),
+        "Move this song to @m2/effects 1.1 or later: run `m2 pack update <song> @m2/effects`. Its `bitcrush` is from an older \
+         @m2/effects, which needs a kernel std 0.8 no longer has; @m2/effects 1.1 has its own, and sounds the same. \
+         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
+    );
+    assert_eq!(
+        said(Some("@alice/crunchy:crunch")),
+        "`crunch`, from @alice/crunchy, calls a kernel std 0.8 no longer has, so it can't play: its author must move it to \
+         `@m2/effects:bitcrush`. Until then, play `bitcrush` from \"@m2/effects\" in its place. (`std:bitcrush` is now \
+         `@m2/effects:bitcrush`.)"
+    );
+    assert_eq!(
+        said(None),
+        "Play `bitcrush` from \"@m2/effects\" instead: import it from \"@m2/effects\", and add \"@m2/effects\" = \"1.1\" under \
+         [dependencies] in music2.toml. This song's code calls a kernel std 0.8 no longer has; the effect sounds the same. \
+         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
+    );
+    // Any other unknown kernel is unknown, as before.
+    let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:crush"}]), "c", json!([]));
+    let e = check(&ir, &pk).expect_err("refused");
+    assert_eq!((e[0].code, e[0].message.as_str()), ("code.check", "unknown kernel `std:crush`"));
 }
 
 // Information only (PLAT-1): how fast `std:stretch` makes a warped clip's render here. A minute of

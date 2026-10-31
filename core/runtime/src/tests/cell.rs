@@ -480,12 +480,12 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
     sum.expect("std has kernels")
 }
 
-// ABI-1, step 5 gate: the debug input-memory check passes for every std kernel. Each is played at
-// the top level and in a voice, fed by signals and cells, through notes that start mid-block and
-// steal voices, cell steps and ramps, and a panic.
+// ABI-1, step 5 gate: the debug input-memory check passes for every std kernel, and every kernel of
+// music2's own packs (PACK-21). Each is played at the top level and in a voice, fed by signals and
+// cells, through notes that start mid-block and steal voices, cell steps and ramps, and a panic.
 #[test]
 fn every_std_kernel_keeps_its_inputs() {
-    let pk = std_packages();
+    let pk = own_packages();
     let mut sigs: Vec<&KernelSig> = pk.kernel_sigs().collect();
     sigs.sort_by(|a, b| a.id.cmp(&b.id));
     let mut site = 1;

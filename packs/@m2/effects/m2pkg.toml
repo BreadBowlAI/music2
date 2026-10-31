@@ -1,13 +1,32 @@
 [package]
 name = "@m2/effects"
-version = "1.0.0"
+version = "1.1.0"
 license = "MIT OR Apache-2.0"
 description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
+# Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
+# part of the pack (PACK-20).
+wasm = "kernels/effects.wasm"
 
 [dependencies]
 # Any @m2/core 1.x: what these components use is older than std 0.7 (below), which comes only with apps that have it all.
 "@m2/core" = "1"
+# The std kernels its effects play are all in std 0.7 and later; its bitcrusher is its own.
 std = "0.7"
+
+# ---------------------------------------------------------------- its own kernels
+# Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/effects:bitcrush", …)`.
+
+[[kernel]]
+name = "bitcrush"
+description = "Bitcrusher: rounds to `bits` and holds samples at `rate` Hz. When playing goes to 1, its sample clock is put back to where it was when playing went to 0 (left out, playing is always 1). It was std:bitcrush until std 0.8, and plays the same bits"
+inputs = [
+  "in: audio<*>",
+  "bits: control<scalar> = 8 in 1..16",
+  "rate: control<hz> = 12000",
+  "mix: control<unit01> = 1",
+  "playing: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]

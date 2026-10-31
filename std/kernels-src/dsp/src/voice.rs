@@ -1,4 +1,4 @@
-//! Building blocks of the instrument voices (`synth`, `fm` and `drum`): a fast sine, a
+//! Building blocks of the instrument voices (`synth`, `fm`, `drum` and the Sampler's): a fast sine, a
 //! band-limited step for oscillators, a 2× decimator, a ladder filter, envelopes, a soft
 //! clipper and noise.
 //!
@@ -10,25 +10,25 @@
 
 use std::f32::consts::{PI, SQRT_2};
 
-pub(crate) use crate::fx::{Coef, Filter, Glide, clampf, flush, prewarp};
+pub use crate::fx::{Coef, Filter, Glide, clampf, flush, prewarp};
 
 /// Samples between control ticks. Values read at a tick are interpolated to the next.
-pub(crate) const TICK: u32 = 16;
+pub const TICK: u32 = 16;
 
 /// Where an envelope ends, at -90 dB: a decay that reaches -60 dB in its time `t` gets
 /// here at 1.5 `t`.
-pub(crate) const END: f32 = 3.162_278e-5;
+pub const END: f32 = 3.162_278e-5;
 
 /// The decay rate that reaches -60 dB in one unit of time (ln 1000).
-pub(crate) const T60: f32 = 6.907_755;
+pub const T60: f32 = 6.907_755;
 
 /// A pitch in semitones that is safe to turn into a frequency: NaN is middle C.
-pub(crate) fn pitch_of(p: f32) -> f32 {
+pub fn pitch_of(p: f32) -> f32 {
     if p.is_nan() { 60.0 } else { clampf(p, -48.0, 160.0) }
 }
 
 /// Frequency of a pitch in semitones (69 = A 440).
-pub(crate) fn hz(pitch: f32) -> f32 {
+pub fn hz(pitch: f32) -> f32 {
     440.0 * ((pitch - 69.0) / 12.0).exp2()
 }
 
@@ -38,7 +38,7 @@ pub(crate) fn hz(pitch: f32) -> f32 {
 /// quarter cycle, within 2e-7 of the true sine.
 // The first coefficient is fitted, so it is close to 2π but not 2π.
 #[allow(clippy::approx_constant)]
-pub(crate) fn sin2pi(p: f32) -> f32 {
+pub fn sin2pi(p: f32) -> f32 {
     let x = p - (p + 0.5).floor();
     let x = if x > 0.25 {
         0.5 - x
@@ -53,21 +53,21 @@ pub(crate) fn sin2pi(p: f32) -> f32 {
 
 /// A tanh-shaped soft clip (a clamped rational): about `x` for small `x`, exactly ±1 from
 /// |x| = 3 on, where its slope reaches 0.
-pub(crate) fn soft(x: f32) -> f32 {
+pub fn soft(x: f32) -> f32 {
     let x = clampf(x, -3.0, 3.0);
     x * (27.0 + x * x) / (27.0 + 9.0 * x * x)
 }
 
 /// Linear up to |x| = 0.5, then bending smoothly (with [`soft`]'s curve) into ±1 at
 /// |x| = 2: sounds at ordinary levels pass untouched, and only peaks saturate.
-pub(crate) fn knee(x: f32) -> f32 {
+pub fn knee(x: f32) -> f32 {
     let a = x.abs();
     if a <= 0.5 { x } else { (0.5 + 0.5 * soft(2.0 * (a - 0.5))).copysign(x) }
 }
 
 /// A hash of two words, for seeds and start phases that sound random but are the same
 /// every time.
-pub(crate) fn hash(a: u32, b: u32) -> u32 {
+pub fn hash(a: u32, b: u32) -> u32 {
     let mut x = a.wrapping_mul(0x9E37_79B9) ^ b.wrapping_add(0x7F4A_7C15).wrapping_mul(0x85EB_CA6B);
     x ^= x >> 16;
     x = x.wrapping_mul(0x7FEB_352D);
@@ -78,14 +78,14 @@ pub(crate) fn hash(a: u32, b: u32) -> u32 {
 
 /// White noise, uniform in -1..1 (xorshift32).
 #[derive(Clone, Copy)]
-pub(crate) struct Noise(u32);
+pub struct Noise(u32);
 
 impl Noise {
-    pub(crate) fn new(seed: u32) -> Self {
+    pub fn new(seed: u32) -> Self {
         Noise(seed.max(1))
     }
 
-    pub(crate) fn next(&mut self) -> f32 {
+    pub fn next(&mut self) -> f32 {
         let mut x = self.0;
         x ^= x << 13;
         x ^= x >> 17;
@@ -97,17 +97,17 @@ impl Noise {
 
 /// A function's last result, so a tick only works out again what has moved.
 #[derive(Clone, Copy)]
-pub(crate) struct Memo {
+pub struct Memo {
     at: f32,
     value: f32,
 }
 
 impl Memo {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Memo { at: f32::NAN, value: 0.0 }
     }
 
-    pub(crate) fn get(&mut self, x: f32, f: impl FnOnce(f32) -> f32) -> f32 {
+    pub fn get(&mut self, x: f32, f: impl FnOnce(f32) -> f32) -> f32 {
         if x != self.at {
             self.at = x;
             self.value = f(x);
@@ -119,14 +119,14 @@ impl Memo {
 /// A value that moves linearly from tick to tick: set a target at each tick, step once a
 /// sample.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Ramp {
-    pub(crate) value: f32,
+pub struct Ramp {
+    pub value: f32,
     step: f32,
 }
 
 impl Ramp {
     /// Head for `target` over the next tick, or be there at once (a note from silence).
-    pub(crate) fn to(&mut self, target: f32, jump: bool) {
+    pub fn to(&mut self, target: f32, jump: bool) {
         if jump {
             self.value = target;
             self.step = 0.0;
@@ -135,7 +135,7 @@ impl Ramp {
         }
     }
 
-    pub(crate) fn next(&mut self) -> f32 {
+    pub fn next(&mut self) -> f32 {
         self.value += self.step;
         self.value
     }
@@ -147,7 +147,7 @@ impl Ramp {
 /// before the sample it was first seen at: for the two samples before that one, that
 /// sample, and the one after. The step is smoothed by a cubic B-spline (an integrated
 /// 4-point polyBLEP), which at 2× leaves aliases about 100 dB down.
-pub(crate) fn blep4(d: f32) -> [f32; 4] {
+pub fn blep4(d: f32) -> [f32; 4] {
     let e = 1.0 - d;
     let (d2, e2) = (d * d, e * e);
     let (d4, e4) = (d2 * d2, e2 * e2);
@@ -159,7 +159,7 @@ pub(crate) fn blep4(d: f32) -> [f32; 4] {
 /// An oscillator bus that band-limits its steps: each sample is held back two samples, so
 /// a step can still correct the two samples before the one it was seen at.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Steps {
+pub struct Steps {
     buf: [[f32; 4]; 2],
     at: usize,
 }
@@ -167,7 +167,7 @@ pub(crate) struct Steps {
 impl Steps {
     /// A step of `h[c]` on each of the first `CH` channels, `d` samples (0..1) before the
     /// current sample.
-    pub(crate) fn step<const CH: usize>(&mut self, d: f32, h: [f32; 2]) {
+    pub fn step<const CH: usize>(&mut self, d: f32, h: [f32; 2]) {
         let r = blep4(clampf(d, 0.0, 1.0));
         for (c, &h) in h.iter().enumerate().take(CH) {
             for (k, r) in r.iter().enumerate() {
@@ -177,14 +177,14 @@ impl Steps {
     }
 
     /// Add to the current sample's first `CH` channels.
-    pub(crate) fn add<const CH: usize>(&mut self, x: [f32; 2]) {
+    pub fn add<const CH: usize>(&mut self, x: [f32; 2]) {
         for (b, x) in self.buf.iter_mut().zip(x).take(CH) {
             b[self.at] += x;
         }
     }
 
     /// The sample from two samples ago, now final; the current sample moves on.
-    pub(crate) fn next<const CH: usize>(&mut self) -> [f32; 2] {
+    pub fn next<const CH: usize>(&mut self) -> [f32; 2] {
         let old = (self.at + 2) & 3;
         let mut y = [0.0; 2];
         for (y, b) in y.iter_mut().zip(&mut self.buf).take(CH) {
@@ -195,7 +195,7 @@ impl Steps {
     }
 
     /// Make the right channel a copy of the left (a mono sound turning stereo).
-    pub(crate) fn copy_left(&mut self) {
+    pub fn copy_left(&mut self) {
         self.buf[1] = self.buf[0];
     }
 }
@@ -203,12 +203,12 @@ impl Steps {
 /// A 50% square at `dt` cycles a sample, band-limited through `bus`, with gain `g` on the
 /// first channel. Its phase starts at 0, where it rises.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Square {
-    pub(crate) phase: f32,
+pub struct Square {
+    pub phase: f32,
 }
 
 impl Square {
-    pub(crate) fn tick(&mut self, dt: f32, g: f32, bus: &mut Steps) -> f32 {
+    pub fn tick(&mut self, dt: f32, g: f32, bus: &mut Steps) -> f32 {
         let was_high = self.phase < 0.5;
         let mut t = self.phase + dt;
         if was_high && t >= 0.5 {
@@ -235,14 +235,14 @@ const HALFBAND: [f32; 7] = [0.051_802_01, 0.187_978_45, 0.365_053_7, 0.542_327_4
 
 /// 2× decimator: two chains of first-order allpasses, one per phase of the input.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Halfband {
+pub struct Halfband {
     x: [f32; 7],
     y: [f32; 7],
 }
 
 impl Halfband {
     /// One output sample from two input samples, `a` then `b`.
-    pub(crate) fn tick(&mut self, a: f32, b: f32) -> f32 {
+    pub fn tick(&mut self, a: f32, b: f32) -> f32 {
         let mut p = [b, a];
         for (i, &c) in HALFBAND.iter().enumerate() {
             let s = &mut p[i & 1];
@@ -256,7 +256,7 @@ impl Halfband {
 
     /// Zero any state far below hearing. Called once a tick rather than every sample, which
     /// would lengthen the recursion each sample waits on.
-    pub(crate) fn flush(&mut self) {
+    pub fn flush(&mut self) {
         self.x = self.x.map(flush);
         self.y = self.y.map(flush);
     }
@@ -272,13 +272,13 @@ fn saturate(u: f32) -> f32 {
 /// the input after the feedback is summed in: clean at ordinary levels, it limits a
 /// resonance (or a hard drive) as an analog ladder does.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Ladder {
+pub struct Ladder {
     s: [f32; 4],
 }
 
 /// One sample's coefficients for every channel's ladder.
 #[derive(Clone, Copy)]
-pub(crate) struct LadderCoefs {
+pub struct LadderCoefs {
     /// Each stage's G = g / (1 + g), and 1 − G.
     g: f32,
     h: f32,
@@ -291,7 +291,7 @@ pub(crate) struct LadderCoefs {
 
 impl LadderCoefs {
     /// From each stage's g / (1 + g) and the feedback (4 is where it starts to self-oscillate).
-    pub(crate) fn new(g: f32, k: f32) -> Self {
+    pub fn new(g: f32, k: f32) -> Self {
         let g2 = g * g;
         let solve = 1.0 / (1.0 + k * g2 * g2);
         LadderCoefs { g, h: 1.0 - g, input: (1.0 + 0.5 * k) * solve, state: k * (1.0 - g) * solve }
@@ -300,11 +300,11 @@ impl LadderCoefs {
 
 impl Ladder {
     /// A whisper (-80 dB) in the first stage, so feedback past 4 sings with no input.
-    pub(crate) fn nudge(&mut self) {
+    pub fn nudge(&mut self) {
         self.s[0] = 1e-4;
     }
 
-    pub(crate) fn tick(&mut self, x: f32, c: &LadderCoefs) -> f32 {
+    pub fn tick(&mut self, x: f32, c: &LadderCoefs) -> f32 {
         let [s0, s1, s2, s3] = self.s;
         let g = c.g;
         // The output is y4 = G⁴ u + (1 − G)(G³ s1 + G² s2 + G s3 + s4): solved for the input
@@ -321,56 +321,56 @@ impl Ladder {
     }
 
     /// Zero any state far below hearing (once a tick).
-    pub(crate) fn flush(&mut self) {
+    pub fn flush(&mut self) {
         self.s = self.s.map(flush);
     }
 }
 
 /// A one-pole TPT stage's g / (1 + g) at `f` Hz.
-pub(crate) fn one_pole(f: f32, sr: f32) -> f32 {
+pub fn one_pole(f: f32, sr: f32) -> f32 {
     let g = prewarp(f, sr);
     g / (1.0 + g)
 }
 
 /// A TPT state-variable filter with fixed settings: lowpass, unit-peak bandpass or highpass.
 #[derive(Clone, Copy)]
-pub(crate) struct Svf {
+pub struct Svf {
     f: Filter,
     s: [f32; 2],
 }
 
 impl Svf {
-    pub(crate) fn lowpass(sr: f32, f: f32, q: f32) -> Self {
+    pub fn lowpass(sr: f32, f: f32, q: f32) -> Self {
         Svf { f: Filter::new(prewarp(f, sr), 1.0 / q, [0.0, 0.0, 1.0]), s: [0.0; 2] }
     }
 
-    pub(crate) fn bandpass(sr: f32, f: f32, q: f32) -> Self {
+    pub fn bandpass(sr: f32, f: f32, q: f32) -> Self {
         Svf { f: Filter::new(prewarp(f, sr), 1.0 / q, [0.0, 1.0 / q, 0.0]), s: [0.0; 2] }
     }
 
-    pub(crate) fn highpass(sr: f32, f: f32, q: f32) -> Self {
+    pub fn highpass(sr: f32, f: f32, q: f32) -> Self {
         Svf { f: Filter::new(prewarp(f, sr), 1.0 / q, [1.0, -1.0 / q, -1.0]), s: [0.0; 2] }
     }
 
-    pub(crate) fn tick(&mut self, x: f32) -> f32 {
+    pub fn tick(&mut self, x: f32) -> f32 {
         self.f.tick(&mut self.s, x)
     }
 }
 
 /// DC blocker: a one-pole highpass at 5 Hz.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct DcBlock {
+pub struct DcBlock {
     x: f32,
     y: f32,
 }
 
 impl DcBlock {
     /// The pole for a sample rate.
-    pub(crate) fn pole(sr: f32) -> f32 {
+    pub fn pole(sr: f32) -> f32 {
         (-2.0 * PI * 5.0 / sr).exp()
     }
 
-    pub(crate) fn tick(&mut self, x: f32, pole: f32) -> f32 {
+    pub fn tick(&mut self, x: f32, pole: f32) -> f32 {
         let y = x - self.x + pole * self.y;
         self.x = x;
         self.y = y;
@@ -378,7 +378,7 @@ impl DcBlock {
     }
 
     /// Zero any state far below hearing (once a tick).
-    pub(crate) fn flush(&mut self) {
+    pub fn flush(&mut self) {
         self.x = flush(self.x);
         self.y = flush(self.y);
     }
@@ -387,7 +387,7 @@ impl DcBlock {
 // ---------------------------------------------------------------- envelopes
 
 #[derive(Clone, Copy, PartialEq, Debug)]
-pub(crate) enum Stage {
+pub enum Stage {
     Idle,
     Attack,
     Decay,
@@ -403,9 +403,9 @@ const REACH: f32 = 1.466_337;
 /// release are exponential, reaching -60 dB of the way in their time, and the sustain level
 /// is approached at the decay's rate. A gate edge carries on from the current level, so a
 /// retrigger never clicks. It ends in exact 0 at -90 dB.
-pub(crate) struct Env {
-    pub(crate) stage: Stage,
-    pub(crate) value: f32,
+pub struct Env {
+    pub stage: Stage,
+    pub value: f32,
     sustain: f32,
     attack: Coef,
     decay: Coef,
@@ -417,7 +417,7 @@ pub(crate) struct Env {
 }
 
 impl Env {
-    pub(crate) fn new() -> Self {
+    pub fn new() -> Self {
         Env {
             stage: Stage::Idle,
             value: 0.0,
@@ -432,7 +432,7 @@ impl Env {
     }
 
     /// Times in seconds, at `rate` steps a second (a sample rate, or a tick rate).
-    pub(crate) fn set(&mut self, attack: f32, decay: f32, sustain: f32, release: f32, rate: f32) {
+    pub fn set(&mut self, attack: f32, decay: f32, sustain: f32, release: f32, rate: f32) {
         self.a = 1.0 - self.attack.get(clampf(attack, 0.0005, 30.0) / REACH, rate);
         self.d = self.decay.get(clampf(decay, 0.001, 60.0) / T60, rate);
         self.r = self.release.get(clampf(release, 0.003, 60.0) / T60, rate);
@@ -440,17 +440,17 @@ impl Env {
         self.sustain = if s < END { 0.0 } else { s };
     }
 
-    pub(crate) fn on(&mut self) {
+    pub fn on(&mut self) {
         self.stage = Stage::Attack;
     }
 
-    pub(crate) fn off(&mut self) {
+    pub fn off(&mut self) {
         if self.stage != Stage::Idle {
             self.stage = Stage::Release;
         }
     }
 
-    pub(crate) fn next(&mut self) -> f32 {
+    pub fn next(&mut self) -> f32 {
         match self.stage {
             Stage::Idle => {}
             Stage::Attack => {
@@ -481,22 +481,22 @@ impl Env {
 /// Exponential decay from 1 that reaches -60 dB in `time` seconds and ends in exact 0 at
 /// -90 dB: a one-shot's envelope.
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Decay {
-    pub(crate) value: f32,
+pub struct Decay {
+    pub value: f32,
     coef: f32,
 }
 
 impl Decay {
-    pub(crate) fn new(time: f32, sr: f32) -> Self {
+    pub fn new(time: f32, sr: f32) -> Self {
         Decay { value: 1.0, coef: (-T60 / (clampf(time, 0.001, 60.0) * sr)).exp() }
     }
 
     /// From `level` rather than 1.
-    pub(crate) fn from(level: f32, time: f32, sr: f32) -> Self {
+    pub fn from(level: f32, time: f32, sr: f32) -> Self {
         Decay { value: level, ..Decay::new(time, sr) }
     }
 
-    pub(crate) fn next(&mut self) -> f32 {
+    pub fn next(&mut self) -> f32 {
         let v = self.value;
         self.value = if v * self.coef < END { 0.0 } else { v * self.coef };
         v
@@ -520,12 +520,12 @@ fn cubic_area(x: f64) -> f64 {
 /// clip's mean over the straight line from the last input to this one, which takes most of
 /// the aliasing out of a hard drive (and delays the sound by half a sample).
 #[derive(Clone, Copy, Default)]
-pub(crate) struct Clip {
+pub struct Clip {
     last: f32,
 }
 
 impl Clip {
-    pub(crate) fn tick(&mut self, x: f32) -> f32 {
+    pub fn tick(&mut self, x: f32) -> f32 {
         let (a, b) = (self.last, x);
         self.last = x;
         if a.abs() <= 1.0 && b.abs() <= 1.0 {
@@ -550,14 +550,14 @@ const DRIVE_IN: f32 = 0.125;
 /// A soft-clipping drive with makeup gain: 0 dB is clean, and turning it up to 24 dB adds
 /// harmonics without changing the level of a full-scale sound by more than about 3 dB.
 #[derive(Clone, Copy)]
-pub(crate) struct Drive {
+pub struct Drive {
     /// Gain into the clip, and after it.
-    pub(crate) into: f32,
-    pub(crate) out: f32,
+    pub into: f32,
+    pub out: f32,
 }
 
 impl Drive {
-    pub(crate) fn new(db: f32) -> Self {
+    pub fn new(db: f32) -> Self {
         let g = 10f32.powf(clampf(db, 0.0, 36.0) / 20.0);
         // A full-scale saw's RMS through the clip, relative to clean: about g / (1 + (g/9.24)^2.5)^0.4.
         let level = (1.0 + (g / 9.24).powf(2.5)).powf(0.4);
@@ -567,7 +567,7 @@ impl Drive {
 
 /// Equal-power pan gains for a mono sound, unity at the centre (std's pan law): `p` from
 /// -1 (left) to 1.
-pub(crate) fn pan(p: f32) -> [f32; 2] {
+pub fn pan(p: f32) -> [f32; 2] {
     let a = (clampf(p, -1.0, 1.0) + 1.0) * 0.125;
     [sin2pi(a + 0.25) * SQRT_2, sin2pi(a) * SQRT_2]
 }

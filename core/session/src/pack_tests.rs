@@ -641,7 +641,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.8\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [
@@ -660,4 +660,12 @@ fn a_choice_in_a_pack_plays_its_place() {
         assert!(out.iter().all(|f| f[0] == heard as f32), "{call}: {:?}", &out[..2]);
     }
     std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-20: the build and the store name a pack's kernels' source the same, in the same words: the
+// script crate keeps its own copy, as it doesn't depend on m2-song.
+#[test]
+fn kernels_src_is_one_name_to_the_build_and_the_store() {
+    assert_eq!(m2_script::KERNELS_SRC, m2_song::pack::KERNELS_SRC);
+    assert_eq!(m2_script::NOT_IN_KERNELS_SRC, m2_song::pack::NOT_IN_KERNELS_SRC);
 }

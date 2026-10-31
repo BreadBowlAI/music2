@@ -1,0 +1,14 @@
+[package]
+name = "m2-dsp"
+description = "What the kernels music2 ships are made of, shared by std's and its own packs': effect helpers, voice blocks, the drum kit's map, and the tests' harness"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[features]
+# The native tests' harness (`m2_dsp::testing`): std's tests and each pack crate's turn it on.
+testing = []
+
+[dependencies]
+m2-kernel = { path = "../kernel" }
