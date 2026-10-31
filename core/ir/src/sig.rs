@@ -1,6 +1,6 @@
 //! Kernel signatures: the typed ports a package declares for each kernel.
 
-use crate::kind::PortKind;
+use crate::kind::{PortKind, Unit};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct PortSig {
@@ -16,7 +16,10 @@ pub struct PortSig {
 impl PortSig {
     /// Parse `"name: kind [= default] [in lo..hi]"`.
     pub fn parse(spec: &str) -> Result<PortSig, String> {
-        let (spec_, range) = match spec.rsplit_once(" in ") {
+        // A choice's options may hold spaces, `=` and ` in ` (CARD-12): what follows the kind is
+        // read after its last `>`.
+        let after = spec.rfind('>').map_or(0, |i| i + 1);
+        let (spec_, range) = match spec[after..].rsplit_once(" in ").map(|(rest, r)| (&spec[..after + rest.len()], r)) {
             Some((rest, r)) => {
                 let bad = || format!("port `{spec}`: a range is written `in lo..hi`");
                 let (lo, hi) = r.trim().split_once("..").ok_or_else(bad)?;
@@ -29,8 +32,8 @@ impl PortSig {
             None => (spec, None),
         };
         let mut port = PortSig::parse_plain(spec_).map_err(|e| e.replace(spec_, spec))?;
-        if range.is_some() && !matches!(port.kind, PortKind::Control(_)) {
-            return Err(format!("port `{spec}`: only controls can have a range"));
+        if range.is_some() && !matches!(port.kind, PortKind::Control(u) if u.is_none_or(Unit::is_number)) {
+            return Err(format!("port `{spec}`: only controls of a number can have a range"));
         }
         port.range = range;
         Ok(port)
@@ -39,8 +42,11 @@ impl PortSig {
     /// `"name: kind [= default]"`.
     fn parse_plain(spec: &str) -> Result<PortSig, String> {
         let (name, rest) = spec.split_once(':').ok_or_else(|| format!("port `{spec}`: expected `name: kind`"))?;
-        let (kind, default) = match rest.split_once('=') {
-            Some((k, d)) => (k, Some(d.trim().parse::<f64>().map_err(|_| format!("port `{spec}`: default must be a number"))?)),
+        let after = rest.rfind('>').map_or(0, |i| i + 1);
+        let (kind, default) = match rest[after..].split_once('=') {
+            Some((k, d)) => {
+                (&rest[..after + k.len()], Some(d.trim().parse::<f64>().map_err(|_| format!("port `{spec}`: default must be a number"))?))
+            }
             None => (rest, None),
         };
         let name = name.trim();
@@ -133,7 +139,6 @@ impl Kernels for std::collections::HashMap<String, KernelSig> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::kind::Unit;
 
     #[test]
     fn parse_ports() {
@@ -152,6 +157,20 @@ mod tests {
         assert_eq!((p.default, p.range), (Some(0.01), Some((0.0001, 1.0))));
         assert_eq!(PortSig::parse("t: control<db> in -80..12").unwrap().range, Some((-80.0, 12.0)));
         for bad in ["in: audio<1> in 0..1", "x: control = 1 in 2..1", "x: control = 1 in 0-1", "x: control in a..b"] {
+            assert!(PortSig::parse(bad).is_err(), "{bad}");
+        }
+    }
+
+    // CARD-12: a choice's port names its options, which may hold spaces, `=` and ` in `; its
+    // default is a place.
+    #[test]
+    fn parse_choice_and_switch_ports() {
+        let p = PortSig::parse("shape: control<choice<sine|fade in|a=b>> = 1").unwrap();
+        assert_eq!(p.kind.to_string(), "control<choice<sine|fade in|a=b>>");
+        assert_eq!((p.default, p.range), (Some(1.0), None));
+        let p = PortSig::parse("on: control<switch> = 0").unwrap();
+        assert_eq!(p.kind, PortKind::Control(Some(Unit::Switch)));
+        for bad in ["s: control<choice<>>", "s: control<choice<a|a>>", "s: control<choice<a> = 1", "s: control<choice<a|b>> = 0 in 0..1"] {
             assert!(PortSig::parse(bad).is_err(), "{bad}");
         }
     }

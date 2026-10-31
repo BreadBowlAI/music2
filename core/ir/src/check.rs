@@ -1206,7 +1206,7 @@ fn join_units(a: Option<Unit>, b: Option<Unit>) -> Result<Option<Unit>, String> 
         (None, x) | (x, None) => Ok(x),
         (Some(a), Some(b)) if a.fits(b) => Ok(Some(b)),
         (Some(a), Some(b)) if b.fits(a) => Ok(Some(a)),
-        (Some(a), Some(b)) => Err(format!("mixes control<{}> with control<{}>", a.name(), b.name())),
+        (Some(a), Some(b)) => Err(format!("mixes control<{a}> with control<{b}>")),
     }
 }
 
@@ -1242,6 +1242,14 @@ fn type_kernel(sig: &KernelSig, conns: &HashMap<&str, (PortRef, Kind)>, plugin: 
         let mismatch = || format!("input `{}` expects {}, got {k}", p.name, p.kind);
         if matches!(k, Kind::Events(_)) && !(plugin && matches!(p.kind, PortKind::Events(_))) {
             errs.push(format!("input `{}`: events can't feed a kernel; play notes with poly", p.name));
+            continue;
+        }
+        // A type variable is for math and mixing, which a place or an on/off isn't (CARD-12).
+        if let (PortKind::Any | PortKind::Control(None), Kind::Control(Some(u))) = (p.kind, k)
+            && !u.is_number()
+        {
+            let only = if u == Unit::Switch { "a switch reaches only a port of a switch" } else { "a choice reaches only a port of its own options" };
+            errs.push(format!("input `{}` ({}) works with numbers, and {k} isn't a number: {only}", p.name, p.kind));
             continue;
         }
         match p.kind {
@@ -1397,6 +1405,75 @@ mod tests {
         assert_eq!(e.len(), 1);
         assert!(e[0].message.contains("expects control<hz>, got control<db>"), "{}", e[0]);
         assert_eq!(e[0].src.as_deref(), Some("song.ts:3:9"));
+    }
+
+    /// A copy of a choice or a switch into audio: kernels that read a place, or 0 or 1 (CARD-12).
+    fn kinds_kernels() -> HashMap<String, KernelSig> {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut m = kernels();
+        for (id, i) in [
+            ("t:osc", "shape: control<choice<saw|square|sine>> = 0"),
+            ("t:sub", "on: control<switch> = 0"),
+            ("t:pick", "which: control<choice<sine|tri>>"),
+        ] {
+            m.insert(id.to_string(), KernelSig::parse(id, "", &s(&[i]), &s(&["out: audio<1>"]), 0).unwrap());
+        }
+        m
+    }
+
+    /// The one error of a song whose kernel `k` reads `input` from a constant `value` of `unit`.
+    fn reading(k: &str, input: &str, value: f64, unit: Option<&str>) -> Result<Flat, Vec<Diagnostic>> {
+        let mut c = json!({"id": "c", "op": "const", "value": value});
+        if let Some(u) = unit {
+            c["unit"] = json!(u);
+        }
+        check(&song(json!([c, {"id": "k", "op": "kernel", "kernel": k, "inputs": {input: "c"}}]), "k"), &kinds_kernels())
+    }
+
+    // CARD-12: a choice's unit is its options, and fits only a port of exactly those options in
+    // their order; a switch fits only a switch; neither meets a number of any unit.
+    #[test]
+    fn a_choice_fits_only_its_own_options() {
+        let f = reading("t:osc", "shape", 1.0, Some("choice<saw|square|sine>")).unwrap_or_else(|e| panic!("{e:?}"));
+        let c = f.nodes.iter().find(|n| n.name == "song/c").unwrap();
+        assert_eq!(c.outputs[0].to_string(), "control<choice<saw|square|sine>>");
+        reading("t:sub", "on", 1.0, Some("switch")).unwrap_or_else(|e| panic!("{e:?}"));
+        // A plain number has no unit, and fits any port, as it always has.
+        reading("t:osc", "shape", 2.0, None).unwrap_or_else(|e| panic!("{e:?}"));
+        for (k, input, unit, says) in [
+            ("t:osc", "shape", "choice<saw|square>", "expects control<choice<saw|square|sine>>, got control<choice<saw|square>>"),
+            ("t:osc", "shape", "choice<square|saw|sine>", "expects control<choice<saw|square|sine>>, got control<choice<square|saw|sine>>"),
+            ("t:osc", "shape", "scalar", "expects control<choice<saw|square|sine>>, got control<scalar>"),
+            ("t:osc", "shape", "switch", "got control<switch>"),
+            ("t:sub", "on", "unit01", "expects control<switch>, got control<unit01>"),
+            ("t:sub", "on", "choice<saw|square|sine>", "expects control<switch>"),
+            ("t:saw", "freq", "choice<saw|square|sine>", "expects control<hz>, got control<choice<saw|square|sine>>"),
+            ("t:vca", "g", "switch", "expects control<gain>, got control<switch>"),
+        ] {
+            let e = reading(k, input, 0.0, Some(unit)).err().unwrap_or_else(|| panic!("{unit} into {k}'s {input} checks"));
+            assert!(e[0].message.contains(says), "{unit} into {k}: {}", e[0]);
+        }
+    }
+
+    // CARD-12: a port with a type variable (math, mixing) takes no choice and no switch: a place
+    // isn't a number to add or scale.
+    #[test]
+    fn a_type_variable_port_refuses_a_choice_and_a_switch() {
+        for unit in ["choice<sine|tri>", "switch"] {
+            let e = check(
+                &song(
+                    json!([
+                        {"id": "c", "op": "const", "value": 1, "unit": unit},
+                        {"id": "a", "op": "kernel", "kernel": "t:add", "inputs": {"a": "c", "b": "c"}},
+                        {"id": "k", "op": "kernel", "kernel": "t:pick", "inputs": {"which": "a"}},
+                    ]),
+                    "k",
+                ),
+                &kinds_kernels(),
+            )
+            .unwrap_err();
+            assert!(e[0].message.contains("input `a`") && e[0].message.contains("isn't a number"), "{unit}: {}", e[0]);
+        }
     }
 
     #[test]
