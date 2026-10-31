@@ -106,6 +106,8 @@ cargo run --locked --release -p music2-desktop
 |---|---|
 | `core/ir` | The graph's compiled form, signal kinds and units, and the checker |
 | `std/kernels-src/kernel` | The kit for writing kernels in Rust (`m2-kernel`), a member of the kernels' own workspace |
+| `std/kernels-src/dsp` | What more than one kernel module is made of (`m2-dsp`): effect helpers, voice blocks, the drum kit's map, and the kernels' test harness |
+| `std/kernels-src/packs` | The crate of each of music2's own packs with kernels (`packs/@m2/effects/Cargo.toml`); its source is beside the pack, in its `kernels-src/` |
 | `core/song` | The song folder (format 1): the manifest, `DataPath` (every project path), keys, lane and arrangement files in their canonical form, asset hashes, and the problems data can have |
 | `core/runtime` | Loads packages, runs kernels (wasmtime), `poly`, `feedback`, audio clips; the renderer |
 | `core/script` | Runs the TypeScript (oxc + QuickJS) and the `@m2/core` SDK |
