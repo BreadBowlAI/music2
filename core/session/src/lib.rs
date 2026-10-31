@@ -404,7 +404,7 @@ mod tests {
         p
     }
 
-    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
+    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -478,8 +478,9 @@ export default song(() => v.out);
         MANIFEST.lines().map(|l| if l.starts_with("std = ") { format!("std = \"{req}\"\n") } else { format!("{l}\n") }).collect()
     }
 
-    // FMT-3: an unmet dependency is refused before any code runs. A song asking for an older std
-    // is told how to move to the one bundled (L7); one asking for a newer std is not.
+    // FMT-3, PACK-24: an unmet dependency is refused before any code runs. A song asking for an
+    // older std is told how to move to the one bundled (L7), and so is one asking for an older major
+    // of @m2/core; one asking for a newer std or @m2/core is not.
     #[test]
     fn unmet_dependencies_block() {
         let dir = project(&[("song.ts", SONG)]);
@@ -496,14 +497,26 @@ export default song(() => v.out);
             "This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song"
         );
         assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
-        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
+        // A newer @m2/core than this app's: no way to move but a newer music2.
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"3\"")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
+        assert!(!e[0].message.contains("This app has"), "{}", e[0].message);
+        // PACK-24: an older major is told first how to move, and that the code may need changes.
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"1\"")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
+        let Version(major, _, _) = Version::parse(m2_script::SDK_VERSION).unwrap();
+        let hint = format!(
+            "This app has @m2/core {major}. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"{major}\". The song's \
+             code may need changes. music2.toml asks for @m2/core \"1\""
+        );
+        assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3, PACK-2: every project the repo ships asks for what this build has: the SDK and the
-    // bundled std; and every pack it ships needs no more than that. So a std bump that leaves a
+    // FMT-3, PACK-2, PACK-23: every project the repo ships asks for what this build has: the SDK and
+    // the bundled std; and every pack it ships needs no more than that, asking for the SDK's major. So a std bump that leaves a
     // manifest behind fails here, with no grep needed.
     #[test]
     fn every_shipped_manifest_is_met() {
@@ -512,6 +525,9 @@ export default song(() => v.out);
         let mut unmet = vec![];
         let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
         let mut packs = 0;
+        // PACK-23: and each pack that runs code asks for this app's major of @m2/core alone
+        // (`"@m2/core" = "2"`); a pack of recordings alone may ask for none.
+        let major = sdk.map(|v| v.0.to_string());
         for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures", "packs"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
@@ -522,6 +538,13 @@ export default song(() => v.out);
                     let name = pack.strip_prefix(&repo).unwrap().display().to_string();
                     let m = m2_song::pack::PkgManifest::at(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
                     unmet.extend(m2_song::pack::meets(&m.dependencies, sdk, std).err().map(|why| format!("{name}: {why}")));
+                    let core = m.dependencies.get("@m2/core").map(|r| r.to_string());
+                    if core.is_some() && core != major || core.is_none() && d.join("src").exists() {
+                        unmet.push(format!(
+                            "{name}: asks for @m2/core {core:?}, not \"{}\" alone (PACK-23)",
+                            major.as_deref().unwrap_or("?")
+                        ));
+                    }
                 }
                 let file = d.join("music2.toml");
                 if file.exists() {

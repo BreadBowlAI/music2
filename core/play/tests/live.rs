@@ -347,7 +347,7 @@ fn audio_lane_song(rate: u32) -> Song {
     let dir = temp("clicks");
     std::fs::write(
         dir.join("music2.toml"),
-        format!("[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"1\"\n"),
+        format!("[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"2\"\n"),
     )
     .unwrap();
     std::fs::write(dir.join("song.ts"), "").unwrap();

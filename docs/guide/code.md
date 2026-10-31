@@ -34,7 +34,7 @@ format = 1
 sample_rate = 48000
 
 [dependencies]
-"@m2/core" = "1"
+"@m2/core" = "2"
 std = "0.9"
 "@m2/synths" = "2"
 ```

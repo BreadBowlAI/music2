@@ -478,7 +478,8 @@ fn builds(
     );
     let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
     let manifest = format!(
-        "[project]\nname = \"check\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n\"{name}\" = {{ path = {} }}\n",
+        "[project]\nname = \"check\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n\"{name}\" = {{ path = {} }}\n",
+        m2_script::sdk_requirement(),
         std_requirement(std),
         serde_json::to_string(&dir.to_string_lossy()).expect("a string")
     );
@@ -597,7 +598,8 @@ pub fn new_pack(folder: &Path, name: &PackName, std: &Path) -> Result<(), String
     let label = short.replace('-', " ");
     let manifest = format!(
         "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\ndescription = \"\"\nauthors = []\ntags = []\n\n\
-         [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}\"\n",
+         [dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}\"\n",
+        m2_script::sdk_requirement(),
         std_requirement(std)
     );
     // Built from std's typed blocks, as `@m2/synths`' simple instruments are: TypeScript checks

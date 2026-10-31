@@ -45,13 +45,25 @@ repository = "https://github.com/alice/felt-piano"
 tags = ["keys", "piano"]
 
 [dependencies]                 # only these two
-"@m2/core" = "1"               # this SDK, 1.0 or newer but below 2
+"@m2/core" = "2"               # this SDK: 2.0 or newer, but below 3
 std = "0.4"                    # the std you made it with, or any newer one
 ```
 
 Every key is checked: one music2 doesn't know is an error, so a typo never goes unseen.
 
-`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"1"` is any 1.x.
+`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"2"` is any 2.x. Write the major alone, `"2"`, as music2's own packs do: `"2.3"` would shut out the music2 versions between 2.0 and 2.3.
+
+### music2's promise to your pack
+
+`@m2/core` (the code a pack is written with) and the way a pack's own kernels talk to music2 (kernel ABI v1) are what your pack is made against. From `@m2/core` 2.0 they only grow: a change that could break a pack's code comes only as a new major version, `@m2/core` 3.
+
+| You see | It means |
+|---|---|
+| Your pack, made for `@m2/core` 2, in a newer music2 that has 2.5 | It runs as it did. |
+| `@a/x 1.3.0 is made for @m2/core 1, and this app has @m2/core 2.0.0 …` | The pack was made before the promise. Get a version made for 2, or ask its author for one. |
+| `… is made for @m2/core 3, newer than this app's 2.0.0` | Update music2. |
+
+Songs get no such promise before music2 1.0: a new music2 may ask a song to change (it says how). Packs get this one, because other people's songs play them.
 
 ## An instrument
 

@@ -110,7 +110,7 @@ impl World {
         write(
             &keys.join("m2pkg.toml"),
             "[package]\nname = \"@bob/keys\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"Soft keys\"\nauthors = [\"Bob\"]\n\
-             repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+             repository = \"https://github.com/bob/keys\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
         );
         write(&keys.join("src/index.ts"), KEYS);
         write(
@@ -489,7 +489,7 @@ fn spin_world(name: &str, wasm: &[u8]) -> World {
     let spin = w.t.0.join("src/spin-0.1.0");
     write(
         &spin.join("m2pkg.toml"),
-        "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\n\
+        "[package]\nname = \"@carol/spin\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\n\
          std = \"0.7\"\n\n[[kernel]]\nname = \"spin\"\ndescription = \"Never returns\"\noutputs = [\"out: audio<1>\"]\n",
     );
     write(&spin.join("k.wasm"), wasm);

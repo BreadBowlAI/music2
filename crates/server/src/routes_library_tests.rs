@@ -264,7 +264,7 @@ fn a_packs_instrument_plays_from_its_pack() {
     std::fs::create_dir_all(acme.join("src")).unwrap();
     std::fs::write(
         acme.join("m2pkg.toml"),
-        "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+        "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(
@@ -320,7 +320,7 @@ fn loops_pack(dir: &Path) {
     std::fs::write(
         dir.join("m2pkg.toml"),
         "[package]\nname = \"@alice/loops\"\nversion = \"1.2.0\"\nlicense = \"CC-BY-4.0\"\nauthors = [\"Alice Example\"]\n\n\
-         [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+         [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\ntags = [\"dusty\"]\n\n[folder.\"one-shots\"]\n").unwrap();
@@ -949,7 +949,7 @@ fn data_pack(dir: &Path) {
     std::fs::create_dir_all(dir.join("instruments")).unwrap();
     std::fs::write(
         dir.join("m2pkg.toml"),
-        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.7\"\n",
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(

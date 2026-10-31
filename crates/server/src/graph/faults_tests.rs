@@ -228,7 +228,7 @@ fn stuck_at(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("k.wasm"), STUCK).unwrap();
     let manifest = "[package]\nname = \"@test/stuck\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
-                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"stuck\"\noutputs = [\"out: audio<1>\"]\n";
+                    \"@m2/core\" = \"2\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"stuck\"\noutputs = [\"out: audio<1>\"]\n";
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     let code = "import { component, kernel, port, signature, type Audio, type Events } from \"@m2/core\";\n\
                 export const stuck = component(\n  { id: \"stuck\", label: \"Stuck\", signature: signature<(notes: Events) => Audio>(), \
@@ -272,7 +272,7 @@ fn hum_at(dir: &std::path::Path) {
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("k.wasm"), HUM).unwrap();
     let manifest = "[package]\nname = \"@test/hum\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\nwasm = \"k.wasm\"\n\n[dependencies]\n\
-                    \"@m2/core\" = \"1\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"hum\"\ninputs = [\"in: control<*>\"]\noutputs = [\"out: audio<1>\"]\n";
+                    \"@m2/core\" = \"2\"\nstd = \"0.5\"\n\n[[kernel]]\nname = \"hum\"\ninputs = [\"in: control<*>\"]\noutputs = [\"out: audio<1>\"]\n";
     std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
     std::fs::write(dir.join("src/index.ts"), "export const nothing = 0;\n").unwrap();
 }

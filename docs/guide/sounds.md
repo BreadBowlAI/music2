@@ -14,7 +14,7 @@ A song that plays them lists them, as the templates do:
 
 ```toml
 [dependencies]
-"@m2/core" = "1"
+"@m2/core" = "2"
 std = "0.9"
 "@m2/synths" = "2"
 "@m2/effects" = "1"

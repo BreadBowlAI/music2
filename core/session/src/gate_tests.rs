@@ -446,7 +446,7 @@ fn bitcrush_plays_from_its_pack_with_the_bits_it_had_in_std() {
     f.write(
         "music2.toml",
         format!(
-            "[project]\nname = \"crush\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+            "[project]\nname = \"crush\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
              \"@m2/effects\" = \"1\"\n",
             std.0, std.1
         ),
@@ -504,7 +504,7 @@ fn engines_play_from_their_packs_with_the_bits_they_had_in_std() {
     f.write(
         "music2.toml",
         format!(
-            "[project]\nname = \"engines\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+            "[project]\nname = \"engines\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
              \"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
             std.0, std.1
         ),
@@ -575,7 +575,7 @@ fn one_drum_song(f: &Fixture, call: &str) {
     f.write(
         "music2.toml",
         format!(
-            "[project]\nname = \"drum\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"{}.{}\"\n\
+            "[project]\nname = \"drum\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n\
              \"@m2/drums\" = \"{}\"\n\"@m2/synths\" = \"{}\"\n",
             std.0,
             std.1,
@@ -756,7 +756,7 @@ fn the_mixer_and_master_gains_change_no_bit() {
 #[test]
 fn compile_never_opens_an_asset() {
     let f = Fixture::new();
-    f.write("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n");
+    f.write("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n");
     f.write(
         "song.ts",
         "import { song, track } from \"@m2/core\";\n\

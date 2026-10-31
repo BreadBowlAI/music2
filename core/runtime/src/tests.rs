@@ -138,7 +138,7 @@ fn song(nodes: Value, out: &str, lanes: Value) -> Ir {
     .unwrap()
 }
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n";
 
 /// A project folder with the given data files, in a fresh temp dir, and the data `ir` reads
 /// from it.

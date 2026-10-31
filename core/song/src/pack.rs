@@ -264,17 +264,30 @@ impl App {
 
 /// Whether the SDK and std this app has (`None`: none at all) meet a package's `[dependencies]`
 /// (PACK-2): the SDK by the caret rule, std as a lower bound. What it needs that isn't met, in
-/// words: `needs std "0.9" or later, but this app has 0.4.0`. The one rule; [`App`] asks it.
+/// words: `needs std "0.9" or later, but this app has 0.4.0`. A pack made for another major of the
+/// SDK is told so, and what to get (PACK-22): `is made for @m2/core 1, and this app has @m2/core
+/// 2.0.0, …`. The one rule; [`App`] asks it.
 pub fn meets(dependencies: &BTreeMap<String, Requirement>, sdk: Option<Version>, std: Option<Version>) -> Result<(), String> {
     for (dep, req) in dependencies {
         let (have, met, at_least) = match dep.as_str() {
             SDK => (sdk, sdk.is_some_and(|v| req.matches(v)), ""),
             _ => (std, std.is_some_and(|v| req.at_least(v)), " or later"),
         };
-        if !met {
-            let have = have.map_or("none".to_string(), |v| v.to_string());
-            return Err(format!("needs {dep} \"{req}\"{at_least}, but this app has {have}"));
+        if met {
+            continue;
         }
+        let made_for = req.least().0;
+        return Err(match have {
+            Some(v) if dep == SDK && made_for < v.0 => format!(
+                "is made for {dep} {made_for}, and this app has {dep} {v}, whose changes may break it. Get a version of it made for \
+                 {dep} {major} (its m2pkg.toml says \"{dep}\" = \"{major}\")",
+                major = v.0
+            ),
+            Some(v) if dep == SDK && made_for > v.0 => {
+                format!("is made for {dep} {made_for}, newer than this app's {v}. Update music2 to use it")
+            }
+            _ => format!("needs {dep} \"{req}\"{at_least}, but this app has {}", have.map_or("none".to_string(), |v| v.to_string())),
+        });
     }
     Ok(())
 }

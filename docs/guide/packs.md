@@ -4,6 +4,7 @@
 - A pack is a folder of instruments, effects, sounds and recordings that someone made, ready to use in your songs. music2's own sounds are three packs that come with it.
 - You install one from its folder with `m2 pack install <folder>`. Its instruments and effects then show in the browser and + Track, with music2's.
 - A song keeps the exact version of each pack it uses in `music2.lock`, so it sounds the same years later.
+- A pack made for `@m2/core` 2 keeps working in every later music2 with `@m2/core` 2.x: music2's one promise to packs.
 
 ## What a pack is
 
@@ -58,6 +59,10 @@ Double-click it in the browser (or pick it in + Track), as with music2's own. mu
 
 Effects work the same way: drag one onto a track, or use the Device view's **+**.
 
+## What music2 promises a pack
+
+A pack is written against `@m2/core`, the code music2 gives every song and pack. From `@m2/core` 2.0, it only grows: a change that could break a pack's code comes only as a new major version (3), and music2 says in words when a pack was made for another one. So a pack made for `@m2/core` 2 runs in every music2 that has 2.x. Songs get no such promise before music2 1.0: a new music2 may ask a song to change, and says how.
+
 ## How a song keeps its version
 
 A song uses the version its `music2.lock` names, even when you install a newer one. Before a song uses an installed version, music2 checks every file of it against the fingerprints it was installed with. Nothing moves a song to another version but you:
@@ -78,5 +83,7 @@ When something is wrong, the song says so, in words, and doesn't build until it 
 | `pkg.changed` | the installed version isn't the copy the song was made with | put that one back (`m2 pack remove @owner/name <version>`, then `m2 pack install <its folder>`), or `m2 pack update <song> @owner/name` to use the installed one |
 | `pkg.unsatisfied` | no installed version fits `music2.toml`'s line, or the lock names one the line no longer allows. Or the versions that fit need a newer music2: a newer music2 on this computer installed them (the message says what they need) | install one that fits, or change the line; then `m2 pack lock <song>`. For a newer music2's version: update music2 |
 | `pkg.broken` | the pack needs a newer std or `@m2/core` than this app has | update music2, or use another version of the pack |
+| `pkg.broken` | the pack is made for another major version of `@m2/core` (`is made for @m2/core 1, and this app has @m2/core 2.0.0`) | get a version of the pack made for this app's: the message names it |
+| `sdk.unsatisfied` | the song asks for another major version of `@m2/core` than this app has | for an older one, the message says the line to write first (`"@m2/core" = "2"`); the song's code may need changes. For a newer one, update music2 |
 
 Removing a pack can't change a song: a song that locks it says `pkg.missing` until it is installed again.

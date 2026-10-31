@@ -128,6 +128,35 @@ fn a_pack_that_needs_another_std_is_broken() {
     std::fs::remove_dir_all(&root).ok();
 }
 
+// PACK-22: a pack made for another major of @m2/core is refused, in words naming the major it was
+// made for, this app's, and what to get: a version made for this app's major. One made for a newer
+// major is told to wait for a newer music2.
+#[test]
+fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
+    let Version(major, _, _) = Version::parse(m2_script::SDK_VERSION).unwrap();
+    assert_eq!(major, 2, "the pack contract is @m2/core 2 (PACK-22)");
+    for (asks, said) in [
+        (
+            "1",
+            "is made for @m2/core 1, and this app has @m2/core 2.0.0, whose changes may break it. Get a version of it made for \
+             @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
+        ),
+        ("3", "is made for @m2/core 3, newer than this app's 2.0.0. Update music2 to use it"),
+    ] {
+        let root = scratch(&format!("core-{asks}"));
+        copy(&fixtures(), &root);
+        let manifest = root.join("tiny/m2pkg.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        assert!(text.contains("\"@m2/core\" = \"2\""), "the test pack asks for @m2/core 2 (PACK-23)");
+        std::fs::write(&manifest, text.replace("\"@m2/core\" = \"2\"", &format!("\"@m2/core\" = \"{asks}\""))).unwrap();
+        let mut pk = packages(&root.join("no-store"));
+        let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
+        assert_eq!(codes(&e), ["pkg.broken"]);
+        assert!(e[0].message.starts_with("@test/tiny") && e[0].message.contains(said), "{asks}: {}", e[0].message);
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
 // PACK-2: a pack's std is a lower bound: one made for an older std builds with the app's.
 #[test]
 fn a_pack_made_for_an_older_std_still_builds() {
@@ -641,7 +670,7 @@ fn a_choice_in_a_pack_plays_its_place() {
     copy(&fixtures().join("kinds"), &root.join("kinds"));
     let song = root.join("song");
     std::fs::create_dir_all(&song).unwrap();
-    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n";
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n";
     std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
     let mut pk = packages(&root.join("no-store"));
     for (call, heard) in [

@@ -106,7 +106,7 @@ fn build(fx: bool, bpm: f64) -> Song {
         ns.extend((0..300).map(|k| json!({"pitch": k % 120, "start": 12, "length": 1})));
     }
     let files = [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
         // Equal keys: the first note twice.
@@ -612,7 +612,7 @@ fn probes_on(gain: f64, host: Option<Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp("trap-plugins");
     let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
     for (name, text) in [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/song/notes.json", json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": ns}]}).to_string()),
     ] {

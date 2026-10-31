@@ -9,7 +9,7 @@ use super::*;
 use crate::testing::Fixture;
 
 /// A song's manifest that needs std alone: these songs play `@test/tiny` from a store of their own.
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n";
 
 /// The fixture pack `@test/tiny`.
 fn tiny() -> PathBuf {
@@ -145,13 +145,13 @@ fn adding_a_pack_effect_writes_its_dependency_and_lock() {
 fn the_dependency_line_goes_at_the_end_of_its_table() {
     let name = PackName::new("@a/b").unwrap();
     let req = Requirement::parse("1.2").unwrap();
-    let text = "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"1\" # the SDK\nstd = \"0.4\"\n\n[other]\n";
+    let text = "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"2\" # the SDK\nstd = \"0.4\"\n\n[other]\n";
     let (at, line) = dependency_line(text, &name, &req).unwrap();
     let mut out = text.to_string();
     out.insert_str(at as usize, &line);
     assert_eq!(
         out,
-        "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"1\" # the SDK\nstd = \"0.4\"\n\"@a/b\" = \"1.2\"\n\n[other]\n"
+        "[project]\nname = \"x\"\n\n[dependencies]\n\"@m2/core\" = \"2\" # the SDK\nstd = \"0.4\"\n\"@a/b\" = \"1.2\"\n\n[other]\n"
     );
     let (at, line) = dependency_line("[dependencies]\nstd = \"0.4\"", &name, &req).unwrap();
     assert_eq!((at, line.as_str()), (26, "\n\"@a/b\" = \"1.2\"\n"), "a last line with no newline gets one");
@@ -263,7 +263,7 @@ fn a_pack_this_app_cant_run_isnt_offered() {
     let f = Fixture::new();
     song_and_store(&f);
     // A newer @test/tiny for an SDK this app doesn't have: 0.1.0 is still offered.
-    install_as(&f, "@test/tiny", "0.2.0", |t| t.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"9\""), None);
+    install_as(&f, "@test/tiny", "0.2.0", |t| t.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"9\""), None);
     // A pack whose every version needs a std this app doesn't have.
     install_as(&f, "@test/later", "1.0.0", |t| t.replace("std = \"0.4\"", "std = \"9.0\""), None);
     let s = open(&f);

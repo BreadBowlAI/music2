@@ -29,7 +29,7 @@ fn installed(store: &Store, name: &str, version: &str) -> Sha {
     listing.hash()
 }
 
-const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
 
 fn song_with(deps: &str) -> Manifest {
     Manifest::read(&format!("{SONG}{deps}")).unwrap()
@@ -112,17 +112,17 @@ fn asset_refs_name_the_song_or_a_package() {
 fn a_package_manifest_is_read_strictly() {
     let good = "[package]\nname = \"@alice/felt-piano\"\nversion = \"1.2.0\"\nlicense = \"CC-BY-4.0\"\ndescription = \"soft\"\n\
                 authors = [\"Alice\"]\nrepository = \"https://github.com/alice/felt-piano\"\ntags = [\"keys\"]\n\n\
-                [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+                [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
     let m = PkgManifest::read(good).unwrap();
     assert_eq!((m.package.name.as_str(), m.package.version), ("@alice/felt-piano", Version(1, 2, 0)));
     assert_eq!((m.package.authors.len(), m.package.tags.len(), m.package.license.as_deref()), (1, 1, Some("CC-BY-4.0")));
-    assert!(m.needs(Version(1, 6, 0), Version(0, 4, 1)).is_ok());
+    assert!(m.needs(Version(2, 6, 0), Version(0, 4, 1)).is_ok());
     // std is a lower bound (PACK-2): a std that grew since meets it, an older one doesn't.
-    assert!(m.needs(Version(1, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
     // The SDK keeps the caret rule.
-    assert!(m.needs(Version(2, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
+    assert!(m.needs(Version(3, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
     for bad in [
         good.replace("tags =", "colour = \"red\"\ntags ="),
         good.replace("[dependencies]", "[other]\nx = 1\n[dependencies]"),

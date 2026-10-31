@@ -133,7 +133,7 @@ pub fn project(what: &str, files: &[(&str, &str)]) -> Song {
 pub fn project_on(what: &str, files: &[(&str, &str)], host: Option<std::sync::Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp(what);
     let manifest = format!(
-        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n"
+        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n"
     );
     for (rel, text) in [("music2.toml", manifest.as_str())].into_iter().chain(files.iter().copied()) {
         let path = dir.join(rel);
@@ -318,7 +318,7 @@ pub fn long_audio(seconds: f64, bpm: f64) -> Song {
 pub fn long_audio_clip(seconds: f64, bpm: f64, clip: Value) -> Song {
     let dir = temp("long-audio");
     let files = [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
         ("data/song/clips.json", json!({"clips": [clip]}).to_string()),

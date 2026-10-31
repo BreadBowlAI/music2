@@ -2,5 +2,5 @@
 
 [[pack]]
 name = "@m2/synths"
-version = "2.0.0"
-hash = "sha256:ed9b8b1117a833425d5a1162cc1b67b21dd1ceaa241d85f083510e18ada2ef39"
+version = "2.1.0"
+hash = "sha256:771d84292b8a436e1fa504d49e845628ba4f2524b23505b1b6f794edfefdfcd4"
