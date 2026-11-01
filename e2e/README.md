@@ -334,6 +334,8 @@ page to show it, and its ⌘Z takes it back before (AGENT-2; `own-edits` checks 
 `open(…, { late })` (or `E2E_LATE_READS=<ms>` for every suite opened by fixlib) holds back the page's
 own reads of the song's state that long, as on a page that hears of each change late: a suite that
 acts before the page shows what it acts on fails there every time, not one run in ten under load.
+A suite that holds back requests of its own does it with the `hold(f)` `open()` gives, which shares
+that one interception (`spotlight`, `beat-grid`): Chrome lets one handler answer a request.
 
 ## Where these came from
 
