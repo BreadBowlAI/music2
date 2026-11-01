@@ -184,3 +184,177 @@ fn every_kit_sounds_under_full_scale() {
         assert!(peak > 0.1 && peak < 1.0, "{}: its peak is {peak}", kit.name);
     }
 }
+
+// ---------------------------------------------------------------- the General MIDI table (KIT-6)
+
+// KIT-6: the table, sound by sound in the Drum's menu order (its options, from its descriptor),
+// each with its own note among its notes; no note in two.
+#[test]
+fn each_sound_answers_to_its_general_midi_notes() {
+    let got: Vec<(&str, &[u8], u8)> = GM.iter().map(|g| (g.sound, g.notes, g.own)).collect();
+    let want: [(&str, &[u8], u8); 9] = [
+        ("kick", &[35, 36], 36),
+        ("snare", &[38, 40], 38),
+        ("clap", &[39], 39),
+        ("hats", &[42, 44, 46], 42),
+        ("tom", &[41, 43, 45, 47, 48, 50], 45),
+        ("rim", &[37, 75], 37),
+        ("cowbell", &[56], 56),
+        ("cymbal", &[49, 51, 52, 55, 57, 59], 49),
+        ("shaker", &[54, 69, 70], 69),
+    ];
+    assert_eq!(got, want);
+    let s = fixture("templates/empty").open();
+    let menu = s.catalog().components[DRUM].control("drum").and_then(|c| c.options()).expect("the Drum's menu");
+    let names: Vec<&str> = (0..9).filter_map(|i| menu.name(i)).collect();
+    assert_eq!(names, GM.map(|g| g.sound), "in the Drum's menu order");
+    for n in 0..=127u8 {
+        let answer: Vec<&str> = GM.iter().filter(|g| g.notes.contains(&n)).map(|g| g.sound).collect();
+        assert!(answer.len() <= 1, "{n} is in {answer:?}");
+        assert_eq!(sound_of(n), answer.first().copied(), "{n}");
+    }
+    assert_eq!((notes_of("hats"), own_note("tom"), notes_of("bongo"), own_note("bongo")), (&[42u8, 44, 46][..], Some(45), &[][..], None));
+    // Every row the drum machine names is the table's.
+    let rows = &s.catalog().components["@m2/drums:drum-kit"].editor.notes;
+    assert!(rows.keys().all(|n| sound_of(*n).is_some()), "{rows:?}");
+}
+
+/// What a song whose one track plays `call` over `notes` sounds like: each note at velocity 0.8,
+/// one every 2.5 s (by when every drum has ended in exact silence), a window of 2.5 s each, mono.
+fn hits(call: &str, notes: &[u8]) -> Vec<Vec<f32>> {
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write("data/arrangement.json", "{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"meter\": []}\n");
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\n\n\
+             const t = track(\"t\", ({{ lane }}) => {call});\n\nexport default song(() => t.out);\n"
+        ),
+    );
+    let at: Vec<String> = notes
+        .iter()
+        .enumerate()
+        .map(|(i, n)| format!("{{\"pitch\": {n}, \"start\": {}, \"length\": 0.25, \"velocity\": 0.8}}", i * 5))
+        .collect();
+    f.write(
+        "data/t/hits.json",
+        format!("{{\"clips\": [{{\"start\": 0, \"length\": {}, \"notes\": [{}]}}]}}", notes.len() * 5, at.join(", ")),
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{call}: {:?}", s.draft_errors);
+    let rev = s.accepted();
+    let out = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000)
+        .unwrap()
+        .render(notes.len() as f64 * 2.5)
+        .unwrap();
+    out.chunks(120_000).map(|w| w.iter().map(|x| x[0]).collect()).collect()
+}
+
+fn silent(w: &[f32]) -> bool {
+    w.iter().all(|x| *x == 0.0)
+}
+
+/// What a hit sounds like, as a few numbers: its level in dB in 16 bands, from 60 Hz to 12 kHz, in
+/// four stretches of time after it starts (its attack, body, ring and tail).
+fn heard(w: &[f32]) -> Vec<f64> {
+    let rate = 48_000.0;
+    let mut out = vec![];
+    for (a, b) in [(0.0, 0.03), (0.03, 0.15), (0.15, 0.6), (0.6, 2.4)] {
+        let part = &w[(a * rate) as usize..(b * rate) as usize];
+        let n = part.len() as f64;
+        for k in 0..16 {
+            let hz = 60.0 * (12_000.0f64 / 60.0).powf(k as f64 / 15.0);
+            let (mut re, mut im) = (0.0, 0.0);
+            for (i, x) in part.iter().enumerate() {
+                let hann = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / n).cos();
+                let phase = std::f64::consts::TAU * hz * i as f64 / rate;
+                re += *x as f64 * hann * phase.cos();
+                im += *x as f64 * hann * phase.sin();
+            }
+            out.push(10.0 * ((re * re + im * im) / n + 1e-12).log10());
+        }
+    }
+    out
+}
+
+// KIT-6: the drum machine plays every note of the table, and none other, but 52 and 55, where it is
+// silent and a Drum's cymbal plays; at each sound's own note, and the hats' 44 and 46, the very drum
+// the Drum of that sound plays, bit for bit; at its other notes a drum of the sound's family: of the
+// nine Drums, each playing the note, the one that sounds most like it (its level in each band, as
+// it starts, rings and ends) is the table's.
+#[test]
+fn the_drum_machine_plays_each_note_as_the_table_says() {
+    let table: Vec<u8> = GM.iter().flat_map(|g| g.notes.iter().copied()).collect();
+    let rest: Vec<u8> = (0..=127).filter(|n| !table.contains(n)).collect();
+    let others = hits("drums.kit(lane.notes(\"hits\"))", &rest);
+    let loud: Vec<u8> = rest.iter().zip(&others).filter(|(_, w)| !silent(w)).map(|(n, _)| *n).collect();
+    assert!(loud.is_empty(), "the drum machine plays {loud:?}, which no sound answers to");
+    let machine = hits("drums.kit(lane.notes(\"hits\"))", &table);
+    let drums: Vec<Vec<Vec<f32>>> =
+        GM.iter().map(|g| hits(&format!("drums.drum(lane.notes(\"hits\"), {{ drum: \"{}\" }})", g.sound), &table)).collect();
+    for (i, n) in table.iter().enumerate() {
+        let sound = sound_of(*n).unwrap();
+        let place = GM.iter().position(|g| g.sound == sound).unwrap();
+        let (m, d) = (&machine[i], &drums[place][i]);
+        assert!(!silent(d), "the Drum's {sound} plays {n}");
+        if *n == own_note(sound).unwrap() || (sound == "hats") {
+            assert!(m == d, "at {n} the drum machine plays the Drum's {sound}, bit for bit");
+        } else if [52, 55].contains(n) {
+            assert!(silent(m), "the drum machine is silent at {n}");
+        } else {
+            let mine = heard(m);
+            let far: Vec<f64> = drums
+                .iter()
+                .map(|d| heard(&d[i]).iter().zip(&mine).map(|(a, b)| (a.max(-100.0) - b.max(-100.0)).powi(2)).sum::<f64>().sqrt())
+                .collect();
+            let nearest = (0..9).min_by(|a, b| far[*a].total_cmp(&far[*b])).unwrap();
+            assert_eq!(GM[nearest].sound, sound, "at {n} the drum machine sounds most like the Drum's {}: {far:?}", GM[nearest].sound);
+        }
+    }
+}
+
+// KIT-7: split gives each sound the drum machine's notes of it, in the Drum's menu order, each
+// note as it was (a tuned one by the key it plays, its pitch rounded), the hats' closed, pedal and
+// open, the toms' pitches; the notes no sound answers to come back apart, in order.
+#[test]
+fn split_gives_each_sound_its_own_notes() {
+    let n = |pitch: f64, start: f64, velocity: f64| m2_song::Note { pitch, start, length: 0.25, velocity };
+    let notes = [
+        n(42.0, 0.0, 0.5),
+        n(36.0, 0.0, 1.0),
+        n(60.0, 0.5, 0.7),
+        n(46.0, 0.5, 0.6),
+        n(38.0, 1.0, 0.9),
+        n(43.7, 1.5, 0.4),
+        n(41.0, 2.0, 0.8),
+        n(48.0, 2.5, 0.8),
+        n(35.0, 3.0, 0.8),
+        n(81.0, 3.5, 0.3),
+    ];
+    let s = split(&notes);
+    let got: Vec<(&str, Vec<m2_song::Note>)> = s.lanes.iter().map(|(sound, ns)| (*sound, ns.clone())).collect();
+    assert_eq!(
+        got,
+        [
+            ("kick", vec![n(36.0, 0.0, 1.0), n(35.0, 3.0, 0.8)]),
+            ("snare", vec![n(38.0, 1.0, 0.9)]),
+            ("hats", vec![n(42.0, 0.0, 0.5), n(46.0, 0.5, 0.6), n(43.7, 1.5, 0.4)]),
+            ("tom", vec![n(41.0, 2.0, 0.8), n(48.0, 2.5, 0.8)]),
+        ]
+    );
+    assert_eq!(s.left, [n(60.0, 0.5, 0.7), n(81.0, 3.5, 0.3)], "never dropped");
+    assert_eq!(split(&[]), Split { lanes: vec![], left: vec![] });
+}
+
+// KIT-9: a Drum's note goes out as a General MIDI drum of its sound: one of its notes as it is, a
+// tom's other note to the nearest tom note (the lower at an equal distance), any other to its own.
+#[test]
+fn a_drums_note_goes_out_as_its_sounds() {
+    let out = |sound: &str, keys: &[u8]| keys.iter().map(|k| general_midi(sound, *k)).collect::<Vec<u8>>();
+    assert_eq!(out("kick", &[36, 35, 60, 0]), [36, 35, 36, 36]);
+    assert_eq!(out("hats", &[42, 44, 46, 60]), [42, 44, 46, 42]);
+    assert_eq!(out("tom", &[41, 44, 46, 49, 60, 30]), [41, 43, 45, 48, 50, 41]);
+    assert_eq!(out("cymbal", &[52, 53]), [52, 49]);
+    assert_eq!(out("shaker", &[54, 70, 71]), [54, 70, 69]);
+}

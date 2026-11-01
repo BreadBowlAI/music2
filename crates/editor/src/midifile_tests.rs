@@ -1,5 +1,7 @@
 //! MIDI files out of songs (Q37) and the sound table (Q33), on the fixtures.
 
+use std::collections::BTreeMap;
+
 use super::*;
 use crate::Gestures;
 use crate::smf::SmfNote;
@@ -96,16 +98,20 @@ fn a_second_lane_is_named_by_its_track_and_lane() {
     assert_eq!(parts[2].notes, [note(1, 72, 102, 960, 1920)], "channel 2");
 }
 
+// Q37: a drum machine's lane goes out on channel 10 as it plays, with no program, and the other
+// parts still count 1, 2 past it. No list offers it now (KIT-2): its call is written in code.
 #[test]
-fn a_drum_kit_lane_is_channel_10() {
+fn a_drum_machine_lane_is_channel_10() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let made = s.add_track("@m2/drums:drum-kit", Some("Kit"), None, None).unwrap();
+    let made = s.add_track("@m2/drums:drum", Some("Kit"), None, None).unwrap();
+    f.write(&made.edited.file, f.read(&made.edited.file).replace("drums.drum(", "drums.kit("));
     f.write(
         &format!("data/{}/hits.json", made.module),
         r#"{"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 38, "start": 1, "length": 0.25}]}]}"#,
     );
     let s = f.open();
+    assert_eq!(player_of(s.accepted(), &made.module, "hits").as_deref(), Some(DRUM_MACHINE));
     let (_, parts) = written(&export_song(&s).unwrap());
     let kit = parts.iter().find(|p| p.name.as_deref() == Some("Kit")).unwrap();
     assert_eq!(kit.notes, [note(9, 38, 102, 960, 1200)]);
@@ -113,6 +119,42 @@ fn a_drum_kit_lane_is_channel_10() {
     // The other parts still count 1, 2 past it.
     let keys = parts.iter().find(|p| p.name.as_deref() == Some("Keys")).unwrap();
     assert!(keys.notes.iter().all(|n| n.channel == 1));
+}
+
+// KIT-9: a kit's Drum tracks go out on channel 10, each note at a General MIDI note of its sound:
+// one of them as it is (the hats' closed, pedal and open; a tom's), a tom's other note to the
+// nearest tom note, any other to the sound's own (the Kick's C4 as 36). A Drum whose sound a lane
+// plays keeps its notes' pitches; so does a clip of it written alone.
+#[test]
+fn a_kits_tracks_go_out_as_general_midi_drums() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    crate::drums::add_kit(&mut s, "@m2/drums:drum", "808 kit", None).unwrap();
+    let hits = |pitches: &[u8]| {
+        let notes: Vec<String> =
+            pitches.iter().enumerate().map(|(i, p)| format!("{{\"pitch\": {p}, \"start\": {i}, \"length\": 0.25}}")).collect();
+        format!("{{\"clips\": [{{\"id\": \"clip0000\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}", notes.join(", "))
+    };
+    f.write("data/kick/hits.json", hits(&[60, 35]));
+    f.write("data/hats/hits.json", hits(&[42, 44, 46, 60]));
+    f.write("data/toms/hits.json", hits(&[45, 44, 60]));
+    let s = f.open();
+    let (_, parts) = written(&export_song(&s).unwrap());
+    let keys = |name: &str| -> Vec<(u8, u8)> {
+        parts.iter().find(|p| p.name.as_deref() == Some(name)).unwrap().notes.iter().map(|n| (n.channel, n.key)).collect()
+    };
+    assert_eq!(keys("Kick"), [(9, 36), (9, 35)]);
+    assert_eq!(keys("Hats"), [(9, 42), (9, 44), (9, 46), (9, 42)]);
+    assert_eq!(keys("Toms"), [(9, 45), (9, 43), (9, 50)]);
+    let (clip, _) = export_clip(&s, "kick", "hits", "clip0000").unwrap();
+    assert_eq!(written(&clip).1[1].notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(), [(9, 36), (9, 35)], "a clip alone too");
+    // The Kick's sound from a lane of names: the code works it out, so its notes keep their pitches.
+    f.write("tracks/kick.ts", f.read("tracks/kick.ts").replace("{ drum: \"kick\",", "{ drum: lane.control(\"sound\", \"choice\"),"));
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let (_, parts) = written(&export_song(&s).unwrap());
+    let kick = parts.iter().find(|p| p.name.as_deref() == Some("Kick")).unwrap();
+    assert_eq!(kick.notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(), [(9, 60), (9, 35)]);
 }
 
 #[test]
@@ -223,7 +265,7 @@ fn a_clip_later_in_the_song_takes_the_tempo_where_it_starts() {
 
 #[test]
 fn the_sound_table_picks_and_writes_one_way() {
-    assert_eq!(sound_for(true, Some(0), 60.0), DRUM_KIT);
+    assert_eq!(sound_for(true, Some(0), 60.0), DRUM);
     assert_eq!(
         [0, 8, 16, 24, 33, 40, 56, 64, 88, 104, 112, 127].map(|p| sound_for(false, Some(p), 60.0)),
         [
@@ -291,8 +333,9 @@ fn each_track_and_channel_becomes_a_track() {
     let b = bring(&f, "groove.mid", &label).unwrap();
     let got: Vec<(&str, &str, usize)> = b.parts.iter().map(|p| (p.label.as_str(), p.component.as_str(), p.notes.len())).collect();
     // The tempo track and the empty one have no notes; Band's two channels are two parts, named by
-    // their sounds, in the order their first notes come.
-    assert_eq!(got, [("Drums", DRUM_KIT, 2), ("fm-keys", "@m2/synths:fm-keys", 1), ("synth-bass", "@m2/synths:synth-bass", 1)]);
+    // their sounds, in the order their first notes come; the drums are the Drum's (KIT-8).
+    assert_eq!(got, [("Drums", DRUM, 2), ("fm-keys", "@m2/synths:fm-keys", 1), ("synth-bass", "@m2/synths:synth-bass", 1)]);
+    assert_eq!(b.parts.iter().map(|p| p.drums).collect::<Vec<_>>(), [true, false, false]);
     let bass = &b.parts[2].notes[0];
     assert_eq!((bass.pitch, bass.start, bass.length), (40.0, 0.5, 1.0));
     assert_eq!(bass.velocity, 0.787, "100 / 127, to a thousandth");
@@ -303,19 +346,20 @@ fn each_track_and_channel_becomes_a_track() {
     one.extend(played(2, 50, 0, 96));
     let b = bring(&file(0, vec![(Some("Song"), one)]), "zero.mid", &label).unwrap();
     // Both start at once: channel 3 (D3 and up: FM keys) comes before channel 10.
-    assert_eq!(b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(), ["@m2/synths:fm-keys", DRUM_KIT]);
+    assert_eq!(b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(), ["@m2/synths:fm-keys", DRUM]);
     // A name twice is numbered.
     let b = bring(&file(1, vec![(Some("Piano"), played(0, 60, 0, 96)), (Some("piano"), played(1, 64, 0, 96))]), "two.mid", &label).unwrap();
     assert_eq!(b.parts.iter().map(|p| p.label.as_str()).collect::<Vec<_>>(), ["Piano", "piano 2"]);
 }
 
+// KIT-8: channel 10 is the drums, whatever program it sets: the Drum's, a kit's tracks; unnamed,
+// they are the Drums.
 #[test]
-fn channel_10_plays_the_drum_kit() {
-    // Whatever program it sets.
+fn channel_10_is_the_drums() {
     let mut drums = vec![(0, Event::Program { channel: 9, program: 40 })];
     drums.extend(played(9, 42, 0, 12));
     let b = bring(&file(1, vec![(None, drums)]), "d.mid", &label).unwrap();
-    assert_eq!((b.parts[0].component.as_str(), b.parts[0].label.as_str()), (DRUM_KIT, "drum-kit"));
+    assert_eq!((b.parts[0].component.as_str(), b.parts[0].label.as_str(), b.parts[0].drums), (DRUM, "Drums", true));
 }
 
 #[test]
@@ -435,12 +479,15 @@ fn an_exported_song_imports_as_the_same_notes() {
     // The sounds: drums on 10, then what the programs pick again.
     assert_eq!(
         b.parts.iter().map(|p| p.component.as_str()).collect::<Vec<_>>(),
-        [DRUM_KIT, DRUM_KIT, "@m2/synths:synth-bass", "@m2/synths:synth-pluck"]
+        [DRUM, DRUM, "@m2/synths:synth-bass", "@m2/synths:synth-pluck"]
     );
     assert_eq!(b.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }]);
     let data = &s.accepted().compiled.data;
+    // The Kick's C1 went out as its sound's own note, C2 (KIT-9); the hats' F#2 is theirs.
+    let general = |module: &str, pitch: f64| if module == "kick" { 36.0 } else { pitch };
     for (p, (module, lane)) in b.parts.iter().zip([("kick", "hits"), ("hats", "hits"), ("bass", "notes"), ("keys", "chords")]) {
-        let want: Vec<(f64, f64, f64)> = data.notes(module, lane).iter().map(|n| (n.pitch, n.start, n.end - n.start)).collect();
+        let want: Vec<(f64, f64, f64)> =
+            data.notes(module, lane).iter().map(|n| (general(module, n.pitch), n.start, n.end - n.start)).collect();
         let mut got: Vec<(f64, f64, f64)> = p.notes.iter().map(|n| (n.pitch, n.start, n.length)).collect();
         got.sort_by(|a, b| a.1.total_cmp(&b.1).then(a.0.total_cmp(&b.0)));
         assert_eq!(got.len(), want.len(), "{module}");
@@ -544,8 +591,9 @@ fn files(f: &Fixture) -> Vec<(std::path::PathBuf, Vec<u8>)> {
     all
 }
 
-// Q32, Q33, Q34, Q36: each part a new track with its sound and one clip, after the track asked
-// for, from the bar asked for; at the song's own tempo there is no question.
+// Q32, Q33, Q34, Q36, KIT-8: each part a new track with its sound and one clip, after the track
+// asked for, from the bar asked for, the drums a kit: a Drums bus and a Drum track for each sound;
+// at the song's own tempo there is no question.
 #[test]
 fn an_import_makes_a_track_for_each_part() {
     let f = fixture("examples/first-song");
@@ -555,27 +603,31 @@ fn an_import_makes_a_track_for_each_part() {
     let t = made(import_tracks(&mut s, &groove(483_871), "groove.mid", &at(Some("kick"), 8.0), None).unwrap());
     assert_eq!(s.accepted().number, number + 1, "one Tx");
     let names: Vec<&str> = t.tracks.iter().map(|t| t.1.as_str()).collect();
-    assert_eq!(names, ["Drums", "Synth bass", "FM keys"]);
+    assert_eq!(names, ["Drums", "Kick 2", "Snare", "Synth bass", "FM keys"]);
     let keys: Vec<String> = t.tracks.iter().map(|t| t.0.clone()).collect();
-    assert_eq!(order(&s), ["kick", &keys[0], &keys[1], &keys[2], "hats", "bass", "keys"], "right after Kick");
+    assert_eq!(order(&s), ["kick", &keys[0], &keys[1], &keys[2], &keys[3], &keys[4], "hats", "bass", "keys"], "right after Kick");
+    let keys = &keys[1..];
     let rev = s.accepted();
-    let sounds: Vec<Option<String>> = keys.iter().zip(["hits", "notes", "notes"]).map(|(k, l)| player_of(rev, k, l)).collect();
-    assert_eq!(sounds, [Some(DRUM_KIT.to_string()), Some("@m2/synths:synth-bass".into()), Some("@m2/synths:fm-keys".into())]);
+    let sounds: Vec<Option<String>> = keys.iter().zip(["hits", "hits", "notes", "notes"]).map(|(k, l)| player_of(rev, k, l)).collect();
+    assert_eq!(
+        sounds,
+        [Some(DRUM.to_string()), Some(DRUM.to_string()), Some("@m2/synths:synth-bass".into()), Some("@m2/synths:fm-keys".into())]
+    );
     // One clip each, from bar 3 to the bar line after its last note.
-    assert_eq!(t.made.len(), 3);
-    for ((k, l), len) in keys.iter().zip(["hits", "notes", "notes"]).zip([4.0, 4.0, 8.0]) {
+    assert_eq!(t.made.len(), 4);
+    for ((k, l), len) in keys.iter().zip(["hits", "hits", "notes", "notes"]).zip([4.0, 4.0, 4.0, 8.0]) {
         let lane = rev.compiled.data.lane(k, l).unwrap().clone();
         let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
         assert_eq!(clips.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(8.0, len)], "{k}");
         assert!(t.made.iter().any(|(a, id)| a.module.as_str() == k && clips[0].id.as_deref() == Some(id.as_str())), "{k}");
     }
-    let bass: Vec<(f64, f64, f64)> = rev.compiled.data.notes(&keys[1], "notes").iter().map(|n| (n.pitch, n.start, n.end)).collect();
+    let bass: Vec<(f64, f64, f64)> = rev.compiled.data.notes(&keys[2], "notes").iter().map(|n| (n.pitch, n.start, n.end)).collect();
     assert_eq!(bass, [(40.0, 8.0, 11.0)]);
     assert_eq!(rev.project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }], "no tempo written");
     // Below the tracks: at the end.
     let t = made(import_tracks(&mut s, &groove(483_871), "groove.mid", &at(None, 0.0), None).unwrap());
-    assert_eq!(order(&s).last(), Some(&t.tracks[2].0));
-    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums 2", "Synth bass 2", "FM keys 2"]);
+    assert_eq!(order(&s).last(), Some(&t.tracks[4].0));
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums 2", "Kick 3", "Snare 2", "Synth bass 2", "FM keys 2"]);
 }
 
 // Q35: a song with no clips takes the file's tempo and time signatures, in the same Tx, with no
@@ -590,7 +642,7 @@ fn an_import_into_an_empty_song_takes_the_files_tempo() {
     let a = &s.accepted().project.arrangement;
     assert_eq!((a.tempo.clone(), a.meter.clone()), (vec![Tempo { beat: 0.0, bpm: 128.0 }], vec![Meter { beat: 0.0, beats: 3, unit: 4 }]));
     // Keys' last note ends at beat 5: two bars of 3/4.
-    let lane = s.accepted().compiled.data.lane(&t.tracks[2].0, "notes").unwrap().clone();
+    let lane = s.accepted().compiled.data.lane(&t.tracks[4].0, "notes").unwrap().clone();
     let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
     assert_eq!((clips[0].start, clips[0].length), (0.0, 6.0));
     crate::undo(&mut s).unwrap();
@@ -626,7 +678,7 @@ fn use_at_a_later_bar_keeps_the_songs_tempo_before_it() {
     let a = &s.accepted().project.arrangement;
     assert_eq!(a.tempo, [Tempo { beat: 0.0, bpm: 124.0 }, Tempo { beat: 16.0, bpm: 128.0 }, Tempo { beat: 24.0, bpm: 140.0 }]);
     assert!(a.meter.is_empty());
-    let lane = s.accepted().compiled.data.lane(&t.tracks[1].0, "notes").unwrap().clone();
+    let lane = s.accepted().compiled.data.lane(&t.tracks[3].0, "notes").unwrap().clone();
     let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
     assert_eq!(clips[0].start, 16.0);
     // The question at a later bar names the song's tempo there.
@@ -663,7 +715,8 @@ fn one_undo_step_takes_the_import_back() {
 }
 
 // Q37 then Q32: a song written as a MIDI file comes back into an empty song as its tracks, with
-// every note as beats, its sounds and its tempo.
+// every note as beats, its sounds and its tempo; its Kick and Hats, two parts on channel 10, as one
+// kit (KIT-8), the Kick's C1 at its sound's own note, C2 (KIT-9).
 #[test]
 fn an_exported_song_imports_back_as_tracks() {
     let from = fixture("examples/first-song");
@@ -672,16 +725,74 @@ fn an_exported_song_imports_back_as_tracks() {
     let f = fixture("templates/empty");
     let mut s = f.open();
     let t = made(import_tracks(&mut s, &smf, "first-song.mid", &at(None, 0.0), None).unwrap());
-    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Kick", "Hats", "Bass", "Keys"]);
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Kick", "Hats", "Bass", "Keys"]);
     assert_eq!(s.accepted().project.arrangement.tempo, [Tempo { beat: 0.0, bpm: 124.0 }]);
     let (a, b) = (&song.accepted().compiled.data, &s.accepted().compiled.data);
-    for ((module, _), (old, lane)) in t.tracks.iter().zip([("kick", "hits"), ("hats", "hits"), ("bass", "notes"), ("keys", "chords")]) {
+    let general = |old: &str, pitch: f64| if old == "kick" { 36.0 } else { pitch };
+    for ((module, _), (old, lane)) in t.tracks[1..].iter().zip([("kick", "hits"), ("hats", "hits"), ("bass", "notes"), ("keys", "chords")])
+    {
         let new_lane = if lane == "hits" { "hits" } else { "notes" };
-        let want: Vec<(f64, f64, f64)> = a.notes(old, lane).iter().map(|n| (n.pitch, n.start, n.end)).collect();
+        let want: Vec<(f64, f64, f64)> = a.notes(old, lane).iter().map(|n| (general(old, n.pitch), n.start, n.end)).collect();
         let got: Vec<(f64, f64, f64)> = b.notes(module, new_lane).iter().map(|n| (n.pitch, n.start, n.end)).collect();
         assert_eq!(got.len(), want.len(), "{old}");
         assert!(got.iter().zip(&want).all(|(g, w)| g.0 == w.0 && (g.1 - w.1).abs() < 1e-9 && (g.2 - w.2).abs() < 1e-9), "{old}: {got:?}");
     }
+}
+
+// KIT-8: a General MIDI drum file comes in as one kit, however many tracks hold its drums: a Drums
+// bus and a Drum track for each sound its notes use, in the Drum's menu order, each with that
+// sound's notes at their own pitches and velocities (the hats' closed, pedal and open; the toms'),
+// each going to the bus; the notes no sound answers to on Percussion, which plays its tom. One
+// undo step takes it all back.
+#[test]
+fn a_general_midi_drum_file_comes_in_as_one_kit() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let before = files(&f);
+    let mut kicks = played(9, 36, 0, 24);
+    kicks.extend(played(9, 36, 96 * 2, 24));
+    let mut rest = vec![];
+    for (i, key) in [42, 38, 46, 44, 41, 45, 49, 51, 62, 81].iter().enumerate() {
+        rest.extend(played(9, *key, 48 * i as u64, 12));
+    }
+    rest.sort_by_key(|e| e.0);
+    let drums = file(1, vec![(Some("Kick"), kicks), (Some("Kit"), rest), (Some("Bass"), played(0, 40, 0, 96))]);
+    let t = made(import_tracks(&mut s, &drums, "beat.mid", &at(None, 0.0), None).unwrap());
+    let got: Vec<&str> = t.tracks.iter().map(|t| t.1.as_str()).collect();
+    assert_eq!(got, ["Drums", "Kick", "Snare", "Hats", "Tom", "Cymbal", "Percussion", "Bass"]);
+    let rev = s.accepted();
+    let bus = &t.tracks[0].0;
+    assert!(rev.compiled.ir.modules.iter().any(|m| m.key == *bus && m.bus), "the Drums bus is a bus");
+    let routes: BTreeMap<String, String> = rev.compiled.flat.routes.iter().cloned().collect();
+    for (key, _) in &t.tracks[1..7] {
+        assert_eq!(routes.get(key), Some(bus), "{key} goes to the bus");
+        assert_eq!(player_of(rev, key, "hits").as_deref(), Some(DRUM), "{key} plays the Drum");
+    }
+    assert!(!routes.contains_key(&t.tracks[7].0), "the bass goes to the master");
+    let notes = |k: usize| -> Vec<(f64, f64, f64)> {
+        rev.compiled.data.notes(&t.tracks[k].0, "hits").iter().map(|n| (n.pitch, n.start, n.velocity)).collect()
+    };
+    let v = 0.787;
+    assert_eq!(notes(1), [(36.0, 0.0, v), (36.0, 2.0, v)], "both tracks' kicks on one Kick");
+    assert_eq!(notes(3), [(42.0, 0.0, v), (46.0, 1.0, v), (44.0, 1.5, v)], "the hats keep closed, open and pedal");
+    assert_eq!(notes(4), [(41.0, 2.0, v), (45.0, 2.5, v)], "the toms their pitches");
+    assert_eq!(notes(5), [(49.0, 3.0, v), (51.0, 3.5, v)]);
+    assert_eq!(notes(6), [(62.0, 4.0, v), (81.0, 4.5, v)], "none lost");
+    let view = s.view();
+    let sound = |k: usize| {
+        let m = view.modules.iter().find(|m| m.key == t.tracks[k].0).unwrap();
+        m.nodes.iter().flat_map(|n| &n.knobs).find(|k| k.slot.as_deref() == Some("drum")).map(|k| k.value.clone()).unwrap()
+    };
+    let sounds: Vec<serde_json::Value> = (1..7).map(sound).collect();
+    assert_eq!(sounds, ["kick", "snare", "hats", "tom", "cymbal", "tom"].map(serde_json::Value::from));
+    // One clip each, to the bar line after the drums' last note.
+    for k in 1..7 {
+        let lane = rev.compiled.data.lane(&t.tracks[k].0, "hits").unwrap().clone();
+        let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
+        assert_eq!(clips.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(0.0, 8.0)], "{}", t.tracks[k].1);
+    }
+    crate::undo(&mut s).unwrap();
+    assert!(files(&f) == before, "one undo takes it all back");
 }
 
 // Q32, D10: refused in words, and nothing written: no notes, over 32 parts, a note past bar 9,999
