@@ -319,7 +319,7 @@ fn moved_module(module: &str) -> bool {
 /// values the old drum played: the old drum clamped its value to `lo..hi` first, and the Drum plays
 /// a length 0.05 to 20 times its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Knob {
+pub(crate) enum Knob {
     /// A tune or tone in Hz: semitones from the drum's own pitch, 12 × log2(Hz ÷ own).
     Tune { own: f64, lo: f64, hi: f64 },
     /// A decay in seconds: times the drum's own length, seconds ÷ own.
@@ -337,13 +337,13 @@ const fn decay(own: f64, lo: f64, hi: f64) -> Option<Knob> {
 }
 
 /// The hats single's closed and open hats' decays, as the Drum's `decay` reads them.
-const CLOSED: Knob = Knob::Decay { own: 0.045, lo: 0.005, hi: 2.0 };
-const OPEN: Knob = Knob::Decay { own: 0.45, lo: 0.02, hi: 5.0 };
+pub(crate) const CLOSED: Knob = Knob::Decay { own: 0.045, lo: 0.005, hi: 2.0 };
+pub(crate) const OPEN: Knob = Knob::Decay { own: 0.45, lo: 0.02, hi: 5.0 };
 
 impl Knob {
     /// `x`, in the old knob's base unit, as the Drum's knob reads it; None where the Drum can't
     /// play it.
-    fn convert(self, x: f64) -> Option<f64> {
+    pub(crate) fn convert(self, x: f64) -> Option<f64> {
         if !x.is_finite() {
             return None;
         }
@@ -355,7 +355,7 @@ impl Knob {
     }
 
     /// The unit a lane of it is in, before and after.
-    fn unit(self) -> (&'static str, &'static str) {
+    pub(crate) fn unit(self) -> (&'static str, &'static str) {
         match self {
             Knob::Tune { .. } => ("hz", "semitones"),
             Knob::Decay { .. } => ("seconds", "scalar"),
@@ -364,7 +364,7 @@ impl Knob {
     }
 
     /// The unit constructors of @m2/core a value of it may be written with, and their scale.
-    fn spellings(self) -> &'static [(&'static str, f64)] {
+    pub(crate) fn spellings(self) -> &'static [(&'static str, f64)] {
         match self {
             Knob::Tune { .. } => &[("hz", 1.0), ("khz", 1000.0)],
             Knob::Decay { .. } => &[("secs", 1.0), ("ms", 0.001)],
@@ -1431,7 +1431,7 @@ fn prop_removal(props: &[Property], p: &Property) -> Edit {
 
 /// A number literal, maybe negative: `0.6`, `-3`, `1_000`; none in another base or with an
 /// exponent.
-fn literal(text: &str) -> Option<f64> {
+pub(crate) fn literal(text: &str) -> Option<f64> {
     let t = text.trim();
     let digits = t.strip_prefix('-').map_or(t, str::trim_start);
     if !digits.starts_with(|c: char| c.is_ascii_digit() || c == '.') || !digits.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '_')
@@ -1443,7 +1443,7 @@ fn literal(text: &str) -> Option<f64> {
 }
 
 /// A plain string literal's text: `"hats"`, `'hz'`; none with an escape or a `${`.
-fn string(text: &str) -> Option<String> {
+pub(crate) fn string(text: &str) -> Option<String> {
     let q = text.chars().next().filter(|q| matches!(q, '"' | '\'' | '`'))?;
     let inner = text.strip_prefix(q)?.strip_suffix(q)?;
     (!inner.contains(['\\', q]) && !inner.contains("${")).then(|| inner.to_string())
@@ -1456,7 +1456,7 @@ fn number(x: f64) -> String {
 
 /// A converted value as the upgrade writes it: in the fewest decimals, from three, that give it
 /// back to half a millionth (`0.706724` semitones, `0.666667` times, `0.15`).
-fn exact(v: f64) -> String {
+pub(crate) fn exact(v: f64) -> String {
     for d in 3..=9 {
         let scale = 10f64.powi(d);
         let r = (v * scale).round() / scale;
@@ -1527,7 +1527,7 @@ fn shown(text: &str, edits: &[Edit]) -> Vec<String> {
 /// and how many points; None when it is in that unit already. A lane moves in straight lines in
 /// its own unit: Hz in a straight line bend in semitones, so a tune lane gets points between, as
 /// many as keep it within a cent of the old line.
-fn convert_lane(text: &str, knob: Knob) -> Result<Option<(String, usize)>, String> {
+pub(crate) fn convert_lane(text: &str, knob: Knob) -> Result<Option<(String, usize)>, String> {
     let (from, to) = knob.unit();
     let data = LaneData::read(text, &LaneKind::Control { unit: None }).map_err(|e| format!("it doesn't read as a lane: {e:?}"))?;
     let LaneData::Control { unit, mut clips } = data else { return Err("it isn't a control lane".into()) };

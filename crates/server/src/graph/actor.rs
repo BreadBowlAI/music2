@@ -895,6 +895,8 @@ impl Open {
                 "instruments": s.instruments(),
                 // The kits the instruments name, which + Track's Drum kit makes (KIT-5).
                 "kit_presets": m2_editor::drums::presets(s),
+                // The tracks that play the drum machine, which Make it a kit makes kits of (KIT-24).
+                "drum_machines": m2_editor::machine::drum_machines(rev),
                 "palette": m2_editor::layout::DEFAULT_ORDER,
                 "diagnostics": diagnostics,
                 "problems": problems,

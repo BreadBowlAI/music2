@@ -920,6 +920,24 @@ fn run(args: Vec<String>) -> Result<()> {
                 made[0].edited.revision
             );
         }
+        Some("make-kit") => {
+            // KIT-22, KIT-24: what a drum machine track's Make it a kit does.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let made = m2_editor::machine::make_kit(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            let rev = s.accepted();
+            let label = rev.compiled.ir.modules.iter().find(|m| m.key == made.bus).map_or(made.bus.clone(), |m| m.label().to_string());
+            let tracks: Vec<String> = made.tracks.iter().map(|m| m.label.clone()).collect();
+            println!(
+                "made {label} a kit: its bus {label} (ID {}), and {} going to it (revision {})",
+                made.bus,
+                m2_editor::listed(&tracks),
+                made.tracks[0].edited.revision
+            );
+            println!("{}", m2_editor::machine::KEEPS);
+            for said in &made.said {
+                println!("{said}");
+            }
+        }
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);

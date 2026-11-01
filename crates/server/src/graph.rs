@@ -1827,6 +1827,34 @@ impl Graph {
         Ok(added)
     }
 
+    /// Make track `track`, which plays the drum machine, a kit (KIT-22, KIT-24): one undo step,
+    /// "Make Beat a kit". The answer names the bus (`module`, `label`), its new `tracks`
+    /// (`{module, label}`), what it keeps (`keeps`), what went (`said`) and the Mix view (`mix`).
+    pub fn make_kit(&self, token: u64, track: &str) -> Result<Value> {
+        let track = track.to_string();
+        let made = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = m2_editor::machine::make_kit(s, &track)?;
+                let label =
+                    s.accepted().compiled.ir.modules.iter().find(|m| m.key == made.bus).map_or(made.bus.clone(), |m| m.label().to_string());
+                let tracks: Vec<Value> = made.tracks.iter().map(|m| json!({"module": m.module, "label": m.label})).collect();
+                let answer = json!({
+                    "module": made.bus,
+                    "label": label,
+                    "tracks": tracks,
+                    "keeps": m2_editor::machine::KEEPS,
+                    "said": made.said,
+                    "mix": s.mix(),
+                });
+                Ok((made.tracks[0].edited.clone(), answer))
+            })
+        })?;
+        let keys: Vec<String> =
+            made["tracks"].as_array().into_iter().flatten().filter_map(|t| t["module"].as_str().map(String::from)).collect();
+        self.forget_overlays(&keys);
+        Ok(made)
+    }
+
     /// A track just made under a key a gone track's mute or solo was kept for starts heard (Q7).
     fn forget_made(&self, made: &Value) {
         if let Some(k) = made["module"].as_str() {

@@ -4070,6 +4070,40 @@ fn the_kit_route_adds_a_bus_and_its_tracks() {
     assert!(!fixture.0.join("tracks/drums.ts").exists() && !fixture.0.join("tracks/snare.ts").exists());
 }
 
+// KIT-24: the state names each track that plays the drum machine, and the route makes one a kit:
+// the track the kit's bus, a Drum track for each sound going to it, one undo step; its answer says
+// what it keeps and the Mix view after it. A track that plays no drum machine is refused in words.
+#[test]
+fn the_make_kit_route_makes_a_drum_machine_track_a_kit() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let hats = fixture.read("tracks/hats.ts");
+    fixture.put(
+        "tracks/hats.ts",
+        &hats.replace("drums.drum(lane.notes(\"hits\"), { drum: \"hats\", tune: 5 })", "drums.kit(lane.notes(\"hits\"))"),
+    );
+    let song = fixture.read("song.ts");
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
+    let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
+    assert_eq!(running.state.graph.state().unwrap()["drum_machines"], json!(["hats"]));
+    let (status, refused) = post("/api/graph/track/make-kit", json!({"session": session, "track": "kick"}));
+    assert!(status >= 400 && refused["error"].as_str().unwrap_or("").contains("Kick plays no drum machine."), "{status} {refused:#}");
+    let (status, made) = post("/api/graph/track/make-kit", json!({"session": session, "track": "hats"}));
+    assert_eq!((status, &made["module"], &made["label"]), (200, &json!("hats"), &json!("Hats")), "{made:#}");
+    assert_eq!(made["keeps"], json!(m2_editor::machine::KEEPS));
+    assert_eq!(made["tracks"], json!([{"module": "hats-2", "label": "Hats 2"}]));
+    let strips = made["mix"]["strips"].as_array().unwrap();
+    assert_eq!(strips.iter().find(|x| x["channel"] == "hats-2").unwrap()["output"], "hats", "{made:#}");
+    let state = running.state.graph.state().unwrap();
+    assert_eq!(state["drum_machines"], json!([]));
+    assert_eq!(state["undo_name"]["name"], "Make Hats a kit", "{:#}", state["undo_name"]);
+    running.state.graph.undo(session).unwrap();
+    assert_eq!(fixture.read("song.ts"), song);
+    assert!(!fixture.0.join("tracks/hats-2.ts").exists());
+}
+
 /// `n` blocks of 128 frames, both channels, interleaved.
 fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
     let mut out = vec![];

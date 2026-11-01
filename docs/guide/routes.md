@@ -514,6 +514,16 @@ An example body:
 {"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}
 ```
 
+### `POST /api/graph/track/make-kit`
+
+Make a track that plays the drum machine a kit: the track its bus, a Drum track for each sound its notes use going to it (the state's drum_machines lists them). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "track": "beat"}
+```
+
 ### `POST /api/graph/track/mute`
 
 Mute tracks in the song, written in their code, or unmute them. It writes the song: one undo step.

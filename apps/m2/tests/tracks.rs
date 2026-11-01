@@ -103,3 +103,51 @@ fn m2_graph_says_each_drum_kit() {
     let kits: Vec<&str> = said.lines().filter(|l| l.starts_with("kit ")).collect();
     assert_eq!(kits, ["kit Drums (drums): Kick (kick/hits, kick) · Hats (hats/hits, hats)"], "{said}");
 }
+
+// KIT-24: `m2 make-kit` makes a drum machine track a kit, as its track menu's Make it a kit does: the
+// track the kit's bus, a Drum track for each sound its notes use going to it, in one undo step; it
+// says what it keeps, and what went. A track that plays no drum machine is refused in words.
+#[test]
+fn a_drum_machine_track_is_made_a_kit_from_the_terminal() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-make-kit-cli-{}", std::process::id())));
+    let song = temp.0.join("beat");
+    let write = |name: &str, text: &str| {
+        let p = song.join(name);
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(p, text).unwrap();
+    };
+    write(
+        "music2.toml",
+        "[project]\nname = \"beat\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n",
+    );
+    write("data/arrangement.json", "{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"meter\": []}\n");
+    write(
+        "song.ts",
+        "import { song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport beat from \"./tracks/beat\";\n\n\
+         export default song(() => master(mixer({ beat: beat.out })));\n",
+    );
+    write(
+        "tracks/beat.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
+         export default track(\"beat\", { name: \"Beat\" }, ({ lane }) => drums.kit(lane.notes(\"hits\")));\n",
+    );
+    write(
+        "data/beat/hits.json",
+        "{\"clips\": [{\"id\": \"c1\", \"start\": 0, \"length\": 4, \"notes\": [{\"pitch\": 36, \"start\": 0, \"length\": 0.25}, \
+         {\"pitch\": 38, \"start\": 1, \"length\": 0.25}, {\"pitch\": 42, \"start\": 1.5, \"length\": 0.25}, {\"pitch\": 55, \"start\": 2, \"length\": 0.25}]}]}\n",
+    );
+    let dir = song.to_str().unwrap();
+    let said = ok(&["make-kit", dir, "beat"]);
+    assert!(said.contains("made Beat a kit: its bus Beat (ID beat), and Kick, Snare and Hats going to it (revision"), "{said}");
+    assert!(said.contains("Same drums, pitches, levels and lengths; each hit's noise comes out a little different."), "{said}");
+    assert!(said.contains("1 note the drum machine is silent at went"), "{said}");
+    assert!(
+        std::fs::read_to_string(song.join("tracks/beat.ts"))
+            .unwrap()
+            .contains("bus(\"beat\", { name: \"Beat\" }, ({ input }) => gain(input))")
+    );
+    ok(&["check", dir]);
+    let out = m2(&["make-kit", dir, "kick"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("Kick plays no drum machine."), "{err}");
+}

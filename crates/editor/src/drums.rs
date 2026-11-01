@@ -62,6 +62,10 @@ pub const GM: [GmDrum; 17] = [
     GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
 ];
 
+/// The notes of the table the drum machine is silent at (KIT-6): a Chinese cymbal, a ride bell and a
+/// splash, which a MIDI file brings in on the Cymbal and the Ride, and Make it a kit drops (KIT-22).
+pub const SILENT: [u8; 3] = [52, 53, 55];
+
 /// The Drum's sound that answers to General MIDI drum note `note`, if any (KIT-6).
 pub fn sound_of(note: u8) -> Option<&'static str> {
     GM.iter().find(|g| g.notes.contains(&note)).map(|g| g.sound)
