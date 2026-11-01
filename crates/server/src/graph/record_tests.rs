@@ -365,7 +365,7 @@ fn a_takes_news_names_its_step() {
     assert_eq!((&top["name"], &top["source"]), (&json!("recording on Bass"), &json!("page")), "{top}");
     assert!(top["step"].is_u64(), "{top}");
     assert_eq!(said["written"]["step"], top["step"], "the take's step, by its id: {said}");
-    assert_eq!(said["written"]["moved"], json!(false), "notes written in a lane move no ids: {said}");
+    assert_eq!(said["written"]["moved"], json!([]), "notes written in a lane move no ids: {said}");
     assert_eq!(said["written"]["undo_name"]["name"], json!("recording on Bass"), "and Undo's name for it: {said}");
 }
 
@@ -1585,7 +1585,7 @@ mod audio {
         let lane = state["timeline"]["tracks"].as_array().unwrap().iter().find(|t| t["module"] == "vox").unwrap()["lanes"][0].clone();
         assert_eq!(lane["takes"][c["asset"].as_str().unwrap()], json!([0.0, 2.0, 4.0, 6.0]));
         let clip = ClipRef { lane: LaneAddr::new("vox", "clips").unwrap(), id: c["id"].as_str().map(String::from), at: None, sha: None };
-        r.graph.choose_take(r.token, clip, 0).unwrap();
+        r.graph.choose_take(r.token, clip, 0, None).unwrap();
         assert_eq!(r.clips()[0]["offset"].as_f64(), Some(0.0), "the first plays");
         assert_eq!(r.graph.undo_names().0.as_deref(), Some("Vox take 1"));
         r.graph.undo(r.token).unwrap();
@@ -1723,7 +1723,7 @@ mod audio {
         let follow =
             Gesture::Audio { clip: clip(), gain_db: None, fade_in: None, fade_out: None, reverse: None, follow: Some(true), offset: None };
         r.graph.clips(r.token, follow).unwrap();
-        r.graph.choose_take(r.token, clip(), 0).unwrap();
+        r.graph.choose_take(r.token, clip(), 0, None).unwrap();
         let after = r.clips()[0].clone();
         assert_eq!((after["offset"].as_f64(), after["warp"][0][0].as_f64()), (Some(0.0), Some(0.0)), "the markers moved with it: {after}");
         r.graph.set_loop(None, Some(false)).unwrap();

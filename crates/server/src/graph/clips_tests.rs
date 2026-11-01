@@ -88,7 +88,8 @@ fn the_timeline_carries_each_clips_sha_and_a_stale_one_is_refused() {
     // Taken in: the window's `sha` is stale.
     assert!(graph.poll());
     match graph.clips(token, stale()).unwrap() {
-        Answer::Changed(why) => assert!(why.contains("clip `a`") && why.contains("changed in another window"), "{why}"),
+        // By who changed it: a file saved outside, taken in (AGENT-2).
+        Answer::Changed(why) => assert!(why.contains("clip `a`") && why.contains("was changed outside the app"), "{why}"),
         Answer::Done(v) => panic!("deleted a clip changed since: {v}"),
     }
     assert_eq!(fixture.read("data/kick/hits.json"), text);

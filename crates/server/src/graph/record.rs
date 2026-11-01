@@ -1560,7 +1560,7 @@ impl Graph {
 
     /// Choose take `take` (from 0) of an audio clip whose file is a take over a loop (MON-11): its
     /// offset moves to the same place in that pass. One Tx, one undo step, "Vox take 2".
-    pub fn choose_take(&self, token: u64, clip: m2_editor::clips::ClipRef, take: usize) -> Result<Value> {
+    pub fn choose_take(&self, token: u64, clip: m2_editor::clips::ClipRef, take: usize, since: Option<u64>) -> Result<Value> {
         let (dir, label) = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;
@@ -1598,7 +1598,7 @@ impl Graph {
             follow: None,
             offset: Some(offset),
         };
-        let (done, _) = self.clips_why(token, gesture, None);
+        let (done, _) = self.clips_why_since(token, gesture, None, since);
         let v = done?;
         // Named by its id: the take it had already makes no change, and no step (AGENT-2).
         if let Some(step) = v["step"].as_u64()

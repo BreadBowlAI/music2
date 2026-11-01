@@ -573,6 +573,16 @@ pub fn edit(s: &mut Session, g: &Gesture) -> Result<ClipsEdited, EditError> {
 
 /// [`edit`] as the Tx with id `tx_id`.
 pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited, EditError> {
+    edit_since(s, g, tx_id, None)
+}
+
+/// [`edit_as`] for a gesture that goes from revision `since` (AGENT-2): refused, saying who, when a
+/// change after it touched the arrangement or any lane, since the bars it names by their beats
+/// may be other bars now.
+pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>) -> Result<ClipsEdited, EditError> {
+    if let Some(since) = since {
+        crate::unchanged_since(s, since, "the song's bars", |p| p.starts_with("data/"))?;
+    }
     let rev = s.accepted();
     // A data Tx needs the lanes an accepted build declared; a draft that doesn't build since is no
     // bar (WRITE-14).

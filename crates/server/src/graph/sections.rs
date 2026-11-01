@@ -16,10 +16,16 @@ impl Graph {
     /// [`Graph::clips`] does: `{file, before, after, revision, made}`, or a conflict when a file it
     /// writes changed since (WRITE-12).
     pub fn sections(&self, token: u64, gesture: Gesture) -> Result<Answer> {
+        self.sections_since(token, gesture, None)
+    }
+
+    /// [`Graph::sections`] for a gesture that goes from revision `since` (AGENT-2): refused, saying
+    /// who, when a change after it touched the arrangement or a lane.
+    pub fn sections_since(&self, token: u64, gesture: Gesture, since: Option<u64>) -> Result<Answer> {
         let why = Arc::new(Mutex::new(None));
         let saw = why.clone();
         let done = self.call(move |a| {
-            a.edit_and(token, |s| match m2_editor::sections::edit(s, &gesture) {
+            a.edit_and(token, |s| match m2_editor::sections::edit_since(s, &gesture, &m2_song::tx::random_id(), since) {
                 Ok(done) => {
                     let made: Vec<_> =
                         done.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();

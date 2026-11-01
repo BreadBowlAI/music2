@@ -160,6 +160,9 @@ struct TakeReq {
     clip: m2_editor::clips::ClipRef,
     /// Which take, from 1.
     take: usize,
+    /// The revision the pick goes from (AGENT-2): a clip changed since is refused.
+    #[serde(default)]
+    revision: Option<u64>,
 }
 
 /// `POST /api/graph/take {session, module, lane, id, take}`: the audio clip `id` plays take `take`
@@ -169,7 +172,7 @@ async fn take(State(s): S, Json(r): Json<TakeReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || {
         let take = r.take.checked_sub(1).ok_or_else(|| anyhow::anyhow!("Takes count from 1."))?;
-        state.graph.choose_take(r.session, r.clip, take)
+        state.graph.choose_take(r.session, r.clip, take, r.revision)
     })
     .await;
     s.graph_changed();

@@ -567,10 +567,13 @@ impl Session {
             // Whatever outside writers did to them before, the files are this save's now (AGENT-2).
             self.outside_was.paths.remove(file);
         }
+        // The revision it makes is by who saved it (AGENT-2).
+        self.accepting = Some(self.by.clone());
         let taken = match settled {
             Some(settled) => self.take_in_settled(draft, settled),
             None => TakenIn::default(),
         };
+        self.accepting = None;
         // Taken into the revision that plays as written: one step, whatever the draft's errors (a
         // lane file saved while the code is broken lands by WRITE-14's data path).
         let recorded = lands && as_written(&self.accepted.snapshot);

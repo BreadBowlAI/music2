@@ -879,13 +879,16 @@ struct LayoutReq {
     /// Write the defaults over a `layout.json` that doesn't read.
     #[serde(default)]
     reset: bool,
+    /// The order a new `order` was made from (AGENT-2): refused when the tracks moved since.
+    #[serde(default)]
+    base: Option<Vec<String>>,
 }
 
 /// Reorder or recolour tracks: a write of `layout.json` only, with no revision (PLANE-3).
 async fn graph_layout(State(s): S, Json(r): Json<LayoutReq>) -> ApiResult {
     let state = s.clone();
     let colour = r.colour.map(|c| (c.module, c.colour));
-    let result = blocking(move || state.graph.layout(r.session, r.order, colour, r.reset)).await;
+    let result = blocking(move || state.graph.layout_from(r.session, r.order, colour, r.reset, r.base)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

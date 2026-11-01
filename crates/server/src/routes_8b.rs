@@ -134,6 +134,10 @@ async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
 struct SectionsReq {
     session: u64,
     gesture: m2_editor::sections::Gesture,
+    /// The revision the gesture goes from (AGENT-2): refused when the arrangement or a lane changed
+    /// since. None: from what the song is.
+    #[serde(default)]
+    revision: Option<u64>,
 }
 
 /// A section gesture (ARR-9): `{session, gesture: {op, …}}`, beats on bar lines, one Tx and one
@@ -141,7 +145,7 @@ struct SectionsReq {
 /// made}`; 409 `{error, changed: true}` when a file it writes changed since (WRITE-12).
 async fn graph_sections(State(s): S, Json(r): Json<SectionsReq>) -> Result<Response, ApiError> {
     let state = s.clone();
-    let result = blocking(move || state.graph.sections(r.session, r.gesture)).await;
+    let result = blocking(move || state.graph.sections_since(r.session, r.gesture, r.revision)).await;
     s.graph_changed();
     Ok(match result? {
         Answer::Done(v) => Json(v).into_response(),
@@ -167,6 +171,10 @@ async fn graph_sections_copy(State(s): S, Json(r): Json<SectionCopyReq>) -> ApiR
 struct ClipsReq {
     session: u64,
     gesture: m2_editor::clips::Gesture,
+    /// The revision the gesture goes from (AGENT-2): a clip it names, or the Beat grid's lane,
+    /// changed since is refused. None: from what the song is.
+    #[serde(default)]
+    revision: Option<u64>,
 }
 
 /// A clip gesture (8b.5): `{session, gesture: {op, …}}`, one Tx and one undo step. A write.
@@ -174,7 +182,7 @@ struct ClipsReq {
 /// true}` when a clip it names by its `sha` changed since the window drew it (WRITE-12).
 async fn graph_clips(State(s): S, Json(r): Json<ClipsReq>) -> Result<Response, ApiError> {
     let state = s.clone();
-    let result = blocking(move || state.graph.clips(r.session, r.gesture)).await;
+    let result = blocking(move || state.graph.clips_since(r.session, r.gesture, r.revision)).await;
     s.graph_changed();
     Ok(match result? {
         Answer::Done(v) => Json(v).into_response(),

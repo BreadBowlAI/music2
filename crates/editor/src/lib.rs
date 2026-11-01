@@ -79,7 +79,7 @@ use m2_song::{Fix, NoteClip};
 
 pub use automate::Automated;
 pub use cable::{Inlet, Outlet};
-pub use controls::{Audition, Control, Declared, moved};
+pub use controls::{Audition, Control, Declared};
 pub use effect::EffectInfo;
 pub use mix::{Inserted, Loop, MasterStrip, MixView, Strip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
@@ -164,6 +164,39 @@ impl EditError {
     pub fn stale(s: &Session, at: u64, file: &str) -> EditError {
         EditError::Stale { current: s.accepted().number, by: s.changed_by(at, file) }
     }
+}
+
+/// Refused unless no change after revision `since`, the one a gesture goes from, touched a path
+/// `touched` says (AGENT-2): `what` is its target, as its words name it. A change the session no
+/// longer remembers the author of is taken to have touched it.
+pub fn unchanged_since(s: &Session, since: u64, what: &str, touched: impl Fn(&str) -> bool) -> Result<(), EditError> {
+    let by = match (s.remembers_since(since), s.changed_by_any(since, touched)) {
+        (true, None) => return Ok(()),
+        (true, Some(by)) => Some(by),
+        (false, _) => None,
+    };
+    let who = by.as_ref().map_or_else(|| "it was changed".to_string(), changed_it);
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("changed since you drew it: {who}. Nothing was changed; it shows as it is now, try again")),
+    }]))
+}
+
+/// Refused, saying who last changed `layout.json`, when a list of it (`what`: the markers, the
+/// track order) isn't what the change was made from (AGENT-2): no change of it is lost silently.
+pub fn list_since(s: &Session, what: &str, same: bool) -> Result<(), EditError> {
+    if same {
+        return Ok(());
+    }
+    let who = s.stepped_by("layout.json").map_or_else(|| "it was changed".to_string(), |by| changed_it(&by));
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("changed since you drew them: {who}. Nothing was changed; they show as they are now, try again")),
+    }]))
 }
 
 /// Who changed a gesture's target, as its refusal says it (AGENT-2): an agent by its name, outside

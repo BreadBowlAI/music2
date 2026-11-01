@@ -274,6 +274,8 @@ pub(crate) fn commit(
     let mut edits: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
     let mut inserts: BTreeMap<(String, u32), Vec<(Insertion, String)>> = BTreeMap::new();
     let mut anchors = vec![];
+    // A number written in a unit call of its own (`db(-3)`) adds a call: that moves ids (AGENT-2).
+    let adds_call = parts.iter().any(|p| p.insertion.as_ref().is_some_and(|(i, _)| i.spelling.is_some()));
     for p in parts {
         match (&p.rewrite, &p.insertion) {
             (Some(r), _) => edits.entry(p.file.clone()).or_default().push(r.clone()),
@@ -296,7 +298,8 @@ pub(crate) fn commit(
         let old = s.accepted().snapshot.files[Path::new(&file)].clone();
         ops.push(plan::text_edit(&path(&file)?, &old, &e));
     }
-    let tx = plan::planned(s, label, ops, Expect::Values(anchors));
+    let mut tx = plan::planned(s, label, ops, Expect::Values(anchors));
+    tx.in_place = !adds_call;
     plan::run_as(s, tx, said, |_, _| Ok(()))
 }
 

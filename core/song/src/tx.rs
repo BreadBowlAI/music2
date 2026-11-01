@@ -39,6 +39,10 @@ pub struct Tx {
     pub expect: Expect,
     /// A code revision, only a hint (WRITE-12).
     pub hint: Option<u64>,
+    /// The app's planner says it writes values where they are written and adds no call (a knob, a
+    /// menu, a switch): it moves no ids (AGENT-2). Never read from JSON: a Tx from outside the app
+    /// moves the ids of every file it touches, but a lane's data.
+    pub in_place: bool,
 }
 
 /// A file's content as a Tx was planned on (WRITE-12).
@@ -369,7 +373,7 @@ fn invalid(message: impl Into<String>) -> Diagnostic {
 impl Tx {
     /// A Tx with no bases yet.
     pub fn new(id: &str, label: (String, String), ops: Vec<Op>, expect: Expect) -> Tx {
-        Tx { id: id.to_string(), base: BTreeMap::new(), label, ops, expect, hint: None }
+        Tx { id: id.to_string(), base: BTreeMap::new(), label, ops, expect, hint: None, in_place: false }
     }
 
     /// The paths the ops touch, in op order, each once.
@@ -799,7 +803,7 @@ fn parse(v: &Value) -> Parse<Tx> {
     let Some(Value::Array(ops)) = o.get("ops") else { return bad("`ops` must be a list") };
     let ops = ops.iter().enumerate().map(|(i, op)| parse_op(op, i + 1)).collect::<Parse<Vec<_>>>()?;
     let expect = parse_expect(o.get("expect").map_or_else(|| bad("a Tx needs `expect`"), Ok)?)?;
-    Ok(Tx { id, base, label, ops, expect, hint })
+    Ok(Tx { id, base, label, ops, expect, hint, in_place: false })
 }
 
 fn parse_op(v: &Value, n: usize) -> Parse<Op> {

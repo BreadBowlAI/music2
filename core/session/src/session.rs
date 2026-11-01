@@ -28,6 +28,9 @@ use crate::tx::stage::{self, Disk};
 use crate::tx::{Prepared, Refusal, TxStep};
 use crate::{Compiled, Seen};
 
+/// How many revisions the session remembers the authors of ([`Session::changed_by`]).
+pub const AUTHORED: usize = 2000;
+
 /// One accepted state of the project (WRITE-13): the pair `(code_rev, data_rev)`, each the
 /// number of the revision whose files of that kind this one has, and `number`, the session's
 /// sequence. A change to code or the manifest moves `code_rev`; one to data or the arrangement
@@ -137,6 +140,8 @@ pub struct StepName {
     pub structural: bool,
     pub file: String,
     pub files: Vec<String>,
+    /// The files whose ids its change moved (AGENT-2).
+    pub moved: Vec<String>,
 }
 
 /// Why an undo or a redo didn't go ahead.
@@ -244,6 +249,14 @@ pub struct Session {
     /// Who the steps recorded now are by, and what they are called (AGENT-2, AGENT-10).
     pub(crate) by: Source,
     pub(crate) why: Option<String>,
+    /// Who made each revision accepted lately, and the paths it changed, newest last: what a
+    /// gesture refused for a change since names (AGENT-2). An undo or a redo is its sender's.
+    pub(crate) authored: std::collections::VecDeque<(u64, BTreeSet<String>, Source)>,
+    /// Who the revision being accepted is by: set by a commit, an undo, a redo and a save; else
+    /// (a batch taken in) it is outside.
+    pub(crate) accepting: Option<Source>,
+    /// The last commit's baseline took in a change made elsewhere (`TxStep::mixed`).
+    pub(crate) took_in: bool,
     /// The last commit, undo or redo: what [`Session::retract`] takes back (AGENT-3).
     pub(crate) last_change: Option<Change>,
     /// How much undo keeps (WRITE-26).
@@ -436,6 +449,9 @@ impl Session {
             landed: None,
             by: Source::Page,
             why: None,
+            authored: std::collections::VecDeque::new(),
+            accepting: None,
+            took_in: false,
             last_change: None,
             bound: crate::history::bound(),
             ends: (None, None),
@@ -665,6 +681,12 @@ impl Session {
             self.packages.show(&compiled.view);
             (self.catalog, self.offered) = lists(&self.packages);
         }
+        // Who made it, for a refusal to name (AGENT-2).
+        let author = self.accepting.take().unwrap_or(Source::Outside);
+        self.authored.push_back((number, changed.iter().map(|p| m2_song::path::slashed(p)).collect(), author));
+        while self.authored.len() > AUTHORED {
+            self.authored.pop_front();
+        }
         let new = Arc::new(Revision { number, code_rev, data_rev, snapshot, project, compiled });
         let old = std::mem::replace(&mut self.accepted, new);
         let (old_number, old_snapshot, sites) = match Arc::try_unwrap(old) {
@@ -790,20 +812,40 @@ impl Session {
         }
     }
 
-    /// Who made the newest change after revision `since` that touched `file` (AGENT-2: what a
-    /// gesture refused because its target changed says): the source of the newest undo step made
-    /// after `since` whose change touched it, while the file reads as that change left it. None when
-    /// no step says (a change that made no step, as git's, or an undo, came after, or the revision it
-    /// made is no longer remembered).
-    pub fn changed_by(&self, since: u64, file: &str) -> Option<Source> {
-        let t = self
-            .history
+    /// Who made the newest change after revision `since` that touched a path `touched` says
+    /// (AGENT-2: what a gesture refused because its target changed says), an undo or a redo by
+    /// its sender. None when none did, as far as the session remembers (its last
+    /// [`AUTHORED`] revisions).
+    pub fn changed_by_any(&self, since: u64, touched: impl Fn(&str) -> bool) -> Option<Source> {
+        self.authored
             .iter()
-            .filter(|t| t.made > since && t.inverse.touched().iter().any(|p| p.to_string() == file))
-            .max_by_key(|t| t.made)?;
-        let path = Path::new(file);
-        let then = self.snapshot(t.made)?;
-        (then.files.get(path) == self.accepted.snapshot.files.get(path)).then(|| t.source.clone())
+            .rev()
+            .take_while(|(n, ..)| *n > since)
+            .find(|(_, paths, _)| paths.iter().any(|p| touched(p)))
+            .map(|(.., by)| by.clone())
+    }
+
+    /// [`Session::changed_by_any`] of one file, or of a `data/<module>/` folder's files.
+    pub fn changed_by(&self, since: u64, file: &str) -> Option<Source> {
+        let folder = format!("{}/", file.trim_end_matches('/'));
+        self.changed_by_any(since, |p| p == file || p.starts_with(&folder))
+    }
+
+    /// Who made the newest undo step that touched `file`: for a change that makes no revision (a
+    /// list of `layout.json`), what its refusal names (AGENT-2).
+    pub fn stepped_by(&self, file: &str) -> Option<Source> {
+        self.history.iter().rev().find(|t| t.inverse.touched().iter().any(|p| p.to_string() == file)).map(|t| t.source.clone())
+    }
+
+    /// Whether the session remembers who made every revision after `since`: else a change since
+    /// can't be ruled out.
+    pub fn remembers_since(&self, since: u64) -> bool {
+        since >= self.accepted.number || self.authored.front().is_some_and(|(n, ..)| *n <= since + 1)
+    }
+
+    /// Whether the last commit's baseline took in a change made elsewhere (`TxStep::mixed`).
+    pub fn took_in(&self) -> bool {
+        self.took_in
     }
 
     /// Name the undo step of the change that made revision `made` (gaps #29): "Hats pan", and
@@ -831,6 +873,7 @@ impl Session {
             structural: t.name.as_ref().is_some_and(|n| n.1),
             file: t.file.clone(),
             files: t.inverse.touched().iter().map(|p| p.to_string()).collect(),
+            moved: t.moved.iter().cloned().collect(),
         };
         (self.history.last().map(named), self.redo.last().map(named))
     }
@@ -985,6 +1028,8 @@ impl Session {
                     // name (AGENT-2).
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
+                    // And it moves what the change moved, whichever way it goes.
+                    inverse.moved = step.moved.clone();
                     inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or_default();
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                     self.bound_stacks();

@@ -294,6 +294,29 @@ pub(crate) enum Blocked {
     Changed,
 }
 
+/// The files whose ids `tx` moves (AGENT-2), judged by the kind of change it is, never by comparing
+/// ids: none for one the app's planner wrote values in place with, adding no call (`in_place`: a
+/// knob, a menu, a switch); for any other, every code file it touches, and every file or folder it
+/// removes or renames (a track's `data/<module>/`). No id names the manifest, the arrangement, a
+/// lane's clips and notes, or the presentation (`layout.json`).
+pub fn moves(tx: &Tx) -> BTreeSet<String> {
+    if tx.in_place {
+        return BTreeSet::new();
+    }
+    let mut out = BTreeSet::new();
+    for op in &tx.ops {
+        let still = match op {
+            Op::Clips { .. } => true,
+            Op::TextEdit { file, .. } | Op::Write { file, .. } => file.class() != Class::Code,
+            Op::Remove { .. } | Op::Rename { .. } => false,
+        };
+        if !still {
+            out.extend(op.paths().iter().map(|p| p.to_string()));
+        }
+    }
+    out
+}
+
 /// An undo step made of a Tx: its inverse, ready to commit (WRITE-21).
 #[derive(Clone, Debug)]
 pub(crate) struct TxStep {
@@ -326,12 +349,19 @@ pub(crate) struct TxStep {
     pub images: Vec<(Sha, u64)>,
     /// The name of its record in `.music2/undo/`, once written (WRITE-25).
     pub record: Option<Sha>,
+    /// The files whose ids its change moved, by its kind ([`moves`]): what its undo and its redo
+    /// move too (AGENT-2).
+    pub moved: BTreeSet<String>,
+    /// Its revision also took in a change made elsewhere: a file saved outside the app, read as the
+    /// commit's baseline (R2), rode along (AGENT-2).
+    pub mixed: bool,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
         let source = crate::session::Source::Page;
+        let moved = moves(&inverse);
         TxStep {
             inverse,
             raw,
@@ -345,6 +375,8 @@ impl TxStep {
             before: BTreeMap::new(),
             images: vec![],
             record: None,
+            moved,
+            mixed: false,
         }
     }
 
@@ -1674,8 +1706,19 @@ impl Session {
                 Target::Write { path, after, .. } => Some((PathBuf::from(path), *after)),
                 _ => None,
             });
-            self.accept_known(snapshot, project, compiled, &known.collect())
+            // By who sent it; what an outside writer saved that rode along, by them (AGENT-2).
+            let outside: BTreeSet<String> = match step.mixed {
+                true => changed_paths(&self.accepted.snapshot, &baseline.snapshot).iter().map(|p| m2_song::path::slashed(p)).collect(),
+                false => BTreeSet::new(),
+            };
+            self.accepting = Some(self.by.clone());
+            let number = self.accept_known(snapshot, project, compiled, &known.collect());
+            if !outside.is_empty() {
+                self.authored.push_back((number, outside, crate::session::Source::Outside));
+            }
+            number
         };
+        self.took_in = step.mixed;
         self.draft = draft;
         self.cache = None;
         let a = &self.accepted;
@@ -1703,7 +1746,10 @@ impl Session {
         inverse.base = planned.inverse_base.clone();
         // Shown where the change is now: a renamed file or folder by its new name.
         let file = inverse.touched().first().or(tx.touched().first()).map(|p| p.to_string()).unwrap_or_default();
-        TxStep::of_targets(inverse, raw, data_only, file, &planned.targets)
+        let mut step = TxStep::of_targets(inverse, raw, data_only, file, &planned.targets);
+        step.moved = moves(tx);
+        step.mixed = baseline.is_some_and(|b| !std::ptr::eq(b, &*self.accepted));
+        step
     }
 
     /// A change written ahead in the history whose files never landed (WRITE-25): a new change's
@@ -1862,7 +1908,10 @@ impl Session {
             self.rescan();
         }
         self.cache = None;
+        self.accepting = Some(self.by.clone());
+        self.took_in = false;
         self.take_in(draft);
+        self.accepting = None;
         self.problems = self.gather_problems();
         let number = self.accepted.number;
         let a = &self.accepted;

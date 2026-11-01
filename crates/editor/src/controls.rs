@@ -7,7 +7,7 @@
 //! accepted one when no change touched its call (WRITE-12, WRITE-22): what a client a revision or
 //! two behind, or a gesture lease across a save, names.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -335,23 +335,6 @@ pub(crate) fn controls_in(rev: &Revision) -> Vec<Control> {
         });
     }
     found.into_values().collect()
-}
-
-/// Whether ids drawn at revision `before` may name something else at `after` (AGENT-2): a call of
-/// the project's own code added, removed, or moved among its file's calls (a control's id is its
-/// call's `file#ordinal`, counted in source order: an effect that wraps a chain counts every call
-/// inside it anew), or a module (a track, a bus) added, removed or re-keyed. A value, a setting, a
-/// label or a lane written moves none. What every change's answer says as `moved`, so a window
-/// moves a gesture drawn before it to the newer revision only when it moved none.
-pub fn moved(before: &Revision, after: &Revision) -> bool {
-    if before.code_rev == after.code_rev {
-        return false;
-    }
-    let calls = |r: &Revision| {
-        r.compiled.sites.iter().filter(|x| x.in_project).map(|x| (x.file.clone(), x.ordinal, x.callee.clone())).collect::<BTreeSet<_>>()
-    };
-    let modules = |r: &Revision| r.compiled.ir.modules.iter().map(|m| m.key.clone()).collect::<BTreeSet<_>>();
-    calls(before) != calls(after) || modules(before) != modules(after)
 }
 
 /// [`controls`] by id.

@@ -269,6 +269,10 @@ fn entry(dir: &Path, s: &Value, records: &Records) -> Option<Option<TxStep>> {
     let Some(inverse) = serde_json::from_slice::<Value>(&bytes).ok().and_then(|v| Tx::from_json(&v).ok()) else { return Some(None) };
     let mut step = TxStep::new(inverse, raw, data_only, file);
     (step.id, step.source, step.name, step.before, step.record) = (id, source, name, before, Some(record));
+    // The files its change moved, as recorded; else every one its undo touches (AGENT-2).
+    if let Some(moved) = s.get("moved").and_then(Value::as_array) {
+        step.moved = moved.iter().filter_map(|m| m.as_str().map(str::to_string)).collect();
+    }
     Some(Some(step))
 }
 
@@ -346,6 +350,7 @@ fn described(step: &TxStep) -> Value {
         "file": step.file,
         "raw": step.raw,
         "data_only": step.data_only,
+        "moved": step.moved,
         "before": before,
         "record": step.record.expect("written first").hex(),
     })

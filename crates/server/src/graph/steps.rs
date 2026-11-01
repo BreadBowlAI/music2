@@ -168,6 +168,8 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) 
     let (undo, again) = o.session.step_names();
     let top = if redo { again } else { undo };
     let took = named(top.as_ref(), &o.timeline);
+    // It moves what the step's change moved, whichever way (AGENT-2).
+    let moved = top.as_ref().map(|t| t.moved.clone()).unwrap_or_default();
     // AGENT-4: an agent's undo takes back only its own newest step.
     if let crate::caller::Caller::Agent { name, .. } = &a.caller
         && !redo
@@ -203,6 +205,7 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) 
     // The step it took back, by its id, and the tops after it: what the window's next Undo
     // and Redo name, before its state is read again (AGENT-2).
     v["step"] = took["step"].clone();
+    v["moved"] = json!(moved);
     if let Some(o) = a.open.as_ref() {
         let (undo, redo) = o.session.step_names();
         v["undo_name"] = named(undo.as_ref(), &o.timeline);

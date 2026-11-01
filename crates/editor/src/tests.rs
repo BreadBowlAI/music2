@@ -127,7 +127,7 @@ fn unrelated_saves_survive_and_overlapping_ones_conflict() {
     let pan = control(&s, "song.ts", "0.hats.pan");
     std::fs::write(&song, now.replacen("pan: 0.45", "pan: 0.2", 1)).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Stale { current: 3, by: None }));
+    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Stale { current: 3, by: Some(m2_session::Source::Outside) }));
     // Listed again, it shows 0.2; a caller still expecting 0.45 gets a conflict.
     let pan = control(&s, "song.ts", "0.hats.pan");
     assert_eq!(pan.value, 0.2);
@@ -230,7 +230,7 @@ fn a_stale_id_whose_call_changed_is_refused() {
     let edited = TWO_OSCS.replace("osc.sine(hz(110))", "osc.sine(hz(115))");
     std::fs::write(dir.join("song.ts"), &edited).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.set(sine.revision, &sine.id, 330.0, None), Err(EditError::Stale { current: 2, by: None }));
+    assert_eq!(s.set(sine.revision, &sine.id, 330.0, None), Err(EditError::Stale { current: 2, by: Some(m2_session::Source::Outside) }));
     assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), edited);
     std::fs::remove_dir_all(dir).ok();
 }
@@ -457,33 +457,69 @@ fn a_control_is_carried_past_edits_above_and_below_its_call() {
     assert_eq!((again.literal.as_str(), again.revision), ("110", s.accepted().number));
     std::fs::write(dir.join("song.ts"), commented.replace("hz(110)", "hz(110 /* Hz */)")).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.carry(again.revision, &again.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number, by: None }));
+    assert_eq!(
+        s.carry(again.revision, &again.id, &s.controls_by_id()),
+        Err(EditError::Stale { current: s.accepted().number, by: Some(m2_session::Source::Outside) })
+    );
     assert_eq!(carried.audition(330.0), Ok(330.0));
     assert!(carried.audition(f64::NAN).is_err());
     std::fs::remove_dir_all(dir).ok();
 }
 
-// AGENT-2: whether a change moved ids, as each change's answer says (`moved`): a value written, or a
-// lane written, moves none; an effect added (a call that wraps the chain, so the calls inside it
-// are counted anew) moves them, and so does a track added.
+/// The files the newest undo step's change moved (AGENT-2).
+fn moved_by_top(s: &Session) -> Vec<String> {
+    s.step_names().0.map(|t| t.moved).unwrap_or_default()
+}
+
+// AGENT-2 (the second review of own-edits, P1, P5): the files a change moves the ids of, judged by
+// its kind, never by comparing ids: a value written where it is, none; an effect added, or two
+// Reverbs trading places (each call keeping what it calls), its file only; a value written as a new
+// unit call (`db(-3)`), its file; an undo and a redo, what the step moved.
 #[test]
-fn a_value_moves_no_ids_and_a_call_added_does() {
+fn a_change_moves_the_files_its_kind_says() {
     let dir = first_song();
     let mut s = Session::open(&dir, std_packages()).unwrap();
-    let before = s.accepted_arc();
     let pan = control(&s, "song.ts", "0.hats.pan");
     s.set(pan.revision, &pan.id, 0.45, Some(0.3)).unwrap();
-    assert!(!moved(&before, s.accepted()), "a value written moves no ids");
+    assert_eq!(moved_by_top(&s), Vec::<String>::new(), "a value written in place moves no ids");
 
-    let before = s.accepted_arc();
+    let kick = s.controls().into_iter().find(|c| c.file == "song.ts" && c.id.ends_with("channels.kick.db")).unwrap();
+    s.set(s.accepted().number, &kick.id, -3.0, None).unwrap();
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("db(-3)"), "written as a unit call");
+    assert_eq!(moved_by_top(&s), vec!["song.ts".to_string()], "a value written as a new call moves its file's ids");
+
+    let at = s.accepted().number;
     let pluck = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.file == "tracks/keys.ts" && x.callee == "pluck").unwrap();
     let call = format!("{}#{}", pluck.file, pluck.ordinal);
-    s.add_effect(before.number, &call, "@m2/effects:reverb").unwrap();
-    assert!(moved(&before, s.accepted()), "an effect added moves them");
-
-    let before = s.accepted_arc();
-    crate::tracks::add(&mut s, "@m2/drums:drum", Some("Clap"), None, None).unwrap();
-    assert!(moved(&before, s.accepted()), "a track added moves them");
-    assert!(!moved(s.accepted(), s.accepted()), "nothing changed, nothing moved");
+    s.add_effect(at, &call, "@m2/effects:reverb").unwrap();
+    assert_eq!(moved_by_top(&s), vec!["tracks/keys.ts".to_string()], "an effect added moves its file's ids, and no other's");
+    let reverb = |s: &Session| {
+        let x = s
+            .accepted()
+            .compiled
+            .sites
+            .iter()
+            .filter(|x| x.in_project && x.file == "tracks/keys.ts" && x.callee == "reverb")
+            .map(|x| x.ordinal)
+            .max()
+            .unwrap();
+        format!("tracks/keys.ts#{x}")
+    };
+    let (at, outer) = (s.accepted().number, reverb(&s));
+    s.add_effect(at, &outer, "@m2/effects:reverb").unwrap();
+    // Two Reverbs, the inner one made different: it moved after the outer. Each call still calls
+    // what it called.
+    let inner = reverb(&s);
+    let size = s.controls().into_iter().find(|c| c.id.starts_with(&format!("{inner}/")) && c.id.ends_with("size")).unwrap();
+    s.set(s.accepted().number, &size.id, 0.3, None).unwrap();
+    let text = std::fs::read_to_string(dir.join("tracks/keys.ts")).unwrap();
+    let at = s.accepted().number;
+    crate::effect::reorder(&mut s, at, &inner, false).unwrap();
+    assert_ne!(std::fs::read_to_string(dir.join("tracks/keys.ts")).unwrap(), text, "the move changed the text");
+    assert_eq!(moved_by_top(&s), vec!["tracks/keys.ts".to_string()], "two Reverbs trading places move ids");
+    s.undo().unwrap();
+    assert_eq!(s.step_names().1.map(|t| t.moved), Some(vec!["tracks/keys.ts".to_string()]), "its undo moves what it moved");
+    s.redo().unwrap();
+    assert_eq!(moved_by_top(&s), vec!["tracks/keys.ts".to_string()], "and so does its redo");
     std::fs::remove_dir_all(dir).ok();
 }

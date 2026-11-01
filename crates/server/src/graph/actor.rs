@@ -2491,20 +2491,43 @@ impl Before {
     }
 
     /// Say at the top of `answer` the revision the change made (none when it made none, as a
-    /// change of `layout.json` alone), its step, and whether it moved ids ([`m2_editor::moved`]),
-    /// as every change's answer says them, whatever the route: so a window keeps its own step
-    /// from the answer, and knows whether a gesture drawn before it may go from what it shows.
+    /// change of `layout.json` alone), its step, the files whose ids it moved (`moved`, by its kind:
+    /// its step's), and whether that revision also took in a change made elsewhere (`mixed`), as
+    /// every change's answer says them, whatever the route: so a window keeps its own step from the
+    /// answer, and knows whether a gesture drawn before it may go from it.
     pub(super) fn tell(&self, s: &Session, answer: &mut Value) {
         let Some(a) = answer.as_object_mut() else { return };
         let now = s.accepted();
-        if now.number != self.accepted.number {
+        let made = self.made(s);
+        let revised = now.number != self.accepted.number;
+        if revised {
             a.insert("revision".into(), json!(now.number));
         } else {
             a.remove("revision");
         }
-        a.insert("moved".into(), json!(m2_editor::moved(&self.accepted, now)));
-        if let Some(id) = self.made(s) {
+        let moved: Vec<String> = match made {
+            Some(_) => s.step_names().0.map(|t| t.moved).unwrap_or_default(),
+            // A revision no step of its own says: every code file it changed (none is made so).
+            None if revised => changed_code(&self.accepted, now),
+            None => vec![],
+        };
+        a.insert("moved".into(), json!(moved));
+        if revised && made.is_some() && s.took_in() {
+            a.insert("mixed".into(), json!(true));
+        }
+        if let Some(id) = made {
             a.insert("step".into(), json!(id));
         }
     }
+}
+
+/// The code files `after` reads otherwise than `before`.
+pub(super) fn changed_code(before: &Revision, after: &Revision) -> Vec<String> {
+    let (b, a) = (&before.snapshot.files, &after.snapshot.files);
+    let ts = |p: &&PathBuf| p.extension().is_some_and(|x| x == "ts");
+    let mut out: Vec<String> =
+        a.keys().chain(b.keys()).filter(ts).filter(|p| a.get(*p) != b.get(*p)).map(|p| m2_song::path::slashed(p)).collect();
+    out.sort();
+    out.dedup();
+    out
 }
