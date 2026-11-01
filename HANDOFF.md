@@ -30,7 +30,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
     scales, lock to key, chord stamps and grooves (#6, #15, #16, #3), undo that survives closing and unsaved code
     through a crash (#29, #30; snapshots dropped for git, the owner's choice), meters after the fader (#20), `m2`
     refusing flags it doesn't know (#50), the Mac graph's flicker (a Fit/scrollbar loop, #60).
-  - Next: the owner's yes to the drums design note (below), then `m2 upgrade` on the owner's own songs.
+  - Next: the drums design note's tracks (the owner said yes on 2026-11-01), then `m2 upgrade` on the owner's own songs.
 - **The registry day (2026-10-30) let music2 get packs from the internet** (#39 to #46; each track reviewed by a
   skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
   - **FLAC** is read wherever WAV is (the `claxon` crate, FMT-24). A FLAC brought into a song lands as a WAV of the same
@@ -232,10 +232,9 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **The drums design note** ([docs/designs/drums/design.md](docs/designs/drums/design.md), proposed, sent to
-   the owner 2026-11-01): Drum is the one building block, a kit is a group of Drum tracks
-   under one bus, a beat grid across them (FL Studio's way). Ask for the owner's yes on D1 to D4; then land the note
-   (Status: Accepted) and build its tracks `kits`, `beat`, `kit-upgrade`.
+1. **The drums design note** ([docs/designs/drums/design.md](docs/designs/drums/design.md), accepted 2026-11-01,
+   D1 to D4 as recommended): Drum is the one building block, a kit is a group of Drum tracks under one bus, a beat
+   grid across them (FL Studio's way). Its tracks: `kits` and `beat` side by side, then `kit-upgrade`.
 2. **The owner's own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"). Presets
    saved for the old single drums are named, not converted (gaps).
 3. **The Mac's one more `ci/check.sh`**, at 48 kHz. macOS is unverified since `e38c131`, and everything in the
@@ -257,7 +256,6 @@ small as possible and most sounds in packs (2026-10-31).
 
 | Question | What was built | Recommendation |
 |---|---|---|
-| The drums design note's D1 to D4: "Drum" for One drum; the one-track drum machine removed once the beat grid exists; cut groups across tracks later; the beat grid as its own tab. | The note only (proposed). One drum is labelled "One drum" for now (the + Track list's near-label rule, build-notes-taste T3). | Yes to all four, as the note recommends. |
 | Dependabot #29 (Swatinem/rust-cache 2.9.3 in `release.yml`). | Waits: a workflow change needs the owner's review. | Approve it. |
 | The bucket's address (packs design D10). D1 is decided: Cloudflare R2, the list on GitHub (2026-10-30). | Everything but the bucket: `DEFAULT_REGISTRY` is empty, so the library shows only with `M2_REGISTRY` or the setting. | The bucket's own `r2.dev` address to start (the robot must read it, not a cache); a name of ours (`packs.<domain>`) in front for the app later. |
 | A Settings field for the registry's address. | None: the environment or `settings.json`. | Not until there is a default; then a field for a mirror. |
