@@ -61,7 +61,25 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
       opts,
     );
   const state = async () => (await api("")).body;
-  const toasts = () => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
+  /**
+   * Until the page shows the revision the server plays, and at least `at`. A gesture goes from the
+   * revision the page shows (`[data-revision]`), and the server refuses one from an older revision
+   * whose target has changed since ("the code changed around this control …", a clip's 409, an undo
+   * step that isn't the newest). The server writes a change's files before it publishes its
+   * revision, and the page reads it a moment later, so a file on disk doesn't mean the page has it.
+   * A wait, not a check: only if they never meet, it fails, saying both.
+   */
+  const caughtUp = async (at = 0) => {
+    let server = -1, shown = -1;
+    const met = await until(async () => {
+      server = (await state()).view?.revision ?? -1;
+      shown = await page.$eval("[data-revision]", (e) => Number(e.dataset.revision)).catch(() => -1);
+      return shown === server && shown >= at;
+    });
+    if (!met) check(false, `the page shows the revision the server plays${at ? `, ${at} or later` : ""}: it shows ${shown}, the server ${server}`);
+    return met;
+  };
+  const toasts =() => page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
   const show = async (module) => {
     await page.click(`[data-module-tab="${module}"]`);
     await page.waitForSelector(`[data-module-tab="${module}"][aria-selected=true]`);
@@ -87,7 +105,7 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
     await page.mouse.move(to.x, to.y, { steps });
     await page.mouse.up();
   };
-  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag, status };
+  return { browser, page, errors, posts, api, state, caughtUp, toasts, show, view, key, box, drag, status };
 }
 
 export function done(errors) {
