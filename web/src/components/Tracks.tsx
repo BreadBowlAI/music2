@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
+import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type Kit } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
@@ -128,6 +128,39 @@ export async function addTrack(instrument: Instrument, after: string | null): Pr
     arrived(r.module, instrument.lane);
     toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.step));
     return r.module;
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/** + Track's group of kits (KIT-5): several tracks at once, worded so beside the Drum. */
+export const KITS = "Drum kit (several tracks)";
+
+/** The kits as + Track's rows, each standing in for its kit by the component `kit:<instrument>/<name>`. */
+export function kitRows(kits: Kit[]): Instrument[] {
+  return kits.map((k) => ({
+    component: `kit:${k.component}/${k.name}`,
+    label: k.name,
+    name: "",
+    module: "",
+    description: `${k.tracks.join(", ")} and a Drums bus`,
+    category: KITS,
+    lane: "hits",
+    pack: k.pack,
+  }));
+}
+
+/** Add kit `kit` below `after` (else last), KIT-5: its bus and tracks, the first track selected and lit, with an Undo. */
+export async function addKit(kit: Kit, after: string | null) {
+  const graph = writable();
+  if (!graph) return;
+  lastAdded = `kit:${kit.component}/${kit.name}`;
+  const toast = useStore.getState().toast;
+  try {
+    const r = await graphApi.addKit(graph.session, kit, after);
+    await refreshed();
+    arrived(r.tracks[0]?.module ?? r.module, r.tracks.length ? "hits" : undefined);
+    toast(`Added the ${kit.name}: ${r.tracks.map((t) => t.label).join(", ")}, going to ${r.label}`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -310,13 +343,20 @@ function InstrumentPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  // + Track's groups end with Audio (lane A's Q8), then Plugins (gaps #32); Change Instrument has neither.
+  // + Track's groups: the Drums, then the kits (KIT-5), then the instruments; they end with Audio
+  // (lane A's Q8), then Plugins (gaps #32). Change Instrument has no kits, Audio or Plugins.
   const listed = graph.instruments;
+  const kits = graph.kits;
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => {
     if (!swap) wantPlugins();
   }, [swap]);
-  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK, ...pluginInstruments(plugins)])], [listed, swap, plugins]);
+  const all = useMemo(() => {
+    const instruments = listed ?? [];
+    if (swap) return instruments;
+    const drums = instruments.filter((i) => i.category === "Drums").length;
+    return [...instruments.slice(0, drums), ...kitRows(kits ?? []), ...instruments.slice(drums), AUDIO_TRACK, ...pluginInstruments(plugins)];
+  }, [listed, kits, swap, plugins]);
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
   const playing = swap ? currentInstrument(graph, swap) : undefined;
@@ -335,6 +375,8 @@ function InstrumentPicker({
     if (!i) return;
     onClose();
     if (i === AUDIO_TRACK) return void addAudioTrack(after);
+    const kit = kits?.find((k) => i.component === `kit:${k.component}/${k.name}`);
+    if (kit) return void addKit(kit, after);
     if (!swap) return void addTrack(i, after);
     // The one it plays: nothing to change.
     if (i.component !== playing?.component) void changeInstrument(swap, i);
@@ -426,9 +468,11 @@ function InstrumentPicker({
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
               : current === AUDIO_TRACK
                 ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
-                : isPlugin(current.component)
-                  ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
-                  : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+                : current.category === KITS
+                  ? `tracks/${proposed("Drums", taken)}.ts · bus(…), and a track for each drum going to it`
+                  : isPlugin(current.component)
+                    ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
+                    : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}

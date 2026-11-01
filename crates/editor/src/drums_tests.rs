@@ -59,7 +59,7 @@ fn the_kits_are_the_packs_own() {
     assert_eq!(kits[0].pack.as_ref().map(|p| p.name.as_str()), Some("@m2/drums"), "from its pack (PACK-11)");
 }
 
-// KIT-5: a kit is a Drums bus and its tracks, made in one Tx: each track a Drum with its name and
+// KIT-5: a kit is a Drums bus (its gain at -6 dB) and its tracks, made in one Tx: each track a Drum with its name and
 // the kit's values in its call, an empty lane of its own and a channel going to the bus; the bus
 // first, then its tracks, last in the layout. One undo takes every byte back, and a redo puts it
 // all again.
@@ -76,7 +76,7 @@ fn a_kit_is_a_bus_and_its_tracks_in_one_undo_step() {
     assert_eq!(
         f.read("tracks/drums.ts"),
         "import { bus } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\n\n\
-         export default bus(\"drums\", { name: \"Drums\" }, ({ input }) => gain(input));\n"
+         export default bus(\"drums\", { name: \"Drums\" }, ({ input }) => gain(input, { db: -6 }));\n"
     );
     assert_eq!(
         f.read("tracks/kick.ts"),
@@ -148,8 +148,11 @@ fn a_kit_nobody_names_is_refused() {
     assert_eq!(tree(&f), before);
 }
 
-// KIT-4: every kit of @m2/drums sounds, each track its own drum, and a beat on all of its tracks
-// at once, at full velocity, stays under full scale on its bus.
+// KIT-4: every kit of @m2/drums sounds, and a beat on its tracks, each drum where a beat has it, at
+// full velocity, stays under full scale on its bus: the Drums bus heard alone, before the master's
+// limiter. Two bars: the kick on every beat, the snare and the clap on 2 and 4, the hats on the
+// eighths (open on the last), the cymbal on the first beat, the rim and the cowbell on offbeats, a
+// fill on the toms at the end.
 #[test]
 fn every_kit_sounds_under_full_scale() {
     let all = kits(&fixture("templates/empty").open());
@@ -158,30 +161,32 @@ fn every_kit_sounds_under_full_scale() {
         let f = fixture("templates/empty");
         let mut s = f.open();
         let made = add_kit(&mut s, &kit.component, &kit.name, None).unwrap();
-        // Sixteenths for two bars on every track, each hit at full velocity: the hats open on the
-        // offbeats, the toms down the drums.
         for (i, m) in made[1..].iter().enumerate() {
-            let notes: Vec<String> = (0..32)
-                .map(|n| {
-                    let pitch = match kit.tracks[i].as_str() {
-                        "Hats" if n % 4 == 2 => 46,
-                        "Hats" => 42,
-                        "Toms" => [50, 48, 45, 43, 41][n % 5],
-                        _ => 36,
-                    };
-                    format!("{{\"pitch\": {pitch}, \"start\": {}, \"length\": 0.25, \"velocity\": 1}}", n as f64 * 0.25)
-                })
-                .collect();
+            let beats: Vec<(u8, f64)> = match kit.tracks[i].as_str() {
+                "Kick" => (0..8).map(|b| (36, b as f64)).collect(),
+                "Snare" | "Clap" => [1.0, 3.0, 5.0, 7.0].map(|b| (if kit.tracks[i] == "Snare" { 38 } else { 39 }, b)).to_vec(),
+                "Hats" => (0..16).map(|e| (if e == 15 { 46 } else { 42 }, e as f64 * 0.5)).collect(),
+                "Cymbal" => vec![(49, 0.0)],
+                "Rim" => vec![(37, 2.75), (37, 6.75)],
+                "Cowbell" => vec![(56, 0.5), (56, 4.5)],
+                "Toms" => vec![(50, 7.0), (48, 7.25), (45, 7.5), (41, 7.75)],
+                other => panic!("a beat for {other}"),
+            };
+            let notes: Vec<String> =
+                beats.iter().map(|(p, at)| format!("{{\"pitch\": {p}, \"start\": {at}, \"length\": 0.25, \"velocity\": 1}}")).collect();
             f.write(
                 &format!("data/{}/hits.json", m.module),
                 format!("{{\"clips\": [{{\"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}", notes.join(", ")),
             );
         }
         let s = f.open();
-        let rev = s.accepted();
-        let out = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(4.0).unwrap();
+        let rev = s.accepted_arc();
+        let ir = crate::render::rooted(&rev.compiled.ir, &made[0].module, "out").unwrap();
+        let bus = crate::render::Parts::of(&*rev, ir, &s.packages).map(|p| p.flat).unwrap_or_else(|d| panic!("{d:?}"));
+        let out = m2_runtime::Renderer::new(&bus, &rev.compiled.data, &s.packages, 48_000).unwrap().render(5.0).unwrap();
         let peak = out.iter().flat_map(|x| x.iter()).fold(0f32, |m, x| m.max(x.abs()));
-        assert!(peak > 0.1 && peak < 1.0, "{}: its peak is {peak}", kit.name);
+        eprintln!("{}: the Drums bus peaks at {:.1} dB", kit.name, 20.0 * peak.log10());
+        assert!(peak > 0.1 && peak < 1.0, "{}: its bus peaks at {peak}", kit.name);
     }
 }
 

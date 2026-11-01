@@ -422,9 +422,9 @@ pub enum Play {
 
 /// A track to add: what it plays, its name (else the instrument's, or "Audio"), its key (else one
 /// proposed from its name, ID-2), and its lane's first clips, as the lane format writes them (each
-/// gets a fresh id, as a gesture mints one). An instrument's track may write `values` of its
-/// controls in its call, as an insert carries them (a kit's, KIT-5), and go to a bus of the same
-/// list, `to`, by its place there, before its own.
+/// gets a fresh id, as a gesture mints one). An instrument's track (or a bus) may write `values` of
+/// its controls in its call, as an insert carries them (a kit's, KIT-5), and a track may go to a bus
+/// of the same list, `to`, by its place there, before its own.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewTrack {
     pub play: Play,
@@ -575,7 +575,11 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
                 track_text(i, &key, &label, &file, &values_text(d, &t.values, &rev.compiled.units)?)
             }
             (None, Some((id, _)), _) => crate::plugins::track_text(id, &key, &label),
-            (None, None, Some(kind)) => crate::bus::bus_text(kind, &buses[kind.body().0], &key, &label),
+            (None, None, Some(kind)) => {
+                let d = &s.catalog().components[kind.body().0];
+                let (values, _) = values_text(d, &t.values, &rev.compiled.units)?;
+                crate::bus::bus_text(kind, &buses[kind.body().0], &key, &label, &values)
+            }
             (None, None, None) => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
         };
         writes.push(Op::Write { file: new_file.clone(), bytes: Payload::Text(text.into()) });

@@ -170,26 +170,28 @@ export const drums = {
         groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
         // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The hats
         // are one Hats track, closed, pedal and open by the note, so a closed hat cuts an open one.
-        // Each kit's punch makes its kick: the 808's long boom at -0.5, the 909's thump at 0.5.
+        // The 808's kick is a long boom (punch -0.5), its snare more tone than snap, its toms and
+        // cymbal ring long; the 909's kick thumps (punch 0.5), its snare snaps, its hats and cymbal
+        // are brighter and its toms shorter.
         kits: {
           "808 kit": [
             { name: "Kick", drum: "kick", punch: -0.5, decay: 1.6 },
-            { name: "Snare", drum: "snare" },
+            { name: "Snare", drum: "snare", punch: -0.3 },
             { name: "Clap", drum: "clap" },
             { name: "Hats", drum: "hats" },
-            { name: "Toms", drum: "tom" },
+            { name: "Toms", drum: "tom", decay: 1.5 },
             { name: "Rim", drum: "rim" },
             { name: "Cowbell", drum: "cowbell" },
-            { name: "Cymbal", drum: "cymbal" },
+            { name: "Cymbal", drum: "cymbal", decay: 1.5 },
           ],
           "909 kit": [
             { name: "Kick", drum: "kick", punch: 0.5 },
             { name: "Snare", drum: "snare", punch: 0.3 },
             { name: "Clap", drum: "clap" },
             { name: "Hats", drum: "hats", tune: 2 },
-            { name: "Toms", drum: "tom" },
+            { name: "Toms", drum: "tom", decay: 0.8 },
             { name: "Rim", drum: "rim" },
-            { name: "Cymbal", drum: "cymbal" },
+            { name: "Cymbal", drum: "cymbal", tune: 2 },
           ],
           "Basic kit": [
             { name: "Kick", drum: "kick" },

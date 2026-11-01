@@ -208,6 +208,9 @@ export function fromPack(item: { pack?: PackFrom }): string {
  */
 export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string; pack?: PackFrom }
 
+/** A kit an instrument names (KIT-3): what + Track's Drum kit makes, a Drums bus and these tracks, each playing `component`. */
+export interface Kit { name: string; component: string; instrument: string; tracks: string[]; pack?: PackFrom }
+
 /** What reads a track a delete would take out: the track it is in, the call, and where. */
 export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
 
@@ -613,6 +616,8 @@ export interface GraphState extends GraphStatus {
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */
   instruments?: Instrument[];
+  /** The kits the instruments name, which + Track's Drum kit makes (KIT-5). */
+  kits?: Kit[];
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
@@ -971,6 +976,21 @@ export const graphApi = {
       session,
       (r) => ({ name: `adding ${r.label}`, structural: true }),
       call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
+    ),
+  /**
+   * Add kit `kit` (KIT-5): a Drums bus and the kit's tracks, each going to it, below `after` in the
+   * layout. One undoable edit; the answer names the bus and its tracks.
+   */
+  addKit: (session: number, kit: Kit, after: string | null) =>
+    edit(
+      session,
+      { name: `adding the ${kit.name}`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[] }>("/track/kit", {
+        session,
+        component: kit.component,
+        kit: kit.name,
+        after: after ?? undefined,
+      }),
     ),
   /**
    * A mixer channel's first pan (design-8b §5.3): optional control `control` (`pan`) of channel

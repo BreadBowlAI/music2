@@ -102,7 +102,7 @@ pub(crate) fn kit_of(
     clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
 ) -> Result<Vec<NewTrack>, EditError> {
     let Split { lanes, left } = split(notes);
-    let mut out = vec![NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), ..NewTrack::default() }];
+    let mut out = vec![kit_bus()];
     let named = |sound: &str| sound[..1].to_uppercase() + &sound[1..];
     let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
     let left = (!left.is_empty()).then(|| ("Percussion".to_string(), "tom", left));
@@ -150,6 +150,13 @@ const DRUM: &str = "@m2/drums:drum";
 /// What a kit's bus is called: a kit's name is its bus's label (KIT-1).
 pub const BUS: &str = "Drums";
 
+/// A kit's bus (KIT-5): a Group called Drums, its gain at −6 dB, so the kit's drums hitting together
+/// stay under full scale (KIT-4).
+pub(crate) fn kit_bus() -> NewTrack {
+    let db = Insert { slot: "db".into(), value: Spelled { value: -6.0, spelled: Some("db".into()), written: -6.0 } };
+    NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), values: vec![db], ..NewTrack::default() }
+}
+
 /// A kit an instrument names (KIT-3), as + Track's Drum kit lists it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct KitInfo {
@@ -184,8 +191,8 @@ pub fn kits(s: &Session) -> Vec<KitInfo> {
         .collect()
 }
 
-/// Add kit `kit` of instrument `component` (KIT-5): a Drums bus (a Group, RENDER-34) and the kit's
-/// tracks, each playing the instrument with the kit's values from an empty lane of its own and
+/// Add kit `kit` of instrument `component` (KIT-5): a Drums bus (a Group, RENDER-34, at −6 dB) and
+/// the kit's tracks, each playing the instrument with the kit's values from an empty lane of its own and
 /// going to the bus, after track `after` (else last), the bus first. One Tx, one undo step.
 /// Refused in words when the lists offer no such instrument, or it names no such kit.
 pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>) -> Result<Vec<Made>, EditError> {
@@ -200,7 +207,6 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
             _ => format!("{} has no kit called {kit}: its kits are {}.", inst.label, crate::listed(&names)),
         }));
     };
-    let bus = NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), ..NewTrack::default() };
     let made = k.tracks.iter().map(|t| NewTrack {
         play: Play::Instrument(component.to_string()),
         label: Some(t.name.clone()),
@@ -208,7 +214,7 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
         to: Some(0),
         ..NewTrack::default()
     });
-    tracks::add_tracks(s, &std::iter::once(bus).chain(made).collect::<Vec<_>>(), after, None)
+    tracks::add_tracks(s, &std::iter::once(kit_bus()).chain(made).collect::<Vec<_>>(), after, None)
 }
 
 #[cfg(test)]

@@ -1490,19 +1490,19 @@ export default song(({ lane, time }) => {
     // 808 kit's Kick added as a track
     track("kick", { name: "Kick" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "kick", punch: -0.5, decay: 1.6 })),
     // 808 kit's Snare added as a track
-    track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare" })),
+    track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare", punch: -0.3 })),
     // 808 kit's Clap added as a track
     track("clap", { name: "Clap" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "clap" })),
     // 808 kit's Hats added as a track
     track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats" })),
     // 808 kit's Toms added as a track
-    track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom" })),
+    track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom", decay: 1.5 })),
     // 808 kit's Rim added as a track
     track("rim", { name: "Rim" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "rim" })),
     // 808 kit's Cowbell added as a track
     track("cowbell", { name: "Cowbell" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "cowbell" })),
     // 808 kit's Cymbal added as a track
-    track("cymbal", { name: "Cymbal" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "cymbal" })),
+    track("cymbal", { name: "Cymbal" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "cymbal", decay: 1.5 })),
     // 909 kit's Kick added as a track
     track("kick", { name: "Kick" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "kick", punch: 0.5 })),
     // 909 kit's Snare added as a track
@@ -1512,17 +1512,19 @@ export default song(({ lane, time }) => {
     // 909 kit's Hats added as a track
     track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats", tune: 2 })),
     // 909 kit's Toms added as a track
-    track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom" })),
+    track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom", decay: 0.8 })),
     // 909 kit's Rim added as a track
     track("rim", { name: "Rim" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "rim" })),
     // 909 kit's Cymbal added as a track
-    track("cymbal", { name: "Cymbal" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "cymbal" })),
+    track("cymbal", { name: "Cymbal" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "cymbal", tune: 2 })),
     // Basic kit's Kick added as a track
     track("kick", { name: "Kick" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "kick" })),
     // Basic kit's Snare added as a track
     track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare" })),
     // Basic kit's Hats added as a track
     track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats" })),
+    // a kit's Drums bus added
+    bus("drums", { name: "Drums" }, ({ input }) => gain(input, { db: -6 })),
     // clap:m2.probe added as a track
     track("m2-probe", { name: "m2 probe" }, ({ lane }) => plugin("clap:m2.probe", { notes: lane.notes("notes"), key: "m2-probe" })),
     // an audio track added

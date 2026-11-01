@@ -62,22 +62,25 @@ impl BusKind {
     }
 
     /// What it plays: a component (its ComponentId), by the name its package exports it as, and
-    /// what its function returns. A Reverb or a Delay is `@m2/effects`', a pack music2 ships
-    /// (PACK-15), added as any pack's item is (PACK-10); a Group is std's gain.
+    /// what its call writes after `input`. A Reverb or a Delay is `@m2/effects`', a pack music2
+    /// ships (PACK-15), added as any pack's item is (PACK-10); a Group is std's gain.
     pub(crate) fn body(self) -> (&'static str, &'static str, &'static str) {
         match self {
-            BusKind::Reverb => ("@m2/effects:reverb", "reverb", "reverb(input, { mix: 1 })"),
-            BusKind::Delay => ("@m2/effects:delay", "delay", "delay(input, { mix: 1 })"),
-            BusKind::Group => ("std:gain", "gain", "gain(input)"),
+            BusKind::Reverb => ("@m2/effects:reverb", "reverb", ", { mix: 1 }"),
+            BusKind::Delay => ("@m2/effects:delay", "delay", ", { mix: 1 }"),
+            BusKind::Group => ("std:gain", "gain", ""),
         }
     }
 }
 
-/// The `bus(…)` call a new bus's file makes: also checked as a call form (PKG-11,
-/// `planned_call_forms_are_current`).
-pub(crate) fn bus_call_text(kind: BusKind, key: &str, label: &str) -> String {
+/// The `bus(…)` call a new bus's file makes, its function's call writing `values` after `input`
+/// when given (a kit's Group at −6 dB: `, { db: -6 }`, KIT-5), else what its kind writes: also
+/// checked as a call form (PKG-11, `planned_call_forms_are_current`).
+pub(crate) fn bus_call_text(kind: BusKind, key: &str, label: &str, values: &str) -> String {
     let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
-    format!("bus({}{options}, ({{ input }}) => {})", quoted(key), kind.body().2)
+    let (_, name, insert) = kind.body();
+    let after = if values.is_empty() { insert } else { values };
+    format!("bus({}{options}, ({{ input }}) => {name}(input{after}))", quoted(key))
 }
 
 /// The name a bus file imports to play `kind`.
@@ -85,13 +88,13 @@ pub(crate) fn bus_import(kind: BusKind) -> &'static str {
     kind.body().1
 }
 
-/// The text of a new bus file, importing what plays `kind` from `module`.
-pub(crate) fn bus_text(kind: BusKind, module: &str, key: &str, label: &str) -> String {
+/// The text of a new bus file, importing what plays `kind` from `module`, its call writing `values`.
+pub(crate) fn bus_text(kind: BusKind, module: &str, key: &str, label: &str, values: &str) -> String {
     format!(
         "import {{ bus }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
         bus_import(kind),
         quoted(module),
-        bus_call_text(kind, key, label)
+        bus_call_text(kind, key, label, values)
     )
 }
 
@@ -137,7 +140,7 @@ pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Optio
     let (song_file, new_file) = (path(&mixer.file)?, path(&file)?);
     let mut ops = vec![
         plan::text_edit(&song_file, &song_text, &edits),
-        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label).into()) },
+        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label, "").into()) },
     ];
     let mut ranges = vec![
         (song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])),

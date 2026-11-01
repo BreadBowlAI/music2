@@ -25,8 +25,8 @@ export interface Guide {
 
 /** The steps, in order: what to do (`title`, then `hint`). Keys as this computer spells them. */
 export const STEPS: { id: StepId; title: string; hint: () => string }[] = [
-  { id: "drums", title: "Add drums.", hint: () => `Press ${chord("T")} and pick Drum kit.` },
-  { id: "beat", title: "Make a beat.", hint: () => "Double-click its row for a clip. In Notes, double-click in the Kick and Snare rows (or press B, then click)." },
+  { id: "drums", title: "Add drums.", hint: () => `Press ${chord("T")} and pick a drum kit, such as Basic kit.` },
+  { id: "beat", title: "Make a beat.", hint: () => "Double-click the Kick's row for a clip. In Notes, double-click four times (or press B, then click)." },
   { id: "bass", title: "Add a bass.", hint: () => `Press ${chord("T")} and pick Synth bass or 808 sub.` },
   { id: "bassline", title: "Play some bass notes.", hint: () => "Make a clip on it. In Notes, double-click a few notes." },
   { id: "listen", title: "Listen.", hint: () => "Press Space. Press it again to stop." },
@@ -47,7 +47,7 @@ function notes(graph: GraphState, module: string) {
   return (t?.lanes ?? []).reduce((n, l) => n + (l.kind === "notes" ? l.clips.reduce((c, clip) => c + clip.notes.length, 0) : 0), 0);
 }
 
-/** The steps the song shows done now: a track of the Drums group and its notes, a bass and its notes. */
+/** The steps the song shows done now: a track of the Drums group (a kit's Drum, KIT-5) and its notes, a bass and its notes. */
 export function seen(graph: GraphState): StepId[] {
   const drums = new Set((graph.instruments ?? []).filter((i) => i.category === "Drums").map((i) => i.component));
   const kits = playing(graph, (c) => drums.has(c));
