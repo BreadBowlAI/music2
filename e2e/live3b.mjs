@@ -138,9 +138,7 @@ check(await until(() => songTs().includes(`db: db(${slowShown})`)), `its release
 check(await until(async () => (await leases()).length === 0), "and ends the lease");
 check((await putFile(sess, "tracks/bass.ts", slowly(bass), bass)).status === 200 && bassTs() === bass, "bass.ts saved back");
 
-// ---- through: an outside save to another file mid-drag. The mixer is one call, and Keys' level is in
-// it: the drag goes from the revision the page shows, so the page shows the release's first.
-await caughtUp();
+// ---- through: an outside save to another file mid-drag.
 at = await knobAt(page, hats);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();
@@ -160,7 +158,6 @@ check(bassTs().includes("khz(3)"), "and the outside edit to bass.ts stays");
 check(await until(async () => (await leases()).length === 0), "the commit ended the lease");
 
 // ---- held: still for 12 s, longer than the server's TTL; the page's keepalive keeps it.
-await caughtUp();
 at = await knobAt(page, keys);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();

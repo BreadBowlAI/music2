@@ -13,7 +13,7 @@ import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 
-const { browser, page, errors, posts, api, key, box, drag, caughtUp } = await open(1440, 900);
+const { browser, page, errors, posts, api, key, box, drag } = await open(1440, 900);
 const PPB = 24;
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 const status = async () => (await api("/status")).body;
@@ -132,19 +132,15 @@ await key("Meta+d");
 check(await until(() => same(spans("kick/hits"), [[0, 32], [32, 32]])), `⌘D duplicates the bars right after them: ${JSON.stringify(spans("kick/hits"))}`);
 check(await until(async () => same(await shown(), [32, 64])), "and the copy is the selection, so ⌘D again goes on");
 await until(async () => (await undoTitle()).includes("Undo duplicating bars 1–8"));
-// The timeline takes a key once it shows its last edit (one pressed sooner does nothing).
-await caughtUp();
 await key("Meta+i");
 check(await until(() => same(spans("kick/hits"), [[0, 32], [64, 32]])), `⌘I inserts 8 empty bars where they start, and the copy moves on: ${JSON.stringify(spans("kick/hits"))}`);
 check(await until(async () => (await undoTitle()).includes("Undo inserting 8 bars at bar 9")), `named: ${await undoTitle()}`);
-await caughtUp();
 await key("Meta+Shift+Backspace");
 check(await until(() => same(spans("kick/hits"), [[0, 32], [32, 32]])), `⇧⌘⌫ deletes the selected bars, and what follows moves earlier: ${JSON.stringify(spans("kick/hits"))}`);
 check(await until(async () => (await shown()) === null), "and lets go of them");
 await until(async () => (await undoTitle()).includes("Undo deleting bars 9–16"));
 await along(32.3, 47.6);
 await until(async () => same(await shown(), [32, 48]));
-await caughtUp();
 await page.keyboard.press("Backspace");
 check(await until(() => same(spans("kick/hits"), [[0, 32], [48, 16]])), `⌫ empties bars 9–12; the clip across their end is split there: ${JSON.stringify(spans("kick/hits"))}`);
 check(await until(async () => (await undoTitle()).includes("Undo emptying bars 9–12")), `named: ${await undoTitle()}`);

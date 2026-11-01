@@ -106,8 +106,6 @@ check(await until(async () => /^Undo turning Reverb on \(/.test(await undoTitle(
 
 // ---------------------------------------------------------------- D2: move an effect left or right
 
-// An effect is added after the reverb call as the page shows it, and Turn on changed that call.
-await caughtUp();
 await page.click(`${card("keys", "reverb")} button[aria-label="Add an effect after reverb"]`);
 await page.waitForSelector('[data-effect="delay"]');
 await page.click('[data-effect="delay"]');

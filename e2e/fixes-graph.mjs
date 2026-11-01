@@ -59,9 +59,6 @@ check(
   await until(async () => (await page.$eval(`${cutoff} svg`, (e) => Number(e.getAttribute("aria-valuenow")))) === 0),
   "and the knob sits at the bottom of its range, not the top",
 );
-// The knob shows its own value at once; its next drag goes from the revision the page shows, which
-// must be the one the first drag wrote.
-await caughtUp();
 k = await knob();
 // Half its 300px throw (taste.md KN-1): half way up its log range, about 630 Hz.
 await drag({ x: k.x + 15, y: k.y + 15 }, { x: k.x + 15, y: k.y + 15 - 150 }, 12);

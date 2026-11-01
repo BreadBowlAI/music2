@@ -39,15 +39,38 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
   await page.setViewport({ width, height });
-  if (late > 0) {
-    await page.setRequestInterception(true);
-    page.on("request", (r) => {
-      if (r.isInterceptResolutionHandled()) return;
-      const read = r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"];
-      if (read) setTimeout(() => r.continue().catch(() => {}), late);
-      else r.continue().catch(() => {});
-    });
-  }
+  // The page's requests, intercepted only while some are held back: its own reads (`late`), or
+  // those a suite's `hold` names.
+  const holders = new Set();
+  let intercepting = false;
+  const intercept = async (on) => {
+    if (on !== intercepting) await page.setRequestInterception((intercepting = on));
+  };
+  page.on("request", async (r) => {
+    if (!intercepting || r.isInterceptResolutionHandled()) return;
+    const read = r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"];
+    const held = [...holders].map((h) => h(r)).find(Boolean);
+    if (held && typeof held === "object") {
+      await held.until;
+      return void (held.answer ? r.respond(held.answer) : r.continue()).catch(() => {});
+    }
+    const ms = Math.max(read ? late : 0, held || 0);
+    if (ms > 0) setTimeout(() => r.continue().catch(() => {}), ms);
+    else r.continue().catch(() => {});
+  });
+  if (late > 0) await intercept(true);
+  /**
+   * Hold back each request of the page's that `f` names, until `off()`: `f` answers how many ms, or
+   * `{ until, answer }` (until that promise settles, then answered with `answer` if given), or 0.
+   */
+  const hold = async (f) => {
+    holders.add(f);
+    await intercept(true);
+    return async () => {
+      holders.delete(f);
+      if (!holders.size && !(late > 0)) await intercept(false);
+    };
+  };
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -104,7 +127,7 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
     await page.mouse.move(to.x, to.y, { steps });
     await page.mouse.up();
   };
-  return { browser, page, errors, posts, api, state, caughtUp, toasts, show, view, key, box, drag, status };
+  return { browser, page, errors, posts, api, state, caughtUp, hold, toasts, show, view, key, box, drag, status };
 }
 
 export function done(errors) {

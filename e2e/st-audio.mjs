@@ -247,9 +247,7 @@ check(endWords === "End of tone.wav", `the bubble says where the file ends: ${en
 check(await until(() => close(one("p3").length, beats(2))), `the right edge stops at the file's end: ${one("p3").length}`);
 check(await stepIs("resizing a Tone clip"), `one undo step: ${await undoTitle()}`);
 
-// The left edge in by a beat: the clip starts a beat later in its file. A drag names the clip by the
-// hash the page drew, so the page shows the right edge's write first.
-await caughtUp();
+// The left edge in by a beat: the clip starts a beat later in its file.
 b = await box(p3);
 await page.mouse.move(b.x + 2, b.y + b.height / 2 + 6);
 await page.mouse.down();
@@ -258,7 +256,6 @@ await page.mouse.up();
 check(await until(() => one("p3").start === 33 && close(one("p3").offset, 60 / 124)), `a left trim moves where it starts in the file: ${JSON.stringify(one("p3"))}`);
 
 // A fade handle dragged in: a fade in, in seconds.
-await caughtUp();
 b = await box(p3);
 await page.click(p3, { offset: { x: b.width / 2, y: b.height - 6 } });
 const handle = (await box(`${p3} [data-fade=in]`)) ?? { x: b.x + 1, y: b.y + 1, width: 0, height: 0 };
@@ -323,9 +320,7 @@ await (await menu(p3, "unfade"))?.click();
 check(await until(() => one("p3").fade_in === 0 && one("p3").fade_out === 0), "Remove fades takes them out");
 check(await stepIs("removing the Tone clip's fades"), `named so: ${await undoTitle()}`);
 
-// Reverse: written, checked, and the waveform mirrored. The timeline takes a gesture once it shows
-// its last edit (one sooner does nothing).
-await caughtUp();
+// Reverse: written, checked, and the waveform mirrored.
 const ahead = (await columns("sw")).map((c) => c.ink);
 await (await menu(sw, "reverse"))?.click();
 check(await until(() => one("sw").reverse === true), "Reverse writes reverse: true");
@@ -352,11 +347,9 @@ b = await box(p3);
 await drag({ x: b.x + b.width / 2, y: b.y + b.height - 6 }, { x: b.x + b.width / 2 + 4 * ppb, y: b.y + b.height - 6 });
 check(await until(() => one("p3").start === 37), `a drag moves it: ${one("p3").start}`);
 check(await stepIs("moving a Tone clip"), `"moving a Tone clip": ${await undoTitle()}`);
-await caughtUp();
 await key("Meta+KeyD");
 check(await until(() => laneClips().filter((c) => c.asset === "tone.wav" && c.gain_db === -6).length === 2), "⌘D duplicates it");
 check(await stepIs("duplicating a Tone clip"), `"duplicating a Tone clip": ${await undoTitle()}`);
-await caughtUp();
 await key("Backspace");
 check(await until(() => laneClips().filter((c) => c.asset === "tone.wav" && c.gain_db === -6).length === 1), "⌫ deletes the copy");
 check(await stepIs("deleting a Tone clip"), `"deleting a Tone clip": ${await undoTitle()}`);

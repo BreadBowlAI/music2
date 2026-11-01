@@ -69,11 +69,18 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 
 /**
  * This window's own changes to the song open (`session`), AGENT-2: the undo steps its edits made, by
- * id (only these may ⌘Z take back unshown), the newest of them, and the newest revision any of its
- * changes made (its edits, undos and redos), which every gesture waits for the window to show.
+ * id (only these may ⌘Z take back unshown), the newest of them, the revisions its changes made (its
+ * edits, undos and redos), and the newest of those, which every gesture waits for the window to show.
  */
-let mine: { session: number; steps: Set<number>; newest: number; revision: number } = { session: 0, steps: new Set(), newest: 0, revision: 0 };
-const minein = (session: number) => (mine.session === session ? mine : (mine = { session, steps: new Set(), newest: 0, revision: 0 }));
+let mine: { session: number; steps: Set<number>; newest: number; revisions: Set<number>; revision: number } = {
+  session: 0,
+  steps: new Set(),
+  newest: 0,
+  revisions: new Set(),
+  revision: 0,
+};
+const minein = (session: number) =>
+  mine.session === session ? mine : (mine = { session, steps: new Set(), newest: 0, revisions: new Set(), revision: 0 });
 
 /**
  * An edit of this window on its way: sent (or, a drag let go, waiting to be), and not yet answered,
@@ -119,11 +126,24 @@ export function madeHere(session: number, step: number | undefined): boolean {
 /** The newest undo step of `session` this window's edits made, by id; 0 with none. */
 export const newestMade = (session: number) => (mine.session === session ? mine.newest : 0);
 
-/** A change of this window (an edit, an undo, a redo) made revision `revision` of `session`: a gesture waits until the window shows it. */
-export function changed(session: number, revision: number) {
+/**
+ * A change of this window (an edit, an undo, a redo) to `file` was answered at revision `revision`
+ * of `session`: a gesture waits until the window shows it. A change of `layout.json` alone makes no
+ * revision (PLANE-3): the one its answer names was made by whoever made it.
+ */
+export function changed(session: number, revision: number, file?: string) {
+  if (file === "layout.json") return;
   const m = minein(session);
+  m.revisions.add(revision);
   m.revision = Math.max(m.revision, revision);
   wake();
+}
+
+/** Whether every revision of `session` after `from`, up to `to`, was made by a change of this window's. */
+export function allMine(session: number, from: number, to: number): boolean {
+  if (mine.session !== session) return to <= from;
+  for (let r = from + 1; r <= to; r++) if (!mine.revisions.has(r)) return false;
+  return true;
 }
 
 /**
@@ -133,9 +153,10 @@ export function changed(session: number, revision: number) {
  * the step's name as the server says it (`undo_name`), Undo names it at once, so a ⌘Z pressed
  * before the state is read again takes back this edit, not the one before.
  */
-export function owned(session: number, answer: { revision: number; step?: number; undo_name?: StepName | null }) {
-  changed(session, answer.revision);
+export function owned(session: number, answer: { revision: number; step?: number; undo_name?: StepName | null; file?: string }) {
+  // An answer with no step changed nothing.
   if (answer.step === undefined) return;
+  changed(session, answer.revision, answer.file);
   const m = minein(session);
   m.steps.add(answer.step);
   m.newest = Math.max(m.newest, answer.step);
@@ -150,7 +171,7 @@ export function owned(session: number, answer: { revision: number; step?: number
  * An edit this window made has committed `answer.revision`, as `step`: the server names its undo
  * step so, the window keeps it as its own (`owned`), and Undo names it at once.
  */
-export function recorded(session: number, answer: { revision: number; step?: number }, step: Step) {
+export function recorded(session: number, answer: { revision: number; step?: number; file?: string }, step: Step) {
   const revision = answer.revision;
   const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
   owned(session, answer);
@@ -245,14 +266,17 @@ export async function through(session: number, own?: Editing): Promise<GraphStat
 /**
  * The revision a gesture of this window drawn at `revision` goes from, once the window shows its own
  * changes (`shown`): `revision` itself, unless the window was still to show its own last change
- * then; then the revision it shows now, when each of `ids` (the controls, nodes or inputs the
- * gesture names) names there what it named in the state drawn. Otherwise `revision`: the server
- * carries the gesture, or refuses it in its own words. Rejects with what to say when it gave up.
+ * then; then the revision it shows now, when every change since `revision` was the window's own and
+ * each of `ids` (the controls, nodes or inputs the gesture names) names there what it named in the
+ * state drawn. Otherwise `revision`: the server carries the gesture, or refuses it in its own words
+ * (a change made elsewhere meanwhile is never taken over unseen). Rejects with what to say when it
+ * gave up.
  */
 export async function goes(session: number, revision: number, ids: readonly string[], own?: Editing): Promise<number> {
   const drawn = useStore.getState().graph;
   const now = await through(session, own);
   if (now.view.revision <= revision || !drawn || drawn.session !== session || drawn.view.revision !== revision) return revision;
+  if (!allMine(session, revision, now.view.revision)) return revision;
   return ids.every((id) => same(named(drawn, id), named(now, id))) ? now.view.revision : revision;
 }
 

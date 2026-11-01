@@ -14,7 +14,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, key, view, box, posts, caughtUp } = await open(1440, 900);
+const { page, errors, api, key, view, box, posts } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 // What the page sends on its socket (audition), as it goes: CDP sees a socket made after it listens.
@@ -171,9 +171,6 @@ check(await until(async () => (await page.$eval(shape, (e) => e.dataset.value)) 
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes the code back, byte for byte");
-// Each gesture below goes from the revision the page shows, after a ⌘Z that changed this call: the
-// page shows the undo's revision first.
-await caughtUp();
 const sub = `${card} [data-knob="sub"] [role=switch]`;
 await seen(sub);
 check((await page.$eval(sub, (e) => e.getAttribute("aria-checked"))) === "false", "sub is a switch, off");
@@ -186,7 +183,6 @@ check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes i
 
 // ---------------------------------------------------------------- the envelope's corner (CARD-27, CARD-22)
 
-await caughtUp();
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
 const handle = await seen(`${card} [data-view="amp"] [data-handle="attack"]`);
@@ -209,7 +205,6 @@ await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes it back");
 
 // The filter's peak: cutoff and q in one edit.
-await caughtUp();
 const peak = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
 await page.mouse.move(peak.x + peak.width / 2, peak.y + peak.height / 2);
 await page.mouse.down();
@@ -225,7 +220,6 @@ await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "one ⌘Z takes both back");
 // Dragged far past the cutoff's declared range (40 Hz to 8 kHz), the peak stops at its end, as a knob's drag does.
-await caughtUp();
 const peak2 = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
 await page.mouse.move(peak2.x + peak2.width / 2, peak2.y + peak2.height / 2);
 await page.mouse.down();
@@ -309,8 +303,6 @@ const mark = async () => {
   const b = await box(`${clip} [data-step="sine"]`);
   return { x: b.x + 1, y: b.y + b.height / 2 };
 };
-// A mark is named by the clip as the page draws it, and the pick changed it: the page shows the pick first.
-await caughtUp();
 let m = await mark();
 await page.mouse.move(m.x, m.y);
 await page.mouse.down();
@@ -320,7 +312,6 @@ check(await until(() => file().clips[0]?.points[1]?.[0] > 2.5), `dragging sine's
 check(await until(async () => !!(await page.$(`${clip} [data-step="sine"][data-picked]`))), "and picks it");
 await key("Escape");
 check(await until(async () => !(await page.$(`${clip} [data-step="sine"][data-picked]`))), "Esc unpicks it");
-await caughtUp();
 m = await mark();
 await page.mouse.move(m.x, m.y);
 await page.mouse.down();
@@ -328,7 +319,6 @@ await page.mouse.move(m.x - 8, m.y, { steps: 3 });
 await page.mouse.up();
 await until(async () => !!(await page.$(`${clip} [data-step="sine"][data-picked]`)));
 await sleep(300);
-await caughtUp();
 await key("Backspace");
 check(await until(() => file().clips[0]?.points.length === 1), `⌫ deletes the point picked: ${JSON.stringify(file().clips[0]?.points)}`);
 check(await stepIs("deleting a Shape point"), `one undo step: ${await undoTitle()}`);

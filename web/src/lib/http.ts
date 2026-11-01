@@ -1,8 +1,9 @@
 // The page's one way to the server (AGENT-2): every request goes through `http`, which keeps the
 // undo step an answer names as this window's own as soon as the answer comes, whatever the route
 // (an import, a Sampler's file, a clip gesture, a knob's value): so a ⌘Z right after takes it back
-// before the window shows it, and no route the page starts to call can forget it. Every revision
-// an answer names is one the window's next gesture waits to show (`shown`, lib/history).
+// before the window shows it, and no route the page starts to call can forget it. The revision a
+// change of the window's own made (an edit's, an undo's, a redo's) is one its next gesture waits to
+// show (`shown`, lib/history).
 // `the_page_keeps_the_step_of_every_route_it_calls` (crates/server) checks no request goes another way.
 
 import { changed, owned, type StepName } from "./history";
@@ -23,6 +24,7 @@ interface Answer {
   revision?: unknown;
   step?: unknown;
   undo_name?: StepName | null;
+  file?: string;
 }
 
 async function keep(path: string, res: Response) {
@@ -30,6 +32,8 @@ async function keep(path: string, res: Response) {
   if (session === undefined || !res.headers.get("content-type")?.includes("json")) return;
   const answer = (await res.clone().json().catch(() => null)) as Answer | null;
   if (!answer || typeof answer.revision !== "number") return;
-  if (TAKES_BACK.includes(path) || typeof answer.step !== "number") return changed(session, answer.revision);
-  owned(session, { revision: answer.revision, step: answer.step, undo_name: answer.undo_name });
+  // An undo, a redo: a change of the window's own, whose step isn't. An answer with no step changed
+  // nothing: the revision it names was made by whoever made it.
+  if (TAKES_BACK.includes(path)) return changed(session, answer.revision, answer.file);
+  if (typeof answer.step === "number") owned(session, { revision: answer.revision, step: answer.step, undo_name: answer.undo_name, file: answer.file });
 }

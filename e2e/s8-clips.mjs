@@ -31,8 +31,6 @@ const chip = (view = "song") =>
   }, view === "song" ? ["song-grid", "song-snap"] : ["grid", "snap"]);
 /** Drag the hats clip `dx` px along its lane (holding ⌘ when `free`); resolves once its file shows a new start. */
 const dragHats = async (dx, { free = false } = {}) => {
-  // A drag names the clip as the page draws it: the page shows the last move first.
-  await caughtUp();
   const before = clips("data/hats/hits.json")[0].start;
   const c = await box('[data-lane="hats.hits"] [data-clip]');
   if (free) await page.keyboard.down("Meta");
@@ -221,8 +219,6 @@ const heardAt = () => hatsNow().notes.map((x) => Number((hatsNow().start + x.sta
 const times = heardAt();
 const edgeCursor = await page.$eval(`[data-lane="hats.hits"] [data-clip="${hatsId}"] [data-edge=right]`, (e) => getComputedStyle(e).cursor);
 check(edgeCursor === "ew-resize", `each edge has a resize cursor: ${edgeCursor}`);
-// The edge's drag names the clip as the page draws it: the page shows the move first.
-await caughtUp();
 b = await clipBox("hats.hits", hatsId);
 const right = { x: b.x + b.width - 3, y: b.y + b.height / 2 };
 const r = await hold(right, { x: right.x - 4 * PPB, y: right.y }, { during: () => looks() });
@@ -231,8 +227,6 @@ check(heardAt() === times && r.bubble === "10.1.1", "every note stays where it p
 // The window draws the trimmed clip once it has heard of it: the next drag names the clip as it is
 // now (its hash), not as it was.
 await until(async () => (await clipBox("hats.hits", hatsId)).width < 31 * PPB);
-// A dropped drag is drawn where it went before the page has its state: the page shows the trim first.
-await caughtUp();
 b = await clipBox("hats.hits", hatsId);
 const trimmed = read("data/hats/hits.json");
 const left = { x: b.x + 3, y: b.y + b.height / 2 };
@@ -302,8 +296,6 @@ check(await until(() => hatsNow().start === 10 && lanes("data/keys/chords.json")
 const g2 = await sentBy(n);
 check(g2.length === 1 && gestureOf(g2[0]).clips.length === 2, "in one gesture");
 const kept = { hats: read("data/hats/hits.json"), keys: read("data/keys/chords.json") };
-// The timeline takes ⌫ once it shows its last edit (a key pressed sooner does nothing).
-await caughtUp();
 n = posts.length;
 await key("Backspace");
 check(await until(() => !lanes("data/hats/hits.json").some((c) => c.id === hatsId) && lanes("data/keys/chords.json").length === 0), "⌫ deletes both");
@@ -391,7 +383,6 @@ check(await until(async () => (await pickedIn("kick.hits")).join() === kickCopy.
 check(await until(async () => (await undoNow()).startsWith("Undo duplicating a Kick clip")), `Undo names it: ${await undoNow()}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0");
-await caughtUp();
 
 // ---------------------------------------------------------------- the marquee keeps its empty bars
 const kickRow = await rowOf("kick.hits");
@@ -411,7 +402,6 @@ const mdup = lastGesture(n)[0];
 check(mdup?.op === "duplicate" && mdup.range?.join() === "0,40" && mdup.clips.length === 2, `as one gesture with the marquee's bars: ${JSON.stringify(mdup?.range)}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0" && starts(await shown("hats", "hits")) === "0");
-await caughtUp();
 
 // ---------------------------------------------------------------- ⌘E splits at the playhead, ⌘J joins
 const hatsBefore = JSON.stringify((await shown("hats", "hits"))[0].notes);
@@ -430,7 +420,6 @@ check(await until(async () => starts(await shown("hats", "hits")) === "0"), "⌘
 const joined = (await shown("hats", "hits"))[0];
 check(joined.id === H && joined.length === 32 && JSON.stringify(joined.notes) === hatsBefore, `keeping the first's id and every note in time: ${joined.id}, ${joined.length}`);
 check(lastGesture(n).map((g) => g.op).join() === "join", "one join gesture");
-await caughtUp();
 
 // ---------------------------------------------------------------- ⌘C ⌘V and ⌘X at the playhead
 await playAt(40);
@@ -444,12 +433,10 @@ check(lastGesture(n).map((g) => g.op).join() === "paste" && JSON.stringify(paste
 await until(async () => (await pickedIn("kick.hits")).join() === pasted.id);
 await key("Meta+x");
 check(await until(async () => starts(await shown("kick", "hits")) === "0"), "⌘X cuts the pasted clip");
-await caughtUp();
 await page.click('[data-module-tab="hats"]');
 await key("Meta+v");
 check(await until(async () => starts(await shown("hats", "hits")) === "0,40"), `with Hats selected, ⌘V pastes the Kick clip onto the Hats lane: ${starts(await shown("hats", "hits"))}`);
 // In the app the menu bar's Copy runs the web view's command: the page takes its events (M7).
-await caughtUp();
 await clickClip("keys.chords", JSON.parse(fixture("data/keys/chords.json")).clips[0].id);
 const events = await page.evaluate(() => {
   const fire = (type) => {

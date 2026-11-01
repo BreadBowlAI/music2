@@ -168,9 +168,7 @@ const withBoth = read("data/keys/chords.json");
 await key("Meta+z");
 check(await until(async () => (await notesOf("keys", "chords")).every(([, s]) => s !== 6)), "one ⌘Z takes the whole chord back");
 check(read("data/keys/chords.json") !== withBoth && (await notesOf("keys", "chords")).length === 6, "and only it");
-// A drag in Draw sets its length; a double-click in Select places one too (NOTE-4). The roll writes
-// the lane as the page shows it, so the page shows the undo first.
-await caughtUp();
+// A drag in Draw sets its length; a double-click in Select places one too (NOTE-4).
 await page.focus("[data-testid=notes]");
 await page.keyboard.press("i");
 await page.keyboard.press("i");
@@ -222,8 +220,6 @@ check(!!sent && JSON.parse(sent.body).gesture.into.sha?.length > 0, `it names Ba
 // With the playhead outside the clip, at its start.
 await key("Meta+z");
 await until(async () => (await notesOf("bass", "notes")).length === 48);
-// ⌘V names Bass's clip by the hash the page drew: the page shows the undo first.
-await caughtUp();
 await post("/seek", { beat: 100 });
 await sleep(600);
 await page.focus("[data-testid=notes]");

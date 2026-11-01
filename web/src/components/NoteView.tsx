@@ -42,7 +42,7 @@ import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
-import { showsOwn, through } from "../lib/history";
+import { allMine, showsOwn, through } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -430,20 +430,21 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
    * lib/history): it names the clip with the hash the graph draws it with then, so the server
    * refuses it over a change it missed, and a change made elsewhere since the roll drew the notes
    * (by their places) refuses it here, unless the roll drew them before the window showed its own
-   * last edit (then it goes from the notes as shown). One Tx, one undo step named `name`. Its notes
+   * last edit and only its own edits came since (then it goes from the notes as shown). One Tx, one undo step named `name`. Its notes
    * show when the graph does; with `select`, the notes it added are then selected.
    */
   const act = (make: (clip: ServerRef) => ClipGesture, name: string, select = false) => {
     if (locked) return;
     const before = clip?.notes ?? [];
     const asShown = !draft && showsOwn(latest.current);
+    const drawnAt = latest.current.view.revision;
     afterLaneWrites(latest.current, async (within) => {
       const g = await through(latest.current.session, within);
       const l = findLane(g.timeline, module, lane);
       const c = l ? serverRef(l, ref) : null;
       const now = findNoteClip(g.timeline, ref);
       if (!c || !now) throw new Error("This clip is gone.");
-      if (asShown && !sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
+      if ((asShown || !allMine(g.session, drawnAt, g.view.revision)) && !sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
       return sendGesture(g, make(c), { name }, undefined, within);
     })
       .then((done) => {

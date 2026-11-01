@@ -63,7 +63,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
-import { editing, shown, showsOwn, type Editing } from "../lib/history";
+import { allMine, editing, shown, showsOwn, type Editing } from "../lib/history";
 import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { dragsSound, droppedSound, loadSound } from "./Spotlight";
@@ -699,16 +699,17 @@ export default function SongTimeline({
      * A dropped drag: one gesture, through its lease when one lives (heard as it went, 8b.7). Drawn
      * where it went until the timeline shows it; refused, it goes back. It goes once the window shows
      * its own last edit (`when`), and is an edit on its way from the moment it is let go: an Undo
-     * pressed meanwhile waits for it. `again`: the drag worked out anew from the timeline it goes
-     * from, when it was pressed while the window didn't show its own last edit yet (the clip as the
-     * window's own edit left it, a trim a moment before, is what it drags); else as drawn at the press,
-     * and a clip changed since by another writer is refused (WRITE-12).
+     * pressed meanwhile waits for it. `again`: when it was pressed while the window didn't show its
+     * own last edit yet, at revision `from`, the drag worked out anew from the timeline it goes from,
+     * if every change since was the window's own (the clip as its own edit left it, a trim a moment
+     * before, is what it drags). Else as drawn at the press, and a clip changed since by another
+     * writer is refused (WRITE-12).
      */
-    const drop = (d: Drag, lease: LaneLease | null, again: ((timeline: TimelineView) => Drag | null) | null) => {
+    const drop = (d: Drag, lease: LaneLease | null, again: { from: number; make: (timeline: TimelineView) => Drag | null } | null) => {
       setDrag({ ...d, landed: Infinity });
       let sent = false;
       void when((graph, own) => {
-        const now = again ? again(graph.timeline) : d;
+        const now = again && allMine(graph.session, again.from, graph.view.revision) ? again.make(graph.timeline) : d;
         const made = now && gestureOf(now);
         if (!made || !made.step) return;
         sent = true;
@@ -865,8 +866,9 @@ export default function SongTimeline({
      * A clip's new points (an automation clip's, or a lane of names', CARD-24): one gesture, through
      * the drag's lease when one lives, drawn as sent (`shown`'s `editing`) until the timeline shows it.
      * `again`: the points worked out anew from the clip as the timeline draws it when the gesture goes,
-     * for a key's gesture, or a drag pressed while the window didn't show its own last edit yet (the
-     * clip as that edit left it is what it edits); else the points and the clip as drawn at the press.
+     * for a key's gesture; or for a drag pressed while the window didn't show its own last edit yet
+     * (at revision `again.from`), when every change since was the window's own (the clip as its own
+     * edit left it is what it edits). Else the points and the clip as drawn at the press.
      */
     const sendClipPoints = <P extends Point | StepPoint>(
       kind: "control" | "steps",
@@ -876,18 +878,18 @@ export default function SongTimeline({
       points: P[],
       step: string,
       lease: LaneLease | null,
-      again: ((points: P[]) => P[] | null) | null,
+      again: { from?: number; make: (points: P[]) => P[] | null } | null,
     ) => {
       drawn.set(points);
       let sent = false;
       void when((graph, own) => {
         let named: ServerRef | null = server;
         let now: P[] | null = points;
-        if (again) {
+        if (again && (again.from === undefined || allMine(graph.session, again.from, graph.view.revision))) {
           const lane = findLane(graph.timeline, clip.module, clip.lane);
           const c = lane?.kind === kind ? lane.clips[clipIndex(lane.clips, clip)] : undefined;
           named = lane && c ? serverRef(lane, clip) : null;
-          now = c ? again(c.points as P[]) : null;
+          now = c ? again.make(c.points as P[]) : null;
           if (!named || !now) return;
           drawn.set(now);
         }
@@ -902,7 +904,7 @@ export default function SongTimeline({
         );
       }).finally(() => !sent && drawn.drop());
     };
-    const sendPoints = (clip: ClipRef, server: ServerRef, points: Point[], step: string, lease: LaneLease | null, again: ((points: Point[]) => Point[] | null) | null) =>
+    const sendPoints = (clip: ClipRef, server: ServerRef, points: Point[], step: string, lease: LaneLease | null, again: { from?: number; make: (points: Point[]) => Point[] | null } | null) =>
       sendClipPoints(
         "control",
         {
@@ -917,7 +919,7 @@ export default function SongTimeline({
         lease,
         again,
       );
-    const sendSteps = (clip: ClipRef, server: ServerRef, points: StepPoint[], step: string, lease: LaneLease | null, again: ((points: StepPoint[]) => StepPoint[] | null) | null) =>
+    const sendSteps = (clip: ClipRef, server: ServerRef, points: StepPoint[], step: string, lease: LaneLease | null, again: { from?: number; make: (points: StepPoint[]) => StepPoint[] | null } | null) =>
       sendClipPoints(
         "steps",
         {
@@ -948,6 +950,7 @@ export default function SongTimeline({
       const server = serverRef(lane, ref);
       if (!server) return;
       // Pressed while the window doesn't show its own last edit yet: the move is worked out anew, as it goes.
+      const drawnAt = latest.current.revision;
       const behind = !drawnNow();
       useClipSelection.getState().clear();
       scroller.current?.focus({ preventScroll: true });
@@ -1010,7 +1013,7 @@ export default function SongTimeline({
           const k = indexOf(now, pressed);
           return k < 0 ? null : now.map((p, j): StepPoint => (j === k ? [at, p[1]] : p)).sort((a, b) => a[0] - b[0]);
         };
-        sendSteps(ref, server, sorted, `moving a ${laneTitle(lane)} point`, lease, behind ? again : null);
+        sendSteps(ref, server, sorted, `moving a ${laneTitle(lane)} point`, lease, behind ? { from: drawnAt, make: again } : null);
       };
       const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
       for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);
@@ -1024,6 +1027,7 @@ export default function SongTimeline({
       const server = serverRef(lane, ref);
       if (!server) return;
       // Pressed while the window doesn't show its own last edit yet: the points are worked out anew, as it goes.
+      const drawnAt = latest.current.revision;
       const behind = !drawnNow();
       // A point is the selection now, not the clip.
       useClipSelection.getState().clear();
@@ -1142,7 +1146,7 @@ export default function SongTimeline({
           if (!start || start.index < 0) return null;
           return to ? moved(start.points, start.index, to) : start.points;
         };
-        sendPoints(ref, server, points, step, lease, behind ? again : null);
+        sendPoints(ref, server, points, step, lease, behind ? { from: drawnAt, make: again } : null);
       };
       // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
       const esc = (ev: KeyboardEvent) => {
@@ -1210,7 +1214,8 @@ export default function SongTimeline({
         // Unless the window doesn't show its own last edit yet: then the drag is worked out anew,
         // when it goes, from the clips as the timeline draws them then (`drop`).
         const shown = leasable();
-        const behind = !shown || shown.view.revision !== latest.current.revision;
+        const drawn = latest.current.timeline, drawnAt = latest.current.revision;
+        const behind = !shown || shown.view.revision !== drawnAt;
         /** The drag with the pointer at `ev`, of the clips as `timeline` draws them: null when the one grabbed is gone. */
         const dragged = (timeline: TimelineView, ev: PointerEvent): Drag | null => {
           const lane = findLane(timeline, ref.module, ref.lane);
@@ -1267,7 +1272,7 @@ export default function SongTimeline({
           const first = !moved;
           moved = true;
           last = ev;
-          now = dragged(latest.current.timeline, ev);
+          now = dragged(drawn, ev);
           if (!now) return cancel();
           setDrag(now);
           const heard = gestureOf(now);
@@ -1303,7 +1308,7 @@ export default function SongTimeline({
           // Let go over a lane that can't take the clips, or the drag cancelled: nothing happens.
           if (ev.type !== "pointerup" || !now || now.refused) return cancel();
           const at = last;
-          drop(now, lease, behind && at ? (timeline) => dragged(timeline, at) : null);
+          drop(now, lease, behind && at ? { from: drawnAt, make: (timeline) => dragged(timeline, at) } : null);
         };
         // Esc during the drag puts it back, and is the drag's alone (not the page's deselect).
         const esc = (ev: KeyboardEvent) => {
@@ -1491,7 +1496,7 @@ export default function SongTimeline({
           return k < 0 ? null : now.map((p, j): StepPoint => (j === k ? [p[0], value] : p));
         };
         const what = named ? `naming a ${laneTitle(lane)} point` : `adding a ${laneTitle(lane)} point`;
-        sendSteps(at.ref, server, again(c.points) ?? c.points, what, null, again);
+        sendSteps(at.ref, server, again(c.points) ?? c.points, what, null, { make: again });
       },
       unpoint() {
         // A lane of names' point (CARD-24).
@@ -1507,7 +1512,7 @@ export default function SongTimeline({
             const k = indexOf(now, step.at);
             return k < 0 ? null : now.filter((_, j) => j !== k);
           };
-          sendSteps(step.clip, server, c.points.filter((_, k) => k !== step.index), `deleting a ${laneTitle(lane)} point`, null, again);
+          sendSteps(step.clip, server, c.points.filter((_, k) => k !== step.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
           return true;
         }
         const { picked } = usePoints.getState();
@@ -1525,7 +1530,7 @@ export default function SongTimeline({
           const k = indexOf(now, picked.at);
           return k < 0 ? null : now.filter((_, j) => j !== k);
         };
-        sendPoints(picked.clip, server, c.points.filter((_, k) => k !== picked.index), `deleting a ${laneTitle(lane)} point`, null, again);
+        sendPoints(picked.clip, server, c.points.filter((_, k) => k !== picked.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
         usePoints.setState({ picked: null });
         return true;
       },

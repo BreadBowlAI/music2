@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { editing, goes, recorded, through, type Editing, type Step, type StepName } from "./history";
+import { allMine, editing, goes, recorded, through, type Editing, type Step, type StepName } from "./history";
 import type { DockView } from "./shell";
 import { token } from "./native";
 import { http } from "./http";
@@ -1197,10 +1197,10 @@ export function writeLane(
   const write = q.queue
     .then(async () => {
       // Through the gate (lib/history): once the window shows its own edits before this one. Made
-      // from an older state than it shows then (the window's own edit a moment before: an undo, a
-      // clip trimmed), it is made `again` from the lane as shown, when it can be.
+      // from an older state than it shows then, and only the window's own edits since (an undo, a
+      // clip trimmed a moment before), it is made `again` from the lane as shown, when it can be.
       const now = await through(graph.session, ours);
-      const remade = again && now.view.revision > base ? again(now) : null;
+      const remade = again && now.view.revision > base && allMine(graph.session, base, now.view.revision) ? again(now) : null;
       const sent = named(remade ?? clips);
       const r = await graphApi.lane(graph.session, remade ? now.view.revision : base, module, lane, sent, step, ours);
       return { ...r, clips: sent };

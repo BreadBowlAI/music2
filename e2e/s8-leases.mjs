@@ -12,7 +12,7 @@
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { browser, page, errors, posts, api, state, caughtUp, toasts, key, box } = await open(1440, 900);
+const { browser, page, errors, posts, api, state, toasts, key, box } = await open(1440, 900);
 const PPB = 24;
 const bassClip = '[data-lane="bass.notes"] [data-clip]';
 const notesOf = () => JSON.parse(read("data/bass/notes.json")).clips;
@@ -77,8 +77,6 @@ check(await until(async () => (await undoNow()).startsWith("Undo moving a Bass c
 check(await until(async () => (await leases()).length === 0), "the lease ended");
 
 // ---------------------------------------------------------------- Esc puts it back
-// A drag names the clip as the page draws it: the page shows the move first.
-await caughtUp();
 n = posts.length;
 const rev1 = await revision();
 const c1 = await box(bassClip);

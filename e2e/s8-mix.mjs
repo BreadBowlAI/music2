@@ -11,16 +11,14 @@
 import { spawn } from "node:child_process";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { page, errors, posts, api, state, caughtUp, toasts, key, box, view } = await open(1440, 900);
+const { page, errors, posts, api, state, toasts, key, box, view } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
 const sent = (path) => posts.filter((p) => p.url === `/api/graph/${path}`).length;
-// ⌘Z, until the page shows the revision it made: the mixer is one call, so the next gesture on any
-// of its knobs goes from the revision the page shows, and is refused from an older one.
 const undo = async () => {
-  const answered = page.waitForResponse((r) => r.url().endsWith("/api/graph/undo"), { timeout: 8000 }).catch(() => null);
+  const rev = (await state()).view.revision;
   await key("Meta+z");
-  return !!(await answered) && caughtUp();
+  return until(async () => (await state()).view.revision !== rev);
 };
 const orig = { song: read("song.ts"), keys: read("tracks/keys.ts") };
 const songIs = (text) => until(() => read("song.ts") === text);
@@ -183,8 +181,6 @@ await songIs(entry("kick: kick.out,", "kick: { in: kick.out, db: db(-60) },"));
 // The fader shows −60 dB before the wheel turns it, as a person would see it: a thumb measured
 // before the window has the new value is where 0 dB was, and its notch steps from there.
 await until(async () => (await faderOf("kick")).value === -60);
-// The fader shows its own value at once; the wheel goes from the revision the page shows.
-await caughtUp();
 const kt = await box(thumb("kick"));
 await page.mouse.move(kt.x + kt.width / 2, kt.y + kt.height / 2);
 await page.mouse.wheel({ deltaY: 40 });

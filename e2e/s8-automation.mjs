@@ -106,8 +106,6 @@ check(!(await page.$(`${clipSel}[data-picked]`)), "and not the clip");
 check(await until(async () => (await undoNow()).startsWith("Undo adding a Decay × point")), `Undo names it: ${await undoNow()}`);
 
 // ---------------------------------------------------------------- a drag moves it
-// The timeline takes a gesture once it shows its last edit (one sooner does nothing).
-await caughtUp();
 const from = await where(2, v0);
 const target = { x: from.x + PPB, y: from.r.y + 2 };
 n = posts.length;
@@ -121,7 +119,6 @@ check(!!bubble && / · 2\.4\.1$/.test(bubble), `while dragged, a bubble says its
 check(gestures(n).length === 1 && (await clips())[0].points.length === 3, "one gesture, still three points");
 
 // ---------------------------------------------------------------- ⌫ deletes it
-await caughtUp();
 n = posts.length;
 await key("Backspace");
 check(await until(async () => (await clips())[0]?.points.length === 2), "⌫ deletes the picked point");
@@ -129,7 +126,6 @@ check(gestures(n).map((g) => g.op).join() === "points" && (await clips()).length
 check(await until(async () => (await undoNow()).startsWith("Undo deleting a Decay × point")), `Undo names it: ${await undoNow()}`);
 
 // ---------------------------------------------------------------- Draw mode paints
-await caughtUp();
 await key("b");
 const top = await where(0.2, (await lane()).max);
 const bottom = await where(3.9, (await lane()).min);

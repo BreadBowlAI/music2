@@ -29,15 +29,8 @@ const centre = async (sel) => {
   const b = await box(grip(sel));
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
-/**
- * Until a control takes a press again: while its last value is being written it is disabled; and
- * until the page shows the revision that wrote it, as a gesture goes from the revision the page
- * shows (the mixer is one call: a change to any of its knobs changes it).
- */
-const ready = async (sel) => (await until(async () => (await page.$eval(sel, (e) => e.getAttribute("aria-disabled"))) !== "true")) && caughtUp();
 /** Drag a knob up by `dy` pixels (down if negative), holding ⇧ from `fineFrom` pixels on. */
 const drag = async (sel, dy, { fineFrom = Infinity } = {}) => {
-  await ready(sel);
   const c = await centre(sel);
   await page.mouse.move(c.x, c.y);
   await page.mouse.down();
@@ -81,7 +74,6 @@ await drag(hatsPan, -45, { fineFrom: 15 });
 // 15px coarse (−0.1), then ⇧ for 30px more (−0.02), from where the knob was when ⇧ went down.
 check(await until(() => hatsLine()?.[2] === "0.4"), `⇧ pressed mid-drag goes on finely from there, with no jump: 0.52 → 0.4 (${hatsLine()?.[2]})`);
 // The knob's whole place drags it, its value too, not only the circle (taste.md §2.2).
-await ready(hatsPan);
 const name = await page.$eval(`${hatsPan} .tabular-nums`, (e) => { const r = e.getBoundingClientRect(); return { x: r.left + 4, y: r.top + r.height / 2 }; });
 await page.mouse.move(name.x, name.y);
 await page.mouse.down();
@@ -137,7 +129,6 @@ await page.keyboard.press("Enter");
 check(await until(() => keysLine()?.[2] === "-0.2"), `"L20" writes a pan of -0.2 (${keysLine()?.[2]})`);
 
 // Tab writes and moves on to the next knob.
-await caughtUp();
 c = await centre(hatsDb);
 await page.mouse.click(c.x, c.y, { count: 2 });
 await page.waitForSelector(`${hatsDb} [data-testid=knob-type-in]`, { timeout: 2000 });
@@ -175,7 +166,6 @@ for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
 check(await until(() => keysLine()?.[1] === "-2.7"), `↑ three times on a focused fader: −3 → −2.7 dB (${keysLine()?.[1]})`);
 await sleep(800);
 check((await revision()) === rev + 1, "written once, when the steps stop");
-await caughtUp();
 await page.keyboard.down("Shift");
 await page.keyboard.press("ArrowUp");
 await page.keyboard.up("Shift");

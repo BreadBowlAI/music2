@@ -91,8 +91,6 @@ const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title);
 async function undoTo(text, what) {
   await key("Meta+z");
   check(await until(() => read(FILE) === text), `${what}: ⌘Z puts ${FILE} back byte for byte`);
-  // The roll's next edit goes from the revision the page shows: the undo's, once it shows it.
-  await caughtUp();
 }
 /** One write: the revision moves by one, and stays. */
 async function oneStep(rev) {

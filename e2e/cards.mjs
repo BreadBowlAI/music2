@@ -15,7 +15,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, caughtUp, key, view, toasts, box } = await open(1440, 900);
+const { page, errors, key, view, toasts, box } = await open(1440, 900);
 
 /** The lint over what is inside `sel`. */
 const linted = async (sel, what) => {
@@ -183,9 +183,7 @@ await page.keyboard.press("Enter");
 check(await until(() => read("tracks/box.ts").includes("{ held: true, voices: 6 }")), `6 on Return writes voices: 6: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
 check(await stepIs("Box voices"), `one undo step: ${await undoTitle()}`);
 
-// A track: a menu of the song's tracks, as the timeline has them, top to bottom. Its pick goes from
-// the revision the page shows, and voices: 6 changed this call: so the page shows that first.
-await caughtUp();
+// A track: a menu of the song's tracks, as the timeline has them, top to bottom.
 await page.click(`${card} [data-setting="follows"] [data-testid=setting-menu]`);
 await page.waitForSelector("[data-testid=setting-options]");
 const listed = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
@@ -195,8 +193,7 @@ await page.click('[data-testid=setting-options] [data-option="Hats"]');
 check(await until(() => read("tracks/box.ts").includes('{ held: true, voices: 6, follows: "hats" }')), `picking Hats writes its key: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
 check(await stepIs("Box approx. track"), `one undo step, named by its label with its dot: ${await undoTitle()}`);
 
-// A recording: a WAV dropped on it, from the revision the page shows, once that is the pick's.
-await caughtUp();
+// A recording: a WAV dropped on it.
 fs.mkdirSync(`${ROOT}/files`, { recursive: true });
 wav(`${ROOT}/files/tone.wav`);
 const rec = `${card} [data-setting="sample"] [data-testid=recording]`;
