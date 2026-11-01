@@ -509,7 +509,7 @@ fn the_sdk_writes_a_settings_label_only_when_given() {
         [("lib/c.ts", lib), ("song.ts", song)].iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
     let mut o = Options::new(code, "song.ts");
     o.time_limit = Duration::from_secs(2);
-    let [_, _, components, _] = on_own_thread(|| run_sdk(&o).map(|(json, _)| json)).unwrap_or_else(|e| panic!("{e:?}"));
+    let [_, _, components, _] = on_own_thread(|| run_sdk(&o).map(|run| run.json)).unwrap_or_else(|e| panic!("{e:?}"));
     let all: serde_json::Value = serde_json::from_str(&components).unwrap();
     let c = all.as_array().unwrap().iter().find(|d| d["id"] == "c").expect("c's descriptor");
     let settings = c["settings"].as_array().unwrap();

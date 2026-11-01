@@ -1011,7 +1011,7 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
 /// [`build_full`], on this thread.
 fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     let err = |m: String| vec![Diagnostic::error("code.build", m)];
-    let ([json, outputs, components, units], state) = run_sdk(opts)?;
+    let SdkRun { json: [json, outputs, components, units], state } = run_sdk(opts)?;
     let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
     let components: Vec<Descriptor> =
         serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
@@ -1025,9 +1025,15 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone(), components, units })
 }
 
-/// The SDK's run of `opts`, on this thread, as the JSON it writes: the IR, the outputs, the
-/// descriptors and the unit table; and what the host recorded while it ran.
-fn run_sdk(opts: &Options) -> Result<([String; 4], Rc<RefCell<State>>), Vec<Diagnostic>> {
+/// What one run of the SDK hands back: the JSON it wrote (the IR, the outputs, the descriptors and
+/// the unit table), and what the host recorded while it ran.
+struct SdkRun {
+    json: [String; 4],
+    state: Rc<RefCell<State>>,
+}
+
+/// The SDK's run of `opts`, on this thread.
+fn run_sdk(opts: &Options) -> Result<SdkRun, Vec<Diagnostic>> {
     let err = |m: String| vec![Diagnostic::error("code.build", m)];
     if !opts.code.contains_key(&opts.entry) {
         return Err(err(format!("the entry `{}` is not a code file of the project", opts.entry)));
@@ -1054,7 +1060,7 @@ fn run_sdk(opts: &Options) -> Result<([String; 4], Rc<RefCell<State>>), Vec<Diag
         };
         run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, limit.passed())])
     });
-    Ok((result?, state))
+    Ok(SdkRun { json: result?, state })
 }
 
 /// How long a run may work before it is stopped as an endless loop: CPU time of the thread it runs

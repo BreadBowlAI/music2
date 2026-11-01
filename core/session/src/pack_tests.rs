@@ -784,7 +784,11 @@ fn a_song_made_before_wave_3_is_told_the_line_to_write() {
     let dir = Store::at(root.join("store")).version_dir(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0));
     copy(&m2_song::pack::source_packs().join("@m2/synths"), &dir);
     let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
-    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"").replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"1\"");
+    // Made for @m2/core 1, whatever minor of 2 the bundled one asks for (PACK-23).
+    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"");
+    let toml: String =
+        toml.lines().map(|l| if l.starts_with("\"@m2/core\" = ") { "\"@m2/core\" = \"1\"" } else { l }).map(|l| format!("{l}\n")).collect();
+    assert!(toml.contains("\"@m2/core\" = \"1\""), "{toml}");
     std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
     let listing = Listing::of(&dir).unwrap();
     std::fs::write(dir.join(LISTING), listing.text()).unwrap();
