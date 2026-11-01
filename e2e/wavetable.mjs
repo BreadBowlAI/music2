@@ -3,7 +3,8 @@
 // (PACK-10). Its card in Device shows its groups (Oscillators, Filter, Envelopes, LFO, Unison, then
 // More); its settings read by their labels (Table A, never TableA: CARD-34); table A is a menu of
 // the five built-in tables, and picking vowels writes `tableA: "vowels"`, one undo step ("Undo
-// Wavetable table A") that ⌘Z takes back byte for byte; position A dragged up writes a new
+// Wavetable table A") that ⌘Z takes back byte for byte; once the page shows the revision ⇧⌘Z made
+// (a drag goes from the revision the page shows), position A dragged up writes a new
 // position; the amp envelope's picture draws its three corners, and the filter envelope's and the
 // filter's pictures are there too. A note played on it from a MIDI keyboard (M2_MIDI=inject) moves
 // its header's meter, and stops when the key is let go. Each state linted.
@@ -22,6 +23,9 @@ const linted = async (sel, what) => {
   check(bad.length === 0, `lint: ${what}${bad.length ? `: ${bad.slice(0, 3).join(" | ")}` : ""}`);
 };
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title).catch(() => null);
+/** The revision the server has published, and the one the page shows. */
+const revision = async () => (await api("")).body.view?.revision ?? -1;
+const shown = () => page.$eval("[data-revision]", (e) => Number(e.dataset.revision)).catch(() => -1);
 
 // ---------------------------------------------------------------- + Track
 
@@ -71,6 +75,8 @@ await page.click('[data-testid=setting-options] [data-option="vowels"]');
 const vowels = fresh.replace('wavetable(lane.notes("notes"))', 'wavetable(lane.notes("notes"), { tableA: "vowels" })');
 check(await until(() => read(file) === vowels), `picking vowels writes it into the call: ${read(file).match(/wavetable\(lane[^\n]*/)?.[0]}`);
 check(await until(async () => (await undoTitle()) !== steps && (await undoTitle()) === "Undo Wavetable table A (⌘Z)"), `one undo step, named by its label (CARD-34): ${await undoTitle()}`);
+// The revision the pick made: ⌘Z and ⇧⌘Z each make one more.
+const picked = await revision();
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read(file) === fresh), "⌘Z takes the code back, byte for byte");
@@ -79,6 +85,11 @@ check(await until(() => read(file) === vowels), "and ⇧⌘Z puts vowels back");
 
 // ---------------------------------------------------------------- position, turned
 
+// A drag goes from the revision the page shows. The server writes the file before it publishes the
+// revision ⇧⌘Z made, so the page must show that revision first: a gesture from an older one, around
+// whose control the code has changed since, is refused ("the code changed around this control …")
+// and writes nothing.
+check(await until(async () => (await shown()) >= picked + 2 && (await shown()) === (await revision())), `the page shows the revision ⇧⌘Z made: ${await shown()}`);
 const position = `${card} [data-knob="position A"]`;
 check(await until(async () => !!(await page.$(position))), "position A is a knob");
 await until(async () => (await page.$eval(position, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
