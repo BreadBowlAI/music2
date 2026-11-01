@@ -467,7 +467,6 @@ await key("q");
 check(await until(async () => (await shown("kick", "hits"))[0].notes.every((x) => Number.isInteger(x.start))), "Q quantizes the selected clip's notes onto the roll's grid (1/32)");
 const q = lastGesture(n)[0];
 check(q?.op === "quantize" && q.grid === 0.125 && (await until(async () => (await undoNow()).startsWith("Undo quantizing a Kick clip to 1/32"))), `as one gesture, named in Undo: ${JSON.stringify({ op: q?.op, grid: q?.grid })}; ${await undoNow()}`);
-await caughtUp();
 await clickClip("hats.hits", H);
 await key("ArrowRight");
 check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 0.5), "→ moves the selected clip by the grid (an eighth at this zoom)");
@@ -477,7 +476,6 @@ await key("ArrowLeft");
 await key("ArrowLeft");
 await key("ArrowLeft");
 check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 3), `three quick ← move it on from where each left it: ${(await shown("hats", "hits")).find((c) => c.id === H)?.start}`);
-await caughtUp();
 
 // ---------------------------------------------------------------- the lane menu
 await page.mouse.click(kickRow.x + 34.3 * PPB, kickRow.y + kickRow.height / 2, { button: "right" });
