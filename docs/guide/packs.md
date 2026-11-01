@@ -25,7 +25,7 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 | Pack | What is in it |
 |---|---|
 | `@m2/synths` | the polysynth's sounds (supersaw, lead, pad, pluck, 808 sub, bass, strings), the FM synth's (keys, bell, metal), each synth with every knob, and three simple instruments to read and copy |
-| `@m2/drums` | an 808/909 drum machine: the whole kit, and One drum, which plays one drum, picked from its menu |
+| `@m2/drums` | 808/909 drums: the Drum, which plays one drum, picked from its menu, and three drum kits of it; and the older drum machine, a whole kit on one track |
 | `@m2/effects` | delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen |
 | `@m2/mixing` | the tools a mix needs: an eight-band EQ, a gate, a transient shaper, a de-esser and a multiband compressor |
 

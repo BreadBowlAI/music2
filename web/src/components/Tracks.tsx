@@ -136,12 +136,15 @@ export async function addTrack(instrument: Instrument, after: string | null): Pr
 /** + Track's group of kits (KIT-5): several tracks at once, worded so beside the Drum. */
 export const KITS = "Drum kit (several tracks)";
 
-/** The kits as + Track's rows, each standing in for its kit by the component `kit:<instrument>/<name>`. */
+/**
+ * The kits as + Track's rows, each standing in for its kit by the component `kit:<instrument>/<name>`,
+ * and found by the group's words too: typing "drum" lists the Drum and the kits.
+ */
 export function kitRows(kits: Kit[]): Instrument[] {
   return kits.map((k) => ({
     component: `kit:${k.component}/${k.name}`,
     label: k.name,
-    name: "",
+    name: KITS,
     module: "",
     description: `${k.tracks.join(", ")} and a Drums bus`,
     category: KITS,
