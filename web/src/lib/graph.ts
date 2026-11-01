@@ -1,6 +1,7 @@
 // The graph view of the open song project: types, API, layout.
 
 import { editing, recorded, type Editing, type Step, type StepName } from "./history";
+import type { DockView } from "./shell";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -218,7 +219,28 @@ export interface Dependent { module: string; label: string; component: string; f
  */
 export interface ModuleView { key: string; label: string; track: boolean; nodes: ViewNode[]; edges: [string, string][]; port_edges: PortEdge[] }
 
-export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
+export interface GraphView {
+  revision: number;
+  modules: ModuleView[];
+  /** The song's drum kits (KIT-1): each bus and the Drum tracks that go to it. Absent from older servers. */
+  kits?: Kit[];
+  draft_errors: string[];
+}
+
+/** A drum kit (KIT-1): a bus, by its key, named by its label, and its Drum tracks in the timeline's order. */
+export interface Kit { bus: string; label: string; rows: KitRow[] }
+/** A Drum track of a kit: its key, the notes lane its Drum plays, and the sound it plays (null when the code works it out). */
+export interface KitRow { track: string; lane: string; sound: string | null }
+
+/** The kit `module` is the bus of, or a row of; null when it is in none (KIT-10). */
+export const kitOf = (graph: GraphState, module: string | null) =>
+  (module && graph.view.kits?.find((k) => k.bus === module || k.rows.some((r) => r.track === module))) || null;
+
+/**
+ * The view the dock shows for `module`: the window's view, but Notes in Beat's place while `module`
+ * is in no drum kit (KIT-10). The window's choice stays Beat, so selecting a kit's track shows it again.
+ */
+export const dockView = (graph: GraphState, view: DockView, module: string | null): DockView => (view === "beat" && !kitOf(graph, module) ? "notes" : view);
 
 /** What to show for a lane or a module: its label, which defaults to its key. */
 export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
@@ -987,6 +1009,9 @@ export const graphApi = {
     edit(session, step, call<Edit>("/mix/send", { session, channel, bus, action, pre })),
   /** Send channel `channel` to bus channel `to` instead of the master, or (null) back to the master. One undoable edit. */
   mixRoute: (session: number, channel: string, to: string | null, step: Step) => edit(session, step, call<Edit>("/mix/route", { session, channel, to })),
+  /** + Drum (KIT-15): a Drum track playing `sound` added to the kit of bus `bus`, named by it. One undoable edit. */
+  kitDrum: (session: number, bus: string, sound: string) =>
+    edit(session, (r) => ({ name: `adding ${r.label}`, structural: true }), call<Edit & { module: string; label: string }>("/kit/drum", { session, bus, sound })),
   /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
   duplicateTrack: (session: number, module: string, name: string) =>
     edit(

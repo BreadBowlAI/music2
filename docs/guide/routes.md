@@ -74,7 +74,7 @@ An example body:
 
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord) or groove. It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove or hits (the beat grid's steps). It writes the song: one undo step.
 
 An example body:
 
@@ -184,6 +184,16 @@ An example body:
 
 ```json
 {"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}
+```
+
+### `POST /api/graph/kit/drum`
+
+Add a Drum track to a drum kit, by its bus: playing a sound of the Drum's, named by it, going to the bus. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "bus": "drums", "sound": "snare"}
 ```
 
 ### `POST /api/graph/label`

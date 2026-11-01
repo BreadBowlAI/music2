@@ -185,6 +185,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
 - **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
+- **The beat grid ([KIT-10](architecture.md#drum-kits)) is a first cut**: a click on a step doesn't sound the drum (Notes' audition does); a row's sound is changed on its Drum's card, not in the grid; the velocity lane shows one row at a time; nothing in the grid copies, repeats or shifts a pattern (the timeline's clip gestures do it to the clips); and its rows can't be dragged into another order (the timeline's order is theirs). Choking across tracks waits too (the design's D3).
 
 ## Automation
 

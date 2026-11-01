@@ -1804,7 +1804,7 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { 
  * the transport clock (taste.md TL-9). Hidden outside the grid: a line past its end would widen the
  * scrolling area.
  */
-function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: number }) {
+export function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(
     () =>
@@ -1820,7 +1820,7 @@ function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: nu
   return <div ref={ref} data-testid="roll-playhead" className="absolute top-0 bottom-0 z-10 w-px bg-fg-strong pointer-events-none" />;
 }
 
-function PlayCap({ start, ppb }: { start: number; ppb: number }) {
+export function PlayCap({ start, ppb }: { start: number; ppb: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(
     () =>

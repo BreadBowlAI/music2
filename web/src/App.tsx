@@ -61,7 +61,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.metaKey || e.ctrlKey) return null;
   if (e.altKey) {
     // By the key's place: ⌥1 types ¡ on a Mac.
-    const n = /^Digit([1-4])$/.exec(e.code);
+    const n = /^Digit([1-5])$/.exec(e.code);
     if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
     // ⌥← and ⌥→: Transport ▸ Previous and Next Marker.
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) return e.key === "ArrowLeft" ? "prev_marker" : "next_marker";

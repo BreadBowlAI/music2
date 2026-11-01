@@ -10,8 +10,11 @@ import { create } from "zustand";
 import { DOCK_H, DOCK_MIN, WIDE, dockMax } from "./layout";
 import type { ClipRef } from "./graph";
 
-/** The dock's views, in the order of the switcher and of ⌥1 to ⌥4. */
-export const VIEWS = ["device", "notes", "mix", "code"] as const;
+/**
+ * The dock's views, in the order of ⌥1 to ⌥5. Beat, the beat grid (KIT-10), is ⌥5, and the switcher
+ * shows it beside Notes, only while a drum kit's track is selected.
+ */
+export const VIEWS = ["device", "notes", "mix", "code", "beat"] as const;
 export type DockView = (typeof VIEWS)[number];
 
 const VIEW_KEY = "m2.dock.view";
