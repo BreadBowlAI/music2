@@ -120,6 +120,8 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const step = grid.step;
   const [ppb, setPpb] = useState(88);
   const [visible, setVisible] = useState(0);
+  // How far it is scrolled: only the steps near what shows are drawn.
+  const [left, setLeft] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
   const anchor = useRef<{ beat: number; x: number } | null>(null);
@@ -146,6 +148,10 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   while (end * ppb < visible) end += barAt(meter, end).length;
   const steps = stepsTo(meter, end, step);
   const width = end * ppb;
+  // What shows, a bar's room either side: the steps drawn, and the hits.
+  const from = left / ppb - 4, to = (left + visible) / ppb + 4;
+  const near = (start: number, length = 0) => start + length > from && start < to;
+  const shown = steps.filter((s) => near(s.start, s.end - s.start));
 
   // Once the song shows what a gesture asked, the grid shows the song.
   useEffect(() => {
@@ -309,7 +315,10 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           ref={scroller}
           data-testid="beat-scroller"
           className="absolute inset-0 overflow-auto"
-          onScroll={(e) => strip.current && (strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`)}
+          onScroll={(e) => {
+            if (strip.current) strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`;
+            setLeft(e.currentTarget.scrollLeft);
+          }}
         >
           <div className="relative" style={{ width: NAMES_W + width, height: ROLL_RULER_H + kit.rows.length * ROW_H }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
@@ -353,7 +362,8 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
                   <Cells
                     row={row}
                     steps={steps}
-                    hits={rowsHits[i]}
+                    shown={shown}
+                    hits={rowsHits[i].filter((h) => near(h.start, h.length))}
                     inSteps={hits}
                     ppb={ppb}
                     tone={t}
@@ -397,7 +407,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           >
             <div className="absolute inset-x-0 border-t border-dashed border-line pointer-events-none" style={{ top: VEL_PAD }} />
             <div className="absolute inset-x-0 border-t border-dashed border-line pointer-events-none" style={{ top: VEL_H / 2 }} />
-            {selectedHits.map((h, i) => {
+            {selectedHits.filter((h) => near(h.start)).map((h, i) => {
               const v = velocityOf(h);
               const height = (VEL_H - 2 * VEL_PAD) * clamp(v, 0, 1);
               const t = tone(selected.track);
@@ -428,11 +438,12 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
 /**
  * One row's steps: a cell each, shaded by beat; an on step filled in the track's colour by its
  * velocity; a hit off the grid (KIT-11) a mark where it starts, as long as it plays, over its step's
- * tint.
+ * tint. Only the steps near what shows are drawn; `steps` are all of them, to place a hit in its own.
  */
 function Cells({
   row,
   steps,
+  shown,
   hits,
   inSteps,
   ppb,
@@ -446,6 +457,9 @@ function Cells({
 }: {
   row: KitRow;
   steps: Step[];
+  /** The steps drawn: those near what shows. */
+  shown: Step[];
+  /** The hits near what shows. */
   hits: Hit[];
   /** The hits that start in each step, by its start. */
   inSteps: Map<number, Hit[]>;
@@ -472,7 +486,7 @@ function Cells({
       onPointerCancel={(e) => onUp(e, true)}
       onLostPointerCapture={(e) => onUp(e, true)}
     >
-      {steps.map((s) => {
+      {shown.map((s) => {
         const on = isOn(s);
         const inStep = inSteps.get(s.start) ?? [];
         // On the grid: a hit at the step's start, a step long. Anything else shows where it is.

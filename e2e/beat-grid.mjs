@@ -149,6 +149,13 @@ check(await until(async () => (await lane("clap")).length === 0), "four undos ta
 await step("Meta+z");
 check(await until(async () => !(await has(row("clap"))) && !fs.existsSync(`${PROJ}/tracks/clap.ts`) && read("song.ts") === song), "a fifth takes the Clap back: its row, its file and its channel");
 
+// ---------------------------------------------------------------- a long song draws what shows
+
+check((await has(cell("kick", 0))) && !(await has(cell("kick", 32))), "the steps far out of view aren't drawn: beat 1's is, the last bar's isn't");
+await page.$eval("[data-testid=beat-scroller]", (e) => (e.scrollLeft = e.scrollWidth));
+check(await until(async () => (await has(cell("kick", 32))) && (await on("kick", 31))), "scrolled to the end, the last bars' steps are, the song's last hit on");
+await page.$eval("[data-testid=beat-scroller]", (e) => (e.scrollLeft = 0));
+
 // ---------------------------------------------------------------- the lint, and a track in no kit
 
 await page.evaluate(lint, "[data-testid=dock]").then((bad) => check(bad.length === 0, `the lint finds nothing in the beat grid${bad.length ? `: ${bad.slice(0, 6).join(" | ")}` : ""}`));
