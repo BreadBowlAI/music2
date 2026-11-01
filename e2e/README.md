@@ -134,7 +134,7 @@ fixes it), so no suite needed `serial`. Run 1 shared the machine with another tr
 
 ### Tiers and parts (`--tier`, `--shard`)
 
-In short: every pull request runs the PR tier, `all --tier pr` (55 of the 76 runs), split over CI
+In short: every pull request runs the PR tier, `all --tier pr` (72 of the 93 runs), split over CI
 machines with `--shard`. The other 21 runs are tagged `tier: "nightly"` in `run.mjs`, each with
 why, and run every night with all the rest (`ci/check.sh --nightly`: `all`, one at a time).
 
