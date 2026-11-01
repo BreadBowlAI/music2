@@ -1489,6 +1489,8 @@ export default song(({ lane, time }) => {
     track("fm-synth", { name: "FM synth" }, ({ lane }) => fm.custom(lane.notes("notes"))),
     // @m2/synths:synth-custom added as a track
     track("polysynth", { name: "Polysynth" }, ({ lane }) => synth.custom(lane.notes("notes"))),
+    // + Drum: a Drum playing a snare
+    track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare" })),
     // clap:m2.probe added as a track
     track("m2-probe", { name: "m2 probe" }, ({ lane }) => plugin("clap:m2.probe", { notes: lane.notes("notes"), key: "m2-probe" })),
     // an audio track added

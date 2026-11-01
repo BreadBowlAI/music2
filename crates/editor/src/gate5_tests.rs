@@ -364,6 +364,13 @@ fn planned_call_forms_are_current() {
         let key = crate::keys::propose(&i.label, |_| false);
         forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label, &[])));
     }
+    // + Drum in the beat grid (KIT-15): a Drum track playing the sound picked.
+    let drum = s.instruments().into_iter().find(|i| i.component == crate::kits::DRUM).expect("the Drum is listed");
+    let values = crate::kits::sound_values("snare");
+    forms.push(format!(
+        "    // + Drum: a Drum playing a snare\n    {},\n",
+        crate::tracks::track_call_text(&drum, "snare", "Snare", &values)
+    ));
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(
         "    // clap:m2.probe added as a track\n    {},\n",

@@ -90,12 +90,18 @@ pub fn add_drum(s: &mut Session, bus: &str, sound: &str) -> Result<Made, EditErr
     let drum = NewTrack {
         play: Play::Instrument(DRUM.into()),
         label: Some(label),
-        values: vec![("drum".into(), tracks::quoted(sound))],
+        values: sound_values(sound),
         to: channel,
         ..NewTrack::default()
     };
     let after = kit.rows.last().map(|r| r.track.clone());
     Ok(tracks::add_tracks(s, &[drum], after.as_deref(), None)?.remove(0))
+}
+
+/// What + Drum writes into a new Drum's call to play `sound`: `{ drum: "snare" }`. Also checked as a
+/// call form (PKG-11, `planned_call_forms_are_current`).
+pub(crate) fn sound_values(sound: &str) -> Vec<(String, String)> {
+    vec![("drum".into(), tracks::quoted(sound))]
 }
 
 /// Track `module` as a row, when it is a Drum track: one Drum, from a notes lane of its own.
