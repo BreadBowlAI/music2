@@ -203,6 +203,7 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     let (mut left, mut notes, mut code_files, mut packs) = (vec![], vec![], vec![], BTreeSet::new());
     let mut lanes: BTreeMap<String, (Knob, Left)> = BTreeMap::new();
     for mut f in code(files, &old) {
+        left.extend(f.unparsed.take());
         left.append(&mut f.left);
         notes.append(&mut f.notes);
         packs.extend(f.packs.iter().cloned());
@@ -597,6 +598,9 @@ struct Code<'t> {
     /// The starts of the calls handled (converted or left), so no other check repeats them.
     handled: BTreeSet<u32>,
     left: Vec<Left>,
+    /// Why it can't be read at all: an upgrade can't go on, but a song made for this music2 with a
+    /// typo in it wasn't made for an older one (`needed`).
+    unparsed: Option<Left>,
     notes: Vec<Left>,
     /// The packs its rewritten code plays.
     packs: BTreeSet<PackName>,
@@ -622,11 +626,11 @@ impl<'t> Code<'t> {
                 }
             }
         }
-        let (sites, left) = match m2_script::sites::instrument(file, text, 0) {
-            Ok(i) => (i.sites, vec![]),
+        let (sites, unparsed) = match m2_script::sites::instrument(file, text, 0) {
+            Ok(i) => (i.sites, None),
             Err(e) => (
                 vec![],
-                vec![Left { file: file.into(), line: 1, what: format!("it doesn't read as TypeScript: {e}"), write: String::new() }],
+                Some(Left { file: file.into(), line: 1, what: format!("it doesn't read as TypeScript: {e}"), write: String::new() }),
             ),
         };
         let drums = match locals.iter().find(|(_, (m, n))| DRUMS_FROM.contains(&m.as_str()) && n == "drums") {
@@ -644,7 +648,8 @@ impl<'t> Code<'t> {
             edits: vec![],
             replaced: vec![],
             handled: BTreeSet::new(),
-            left,
+            left: vec![],
+            unparsed,
             notes: vec![],
             packs: BTreeSet::new(),
             lanes: vec![],

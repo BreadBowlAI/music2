@@ -677,3 +677,14 @@ fn an_own_pack_locked_with_other_files_is_locked_again() {
     assert!(up.changes.iter().any(|c| c.file == "music2.lock"), "{:?}", up.changes);
     drop(s);
 }
+
+// AGENT-14: a song made for this music2 that doesn't build for its own reasons (a typo) wasn't made
+// for an older music2: the status says nothing of an upgrade.
+#[test]
+fn a_song_broken_otherwise_needs_no_upgrade() {
+    let f = fixture("examples/first-song");
+    f.write("song.ts", "export default (;\n");
+    let s = f.open();
+    assert!(!s.draft_errors.is_empty());
+    assert!(!needed(&s), "a typo isn't an older music2");
+}
