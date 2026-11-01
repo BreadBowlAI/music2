@@ -69,25 +69,20 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 
 /**
  * This window's own changes to the song open (`session`), AGENT-2: the undo steps its edits made, by
- * id (only these may ⌘Z take back unshown), the newest of them, the revisions its changes made (its
- * edits, undos and redos), and the newest of those, which every gesture waits for the window to show.
+ * id, in the order their answers came (only these may ⌘Z take back unshown), the revisions its
+ * changes made (its edits, undos and redos), and the newest of those, which every gesture waits for
+ * the window to show.
  */
-let mine: { session: number; steps: Set<number>; newest: number; revisions: Set<number>; revision: number } = {
-  session: 0,
-  steps: new Set(),
-  newest: 0,
-  revisions: new Set(),
-  revision: 0,
-};
-const minein = (session: number) =>
-  mine.session === session ? mine : (mine = { session, steps: new Set(), newest: 0, revisions: new Set(), revision: 0 });
+let mine: { session: number; steps: number[]; revisions: Set<number>; revision: number } = { session: 0, steps: [], revisions: new Set(), revision: 0 };
+const minein = (session: number) => (mine.session === session ? mine : (mine = { session, steps: [], revisions: new Set(), revision: 0 }));
 
 /**
  * An edit of this window on its way: sent (or, a drag let go, waiting to be), and not yet answered,
- * or refused. `end` once it is over.
+ * or refused. `since`: how many steps the window had kept when it started. `end` once it is over.
  */
 export interface Editing {
   readonly done: Promise<void>;
+  readonly since: number;
   end(): void;
 }
 
@@ -105,6 +100,7 @@ export function editing(): Editing {
   const done = new Promise<void>((r) => (resolve = r));
   const e: Editing = {
     done,
+    since: mine.steps.length,
     end() {
       onItsWay.delete(e);
       resolve();
@@ -120,11 +116,11 @@ export const onTheirWay = (): Editing[] => [...onItsWay];
 
 /** Whether undo step `step` of `session` was made by an edit of this window. */
 export function madeHere(session: number, step: number | undefined): boolean {
-  return step !== undefined && mine.session === session && mine.steps.has(step);
+  return step !== undefined && mine.session === session && mine.steps.includes(step);
 }
 
-/** The newest undo step of `session` this window's edits made, by id; 0 with none. */
-export const newestMade = (session: number) => (mine.session === session ? mine.newest : 0);
+/** The newest undo step of `session` this window kept since it had kept `since` (an edit's `since`); 0 with none. */
+export const madeSince = (session: number, since: number) => (mine.session === session ? Math.max(0, ...mine.steps.slice(since)) : 0);
 
 /**
  * A change of this window (an edit, an undo, a redo) to `file` was answered at revision `revision`
@@ -158,8 +154,7 @@ export function owned(session: number, answer: { revision: number; step?: number
   if (answer.step === undefined) return;
   changed(session, answer.revision, answer.file);
   const m = minein(session);
-  m.steps.add(answer.step);
-  m.newest = Math.max(m.newest, answer.step);
+  if (!m.steps.includes(answer.step)) m.steps.push(answer.step);
   const { graph, set } = useStore.getState();
   // Unless a newer state already says what is on top.
   if (answer.undo_name?.step === answer.step && graph?.session === session && graph.view.revision <= answer.revision) {

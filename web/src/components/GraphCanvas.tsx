@@ -18,7 +18,7 @@ import {
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { useSection } from "../lib/sections";
-import { madeHere, newestMade, onTheirWay, said, tookBack, type StepName } from "../lib/history";
+import { madeHere, madeSince, onTheirWay, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
 import { ending as takeEnding, useRecord } from "../lib/record";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
@@ -402,7 +402,6 @@ export function undoTop(graph: GraphState, id: "undo" | "redo") {
   waiting = true;
   const shown = useStore.getState().graph ?? graph;
   const atPress = (id === "redo" ? shown.redo_name : shown.undo_name)?.step ?? 0;
-  const before = newestMade(graph.session);
   const answered = Promise.all(awaited.map((e) => e.done)).then(() => true);
   const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), EDITS_WAIT_MS));
   topped = topped
@@ -412,9 +411,10 @@ export function undoTop(graph: GraphState, id: "undo" | "redo") {
       const now = useStore.getState();
       if (now.graph?.session !== graph.session) return;
       if (!all) return void now.toast(`Nothing was ${id === "redo" ? "redone" : "undone"}: your last edit isn't answered yet. Try again in a moment.`);
-      // The newest step this window's edits made since the press, if they made one.
-      const made = newestMade(graph.session);
-      return graphUndo(graph.session, id, id === "undo" && made > before ? made : atPress);
+      // The newest step this window kept since the first of those edits started (its answer may
+      // have come just before the press, the edit not over yet).
+      const made = madeSince(graph.session, Math.min(...awaited.map((e) => e.since)));
+      return graphUndo(graph.session, id, id === "undo" && made ? made : atPress);
     });
   return topped;
 }

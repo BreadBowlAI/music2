@@ -1178,11 +1178,14 @@ export default function SongTimeline({
           const box = e.currentTarget.getBoundingClientRect();
           const r = new DOMRect(box.left + BORDER, box.top + BORDER + BODY_TOP, box.width - 2 * BORDER, box.height - 2 * BORDER - BODY_TOP - BODY_BOTTOM);
           if (r.width > 0 && r.height > 0) {
+            // Its points as drawn: the window's own edit of them, until the timeline shows it.
+            const pending = usePoints.getState().editing;
+            const drawn = pending && sameClip(pending.clip, ref) ? { ...(c as ControlClip), points: pending.points } : (c as ControlClip);
             const scale = laneScale(lane);
-            const at = hit((c as ControlClip).points, c.length, scale.level, r.width, r.height, e.clientX - r.left, e.clientY - r.top, scale.path);
+            const at = hit(drawn.points, c.length, scale.level, r.width, r.height, e.clientX - r.left, e.clientY - r.top, scale.path);
             const draw = useShell.getState().draw;
             const point = at?.point ?? null;
-            if (draw || point !== null || (at && !onEdge)) return pointsFrom(ref, lane, c as ControlClip, r, e, point);
+            if (draw || point !== null || (at && !onEdge)) return pointsFrom(ref, lane, drawn, r, e, point);
           }
         }
         // On a step's mark of a lane of names: that point (CARD-24).
@@ -1190,7 +1193,9 @@ export default function SongTimeline({
         if (lane.kind === "steps" && !latest.current.locked && !add && !toggle && !onEdge) {
           const box = e.currentTarget.getBoundingClientRect();
           const r = new DOMRect(box.left + BORDER, box.top + BORDER + BODY_TOP, box.width - 2 * BORDER, box.height - 2 * BORDER - BODY_TOP - BODY_BOTTOM);
-          const clip = lane.clips[i];
+          // Its marks as drawn: the window's own edit of them, until the timeline shows it.
+          const pending = useSteps.getState().editing;
+          const clip = pending && sameClip(pending.clip, ref) ? { ...lane.clips[i], points: pending.points } : lane.clips[i];
           const near = clip.points.findIndex((p) => Math.abs(r.left + (p[0] / clip.length) * r.width - e.clientX) <= 4);
           if (near >= 0) return stepFrom(ref, lane, clip, r, e, near);
           const b = clip.start + ((e.clientX - r.left) / r.width) * clip.length;
@@ -1505,14 +1510,17 @@ export default function SongTimeline({
           const lane = findLane(latest.current.timeline, step.clip.module, step.clip.lane);
           const c = lane?.kind === "steps" ? lane.clips[clipIndex(lane.clips, step.clip)] : undefined;
           const server = lane && c ? serverRef(lane, step.clip) : null;
+          // Its marks as drawn: the window's own edit of them, until the timeline shows it.
+          const pending = useSteps.getState().editing;
+          const points = c && pending && sameClip(pending.clip, step.clip) ? pending.points : c?.points;
           useSteps.setState({ picked: null });
-          if (!lane || !c || !server || pickedStep(step, c.points, false) < 0 || latest.current.locked) return !latest.current.locked;
+          if (!lane || !points || !server || pickedStep(step, points, false) < 0 || latest.current.locked) return !latest.current.locked;
           // The point picked, out of the points as drawn when it goes.
           const again = (now: StepPoint[]) => {
             const k = indexOf(now, step.at);
             return k < 0 ? null : now.filter((_, j) => j !== k);
           };
-          sendSteps(step.clip, server, c.points.filter((_, k) => k !== step.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
+          sendSteps(step.clip, server, points.filter((_, k) => k !== step.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
           return true;
         }
         const { picked } = usePoints.getState();
@@ -1521,7 +1529,10 @@ export default function SongTimeline({
         const i = lane ? clipIndex(lane.clips, picked.clip) : -1;
         const c = lane?.kind === "control" ? lane.clips[i] : undefined;
         const server = lane && c ? serverRef(lane, picked.clip) : null;
-        if (!lane || !c || !server || pointIn(picked, c.points, false) < 0) {
+        // Its points as drawn: the window's own edit of them, until the timeline shows it.
+        const pending = usePoints.getState().editing;
+        const points = c && pending && sameClip(pending.clip, picked.clip) ? pending.points : c?.points;
+        if (!lane || !points || !server || pointIn(picked, points, false) < 0) {
           usePoints.setState({ picked: null });
           return false;
         }
@@ -1530,7 +1541,7 @@ export default function SongTimeline({
           const k = indexOf(now, picked.at);
           return k < 0 ? null : now.filter((_, j) => j !== k);
         };
-        sendPoints(picked.clip, server, c.points.filter((_, k) => k !== picked.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
+        sendPoints(picked.clip, server, points.filter((_, k) => k !== picked.index), `deleting a ${laneTitle(lane)} point`, null, { make: again });
         usePoints.setState({ picked: null });
         return true;
       },

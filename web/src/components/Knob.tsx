@@ -274,7 +274,9 @@ export function useKnobGesture({
     idle.current = null;
     if (dragging.current || !editable) return;
     dragging.current = begin(on);
-    latest.current = dragging.current.knob.value;
+    // From the value it shows: the last one it was let go at, though the window may not show that
+    // edit yet; a first pan's from its new knob's.
+    if (on) latest.current = dragging.current.knob.value;
     stopKeepalive();
     keepalive.current = window.setInterval(() => {
       const gesture = dragging.current;
