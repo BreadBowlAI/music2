@@ -4104,6 +4104,24 @@ fn the_make_kit_route_makes_a_drum_machine_track_a_kit() {
     assert!(!fixture.0.join("tracks/hats-2.ts").exists());
 }
 
+// RENDER-3 (the review's U1): a song whose code never compiled has nothing to render. Export, a
+// render and stems are refused in words, saying what to fix, before they start: never a panic.
+#[test]
+fn export_of_a_song_whose_code_doesnt_compile_is_refused_in_words() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", "import { song } from '@m2/core';\nexport default song(() => (;\n");
+    let graph = fixture.open();
+    let said = |e: anyhow::Error| format!("{e:#}");
+    let export = graph.export(m2_editor::render::Length::Seconds(1.0)).map(drop).map_err(said).unwrap_err();
+    assert!(export.starts_with("Fix the code first: it doesn't compile right now"), "{export}");
+    assert!(export.contains("song.ts"), "it says where: {export}");
+    let render = graph.render(m2_editor::render::Length::Seconds(1.0)).map(drop).map_err(said).unwrap_err();
+    assert!(render.starts_with("Fix the code first"), "{render}");
+    let token = graph.state().unwrap()["session"].as_u64().unwrap();
+    let stems = graph.stems_refused(token).unwrap().unwrap_or_default();
+    assert!(stems.starts_with("Fix the code first"), "{stems}");
+}
+
 /// `n` blocks of 128 frames, both channels, interleaved.
 fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
     let mut out = vec![];

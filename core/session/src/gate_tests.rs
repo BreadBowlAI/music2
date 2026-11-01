@@ -798,7 +798,13 @@ fn the_mixer_and_master_gains_change_no_bit() {
         f.write("old-mix.ts", OLD_MIX);
         f.write("song.ts", song.replace("from \"std/mix\"", "from \"./old-mix\""));
         let before = f.open();
-        assert!(before.problems().is_empty(), "{name}: {:?}", before.problems());
+        // The code's errors are apart from the song's problems (DIAG-1): it must build, or it renders nothing.
+        assert!(
+            before.draft_errors.is_empty() && before.problems().is_empty(),
+            "{name}: {:?} {:?}",
+            before.draft_errors,
+            before.problems()
+        );
         let ((gains_before, stereo_before), then) = heard(before);
         // Today's graph has more: a gain for each channel that didn't write one, the master's, and its stereo.
         assert!(gains > gains_before, "{name}: {gains} gains today against {gains_before} before");

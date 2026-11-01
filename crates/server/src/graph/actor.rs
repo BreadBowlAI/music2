@@ -1734,6 +1734,9 @@ impl Actor {
 
     pub(super) fn render(&mut self, length: Length) -> Result<(String, PathBuf, Render, Vec<m2_song::Diagnostic>)> {
         let o = self.open.as_ref().context("no project is open")?;
+        if let Some(why) = nothing_to_render(&o.session) {
+            bail!("{why}");
+        }
         let rev = o.session.accepted_arc();
         // Offline renders run at the project's rate (RENDER-31a).
         let r = Render::new(rev.clone(), &o.session.packages, rev.project.sample_rate(), 0.0, length, Threads::Alone)?;
@@ -1751,6 +1754,9 @@ impl Actor {
         self.flush_autosaves();
         let device = self.inner.current_device();
         let o = self.open.as_mut().context("no project is open")?;
+        if let Some(why) = nothing_to_render(&o.session) {
+            bail!("{why}");
+        }
         let rev = o.session.accepted_arc();
         let (flat, data, rate, packages) = (&rev.compiled.flat, &rev.compiled.data, rev.project.sample_rate(), &o.session.packages);
         let problems = carried(&rev);
@@ -2455,4 +2461,17 @@ impl Actor {
             }
         }
     }
+}
+
+/// Why the open song has nothing to render (RENDER-3), in words, or None: its code has never
+/// compiled, so its accepted revision is the empty one. What to fix: its first error, where.
+pub(super) fn nothing_to_render(s: &Session) -> Option<String> {
+    if s.accepted().has_code() {
+        return None;
+    }
+    let first = s.draft_errors.first().map(|d| match d.src.as_deref() {
+        Some(at) => format!(": {at}: {}", d.message),
+        None => format!(": {}", d.message),
+    });
+    Some(format!("Fix the code first: it doesn't compile right now{}", first.unwrap_or_default()))
 }
