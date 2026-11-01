@@ -2290,7 +2290,7 @@ impl Actor {
             self.arrive(Some(&files))?;
         }
         self.edit_and(token, |s| {
-            let up = m2_editor::upgrade::upgrade(s, check)?;
+            let up = m2_editor::upgrade::upgrade(s, check, m2_os::dirs::presets().as_deref())?;
             let revision = up.written.unwrap_or(s.accepted().number);
             let file = up.changes.first().map_or_else(String::new, |c| c.file.clone());
             let said = serde_json::to_value(&up).expect("an upgrade serialises");
