@@ -273,6 +273,8 @@ fn entry(dir: &Path, s: &Value, records: &Records) -> Option<Option<TxStep>> {
     if let Some(moved) = s.get("moved").and_then(Value::as_array) {
         step.moved = moved.iter().filter_map(|m| m.as_str().map(str::to_string)).collect();
     }
+    // Whether it moved beats, as recorded; else that it may have (a history saved before it was).
+    step.beats = s.get("beats").and_then(Value::as_bool).unwrap_or(true);
     Some(Some(step))
 }
 
@@ -351,6 +353,7 @@ fn described(step: &TxStep) -> Value {
         "raw": step.raw,
         "data_only": step.data_only,
         "moved": step.moved,
+        "beats": step.beats,
         "before": before,
         "record": step.record.expect("written first").hex(),
     })

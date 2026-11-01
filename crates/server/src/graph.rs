@@ -1032,11 +1032,13 @@ impl Graph {
         debug_assert!(!m2_plugins::on_main_thread(), "the plugin main thread waited for the session");
         // Who asked (AGENT-10): the job is theirs, the steps it records too.
         let caller = crate::caller::now();
+        let window = crate::caller::window();
         let (tx, rx) = mpsc::sync_channel(1);
         self.jobs
             .send(Box::new(move |a: &mut Actor| {
                 let before = a.before();
                 a.asked_by(caller);
+                a.asked_in(window);
                 let r = f(a);
                 let r = a.answered(r);
                 // A change may let a pending commit be written (C5): before the reply, so the

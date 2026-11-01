@@ -37,10 +37,18 @@ fn ask(url: &str, method: &str, path: &str, key: &str, body: &Value) -> (u16, Va
 
 /// [`ask`] as the agent `name` says it is (`x-m2-as`).
 fn ask_as(url: &str, method: &str, path: &str, key: &str, name: Option<&str>, body: &Value) -> (u16, Value) {
+    ask_with(url, method, path, key, name.map(|n| format!("x-m2-as: {n}\r\n")).unwrap_or_default(), body)
+}
+
+/// [`ask`] from the page's window `window` (`x-m2-window`, AGENT-2).
+fn ask_in(url: &str, method: &str, path: &str, window: &str, body: &Value) -> (u16, Value) {
+    ask_with(url, method, path, PAGE, format!("x-m2-window: {window}\r\n"), body)
+}
+
+fn ask_with(url: &str, method: &str, path: &str, key: &str, named: String, body: &Value) -> (u16, Value) {
     let addr = url.trim_start_matches("http://");
     let mut s = std::net::TcpStream::connect(addr).unwrap();
     let body = if body.is_null() { String::new() } else { body.to_string() };
-    let named = name.map(|n| format!("x-m2-as: {n}\r\n")).unwrap_or_default();
     let req = format!(
         "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: {key}\r\n{named}Content-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
@@ -871,6 +879,117 @@ fn a_refusal_for_an_agents_undo_names_the_agent() {
     let (status, refused) = page(&r, "POST", "/api/graph/clips", json!({"revision": drawn, "gesture": gesture}));
     assert_ne!(status, 200, "{refused}");
     assert!(refused.to_string().contains("the agent Claude changed"), "the agent's undo, by the agent: {refused}");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `method path` from the page's window `w1`, with the session.
+fn win(r: &Run, method: &str, path: &str, mut body: Value) -> (u16, Value) {
+    body["session"] = json!(r.session);
+    ask_in(&r.url, method, path, "w1", &body)
+}
+
+// AGENT-2 (the third check of own-edits, Q1): an undo whose commit took in a file saved outside says
+// `mixed`, and a gesture drawn before it is refused over the outside change, naming outside.
+#[test]
+fn an_undo_that_took_in_an_outside_save_is_mixed() {
+    let (dir, running, session) = serving("undomixed");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let pan = r.knob("song", "hats.pan");
+    let (_, _) = win(&r, "POST", "/api/graph/set", json!({"revision": r.revision(), "id": pan, "gesture": "set", "value": 0.4}));
+    let drawn = r.revision();
+    let keys = r.knob("song", "keys.pan");
+    let song = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    std::fs::write(dir.join("song.ts"), song.replacen("pan: -0.25", "pan: 0.6", 1)).unwrap();
+    let (status, u) = win(&r, "POST", "/api/graph/undo", json!({}));
+    assert_eq!((status, &u["mixed"]), (200, &json!(true)), "the undo took the outside save in with it: {u}");
+    let (status, refused) =
+        win(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": keys, "gesture": "set", "value": -0.05, "expect": -0.25}));
+    assert_ne!(status, 200, "{refused}");
+    assert!(refused.to_string().contains("changed outside the app"), "{refused}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("pan: 0.6"));
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// AGENT-2 (the third check, Q2): bars inserted, their undo, and a tempo change say they moved
+// beats; a value doesn't. After an agent's bars, a Beat grid step on an empty lane, a clip made
+// and a paste, each drawn before, are refused naming the agent.
+#[test]
+fn a_change_that_moves_beats_says_so_and_refuses_gestures_named_by_beats() {
+    let (dir, running, session) = serving("beats");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let (_, a) = page(&r, "POST", "/api/graph/sections", json!({"gesture": {"op": "insert-bars", "at": 0, "bars": 1}}));
+    assert_eq!(a["beats"], json!(true), "bars inserted move beats: {a}");
+    let (_, a) = page(&r, "POST", "/api/graph/undo", json!({}));
+    assert_eq!(a["beats"], json!(true), "and so does their undo: {a}");
+    let (_, a) = page(&r, "POST", "/api/graph/tempo", json!({"at": 0, "bpm": 121}));
+    assert_eq!(a["beats"], json!(true), "a tempo change moves beats: {a}");
+    let pan = r.knob("song", "hats.pan");
+    let (_, a) = page(&r, "POST", "/api/graph/set", json!({"revision": r.revision(), "id": pan, "gesture": "set", "value": 0.4}));
+    assert!(a["beats"].is_null(), "a value doesn't: {a}");
+    let (_, made) = page(&r, "POST", "/api/graph/track/add", json!({"component": "@m2/drums:drum", "label": "Clap"}));
+    assert!(made["revision"].is_u64(), "{made}");
+    let st = r.state();
+    let clap = st["timeline"]["tracks"].as_array().unwrap().iter().find(|t| t["label"] == "Clap").unwrap();
+    let (module, lane) = (clap["module"].clone(), clap["lanes"][0]["key"].clone());
+    assert_eq!(clap["lanes"][0]["clips"], json!([]), "an empty lane");
+    let drawn = r.revision();
+    let (status, _) = claude(&r, "POST", "/api/graph/sections", json!({"gesture": {"op": "insert-bars", "at": 0, "bars": 4}}));
+    assert_eq!(status, 200);
+    let steps = json!({"op": "hits", "module": module, "lane": lane, "at": [1.0], "step": 0.25, "to": "on"});
+    let made = json!({"op": "create", "module": "kick", "lane": "hits", "start": 200, "length": 4});
+    let copied = page(&r, "POST", "/api/graph/sections/copy", json!({"start": 0, "end": 16})).1;
+    for (what, gesture) in [("a Beat grid step on an empty lane", steps), ("a clip made at a beat", made)] {
+        let (status, refused) = page(&r, "POST", "/api/graph/clips", json!({"revision": drawn, "gesture": gesture}));
+        assert_ne!(status, 200, "{what}: {refused}");
+        assert!(refused.to_string().contains("the agent Claude changed"), "{what}, naming the agent: {refused}");
+    }
+    let (status, refused) = page(
+        &r,
+        "POST",
+        "/api/graph/sections",
+        json!({"revision": drawn, "gesture": {"op": "paste", "at": 64, "section": copied["section"]}}),
+    );
+    assert_ne!(status, 200, "bars pasted: {refused}");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// AGENT-2 (the third check, Q3): the server knows each revision's window. An agent's change in
+// another file, then the window's own value, then the window's gesture drawn before both: it goes,
+// as a value and as a drag's preview, never refused for the window's own change. Another window's
+// change of the same value refuses it.
+#[test]
+fn the_windows_own_change_never_refuses_its_gesture_whatever_came_between() {
+    let (dir, running, session) = serving("window");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let drawn = r.revision();
+    let pan = r.knob("song", "hats.pan");
+    let bright = r.knob("keys", "brightness");
+    let (status, _) = claude(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": bright, "gesture": "agent", "value": 0.7}));
+    assert_eq!(status, 200);
+    let (status, _) = win(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": pan, "gesture": "a", "value": 0.4, "expect": 0.3}));
+    assert_eq!(status, 200);
+    let (status, a) =
+        win(&r, "POST", "/api/graph/preview", json!({"revision": drawn, "id": pan, "gesture": "b", "value": 0.45, "client": "w1"}));
+    assert_eq!(status, 200, "a drag drawn before both begins: {a}");
+    let (status, a) = win(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": pan, "gesture": "b", "value": 0.5, "expect": 0.3}));
+    assert_eq!(status, 200, "and lands: {a}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("pan: 0.5"));
+    // Another window's change of the same value.
+    let now = r.revision();
+    let (_, _) = ask_in(
+        &r.url,
+        "POST",
+        "/api/graph/set",
+        "w2",
+        &json!({"session": session, "revision": now, "id": pan, "gesture": "c", "value": 0.2}),
+    );
+    let (status, refused) =
+        win(&r, "POST", "/api/graph/set", json!({"revision": now, "id": pan, "gesture": "d", "value": 0.6, "expect": 0.5}));
+    assert_ne!(status, 200, "{refused}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("pan: 0.2"), "the other window's value is kept");
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }

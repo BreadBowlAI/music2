@@ -1529,6 +1529,10 @@ impl Graph {
                 let first = &e.parts[0];
                 let mut w =
                     json!({"revision": revision, "moved": v["moved"], "made": v["made"], "module": first.module(), "lane": first.lane()});
+                // A lane write that took an outside change in with it, as any change says (AGENT-2).
+                if v["mixed"] == json!(true) {
+                    w["mixed"] = json!(true);
+                }
                 // The undo step it made, by its id, and whether it moved ids, as an edit's answer
                 // says them: the window that recorded the take keeps it as its own (AGENT-2).
                 if v["step"].is_u64() {

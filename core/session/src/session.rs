@@ -28,6 +28,25 @@ use crate::tx::stage::{self, Disk};
 use crate::tx::{Prepared, Refusal, TxStep};
 use crate::{Compiled, Seen};
 
+/// Who made a revision ([`Session::changed_by`], AGENT-2): its number, the paths it changed, its
+/// sender and the window it came from, and what it moved (ids, as files, and beats).
+#[derive(Clone, Debug)]
+pub struct Authored {
+    pub number: u64,
+    pub paths: BTreeSet<String>,
+    pub by: Source,
+    pub window: Option<String>,
+    pub moved: BTreeSet<String>,
+    pub beats: bool,
+}
+
+impl Authored {
+    /// A change saved outside the app, taken in.
+    pub(crate) fn outside(number: u64, paths: BTreeSet<String>) -> Authored {
+        Authored { number, paths, by: Source::Outside, window: None, moved: BTreeSet::new(), beats: false }
+    }
+}
+
 /// How many revisions the session remembers the authors of ([`Session::changed_by`]).
 pub const AUTHORED: usize = 2000;
 
@@ -140,8 +159,9 @@ pub struct StepName {
     pub structural: bool,
     pub file: String,
     pub files: Vec<String>,
-    /// The files whose ids its change moved (AGENT-2).
+    /// The files whose ids its change moved, and whether it moved beats (AGENT-2).
     pub moved: Vec<String>,
+    pub beats: bool,
 }
 
 /// Why an undo or a redo didn't go ahead.
@@ -251,7 +271,9 @@ pub struct Session {
     pub(crate) why: Option<String>,
     /// Who made each revision accepted lately, and the paths it changed, newest last: what a
     /// gesture refused for a change since names (AGENT-2). An undo or a redo is its sender's.
-    pub(crate) authored: std::collections::VecDeque<(u64, BTreeSet<String>, Source)>,
+    pub(crate) authored: std::collections::VecDeque<Authored>,
+    /// The window the request served now came from (AGENT-2): what it changes is that window's.
+    pub(crate) window: Option<String>,
     /// Who the revision being accepted is by: set by a commit, an undo, a redo and a save; else
     /// (a batch taken in) it is outside.
     pub(crate) accepting: Option<Source>,
@@ -450,6 +472,7 @@ impl Session {
             by: Source::Page,
             why: None,
             authored: std::collections::VecDeque::new(),
+            window: None,
             accepting: None,
             took_in: false,
             last_change: None,
@@ -682,8 +705,12 @@ impl Session {
             (self.catalog, self.offered) = lists(&self.packages);
         }
         // Who made it, for a refusal to name (AGENT-2).
-        let author = self.accepting.take().unwrap_or(Source::Outside);
-        self.authored.push_back((number, changed.iter().map(|p| m2_song::path::slashed(p)).collect(), author));
+        let paths: BTreeSet<String> = changed.iter().map(|p| m2_song::path::slashed(p)).collect();
+        let author = match self.accepting.take() {
+            Some(by) => Authored { number, paths, by, window: self.window.clone(), moved: BTreeSet::new(), beats: false },
+            None => Authored::outside(number, paths),
+        };
+        self.authored.push_back(author);
         while self.authored.len() > AUTHORED {
             self.authored.pop_front();
         }
@@ -749,6 +776,12 @@ impl Session {
     /// (AGENT-2, AGENT-10): the app says so for each request, by the key it came with.
     pub fn act_as(&mut self, by: Source, why: Option<String>) {
         (self.by, self.why) = (by, why);
+        self.took_in = false;
+    }
+
+    /// The window the requests served from now come from (AGENT-2), or none (an agent, the app).
+    pub fn act_in(&mut self, window: Option<String>) {
+        self.window = window;
     }
 
     /// Take back the last commit, undo or redo this session made, and leave undo and redo as they
@@ -814,15 +847,40 @@ impl Session {
 
     /// Who made the newest change after revision `since` that touched a path `touched` says
     /// (AGENT-2: what a gesture refused because its target changed says), an undo or a redo by
-    /// its sender. None when none did, as far as the session remembers (its last
-    /// [`AUTHORED`] revisions).
+    /// its sender; the window the request comes from's own changes left out. None when none did,
+    /// as far as the session remembers (its last [`AUTHORED`] revisions).
     pub fn changed_by_any(&self, since: u64, touched: impl Fn(&str) -> bool) -> Option<Source> {
-        self.authored
-            .iter()
-            .rev()
-            .take_while(|(n, ..)| *n > since)
-            .find(|(_, paths, _)| paths.iter().any(|p| touched(p)))
-            .map(|(.., by)| by.clone())
+        self.others_since(since).find(|a| a.paths.iter().any(|p| touched(p))).map(|a| a.by.clone())
+    }
+
+    /// The revisions after `since` not made by the window the request comes from, newest first.
+    fn others_since(&self, since: u64) -> impl Iterator<Item = &Authored> {
+        let mine = self.window.clone();
+        self.authored.iter().rev().take_while(move |a| a.number > since).filter(move |a| mine.is_none() || a.window != mine)
+    }
+
+    /// The paths changed after revision `since` by anyone but the window that asks (AGENT-2).
+    pub fn others_paths_since(&self, since: u64) -> BTreeSet<String> {
+        self.others_since(since).flat_map(|a| a.paths.iter().cloned()).collect()
+    }
+
+    /// Who made the newest change after revision `since`, the window's own left out, that moved
+    /// beats (AGENT-2): a gesture named by beats then names other music.
+    pub fn beats_moved_since(&self, since: u64) -> Option<Source> {
+        self.others_since(since).find(|a| a.beats).map(|a| a.by.clone())
+    }
+
+    /// Whether every change after revision `since` that touched `file` was the window's own and
+    /// moved no ids in it (AGENT-2): an id it named then names the same thing now. False when the
+    /// request names no window, or the session doesn't remember.
+    pub fn only_own_since(&self, since: u64, file: &str) -> bool {
+        let Some(mine) = self.window.as_deref() else { return false };
+        self.remembers_since(since)
+            && self
+                .authored
+                .iter()
+                .filter(|a| a.number > since && a.paths.contains(file))
+                .all(|a| a.window.as_deref() == Some(mine) && !a.moved.contains(file))
     }
 
     /// [`Session::changed_by_any`] of one file, or of a `data/<module>/` folder's files.
@@ -840,7 +898,7 @@ impl Session {
     /// Whether the session remembers who made every revision after `since`: else a change since
     /// can't be ruled out.
     pub fn remembers_since(&self, since: u64) -> bool {
-        since >= self.accepted.number || self.authored.front().is_some_and(|(n, ..)| *n <= since + 1)
+        since >= self.accepted.number || self.authored.front().is_some_and(|a| a.number <= since + 1)
     }
 
     /// Whether the last commit's baseline took in a change made elsewhere (`TxStep::mixed`).
@@ -874,6 +932,7 @@ impl Session {
             file: t.file.clone(),
             files: t.inverse.touched().iter().map(|p| p.to_string()).collect(),
             moved: t.moved.iter().cloned().collect(),
+            beats: t.beats,
         };
         (self.history.last().map(named), self.redo.last().map(named))
     }
@@ -1029,7 +1088,10 @@ impl Session {
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
                     // And it moves what the change moved, whichever way it goes.
-                    inverse.moved = step.moved.clone();
+                    (inverse.moved, inverse.beats) = (step.moved.clone(), step.beats);
+                    if let Some(a) = self.authored.back_mut().filter(|a| a.number == done.number) {
+                        (a.moved, a.beats) = (step.moved.iter().cloned().collect(), step.beats);
+                    }
                     inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or_default();
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
                     self.bound_stacks();

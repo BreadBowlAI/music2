@@ -184,6 +184,23 @@ pub fn unchanged_since(s: &Session, since: u64, what: &str, touched: impl Fn(&st
     }]))
 }
 
+/// Refused, saying who, when a change after revision `since` made by anyone but the window that
+/// asks moved beats (AGENT-2): a gesture named by beats then names other music, whatever lane.
+pub fn beats_since(s: &Session, since: u64, what: &str) -> Result<(), EditError> {
+    let by = match (s.remembers_since(since), s.beats_moved_since(since)) {
+        (true, None) => return Ok(()),
+        (true, Some(by)) => Some(by),
+        (false, _) => None,
+    };
+    let who = by.as_ref().map_or_else(|| "it was changed".to_string(), changed_it);
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("moved since you drew it: {who}. Nothing was changed; it shows as it is now, try again")),
+    }]))
+}
+
 /// Refused, saying who last changed `layout.json`, when a list of it (`what`: the markers, the
 /// track order) isn't what the change was made from (AGENT-2): no change of it is lost silently.
 pub fn list_since(s: &Session, what: &str, same: bool) -> Result<(), EditError> {

@@ -62,9 +62,17 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
         )));
     }
     // The lane's file as the edit was planned on it.
+    // Notes sit by beats: another's change that moved beats since makes these other music (AGENT-2).
+    if at < rev.number {
+        crate::beats_since(s, at, &shown)?;
+    }
     let planned_on = s.snapshot(at).ok_or_else(|| EditError::stale(s, at, &shown))?;
-    let base = planned_on.files.get(&file).cloned();
+    let mut base = planned_on.files.get(&file).cloned();
     let now = rev.snapshot.files.get(&file).cloned();
+    // Changed since only by the window that asks: its own writes are what it made these from.
+    if base != now && at < rev.number && s.only_own_since(at, &shown) {
+        base = now.clone();
+    }
     if base.is_none()
         && now.is_none()
         && let Some(by) = rev.snapshot.taken(&file)

@@ -581,6 +581,7 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
 /// may be other bars now.
 pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>) -> Result<ClipsEdited, EditError> {
     if let Some(since) = since {
+        crate::beats_since(s, since, "where the song's bars are")?;
         crate::unchanged_since(s, since, "the song's bars", |p| p.starts_with("data/"))?;
     }
     let rev = s.accepted();
@@ -643,6 +644,8 @@ pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>)
     let label = planned.label.clone();
     let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
     tx.id = tx_id.to_string();
+    // Bars moved: where music sits in time (AGENT-2).
+    tx.beats = true;
     if let Some((f, b)) = layout_base {
         tx.base.insert(f, b);
     }

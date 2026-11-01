@@ -34,6 +34,7 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
     }
     let c = resolve(s, at, id)?;
     c.numbered()?;
+    let expect = expect.filter(|_| !own_since(s, at, &c.file));
     one(s, &c, &Json::from(value), expect.map(Json::from).as_ref())
 }
 
@@ -46,7 +47,14 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
 pub fn write(s: &mut Session, at: u64, id: &str, value: &Json, expect: Option<&Json>) -> Result<Committed, EditError> {
     ready(s)?;
     let c = resolve(s, at, id)?;
+    let expect = expect.filter(|_| !own_since(s, at, &c.file));
     one(s, &c, value, expect)
+}
+
+/// Whether the control's file changed since revision `at` only by the window that asks (AGENT-2):
+/// then what it expects is what that window saw before its own change, which is no conflict.
+fn own_since(s: &Session, at: u64, file: &str) -> bool {
+    at < s.accepted().number && s.only_own_since(at, file)
 }
 
 /// What a control is called in words: its declared label.

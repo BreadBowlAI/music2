@@ -355,6 +355,8 @@ pub(crate) struct TxStep {
     /// Its revision also took in a change made elsewhere: a file saved outside the app, read as the
     /// commit's baseline (R2), rode along (AGENT-2).
     pub mixed: bool,
+    /// Its change moved beats (`Tx::beats`): its undo and its redo do too (AGENT-2).
+    pub beats: bool,
 }
 
 impl TxStep {
@@ -377,6 +379,7 @@ impl TxStep {
             record: None,
             moved,
             mixed: false,
+            beats: false,
         }
     }
 
@@ -1713,8 +1716,12 @@ impl Session {
             };
             self.accepting = Some(self.by.clone());
             let number = self.accept_known(snapshot, project, compiled, &known.collect());
+            // What it moved, as its step says (an undo's and a redo's are set as they are pushed).
+            if let Some(a) = self.authored.back_mut() {
+                (a.moved, a.beats) = (step.moved.clone(), step.beats);
+            }
             if !outside.is_empty() {
-                self.authored.push_back((number, outside, crate::session::Source::Outside));
+                self.authored.push_back(crate::session::Authored::outside(number, outside));
             }
             number
         };
@@ -1748,6 +1755,7 @@ impl Session {
         let file = inverse.touched().first().or(tx.touched().first()).map(|p| p.to_string()).unwrap_or_default();
         let mut step = TxStep::of_targets(inverse, raw, data_only, file, &planned.targets);
         step.moved = moves(tx);
+        step.beats = tx.beats;
         step.mixed = baseline.is_some_and(|b| !std::ptr::eq(b, &*self.accepted));
         step
     }

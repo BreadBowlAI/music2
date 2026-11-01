@@ -177,6 +177,13 @@ pub(super) fn run(inner: Arc<Inner>, jobs: mpsc::Receiver<Job>, events: HostEven
 impl Actor {
     /// Serve what follows for `caller` (AGENT-10): the steps it records are theirs, named by the
     /// words they gave, and only what it changes can be taken back at its settle (AGENT-3).
+    /// The page's window the job came from (AGENT-2): each revision it makes is that window's.
+    pub(super) fn asked_in(&mut self, window: Option<String>) {
+        if let Some(o) = self.open.as_mut() {
+            o.session.act_in(window);
+        }
+    }
+
     pub(super) fn asked_by(&mut self, caller: crate::caller::Caller) {
         if let Some(o) = self.open.as_mut() {
             o.session.act_as(caller.source(), caller.why());
@@ -1866,11 +1873,12 @@ impl Actor {
     /// edit, which may adopt unrelated changes first.
     pub(super) fn commit(&mut self, lease: u64) -> Result<Committed> {
         let inner = self.inner.clone();
-        let (token, revision, id, value, expect) = {
+        let (token, revision, id, value, expect, named, file) = {
             let cp = inner.control.lock();
             let l = &cp.leases.live[cp.leases.index(lease).map_err(|e| anyhow!(e))?];
             let State::Closing { value, expect } = l.state else { bail!("this gesture isn't being committed") };
-            (l.token, l.revision, l.control.id.clone(), value, expect)
+            let named = l.names.first().map_or(l.revision, |n| n.0);
+            (l.token, l.revision, l.control.id.clone(), value, expect, named, l.control.file.clone())
         };
         let Some(o) = self.open.as_mut().filter(|o| o.token == token) else {
             let mut cp = inner.control.lock();
@@ -1882,6 +1890,9 @@ impl Actor {
         // What plays takes the commit as the cells whose constants differ from it (an outside
         // change in the knob's file that rode along included), in the settle (RENDER-22).
         let before = Before::of(&o.session);
+        // Drawn before the window's own changes to its file alone: what it expects is the value
+        // that window saw before its own change, no conflict (AGENT-2).
+        let expect = expect.filter(|_| !(named < revision && o.session.only_own_since(named, &file)));
         match o.session.set(revision, &id, value, expect) {
             Ok(c) => {
                 let mut written = json!({"file": c.file, "before": c.before, "after": c.after});
@@ -2512,7 +2523,12 @@ impl Before {
             None => vec![],
         };
         a.insert("moved".into(), json!(moved));
-        if revised && made.is_some() && s.took_in() {
+        // Beats moved, as its step says (AGENT-2).
+        if made.is_some() && s.step_names().0.is_some_and(|t| t.beats) {
+            a.insert("beats".into(), json!(true));
+        }
+        // Whatever made the revision (a commit, an undo, a redo), it took an outside change in.
+        if revised && s.took_in() {
             a.insert("mixed".into(), json!(true));
         }
         if let Some(id) = made {
