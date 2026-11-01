@@ -90,6 +90,8 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
   track, not part of `m2 upgrade`, which names the track and writes nothing for it: each hit's noise is seeded from its
   count on its own lane, so a lane of several drums can't keep its bits as a kit (KIT-22), and an upgrade keeps a
   song's sound exactly. The drum machine stays, unlisted, until 1.0 (KIT-24).
+- *Also from track `kit-upgrade`:* every drum the drum machine plays is a sound of the Drum's own menu (a ride, a
+  tambourine, claves, a soft kick…), so each of its notes moves onto a track that plays that very drum (KIT-20).
 
 ## 6. Decisions for the owner
 
