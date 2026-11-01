@@ -1,10 +1,29 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-01 (the packs night, the registry day, then the typed-sounds build). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-02 (the packs night, the registry day, the typed-sounds build, then drum kits and quick gestures). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
+- **Drum kits, the FL way, and quick gestures (2026-11-01 to 11-02)** (#68 to #72; each track reviewed by an agent,
+  every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each). Design:
+  [docs/designs/drums/design.md](docs/designs/drums/design.md), the owner's "Yes" to D1 to D4.
+  - **Drum** is the one building block: one drum sound on one track. Its menu has every sound the old drum machine
+    had (17, grouped by family). A **drum kit** is just Drum tracks that play into one bus, worked out, never stored
+    (KIT-1). + Track ▸ **Drum kit (several tracks)** makes one from a pack's preset (808, 909, Basic kit;
+    `@m2/core` 2.2's `editor.kits`). MIDI drum files come in as a kit.
+  - The **Beat** tab (⌥5): a kit's tracks as rows of steps, velocity, + Drum (KIT-10 to KIT-15).
+  - The old one-track **Drum machine** is unlisted; **Make it a kit** (`m2 make-kit`) turns one into a kit, one undo
+    step, saying that each hit's noise comes out a little different (a split lane can't keep its noise seeds).
+    `m2 upgrade` stays exact and lists such tracks apart. Pads and the keyboard piano play a kit by sound; arming a
+    Drum of a kit arms the kit (KIT-20 to KIT-26).
+  - **Quick gestures** (AGENT-2): a gesture right after the window's own edit waits for it and lands, and never on a
+    call, bar or clip it didn't press; every answer says `revision`, `step`, `moved` (files, by the kind of change),
+    `beats` and `mixed`; every request names its window; a refusal names who changed the target. ⌘Z right after an
+    import or a take works. It took four review rounds (O, P, Q, R) to get safe: worth reading AGENT-2 before
+    touching `web/src/lib/history.ts` or `crates/server/src/graph/actor.rs`'s `Before::tell`.
+  - Exporting a song whose code never compiled is refused in words (RENDER-3; it used to hit an index bug).
+  - The guide: "Keep versions of your song with git" (Saving); gap #30 went (the owner chose git over snapshots).
 - **The typed-sounds build (2026-10-31 to 11-01) made each sound's type its interface, and moved the sounds into
   packs** (#48 to #66; each track built by one agent, attacked by a reviewer agent, every finding fixed with a test
   seen failing first, `ci/check.sh --pr` passed on each; tracks were landed in batches to save CI rounds). Design:
@@ -181,7 +200,7 @@ G7f's S plays its own std, as S can't play the app's.
 
 ## Known flakes
 
-Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judged on the Mac.
+Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judged on the Mac. The sweep in #72 fixed the race behind several (`s8-clips` "8+28", `st-errors`, `nx-effects-fix`, `st-midi`'s ⌘Z after an import): a gesture or a read made before the page showed a change; `e2e/caughtup.mjs` is the wait for a change the page didn't make, and fixlib's `late` option holds the page's reads back to bring such races out.
 
 | Test | What fails | Note |
 |---|---|---|
@@ -193,17 +212,13 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7 |
 | `s5-knobs` | page detached after a double-click on a knob at its default | from before the platform step |
 | `pl-sounds-fix` | "one revision, and song.ts as it was" right after Return in Change instrument | once, 2026-10-30, track F's check; passed on the retry. The check reads the revision as soon as `tracks/hats.ts` is written, so the file may land before its revision is counted |
-| `s8-clips` | "the left edge dragged a bar right: 8+28" | once, beside other tracks' builds; passed on its retry |
 | `st-audio-fix` | "and adds nothing": the revision moved after an MP3 was refused | once, passed on its retry |
-| `nx-effects-fix` | "and says why: Move left (off)": the tooltip read before it changed | once, passed on its retry |
-| `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
 | `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read": its reader thread wasn't scheduled within 40 callbacks | once each in three checks at load 50 to 70 (2026-10-31); moved to the nightly tier unchanged (`ci/nightly-tests.txt`) |
 | `pl-notes` | "the focus is back in the roll" after two Escapes | under heavy load, on main too (4 of 8 at load 60); cause not found |
-| `pl-zoom-fix`, `ag-notice-fix`, `spotlight-fix`, `s8-songbar-fix`, `ports-proj`, `notes-proj`, `start-proj` | one check each, under load beside other agents' builds | each passed on its retry, 2026-10-31 |
+| `pl-zoom-fix`, `ag-notice-fix`, `notes-proj`, `start-proj` (and `spotlight-fix`, `s8-songbar-fix`, `ports-proj`, each with one race site fixed in #72) | one check each, under load beside other agents' builds | each passed on its retry, 2026-10-31 |
 | `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |
 | `a_hung_host_process_is_ended_and_said` | the plugin host's timing | once, passed on retry |
-| Suites that change code, then drag a knob at once | the drag starts from the page's older revision and the server refuses it | found in `wavetable` (fixed in #65: wait until the page shows the revision the server plays); others may race the same way |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
 | `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read. The next Mac nightly (`53382be`, run 40666853783) passed it with no retry |
 | `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
@@ -232,22 +247,23 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **The drums design note** ([docs/designs/drums/design.md](docs/designs/drums/design.md), accepted 2026-11-01,
-   D1 to D4 as recommended): Drum is the one building block, a kit is a group of Drum tracks under one bus, a beat
-   grid across them (FL Studio's way). Its tracks: `kits` and `beat` side by side, then `kit-upgrade`.
-2. **The owner's own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"). Presets
-   saved for the old single drums are named, not converted (gaps).
-3. **The Mac's one more `ci/check.sh`**, at 48 kHz. macOS is unverified since `e38c131`, and everything in the
-   typed-sounds build has run only on Linux and GitHub's Mac runner.
+1. **The owner's own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"); then Make it
+   a kit on any Drum machine track, if wanted. Presets saved for the old single drums are named, not converted
+   (gaps). A song made from main on 2026-11-01 between #69 and #70 has an earlier `@m2/drums` 2.1.0 hash in its lock:
+   `m2 pack update <song> @m2/drums` moves it (the first nine sounds' bits are pinned).
+2. **The Mac's one more `ci/check.sh`**, at 48 kHz. macOS is unverified since `e38c131`; everything since has run
+   only on Linux and GitHub's Mac runner.
+3. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
+   few clean nightlies.
 4. **The registry, live**: the owner makes the Cloudflare R2 bucket and its address (D10), then the repo
    `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
    `m2 registry`, `DEFAULT_REGISTRY` set, and `@m2/grand-piano` listed, then the five `@m2/` packs listed too.
 5. **More sounds, inside packs** (the owner's rule): a flanger and a convolution reverb in `@m2/effects`, sampled
    drum kits (free-licence recordings; big ones need the bucket), an EQ view of the whole curve (a new view word,
    CARD), and the arpeggiator, which needs kernels that can play notes (ABI-2's event outputs): a design note first.
+   The beat grid's gaps: a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks (D3).
 6. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
-7. **A sweep of the browser suites** for the knob-drag race (Known flakes, last row).
-8. **Open owner decisions** (below).
+7. **Open owner decisions** (below).
 
 The owner wants music2 to be a novel, type-safe DAW built from first principles, simple yet elegant, with std as
 small as possible and most sounds in packs (2026-10-31).
@@ -287,6 +303,7 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | The sound | The same, bit for bit, where it can be; anything it can't convert exactly is named with its file and line, and then nothing is written. |
 | Presets | Your saved presets for the old single drums aren't changed: the upgrade names them, so you can save them again. |
 | First try | `m2 upgrade <song> --check` shows what it would change, and writes nothing. |
+| A drum machine track | Upgrade it leaves it as it is, so the sound stays exactly the same. To give each drum its own track, use **Make it a kit** in the track's menu: same drums, pitches and levels; each hit's noise comes out a little different. |
 
 ## Where things are
 
