@@ -11,6 +11,7 @@ import {
   findLane,
   formatValue,
   hasOwnId,
+  kitOf,
   wroteHere,
   laneTitle,
   laneValue,
@@ -2230,6 +2231,24 @@ const Tracks = memo(function Tracks({
   );
 });
 
+/**
+ * What a bus's row says, as it has no lanes (RENDER-34): how tracks reach it, by their output or a
+ * send; for a drum kit's bus, that it is the kit, which drums play into it and that Beat writes their
+ * beat (KIT-10).
+ */
+function BusWords({ module }: { module: string }) {
+  const graph = useStore((s) => s.graph);
+  const kit = graph && kitOf(graph, module);
+  if (!kit || kit.bus !== module) return <>Plays the tracks whose output is set to it, and what tracks send it. Set them in Mix ({opt("3")}).</>;
+  const names = kit.rows.map((r) => moduleName({ key: r.track, label: graph.timeline.tracks.find((t) => t.module === r.track)?.label }));
+  const drums = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)} play` : `${names[0]} plays`;
+  return (
+    <>
+      The {kit.label} kit: {drums} into it. Write {names.length > 1 ? "their" : "its"} beat in Beat ({opt("5")}).
+    </>
+  );
+}
+
 const TrackRows = memo(function TrackRows({
   track,
   color,
@@ -2361,10 +2380,10 @@ const TrackRows = memo(function TrackRows({
         }}
       >
         {grid}
-        {/* A bus has no lanes to fill: it plays what tracks send it (RENDER-34). */}
+        {/* A bus has no lanes to fill: it says how tracks reach it (RENDER-34). */}
         {!lane && opts.first && track.bus && (
           <div data-testid="bus-lane" className="sticky left-0 h-full w-fit px-3 flex items-center text-xs text-fg-faint pointer-events-none">
-            Plays what tracks send it. Set the sends in Mix ({opt("3")}).
+            <BusWords module={module} />
           </div>
         )}
         {lane && (

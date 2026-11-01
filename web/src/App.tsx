@@ -17,7 +17,7 @@ import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { openSettings } from "./lib/settings";
-import { automation, CutOff, editorHooks, graphApi } from "./lib/graph";
+import { automation, CutOff, editorHooks, graphApi, kitOf } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
@@ -323,6 +323,8 @@ export function appCommand(id: string) {
   if (!graph) return;
   if (id.startsWith("view_")) {
     const view = VIEWS.find((v) => `view_${v}` === id);
+    // Beat is a drum kit's (KIT-10): with no kit's track selected there is nothing to show, so say why.
+    if (view === "beat" && !kitOf(graph, shell.module)) return void st.toast("Beat shows a drum kit: select a Drum track or its bus.");
     return void (view && shell.setView(view));
   }
   switch (id) {
