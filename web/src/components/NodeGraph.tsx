@@ -870,7 +870,7 @@ function NodeCard({
   }, [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
-  const edited = (p: Promise<{ revision: number; step?: number }>, words: string) =>
+  const edited = (p: Promise<{ revision?: number; step?: number }>, words: string) =>
     p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);

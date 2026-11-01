@@ -11,6 +11,7 @@ import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette
 import { isPlugin, pluginInstruments, usePluginList, wantPlugins } from "../lib/plugins";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { editing } from "../lib/history";
 import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
@@ -271,6 +272,50 @@ export function moved(order: string[], module: string, before: string) {
 const trackOrder = (graph: GraphState) => graph.timeline.tracks.filter((t) => t.track && t.module !== "song").map((t) => t.module);
 
 /**
+ * The order this window's last move wrote, from its drop until the window shows it (AGENT-2: a
+ * change of `layout.json` makes no revision, so the gate can't wait for it): the next move goes from
+ * it, one after another (`queue`), so a quick second move never undoes the first. Done once the
+ * timeline draws that order, or 3 s after its answer (another window's move came since).
+ */
+let sent: { session: number; order: string[]; answered?: number; queue: Promise<unknown> } | null = null;
+const SENT_MS = 3000;
+useStore.subscribe((s) => {
+  const g = s.graph;
+  if (sent && (!g || g.session !== sent.session || (sent.answered !== undefined && trackOrder(g).join() === sent.order.join()))) sent = null;
+});
+
+/**
+ * Move `module` to place `at` among the other tracks (0: the top), as the window drew them, after
+ * the move before it: from the order that one wrote while the window doesn't show it yet.
+ */
+function reorder(graph: GraphState, module: string, at: number, name: string) {
+  const session = graph.session;
+  const before = sent?.session === session && !(sent.answered !== undefined && Date.now() - sent.answered > SENT_MS) ? sent : null;
+  const mine: NonNullable<typeof sent> = { session, order: [], queue: Promise.resolve() };
+  // On its way from the drop: an Undo, or a gesture, waits for it.
+  const ours = editing();
+  mine.queue = (before?.queue ?? Promise.resolve())
+    .then(async () => {
+      const now = useStore.getState().graph;
+      if (!now || now.session !== session) return;
+      const base = before?.order.length ? before.order : trackOrder(now);
+      const rest = base.filter((k) => k !== module);
+      const order = [...rest.slice(0, at), module, ...rest.slice(at)];
+      mine.order = order;
+      if (order.join() === base.join()) return;
+      await graphApi.layout(session, { order }, { name: `moving ${name}` });
+      mine.answered = Date.now();
+    })
+    .catch((error) => useStore.getState().toast(message(error)))
+    .finally(() => {
+      // Refused, or nothing written: nothing for the next move to go from.
+      if (sent === mine && mine.answered === undefined) sent = null;
+      ours.end();
+    });
+  sent = mine;
+}
+
+/**
  * Drag a track's header up or down to move it (taste.md §3.4): after 4px, the header follows the
  * pointer and a 2px line shows where it lands; letting go writes the new order (no toast; ⌘Z puts
  * it back). The Song row is pinned and never a target.
@@ -301,8 +346,9 @@ export function startReorder(e: React.PointerEvent, module: string) {
     window.removeEventListener("pointercancel", end);
     useReorder.setState({ module: null, dy: 0, before: null });
     if (!dragging || ev.type !== "pointerup" || !before) return;
-    const name = nameOf(graph, module);
-    graphApi.layout(graph.session, { order: moved(order, module, before) }, { name: `moving ${name}` }).catch((error) => useStore.getState().toast(message(error)));
+    // Where it lands among the others, as drawn: from the order the window's last move wrote.
+    const rest = order.filter((k) => k !== module);
+    reorder(graph, module, before === END ? rest.length : rest.indexOf(before), nameOf(graph, module));
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end);

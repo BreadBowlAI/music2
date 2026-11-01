@@ -27,21 +27,25 @@ export async function http(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-/** What an answer names of the song's history: the revision a change made, and its step. */
+/** What an answer says at its top of the song's history (AGENT-2): the revision the change made (none when it made none), its step, and whether it moved ids. */
 interface Answer {
   revision?: unknown;
   step?: unknown;
+  moved?: unknown;
   undo_name?: StepName | null;
-  file?: string;
 }
 
 async function keep(path: string, res: Response) {
   const session = useStore.getState().graph?.session;
   if (session === undefined || !res.headers.get("content-type")?.includes("json")) return;
   const answer = (await res.clone().json().catch(() => null)) as Answer | null;
-  if (!answer || typeof answer.revision !== "number") return;
-  // An undo, a redo: a change of the window's own, whose step isn't. An answer with no step changed
-  // nothing: the revision it names was made by whoever made it.
-  if (TAKES_BACK.includes(path)) return changed(session, answer.revision, answer.file);
-  if (typeof answer.step === "number") owned(session, { revision: answer.revision, step: answer.step, undo_name: answer.undo_name, file: answer.file });
+  if (!answer || typeof answer !== "object") return;
+  // Only a change's answer says `moved`: then its `revision` is the one the change made (another
+  // answer's, as naming a step's, is the one shown).
+  const moved = typeof answer.moved === "boolean" ? answer.moved : undefined;
+  const revision = moved !== undefined && typeof answer.revision === "number" ? answer.revision : undefined;
+  // An undo, a redo: a change of the window's own, whose step isn't.
+  if (TAKES_BACK.includes(path)) return void (revision !== undefined && changed(session, revision, !!moved));
+  if (typeof answer.step === "number") owned(session, { revision, step: answer.step, moved, undo_name: answer.undo_name });
+  else if (revision !== undefined) changed(session, revision, !!moved);
 }

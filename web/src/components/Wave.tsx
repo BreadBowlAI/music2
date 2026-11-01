@@ -14,7 +14,7 @@ import { clipIndex, findLane, moduleName, type AudioClip, type ClipRef, type Tim
 import type { TrackColor } from "../lib/palette";
 import { beatAt, clipSeconds, MISSING, secondsAt, usePeaks, type Peaks, type Tempo } from "../lib/peaks";
 import { request } from "../lib/projects";
-import { editing, shown } from "../lib/history";
+import { editing, goesFrom } from "../lib/history";
 import { useStore } from "../lib/store";
 import { useZoom } from "../lib/zoom";
 import type { MenuItem } from "./ClipMenu";
@@ -201,19 +201,22 @@ const secondsWords = (s: number) => `${s.toFixed(2)} s`;
 
 /**
  * Send an audio gesture on `ref` (one undo step, named by `name` from its track's name), saying a
- * refusal in a toast. An edit on its way from now, naming the clip as the timeline draws it once
- * the window shows its own last edit (the gate, lib/history): a fade right after a trim goes from it.
+ * refusal in a toast. An edit on its way from now, through the gate (`goesFrom`, lib/history): once
+ * the window shows its own last edit, it names the clip as the timeline draws it then when only its
+ * own edits that moved no ids came since (a fade right after a trim goes from it); else as `lane`
+ * drew it, which the server refuses if the clip changed since, saying who changed it; after its own
+ * edit that moved ids, it isn't sent (`MOVED`).
  */
 export async function sendAudio(lane: TimelineLane, ref: ClipRef, set: Omit<Extract<Gesture, { op: "audio" }>, "op" | "clip">, name: (track: string) => string) {
   const { graph, toast } = useStore.getState();
   if (!graph || !serverRef(lane, ref)) return null;
   const ours = editing();
   try {
-    const now = await shown(graph.session, ours);
-    const drawn = now && findLane(now.timeline, ref.module, ref.lane);
+    const f = await goesFrom(graph.session, graph.view.revision, ours);
+    const drawn = f.shown ? findLane(f.graph.timeline, ref.module, ref.lane) : lane;
     const clip = drawn && serverRef(drawn, ref);
-    if (!now || !clip) return null;
-    return await send(now, { op: "audio", clip, ...set }, { name: name(trackName(ref.module)) }, undefined, ours);
+    if (!clip) return null;
+    return await send(f.graph, { op: "audio", clip, ...set }, { name: name(trackName(ref.module)) }, undefined, ours);
   } catch (error) {
     toast(error instanceof Error ? error.message.replace(/^edit rejected: /, "") : String(error));
     return null;
@@ -433,16 +436,20 @@ function takeRows(lane: TimelineLane, ref: ClipRef, c: AudioClip, off: string | 
   takes.forEach((t, i) => {
     if (t <= offset + 1e-6) now = i;
   });
-  /** Its take: one edit on its way from the pick, naming the clip as drawn once the window shows its own last edit (the gate, lib/history). */
+  /**
+   * Its take: one edit on its way from the pick, through the gate (`goesFrom`, lib/history), naming
+   * the clip as the window shows it once it shows its own last edit, when only its own edits that
+   * moved no ids came since; else as the menu drew it.
+   */
   const choose = async (take: number) => {
     const { graph, toast } = useStore.getState();
     if (!graph) return;
     const ours = editing();
     try {
-      const now = await shown(graph.session, ours);
-      const drawn = now && findLane(now.timeline, ref.module, ref.lane);
+      const f = await goesFrom(graph.session, graph.view.revision, ours);
+      const drawn = f.shown ? findLane(f.graph.timeline, ref.module, ref.lane) : lane;
       const clip = drawn && serverRef(drawn, ref);
-      if (now && clip) await request("/api/graph/take", { session: now.session, ...clip, take });
+      if (clip) await request("/api/graph/take", { session: graph.session, ...clip, take });
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error));
     } finally {

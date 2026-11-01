@@ -1017,7 +1017,7 @@ function Pan({
     graphApi
       .mixInsert(session, channel, "pan", 0, { name: label })
       .then((r) => {
-        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision };
+        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision ?? live.revision };
         setMade(m);
         if (now.cancelled) return g.show(0);
         g.start(m);

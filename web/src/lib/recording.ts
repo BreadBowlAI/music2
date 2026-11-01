@@ -45,7 +45,7 @@ export async function dropOnRecording(files: DropFile[], t: RecordingTarget) {
   // window shows its own last edit.
   const ours = editing();
   try {
-    const at = await goes(graph.session, graph.view.revision, [t.call], ours);
+    const at = await goes(graph.session, graph.view.revision, ours);
     let res: Response;
     if (f.path) {
       const body = JSON.stringify({ session: graph.session, at, call: t.call, setting: t.setting, file: f.path });

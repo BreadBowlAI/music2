@@ -3,7 +3,7 @@ import { RotateCcw, Spline } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { display, graphApi, picks, type GraphState, type Home, type Knob, type NumberKnob as KnobInfo } from "../lib/graph";
-import { editing, goes } from "../lib/history";
+import { carried, editing, goesFrom } from "../lib/history";
 import { useStore } from "../lib/store";
 import { guideDid } from "../lib/guide";
 
@@ -168,9 +168,11 @@ export function useKnobGesture({
 
   /**
    * A gesture on this control, or (`on`) on a control the page has no view of yet: a first pan's new
-   * knob, in the revision that wrote it. It goes through the gate (`goes`, lib/history): from the
-   * revision the window shows once it shows its own last edit, the control as that revision has it,
-   * and what it is there, which the commit expects to find.
+   * knob, in the revision that wrote it. It goes through the gate (`goesFrom`, lib/history): from
+   * the revision the window shows once it shows its own last edit, the control as that revision has
+   * it, and what it is there, which the commit expects to find, when only the window's own edits that
+   * moved no ids came since; else from the revision it was drawn at; after an edit of its own that
+   * moved ids, not at all (`MOVED`).
    */
   const begin = (on?: { knob: KnobInfo; revision: number }): Gesture => {
     const k = on?.knob ?? knob;
@@ -179,12 +181,16 @@ export function useKnobGesture({
       previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
     };
     if (!on) {
-      gesture.previews = goes(session, gesture.revision, [k.id]).then(
-        (at) => {
-          if (at === gesture.revision) return;
-          const now = knobIn(useStore.getState().graph, k.id);
+      // From what the window shows, once it shows its own last change, when every change since was
+      // its own and moved no ids; else from what it was drawn on, which the server carries or refuses
+      // saying who changed it; after its own change that moved ids, not at all (`Moved`).
+      const drawn = useStore.getState().graph;
+      gesture.previews = goesFrom(session, gesture.revision).then(
+        (f) => {
+          if (!f.shown) return;
+          const now = knobIn(f.graph, carried(k.id, f.graph, drawn));
           if (!now || picks(now)) return;
-          gesture.revision = at;
+          gesture.revision = f.graph.view.revision;
           gesture.knob = now;
           gesture.start = now.value;
         },

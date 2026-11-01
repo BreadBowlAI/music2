@@ -10,8 +10,12 @@
 //
 // Here too, the window's own changes (AGENT-2): the steps its edits made, kept as its own as their
 // answers come (`owned`), so ⌘Z takes one back before the window shows it; and the one gate every
-// gesture goes through (`shown`), which waits until the window shows its own last change, so a
-// gesture is never dropped, nor refused, for it.
+// gesture goes through (`shown`, `goesFrom`), which waits until the window shows its own last change,
+// then goes from what it shows when every change since the gesture was drawn was the window's own
+// and moved no ids, from what it was drawn on when a change made elsewhere came in between (the
+// server refuses it if that touched its target), and not at all after a change of its own that
+// moved ids (`MOVED`). So the window's own change alone never refuses its gesture, nor moves it
+// onto another call.
 
 import { useStore } from "./store";
 import { request } from "./projects";
@@ -70,11 +74,17 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 /**
  * This window's own changes to the song open (`session`), AGENT-2: the undo steps its edits made, by
  * id, in the order their answers came (only these may ⌘Z take back unshown), the revisions its
- * changes made (its edits, undos and redos), and the newest of those, which every gesture waits for
- * the window to show.
+ * changes made (its edits, undos and redos), each with whether it moved ids (as its answer says,
+ * `moved`), and the newest of those, which every gesture waits for the window to show.
  */
-let mine: { session: number; steps: number[]; revisions: Set<number>; revision: number } = { session: 0, steps: [], revisions: new Set(), revision: 0 };
-const minein = (session: number) => (mine.session === session ? mine : (mine = { session, steps: [], revisions: new Set(), revision: 0 }));
+interface Mine {
+  session: number;
+  steps: number[];
+  revisions: Map<number, boolean>;
+  revision: number;
+}
+let mine: Mine = { session: 0, steps: [], revisions: new Map(), revision: 0 };
+const minein = (session: number): Mine => (mine.session === session ? mine : (mine = { session, steps: [], revisions: new Map(), revision: 0 }));
 
 /**
  * An edit of this window on its way: sent (or, a drag let go, waiting to be), and not yet answered,
@@ -140,23 +150,32 @@ export function madeHere(session: number, step: number | undefined): boolean {
 export const madeSince = (session: number, since: number) => (mine.session === session ? Math.max(0, ...mine.steps.slice(since)) : 0);
 
 /**
- * A change of this window (an edit, an undo, a redo) to `file` was answered at revision `revision`
- * of `session`: a gesture waits until the window shows it. A change of `layout.json` alone makes no
- * revision (PLANE-3): the one its answer names was made by whoever made it.
+ * A change of this window (an edit, an undo, a redo) made revision `revision` of `session`, as its
+ * answer says at its top, and `moved` ids or not: a gesture waits until the window shows it. A change
+ * of `layout.json` alone makes no revision (PLANE-3), and its answer names none.
  */
-export function changed(session: number, revision: number, file?: string) {
-  if (file === "layout.json") return;
+export function changed(session: number, revision: number, moved: boolean) {
   const m = minein(session);
-  m.revisions.add(revision);
+  m.revisions.set(revision, moved);
   m.revision = Math.max(m.revision, revision);
   wake();
 }
 
-/** Whether every revision of `session` after `from`, up to `to`, was made by a change of this window's. */
-export function allMine(session: number, from: number, to: number): boolean {
-  if (mine.session !== session) return to <= from;
-  for (let r = from + 1; r <= to; r++) if (!mine.revisions.has(r)) return false;
-  return true;
+/**
+ * Who made the revisions of `session` after `from`, up to `to` (AGENT-2): every one this window's
+ * own, none moving ids (`own`, and so when there are none); every one its own, one moving ids
+ * (`moved`); or not every one its own (`elsewhere`).
+ */
+export function since(session: number, from: number, to: number): "own" | "moved" | "elsewhere" {
+  if (to <= from) return "own";
+  if (mine.session !== session) return "elsewhere";
+  let moved = false;
+  for (let r = from + 1; r <= to; r++) {
+    const m = mine.revisions.get(r);
+    if (m === undefined) return "elsewhere";
+    moved ||= m;
+  }
+  return moved ? "moved" : "own";
 }
 
 /**
@@ -166,25 +185,28 @@ export function allMine(session: number, from: number, to: number): boolean {
  * the step's name as the server says it (`undo_name`), Undo names it at once, so a ⌘Z pressed
  * before the state is read again takes back this edit, not the one before.
  */
-export function owned(session: number, answer: { revision: number; step?: number; undo_name?: StepName | null; file?: string }) {
+export function owned(session: number, answer: { revision?: number; step?: number; moved?: boolean; undo_name?: StepName | null }) {
   // An answer with no step changed nothing.
   if (answer.step === undefined) return;
-  changed(session, answer.revision, answer.file);
+  // Only an answer that says whether it moved ids names the revision the change made (lib/http).
+  if (answer.revision !== undefined && answer.moved !== undefined) changed(session, answer.revision, answer.moved);
   const m = minein(session);
   if (!m.steps.includes(answer.step)) m.steps.push(answer.step);
   const { graph, set } = useStore.getState();
   // Unless a newer state already says what is on top.
-  if (answer.undo_name?.step === answer.step && graph?.session === session && graph.view.revision <= answer.revision) {
+  if (answer.undo_name?.step === answer.step && graph?.session === session && graph.view.revision <= (answer.revision ?? graph.view.revision)) {
     set({ graph: { ...graph, undo_name: answer.undo_name, redo_name: null, can_undo: true } });
   }
 }
 
 /**
- * An edit this window made has committed `answer.revision`, as `step`: the server names its undo
- * step so, the window keeps it as its own (`owned`), and Undo names it at once.
+ * An edit this window made has committed `answer.revision` (none, a change of `layout.json` alone),
+ * as `step`: the server names its undo step so, by its id, the window keeps it as its own (`owned`),
+ * and Undo names it at once.
  */
-export function recorded(session: number, answer: { revision: number; step?: number; file?: string }, step: Step) {
-  const revision = answer.revision;
+export function recorded(session: number, answer: { revision?: number; step?: number; moved?: boolean }, step: Step) {
+  const { graph: drawn } = useStore.getState();
+  const revision = answer.revision ?? (drawn?.session === session ? drawn.view.revision : 0);
   const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
   owned(session, answer);
   if (answer.step !== undefined) {
@@ -194,7 +216,8 @@ export function recorded(session: number, answer: { revision: number; step?: num
   }
   // Said at once, before the server has it: the edit's own refresh names the step plainly.
   answered = { session, revision, undo, redo: null };
-  request<Named>("/api/graph/step", { session, revision, name: step.name, structural: !!step.structural })
+  const by = answer.step !== undefined ? { step: answer.step } : { revision };
+  request<Named>("/api/graph/step", { session, ...by, name: step.name, structural: !!step.structural })
     .then((r) => {
       answered = { session, revision: r.revision, undo: r.undo_name, redo: r.redo_name };
       // Shown at once, by a state that is still that revision.
@@ -207,11 +230,21 @@ export function recorded(session: number, answer: { revision: number; step?: num
 
 // ---------------------------------------------------------------- the gate (AGENT-2)
 
-/** How long a gesture waits for the window to show its own last change before it gives up, saying so. */
+/** How long a gesture waits with nothing moving (none of the changes it waits for answered, nothing new shown) before it gives up, saying so. */
 const SHOWN_WAIT_MS = 2000;
 
-/** What a gesture that waited too long says (its own last change didn't show within 2 s: the server is stuck). */
+/** What a gesture that waited too long says (for 2 s none of its window's changes ahead of it was answered, and it showed nothing new: the server is stuck). */
 export const LATE = "Nothing was changed: your last change isn't showing yet. Try again in a moment.";
+
+/** What a gesture says when a change of the window's own moved ids while it waited to show it: it does nothing (AGENT-2). */
+export const MOVED = "The song changed while you pressed. Try again.";
+
+/** A gesture not sent: a change of the window's own since it was drawn moved ids (`MOVED`). Its control is drawn again as it is. */
+export class Moved extends Error {
+  constructor() {
+    super(MOVED);
+  }
+}
 
 /** The gates waiting, each told when something it waits for may have happened. */
 const waiters = new Set<() => void>();
@@ -227,12 +260,15 @@ function ahead(own?: Editing): object[] {
   return [...(at >= 0 ? all.slice(0, at) : all), ...flying];
 }
 
+/** Whether change `e` (an edit or an undo of this window's) is on its way still. */
+const going = (e: object) => onItsWay.has(e as Editing) || flying.has(e);
+
 /**
  * Whether `graph` shows this window's own changes: none of `before` (by default, its changes on
  * their way now) is on its way still, and `graph` shows the newest revision its changes made.
  */
 export function showsOwn(graph: GraphState, before: readonly object[] = ahead()): boolean {
-  return !before.some((e) => onItsWay.has(e as Editing) || flying.has(e)) && (mine.session !== graph.session || graph.view.revision >= mine.revision);
+  return !before.some(going) && (mine.session !== graph.session || graph.view.revision >= mine.revision);
 }
 
 /**
@@ -241,25 +277,35 @@ export function showsOwn(graph: GraphState, before: readonly object[] = ahead())
  * being on its way. So a gesture is never dropped, nor refused, for the window's own last change.
  * It waits for the edits on their way when it is called, before `own` (the gesture's own edit on
  * its way, if it has one): never for one started after, which may be waiting for it. Null when the
- * song closed or another opened meanwhile, or, said in words (`LATE`), after 2 s.
+ * song closed or another opened meanwhile, or, said in words (`LATE`), after 2 s in which nothing it
+ * waits for moved: a long queue of quick gestures, each answered in turn, waits as long as it takes.
  */
 export function shown(session: number, own?: Editing): Promise<GraphState | null> {
   const before = ahead(own);
   return new Promise((resolve) => {
+    let timer = 0;
+    // What it last saw: how many changes ahead were on their way, and the revision shown.
+    let seen = "";
     const finish = (graph: GraphState | null) => {
       waiters.delete(check);
       clearTimeout(timer);
       resolve(graph);
     };
-    const check = () => {
-      const graph = useStore.getState().graph;
-      if (!graph || graph.session !== session) finish(null);
-      else if (showsOwn(graph, before)) finish(graph);
-    };
-    const timer = setTimeout(() => {
+    const late = () => {
       finish(null);
       if (useStore.getState().graph?.session === session) useStore.getState().toast(LATE);
-    }, SHOWN_WAIT_MS);
+    };
+    const check = () => {
+      const graph = useStore.getState().graph;
+      if (!graph || graph.session !== session) return finish(null);
+      if (showsOwn(graph, before)) return finish(graph);
+      // Something moved: the 2 s start again.
+      const now = `${before.filter(going).length} ${graph.view.revision}`;
+      if (now === seen) return;
+      seen = now;
+      clearTimeout(timer);
+      timer = window.setTimeout(late, SHOWN_WAIT_MS);
+    };
     waiters.add(check);
     check();
   });
@@ -276,39 +322,57 @@ export async function through(session: number, own?: Editing): Promise<GraphStat
 }
 
 /**
- * The revision a gesture of this window drawn at `revision` goes from, once the window shows its own
- * changes (`shown`): `revision` itself, unless the window was still to show its own last change
- * then; then the revision it shows now, when every change since `revision` was the window's own and
- * each of `ids` (the controls, nodes or inputs the gesture names) names there what it named in the
- * state drawn. Otherwise `revision`: the server carries the gesture, or refuses it in its own words
- * (a change made elsewhere meanwhile is never taken over unseen). Rejects with what to say when it
- * gave up.
+ * How a gesture of this window drawn at revision `drawn` goes (AGENT-2), once the window shows its
+ * own changes (`through`): from what the window shows then (`shown` true: every change since `drawn`
+ * was the window's own and moved no ids, so what the gesture names is there as it was), or from what
+ * it was drawn on (`shown` false: nothing changed since, or a change made elsewhere came in between,
+ * and the server refuses the gesture if any change since touched its target, saying who made it).
+ * Rejects with `Moved` when every change since was the window's own and one moved ids: the gesture
+ * is not sent. Rejects with what to say when it gave up.
  */
-export async function goes(session: number, revision: number, ids: readonly string[], own?: Editing): Promise<number> {
-  const drawn = useStore.getState().graph;
-  const now = await through(session, own);
-  if (now.view.revision <= revision || !drawn || drawn.session !== session || drawn.view.revision !== revision) return revision;
-  if (!allMine(session, revision, now.view.revision)) return revision;
-  return ids.every((id) => same(named(drawn, id), named(now, id))) ? now.view.revision : revision;
+export async function goesFrom(session: number, drawn: number, own?: Editing): Promise<{ shown: boolean; graph: GraphState }> {
+  const graph = await through(session, own);
+  switch (since(session, drawn, graph.view.revision)) {
+    case "own":
+      return { shown: graph.view.revision > drawn, graph };
+    case "moved":
+      throw new Moved();
+    default:
+      return { shown: false, graph };
+  }
 }
 
-/** What `id` names in `graph`: a node, a knob, a setting or an input, by what it is; null when nothing. */
-function named(graph: GraphState, id: string): string | null {
-  for (const m of graph.view.modules) {
-    for (const n of m.nodes) {
-      const at = `${m.key} ${n.component ?? n.kind} ${n.label}`;
-      if (n.id === id) return `node ${at}`;
-      const k = n.knobs.find((x) => x.id === id);
-      if (k) return `knob ${at} ${k.slot ?? ""} ${k.label}`;
-      const s = n.settings?.find((x) => x.id === id);
-      if (s) return `setting ${at} ${s.slot} ${s.label}`;
-      const i = n.inlets.find((x) => x.id === id);
-      if (i) return `inlet ${at} ${i.label} ${i.name}`;
-    }
-  }
-  return null;
+/**
+ * What control `id` (a knob's or a setting's, as `drawn` names it) is called in `now`, after the
+ * window's own changes that moved no ids (`goesFrom`'s `shown`): the same call (`file#ordinal`), the same
+ * declared slot. A value written where the call played its default gives the control a new id
+ * (`…/@brightness` becomes `…/1.brightness`); nothing else does. Any other id is the same.
+ */
+export function carried(id: string, now: GraphState, drawn?: GraphState | null): string {
+  const controls = (g: GraphState) => g.view.modules.flatMap((m) => m.nodes.flatMap((n) => [...n.knobs, ...(n.settings ?? [])].map((c) => ({ node: n.id, c }))));
+  const there = controls(now);
+  if (there.some(({ c }) => c.id === id)) return id;
+  const was = drawn && controls(drawn).find(({ c }) => c.id === id);
+  const slot = was ? was.c.slot : id.includes("/@") ? id.slice(id.lastIndexOf("/@") + 2) : null;
+  const call = id.slice(0, id.lastIndexOf("/"));
+  return (slot && there.find(({ node, c }) => node === call && c.slot === slot)?.c.id) || id;
 }
-const same = (a: string | null, b: string | null) => a !== null && a === b;
+
+/**
+ * `goesFrom`, as a call that names controls wants it: the revision to go from, and what each id it
+ * names is called there (`carried`).
+ */
+export async function gate(session: number, drawn: number, own?: Editing): Promise<{ revision: number; id: (id: string) => string }> {
+  const was = useStore.getState().graph;
+  const f = await goesFrom(session, drawn, own);
+  return f.shown ? { revision: f.graph.view.revision, id: (id) => carried(id, f.graph, was) } : { revision: drawn, id: (id) => id };
+}
+
+/** The revision a gesture drawn at `drawn` goes from (`goesFrom`): the one the window shows, or `drawn`. */
+export async function goes(session: number, drawn: number, own?: Editing): Promise<number> {
+  const f = await goesFrom(session, drawn, own);
+  return f.shown ? f.graph.view.revision : drawn;
+}
 
 /** The step Undo (or Redo) would take back in `graph`. */
 export function next(graph: GraphState, redo: boolean): StepName | null {

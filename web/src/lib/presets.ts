@@ -90,7 +90,7 @@ export const presetsApi = {
     name: string,
   ) => {
     const ours = editing();
-    return goes(session, at, [node], ours)
+    return goes(session, at, ours)
       .then((at) => request<Loaded>("/api/graph/preset/load", { session, at, node, from, name }))
       .then((r) => {
         if (r.changed) recorded(session, r, { name: `loading ${name}` });

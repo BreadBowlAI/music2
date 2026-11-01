@@ -18,7 +18,7 @@ import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { controlLabel, graphApi, inSentence, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
 import { useStore } from "../lib/store";
-import { editing, goes } from "../lib/history";
+import { editing, gate } from "../lib/history";
 import { words } from "./Settings";
 
 /** How tall each view is on its card, in px. */
@@ -95,8 +95,10 @@ const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) =>
  * (`/preview` begins each knob's lease under one gesture, and keeps it alive while held still; one
  * in flight for each knob, the newest sent when it lands), and all of them written at release by
  * one `/set` with `with`: one undo step. A release refused, or a drag let go of, ends every lease.
- * It goes through the gate (`goes`, lib/history): begun while the window doesn't show its own last
- * edit yet, its first value waits until it does, and it goes from there (`revision`).
+ * It goes through the gate (`gate`, lib/history): begun while the window doesn't show its own last
+ * edit yet, its first value waits until it does, and it goes from there (`revision`) when only the
+ * window's own edits that moved no ids came since; else from the revision it was drawn at, which the
+ * server carries or refuses; after an edit of its own that moved ids, it isn't sent.
  */
 function useViewDrag(p: ViewProps) {
   const toast = useStore((s) => s.toast);
@@ -160,8 +162,10 @@ function useViewDrag(p: ViewProps) {
         revision: p.revision,
         ready: Promise.resolve(true),
       };
-      d.ready = goes(p.session, p.revision, knobs.map((k) => k.id)).then(
-        (at) => ((d.revision = at), true),
+      // Through the gate (AGENT-2): from what the window shows once it shows its own last change,
+      // when only its own changes that moved no ids came since, each knob as it is called there.
+      d.ready = gate(p.session, p.revision).then(
+        (g) => ((d.revision = g.revision), (d.knobs = d.knobs.map((k) => ({ ...k, id: g.id(k.id) }))), true),
         (e) => (toast(words(e)), false),
       );
       // Held still, each lease is kept alive (the server ends one nobody moves for 10 s).

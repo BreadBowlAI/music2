@@ -9,7 +9,7 @@ import { chord, mod } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { editing, through } from "../lib/history";
+import { editing, goesFrom } from "../lib/history";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
@@ -216,18 +216,21 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
 
   /**
    * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. An edit on
-   * its way from the click, it goes through the window's one gate (AGENT-2, lib/history): once the
-   * window shows its own edits before it, so the grid's clicks land in the order made, each decided
-   * from what the grid showed, theirs included.
+   * its way from the click, it goes through the window's one gate (AGENT-2, `goesFrom` in
+   * lib/history): once the window shows its own edits before it, so the grid's clicks land in the
+   * order made, each decided from what the grid showed, theirs included (it names steps by their
+   * beats, and says on or off: nothing a change elsewhere can make stale); after its own edit that
+   * moved ids, not at all (`MOVED`).
    */
   const write = (row: DrumRow, a: Omit<Asked, "revision">, step: string) => {
     const mine: Asked = { ...a, revision: Infinity };
     setAsked((all) => [...all, mine]);
     const size = grid.step;
     const own = editing();
-    through(latest.current.session, own)
-      .then((now) => send(now, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own))
-      .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision } : x))))
+    goesFrom(latest.current.session, latest.current.view.revision, own)
+      .then((f) => send(f.graph, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own))
+      // One that changed nothing made no revision: shown at once.
+      .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision ?? 0 } : x))))
       .catch((error) => {
         setAsked((all) => all.filter((x) => x !== mine));
         toast(message(error));

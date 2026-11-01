@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { allMine, editing, goes, recorded, through, type Editing, type Step, type StepName } from "./history";
+import { editing, gate, goesFrom, recorded, type Editing, type Step, type StepName } from "./history";
 import type { DockView } from "./shell";
 import { token } from "./native";
 import { http } from "./http";
@@ -877,7 +877,7 @@ export const editorHooks: {
  * An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history).
  * `p` is the call, or what makes it from the edit's own on its way (a `gated` call waits at the gate).
  */
-function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(
+function edit<T extends { revision?: number; before: string; after: string; pending?: boolean }>(
   session: number,
   step: Step | ((r: T) => Step),
   p: Promise<T> | ((ours: Editing) => Promise<T>),
@@ -920,7 +920,7 @@ export interface UpgradePlace {
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
-type Edit = { file: string; before: string; after: string; revision: number; step?: number };
+type Edit = { file: string; before: string; after: string; revision?: number; step?: number; moved?: boolean };
 /**
  * An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step (`newest`),
  * or the step undo can't take back, which can be skipped (`stuck`).
@@ -928,14 +928,16 @@ type Edit = { file: string; before: string; after: string; revision: number; ste
 type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null; newest?: StepName | null; stuck?: StepName };
 
 /**
- * A gesture's call from the revision it was drawn at, naming `ids` (its knob, node or input): it
- * goes through the gate (`goes`, lib/history), so once the window shows its own last edit, from the
- * revision it shows then when each id still names what it did. `send` sends it from that revision.
+ * A gesture's call from the revision it was drawn at: it goes through the gate (`goesFrom`, lib/history),
+ * so once the window shows its own last edit, from the revision it shows then when every change since
+ * was the window's own and moved no ids, else from the one it was drawn at; after a change of its own
+ * that moved ids it isn't sent (`Moved`). `send` sends it from that revision, each id it names as
+ * `id` calls it there.
  */
 const gated =
-  <T>(session: number, revision: number, ids: readonly string[], send: (revision: number) => Promise<T>) =>
+  <T>(session: number, revision: number, send: (revision: number, id: (id: string) => string) => Promise<T>) =>
   (ours: Editing) =>
-    goes(session, revision, ids, ours).then(send);
+    gate(session, revision, ours).then((g) => send(g.revision, g.id));
 
 export const graphApi = {
   get: () => call<GraphState>(""),
@@ -988,19 +990,19 @@ export const graphApi = {
     call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
   /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
   setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
-    edit(session, step, gated(session, revision, [id], (at) => call<Edit>("/set", { session, revision: at, id, gesture: "set", value, client: clientId }))),
+    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),
   connect: (session: number, revision: number, from: string, to: string, step: Step) =>
-    edit(session, step, gated(session, revision, [from, to], (at) => call<Edit>("/connect", { session, revision: at, from, to }))),
+    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/connect", { session, revision: at, from, to: as(to) }))),
   disconnect: (session: number, revision: number, id: string, step: Step) =>
-    edit(session, step, gated(session, revision, [id], (at) => call<Edit>("/disconnect", { session, revision: at, id }))),
+    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/disconnect", { session, revision: at, id: as(id) }))),
   addEffect: (session: number, revision: number, node: string, effect: Effect) =>
     edit(
       session,
       { name: `adding ${effect.label}`, structural: true },
-      gated(session, revision, [node], (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
+      gated(session, revision, (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
     ),
   removeEffect: (session: number, revision: number, node: string, step: Step) =>
-    edit(session, step, gated(session, revision, [node], (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
+    edit(session, step, gated(session, revision, (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step, within?: Editing) =>
     edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips }), within),
@@ -1014,13 +1016,13 @@ export const graphApi = {
     edit<Edit & { lane: { module: string; lane: string }; name: string }>(
       session,
       (r) => ({ name: `automating ${r.name}`, structural: true }),
-      gated(session, revision, [id], (at) => call("/automate", { session, revision: at, id })),
+      gated(session, revision, (at, as) => call("/automate", { session, revision: at, id: as(id) })),
     ),
   /** Apply a problem's fix, offered at `revision`, exactly as it came: its Tx, one undoable edit. */
   fix: (session: number, revision: number, fix: Fix) =>
     // Named by its own title, quoted: "Undid “Move all to Kick (kicks)”".
     // Its Tx is the one offered at `revision`: it waits at the gate, and goes from there.
-    edit(session, { name: `“${fix.title}”`, structural: true }, gated(session, revision, [], () => call<Edit>("/fix", { session, revision, fix }))),
+    edit(session, { name: `“${fix.title}”`, structural: true }, gated(session, revision, () => call<Edit>("/fix", { session, revision, fix }))),
   /**
    * Add a track playing `instrument` (WRITE-10): its file, its import and mixer channel, its lane and
    * its place below `after` in the layout. One undoable edit; the answer names the new track.
@@ -1178,8 +1180,8 @@ export function tilde(path: string, home: string | null) {
 
 // ---------------------------------------------------------------- lane writes
 
-/** Lane writes of the open project, one at a time, and the newest revision one made. */
-let lanes = { session: 0, revision: 0, pending: 0, queue: Promise.resolve() as Promise<unknown> };
+/** Lane writes of the open project, one at a time: each an edit on its way (lib/history), which the gate waits for. */
+let lanes = { session: 0, queue: Promise.resolve() as Promise<unknown> };
 
 /**
  * Rewrite `module`'s notes lane `lane` (keys) with every clip it is to have: one write, one undo
@@ -1199,7 +1201,7 @@ export function writeLane(
   step: Step,
   again?: (now: GraphState) => NoteClip[] | null,
 ) {
-  if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
+  if (lanes.session !== graph.session) lanes = { session: graph.session, queue: Promise.resolve() };
   /** `clips`, each with an id: a clip keeps the one it has, one without gets a new one. */
   const named = (clips: NoteClip[]) => {
     const taken = clips.map((c) => c.id);
@@ -1211,25 +1213,22 @@ export function writeLane(
     });
   };
   const q = lanes;
-  q.pending++;
   // On its way from now, while it waits in the queue too (Undo waits for it).
   const ours = editing();
   const write = q.queue
     .then(async () => {
       // Through the gate (lib/history): once the window shows its own edits before this one. Made
-      // from an older state than it shows then, and only the window's own edits since (an undo, a
-      // clip trimmed a moment before), it is made `again` from the lane as shown, when it can be.
-      const now = await through(graph.session, ours);
-      const remade = again && now.view.revision > base && allMine(graph.session, base, now.view.revision) ? again(now) : null;
+      // from an older state than it shows then, and only the window's own edits since that moved
+      // no ids (an undo, a clip trimmed a moment before), it is made `again` from the lane as shown,
+      // when it can be; after a change made elsewhere, from `base`, which the server refuses if the
+      // lane changed since; after one of its own that moved ids, not at all.
+      const f = await goesFrom(graph.session, base, ours);
+      const remade = again && f.shown ? again(f.graph) : null;
       const sent = named(remade ?? clips);
-      const r = await graphApi.lane(graph.session, remade ? now.view.revision : base, module, lane, sent, step, ours);
+      const r = await graphApi.lane(graph.session, remade ? f.graph.view.revision : base, module, lane, sent, step, ours);
       return { ...r, clips: sent };
     })
-    .then((r) => {
-      q.revision = Math.max(q.revision, r.revision);
-      return r;
-    })
-    .finally(() => (q.pending--, ours.end()));
+    .finally(() => ours.end());
   q.queue = write.catch(() => {});
   return write;
 }
@@ -1238,21 +1237,14 @@ export function writeLane(
  * Run `f` (a write of a notes lane by another route: a drag's lease, 8b.7) after the lane writes on
  * their way, in their queue, counted as one of them: it never races a roll write still on its way.
  */
-export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Promise<T & { revision: number }>): Promise<T & { revision: number }> {
-  if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
+export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Promise<T>): Promise<T> {
+  if (lanes.session !== graph.session) lanes = { session: graph.session, queue: Promise.resolve() };
   const q = lanes;
-  q.pending++;
   const ours = editing();
-  const write = q.queue
-    .then(() => f(ours))
-    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
-    .finally(() => (q.pending--, ours.end()));
+  const write = q.queue.then(() => f(ours)).finally(() => ours.end());
   q.queue = write.catch(() => {});
   return write;
 }
-
-/** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
-export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);
 
 // ---------------------------------------------------------------- knob values
 

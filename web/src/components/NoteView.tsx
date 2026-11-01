@@ -14,7 +14,6 @@ import {
   laneTitle,
   lockReason,
   moduleName,
-  laneWriting,
   meterSpans,
   writeLane,
   type ClipRef,
@@ -42,7 +41,7 @@ import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
-import { allMine, editing, showsOwn, through } from "../lib/history";
+import { editing, goesFrom, showsOwn } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -232,7 +231,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useEffect(() => {
     const n = server?.notes.length;
     if (draft) {
-      if (gesture.current || sending.current.busy || laneWriting(graph)) return;
+      if (gesture.current || sending.current.busy || !showsOwn(graph)) return;
       setDraft(null);
       written.current = null;
       if (n !== draft.notes.length) setSelected(new Set());
@@ -357,7 +356,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     // A drag heard as it went (8b.7) is written by its lease: one notes gesture, in the lane writes' queue.
     const write =
       lease && gesture
-        ? afterLaneWrites(latest.current, (within) => lease.finish(gesture, step, within)).then((r) => ({ revision: r.revision, clips }))
+        ? afterLaneWrites(latest.current, (within) => lease.finish(gesture, step, within)).then((r) => ({ revision: r.revision ?? b.revision, clips }))
         : writeLane(latest.current, module, lane, clips, b.revision, step, (now) =>
             withClip(now, (c) => {
               const made = merged(b.clips[at], shape, c);
@@ -365,7 +364,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
             }),
           );
     write
-      .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
+      // A write that changed nothing made no revision: the next goes from the one it went from.
+      .then((r) => void (written.current = { revision: r.revision ?? b.revision, clips: r.clips }))
       .catch((error) => {
         toast(error instanceof Error ? error.message : String(error));
         s.next = null;
@@ -433,30 +433,29 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   /**
    * A clip gesture on this clip that the server works out (a groove, NOTE-7; a paste, NOTE-5),
-   * sent after this view's lane writes on their way, once the window shows its own edits (the gate,
-   * lib/history): it names the clip with the hash the graph draws it with then, so the server
-   * refuses it over a change it missed, and a change made elsewhere since the roll drew the notes
-   * (by their places) refuses it here, unless the roll drew them before the window showed its own
-   * last edit and only its own edits came since (then it goes from the notes as shown). One Tx, one undo step named `name`. Its notes
-   * show when the graph does; with `select`, the notes it added are then selected.
+   * sent after this view's lane writes on their way, through the gate (`goesFrom`, lib/history): once
+   * the window shows its own edits, from the clip as it shows it then when only its own edits that
+   * moved no ids came since the roll drew it; else from the clip as drawn, by its hash, which the
+   * server refuses if it changed since, saying who changed it; after its own edit that moved ids,
+   * not at all. One Tx, one undo step named `name`. Its notes show when the graph does; with
+   * `select`, the notes it added are then selected.
    */
   const act = (make: (clip: ServerRef) => ClipGesture, name: string, select = false) => {
     if (locked) return;
     const before = clip?.notes ?? [];
-    const asShown = !draft && showsOwn(latest.current);
     const drawnAt = latest.current.view.revision;
+    const drawnLane = findLane(latest.current.timeline, module, lane);
+    const drawn = drawnLane ? serverRef(drawnLane, ref) : null;
     afterLaneWrites(latest.current, async (within) => {
-      const g = await through(latest.current.session, within);
-      const l = findLane(g.timeline, module, lane);
-      const c = l ? serverRef(l, ref) : null;
-      const now = findNoteClip(g.timeline, ref);
-      if (!c || !now) throw new Error("This clip is gone.");
-      if ((asShown || !allMine(g.session, drawnAt, g.view.revision)) && !sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
-      return sendGesture(g, make(c), { name }, undefined, within);
+      const f = await goesFrom(latest.current.session, drawnAt, within);
+      const l = f.shown ? findLane(f.graph.timeline, module, lane) : null;
+      const c = f.shown ? l && serverRef(l, ref) : drawn;
+      if (!c) throw new Error("This clip is gone.");
+      return sendGesture(f.graph, make(c), { name }, undefined, within);
     })
       .then((done) => {
         if (!select || done.before === done.after) return;
-        added.current = { revision: done.revision, before };
+        added.current = { revision: done.revision ?? drawnAt, before };
         // Drawn again, in case the graph showed the revision before this answer came.
         setWrites((n) => n + 1);
       })
@@ -476,7 +475,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const graph = latest.current;
     const lane0 = findLane(graph.timeline, module, lane);
     const named = lane0?.kind === "notes" && lane0.clips.every((_, i) => hasOwnId(lane0.clips, i));
-    const free = !locked && named && !!gesture && !sending.current.busy && !written.current && !laneWriting(graph) && showsOwn(graph);
+    const free = !locked && named && !!gesture && !sending.current.busy && !written.current && showsOwn(graph);
     leased.current = {
       g,
       lease: free
@@ -546,19 +545,23 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
    * An edit of this clip (a key's, a tool's, the menu's), made from `c`, the clip as the roll draws
    * it, and `from`, what that was made from. While the window doesn't show its own last edit yet (an
    * undo a moment before) and the roll has no write of its own on its way, it is made when it goes
-   * instead, from the clip as the window shows it then (the gate, AGENT-2): never from notes an own
-   * edit has changed since.
+   * instead (the gate, AGENT-2): from the clip as the window shows it then, when only its own edits
+   * that moved no ids came since; else from the clip as drawn, which the server refuses if the lane
+   * changed since, saying who changed it; after its own edit that moved ids, not at all. Never from
+   * notes an own edit has changed since.
    */
   const fromShown = (make: (c: Shape, from: Basis) => void) => {
     if (!clip || locked) return;
     const g = useStore.getState().graph;
     if (draft || sending.current.busy || (g && showsOwn(g) && g.view.revision === latest.current.view.revision)) return make(clip, basis());
+    const drawn = { clip, basis: basis() };
     const own = editing();
-    through(latest.current.session, own)
-      .then((now) => {
-        const l = findLane(now.timeline, module, lane);
-        const c = findNoteClip(now.timeline, ref);
-        if (c && l?.kind === "notes") make({ length: c.length, notes: c.notes }, { revision: now.view.revision, clips: l.clips });
+    goesFrom(latest.current.session, latest.current.view.revision, own)
+      .then((f) => {
+        if (!f.shown) return make(drawn.clip, drawn.basis);
+        const l = findLane(f.graph.timeline, module, lane);
+        const c = findNoteClip(f.graph.timeline, ref);
+        if (c && l?.kind === "notes") make({ length: c.length, notes: c.notes }, { revision: f.graph.view.revision, clips: l.clips });
       })
       .catch((error) => toast(error instanceof Error ? error.message : String(error)))
       .finally(() => own.end());

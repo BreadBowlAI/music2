@@ -149,7 +149,7 @@ export async function addSample(item: LibraryItem, to: Target | RecordingTarget)
   try {
     const body =
       to.kind === "recording"
-        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, [to.call], ours), call: to.call, setting: to.setting }
+        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, ours), call: to.call, setting: to.setting }
         : { session: graph.session, id: item.id, to };
     const res = await http("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) }).finally(() => ours.end());
     const done = (await readJson(res)) as SampleAdded & { error?: string };
