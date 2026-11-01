@@ -538,6 +538,25 @@ fn two_states_in_one_instance_play_independently() {
 
 // Regression tests for bugs reported in review (2026-10-11).
 
+// RENDER-3: a graph with no output (the empty revision of a song whose code never compiled) is
+// refused in words, never rendered: a render that indexed its output panicked.
+#[test]
+fn a_graph_with_no_output_is_refused_in_words() {
+    let flat = m2_ir::Flat {
+        nodes: vec![],
+        order: vec![],
+        out: m2_ir::PortRef { node: 0, port: 0 },
+        out_kind: m2_ir::Kind::Audio(2),
+        sidechain: vec![],
+        overlays: vec![],
+        muted: vec![],
+        routes: vec![],
+    };
+    let pk = std_packages();
+    let err = Renderer::new(&flat, &DataSet::empty(), &pk, SR).map(drop).unwrap_err().to_string();
+    assert!(err.contains("nothing to render"), "{err}");
+}
+
 #[test]
 fn output_does_not_depend_on_the_callers_buffer_size() {
     let ir = song(

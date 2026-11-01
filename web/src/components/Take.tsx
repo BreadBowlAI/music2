@@ -29,7 +29,8 @@ export default function Take({ module, lane, color }: { module: string; lane: st
   const audio = (mine?.kind ?? take.kind) === "audio";
   const start = mine?.start ?? take.start;
   const length = Math.max(end - start, 1 / 64);
-  const notes = (audio ? [] : take.notes).map((n) => ({
+  // A kit's take holds each hit on its Drum track's lane (KIT-26): this lane's alone.
+  const notes = (audio ? [] : take.notes.filter((n) => !n.module || (n.module === module && n.lane === lane))).map((n) => ({
     pitch: n.pitch,
     start: n.start - start,
     length: n.held ? Math.max(end - n.start, 1 / 64) : n.length,

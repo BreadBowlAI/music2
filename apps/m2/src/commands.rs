@@ -198,6 +198,17 @@ pub const COMMANDS: &[Command] = &[
                on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.",
     },
     Command {
+        name: "make-kit",
+        also: &[],
+        usage: "m2 make-kit <project> <track>",
+        words: "make a track that plays the drum machine a drum kit: the track becomes the kit's bus, keeping its \
+                name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, \
+                its knobs and levels carried; one edit that undo takes back, verified",
+        more: "It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's \
+               noise comes out a little different. Notes the drum machine played nothing for go, and it names them. \
+               `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.",
+    },
+    Command {
         name: "import",
         also: &[],
         usage: "m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]",

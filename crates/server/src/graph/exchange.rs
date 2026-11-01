@@ -78,7 +78,7 @@ impl Graph {
             if o.token != token {
                 return Err(anyhow!("the open project changed; refresh the graph before editing"));
             }
-            Ok(stems_refused(o.session.accepted(), &o.session.packages))
+            Ok(super::actor::nothing_to_render(&o.session).or_else(|| stems_refused(o.session.accepted(), &o.session.packages)))
         })
     }
 
@@ -91,7 +91,7 @@ impl Graph {
                 return Err(anyhow!("the open project changed; refresh the graph before editing"));
             }
             let rev = o.session.accepted_arc();
-            if let Some(why) = stems_refused(&rev, &o.session.packages) {
+            if let Some(why) = super::actor::nothing_to_render(&o.session).or_else(|| stems_refused(&rev, &o.session.packages)) {
                 bail!("{why}");
             }
             let modules = &rev.compiled.ir.modules;

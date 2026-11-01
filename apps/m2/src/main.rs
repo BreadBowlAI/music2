@@ -920,6 +920,24 @@ fn run(args: Vec<String>) -> Result<()> {
                 made[0].edited.revision
             );
         }
+        Some("make-kit") => {
+            // KIT-22, KIT-24: what a drum machine track's Make it a kit does.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let made = m2_editor::machine::make_kit(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            let rev = s.accepted();
+            let label = rev.compiled.ir.modules.iter().find(|m| m.key == made.bus).map_or(made.bus.clone(), |m| m.label().to_string());
+            let tracks: Vec<String> = made.tracks.iter().map(|m| m.label.clone()).collect();
+            println!(
+                "made {label} a kit: its bus {label} (ID {}), and {} going to it (revision {})",
+                made.bus,
+                m2_editor::listed(&tracks),
+                made.tracks[0].edited.revision
+            );
+            println!("{}", m2_editor::machine::KEEPS);
+            for said in &made.said {
+                println!("{said}");
+            }
+        }
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);
@@ -1569,6 +1587,7 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: 
     let (presets, notes): (Vec<_>, Vec<_>) = up.notes.iter().partition(|n| n.file.starts_with("Presets/"));
     if up.current() {
         println!("{} is made for this music2 already: nothing to upgrade", dir.display());
+        list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
         list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
         return Ok(());
     }
@@ -1580,6 +1599,7 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: 
     }
     list("left as it is, so nothing was written: change these by hand, then run m2 upgrade again:", &up.left.iter().collect::<Vec<_>>());
     list("check these by hand: the upgrade can't keep them as they were:", &notes);
+    list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
     list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
     if !up.refused.is_empty() {
         println!("the song wouldn't build after it:");

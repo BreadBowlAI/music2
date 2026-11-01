@@ -107,8 +107,8 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
   const pill = usePill();
   const dropouts = useDropouts(status);
   // What the last Upgrade it left to check by hand, for this song (AGENT-14).
-  const [after, setAfter] = useState<{ session: number; notes: UpgradePlace[] } | null>(null);
-  const upgraded = !!after && after.session === graph.session && after.notes.length > 0;
+  const [after, setAfter] = useState<{ session: number; notes: UpgradePlace[]; choose: UpgradePlace[] } | null>(null);
+  const upgraded = !!after && after.session === graph.session && after.notes.length + after.choose.length > 0;
   const all = states(graph, status, connected, dropouts, upgraded);
   if (!all.length) return null;
   const [main, ...rest] = all;
@@ -148,13 +148,16 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                   <Upgrade
                     graph={graph}
                     state={s}
-                    onDone={(up) => (up.notes.length ? setAfter({ session: graph.session, notes: up.notes }) : setAnchor(null))}
+                    onDone={(up) =>
+                      up.notes.length + (up.choose?.length ?? 0) ? setAfter({ session: graph.session, notes: up.notes, choose: up.choose ?? [] }) : setAnchor(null)
+                    }
                   />
                 )}
                 {s.id === "upgraded" && after && (
                   <UpgradedItem
                     state={s}
                     notes={after.notes}
+                    choose={after.choose}
                     onDone={() => {
                       setAfter(null);
                       setAnchor(null);
@@ -354,23 +357,34 @@ function Upgrade({ graph, state, onDone }: { graph: GraphState; state: State; on
 }
 
 /** What an upgrade that was written leaves to check by hand: a sound it couldn't keep as it was, and the musician's presets of sounds that moved, never changed. */
-function UpgradedItem({ state, notes, onDone }: { state: State; notes: UpgradePlace[]; onDone: () => void }) {
+function UpgradedItem({ state, notes, choose, onDone }: { state: State; notes: UpgradePlace[]; choose: UpgradePlace[]; onDone: () => void }) {
   return (
     <div data-testid="upgraded">
       <Item
         state={state}
-        title="Upgraded: check these by hand"
+        title={notes.length ? "Upgraded: check these by hand" : "Upgraded"}
         action={
           <Button variant="secondary" size="sm" onClick={onDone} data-testid="upgraded-done" className="shrink-0">
             Done
           </Button>
         }
       >
-        The song plays in this music2 now. These may sound a little different, or are yours to change.
+        {notes.length ? "The song plays in this music2 now. These may sound a little different, or are yours to change." : "The song plays in this music2 now."}
       </Item>
-      <ul className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
-        <Places places={notes} testid="upgraded-note" />
-      </ul>
+      {notes.length > 0 && (
+        <ul className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
+          <Places places={notes} testid="upgraded-note" />
+        </ul>
+      )}
+      {/* A drum machine track: the upgrade leaves it as it is, and it plays as before (KIT-24). */}
+      {choose.length > 0 && (
+        <>
+          <p className="px-2 pl-8 text-sm text-fg-muted">When you choose, the upgrade leaves these as they are:</p>
+          <ul className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
+            <Places places={choose} testid="upgraded-choose" />
+          </ul>
+        </>
+      )}
     </div>
   );
 }

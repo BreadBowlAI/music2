@@ -2839,6 +2839,11 @@ impl Renderer {
         basis: Basis,
         mode: m2_plugins::RenderMode,
     ) -> Result<Renderer> {
+        // A graph with no output (the empty revision of a song whose code never compiled) has
+        // nothing to render (RENDER-3): said, never indexed.
+        if flat.nodes.get(flat.out.node).is_none() {
+            bail!("there is nothing to render: the song gives no sound yet (its code hasn't compiled)");
+        }
         // Each kernel's first state is computed here, by `k_init` and a reset (RENDER-2a).
         let _mode = fpenv::Canon::enter();
         let tempo = data.tempo().clone();

@@ -80,12 +80,13 @@ export interface AuditionOut {
   keep?: number[];
 }
 
-/** The server's answer, to this window only: why a lane is silent, or what went wrong, in words. */
+/** The server's answer, to this window only: why a lane is silent, what a key on a kit played nothing for (KIT-25), or what went wrong, in words. */
 export interface AuditionIn {
   t: "audition";
   module?: string;
   lane?: string;
   silent?: string;
+  said?: string;
   error?: string;
 }
 

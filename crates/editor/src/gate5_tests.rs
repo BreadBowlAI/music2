@@ -370,7 +370,7 @@ fn planned_call_forms_are_current() {
         let i = s.instruments().into_iter().find(|i| i.component == k.component).expect("the kit's instrument");
         let d = &s.catalog().components[&k.component];
         for t in &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks {
-            let (values, ctors) = crate::tracks::values_text(d, &t.values, &s.accepted().compiled.units).unwrap();
+            let (values, ctors) = crate::tracks::values_text(d, &t.values, &[], &s.accepted().compiled.units).unwrap();
             assert!(ctors.is_empty(), "every-component imports no unit for {}'s {}", k.name, t.name);
             let key = crate::keys::propose(&t.name, |_| false);
             forms.push(format!(
@@ -385,7 +385,7 @@ fn planned_call_forms_are_current() {
     let drum = s.instruments().into_iter().find(|i| i.component == crate::drums::DRUM).expect("the Drum is listed");
     let d = &s.catalog().components[crate::drums::DRUM];
     let snare = crate::kits::sound_value(d, "snare").expect("the Drum's snare");
-    let (values, _) = crate::tracks::values_text(d, &[snare], &s.accepted().compiled.units).unwrap();
+    let (values, _) = crate::tracks::values_text(d, &[snare], &[], &s.accepted().compiled.units).unwrap();
     forms.push(format!(
         "    // + Drum: a Drum playing a snare\n    {},\n",
         crate::tracks::track_call_text(&drum, "snare", "Snare", &values)

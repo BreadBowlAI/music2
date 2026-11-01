@@ -18,8 +18,31 @@
 
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
 
-/** The drums One drum can play, as its menu names them: their places are the kit kernel's models 0 to 8. */
-const DRUMS = ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"] as const;
+/**
+ * The drums the Drum can play, as its menu names them, grouped by family: each other drum the drum
+ * machine plays beside the drum it is most like, named as General MIDI names it (KIT-20). A song
+ * writes a sound by its name; the `one` kernel reads its place (`SOUNDS` in kernels-src), so the
+ * order is for reading, and each name plays what it always played.
+ */
+const DRUMS = [
+  "kick",
+  "kick 2",
+  "snare",
+  "snare 2",
+  "clap",
+  "hats",
+  "tom",
+  "rim",
+  "claves",
+  "cowbell",
+  "cymbal",
+  "cymbal 2",
+  "ride",
+  "ride 2",
+  "shaker",
+  "shaker 2",
+  "tambourine",
+] as const;
 
 /**
  * The drum voices for `notes`, with a patch of kernel inputs (see `@m2/drums:drum` and `one` in the
@@ -140,7 +163,9 @@ export const drums = {
 
   /**
    * One drum on every note, the one its menu picks: kick, snare, clap, hats (G#2 pedal, A#2 open),
-   * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal or shaker. The menu is a
+   * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal (a crash) or shaker, or another
+   * drum the drum machine plays (kick 2, snare 2, claves, cymbal 2, ride, ride 2, shaker 2, tambourine:
+   * KIT-20), as the drum machine plays it at its note. The menu is a
    * control: a pick plays from the next hit, and a lane can automate it. Its knobs move whichever it
    * plays: `tune` in semitones from the drum's own, `decay` times its own length, and `punch` more or
    * less of a kick's thump or a snare's snap, or on the others of the hit's first 15 ms. At 0, 1
@@ -166,7 +191,7 @@ export const drums = {
       output: port.audio(),
       editor: {
         category: "Drums",
-        description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal or shaker",
+        description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal, shaker, ride, tambourine, claves and more",
         groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
         // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The hats
         // are one Hats track, closed, pedal and open by the note, so a closed hat cuts an open one.

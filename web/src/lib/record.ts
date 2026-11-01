@@ -36,6 +36,9 @@ export interface TakeNote {
   length: number;
   velocity: number;
   held?: boolean;
+  /** The lane it is on: a kit's take has one for each Drum track (KIT-26). */
+  module?: string;
+  lane?: string;
 }
 
 /** A lane a take records on: where its clip starts, and an audio lane's input channels ("3-4"). */

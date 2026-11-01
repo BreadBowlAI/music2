@@ -644,6 +644,10 @@ export interface GraphState extends GraphStatus {
   instruments?: Instrument[];
   /** The kit presets the instruments name, which + Track's Drum kit makes a kit from (KIT-5). */
   kit_presets?: KitPreset[];
+  /** The tracks that play the drum machine, by key: each one's menu and card offer Make it a kit (KIT-24). */
+  drum_machines?: string[];
+  /** What Make it a kit keeps, in its words, wherever it is offered (KIT-22). */
+  make_kit_keeps?: string;
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
@@ -901,6 +905,8 @@ export interface Upgraded {
   left: UpgradePlace[];
   /** What to check by hand though it was written, and the musician's presets of sounds that moved (`Presets/…`), never changed. */
   notes: UpgradePlace[];
+  /** What to do when you choose, which the upgrade doesn't: each drum machine track, with Make it a kit or what to do by hand first (KIT-24). */
+  choose?: UpgradePlace[];
   written: number | null;
   refused: string[];
 }
@@ -1038,6 +1044,20 @@ export const graphApi = {
         component: kit.component,
         kit: kit.name,
         after: after ?? undefined,
+      }),
+    ),
+  /**
+   * Make it a kit (KIT-22): drum machine track `track`, called `name`, becomes a kit's bus, with a
+   * Drum track for each sound its notes use going to it. One undoable edit; the answer names the
+   * bus and its tracks, and says what it keeps (`keeps`) and what went (`said`).
+   */
+  makeKit: (session: number, track: string, name: string) =>
+    edit(
+      session,
+      { name: `Make ${name} a kit`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[]; keeps: string; said: string[] }>("/track/make-kit", {
+        session,
+        track,
       }),
     ),
   /**
