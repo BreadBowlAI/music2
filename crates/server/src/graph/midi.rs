@@ -84,6 +84,20 @@ impl Pads {
     }
 }
 
+impl Midi {
+    /// The words for note `key`, which no Drum of kit `p` answers to: the first time since keys
+    /// played something else, else none (KIT-25).
+    pub(super) fn unanswered(&mut self, p: &Pads, key: u8) -> Option<String> {
+        self.unanswered.insert((p.bus.clone(), key)).then(|| {
+            format!(
+                "No drum of the {} kit answers to {} ({key}). + Drum in Beat adds one.",
+                p.label,
+                m2_song::lane::pitch_name(f64::from(key)).unwrap_or_default()
+            )
+        })
+    }
+}
+
 struct Keyboard {
     name: String,
     /// The sustain pedal is down.
@@ -214,11 +228,7 @@ impl Graph {
                     };
                     // A note no Drum of the kit answers to plays nothing: said once (KIT-25).
                     let unanswered = match (&lane, &pads) {
-                        (None, Some(p)) if cp.midi.unanswered.insert((p.bus.clone(), key)) => Some(format!(
-                            "No drum of the {} kit answers to {} ({key}). + Drum in Beat adds one.",
-                            p.label,
-                            m2_song::lane::pitch_name(f64::from(key)).unwrap_or_default()
-                        )),
+                        (None, Some(p)) => cp.midi.unanswered(p, key),
                         _ => None,
                     };
                     drop(cp);

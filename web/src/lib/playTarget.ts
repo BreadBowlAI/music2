@@ -26,7 +26,12 @@ export const holdTarget = (lane: { module: string; lane: string } | null) => use
 /** The take's lane as a target, while one records. */
 function held(graph: GraphState | null, lane: { module: string; lane: string } | null): PlayTarget | null {
   const track = lane && graph?.timeline.tracks.find((t) => t.module === lane.module);
-  return lane && track ? { module: lane.module, lane: lane.lane, label: track.label, colour: track.colour } : null;
+  return lane && track ? { module: lane.module, lane: lane.lane, label: kitOf(graph, lane.module) ?? track.label, colour: track.colour } : null;
+}
+
+/** The name of the kit track `module` is a Drum track of: keys play the kit by sound then (KIT-25). */
+function kitOf(graph: GraphState | null, module: string): string | undefined {
+  return graph?.view.drum_kits?.find((k) => k.rows.some((r) => r.track === module))?.label;
 }
 
 /** What plays, given the open song and the shell's selection. */
@@ -47,7 +52,7 @@ export function playTarget(graph: GraphState | null, selected: string | null, cl
   const notes = track.lanes.filter((l) => l.kind === "notes");
   const clip = clips[selected];
   const lane = (clip?.module === selected ? notes.find((l) => l.key === clip.lane) : undefined) ?? notes[0];
-  return lane ? { module: selected, lane: lane.key, label: track.label, colour: track.colour } : null;
+  return lane ? { module: selected, lane: lane.key, label: kitOf(graph, selected) ?? track.label, colour: track.colour } : null;
 }
 
 /** The armed notes track's lane, as a target (MON-9): what keys play then, whatever is selected. */

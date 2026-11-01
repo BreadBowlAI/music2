@@ -2076,6 +2076,32 @@ fn each_pass_over_a_loop_on_a_kit_is_one_step() {
     assert_eq!(kit_notes(&r), [("kick", vec![]), ("snare", vec![]), ("hats", vec![])], "the first pass, both lanes");
 }
 
+// KIT-25, KIT-26: a take on a kit records the keyboard piano's keys on the Drum tracks that answer
+// to them, as a pad's.
+#[test]
+fn a_take_on_a_kit_records_the_keyboard_pianos_keys_on_their_drums() {
+    let mut r = Rig::with(&[("song.ts", KIT)]);
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "kick", "hits", Options::default()).unwrap();
+    let piano = |h: u32, key: f64| Audition {
+        module: Some("kick".into()),
+        lane: Some("hits".into()),
+        on: vec![Strike { h, pitch: key, velocity: 0.8 }],
+        record: true,
+        ..Audition::default()
+    };
+    for (h, key, at) in [(1, 38.0, 1.0), (2, 42.0, 2.0)] {
+        r.to(at);
+        r.graph.audition("w1", piano(h, key)).unwrap();
+        r.to(at + 0.25);
+        r.graph.audition("w1", Audition { off: vec![h], ..Audition::default() }).unwrap();
+    }
+    r.to(3.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    assert_eq!(kit_notes(&r), [("kick", vec![]), ("snare", vec![(38.0, 1.0)]), ("hats", vec![(42.0, 2.0)])]);
+}
+
 // MON-9: one notes track is armed at a time; while one is, the keyboards play it and Record records
 // it, whatever a window selects.
 #[test]

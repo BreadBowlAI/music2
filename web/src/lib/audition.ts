@@ -217,6 +217,8 @@ function listen() {
   const offMenu = onMenu((id) => id === "panic" && releaseAll());
   const offAnswer = on<AuditionIn>("audition", (msg) => {
     if (msg.error) return useStore.getState().toast(msg.error);
+    // A key of the keyboard piano no Drum of the kit answers to (KIT-25).
+    if (msg.said) return useStore.getState().toast(msg.said);
     if (msg.silent && msg.module && msg.lane) {
       const k = laneKey(msg.module, msg.lane);
       clearTimeout(checks.get(k));

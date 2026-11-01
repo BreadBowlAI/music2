@@ -428,3 +428,37 @@ fn a_key_plays_the_kits_drum_that_answers_to_it() {
     stays(&graph, 0, "it plays nothing");
     assert_eq!(graph.midi(Event::Bytes("Keys", &[0x90, 60, 100])), None, "said once");
 }
+
+// KIT-25: the keyboard piano plays a kit by sound too: its key on a kit's Drum track goes to the
+// Drum track that answers to it, the first of two with one sound; a note none answers to plays
+// nothing, said once. A window's own note click plays the lane it names.
+#[test]
+fn the_keyboard_piano_plays_a_kit_by_sound() {
+    use super::super::audition::{Audition, Strike};
+    let fixture = Fixture::new();
+    fixture.put("song.ts", KIT);
+    let graph = fixture.open();
+    let piano = |h: u32, key: f64| Audition {
+        module: Some("kick".into()),
+        lane: Some("hits".into()),
+        on: vec![Strike { h, pitch: key, velocity: 0.8 }],
+        record: true,
+        ..Audition::default()
+    };
+    let off = |h: u32| Audition { off: vec![h], ..Audition::default() };
+    for (h, key, lane) in [(1, 38.0, "snare"), (2, 42.0, "hats"), (3, 46.0, "hats"), (4, 36.0, "kick")] {
+        assert_eq!(graph.audition("w1", piano(h, key)).unwrap(), None);
+        eventually("the key sounds", || live(&graph) == 1);
+        assert_eq!(graph.held_lanes("w1"), [(lane.to_string(), "hits".to_string())], "{key}");
+        graph.audition("w1", off(h)).unwrap();
+        eventually("let go", || live(&graph) == 0);
+    }
+    let said = graph.audition("w1", piano(5, 60.0)).unwrap();
+    assert_eq!(said, Some(json!({"t": "audition", "said": "No drum of the Drums kit answers to C4 (60). + Drum in Beat adds one."})));
+    stays(&graph, 0, "it plays nothing");
+    assert_eq!(graph.audition("w1", piano(6, 60.0)).unwrap(), None, "said once");
+    // A note clicked in the roll of the Kick's lane plays the Kick.
+    graph.audition("w1", Audition { record: false, ..piano(7, 38.0) }).unwrap();
+    eventually("the click sounds", || live(&graph) == 1);
+    assert_eq!(graph.held_lanes("w1"), [("kick".to_string(), "hits".to_string())]);
+}

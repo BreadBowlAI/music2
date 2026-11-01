@@ -164,7 +164,13 @@ impl Graph {
         };
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let ControlPlane { open, audition, record, .. } = &mut *cp;
+        // The keyboard piano plays a kit by sound, as a MIDI keyboard does (KIT-25): a key on a kit's
+        // bus or Drum track goes to the Drum track that answers to it. A MIDI keyboard's come so.
+        let pads = match &lane {
+            Some((m, _)) if a.record && !super::midi::is_keyboard(client) => super::midi::Pads::of(&cp, m),
+            _ => None,
+        };
+        let ControlPlane { open, audition, record, midi, .. } = &mut *cp;
         let open = open.as_ref().context("no project is open")?;
         let plays = playing(open.engine.plays.as_ref(), device.as_ref());
         // What a take records: a keyboard's notes, and a window's marked so (lane B).
@@ -185,18 +191,30 @@ impl Graph {
             }
         }
         let Some((m, l)) = lane.filter(|_| !a.on.is_empty()) else { return Ok(None) };
-        let Some((p, d, slot)) = plays.and_then(|(p, d)| Some((p, d, slot_of(p, &m, &l)?))) else {
-            return Ok(Some(json!({"t": "audition", "module": m, "lane": l, "silent": "Nothing plays this lane"})));
-        };
+        // Each strike's lane: the one named, or on a kit the Drum track's that answers to it; a note
+        // none answers to plays nothing, said once.
+        let mut said = None;
+        let mut strikes: Vec<((String, String), &Strike)> = vec![];
         for s in &a.on {
+            let key = s.pitch.round() as u8;
+            match pads.as_ref().map(|p| (p, p.answers(key))) {
+                None => strikes.push(((m.clone(), l.clone()), s)),
+                Some((_, Some(to))) => strikes.push((to, s)),
+                Some((p, None)) => said = said.or(midi.unanswered(p, key)),
+            }
+        }
+        for ((m, l), s) in strikes {
+            let Some((p, d, slot)) = plays.and_then(|(p, d)| Some((p, d, slot_of(p, &m, &l)?))) else {
+                return Ok(Some(json!({"t": "audition", "module": m, "lane": l, "silent": "Nothing plays this lane"})));
+            };
             let ev = LiveEv::On { source: id, handle: s.h, pitch: s.pitch as f32, velocity: s.velocity as f32 };
             d.player.live(p.generation, slot, ev)?;
-            source.held.insert(s.h, (m.clone(), l.clone()));
             if records {
                 record.on(d, (&m, &l), (id, s.h), s.pitch, s.velocity);
             }
+            source.held.insert(s.h, (m, l));
         }
-        Ok(None)
+        Ok(said.map(|w| json!({"t": "audition", "said": w})))
     }
 
     /// Move a wheel of lane `(module, lane)` of the open song, from the keyboard `client` (RENDER-14's
