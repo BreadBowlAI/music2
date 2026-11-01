@@ -14,12 +14,11 @@ use m2_ir::Kind;
 use m2_script::component::Spelled;
 use m2_script::sites::{Arg, Site};
 use m2_session::{Revision, Session};
-use m2_song::tx::{Declared, Op, Range, TxPath};
+use m2_song::tx::{Declared, Op, TxPath};
 use m2_song::{Key, LaneAddr, LaneData, NoteClip};
 
 use crate::drums::{GM, SILENT, split};
 use crate::mix::{self, Channel, Mixing};
-use crate::plan::{self, path};
 use crate::sites::{bound_names, fn_params, imported_names, properties, references};
 use crate::tracks::{self, Becomes, Goes, Made, NewTrack, Play, quoted};
 use crate::upgrade::{CLOSED, Knob, OPEN, convert_lane, exact, literal, string};
@@ -590,6 +589,28 @@ fn lane_moved(
     }
 }
 
+/// The bus's words for itself (KIT-22).
+const BUS_COMMENT: &str = "// The kit's bus: its Drum tracks play into it.";
+
+/// The edit that makes the `//` comment right above the line at `at` (a track's call) the bus's:
+/// every line of it, as one, at its indentation; none where there is none.
+fn comment_above(text: &str, at: u32) -> Option<(u32, u32, String)> {
+    let line = text[..at as usize].rfind('\n').map_or(0, |i| i + 1);
+    let mut start = line;
+    while start > 0 {
+        let above = text[..start - 1].rfind('\n').map_or(0, |i| i + 1);
+        if !text[above..start - 1].trim_start().starts_with("//") {
+            break;
+        }
+        start = above;
+    }
+    if start == line {
+        return None;
+    }
+    let indent: String = text[start..].chars().take_while(|c| *c == ' ' || *c == '\t').collect();
+    Some((start as u32, line as u32 - 1, format!("{indent}{BUS_COMMENT}")))
+}
+
 /// Whether channel `c` of the mixer in `file` reads its track's `out` as it is (`beat: beat.out`, or
 /// `{ in: beat.out, … }`), as a bus channel must (RENDER-34).
 fn reads_out(rev: &Revision, file: &str, c: &Channel) -> bool {
@@ -636,9 +657,10 @@ fn bus_edits(
         ("()", _) => ("input".to_string(), Some((params.start, params.end, "({ input })".to_string()))),
         (_, Some(props)) if props.split(',').any(|p| p == "input") => ("input".to_string(), None),
         (_, Some(props)) if props.split(',').all(|p| !p.is_empty() && p.chars().all(|ch| ch.is_alphanumeric() || ch == '_')) => {
-            let close = params.start + list.rfind('}').expect("a closing brace") as u32;
-            let at = params.start + text[params.start as usize..close as usize].trim_end().len() as u32;
-            ("input".to_string(), Some((at, at, ", input".to_string())))
+            // The whole list rewritten, so the bus's `input` it now takes is inside the edit.
+            let close = list.rfind('}').expect("a closing brace");
+            let at = list[..close].trim_end().len();
+            ("input".to_string(), Some((params.start, params.end, format!("{}, input{}", &list[..at], &list[at..]))))
         }
         (c, None)
             if c.len() > 2
@@ -668,22 +690,19 @@ fn bus_edits(
     let mut edits =
         vec![(callee.0, callee.1, "bus".to_string()), (call.start, call.end, if whole { format!("gain({input})") } else { input })];
     edits.extend(param);
-    let mut adds: Vec<(&str, &str)> = vec![(m2_song::SDK, "bus")];
+    edits.extend(comment_above(text, track.start));
+    let mut adds: Vec<(&'static str, &'static str)> = vec![(m2_song::SDK, "bus")];
     if gain {
         adds.push(("std/dsp", "gain"));
     }
-    if let Some((a, b, t)) = crate::swap::import_edits(text, &adds, &[callee, (call.start, call.end)]) {
-        if b > track.start {
-            return Err(refused("its imports aren't at its top"));
-        }
-        edits.push((a, b, t));
+    let gone = vec![callee, (call.start, call.end)];
+    if let Some((_, b, _)) = crate::swap::import_edits(text, &adds, &gone)
+        && b > track.start
+    {
+        return Err(refused("its imports aren't at its top"));
     }
     edits.sort_by_key(|e| (e.0, e.1));
-    let file = path(&call.file)?;
-    let mut ops = vec![plan::text_edit(&file, text, &edits)];
-    let mut ranges: BTreeMap<TxPath, Declared> =
-        [(file, Declared::Ranges(edits.iter().map(|(a, b, _)| Range::bytes(*a, *b)).collect()))].into();
-    let mut lanes = vec![];
+    let (mut ops, mut ranges, mut lanes) = (vec![], BTreeMap::new(), vec![]);
     let key = Key::new(&m.key).map_err(EditError::Rejected)?;
     for lane in std::iter::once(notes).chain(moved.iter().map(String::as_str)) {
         let addr = LaneAddr { module: key.clone(), lane: Key::new(lane).map_err(EditError::Rejected)? };
@@ -694,7 +713,19 @@ fn bus_edits(
         }
         lanes.push(addr);
     }
-    Ok(Becomes { module: m.key.clone(), channel: channel.to_string(), ops, ranges, lanes, shown: String::new() })
+    Ok(Becomes {
+        module: m.key.clone(),
+        channel: channel.to_string(),
+        component: MACHINE.to_string(),
+        file: call.file.clone(),
+        edits,
+        adds,
+        gone,
+        ops,
+        ranges,
+        lanes,
+        shown: String::new(),
+    })
 }
 
 #[cfg(test)]

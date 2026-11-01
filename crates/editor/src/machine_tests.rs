@@ -112,9 +112,10 @@ fn a_drum_machine_track_becomes_a_kit_in_one_undo_step() {
     assert_eq!(keys, ["kick", "snare", "hats", "toms", "ride"]);
     let labels: Vec<&str> = made.tracks.iter().map(|m| m.label.as_str()).collect();
     assert_eq!(labels, ["Kick", "Snare", "Hats", "Toms", "Ride"]);
+    // The comment right above was the drum machine's: it is the bus's now (KIT-22).
     assert_eq!(
         f.read("tracks/beat.ts"),
-        "import { bus } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\n\n// The beat, on one lane.\n\
+        "import { bus } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\n\n// The kit's bus: its Drum tracks play into it.\n\
          export default bus(\"beat\", { name: \"Beat\" }, ({ input }) => gain(input));\n"
     );
     assert_eq!(
@@ -122,11 +123,16 @@ fn a_drum_machine_track_becomes_a_kit_in_one_undo_step() {
         "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
          export default track(\"ride\", { name: \"Ride\" }, ({ lane }) => drums.drum(lane.notes(\"hits\"), { drum: \"ride\", voices: 16 }));\n"
     );
-    let song = f.read("song.ts");
-    assert!(song.contains("beat: { in: beat.out, db: db(-5), pan: 0.2, sends: { verb: db(-12) } },"), "{song}");
-    for k in &keys {
-        assert!(song.contains(&format!("{k}: {{ in: {k}.out, to: \"beat\" }}")), "{k}: {song}");
-    }
+    // Each track's import beside the bus's, and its channel right after the bus's (KIT-22).
+    assert_eq!(
+        f.read("song.ts"),
+        "import { db, song } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport beat from \"./tracks/beat\";\n\
+         import kick from \"./tracks/kick\";\nimport snare from \"./tracks/snare\";\nimport hats from \"./tracks/hats\";\n\
+         import toms from \"./tracks/toms\";\nimport ride from \"./tracks/ride\";\nimport verb from \"./tracks/verb\";\n\n\
+         export default song(() =>\n  master(\n    mixer({\n      beat: { in: beat.out, db: db(-5), pan: 0.2, sends: { verb: db(-12) } },\n\
+         \x20     kick: { in: kick.out, to: \"beat\" },\n      snare: { in: snare.out, to: \"beat\" },\n      hats: { in: hats.out, to: \"beat\" },\n\
+         \x20     toms: { in: toms.out, to: \"beat\" },\n      ride: { in: ride.out, to: \"beat\" },\n      verb: verb.out,\n    }),\n  ),\n);\n"
+    );
     assert!(!f.0.join("data/beat/hits.json").exists(), "the bus has no notes lane");
     assert_eq!(notes(&s, "kick"), [(0.0, 4.0, vec![(36.0, 0.0)]), (4.0, 4.0, vec![(36.0, 0.0)])]);
     assert_eq!(notes(&s, "hats"), [(0.0, 4.0, vec![(42.0, 0.0), (46.0, 1.5)]), (4.0, 4.0, vec![(42.0, 0.5)])]);
@@ -432,4 +438,84 @@ fn only_a_track_it_can_make_a_kit_of_is_offered() {
         refusal(s.accepted(), "empty").as_deref(),
         Some("Empty's drum machine plays no notes: delete it, or add a kit with + Track ▸ Drum kit.")
     );
+}
+
+// KIT-22 (the review's U4): a drum machine track written in `song.ts` becomes the kit's bus there,
+// in the same edit of the file as its tracks' imports and channels; one undo puts it back.
+#[test]
+fn a_drum_machine_track_in_song_ts_becomes_a_kit() {
+    let f = Fixture::new();
+    machine_song(&f, "", BEAT);
+    std::fs::remove_file(f.0.join("tracks/beat.ts")).unwrap();
+    f.write(
+        "song.ts",
+        "import { db, song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { master, mixer } from \"std/mix\";\n\
+         import verb from \"./tracks/verb\";\n\n// The beat: every drum on one lane.\n// Its hats choke.\n\
+         const beat = track(\"beat\", { name: \"Beat\" }, ({ lane }) => drums.kit(lane.notes(\"hits\")));\n\n\
+         export default song(() =>\n  master(\n    mixer({\n      verb: verb.out,\n      beat: { in: beat.out, db: db(-5) },\n    }),\n  ),\n);\n",
+    );
+    let before = tree(&f);
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(drum_machines(s.accepted()), ["beat"]);
+    let made = make_kit(&mut s, "beat").unwrap();
+    let keys: Vec<&str> = made.tracks.iter().map(|m| m.module.as_str()).collect();
+    assert_eq!(keys, ["kick", "snare", "hats", "toms", "ride"]);
+    let song = f.read("song.ts");
+    assert!(
+        song.contains(
+            "\n\n// The kit's bus: its Drum tracks play into it.\nconst beat = bus(\"beat\", { name: \"Beat\" }, ({ input }) => gain(input));\n\n"
+        ),
+        "{song}"
+    );
+    assert!(!song.contains("drums") && !song.contains("track,") && !song.contains("track }"), "{song}");
+    assert!(song.contains("import { gain } from \"std/dsp\";"), "{song}");
+    for k in &keys {
+        assert!(song.contains(&format!("import {k} from \"./tracks/{k}\";")), "{k}: {song}");
+    }
+    assert!(
+        song.contains(
+            "      beat: { in: beat.out, db: db(-5) },\n      kick: { in: kick.out, to: \"beat\" },\n      snare: { in: snare.out, to: \"beat\" },\n"
+        ),
+        "{song}"
+    );
+    assert!(s.accepted().compiled.ir.modules.iter().any(|m| m.key == "beat" && m.bus), "the track is a bus");
+    assert_eq!(crate::kits::drum_kits(&s).len(), 1);
+    assert_eq!(notes(&s, "kick"), [(0.0, 4.0, vec![(36.0, 0.0)]), (4.0, 4.0, vec![(36.0, 0.0)])]);
+    crate::undo(&mut s).unwrap();
+    assert!(tree(&f) == before, "one undo puts every file back, byte for byte");
+}
+
+// KIT-22 (the review's U13): the planner lets only the drum machine's call of the track that becomes
+// the bus go: a value changed in the rest of its code, or a node of it taken out, is refused.
+#[test]
+fn the_planner_lets_only_the_drum_machine_go() {
+    // A track with one drum machine, a gain at -3 dB after it, and a lane of its own on another gain:
+    // Make it a kit makes it a bus, keeping both.
+    let text = "import { db, track } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\nimport { drums } from \"@m2/drums\";\n\n\
+                export default track(\"beat\", { name: \"Beat\" }, ({ lane }) =>\n  gain(gain(drums.kit(lane.notes(\"hits\")), db(-3)), lane.control(\"lift\", \"db\", 0)),\n);\n";
+    let f = Fixture::new();
+    machine_song(&f, "", BEAT);
+    f.write("tracks/beat.ts", text);
+    let mut s = f.open();
+    make_kit(&mut s, "beat").unwrap();
+    assert!(f.read("tracks/beat.ts").contains("({ lane, input }) =>\n  gain(gain(input, db(-3)), lane.control(\"lift\", \"db\", 0)),"));
+    for (find, put, why) in
+        [("db(-3)", "db(-4)", "change a value"), ("lane.control(\"lift\", \"db\", 0)", "db(0)", "take something out of the song")]
+    {
+        let f = Fixture::new();
+        machine_song(&f, "", BEAT);
+        f.write("tracks/beat.ts", text);
+        let mut s = f.open();
+        assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+        let mut plan = plan(s.accepted(), "beat").unwrap();
+        // One more edit the gesture never makes, as a planner's mistake would.
+        let at = text.find(find).unwrap() as u32;
+        plan.becomes.edits.push((at, at + find.len() as u32, put.to_string()));
+        plan.becomes.edits.sort_by_key(|e| (e.0, e.1));
+        let before = tree(&f);
+        let err = tracks::add_tracks_as(&mut s, &plan.tracks, Some("beat"), None, Some(&plan.becomes)).unwrap_err().to_string();
+        assert!(err.contains(why), "{find}: {err}");
+        assert!(tree(&f) == before, "nothing written");
+    }
 }

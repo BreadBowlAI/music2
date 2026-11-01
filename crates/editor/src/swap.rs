@@ -119,6 +119,18 @@ fn computed(text: &str, arg: &Arg, name: &str, units: &[m2_script::UnitCtor]) ->
 /// take out every name only bytes `gone` read: as one edit of the imports' bytes (trimmed to what
 /// differs), so no node's name moves. None when they don't change.
 pub(crate) fn import_edits(text: &str, adds: &[(&str, &str)], gone: &[(u32, u32)]) -> Option<(u32, u32, String)> {
+    import_edits_with(text, adds, gone, |_| vec![])
+}
+
+/// [`import_edits`], with the lines `more` places in the imports as they are then (each an offset
+/// in that text and what goes there): a new track's default import, in the same edit (Make it a
+/// kit's, where the bus is written in the mixer's file, KIT-22).
+pub(crate) fn import_edits_with(
+    text: &str,
+    adds: &[(&str, &str)],
+    gone: &[(u32, u32)],
+    more: impl Fn(&str) -> Vec<(u32, String)>,
+) -> Option<(u32, u32, String)> {
     let imports: Vec<(u32, u32)> = statements(text).into_iter().filter(|s| s.2).map(|s| (s.0, s.1)).collect();
     // The imports' bytes, through the end of the last one's line; none: the top of the file.
     let (start, end) = match (imports.first(), imports.last()) {
@@ -139,6 +151,11 @@ pub(crate) fn import_edits(text: &str, adds: &[(&str, &str)], gone: &[(u32, u32)
         if let Some((i, line)) = import_insertion(&after, from, binding) {
             after.insert_str(i as usize, &line);
         }
+    }
+    let mut lines = more(&after);
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
+    for (i, line) in lines {
+        after.insert_str(i as usize, &line);
     }
     let new = &after[start..after.len() - (text.len() - end)];
     let old = &text[start..end];

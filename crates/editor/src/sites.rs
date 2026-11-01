@@ -273,6 +273,18 @@ pub fn import_place(source: &str, file: &str, beside: &str) -> (u32, bool) {
     }
 }
 
+/// The end of the default import of project file `target` in `file`'s `source`, if it has one
+/// (where Make it a kit's tracks go, beside their bus's, KIT-22).
+pub fn import_end(source: &str, file: &str, target: &str) -> Option<u32> {
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    ret.program.body.iter().find_map(|statement| {
+        let Statement::ImportDeclaration(import) = statement else { return None };
+        let default = import.specifiers.iter().flatten().any(|s| matches!(s, ImportDeclarationSpecifier::ImportDefaultSpecifier(_)));
+        (default && import.source.value.as_str().and_then(|s| resolve(file, s)).as_deref() == Some(target)).then_some(import.span.end)
+    })
+}
+
 /// The top-level statements of `source`, each as its bytes and whether it is an import.
 pub fn statements(source: &str) -> Vec<(u32, u32, bool)> {
     let allocator = Allocator::default();
