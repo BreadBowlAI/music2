@@ -168,11 +168,15 @@ pub struct Editor {
     pub kits: Vec<Kit>,
 }
 
-/// A kit an instrument names (KIT-3): its name, and the tracks a new one makes, in order.
+/// A kit a drum names (KIT-3): its name, the tracks a new one makes, in order, and its bus's fader.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Kit {
     pub name: String,
     pub tracks: Vec<KitTrack>,
+    /// Its bus's fader in dB, as written (KIT-4): written only when given, so a kit that gives
+    /// none keeps its bytes; none is 0 dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<Spelled>,
 }
 
 /// One track of a kit: its name, and values of the instrument's own controls, in the order written,

@@ -25,7 +25,7 @@ std = "0.7"
 
 [[kernel]]
 name = "drum"
-description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the kit. the Drum's own knobs (`one`) move whatever drum it plays; the drum machine leaves them at 0, 1 and 0, where they change no bit"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the drum machine. The Drum's own knobs (`one`) move whatever drum it plays; the drum machine leaves them at 0, 1 and 0, where they change no bit"
 inputs = [
   "pitch: control<semitones>",
   "velocity: control<unit01> = 0.8",

@@ -74,6 +74,8 @@ export function unitOf(v: unknown): Unit | undefined {
 
 /** The numbers inside quantities. Only the core reads them, when it builds the graph. */
 const amounts = new WeakMap<Quantity, number>();
+/** A unit constructor's quantity's spelling and the number it was written with: `ms(80)` is ms, 80. */
+const writings = new WeakMap<Quantity, [Spelling, number]>();
 
 /**
  * A number with a unit, from `hz(440)`, `db(-6)`, … It is opaque: its number goes
@@ -156,7 +158,9 @@ const unitFn = <S extends Spelling>(name: S) => {
   const [unit, scale] = UNITS[name];
   return function (v: number): Quantity<UnitOf<S>> {
     const site = takeSite(arguments);
-    return new Quantity(v * scale, unit as UnitOf<S>, site, scale);
+    const q = new Quantity(v * scale, unit as UnitOf<S>, site, scale);
+    writings.set(q, [name, v]);
+    return q;
   };
 };
 
@@ -1239,10 +1243,11 @@ export type Descriptor = {
    * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
    * `groups` put its card in order: `{ Filter: ["filter", "cutoff", "q"] }`, each entry one of its
    * values or views, each named once (CARD-17). `unlisted: true` says on purpose that code plays
-   * it and no list offers it: such a component has no category (PKG-7, PACK-12). An instrument's
-   * `kits` are what + Track's Drum kit makes (KIT-3): each by its name, the tracks a new one makes,
-   * each a `name` and values of this instrument's own controls as a call writes them, `{ "Basic
-   * kit": [{ name: "Kick", drum: "kick" }, { name: "Hats", drum: "hats" }] }`.
+   * it and no list offers it: such a component has no category (PKG-7, PACK-12). A drum's (category
+   * "Drums") `kits` are what + Track's Drum kit makes (KIT-3): each by its name, the tracks a new
+   * one makes, each a `name` and values of this instrument's own controls, taken as a call takes
+   * them, and its bus's fader, `db`: `{ "Basic kit": { db: -2, tracks: [{ name: "Kick", drum:
+   * "kick" }, { name: "Hats", drum: "hats", tune: semis(2) }] } }`.
    */
   editor?: {
     category?: string;
@@ -1252,12 +1257,14 @@ export type Descriptor = {
     views?: Record<string, ViewDecl<any>>;
     groups?: Record<string, readonly string[]>;
     unlisted?: true;
-    kits?: Record<string, readonly KitTrack[]>;
+    kits?: Record<string, Kit>;
   };
 };
 
-/** One track of a kit an instrument names (KIT-3): its name, and values of the instrument's controls. */
-export type KitTrack = { readonly name: string; readonly [control: string]: string | number | boolean };
+/** A kit a drum names (KIT-3): its tracks, and its bus's fader in dB (0 when left out). */
+export type Kit = { readonly db?: number | Quantity<"db">; readonly tracks: readonly KitTrack[] };
+/** One track of a kit (KIT-3): its name, and values of the instrument's controls, as a call takes them. */
+export type KitTrack = { readonly name: string; readonly [control: string]: string | number | boolean | Quantity };
 
 /** What a component's body receives after its inputs: a signal per control, a value per setting. */
 export type Params = { readonly [name: string]: any };
@@ -1465,13 +1472,14 @@ type GroupsProblems<D, Gs = GroupsOf<D>> = { [G in keyof Gs]: GroupProblems<D, G
 // The groups themselves become what is wrong: a string, which no object of groups is.
 type GroupsFit<D> = [GroupsProblems<D>] extends [never] ? unknown : { editor: { groups: GroupsProblems<D> } };
 
-// Kits (KIT-3), checked against this very descriptor: each track's values are its controls', as a
-// call writes them. A track with a mistake becomes what is wrong with it, a string no track is, so
-// the editor marks it where it is written and says what is wrong.
+// Kits (KIT-3), checked against this very descriptor: a drum's only, each track's values its
+// controls', as a call takes them. A track with a mistake becomes what is wrong with it, a string no
+// track is, so the editor marks it where it is written and says what is wrong.
 type KitsOf<D> = D extends { editor: { kits: infer K } } ? K : {};
+type TracksOf<K> = K extends { tracks: infer T extends readonly unknown[] } ? T : readonly [];
 /** A choice's names as words: `"kick", "snare", "hats"`. */
 type Names<O> = O extends readonly [infer H extends string, ...infer R] ? (R extends readonly [] ? `"${H}"` : `"${H}", ${Names<R>}`) : string;
-type Shown<V> = V extends string ? `"${V}"` : V extends number | boolean ? `${V}` : "that";
+type Shown<V> = V extends string ? `"${V}"` : V extends number | boolean ? `${V}` : V extends Quantity<infer U> ? `a ${U} value` : "that";
 /** What is wrong with `V` as the value of control `C` (named `P`) in a kit's track, if anything. */
 type KitValueProblem<C, P extends string, V> =
   C extends ControlDecl<any, infer K>
@@ -1483,9 +1491,9 @@ type KitValueProblem<C, P extends string, V> =
         ? V extends boolean
           ? never
           : `${P} is true or false, not ${Shown<V>}`
-        : V extends number
+        : V extends number | Quantity<NonNullable<K> & Unit>
           ? never
-          : `${P} is a number, not ${Shown<V>}`
+          : `${P} is a number or a ${NonNullable<K> & string} value, not ${Shown<V>}`
     : `"${P}" isn't a control of this sound`;
 /** What is wrong with track `T`, if anything: a field that isn't a control, or a value it can't take. */
 type KitTrackProblem<D, T> = {
@@ -1494,10 +1502,15 @@ type KitTrackProblem<D, T> = {
 // Each mapped over a type parameter, so a kit's tuple maps to a tuple.
 type TracksProblems<D, T extends readonly unknown[]> = { [I in keyof T]: KitTrackProblem<D, T[I]> }[number];
 type TracksFitted<D, T extends readonly unknown[]> = { [I in keyof T]: [KitTrackProblem<D, T[I]>] extends [never] ? T[I] : KitTrackProblem<D, T[I]> };
-type KitsProblems<D, K = KitsOf<D>> = { [N in keyof K]: TracksProblems<D, Extract<K[N], readonly unknown[]>> }[keyof K];
-type KitsFit<D> = [KitsProblems<D>] extends [never]
-  ? unknown
-  : { editor: { kits: { [N in keyof KitsOf<D>]: TracksFitted<D, Extract<KitsOf<D>[N], readonly unknown[]>> } } };
+type KitsProblems<D, K = KitsOf<D>> = { [N in keyof K]: TracksProblems<D, TracksOf<K[N]>> }[keyof K];
+type KitsFit<D> = D extends { editor: { kits: infer K } }
+  ? D extends { editor: { category: "Drums" } }
+    ? [KitsProblems<D>] extends [never]
+      ? unknown
+      : { editor: { kits: { [N in keyof K]: { tracks: TracksFitted<D, TracksOf<K[N]>> } } } }
+    : { editor: { kits: `only a drum (editor.category "Drums") names kits` } }
+  : unknown;
+
 
 /** The old form's descriptor: the argument paths whose numbers are knobs. */
 type PathsDesc = { readonly controls: readonly string[] };
@@ -1873,16 +1886,23 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (needed.length) fail(`an effect (editor.category) must build from its insert alone, which leaves out "${needed[0]}"`);
   }
 
-  // Kits (KIT-3): an instrument's, each by a short name, its tracks each a short name, once in the
-  // kit, and values of this sound's own controls as a call writes them.
+  // Kits (KIT-3): a drum's, each by a short name, its tracks each a short name, once in the kit,
+  // and values of this sound's own controls, taken as a call takes them; and its bus's fader.
   const kitEntries = record("editor.kits", editor.kits);
-  if (kitEntries.length && !instrument) fail("editor.kits: only an instrument (editor.category, notes first) names kits");
-  const kits = kitEntries.map(([name, tracks]) => {
+  if (kitEntries.length && !(instrument && editor.category === "Drums")) fail('editor.kits: only a drum (editor.category "Drums") names kits');
+  const kits = kitEntries.map(([name, kit]) => {
     const bad = labelProblem(name);
     if (bad) fail(`editor.kits: a kit's name ${bad.replace(/^its label /, "")}`);
     const at = `editor.kits' ${JSON.stringify(name)}`;
-    if (!Array.isArray(tracks)) fail(`${at} must be a list of tracks, as [{ name: "Kick", drum: "kick" }]`);
+    if (kit === null || typeof kit !== "object" || Array.isArray(kit)) {
+      fail(`${at} must be its tracks and its bus's fader, as { db: -2, tracks: [{ name: "Kick", drum: "kick" }] }`);
+    }
+    const { tracks, db } = kit as { tracks: unknown; db: unknown };
+    for (const k of Object.keys(kit as object)) if (k !== "db" && k !== "tracks") fail(`${at} has no field "${k}" (fields: db, tracks)`);
+    if (!Array.isArray(tracks)) fail(`${at}: its tracks must be a list, as [{ name: "Kick", drum: "kick" }]`);
     if (!(tracks as unknown[]).length) fail(`${at} has no track: a kit has one at least`);
+    const fader = db === undefined ? undefined : kitNumber(db, "db");
+    if (db !== undefined && !fader) fail(`${at}: db is a number or a db value, not ${shownValue(db)}`);
     const seen = new Set<string>();
     return {
       name,
@@ -1908,14 +1928,18 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
               if (typeof v !== "boolean") fail(`${said}: ${slot} is true or false, not ${shown(v)}`);
               return { slot, ...spelled(s, v ? 1 : 0) };
             }
-            if (typeof v !== "number" || !Number.isFinite(v)) fail(`${said}: ${slot} is a number, not ${shown(v)}`);
-            if (s.strict && s.range && !((v as number) >= s.range[0] && (v as number) <= s.range[1])) {
-              fail(`${said}: ${slot} ${v} is outside its strict range ${s.range[0]}..${s.range[1]}`);
+            // As a call takes it: a quantity of its unit, or a plain number in the unit's base.
+            const n = kitNumber(v, s.unit);
+            if (!n) fail(`${said}: ${slot} is a number or a ${s.unit} value, not ${shownValue(v)}`);
+            const [lo, hi] = (s.range ?? [0, 0]).map((x) => x * s.scale);
+            if (s.strict && s.range && !(n!.value >= lo && n!.value <= hi)) {
+              fail(`${said}: ${slot} ${n!.spelled ? `${n!.spelled}(${n!.written})` : n!.written} is outside its strict range, ${lo} to ${hi} ${s.unit}`);
             }
-            return { slot, ...spelled(s, v as number) };
+            return { slot, ...n! };
           });
         return { name: tname, values };
       }),
+      ...(fader ? { db: fader } : {}),
     };
   });
 
@@ -1977,6 +2001,23 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
   const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
   return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json };
+}
+
+/**
+ * A number as a call takes it, for a kit (KIT-3): a quantity of `unit`, with the spelling and the
+ * number it was written with (`ms(80)`: 0.08, ms, 80), or a plain number in the unit's base, as it is.
+ * Undefined for anything else, a quantity of another unit included.
+ */
+function kitNumber(v: unknown, unit: Unit | undefined): { value: number; spelled: Spelling | null; written: number } | undefined {
+  if (typeof v === "number") return Number.isFinite(v) ? { value: v, spelled: null, written: v } : undefined;
+  if (!(v instanceof Quantity) || v.unit !== unit) return undefined;
+  const writing = writings.get(v);
+  return writing ? { value: amounts.get(v)!, spelled: writing[0], written: writing[1] } : { value: amounts.get(v)!, spelled: null, written: amounts.get(v)! };
+}
+
+/** A value as a refusal names it: a quantity by its unit, anything else as `shown` does. */
+function shownValue(v: unknown): string {
+  return v instanceof Quantity ? `a ${v.unit} value` : shown(v);
 }
 
 /** A number written in a control's spelling, as the JSON carries it: its value in base units too. */

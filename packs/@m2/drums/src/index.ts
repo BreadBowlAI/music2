@@ -172,32 +172,42 @@ export const drums = {
         // are one Hats track, closed, pedal and open by the note, so a closed hat cuts an open one.
         // The 808's kick is a long boom (punch -0.5), its snare more tone than snap, its toms and
         // cymbal ring long; the 909's kick thumps (punch 0.5), its snare snaps, its hats and cymbal
-        // are brighter and its toms shorter.
+        // are brighter and its toms shorter. Each kit's bus fader (db) keeps its beat under -1 dBTP,
+        // about as loud as the drum machine's was: the 808's loud fill keeps it quieter.
         kits: {
-          "808 kit": [
-            { name: "Kick", drum: "kick", punch: -0.5, decay: 1.6 },
-            { name: "Snare", drum: "snare", punch: -0.3 },
-            { name: "Clap", drum: "clap" },
-            { name: "Hats", drum: "hats" },
-            { name: "Toms", drum: "tom", decay: 1.5 },
-            { name: "Rim", drum: "rim" },
-            { name: "Cowbell", drum: "cowbell" },
-            { name: "Cymbal", drum: "cymbal", decay: 1.5 },
-          ],
-          "909 kit": [
-            { name: "Kick", drum: "kick", punch: 0.5 },
-            { name: "Snare", drum: "snare", punch: 0.3 },
-            { name: "Clap", drum: "clap" },
-            { name: "Hats", drum: "hats", tune: 2 },
-            { name: "Toms", drum: "tom", decay: 0.8 },
-            { name: "Rim", drum: "rim" },
-            { name: "Cymbal", drum: "cymbal", tune: 2 },
-          ],
-          "Basic kit": [
-            { name: "Kick", drum: "kick" },
-            { name: "Snare", drum: "snare" },
-            { name: "Hats", drum: "hats" },
-          ],
+          "808 kit": {
+            db: -4,
+            tracks: [
+              { name: "Kick", drum: "kick", punch: -0.5, decay: 1.6 },
+              { name: "Snare", drum: "snare", punch: -0.3 },
+              { name: "Clap", drum: "clap" },
+              { name: "Hats", drum: "hats" },
+              { name: "Toms", drum: "tom", decay: 1.5 },
+              { name: "Rim", drum: "rim" },
+              { name: "Cowbell", drum: "cowbell" },
+              { name: "Cymbal", drum: "cymbal", decay: 1.5 },
+            ],
+          },
+          "909 kit": {
+            db: -3.8,
+            tracks: [
+              { name: "Kick", drum: "kick", punch: 0.5 },
+              { name: "Snare", drum: "snare", punch: 0.3 },
+              { name: "Clap", drum: "clap" },
+              { name: "Hats", drum: "hats", tune: 2 },
+              { name: "Toms", drum: "tom", decay: 0.8 },
+              { name: "Rim", drum: "rim" },
+              { name: "Cymbal", drum: "cymbal", tune: 2 },
+            ],
+          },
+          "Basic kit": {
+            db: -2,
+            tracks: [
+              { name: "Kick", drum: "kick" },
+              { name: "Snare", drum: "snare" },
+              { name: "Hats", drum: "hats" },
+            ],
+          },
         },
       },
     },

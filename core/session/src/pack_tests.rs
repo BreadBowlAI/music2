@@ -159,8 +159,8 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
 
 // PACK-22: an addition to @m2/core is a minor that every 2.x pack still builds with. A pack made for
 // 2.0, the frozen contract, builds, its descriptors as they were; one made for 2.1 may label a
-// setting (CARD-34), and the label reaches its descriptor; one made for 2.2 may name kits (KIT-3),
-// which reach its descriptor, every other byte of it as it was. A descriptor that names none has
+// setting (CARD-34), and the label reaches its descriptor; one made for 2.2 may name kits on a drum
+// (KIT-3), which reach its descriptor, every other byte of it as it was but its category. A descriptor that names none has
 // no `kits` at all, so a 2.1 pack's keeps its bytes.
 #[test]
 fn a_pack_made_for_an_older_minor_of_core_still_builds() {
@@ -178,9 +178,10 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
                 "controls: { brightness: control.hz(1800).range(200, 20000) },",
                 "controls: { brightness: control.hz(1800).range(200, 20000) },\n    settings: { voices: setting.int(12).label(\"notes at once\") },",
             ),
+            // A drum, to name kits (KIT-3): its fader in dB, a value as a call takes it.
             "2.2" => code.replace(
                 "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
-                "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\", kits: { Pair: [{ name: \"Dark\", brightness: 400 }, { name: \"Bright\" }] } },",
+                "editor: { category: \"Drums\", description: \"A soft pluck, built from std's blocks\", kits: { Pair: { db: -3, tracks: [{ name: \"Dark\", brightness: 400 }, { name: \"Bright\" }] } } },",
             ),
             _ => code,
         };
@@ -195,6 +196,9 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
         assert_eq!(kits, if asks == "2.2" { vec![("Pair", 2)] } else { vec![] }, "{asks}");
         let mut without = keys.as_ref().clone();
         without.editor.kits.clear();
+        if asks == "2.2" {
+            without.editor.category = Some("Keys".into());
+        }
         let bytes = serde_json::to_string(&without).unwrap();
         assert!(!serde_json::to_string(keys.as_ref()).unwrap().contains("kits") || asks == "2.2", "{asks}: no kits, no kits key");
         if asks != "2.1" {
