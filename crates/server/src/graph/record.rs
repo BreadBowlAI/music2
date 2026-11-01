@@ -32,7 +32,8 @@
 //! - **The code must compile** (the review's R1): R is refused while it doesn't, as every edit is. A
 //!   take that ends while it doesn't waits in the queue, said once, and is written once it does.
 //! - **The windows hear** `{"t": "take", …}`: the take's phase and notes when they change, then
-//!   `written`, `empty`, or `error`.
+//!   `written` (with its undo step's id, `step`, which the window that recorded it keeps as its
+//!   own: AGENT-2), `empty`, or `error`.
 //! - **The input's problems** (the ex plan's slice 3) go through the fault ring (RENDER-25), named
 //!   by the input's [`InputNamer`]: an input chosen that isn't there (the player reports it as it
 //!   opens), an input gone during a take, and the OS refusing the microphone during one, which the
@@ -1480,6 +1481,11 @@ impl Graph {
                 }
                 let first = &e.parts[0];
                 let mut w = json!({"revision": revision, "made": v["made"], "module": first.module(), "lane": first.lane()});
+                // The undo step it made, by its id, as an edit's answer names it: the window that
+                // recorded the take keeps it as its own (AGENT-2).
+                if v["step"].is_u64() {
+                    w["step"] = v["step"].clone();
+                }
                 if let Some(Part::Audio { file, .. }) = e.parts.iter().find(|p| matches!(p, Part::Audio { .. }))
                     && let Audio::Written(f) = &**file
                 {

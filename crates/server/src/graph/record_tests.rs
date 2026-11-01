@@ -347,6 +347,25 @@ fn stop_writes_one_tx_named_recording_on_bass() {
     assert!(r.clips().is_empty(), "one Undo takes it back");
 }
 
+// AGENT-2: the news that a take was written names its undo step, as an edit's answer does, so the
+// window that recorded it keeps it as its own: its ⌘Z takes it back before the window shows it.
+#[test]
+fn a_takes_news_names_its_step() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    r.key(&[0x90, 48, 90]);
+    r.to(1.0);
+    r.key(&[0x80, 48, 0]);
+    r.graph.transport("stop").unwrap();
+    let said = r.written();
+    let top = r.graph.state().unwrap()["undo_name"].clone();
+    assert_eq!((&top["name"], &top["source"]), (&json!("recording on Bass"), &json!("page")), "{top}");
+    assert!(top["step"].is_u64(), "{top}");
+    assert_eq!(said["written"]["step"], top["step"], "the take's step, by its id: {said}");
+}
+
 #[test]
 fn held_notes_end_at_the_stop() {
     let mut r = Rig::new();
