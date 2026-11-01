@@ -15,7 +15,7 @@
 import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, posts, api, state, box, key, drag } = await open(1440, 900);
+const { page, errors, posts, api, state, caughtUp, box, key, drag } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 
 /** The song's own view settings on this machine. */
@@ -167,7 +167,9 @@ const withBoth = read("data/keys/chords.json");
 await key("Meta+z");
 check(await until(async () => (await notesOf("keys", "chords")).every(([, s]) => s !== 6)), "one ⌘Z takes the whole chord back");
 check(read("data/keys/chords.json") !== withBoth && (await notesOf("keys", "chords")).length === 6, "and only it");
-// A drag in Draw sets its length; a double-click in Select places one too (NOTE-4).
+// A drag in Draw sets its length; a double-click in Select places one too (NOTE-4). The roll writes
+// the lane as the page shows it, so the page shows the undo first.
+await caughtUp();
 await page.focus("[data-testid=notes]");
 await page.keyboard.press("i");
 await page.keyboard.press("i");
@@ -181,6 +183,8 @@ check(await until(async () => (await notesOf("keys", "chords")).filter(([, s]) =
 await key("Meta+z");
 await key("Meta+z");
 check(await until(async () => (await notesOf("keys", "chords")).length === 6), "two ⌘Z take both back");
+// ⌘A and ⌘C take the notes the page shows: the page shows the two undos first.
+await caughtUp();
 
 // ---------------------------------------------------------------- copy and paste between clips (NOTE-5)
 
@@ -217,6 +221,8 @@ check(!!sent && JSON.parse(sent.body).gesture.into.sha?.length > 0, `it names Ba
 // With the playhead outside the clip, at its start.
 await key("Meta+z");
 await until(async () => (await notesOf("bass", "notes")).length === 48);
+// ⌘V names Bass's clip by the hash the page drew: the page shows the undo first.
+await caughtUp();
 await post("/seek", { beat: 100 });
 await sleep(600);
 await page.focus("[data-testid=notes]");

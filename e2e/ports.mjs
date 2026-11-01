@@ -8,6 +8,7 @@ const H = process.argv[3] ?? `${S}/testhome`;
 const proj = process.argv[4] ?? `${S}/proj`;
 const sess = JSON.parse(fs.readFileSync(`${H}/.music2/session.json`, "utf8"));
 import { exe } from "./chrome.mjs";
+import { following } from "./caughtup.mjs";
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 1000 });
@@ -24,6 +25,7 @@ let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
 const until = async (f, ms = 5000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const caughtUp = following(page, () => api("graph"), check);
 const read = (f) => fs.readFileSync(`${proj}/${f}`, "utf8");
 const center = async (sel) => {
   const el = await page.waitForSelector(sel);
@@ -208,6 +210,9 @@ await press('button[aria-label="Undo"]');
 check(await until(() => read("tracks/bass.ts") === wired), "undo puts the cable back");
 await press('button[aria-label="Undo"]');
 check(await until(async () => !!(await page.$(target)) && (await page.$eval(target, (e) => e.dataset.value)) === "1000"), "undoing the connection brings the cutoff knob back");
+// Remove goes from the revision the page shows, and the undo changed the lowpass call (the knob reads
+// 1000 before it too): the page shows the undo first.
+await caughtUp();
 await press('[data-module="bass"] [data-node="lowpass"] button[aria-label^="Remove "]');
 check(await until(() => read("tracks/bass.ts").includes('return bass(lane.notes("notes"), { cutoff: blend(cutoff, wobble, drop) });')), "removing the lowpass leaves the bass as it was");
 for (let i = 0; i < 2; i++) {

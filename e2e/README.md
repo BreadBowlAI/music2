@@ -318,6 +318,13 @@ checks, nothing skipped. Without `CLAP_PATH`, live3b is `PART` at 40 of 51, exit
 `fixlib.mjs` is the shared setup of the `fix`/`attn` suites; `chrome.mjs` and `env.mjs` hold what
 all of them get from `run.mjs`'s environment.
 
+A suite that changes the song (an undo, a write from outside, the page's own edit) and then acts in
+the page on what it changed waits for `caughtUp()` first (`caughtup.mjs`; fixlib's `open()` gives
+it). It waits until the page's requests are answered and the page shows the revision the server
+plays. A gesture goes from the revision the page shows, and the server refuses one from an older
+revision whose target changed since. The file on disk, or the server's state, doesn't mean the page
+has the change: the server writes the files first, and the page reads the new state a moment later.
+
 ## Where these came from
 
 The suites were written during steps 1–5 in a temporary folder that a reboot wiped; they were

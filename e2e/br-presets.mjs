@@ -7,7 +7,7 @@
 import { HOME, PROJ, check, done, open, read, until } from "./fixlib.mjs";
 import fs from "node:fs";
 
-const { page, errors, toasts, state, api, view } = await open(1440, 900);
+const { page, errors, toasts, state, api, view, caughtUp } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 8000);
 
@@ -54,6 +54,9 @@ await page.click('button[aria-label="Undo"]');
 check(await until(() => read(file) === before), "Undo puts the code back, byte for byte");
 
 // ---------------------------------------------------------------- save as yours
+
+// Presets lists and saves the call as the page shows it, and Undo changed it: the page shows that first.
+await caughtUp();
 
 const yours = `${HOME}/Music/music2/Presets/_m2_synths/synth-pluck`;
 check(await openPresets(), "Presets opens again");

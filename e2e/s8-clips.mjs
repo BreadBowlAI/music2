@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, posts, api, state, toasts, key, box, drag, view } = await open(1440, 900);
+const { browser, page, errors, posts, api, state, caughtUp, toasts, key, box, drag, view } = await open(1440, 900);
 const status = async () => (await api("/status")).body;
 const clips = (path) => JSON.parse(read(path)).clips;
 const near = (a, b) => Math.abs(a - b) < 1e-3;
@@ -31,6 +31,8 @@ const chip = (view = "song") =>
   }, view === "song" ? ["song-grid", "song-snap"] : ["grid", "snap"]);
 /** Drag the hats clip `dx` px along its lane (holding ⌘ when `free`); resolves once its file shows a new start. */
 const dragHats = async (dx, { free = false } = {}) => {
+  // A drag names the clip as the page draws it: the page shows the last move first.
+  await caughtUp();
   const before = clips("data/hats/hits.json")[0].start;
   const c = await box('[data-lane="hats.hits"] [data-clip]');
   if (free) await page.keyboard.down("Meta");
@@ -219,6 +221,8 @@ const heardAt = () => hatsNow().notes.map((x) => Number((hatsNow().start + x.sta
 const times = heardAt();
 const edgeCursor = await page.$eval(`[data-lane="hats.hits"] [data-clip="${hatsId}"] [data-edge=right]`, (e) => getComputedStyle(e).cursor);
 check(edgeCursor === "ew-resize", `each edge has a resize cursor: ${edgeCursor}`);
+// The edge's drag names the clip as the page draws it: the page shows the move first.
+await caughtUp();
 b = await clipBox("hats.hits", hatsId);
 const right = { x: b.x + b.width - 3, y: b.y + b.height / 2 };
 const r = await hold(right, { x: right.x - 4 * PPB, y: right.y }, { during: () => looks() });
@@ -227,6 +231,8 @@ check(heardAt() === times && r.bubble === "10.1.1", "every note stays where it p
 // The window draws the trimmed clip once it has heard of it: the next drag names the clip as it is
 // now (its hash), not as it was.
 await until(async () => (await clipBox("hats.hits", hatsId)).width < 31 * PPB);
+// A dropped drag is drawn where it went before the page has its state: the page shows the trim first.
+await caughtUp();
 b = await clipBox("hats.hits", hatsId);
 const trimmed = read("data/hats/hits.json");
 const left = { x: b.x + 3, y: b.y + b.height / 2 };
@@ -296,6 +302,8 @@ check(await until(() => hatsNow().start === 10 && lanes("data/keys/chords.json")
 const g2 = await sentBy(n);
 check(g2.length === 1 && gestureOf(g2[0]).clips.length === 2, "in one gesture");
 const kept = { hats: read("data/hats/hits.json"), keys: read("data/keys/chords.json") };
+// The timeline takes ⌫ once it shows its last edit (a key pressed sooner does nothing).
+await caughtUp();
 n = posts.length;
 await key("Backspace");
 check(await until(() => !lanes("data/hats/hits.json").some((c) => c.id === hatsId) && lanes("data/keys/chords.json").length === 0), "⌫ deletes both");
@@ -351,6 +359,8 @@ write("data/hats/hits.json", fixture("data/hats/hits.json"));
 write("data/keys/chords.json", fixture("data/keys/chords.json"));
 const K = kickClip.clips[0].id, H = JSON.parse(fixture("data/hats/hits.json")).clips[0].id;
 await until(async () => starts(await shown("hats", "hits")) === "0" && (await shown("kick", "hits"))[0]?.length === 31 && (await shown("keys", "chords")).length === 1);
+// A gesture names a clip by the hash the page drew: the page shows the outside writes first.
+await caughtUp();
 await key("Escape");
 await key("Escape");
 await playAt(0);
@@ -381,6 +391,7 @@ check(await until(async () => (await pickedIn("kick.hits")).join() === kickCopy.
 check(await until(async () => (await undoNow()).startsWith("Undo duplicating a Kick clip")), `Undo names it: ${await undoNow()}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0");
+await caughtUp();
 
 // ---------------------------------------------------------------- the marquee keeps its empty bars
 const kickRow = await rowOf("kick.hits");
@@ -400,6 +411,7 @@ const mdup = lastGesture(n)[0];
 check(mdup?.op === "duplicate" && mdup.range?.join() === "0,40" && mdup.clips.length === 2, `as one gesture with the marquee's bars: ${JSON.stringify(mdup?.range)}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0" && starts(await shown("hats", "hits")) === "0");
+await caughtUp();
 
 // ---------------------------------------------------------------- ⌘E splits at the playhead, ⌘J joins
 const hatsBefore = JSON.stringify((await shown("hats", "hits"))[0].notes);
@@ -418,6 +430,7 @@ check(await until(async () => starts(await shown("hats", "hits")) === "0"), "⌘
 const joined = (await shown("hats", "hits"))[0];
 check(joined.id === H && joined.length === 32 && JSON.stringify(joined.notes) === hatsBefore, `keeping the first's id and every note in time: ${joined.id}, ${joined.length}`);
 check(lastGesture(n).map((g) => g.op).join() === "join", "one join gesture");
+await caughtUp();
 
 // ---------------------------------------------------------------- ⌘C ⌘V and ⌘X at the playhead
 await playAt(40);
@@ -455,12 +468,14 @@ const loose = JSON.parse(fixture("data/kick/hits.json"));
 loose.clips[0].notes = loose.clips[0].notes.map((x, i) => ({ ...x, start: x.start + (i % 2 ? 0.06 : -0.04 * (x.start > 0)) }));
 write("data/kick/hits.json", JSON.stringify(loose, null, 2));
 await until(async () => Math.abs((await shown("kick", "hits"))[0].notes[1]?.start - 1.06) < 1e-9);
+await caughtUp();
 await clickClip("kick.hits", K);
 n = posts.length;
 await key("q");
 check(await until(async () => (await shown("kick", "hits"))[0].notes.every((x) => Number.isInteger(x.start))), "Q quantizes the selected clip's notes onto the roll's grid (1/32)");
 const q = lastGesture(n)[0];
 check(q?.op === "quantize" && q.grid === 0.125 && (await until(async () => (await undoNow()).startsWith("Undo quantizing a Kick clip to 1/32"))), `as one gesture, named in Undo: ${JSON.stringify({ op: q?.op, grid: q?.grid })}; ${await undoNow()}`);
+await caughtUp();
 await clickClip("hats.hits", H);
 await key("ArrowRight");
 check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 0.5), "→ moves the selected clip by the grid (an eighth at this zoom)");

@@ -17,7 +17,7 @@
 //   node run.mjs s5-knobs fix
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, api, state, toasts, show, view, box } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, toasts, show, view, box } = await open(1440, 900);
 
 /** The view's knobs, each with its module and node: `{ module, node, k }`. */
 const knobs = async () =>
@@ -266,6 +266,8 @@ const bassPanned = "bass: { in: duck(bass.out, kick.env, { depth: db(-9) }), pan
 check(panned.status === 200 && read("song.ts") === songFile.replace("bass: duck(bass.out, kick.env, { depth: db(-9) }),", bassPanned), `POST /mix/insert writes the bass's first pan (${panned.status}: ${read("song.ts").match(/bass: .*,/)?.[0]})`);
 const bassStrip = (await state()).mix.strips.find((x) => x.channel === "bass");
 check(bassStrip?.pan === panned.body.control && !bassStrip.pan_insert, `and names the new knob, which the Mix view's strip has (${panned.body.control})`);
+// Undo takes back the step the page shows, and the page didn't make this one: it shows it first.
+await caughtUp();
 await undo();
 check(await until(() => read("song.ts") === songFile), "undo takes the pan out");
 

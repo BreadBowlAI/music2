@@ -8,7 +8,7 @@
 import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import fs from "node:fs";
 
-const { page, errors, toasts, show } = await open(1440, 900, { browser: true });
+const { page, errors, toasts, show, caughtUp } = await open(1440, 900, { browser: true });
 const kick = read("tracks/kick.ts");
 const song = read("song.ts");
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 8000);
@@ -92,6 +92,8 @@ const names = await page.$$eval("[data-testid=setting-options] [role=menuitem]",
 check(JSON.stringify(names) === '["Soft","Warm","Hard"]', `its menu lists the plugin's names: ${JSON.stringify(names)}`);
 await page.click('[data-testid=setting-options] [data-option="Hard"]');
 check(await until(() => read("tracks/kick.ts").includes("mode_3: 2")), "picking Hard writes its number, 2, into the code");
+// The switch goes from the revision the page shows, and Hard changed this call: the page shows it first.
+await caughtUp();
 const sw = `${bright} [role=switch]`;
 check(!!(await page.$(`${bright}[data-kind=switch][data-knob-id]`)) && (await page.$eval(sw, (e) => e.getAttribute("aria-checked"))) === "false", "Bright is a switch, off, and still a knob");
 await page.click(sw);

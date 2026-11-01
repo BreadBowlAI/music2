@@ -3,7 +3,7 @@
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, state, toasts, show, view, key, box, drag } = await open();
+const { browser, page, errors, state, caughtUp, toasts, show, view, key, box, drag } = await open();
 const lane = (path) => JSON.parse(read(path)).clips;
 const clipEls = (l) => page.$$eval(`[data-lane="${l}"] [data-clip]`, (els) => els.map((e) => ({ id: e.dataset.clip, start: Number(e.dataset.start), open: !!e.dataset.open, picked: !!e.dataset.picked })));
 const kick0 = lane("data/kick/hits.json");
@@ -43,6 +43,8 @@ check(lane("data/hats/hits.json")[0].id === hats0[0].id, "keeping its id");
 check(await until(async () => (await clipEls("hats.hits"))[0]?.picked), "and it stays picked");
 
 // ---------------------------------------------------------------- make a clip: a new id, picked and open
+// The timeline takes a gesture once it shows its last edit (one sooner does nothing).
+await caughtUp();
 const kr = await box('[data-lane="kick.hits"]');
 await page.mouse.click(kr.x + 240 + 24 * 34 + 5, kr.y + kr.height / 2, { count: 2 });
 check(await until(() => lane("data/kick/hits.json").length === 2), "double-clicking after the clip makes one");

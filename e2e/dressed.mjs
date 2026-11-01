@@ -12,7 +12,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, key, view, box, posts } = await open(1440, 900);
+const { page, errors, api, key, view, box, posts, caughtUp } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 /** The lint over what is inside `sel`. */
@@ -124,6 +124,8 @@ check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes the cod
 
 // ---------------------------------------------------------------- the envelope's corner (CARD-31)
 
+// A drag goes from the revision the page shows, and ⌘Z changed this call: the page shows it first.
+await caughtUp();
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
 const handle = await seen(`${card} [data-view="amp"] [data-handle="attack"]`);
@@ -144,7 +146,9 @@ check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back
 // ---------------------------------------------------------------- the filter's resonance (CARD-30)
 
 // The Lead's filter view draws its resonance (0 to 1) as the q it stands for; its peak dragged up
-// writes a higher resonance, in hundredths, inside 0 to 1, and its words say resonance.
+// writes a higher resonance, in hundredths, inside 0 to 1, and its words say resonance. Once the
+// page shows the revision ⌘Z made, as the corner's drag did.
+await caughtUp();
 const peakSel = `${card} [data-view="filter"] [data-handle="peak"]`;
 const peakAt = await seen(peakSel);
 const said = await page.$eval(peakSel, (e) => e.querySelector("title")?.textContent ?? "");

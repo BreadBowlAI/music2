@@ -15,7 +15,7 @@
 import fs from "node:fs";
 import { check, done, HOME, open, PROJ, read, sess, sleep, until } from "./fixlib.mjs";
 
-const { page, errors, toasts, state, key } = await open(1440, 900, { browser: true });
+const { page, errors, toasts, state, key, caughtUp } = await open(1440, 900, { browser: true });
 
 // Requests held back until released, to stand in for a slow answer (a plugin scan, a busy session,
 // a preview rendering); then they go on, or get `answer`.
@@ -135,6 +135,8 @@ check(await toasted("Loaded Glass into Synth pluck"), "and says so");
 
 // ---------------------------------------------------------------- a sound row drags onto a track
 
+// The drop loads into the call as the page shows it, and Glass changed that call.
+await caughtUp();
 await find("soft");
 await page.evaluate((into) => {
   const row = document.querySelector('[data-spotlight-item="sound:std/@m2/synths:synth-pluck/Soft"]');

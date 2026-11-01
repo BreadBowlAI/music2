@@ -6,7 +6,7 @@
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, toasts, show, view, key, box } = await open(1440, 900);
+const { page, errors, toasts, show, view, key, box, caughtUp } = await open(1440, 900);
 const orig = { keys: read("tracks/keys.ts"), song: read("song.ts") };
 
 /** The lint over what is inside `sel`. */
@@ -106,6 +106,8 @@ check(await until(async () => /^Undo turning Reverb on \(/.test(await undoTitle(
 
 // ---------------------------------------------------------------- D2: move an effect left or right
 
+// An effect is added after the reverb call as the page shows it, and Turn on changed that call.
+await caughtUp();
 await page.click(`${card("keys", "reverb")} button[aria-label="Add an effect after reverb"]`);
 await page.waitForSelector('[data-effect="delay"]');
 await page.click('[data-effect="delay"]');

@@ -9,7 +9,7 @@
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, show, key, box } = await open(1440, 900);
+const { page, errors, show, key, box, caughtUp } = await open(1440, 900);
 
 /** The lint over what is inside `sel`. */
 const linted = async (sel, what) => {
@@ -82,6 +82,8 @@ check(await until(() => files() === withEq), "⌘Z takes the code back, byte for
 
 // ---------------------------------------------------------------- a band's frequency knob (PKG-3)
 
+// A drag goes from the revision the page shows, and ⌘Z changed this call: the page shows it first.
+await caughtUp();
 const freq = `${card} [data-knob="Frequency 3"]`;
 const grip = await seen(`${freq} svg`);
 await page.mouse.move(grip.x + grip.width / 2, grip.y + grip.height / 2);

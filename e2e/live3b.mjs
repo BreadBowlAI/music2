@@ -37,6 +37,7 @@ const S = process.argv[2];
 const proj = `${S}/proj`;
 const sess = JSON.parse(fs.readFileSync(`${S}/testhome/.music2/session.json`, "utf8"));
 import { exe } from "./chrome.mjs";
+import { following } from "./caughtup.mjs";
 import { HEADLESS, REPO as FIX } from "./env.mjs";
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const consoleErrors = [];
@@ -71,6 +72,7 @@ const bassTs = () => fs.readFileSync(`${proj}/tracks/bass.ts`, "utf8");
 const bass = bassTs();
 
 const page = await newPage();
+const caughtUp = following(page, () => api("graph"), check);
 const show = async (p, name) => {
   await p.click(`[data-module-tab="${name}"]`);
   await p.waitForSelector(`[data-module="${name}"]`);
@@ -136,7 +138,9 @@ check(await until(() => songTs().includes(`db: db(${slowShown})`)), `its release
 check(await until(async () => (await leases()).length === 0), "and ends the lease");
 check((await putFile(sess, "tracks/bass.ts", slowly(bass), bass)).status === 200 && bassTs() === bass, "bass.ts saved back");
 
-// ---- through: an outside save to another file mid-drag.
+// ---- through: an outside save to another file mid-drag. The mixer is one call, and Keys' level is in
+// it: the drag goes from the revision the page shows, so the page shows the release's first.
+await caughtUp();
 at = await knobAt(page, hats);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();
@@ -156,6 +160,7 @@ check(bassTs().includes("khz(3)"), "and the outside edit to bass.ts stays");
 check(await until(async () => (await leases()).length === 0), "the commit ended the lease");
 
 // ---- held: still for 12 s, longer than the server's TTL; the page's keepalive keeps it.
+await caughtUp();
 at = await knobAt(page, keys);
 await page.mouse.move(at.x, at.y);
 await page.mouse.down();
@@ -168,7 +173,9 @@ await page.mouse.up();
 const shown = await value(page, keys);
 check(await until(() => songTs().includes(`pan: ${shown} }`)), `and its release writes the value it shows (${shown})`);
 
-// ---- closed: a second window drags, then closes; its drag ends, and nothing is written.
+// ---- closed: a second window drags, then closes; its drag ends, and nothing is written. It opens
+// once the release's revision is published, so its drag goes from that one.
+await caughtUp();
 const other = await newPage();
 await mix(other);
 const kept = songTs();

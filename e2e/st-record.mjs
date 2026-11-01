@@ -24,7 +24,7 @@ import { exe } from "./chrome.mjs";
 import { lint } from "./lintlib.mjs";
 import { HOME, PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { page, errors, api, state, box, key } = await open(1440, 900);
+const { page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
 const DANGER = "rgb(175, 61, 54)";
 const DANGER_SOFT = "rgb(255, 233, 230)";
 const OLD = "db9f9t5s";
@@ -174,12 +174,16 @@ check(
 await sleep(300);
 await page.keyboard.up("a");
 await sleep(200);
+const unwritten = (await state()).view.revision;
 await press("r");
 check(await until(() => takes().length === 1, 5000), "R again ends the take and writes it");
 check((await status()).playing, "R ends recording; the song plays on");
 check(takes()[0]?.notes.map((n) => n.pitch).join() === "C4", `the piano's A key recorded (${JSON.stringify(takes()[0]?.notes)})`);
 await press("Space");
 await key("Meta+k");
+// ⌘Z takes back the step the page shows: the take's, once the page shows it (the take is on disk
+// before its revision is published).
+await caughtUp(unwritten + 1);
 await key("Meta+z");
 await until(() => takes().length === 0, 3000);
 
@@ -208,6 +212,7 @@ await settled();
 await pick("quantize");
 await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 4 }) });
 await api("/seek", { method: "POST", body: JSON.stringify({ beat: 0 }) });
+const unlooped = (await state()).view.revision;
 await press("r");
 await until(async () => (await record())?.phase === "take", 2000);
 check((await record())?.until === 4, "looping bar 1: each pass of the take ends at the loop's end");
@@ -225,6 +230,8 @@ const t3 = takes()[0];
 check(t3?.start === 0 && t3.length === 4 && t3.notes.length === 1 && Math.abs((t3.notes[0].start * 4) % 1) < 1e-9, `one bar, its note's start on a sixteenth (${JSON.stringify(t3)})`);
 await press("Space");
 await api("/loop", { method: "POST", body: JSON.stringify({ on: false }) });
+// The pass written at the wrap is the server's, not an answer to the page: the page shows it first.
+await caughtUp(unlooped + 1);
 await key("Meta+z");
 await until(() => takes().length === 0, 3000);
 await pick("quantize");

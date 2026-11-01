@@ -13,7 +13,7 @@
 //   node run.mjs gestures fix
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 
-const { browser, page, errors, state, show, view, box } = await open(1440, 900);
+const { browser, page, errors, state, caughtUp, show, view, box } = await open(1440, 900);
 
 const revision = async () => (await state()).view.revision;
 const knobIn = (module, label) => `[data-module="${module}"] [data-knob="${label}"]`;
@@ -29,8 +29,12 @@ const centre = async (sel) => {
   const b = await box(grip(sel));
   return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
-/** Until a control takes a press again: while its last value is being written it is disabled. */
-const ready = (sel) => until(async () => (await page.$eval(sel, (e) => e.getAttribute("aria-disabled"))) !== "true");
+/**
+ * Until a control takes a press again: while its last value is being written it is disabled; and
+ * until the page shows the revision that wrote it, as a gesture goes from the revision the page
+ * shows (the mixer is one call: a change to any of its knobs changes it).
+ */
+const ready = async (sel) => (await until(async () => (await page.$eval(sel, (e) => e.getAttribute("aria-disabled"))) !== "true")) && caughtUp();
 /** Drag a knob up by `dy` pixels (down if negative), holding ⇧ from `fineFrom` pixels on. */
 const drag = async (sel, dy, { fineFrom = Infinity } = {}) => {
   await ready(sel);
@@ -67,6 +71,8 @@ check(JSON.stringify(words) === JSON.stringify(["−6.0 dB", "R 30", "−5.0 dB"
 let rev = await revision();
 await drag(hatsPan, 30);
 check(await until(() => hatsLine()?.[2] === "0.5"), `30px up of a knob's 300 moves the pan a tenth of its range: 0.3 → 0.5 (${hatsLine()?.[2]})`);
+// The file is written before its revision is published: the page's write answered first.
+await caughtUp();
 check((await revision()) === rev + 1, "as one edit");
 check(await until(async () => (await reads(hatsPan)) === "R 50"), "and it reads R 50");
 await drag(hatsPan, 30, { fineFrom: 0 });
@@ -84,6 +90,7 @@ await page.mouse.up();
 check(await until(() => hatsLine()?.[2] === "0.3"), `a drag on its value turns it too: 15px down, 0.4 → 0.3 (${hatsLine()?.[2]})`);
 
 // ---------------------------------------------------------------- reset
+await caughtUp();
 rev = await revision();
 let c = await centre(hatsPan);
 await page.keyboard.down("Alt");
@@ -93,6 +100,7 @@ check(await until(() => hatsLine()?.[2] === "0"), `⌥-click puts the pan back a
 check(await until(async () => (await revision()) === rev + 1 && (await reads(hatsPan)) === "C"), "as one edit, and it reads C");
 
 // ---------------------------------------------------------------- type
+await caughtUp();
 rev = await revision();
 c = await centre(keysDb);
 await page.mouse.click(c.x, c.y, { count: 2 });
@@ -104,6 +112,7 @@ await page.keyboard.type("-3");
 await page.keyboard.press("Enter");
 check(await until(() => keysLine()?.[1] === "-3"), `"-3" and Return writes db(-3) (${keysLine()?.[0]})`);
 check(!(await page.$(`${keysDb} [data-testid=knob-type-in]`)) && (await until(async () => (await reads(keysDb)) === "−3.0 dB")), "and the field gives way to the readout");
+await caughtUp();
 check((await revision()) === rev + 1, "one edit");
 
 // Text that isn't a value: the field says so and stays; nothing is written. Escape leaves it.
@@ -128,6 +137,7 @@ await page.keyboard.press("Enter");
 check(await until(() => keysLine()?.[2] === "-0.2"), `"L20" writes a pan of -0.2 (${keysLine()?.[2]})`);
 
 // Tab writes and moves on to the next knob.
+await caughtUp();
 c = await centre(hatsDb);
 await page.mouse.click(c.x, c.y, { count: 2 });
 await page.waitForSelector(`${hatsDb} [data-testid=knob-type-in]`, { timeout: 2000 });
@@ -158,20 +168,24 @@ await until(async () => (await state()).view.modules.find((m) => m.key === "bass
 // ---------------------------------------------------------------- step
 await view("mix");
 await page.waitForSelector(keysDb);
+await caughtUp();
 rev = await revision();
 await page.$eval(grip(keysDb), (e) => e.focus());
 for (let i = 0; i < 3; i++) await page.keyboard.press("ArrowUp");
 check(await until(() => keysLine()?.[1] === "-2.7"), `↑ three times on a focused fader: −3 → −2.7 dB (${keysLine()?.[1]})`);
 await sleep(800);
 check((await revision()) === rev + 1, "written once, when the steps stop");
+await caughtUp();
 await page.keyboard.down("Shift");
 await page.keyboard.press("ArrowUp");
 await page.keyboard.up("Shift");
 check(await until(() => keysLine()?.[1] === "-1.7"), `⇧↑ is ten steps: 1 dB (${keysLine()?.[1]})`);
 await sleep(800);
+await caughtUp();
 rev = await revision();
 await page.keyboard.press("Backspace");
 check(await until(() => keysLine()?.[1] === "0"), `⌫ on a focused fader resets it to its default, 0 dB (${keysLine()?.[1]})`);
+await caughtUp();
 check((await revision()) === rev + 1, "as one edit");
 
 rev = await revision();
@@ -181,6 +195,7 @@ await page.mouse.move(c.x, c.y);
 await page.mouse.wheel({ deltaY: -80 });
 check(await until(() => Math.abs(Number(hatsLine()?.[2]) - (before + 0.04)) < 1e-9), `the wheel steps it, a step (1% of its range) a notch: ${before} → ${hatsLine()?.[2]}`);
 await sleep(800);
+await caughtUp();
 check((await revision()) === rev + 1, "two notches, one edit");
 
 await browser.close();

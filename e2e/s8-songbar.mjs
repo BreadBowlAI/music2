@@ -10,7 +10,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 
-const { page, errors, posts, api, state, toasts, key, box } = await open(1440, 900);
+const { page, errors, posts, api, state, caughtUp, toasts, key, box } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 const status = async () => (await api("/status")).body;
 const arrangement = () => JSON.parse(read("data/arrangement.json"));
@@ -161,6 +161,8 @@ await post("/tempo", { session, at: 16, bpm: 140, add: true });
 await post("/meter", { session, at: 16, beats: 3, unit: 4, add: true });
 const both = read("data/arrangement.json");
 await until(async () => !!(await page.$('[data-testid=ruler] [data-mark="16"]')));
+// The tempo's revision alone draws the mark; its popover offers what the page shows: both, once it shows the meter's.
+await caughtUp();
 await page.click('[data-testid=ruler] [data-mark="16"]');
 await page.waitForSelector("[data-testid=mark-remove]", { timeout: 2000 }).catch(() => null);
 const removeBoth = await page.$eval("[data-testid=mark-remove]", (e) => e.textContent).catch(() => null);
@@ -349,6 +351,8 @@ check(await until(() => { try { return loopIs(JSON.parse(read(".music2/view.json
 check((await post("/open", { path: PROJ })).status === 200, "the song is opened again");
 check(await until(async () => loopIs((await status()).loop, 0, 32, true)), "with its loop");
 await page.waitForSelector("[data-testid=tempo-field]");
+// A gesture goes in the session the page shows: the reopened song's, once the page has it.
+await caughtUp();
 // ⌘L loops the clip shown as selected, not every track's remembered one: Hats' clip, then a new
 // one-bar clip on Kick at bar 10; then, with nothing selected, the bar at the playhead.
 await page.click('[data-lane="hats.hits"] [data-clip]');

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, box, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
@@ -35,6 +35,8 @@ async function setBass(notes) {
   }
   await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === notes.length);
   await sleep(150);
+  // The roll writes the lane as the page shows it: the page shows this write first.
+  await caughtUp();
   return read(FILE);
 }
 const revision = async () => (await state()).view.revision;
@@ -89,6 +91,8 @@ const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title);
 async function undoTo(text, what) {
   await key("Meta+z");
   check(await until(() => read(FILE) === text), `${what}: ⌘Z puts ${FILE} back byte for byte`);
+  // The roll's next edit goes from the revision the page shows: the undo's, once it shows it.
+  await caughtUp();
 }
 /** One write: the revision moves by one, and stays. */
 async function oneStep(rev) {

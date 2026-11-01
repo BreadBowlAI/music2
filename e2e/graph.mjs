@@ -6,6 +6,7 @@ const S = process.argv[2];
 const proj = `${S}/proj`;
 const sess = JSON.parse(fs.readFileSync(`${S}/testhome/.music2/session.json`, "utf8"));
 import { exe } from "./chrome.mjs";
+import { following } from "./caughtup.mjs";
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 1000 });
@@ -17,6 +18,7 @@ const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: {
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
+const caughtUp = following(page, () => api("graph"), check);
 const until = async (f, ms = 4000) => { const t = Date.now(); while (Date.now() - t < ms) { if (await f()) return true; await new Promise((r) => setTimeout(r, 100)); } return false; };
 
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
@@ -67,7 +69,9 @@ check(songTs() === fs.readFileSync(`${S}/orig-song.ts`, "utf8").replace("pan: 0.
 check(await until(async () => (await page.$eval(panKnob, (e) => e.dataset.value)) === "0.7") && (await page.$$("[data-testid=toast]")).length === 0, "the knob shows the edit, with no toast");
 check(await until(async () => (await api("graph")).view.revision === 2), "the revision is now 2");
 
-// A fast drag (one move, immediate release) commits exactly the value shown at release.
+// A fast drag (one move, immediate release) commits exactly the value shown at release. The mixer is
+// one call, and the drag goes from the revision the page shows: the hats pan's, once it shows it.
+await caughtUp();
 const keysKnob = '[data-testid=mix] [data-knob="keys.pan"]';
 const kb = await knobBox(keysKnob);
 await page.mouse.move(kb.x + kb.width / 2, kb.y + kb.height / 2);
