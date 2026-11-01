@@ -153,7 +153,7 @@ fn what_is_typed_is_split_into_words_as_an_items_text_is() {
     for typed in ["synth-pluck", "synth.pluck", "Synth  pluck", "synth pluck!"] {
         assert_eq!(first(typed), "@m2/synths:synth-pluck", "{typed}");
     }
-    assert_eq!(first("drum-kit"), "@m2/drums:drum-kit");
+    assert_eq!(first("fm-metal"), "@m2/synths:fm-metal");
     assert_eq!(first("big-hall"), "sound:std/@m2/effects:reverb/Big hall");
     let both = found(&all, "delay & reverb");
     assert!(both.contains(&"@m2/effects:delay".to_string()) && both.contains(&"@m2/effects:reverb".to_string()), "{both:?}");
@@ -320,8 +320,10 @@ fn the_library_holds_stds_instruments_effects_and_presets() {
         .filter(|f| f.extension().is_some_and(|x| x == "json"))
         .count();
     assert_eq!(all.iter().filter(|i| i.kind == Kind::Sound).count(), shipped, "each of the packages' presets");
-    // "snare" finds the drum kit by what its notes play; "glass" finds the pluck's sound.
-    assert!(found(&all, "snare").contains(&"@m2/drums:drum-kit".to_string()));
+    // "snare" finds the Drum by what its menu plays; "glass" finds the pluck's sound. The drum
+    // machine is no item: no list offers it (KIT-2).
+    assert!(found(&all, "snare").contains(&"@m2/drums:drum".to_string()));
+    assert!(!all.iter().any(|i| i.id == "@m2/drums:drum-kit"), "the drum machine has no category");
     assert_eq!(found(&all, "glass pluck").first().map(String::as_str), Some("sound:std/@m2/synths:synth-pluck/Glass"));
     assert_eq!(found(&all, "reverb")[0], "@m2/effects:reverb");
 }
@@ -395,18 +397,18 @@ mod previews {
         v["clips"][0]["notes"].as_array().unwrap().iter().map(|n| n["pitch"].as_u64().unwrap()).collect()
     }
 
-    // LIB-3: the phrase follows the category: a beat on the notes a kit names, a bass line, four
-    // chords; a sound plays its instrument with its preset's values; an effect plays the loop, the
+    // LIB-3: the phrase follows the category: a beat (on the notes a drum names, else General MIDI's
+    // kick, snare and closed hat, as for the Drum), a bass line, four chords; a sound plays its instrument with its preset's values; an effect plays the loop, the
     // first bar dry and the second through it.
     #[test]
     fn a_previews_song_plays_a_phrase_for_its_category() {
         let (catalog, all) = std_items();
         let none = BTreeMap::new();
-        let kit = preview::song(get(&all, "@m2/drums:drum-kit"), &catalog, &none).unwrap();
-        let mut beat = pitches(&kit.files["data/play/notes.json"]);
+        let drum = preview::song(get(&all, "@m2/drums:drum"), &catalog, &none).unwrap();
+        let mut beat = pitches(&drum.files["data/play/notes.json"]);
         beat.sort();
         beat.dedup();
-        assert_eq!(beat, [36, 38, 42], "kick, snare and closed hat, by the kit's names");
+        assert_eq!(beat, [36, 38, 42], "kick, snare and closed hat, General MIDI's");
         let bass = preview::song(get(&all, "@m2/synths:synth-bass"), &catalog, &none).unwrap();
         assert!(pitches(&bass.files["data/play/notes.json"]).iter().all(|&p| p < 48), "a bass line, low");
         let pad = preview::song(get(&all, "@m2/synths:synth-pad"), &catalog, &none).unwrap();
@@ -577,7 +579,7 @@ mod previews {
         let (catalog, all) = std_items();
         let dir = std::env::temp_dir().join(format!("m2-preview-test-{}", std::process::id()));
         let packages = std_packages();
-        for id in ["@m2/synths:synth-pad", "@m2/drums:drum-kit", "@m2/effects:delay"] {
+        for id in ["@m2/synths:synth-pad", "@m2/drums:drum", "@m2/effects:delay"] {
             let song = preview::song(get(&all, id), &catalog, &BTreeMap::new()).unwrap();
             let (a, b) = (dir.join("a.wav"), dir.join("b.wav"));
             preview::render(&song, &packages, &dir.join("work"), &a).unwrap();

@@ -1,4 +1,4 @@
-//! Note names on the fixtures: a drum kit's lane names its notes, a pluck's names none.
+//! Note names on the fixtures: a drum machine's lane names its notes, a pluck's names none.
 
 use crate::Gestures;
 use crate::TimelineLane;
@@ -14,13 +14,16 @@ fn names(s: &m2_session::Session, module: &str, lane: &str) -> Vec<(u8, String)>
     }
 }
 
-// A track playing the drum kit (added as + Track adds one) shows its rows by name: the GM notes
-// the kit plays, from its descriptor. The timeline's JSON says them by note.
+// A track playing the drum machine shows its rows by name: the GM notes it plays, from its
+// descriptor. No list offers it now (KIT-2), so its call is written in code, here over a Drum
+// + Track added. The timeline's JSON says them by note.
 #[test]
-fn a_drum_kit_lane_names_its_notes() {
+fn a_drum_machine_lane_names_its_notes() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    let made = s.add_track("@m2/drums:drum-kit", None, None, None).unwrap();
+    let made = s.add_track("@m2/drums:drum", Some("Machine"), None, None).unwrap();
+    f.write(&made.edited.file, f.read(&made.edited.file).replace("drums.drum(", "drums.kit("));
+    s.refresh();
     let got = names(&s, &made.module, "hits");
     assert_eq!(got.len(), 20, "{got:?}");
     assert!(
@@ -30,17 +33,17 @@ fn a_drum_kit_lane_names_its_notes() {
     let json = serde_json::to_value(s.timeline()).unwrap();
     let lane = json["tracks"].as_array().unwrap().iter().find(|t| t["module"] == made.module.as_str()).unwrap()["lanes"][0].clone();
     assert_eq!(lane["names"]["36"], "Kick");
-    // Played through another call (a project's own wrapper), the kit still names them.
+    // Played through another call (a project's own wrapper), the drum machine still names them.
     f.write(
         &made.edited.file,
         "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { scale } from \"std/math\";\n\n\
-         export default track(\"drum-kit\", { name: \"Drum kit\" }, ({ lane }) => scale(drums.kit(lane.notes(\"hits\")), 0.5));\n",
+         export default track(\"machine\", { name: \"Machine\" }, ({ lane }) => scale(drums.kit(lane.notes(\"hits\")), 0.5));\n",
     );
     s.refresh();
-    assert_eq!(names(&s, "drum-kit", "hits").len(), 20);
+    assert_eq!(names(&s, "machine", "hits").len(), 20);
 }
 
-// A pluck names no notes, nor does a lane two different instruments read, nor One drum's (its
+// A pluck names no notes, nor does a lane two different instruments read, nor a Drum's (its
 // hats' names would have to follow its menu: gaps.md, review Y14).
 #[test]
 fn a_pluck_lane_has_no_names() {

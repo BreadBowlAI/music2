@@ -3668,20 +3668,12 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
     let names: Vec<String> =
         graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
-    // std's ready-made sounds (T3): drums, instruments (the Wavetable their last), the sampler, then
-    // the two with every knob.
-    assert_eq!(names.len(), 16, "{names:?}");
+    // std's ready-made sounds (T3): drums (the Drum, then FM metal: the drum machine is no longer
+    // listed, KIT-2), instruments (the Wavetable their last), the sampler, then the two with every knob.
+    assert_eq!(names.len(), 15, "{names:?}");
     assert_eq!(
-        (
-            names[0].as_str(),
-            names[1].as_str(),
-            names[2].as_str(),
-            names[3].as_str(),
-            names[12].as_str(),
-            names[13].as_str(),
-            names[15].as_str()
-        ),
-        ("Drum kit", "One drum", "FM metal", "FM keys", "Wavetable", "Sampler", "Polysynth")
+        (names[0].as_str(), names[1].as_str(), names[2].as_str(), names[11].as_str(), names[12].as_str(), names[14].as_str()),
+        ("Drum", "FM metal", "FM keys", "Wavetable", "Sampler", "Polysynth")
     );
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
     let added = graph.add_track(token, "@m2/synths:synth-pluck", None, None, Some("kick".into())).unwrap();

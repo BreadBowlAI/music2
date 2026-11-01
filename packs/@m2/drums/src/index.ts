@@ -1,12 +1,14 @@
 // @m2/drums: an 808/909-style drum machine (PACK-15).
 //
 // One engine, the pack's own `@m2/drums:drum` kernel (built from kernels-src/), plays every drum.
-// `drums.kit` maps notes to drums by their General MIDI numbers, so one notes lane plays a whole beat:
-// C2 (36) kick, D2 (38) snare, D#2 (39) clap, F#2 (42) closed hat, G#2 (44) pedal hat, A#2 (46) open
-// hat, toms on F2, G2, A2, B2, C3 and D3 (41 to 50), C#2 (37) rim, C#3 (49) crash, D#3 (51) ride,
-// F#3 (54) tambourine, G#3 (56) cowbell, A4 and A#4 (69, 70) shakers, D#5 (75) claves. `drums.drum`
-// (One drum) plays one drum on every note, the one its menu picks (`drum: "snare"`): a drum to
-// process on its own (a kick to duck the bass under) goes on a lane of its own, played by One drum.
+// `drums.drum` (Drum) plays one drum on every note, the one its menu picks (`drum: "snare"`): the
+// building block of a kit, several Drum tracks that go to one Drums bus (KIT-1), each mixed on its
+// own. Its kits are what + Track's Drum kit makes (KIT-4). `drums.kit` (Drum machine) is the older
+// way, a whole beat on one notes lane, each drum on its General MIDI note: C2 (36) kick, D2 (38)
+// snare, D#2 (39) clap, F#2 (42) closed hat, G#2 (44) pedal hat, A#2 (46) open hat, toms on F2, G2,
+// A2, B2, C3 and D3 (41 to 50), C#2 (37) rim, C#3 (49) crash, D#3 (51) ride, F#3 (54) tambourine,
+// G#3 (56) cowbell, A4 and A#4 (69, 70) shakers, D#5 (75) claves. No list offers it now; songs
+// that play it play as before.
 //
 // A hit cuts off the drum it replaces, as on a drum machine: a kick the kick before it,
 // and a closed hat an open one (the hats choke each other). Toms, rim, cowbell, ride and
@@ -70,11 +72,14 @@ const KIT_NOTES = {
 };
 
 export const drums = {
-  /** The whole drum machine on one notes lane, each drum on its General MIDI note (see above). */
+  /**
+   * The whole drum machine on one notes lane, each drum on its General MIDI note (see above). No
+   * list offers it (KIT-2): a kit of Drum tracks does what it did, each drum on a track of its own.
+   */
   kit: component(
     {
       id: "drum-kit",
-      label: "Drum kit",
+      label: "Drum machine",
       signature: signature<(notes: Events) => Audio>(),
       inputs: { notes: port.notes() },
       controls: {
@@ -99,7 +104,7 @@ export const drums = {
       settings: { voices: setting.int(16) },
       output: port.audio(),
       editor: {
-        category: "Drums",
+        unlisted: true,
         description: "An 808/909 drum machine: kick, snare, clap, hats, toms and more, one per note",
         notes: KIT_NOTES,
         groups: {
@@ -139,15 +144,15 @@ export const drums = {
    * control: a pick plays from the next hit, and a lane can automate it. Its knobs move whichever it
    * plays: `tune` in semitones from the drum's own, `decay` times its own length, and `punch` more or
    * less of a kick's thump or a snare's snap, or on the others of the hit's first 15 ms. At 0, 1
-   * and 0 it is the drum as the kit plays it, and at its single's voices (4, or 6 for the hats and
-   * the tom) the drum each removed single played (CARD-33).
+   * and 0 it is the drum as the drum machine plays it, and at its single's voices (4, or 6 for the
+   * hats and the tom) the drum each removed single played (CARD-33). Its kits are several of it,
+   * each on a track of its own, going to one Drums bus (KIT-4).
    */
   drum: component(
     {
       id: "drum",
-      // Not "Drum": beside "Drum kit" in the + Track list, a row a word away from another is hard to
-      // tell apart (`the_instruments_are_stds_sounds_in_order`; build-notes-taste.md, T3).
-      label: "One drum",
+      // The one building block (KIT-2): + Track lists the kits apart, as "Drum kit (several tracks)".
+      label: "Drum",
       signature: signature<(notes: Events) => Audio>(),
       inputs: { notes: port.notes() },
       controls: {
@@ -163,6 +168,35 @@ export const drums = {
         category: "Drums",
         description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal or shaker",
         groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
+        // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The hats
+        // are one Hats track, closed, pedal and open by the note, so a closed hat cuts an open one.
+        // Each kit's punch makes its kick: the 808's long boom at -0.5, the 909's thump at 0.5.
+        kits: {
+          "808 kit": [
+            { name: "Kick", drum: "kick", punch: -0.5, decay: 1.6 },
+            { name: "Snare", drum: "snare" },
+            { name: "Clap", drum: "clap" },
+            { name: "Hats", drum: "hats" },
+            { name: "Toms", drum: "tom" },
+            { name: "Rim", drum: "rim" },
+            { name: "Cowbell", drum: "cowbell" },
+            { name: "Cymbal", drum: "cymbal" },
+          ],
+          "909 kit": [
+            { name: "Kick", drum: "kick", punch: 0.5 },
+            { name: "Snare", drum: "snare", punch: 0.3 },
+            { name: "Clap", drum: "clap" },
+            { name: "Hats", drum: "hats", tune: 2 },
+            { name: "Toms", drum: "tom" },
+            { name: "Rim", drum: "rim" },
+            { name: "Cymbal", drum: "cymbal" },
+          ],
+          "Basic kit": [
+            { name: "Kick", drum: "kick" },
+            { name: "Snare", drum: "snare" },
+            { name: "Hats", drum: "hats" },
+          ],
+        },
       },
     },
     (notes: Events, { drum, voices, tune, decay, punch, drive }: Params): Audio =>
