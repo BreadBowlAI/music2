@@ -8,7 +8,7 @@
 //!
 //! An upgrade keeps the song's sound, or says exactly where it can't, and never writes half a
 //! conversion: what it can't convert exactly (a value worked out by code, a name used some other
-//! way, a lane two knobs read in different units, hats whose lengths One drum can't keep) is named
+//! way, a lane two knobs read in different units, hats whose lengths the Drum can't keep) is named
 //! with its file and line and the line to write, and then nothing is written at all. What changes
 //! though it is converted as well as it can be (the simple kick and hat, other sounds than One
 //! drum's) is named too, and written. It is written only when the song then builds, as one save of
@@ -211,7 +211,7 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
             match lanes.get(&lane) {
                 // One lane can't be read in two units.
                 Some((k, _)) if *k != knob => left.push(Left {
-                    what: format!("{lane} is a lane two knobs read, which One drum reads in different units now"),
+                    what: format!("{lane} is a lane two knobs read, which the Drum reads in different units now"),
                     write: "give each knob a lane of its own, then upgrade".into(),
                     ..at
                 }),
@@ -315,8 +315,8 @@ fn moved_module(module: &str) -> bool {
     module.strip_prefix("std/").is_some_and(|sub| m2_script::MOVED.iter().any(|(m, ..)| *m == sub))
 }
 
-/// How a knob of a drum One drum plays now reads there (wave 3, CARD-33). Each is exact for the
-/// values the old drum played: the old drum clamped its value to `lo..hi` first, and One drum plays
+/// How a knob of a drum the Drum plays now reads there (wave 3, CARD-33). Each is exact for the
+/// values the old drum played: the old drum clamped its value to `lo..hi` first, and the Drum plays
 /// a length 0.05 to 20 times its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Knob {
@@ -324,7 +324,7 @@ enum Knob {
     Tune { own: f64, lo: f64, hi: f64 },
     /// A decay in seconds: times the drum's own length, seconds ÷ own.
     Decay { own: f64, lo: f64, hi: f64 },
-    /// A kick's punch, a snare's snap, 0 to 1: One drum's punch, less the drum's own.
+    /// A kick's punch, a snare's snap, 0 to 1: the Drum's punch, less the drum's own.
     Punch(f64),
 }
 
@@ -336,12 +336,12 @@ const fn decay(own: f64, lo: f64, hi: f64) -> Option<Knob> {
     Some(Knob::Decay { own, lo, hi })
 }
 
-/// The hats single's closed and open hats' decays, as One drum's `decay` reads them.
+/// The hats single's closed and open hats' decays, as the Drum's `decay` reads them.
 const CLOSED: Knob = Knob::Decay { own: 0.045, lo: 0.005, hi: 2.0 };
 const OPEN: Knob = Knob::Decay { own: 0.45, lo: 0.02, hi: 5.0 };
 
 impl Knob {
-    /// `x`, in the old knob's base unit, as One drum's knob reads it; None where One drum can't
+    /// `x`, in the old knob's base unit, as the Drum's knob reads it; None where the Drum can't
     /// play it.
     fn convert(self, x: f64) -> Option<f64> {
         if !x.is_finite() {
@@ -382,9 +382,9 @@ impl Knob {
     }
 }
 
-/// A drum One drum plays now: the single (or simple) one's name, One drum's name for it, how each
-/// of its knobs reads (old key, One drum's key, how; None: the same knob), and the voices it played
-/// at when One drum's own 6 aren't them.
+/// A drum the Drum plays now: the single (or simple) one's name, the Drum's name for it, how each
+/// of its knobs reads (old key, the Drum's key, how; None: the same knob), and the voices it played
+/// at when the Drum's own 6 aren't them.
 struct Drum {
     old: &'static str,
     drum: &'static str,
@@ -392,7 +392,7 @@ struct Drum {
     voices: Option<u32>,
 }
 
-/// `drums.kick` … `drums.shaker` of `@m2/drums` 1 (and `std/drums` before it), as One drum plays
+/// `drums.kick` … `drums.shaker` of `@m2/drums` 1 (and `std/drums` before it), as the Drum plays
 /// them: at their own pitch and length and their own voices, so they are the single's sound
 /// (CARD-33). The ranges are those the old drum clamped each value to.
 const SINGLES: &[Drum] = &[
@@ -461,7 +461,7 @@ const SIMPLE_FROM: &[&str] = &["std/instruments", "@m2/synths"];
 const DRUMS_FROM: &[&str] = &["std/drums", "@m2/drums"];
 /// The modules `synth` came from, and is from.
 const SYNTH_FROM: &[&str] = &["std/synth", "@m2/synths"];
-/// One drum's pack.
+/// The Drum's pack.
 const DRUMS_PACK: &str = "@m2/drums";
 
 /// Whether `name`, imported from `module`, is one no module has now: the simple kick and hat.
@@ -606,7 +606,7 @@ struct Code<'t> {
     packs: BTreeSet<PackName>,
     /// Each lane file a converted knob reads, how, and where it is read.
     lanes: Vec<(String, Knob, Left)>,
-    /// What One drum's `drums` is called here, and whether its import must be added; or why it
+    /// What the Drum's `drums` is called here, and whether its import must be added; or why it
     /// can't be.
     drums: Result<(String, bool), String>,
     /// The modules whose names mean what they did before wave 3 (`old_modules`).
@@ -737,7 +737,7 @@ impl<'t> Code<'t> {
         )
     }
 
-    /// `kick(x)`, `drums.snare(x, { snap: 0.75 })` as One drum: `drums.drum(x, { drum: "snare",
+    /// `kick(x)`, `drums.snare(x, { snap: 0.75 })` as the Drum: `drums.drum(x, { drum: "snare",
     /// punch: 0.15, voices: 4 })`. All or nothing: a call with a value it can't convert exactly is
     /// left as it is, and named.
     fn drum(&mut self, site: &Site, sites: &[Site], d: &Drum, single: bool) {
@@ -766,7 +766,7 @@ impl<'t> Code<'t> {
             why.push(format!("its options are worked out by code (`{opts}`)"));
             let hows: Vec<String> = d.knobs.iter().filter_map(|(o, n, k)| k.map(|k| k.how(o, n))).collect();
             let first = drum.as_ref().map_or_else(String::new, |d| format!("{d}, "));
-            let write = format!("{drums}.drum({notes}, {{ {first}… }}), its knobs as One drum's: {}", hows.join("; "));
+            let write = format!("{drums}.drum({notes}, {{ {first}… }}), its knobs as the Drum's: {}", hows.join("; "));
             return self.leave(site.start, format!("`{}`: {}", site.callee.trim(), why.join("; ")), write);
         };
         // Each knob of the old drum this call writes: its property and its value.
@@ -776,7 +776,7 @@ impl<'t> Code<'t> {
             let value = self.slice(p.value);
             match d.knobs.iter().find(|(old, ..)| *old == p.key.as_str()) {
                 None if p.key == "voices" => suggested.push(format!("voices: {value}")),
-                None => why.push(format!("One drum has no `{}`", p.key)),
+                None => why.push(format!("the Drum has no `{}`", p.key)),
                 Some((_, new, None)) => suggested.push(format!("{new}: {value}")),
                 Some((old, _, Some(knob))) => match self.value(p.value, sites, *knob) {
                     Ok(v) => drop(given.insert(old, (p, v))),
@@ -789,12 +789,12 @@ impl<'t> Code<'t> {
         // Knobs to add, which the call leaves out: (key, value).
         let mut extra: Vec<(&str, f64)> = vec![];
         if d.drum == "tom" {
-            // One drum rings a tom longer the lower it is tuned from its own 130 Hz, where the tom
+            // The Drum rings a tom longer the lower it is tuned from its own 130 Hz, where the tom
             // single rang its decay at every tune: its decay is times sqrt(tune ÷ 130).
             let tuned = match given.get("tune") {
                 Some((_, Value::Lane { .. })) => {
                     why.push(
-                        "its tune is on a lane: One drum rings a tom longer the lower it is tuned, where this tom rang the same at every tune"
+                        "its tune is on a lane: the Drum rings a tom longer the lower it is tuned, where this tom rang the same at every tune"
                             .into(),
                     );
                     None
@@ -814,7 +814,7 @@ impl<'t> Code<'t> {
         if d.drum == "hats" {
             self.hats(site, sites, &given, &mut values, &mut knobs, &mut why);
         }
-        // Each property as One drum reads it.
+        // Each property as the Drum reads it.
         for p in &props {
             let Some(v) = values.get(p.key.as_str()) else { continue };
             let new = d.knobs.iter().find(|(o, ..)| *o == p.key).map(|(_, n, _)| *n).expect("a knob");
@@ -831,7 +831,7 @@ impl<'t> Code<'t> {
                         Some(format!("{new}: {}", exact(c)))
                     }
                     None => {
-                        why.push(format!("its `{}` of {} is past what One drum plays", p.key, self.slice(p.value)));
+                        why.push(format!("its `{}` of {} is past what the Drum plays", p.key, self.slice(p.value)));
                         None
                     }
                 },
@@ -860,7 +860,7 @@ impl<'t> Code<'t> {
         for (k, v) in extra {
             match Some(v).filter(|v| (0.05..=20.0).contains(v)) {
                 Some(v) => extras.push(format!("{k}: {}", exact(v))),
-                None => why.push(format!("its {k} would be past what One drum plays")),
+                None => why.push(format!("its {k} would be past what the Drum plays")),
             }
         }
         if let Some(n) = d.voices
@@ -885,7 +885,7 @@ impl<'t> Code<'t> {
             self.notes.push(Left {
                 file: self.file.clone(),
                 line: self.line_at(site.start),
-                what: format!("the simple {} is One drum's {what} now: another sound, a drum machine's", d.old),
+                what: format!("the simple {} is the Drum's {what} now: another sound, a drum machine's", d.old),
                 write: String::new(),
             });
         }
@@ -915,10 +915,10 @@ impl<'t> Code<'t> {
         self.packs.insert(PackName::new(DRUMS_PACK).expect("a pack's name"));
     }
 
-    /// The hats single's `decay` and `openDecay` as One drum's one `decay`, which sets every hat's
+    /// The hats single's `decay` and `openDecay` as the Drum's one `decay`, which sets every hat's
     /// length, where the single had its closed hats', its open hats' and its pedal hats' (25 ms).
     /// Exact when every hat the call's lane plays keeps its length: then the first of the two the
-    /// call writes says it, as a factor of One drum's, and the other goes. Otherwise named.
+    /// call writes says it, as a factor of the Drum's, and the other goes. Otherwise named.
     fn hats(
         &self,
         site: &Site,
@@ -932,7 +932,7 @@ impl<'t> Code<'t> {
             return;
         }
         let played = self.hats_played(site, sites).unwrap_or_else(|| [Hat::Closed, Hat::Pedal, Hat::Open].into());
-        // What each hat played needs of One drum's decay: a factor, or the lane of `decay` or
+        // What each hat played needs of the Drum's decay: a factor, or the lane of `decay` or
         // `openDecay`.
         let need = |k: &'static str, knob: Knob| match given.get(k) {
             Some((_, Value::Number(x))) => knob.convert(*x).ok_or(k),
@@ -951,7 +951,7 @@ impl<'t> Code<'t> {
         let factors: Vec<f64> = needs.iter().filter_map(|n| n.ok()).collect();
         let same = factors.windows(2).all(|w| (w[0] - w[1]).abs() <= 1e-9);
         let first = |k: &str| given.get(k).map(|(p, _)| p.start);
-        // Which of the two says One drum's decay, and with which knob.
+        // Which of the two says the Drum's decay, and with which knob.
         let carrier = match (lanes.len(), factors.is_empty()) {
             (1, true) => lanes.iter().next().copied(),
             (0, _) if same => ["decay", "openDecay"].into_iter().filter(|k| given.contains_key(k)).min_by_key(|k| first(k)),
@@ -965,7 +965,7 @@ impl<'t> Code<'t> {
             };
             let pedal = if played.contains(&Hat::Pedal) { ", its pedal hats 25 ms" } else { "" };
             why.push(format!(
-                "its closed hats ring {} and its open hats {}{pedal}, and One drum's `decay` sets every hat's length: put the hats that \
+                "its closed hats ring {} and its open hats {}{pedal}, and the Drum's `decay` sets every hat's length: put the hats that \
                  ring longer on a lane of their own",
                 ms("decay", CLOSED, 0.045),
                 ms("openDecay", OPEN, 0.45)
@@ -1046,7 +1046,7 @@ impl<'t> Code<'t> {
             None => None,
         };
         let now =
-            knob.convert(was.map_or(0.0, |(_, x)| x)).ok_or_else(|| format!("its lane `{key}`'s fallback is past what One drum plays"))?;
+            knob.convert(was.map_or(0.0, |(_, x)| x)).ok_or_else(|| format!("its lane `{key}`'s fallback is past what the Drum plays"))?;
         match was {
             Some((span, _)) => {
                 edits.push((span.0, span.1, exact(now)));
@@ -1138,10 +1138,10 @@ impl<'t> Code<'t> {
                 let found_here = match member {
                     _ if simple => {
                         let d = SIMPLE.iter().find(|d| d.old == name).expect("kick or hat");
-                        Some((format!("`{local}` is used here, not called: One drum plays the {name} now"), drum_call(d.drum)))
+                        Some((format!("`{local}` is used here, not called: the Drum plays the {name} now"), drum_call(d.drum)))
                     }
                     Some(m) if drums && SINGLES.iter().any(|d| d.old == m) => {
-                        Some((format!("`{local}.{m}` is used here, not called: One drum plays the {m} now"), drum_call(m)))
+                        Some((format!("`{local}.{m}` is used here, not called: the Drum plays the {m} now"), drum_call(m)))
                     }
                     Some("bass") if synth => Some((
                         format!("`{local}.bass` is used here, not called: its `decay` is `biteDecay` now"),
@@ -1188,7 +1188,7 @@ impl<'t> Code<'t> {
                 let what = match (n, single) {
                     (n, _) if removed(&st.source, n) => Some(format!("`{ns}.{n}` plays the simple {n}, which no pack has now")),
                     ("drums", Some(d)) if DRUMS_FROM.contains(&st.source.as_str()) => {
-                        Some(format!("`{ns}.drums.{}` is One drum's now", d.old))
+                        Some(format!("`{ns}.drums.{}` is the Drum's now", d.old))
                     }
                     _ => None,
                 };
@@ -1223,7 +1223,7 @@ impl<'t> Code<'t> {
 
     /// The imports and re-exports, as the code now reads them: a moved name from where it is now (a
     /// statement of its own after the one it was in, which keeps the rest, with their comments), a
-    /// name nothing reads any more gone, and One drum's `drums` where the simple kick or hat was.
+    /// name nothing reads any more gone, and the Drum's `drums` where the simple kick or hat was.
     fn rewrite_statements(&mut self) {
         let simple_gone = self.locals.iter().any(|(l, (m, n))| removed(m, n) && self.unread(l));
         let mut add = match &self.drums {
@@ -1488,7 +1488,7 @@ fn shown(text: &str, edits: &[Edit]) -> Vec<String> {
 
 // ---------------------------------------------------------------- data
 
-/// A control lane's file with every point converted by `knob`, in One drum's unit: the new text
+/// A control lane's file with every point converted by `knob`, in the Drum's unit: the new text
 /// and how many points; None when it is in that unit already. A lane moves in straight lines in
 /// its own unit: Hz in a straight line bend in semitones, so a tune lane gets points between, as
 /// many as keep it within a cent of the old line.
@@ -1502,7 +1502,7 @@ fn convert_lane(text: &str, knob: Knob) -> Result<Option<(String, usize)>, Strin
         _ => {}
     }
     let value = |x: f64| -> Result<f64, String> {
-        knob.convert(x).and_then(|v| exact(v).parse().ok()).ok_or_else(|| format!("its point of {} is past what One drum plays", number(x)))
+        knob.convert(x).and_then(|v| exact(v).parse().ok()).ok_or_else(|| format!("its point of {} is past what the Drum plays", number(x)))
     };
     let mut n = 0;
     for c in &mut clips {
@@ -1569,7 +1569,7 @@ fn preset_notes(dir: &Path, catalog: &m2_script::Catalog) -> Vec<Left> {
         };
         let what = if let Some(d) = single {
             format!(
-                "\"{}\" is for the single {} (`{}`), which One drum plays now: no list offers it. Set One drum's knobs as it says, by hand",
+                "\"{}\" is for the single {} (`{}`), which the Drum plays now: no list offers it. Set the Drum's knobs as it says, by hand",
                 p.name, d.old, p.sound
             )
         } else if let Some(d) = simple {

@@ -7,7 +7,7 @@
 //   const bytes = trapping(fs.readFileSync("std/kernels/std.wasm"), "noise_process");
 //
 // `NOISE_HATS` is a `tracks/hats.ts` for a copy of first-song whose hats play on std's `noise`, as
-// @m2/synths' simple hat did before wave 3: first-song's own hats play One drum, whose kernel is
+// @m2/synths' simple hat did before wave 3: first-song's own hats play the Drum, whose kernel is
 // @m2/drums' and the kick's too, so a trap there would stop both.
 export const NOISE_HATS = `import { hz, ms, poly, track } from "@m2/core";
 import { adsr, noise, svf, vca } from "std/dsp";

@@ -340,12 +340,12 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 upgrade <project> [--check]",
         words: "move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its \
-                lock, its imports of what moved into the packs, the single drums as One drum with their knobs converted, and \
+                lock, its imports of what moved into the packs, the single drums as the Drum with their knobs converted, and \
                 renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then \
                 builds; `--check` says what it would change, and writes nothing",
         more: "It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names \
                by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it \
-               again. What it converts as well as it can (the simple kick and hat, other sounds than One drum's) it names to \
+               again. What it converts as well as it can (the simple kick and hat, other sounds than the Drum's) it names to \
                check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song \
                made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. \
                See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).",
