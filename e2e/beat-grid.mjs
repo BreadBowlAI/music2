@@ -35,6 +35,14 @@ const clickCell = async (track, beat) => {
   const b = await box(cell(track, beat));
   await page.mouse.click(b.x + b.width / 2, b.y + b.height / 2);
 };
+const marks = (track) => page.$$eval(`${row(track)} [data-off-grid]`, (els) => els.map((e) => Number(e.dataset.offGrid)));
+const busWords = () => page.$eval('[data-testid=timeline] [data-track="drums"] [data-testid=bus-lane]', (e) => e.textContent).catch(() => null);
+const undoName = async () => (await state()).undo_name?.name;
+/** Clip `id` of track `track`'s hits lane with `change` made to its notes, as one `notes` gesture (an agent's edit). */
+const reNote = async (track, id, change) => {
+  const c = (await state()).timeline.tracks.find((t) => t.module === track).lanes.find((l) => l.key === "hits").clips.find((x) => x.id === id);
+  return post("/clips", { gesture: { op: "notes", clip: { module: track, lane: "hits", id }, notes: change(c.notes) } });
+};
 const rects = (track) => page.$$eval(`[data-testid=timeline] [data-lane="${track}.hits"] [data-clip] rect`, (els) => els.length).catch(() => -1);
 // The server's meters messages, as the page gets them: each track's peaks (linear).
 const meters = [];
@@ -51,11 +59,24 @@ cdp.on("Network.webSocketFrameReceived", ({ response }) => {
 
 check(!(await has('[data-view-tab="beat"]')), "with no kit, the dock has no Beat tab");
 await post("/mix/bus", { kind: "group", label: "Drums" });
+const group = "Plays the tracks whose output is set to it, and what tracks send it. Set them in Mix (⌥3).";
+check(await until(async () => (await busWords()) === group), `a Group bus's row says how tracks reach it: by their output, or a send (${await busWords()})`);
 await post("/mix/route", { channel: "kick", to: "drums" });
 await post("/mix/route", { channel: "hats", to: "drums" });
 const k = await until(async () => (await kits()).length === 1 && (await kits())[0].rows.length === 2);
 const kit = (await kits())[0];
 check(k && kit.bus === "drums" && kit.rows.map((r) => `${r.track}:${r.sound}`).join() === "kick:kick,hats:hats", `the Kick and the Hats sent to a Drums bus are a kit (${JSON.stringify(kit)})`);
+const kitWords = "The Drums kit: Kick and Hats play into it. Write their beat in Beat (⌥5).";
+check(await until(async () => (await busWords()) === kitWords), `the kit's bus says so in its row, and how to open Beat (${await busWords()})`);
+await show("bass");
+const shown = () => page.$$eval("[data-view-tab]", (els) => els.map((e) => `${e.dataset.viewTab}${e.getAttribute("aria-selected") === "true" ? "*" : ""}`).join());
+const before = await shown();
+await key("Alt+5");
+check(
+  await until(async () => (await toasts()).some((t) => t.includes("Beat shows a drum kit: select a Drum track or its bus."))),
+  `⌥5 with the Bass, in no kit, opens nothing and says why (${await toasts()})`,
+);
+check((await shown()) === before && !before.includes("beat"), `the dock stays as it was (${await shown()})`);
 await show("kick");
 check(await until(() => has('[data-view-tab="beat"]')), "with the Kick selected, the dock has a Beat tab");
 const tabs = await page.$$eval("[data-view-tab]", (els) => els.map((e) => e.dataset.viewTab));
@@ -72,8 +93,13 @@ await post("/label", { module: "hats", label: "Hats" });
 await until(async () => (await named()) === "Hats");
 const kicks = await lane("kick");
 check(await on("kick", 0) && !(await on("kick", 0.5)), "the Kick's hits are on: beat 1 on, the step after off");
-const offGrid = await page.$$eval(`${row("hats")} [data-off-grid]`, (els) => els.map((e) => Number(e.dataset.offGrid)));
-check(offGrid.length > 0 && offGrid[0] === 0.5 && (await on("hats", 0.5)), `the Hats' notes, a tenth of a beat long, show where they are, off the grid (${offGrid.slice(0, 4)}…)`);
+check((await marks("hats")).length === 0 && (await on("hats", 0.5)), `the Hats' notes, a tenth of a beat long, start on their steps: on the grid, with no marks (${(await marks("hats")).slice(0, 4)})`);
+check((await page.$eval(row("kick"), (e) => e.title)).includes("⌘1 and ⌘2 make the steps shorter or longer"), "a row's tooltip says what ⌘1 and ⌘2 do");
+// An agent's hats note between two steps: off the grid, a mark where it starts.
+await reNote("hats", "92gr2959", (notes) => [...notes, { pitch: 42, start: 2.85, length: 0.1, velocity: 0.7 }]);
+check(await until(async () => (await marks("hats")).join() === "2.85" && (await on("hats", 2.75))), `a note between two steps is off the grid: a mark where it starts, its step on (${await marks("hats")})`);
+const said = await page.$eval(`${row("hats")} [data-off-grid]`, (e) => e.title).catch(() => "");
+check(said === "It starts a little after 1.3.4 and is 0.1 beat long. The grid leaves it where it is; click its step to take it away.", `its tooltip says where, by bar and beat (${said})`);
 
 // ---------------------------------------------------------------- a click is a hit, one undo step
 
@@ -85,8 +111,9 @@ check(await until(async () => (await lane("kick")).length === kicks.length + 1),
 const added = (await lane("kick")).find((n) => n[0] === 0.5);
 check(added && added[1] === 0.25 && added[2] === kicks[0][2] && added[3] === 0.8, `on the Kick's lane at its step, a step long, at the row's pitch, velocity 0.8 (${JSON.stringify(added)})`);
 check((await revision()) === rev + 1, "one revision");
+check(await until(async () => (await undoName()) === "adding a Kick hit"), `named "adding a Kick hit" (${await undoName()})`);
 check(await until(async () => (await rects("kick")) === minis + 1), `the timeline's Kick lane shows it (${minis} → ${await rects("kick")} notes)`);
-check(JSON.stringify(await lane("hats")) === JSON.stringify(hats), "the Hats' off-grid notes are left alone");
+check(JSON.stringify(await lane("hats")) === JSON.stringify(hats), "the Hats' notes are left alone");
 check(await until(() => on("kick", 0.5)), "its step is on");
 check((await step("Meta+z")) && (await until(async () => (await lane("kick")).length === kicks.length)), "one undo takes it back");
 check(await until(async () => !(await on("kick", 0.5))), "and the step is off again");
@@ -101,13 +128,51 @@ await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2, { steps: 10 });
 await page.mouse.up();
 check(await until(async () => (await lane("kick")).length === kicks.length + 3), "a drag along the row paints a hit in each step it crosses");
 check((await revision()) === rev + 1, "as one revision");
+check(await until(async () => (await undoName()) === "adding 3 Kick hits"), `named "adding 3 Kick hits" (${await undoName()})`);
 check((await step("Meta+z")) && (await until(async () => (await lane("kick")).length === kicks.length)), "one undo takes the three back");
+
+// ---------------------------------------------------------------- two clicks keep their order
+
+// The first click's write is held back on its way: the second, which takes the hit away, must
+// still land after it.
+let held = false;
+const hold = (r) => {
+  if (!held && r.method() === "POST" && r.url().endsWith("/api/graph/clips")) {
+    held = true;
+    setTimeout(() => r.continue(), 700);
+  } else r.continue();
+};
+await page.setRequestInterception(true);
+page.on("request", hold);
+await clickCell("kick", 0.25);
+await clickCell("kick", 0.25);
+await until(async () => (await undoName()) === "removing a Kick hit", 5000);
+await sleep(300);
+page.off("request", hold);
+await page.setRequestInterception(false);
+check(held && !(await lane("kick")).some((n) => n[0] === 0.25) && !(await on("kick", 0.25)), `on then off, the first held back on its way, lands as on then off: no hit (${JSON.stringify((await lane("kick")).filter((n) => n[0] < 0.5))})`);
+await step("Meta+z");
+await step("Meta+z");
+await until(async () => (await lane("kick")).length === kicks.length);
 
 // ---------------------------------------------------------------- a click on a hit takes it away
 
-await clickCell("hats", 0.5);
-check(await until(async () => (await lane("hats")).length === hats.length - 1 && !(await lane("hats")).some((n) => n[0] === 0.5)), "a click on an off-grid hit takes it away, as any hit");
+await clickCell("hats", 2.75);
+check(await until(async () => (await lane("hats")).length === hats.length - 1 && !(await lane("hats")).some((n) => n[0] === 2.85)), "a click on an off-grid hit's step takes it away, as any hit");
 check((await step("Meta+z")) && (await until(async () => JSON.stringify(await lane("hats")) === JSON.stringify(hats))), "one undo puts it back where it was");
+
+// ---------------------------------------------------------------- a note a millionth before a step
+
+await reNote("kick", "my53vvkc", (notes) => notes.map((n) => (n.start === 1 ? { ...n, start: 0.999999 } : n)));
+check(
+  await until(async () => (await lane("kick")).some((n) => n[0] === 0.999999) && (await on("kick", 1)) && !(await on("kick", 0.75)) && (await marks("kick")).length === 0),
+  "a Kick note a millionth before beat 2 is in beat 2's step, on the grid",
+);
+await clickCell("kick", 1);
+check(await until(async () => !(await lane("kick")).some((n) => n[0] === 0.999999)), "a click there takes it away: the server's step is the grid's");
+await step("Meta+z");
+await step("Meta+z");
+check(await until(async () => (await lane("kick")).some((n) => n[0] === 1) && !(await lane("kick")).some((n) => n[0] === 0.999999)), "two undos put the Kick back on beat 2");
 
 // ---------------------------------------------------------------- velocity
 
@@ -124,6 +189,14 @@ const soft = await until(async () => (await lane("kick")).find((n) => n[0] === 1
 check(soft && (await revision()) === rev + 1, `a drag down on a hit's velocity bar makes it softer, one revision (${(await lane("kick")).find((n) => n[0] === 1)?.[3]})`);
 check((await step("Meta+z")) && (await until(async () => (await lane("kick")).find((n) => n[0] === 1)?.[3] === 0.8)), "one undo puts its velocity back");
 
+// ---------------------------------------------------------------- another step: still on the grid
+
+await key("Meta+2");
+check(await until(async () => (await page.$eval("[data-testid=beat-grid]", (e) => e.dataset.grid)) === "1/8"), "⌘2: the steps are eighths");
+check((await marks("kick")).length === 0 && (await on("kick", 0)) && (await on("kick", 1)), `the Kick's hits start on eighths too: on the grid, with no marks (${(await marks("kick")).slice(0, 4)})`);
+await key("Meta+1");
+check(await until(async () => (await page.$eval("[data-testid=beat-grid]", (e) => e.dataset.grid)) === "1/16"), "⌘1: sixteenths again");
+
 // ---------------------------------------------------------------- + Drum, heard
 
 const song = read("song.ts");
@@ -135,6 +208,7 @@ await page.click('[data-testid=add-drum-menu] [data-sound="clap"]');
 check(await until(() => fs.existsSync(`${PROJ}/tracks/clap.ts`) && read("song.ts").includes('clap: { in: clap.out, to: "drums" }')), "Clap adds a track whose channel goes to the Drums bus");
 check(read("tracks/clap.ts").includes('drums.drum(lane.notes("hits"), { drum: "clap" })'), "playing the clap");
 check(await until(() => has(row("clap"))), "and a Clap row, last");
+check(await until(async () => (await busWords()) === "The Drums kit: Kick, Hats and Clap play into it. Write their beat in Beat (⌥5)."), `the bus's row names it too (${await busWords()})`);
 for (const beat of [1, 3, 5, 7]) await clickCell("clap", beat);
 check(await until(async () => (await lane("clap")).length === 4), `four clicks on its steps write four hits (${JSON.stringify(await lane("clap"))})`);
 check((await lane("clap")).every((n) => n[2] === 39), "each at the clap's own note, D#2");

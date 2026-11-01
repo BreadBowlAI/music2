@@ -175,7 +175,7 @@ export const SUITES = [
   ["taps", "fix", { expect: 23, s: 20 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 38, s: 8 }],
-  ["beat-grid", "fix", { expect: 43, s: 7 }],
+  ["beat-grid", "fix", { expect: 60, s: 9 }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],

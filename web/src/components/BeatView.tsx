@@ -1,8 +1,8 @@
 import clsx from "clsx";
 import { Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { send } from "../lib/clips";
-import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, type GraphState, type Kit, type KitRow, type Meter, type TimelineView } from "../lib/graph";
+import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, position, type GraphState, type Kit, type KitRow, type Meter, type TimelineView } from "../lib/graph";
 import { clean, GRID_VIEW, useGrid } from "../lib/grid";
 import { ROLL_RULER_H } from "../lib/layout";
 import { chord, mod } from "../lib/native";
@@ -12,7 +12,7 @@ import { useStore } from "../lib/store";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
-import { PlayCap, PlayLine } from "./NoteView";
+import { PlayLine, Ruler } from "./NoteView";
 import { Button, EmptyState, keepFocus, MenuRow, Popover } from "./ui";
 
 // The beat grid (KIT-10 to KIT-15): a drum kit's Drum tracks as rows of steps, as FL Studio's step
@@ -28,8 +28,16 @@ const NAMES_W = 160;
 const VEL_H = 56;
 /** The velocity lane's bars stop this far from its edges. */
 const VEL_PAD = 8;
-/** Beats a hit's start may be from its step's and still be on it: the lane format keeps a millionth. */
-const EPS = 1e-6;
+/**
+ * Two places in beats this close or closer are one: the lane format writes beats to a millionth
+ * (KIT-11). The editor's `SAME_PLACE` (`crates/editor/src/clips.rs`) is the same, so the grid and
+ * the `hits` gesture agree on which step a hit starts in.
+ */
+const SAME_PLACE = 1e-6;
+/** How far place `x` is after place `y`, in whole `SAME_PLACE`s (before: negative). */
+const apart = (x: number, y: number) => Math.round((x - y) / SAME_PLACE);
+/** Whether `x` and `y` are one place. */
+const same = (x: number, y: number) => Math.abs(apart(x, y)) <= 1;
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
@@ -62,9 +70,9 @@ function stepsTo(meter: Meter[], end: number, step: number): Step[] {
   const out: Step[] = [];
   for (const b of barList(meter, end)) {
     const barEnd = b.start + b.length;
-    for (let k = 0; b.start + k * step < barEnd - EPS; k++) {
+    for (let k = 0; apart(barEnd, b.start + k * step) > 1; k++) {
       const start = clean(b.start + k * step);
-      out.push({ start, end: Math.min(clean(b.start + (k + 1) * step), barEnd), odd: Math.floor(k * step + EPS) % 2 === 1 });
+      out.push({ start, end: Math.min(clean(b.start + (k + 1) * step), barEnd), odd: Math.floor(k * step + SAME_PLACE) % 2 === 1 });
     }
   }
   return out;
@@ -75,17 +83,17 @@ function byStep(steps: Step[], hits: Hit[]): Map<number, Hit[]> {
   const out = new Map<number, Hit[]>();
   for (const h of hits) {
     const s = stepAt(steps, h.start);
-    if (s && h.start < s.end - EPS) out.set(s.start, [...(out.get(s.start) ?? []), h]);
+    if (s && apart(h.start, s.end) < -1) out.set(s.start, [...(out.get(s.start) ?? []), h]);
   }
   return out;
 }
 
-/** The step that holds beat `beat`: the last that starts at or before it. */
+/** The step that holds beat `beat`: the last that starts at or before it (a millionth before it is at it). */
 function stepAt(steps: Step[], beat: number): Step | null {
   let lo = 0, hi = steps.length - 1, found = -1;
   while (lo <= hi) {
     const mid = (lo + hi) >> 1;
-    if (steps[mid].start <= beat + EPS) [found, lo] = [mid, mid + 1];
+    if (apart(beat, steps[mid].start) >= -1) [found, lo] = [mid, mid + 1];
     else hi = mid - 1;
   }
   return found < 0 ? null : steps[found];
@@ -93,6 +101,19 @@ function stepAt(steps: Step[], beat: number): Step | null {
 
 /** A hit's colour: the track's bar, mixed toward its ink the harder it is played (as the roll's notes are). */
 const fill = (tone: TrackColor, velocity: number) => `color-mix(in oklab, ${tone.ink} ${Math.round(clamp(velocity, 0, 1) * 45)}%, ${tone.bar})`;
+
+/** What an off-grid hit's mark says (KIT-11): where it starts, by bar, beat and sixteenth as the transport says it, and how long it is. */
+function offGridWords(meter: Meter[], h: Hit) {
+  const bar = barAt(meter, h.start);
+  const sixteenths = (h.start - bar.start) * 4;
+  const onOne = same(sixteenths / 4, Math.round(sixteenths) / 4);
+  const at = onOne ? `at ${position(meter, bar.start + Math.round(sixteenths) / 4)}` : `a little after ${position(meter, h.start)}`;
+  const n = Number(h.length.toFixed(3));
+  return `It starts ${at} and is ${n} ${n > 1 ? "beats" : "beat"} long. The grid leaves it where it is; click its step to take it away.`;
+}
+
+/** `n` hits of track `name`, as an undo step says them: "a Kick hit", "3 Kick hits". */
+const hitsSaid = (n: number, name: string) => (n === 1 ? `a ${name} hit` : `${n} ${name} hits`);
 
 /** A sound's name as the grid says it: `snare` → Snare. */
 const said = (sound: string) => sound.charAt(0).toUpperCase() + sound.slice(1);
@@ -142,7 +163,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const name = (track: string) => moduleName(graph.view.modules.find((m) => m.key === track) ?? { key: track, label: timeline.tracks.find((t) => t.module === track)?.label });
 
   // The song's bars and one bar more (KIT-10), at least as wide as the view.
-  const last = barAt(meter, Math.max(0, timeline.end - EPS));
+  const last = barAt(meter, Math.max(0, timeline.end - SAME_PLACE));
   let end = last.start + last.length;
   end += barAt(meter, end).length;
   while (end * ppb < visible) end += barAt(meter, end).length;
@@ -191,12 +212,19 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
 
   // ---------------------------------------------------------------- writing
 
-  /** Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. */
+  /** The grid's gestures on their way, one after another, so they land in the order made. */
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+
+  /**
+   * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. It goes once
+   * the gestures before it have landed: each was decided from what the grid showed, theirs included.
+   */
   const write = (row: KitRow, a: Omit<Asked, "revision">, step: string) => {
     const mine: Asked = { ...a, revision: Infinity };
     setAsked((all) => [...all, mine]);
-    const g = latest.current;
-    send(g, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: grid.step, to: a.to }, { name: step })
+    const size = grid.step;
+    queue.current = queue.current
+      .then(() => send(latest.current, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }))
       .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision } : x))))
       .catch((error) => {
         setAsked((all) => all.filter((x) => x !== mine));
@@ -207,7 +235,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   /** Whether step `s` of row `track` is on: as the newest gesture on it asked, else whether a hit starts in it (`hits`, by step). */
   const isOn = (track: string, hits: Map<number, Hit[]>, s: Step) => {
     const asking = [...asked, ...(drag.current ? [drag.current] : [])].filter((a) => a.track === track && (a.to === "on" || a.to === "off"));
-    const last = asking.findLast((a) => a.at.some((x) => Math.abs(x - s.start) < EPS));
+    const last = asking.findLast((a) => a.at.some((x) => same(x, s.start)));
     return last ? last.to === "on" : hits.has(s.start);
   };
 
@@ -236,7 +264,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     const d = drag.current;
     if (!d || d.pointer !== e.pointerId || d.track !== row.track) return;
     const s = stepOf(e);
-    if (!s || d.at.some((x) => Math.abs(x - s.start) < EPS)) return;
+    if (!s || d.at.some((x) => same(x, s.start))) return;
     // Only the steps it changes: on paints the empty ones, off clears the full ones.
     if (isOn(row.track, hits, s) === (d.to === "on")) return;
     d.at.push(s.start);
@@ -249,7 +277,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     redraw();
     if (cancelled) return;
     const at = [...d.at].sort((a, b) => a - b);
-    write(row, { track: row.track, at, to: d.to }, `${d.to === "on" ? "adding" : "removing"} ${name(row.track)} hits`);
+    write(row, { track: row.track, at, to: d.to }, `${d.to === "on" ? "adding" : "removing"} ${hitsSaid(at.length, name(row.track))}`);
   };
 
   // ---------------------------------------------------------------- velocity
@@ -284,8 +312,8 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const velocityOf = (h: Hit) => {
     const s = stepAt(steps, h.start);
     const v = vel.current;
-    if (s && v && Math.abs(v.at - s.start) < EPS) return v.velocity;
-    const a = [...asked].reverse().find((x) => x.track === selected.track && typeof x.to === "object" && s && x.at.some((y) => Math.abs(y - s.start) < EPS));
+    if (s && v && same(v.at, s.start)) return v.velocity;
+    const a = [...asked].reverse().find((x) => x.track === selected.track && typeof x.to === "object" && s && x.at.some((y) => same(y, s.start)));
     return a && typeof a.to === "object" ? a.to.velocity : h.velocity;
   };
 
@@ -323,7 +351,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           <div className="relative" style={{ width: NAMES_W + width, height: ROLL_RULER_H + kit.rows.length * ROW_H }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: NAMES_W }} />
-              <Ruler width={width} ppb={ppb} meter={meter} />
+              <Ruler width={width} ppb={ppb} meter={meter} start={0} />
             </div>
             {/* A line at each bar, behind the steps. */}
             <div className="absolute bottom-0 pointer-events-none" style={{ top: ROLL_RULER_H, left: NAMES_W, width }}>
@@ -361,6 +389,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
                   </button>
                   <Cells
                     row={row}
+                    meter={meter}
                     steps={steps}
                     shown={shown}
                     hits={rowsHits[i].filter((h) => near(h.start, h.length))}
@@ -442,6 +471,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
  */
 function Cells({
   row,
+  meter,
   steps,
   shown,
   hits,
@@ -456,6 +486,7 @@ function Cells({
   onUp,
 }: {
   row: KitRow;
+  meter: Meter[];
   steps: Step[];
   /** The steps drawn: those near what shows. */
   shown: Step[];
@@ -479,7 +510,7 @@ function Cells({
       data-lane={row.lane}
       className={clsx("relative shrink-0 touch-none border-b border-line", locked ? "cursor-default" : "cursor-pointer")}
       style={{ width, height: ROW_H }}
-      title={locked ?? `Click a step to add a hit, or take one away · drag along the row to do several · ${chord("1")} ${chord("2")} change the steps`}
+      title={locked ?? `Click a step to add a hit, or take one away · drag along the row to do several · ${chord("1")} and ${chord("2")} make the steps shorter or longer`}
       onPointerDown={onDown}
       onPointerMove={onMove}
       onPointerUp={(e) => onUp(e)}
@@ -489,8 +520,8 @@ function Cells({
       {shown.map((s) => {
         const on = isOn(s);
         const inStep = inSteps.get(s.start) ?? [];
-        // On the grid: a hit at the step's start, a step long. Anything else shows where it is.
-        const exact = inStep.find((h) => Math.abs(h.start - s.start) < EPS && Math.abs(h.length - (s.end - s.start)) < EPS);
+        // On the grid: a hit at the step's start, however long (KIT-11). One after it shows where it is.
+        const exact = inStep.find((h) => same(h.start, s.start));
         const filled = on && (exact || inStep.length === 0);
         return (
           <div
@@ -511,13 +542,13 @@ function Cells({
       {hits
         .filter((h) => {
           const s = stepAt(steps, h.start);
-          return !s || Math.abs(h.start - s.start) > EPS || Math.abs(h.length - (s.end - s.start)) > EPS;
+          return !s || !same(h.start, s.start);
         })
         .map((h, i) => (
           <div
             key={`off${i}`}
             data-off-grid={h.start}
-            title={`Off the grid: it starts at beat ${Number((h.start + 1).toFixed(3))} and lasts ${Number(h.length.toFixed(3))} beats. Notes or the code placed it; the grid leaves it where it is`}
+            title={offGridWords(meter, h)}
             className="absolute rounded-xs pointer-events-none"
             style={{ left: h.start * ppb, top: ROW_H / 2 - 5, width: Math.max(h.length * ppb, 3), height: 8, background: locked ? "var(--color-fg-off)" : tone.ink }}
           />
@@ -525,36 +556,6 @@ function Cells({
     </div>
   );
 }
-
-/** Bar numbers of the song, and a click to play from there. */
-const Ruler = memo(function Ruler({ width, ppb, meter }: { width: number; ppb: number; meter: Meter[] }) {
-  const shown = barList(meter, width / ppb);
-  return (
-    <div
-      data-testid="beat-ruler"
-      className="relative bg-chrome border-b border-line cursor-pointer overflow-hidden"
-      style={{ width }}
-      title="Click to play from here"
-      onPointerDown={(e) => {
-        if (e.button !== 0) return;
-        const beat = (e.clientX - e.currentTarget.getBoundingClientRect().left) / ppb;
-        void graphApi.seek(Math.max(0, Math.round(beat))).catch(() => {});
-      }}
-    >
-      {shown.map((b) => {
-        const w = b.length * ppb;
-        const every = w >= 36 ? 1 : w >= 18 ? 2 : 4;
-        return (
-          <div key={b.bar} className="absolute top-0 bottom-0 pointer-events-none" style={{ left: b.start * ppb }}>
-            <div className="absolute bottom-0 h-2 w-px bg-line-strong" />
-            {b.bar % every === 0 && <span className="absolute top-1.5 left-1.5 text-xs font-medium text-fg-faint">{b.bar + 1}</span>}
-          </div>
-        );
-      })}
-      <PlayCap start={0} ppb={ppb} />
-    </div>
-  );
-});
 
 /** + Drum (KIT-15): a menu of the Drum's sounds; the one picked is a new row of the kit, as one undo step. */
 function AddDrum({ graph, kit, locked }: { graph: GraphState; kit: Kit; locked: string | null }) {
