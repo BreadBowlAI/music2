@@ -1946,8 +1946,11 @@ fn previews_never_wait_for_a_compile() {
             g.poll()
         })
     };
+    // The compile is a request that starts after the save. The actor is still busy with the one
+    // before for a moment after answering it, and that request isn't the compile.
+    let saved = graph.now_ns();
     let saver = compile(100_000_000);
-    eventually("the session compiles", || graph.busy().is_some());
+    eventually("the session compiles", || graph.busy().is_some_and(|since| since >= saved));
     let busy_from = graph.busy().unwrap();
     let (mut sent, mut slowest, mut during) = (vec![], 0.0f64, 0);
     let mut begins = vec![];
@@ -1998,8 +2001,9 @@ fn previews_never_wait_for_a_compile() {
 
     // The negative control: a begin through the session waits for the compile.
     let (_, r3, tri) = knob(&graph, 300.0);
+    let saved = graph.now_ns();
     let saver = compile(100_000_001);
-    eventually("the session compiles", || graph.busy().is_some());
+    eventually("the session compiles", || graph.busy().is_some_and(|since| since >= saved));
     let asked = graph.now_ns();
     let (ms, begun) = timed(|| graph.begin_via_actor(token, r3, &tri, Owner::default()));
     assert!(saver.join().unwrap());
@@ -3664,11 +3668,20 @@ fn tracks_are_added_duplicated_and_deleted_and_the_player_follows() {
     let token = graph.state().unwrap()["session"].as_u64().unwrap();
     let names: Vec<String> =
         graph.state().unwrap()["instruments"].as_array().unwrap().iter().map(|i| i["label"].as_str().unwrap().into()).collect();
-    // std's ready-made sounds (T3): drums, instruments, the sampler, then the two with every knob.
-    assert_eq!(names.len(), 15, "{names:?}");
+    // std's ready-made sounds (T3): drums, instruments (the Wavetable their last), the sampler, then
+    // the two with every knob.
+    assert_eq!(names.len(), 16, "{names:?}");
     assert_eq!(
-        (names[0].as_str(), names[1].as_str(), names[2].as_str(), names[3].as_str(), names[12].as_str(), names[14].as_str()),
-        ("Drum kit", "One drum", "FM metal", "FM keys", "Sampler", "Polysynth")
+        (
+            names[0].as_str(),
+            names[1].as_str(),
+            names[2].as_str(),
+            names[3].as_str(),
+            names[12].as_str(),
+            names[13].as_str(),
+            names[15].as_str()
+        ),
+        ("Drum kit", "One drum", "FM metal", "FM keys", "Wavetable", "Sampler", "Polysynth")
     );
     assert_eq!(graph.state().unwrap()["palette"][0], "rose");
     let added = graph.add_track(token, "@m2/synths:synth-pluck", None, None, Some("kick".into())).unwrap();

@@ -1,14 +1,14 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/drums` (a drum machine), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser and a multiband compressor).
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (a drum machine), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser and a multiband compressor).
 - std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 22 effects in seven groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
 |---|---|
 | **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
-| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, six of `@m2/effects`' effects, and `@m2/mixing`'s tools, built from Rust beside them). They come with the app and with `m2` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, six of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
 
 A song that plays them lists them, as the templates do:
 
@@ -43,6 +43,17 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   - `synth.custom`: the synth itself with every knob, to make your own sound: its `shape`; the saw's and the pulse's levels (`saw` and `square`) and the pulse's `width`, which at another shape set only how loud that shape plays; sub and noise; a ladder filter with its own envelope, the amp envelope, drive, vibrato, a pitch drop and glide. `unison` (1 to 7 stacked voices) is a setting: `synth.custom(notes, { unison: 5 })`.
   - With `voices: 1` any of them, and any FM sound, plays one note at a time: a note that starts before the last one ends carries on from it, without starting again (legato), and the ones with a `glide` knob slide to it. When that note ends while an older one is still held, the older one sounds again, sliding back: hold A1 on the 808 and tap A2 over it for the classic slide up and back. Notes that start together count as one, the last of them, and each note keeps its own velocity. `synth.lead`, `synth.sub` and `synth.bass` start that way, and their card in Device says "Plays one note at a time". For a voice of your own, std's `mono(notes, voice, { glide })`, in `std/dsp`, is `poly(notes, voice, { mode: "legato", retrigger: false, glide })`.
 - **FM** (`@m2/synths`: `import { fm } from "@m2/synths"`), one FM synth: `fm.keys`, an electric piano with a warm body and a tine that barks when you play hard (knobs `tone`, `tine`, the envelope's four, `velSens`); `fm.bell`, a glassy bell (`tone`, the envelope's four, `velSens`); `fm.metal`, a short, clangy metallic hit that zaps down into its note (`tone`, `decay`, `feedback`, `drop`, `velSens`); and `fm.custom`, the FM synth with every knob. Its carriers and modulators are frequency ratios to the note: whole numbers sound harmonic, halves (the bell's 3.5) like a bell, and others such as 3.17 clang like metal. A ratio typed into the code is exact; dragged on a knob it lands near a value (2.03, say), so type the musical ones.
+- **Wavetable** (`@m2/wavetable`: `import { wavetable } from "@m2/wavetable"`), the kind of synth most producers use today. A wavetable is a set of waveforms, its frames; `position` slides between them, and as it moves the sound changes shape. Turn it slowly, or let the LFO turn it, and the sound moves. Two oscillators, A and B, each play a table, chosen from its menu on the card (`tableA`, `tableB`):
+
+  | Table | Its frames, from position 0 to 1 |
+  |---|---|
+  | `basic` | a sine (soft), a triangle, a saw (bright), a square (hollow) |
+  | `pulse` | a square that gets narrower, to a thin, nasal pulse |
+  | `vowels` | a voice singing a, e, i, o, u |
+  | `harmonics` | a sine, then harmonics added one by one, up to a bright saw |
+  | `digital` | hard, glassy waves, harmonics switched on and off in steps |
+
+  Or play your own: drop a WAV on the oscillator's file on the card (`fileA`, `fileB`), and it is that oscillator's table, in place of the menu's. A wavetable file is frames of 2048 samples one after another, as Serum and Vital save theirs; a file shorter than that is one cycle of a wave (a single-cycle file). Up to 64 frames are kept: a file with more gives 64 spread evenly through it. Each oscillator has `position`, `pitch` (in semitones: 12 is an octave up) and `level`; B starts silent (`levelB` 0). Then a filter: `filter` is its shape (`lowpass` keeps the lows, `highpass` the highs, `bandpass` the middle, `notch` all but the middle), with `cutoff`, `q` (the bump at the cutoff), `keytrack` (higher notes open it more) and `filterEnv` (how many octaves its own envelope opens it). Two envelopes, each with its picture on the card: the amp's (`attack`, `decay`, `sustain`, `release`) and the filter's (`filterAttack` and the rest). An LFO, a slow wave from each note's start: `lfoRate`, how far it moves both positions (`lfoPosition`) and the cutoff (`lfoCutoff`, in octaves). `unison` (a setting, 1 to 8) plays each note as that many copies, `detune` semitones apart at the edges and `spread` wide. With `voices: 1` it plays one note at a time, sliding over `glide`. Its presets: Slow pad, Round bass, Sharp lead and Short pluck; a preset sets the knobs, not the tables. A high note never folds back into a low hum (aliasing): each table is kept as a copy for each octave, holding only the harmonics that fit under it.
 - **Drums** (`@m2/drums`: `import { drums } from "@m2/drums"`), an 808/909-style drum machine. `drums.kit` plays a whole beat from one notes lane, each drum on its General MIDI note, the numbers drum parts usually use:
 
   | Note | Drum | Note | Drum |

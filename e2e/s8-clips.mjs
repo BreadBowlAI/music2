@@ -498,7 +498,7 @@ await page.click("[data-testid=timeline]");
 await key("Alt+k");
 await page.waitForSelector("[data-testid=shortcuts]");
 const sheet3 = Object.fromEntries(await page.$$eval("[data-testid=shortcuts] dl > div", (els) => els.map((e) => [e.querySelector("dt").textContent, e.querySelector("dd").textContent])));
-const want3 = { "Split clips at the playhead": "⌘E", "Join clips": "⌘J", "Quantize the selected clips": "Q", "Cut / copy / paste clips": "⌘X / ⌘C / ⌘V", "Move clips by the grid / by a bar": "← → / ⇧← ⇧→" };
+const want3 = { "Split clips at the playhead": "⌘E", "Join clips": "⌘J", "Quantize the selected clips": "Q", "Cut / copy / paste clips or notes": "⌘X / ⌘C / ⌘V", "Move clips by the grid / by a bar": "← → / ⇧← ⇧→" };
 check(Object.entries(want3).every(([k, v]) => sheet3[k] === v), `the shortcuts sheet lists the clip commands: ${Object.keys(want3).map((k) => `${k} = ${sheet3[k]}`).join("; ")}`);
 await key("Escape");
 

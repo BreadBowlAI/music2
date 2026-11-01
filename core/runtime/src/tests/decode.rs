@@ -246,3 +246,26 @@ fn a_flac_with_a_part_claxon_cant_decode_is_told_so() {
         assert!(!e.contains("damaged"), "{name}: {e}");
     }
 }
+
+// FMT-24 (review B2): a float WAV's sample that isn't a number, or is infinite, reads as 0, decoded
+// whole and read in pieces from the disk alike; the numbers around it are kept bit for bit.
+#[test]
+fn a_float_wavs_samples_that_arent_numbers_read_as_0() {
+    let dir = scratch("finite");
+    let path = dir.join("bad.wav");
+    let left = vec![0.5, f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.25, -f32::NAN];
+    let right = vec![f32::INFINITY, 0.75, 0.0, f32::NAN, 1.0, -1.0];
+    crate::audio::write_wav(&path, &[left, right], 48_000).unwrap();
+    let want = [vec![0.5, 0.0, 0.0, 0.0, -0.25, 0.0], vec![0.0, 0.75, 0.0, 0.0, 1.0, -1.0]];
+    let whole = decode::load(&path).unwrap();
+    assert_eq!(
+        bits(&whole),
+        want.iter().map(|c| c.iter().map(|s: &f32| s.to_bits()).collect()).collect::<Vec<Vec<u32>>>(),
+        "decoded whole"
+    );
+    let wav = crate::stream::Wav::open(&path).unwrap();
+    let (mut buf, mut out) = (vec![], vec![vec![], vec![]]);
+    wav.read(1, 6, &mut buf, &mut out).unwrap();
+    assert_eq!(out, [want[0][1..].to_vec(), want[1][1..].to_vec()], "read in pieces from the disk");
+    std::fs::remove_dir_all(dir).ok();
+}

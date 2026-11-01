@@ -411,7 +411,7 @@ mod tests {
             )],
         );
         let loud = installing_packs(&from, &t.0.join("Packs-2"), false);
-        assert_eq!(loud.len(), 4, "{loud:?}");
+        assert_eq!(loud.len(), 5, "{loud:?}");
         assert!(loud.iter().all(|l| !l.contains("..")), "{loud:?}");
         m2_song::pack::remove_tree(&t.0).unwrap();
     }

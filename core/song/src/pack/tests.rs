@@ -593,7 +593,7 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
     let bundled: Vec<String> =
         bundled(&source_packs()).iter().map(|d| PkgManifest::at(d).unwrap().package).map(|p| format!("{} {}", p.name, p.version)).collect();
     assert_eq!(names, bundled);
-    assert_eq!(names.len(), 4, "@m2/drums, @m2/effects, @m2/mixing and @m2/synths");
+    assert_eq!(names.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();
@@ -641,7 +641,7 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
 fn every_bundled_pack_is_the_version_its_record_names() {
     let mut wrong = vec![];
     let packs = bundled(&source_packs());
-    assert_eq!(packs.len(), 4, "@m2/drums, @m2/effects, @m2/mixing and @m2/synths");
+    assert_eq!(packs.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
     for dir in &packs {
         let m = PkgManifest::at(dir).unwrap();
         let (name, v) = (&m.package.name, m.package.version);

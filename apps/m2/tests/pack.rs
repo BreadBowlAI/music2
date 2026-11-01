@@ -936,6 +936,7 @@ fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
         "@m2/effects:delay",
         "@m2/effects:bitcrush",
         "@m2/mixing:eq",
+        "@m2/wavetable:voice",
     ] {
         assert!(
             listed.lines().any(|l| l.starts_with(&format!("{id} ")) || l.starts_with(&format!("{id}("))),

@@ -12,6 +12,7 @@ import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
+import { wavetable } from "@m2/wavetable";
 
 export default song(({ lane, time }) => {
   const sweep = lfo(time.beats, { period: 2 });
@@ -63,5 +64,6 @@ export default song(({ lane, time }) => {
   const mixed = multiband(deesser(transient(gate(eq(tones, { freq3: wobble, gain3: 3, on1: true, shape8: "high shelf" }), hit, { threshold: -30 }), { attack: 4 }), { amount: 4 }), {
     lowRatio: 3,
   });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed }));
+  const tables = wavetable(lane.notes("tables"), { tableA: "vowels", positionA: level, filter: "bandpass", unison: 3 });
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables }));
 });

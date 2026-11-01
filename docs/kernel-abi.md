@@ -195,7 +195,7 @@ The five rules hold for offline kernels too: memory only at birth, a reset that 
 | 2 | `k_reset` takes no memory and leaves the state as `k_new` (and later `k_load`) left it | voices are reset on the audio thread at every reuse and Panic |
 | 3 | Never write an input (ABI-1). Read the port addresses from `io` at each call, and never keep them | the host writes a steady input once and leaves it there |
 | 4 | Write every frame of `from..to` on every output channel, and touch only the channels a port has | the host doesn't clear outputs |
-| 5 | Keep no per-state data in statics: every state in the sandbox shares them. Let no static point at memory a state took. All one `k_new` takes lies in one run of bytes | many states share one sandbox, and a later layout may move a state's bytes |
+| 5 | Keep no per-state data in statics: every state in the sandbox shares them. Let no static point at memory a state took. All one `k_new` takes lies in one run of bytes. Data every state may share (*sandbox-wide data*, such as a table worked out once for every voice) may live in statics when it is made only while a state is born, never changed after, the same for the same settings whatever order states are born in, found by a state through its settings each time (never through an address the state keeps), and holds no state's own bytes | many states share one sandbox, and a later layout may move a state's bytes: a host that moves one into another sandbox first births that sandbox's states, so their sandbox-wide data is there (no host does yet) |
 
 The host checks rules 1 and 2 by construction (the seal and the prewarm). Debug builds check rule 3 at every call.
 

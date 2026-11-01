@@ -1,0 +1,21 @@
+[package]
+name = "m2-wavetable-kernels"
+description = "The @m2/wavetable pack's own kernel, compiled to packs/@m2/wavetable/kernels/wavetable.wasm"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# The source is beside the pack, packs/@m2/wavetable/kernels-src (no part of the pack, PACK-20); this
+# manifest is in the kernels' workspace's folder, so the crate builds to the same bytes in any folder
+# (ABI-10).
+[lib]
+path = "../../../../../packs/@m2/wavetable/kernels-src/src/lib.rs"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+m2-kernel = { path = "../../../kernel" }
+m2-dsp = { path = "../../../dsp" }
+
+[dev-dependencies]
+m2-dsp = { path = "../../../dsp", features = ["testing"] }
