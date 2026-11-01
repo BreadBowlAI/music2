@@ -176,6 +176,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip; a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go. Its tooltip says so.
+- **A clip dragged right after your own edit to it, while an agent or another program changes the song too**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, with words that say it was changed in another window or by an agent. Without a change made elsewhere at the same moment, it goes from your edit and lands.
+- **A gesture that waits more than 2 s** for the window to show your own last change (the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too.
 
 ## Notes
 
