@@ -779,6 +779,27 @@ impl Session {
         self.took_in = false;
     }
 
+    /// Who the requests served now are by, why, and from which window: to serve another's work
+    /// (a value let go while the code didn't build) and come back.
+    pub fn acting(&self) -> (Source, Option<String>, Option<String>) {
+        (self.by.clone(), self.why.clone(), self.window.clone())
+    }
+
+    /// A save or a raw commit just accepted revision `number`, writing `wrote` itself (AGENT-2): its
+    /// own record keeps those paths and what its step moved (`moved`, `beats`); any other path it
+    /// took in from the draft (an outside change that waited for the code to build) is outside the
+    /// app's, and the revision is mixed.
+    pub(crate) fn authored_as(&mut self, number: u64, wrote: &BTreeSet<String>, moved: &BTreeSet<String>, beats: bool) {
+        let Some(a) = self.authored.back_mut().filter(|a| a.number == number && a.by != Source::Outside) else { return };
+        let others: BTreeSet<String> = a.paths.difference(wrote).cloned().collect();
+        a.paths.retain(|p| wrote.contains(p));
+        (a.moved, a.beats) = (moved.clone(), beats);
+        if !others.is_empty() {
+            self.authored.push_back(Authored::outside(number, others));
+            self.took_in = true;
+        }
+    }
+
     /// The window the requests served from now come from (AGENT-2), or none (an agent, the app).
     pub fn act_in(&mut self, window: Option<String>) {
         self.window = window;

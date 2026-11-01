@@ -574,6 +574,13 @@ impl Session {
             None => TakenIn::default(),
         };
         self.accepting = None;
+        // Its own: the files it wrote, moving its code files' ids; what else came in with it
+        // (an outside change that waited for the code) is outside the app's.
+        if let Some(accepted) = &taken.accepted {
+            let wrote: BTreeSet<String> = written.iter().map(|(_, p, _)| p.to_string()).collect();
+            let beats = wrote.iter().any(|p| p == "data/arrangement.json");
+            self.authored_as(accepted.number, &wrote, &step.moved, beats);
+        }
         // Taken into the revision that plays as written: one step, whatever the draft's errors (a
         // lane file saved while the code is broken lands by WRITE-14's data path).
         let recorded = lands && as_written(&self.accepted.snapshot);

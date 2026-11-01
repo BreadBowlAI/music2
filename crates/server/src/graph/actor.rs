@@ -1950,11 +1950,24 @@ impl Actor {
                 l.map(|l| {
                     let State::Pending { value, expect, .. } = l.state else { unreachable!() };
                     l.state = State::Closing { value, expect };
-                    (l.id, format!("{}:{}", l.control.file, l.control.line))
+                    (l.id, format!("{}:{}", l.control.file, l.control.line), l.owner.client.clone())
                 })
             };
-            let Some((lease, at)) = next else { return };
-            let said = match self.commit(lease) {
+            let Some((lease, at, client)) = next else { return };
+            // Written as the window that let it go (its client is its window, AGENT-2), whatever
+            // job this is: then back to the job's.
+            let was = self.open.as_mut().map(|o| {
+                let was = o.session.acting();
+                o.session.act_as(m2_session::Source::Page, None);
+                o.session.act_in(client);
+                was
+            });
+            let committed = self.commit(lease);
+            if let (Some(o), Some((by, why, window))) = (self.open.as_mut(), was) {
+                o.session.act_as(by, why);
+                o.session.act_in(window);
+            }
+            let said = match committed {
                 Ok(Committed::Written(v)) => format!("{at}: saved once the code compiled ({} → {})", v["before"], v["after"]),
                 Ok(Committed::Pending { .. }) => return,
                 Err(e) => format!("{at}: the value wasn't saved: {e:#}"),

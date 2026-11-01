@@ -1918,8 +1918,15 @@ impl Session {
         self.cache = None;
         self.accepting = Some(self.by.clone());
         self.took_in = false;
+        let was = self.accepted.number;
         self.take_in(draft);
         self.accepting = None;
+        // Its own: the paths it wrote, moving what its step says; what else came in with it from
+        // the draft (an outside change that waited for the code) is outside the app's (AGENT-2).
+        if self.accepted.number != was {
+            let wrote: BTreeSet<String> = tx.touched().iter().map(|p| p.to_string()).collect();
+            self.authored_as(self.accepted.number, &wrote, &step.moved, step.beats);
+        }
         self.problems = self.gather_problems();
         let number = self.accepted.number;
         let a = &self.accepted;
