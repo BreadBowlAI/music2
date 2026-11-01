@@ -383,6 +383,9 @@ check(await until(async () => (await pickedIn("kick.hits")).join() === kickCopy.
 check(await until(async () => (await undoNow()).startsWith("Undo duplicating a Kick clip")), `Undo names it: ${await undoNow()}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0");
+// The marquee starts on empty lane space as the page draws it: the page shows the undo first (a
+// read of what it draws, not a gesture's wait).
+await caughtUp();
 
 // ---------------------------------------------------------------- the marquee keeps its empty bars
 const kickRow = await rowOf("kick.hits");

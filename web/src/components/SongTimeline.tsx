@@ -259,6 +259,26 @@ function reshaped<C extends AnyClip>(c: C, start: number, length: number): C {
   return respanned(c, useStore.getState().graph?.timeline.tempo ?? [], start, length) as C;
 }
 
+/**
+ * `timeline` with drag `d`, let go, where it went: its clips moved along their lane or resized, as
+ * they are drawn until the timeline shows the edit. A drag to another lane, or a copy, leaves it.
+ */
+function landedIn(timeline: TimelineView, d: Drag): TimelineView {
+  if (d.refused || (d.kind === "move" && (d.to || d.copy))) return timeline;
+  const went = (ref: ClipRef, c: AnyClip): AnyClip => {
+    const x = d.clips.find((g) => sameClip(g.ref, ref));
+    if (!x) return c;
+    return d.kind === "move" ? { ...c, start: clean(c.start + d.by) } : reshaped(c, d.start, d.length);
+  };
+  return {
+    ...timeline,
+    tracks: timeline.tracks.map((t) => ({
+      ...t,
+      lanes: t.lanes.map((l) => ({ ...l, clips: l.clips.map((c: AnyClip, i) => went(clipRef(t.module, l.key, l.clips, i), c)) }) as TimelineLane),
+    })),
+  };
+}
+
 /** The value bubble at the pointer while clips are dragged (taste.md §2.14), as the song bar's. */
 function DragBubble({ at, children }: { at: { x: number; y: number }; children: ReactNode }) {
   return createPortal(
@@ -596,8 +616,10 @@ export default function SongTimeline({
   // the edit. Named by id, so an edit that reorders a lane (a move, an undo, an edit elsewhere)
   // keeps them.
   const [drag, setDrag] = useState<Drag | null>(null);
-  const latest = useRef({ timeline, revision, onOpenClip, locked, playing, onSeek, headerW });
-  latest.current = { timeline, revision, onOpenClip, locked, playing, onSeek, headerW };
+  // The timeline as drawn: a drag let go is drawn where it went until the timeline shows it.
+  const drawnNow = useMemo(() => (drag?.landed !== undefined ? landedIn(timeline, drag) : timeline), [timeline, drag]);
+  const latest = useRef({ timeline, drawn: drawnNow, revision, onOpenClip, locked, playing, onSeek, headerW });
+  latest.current = { timeline, drawn: drawnNow, revision, onOpenClip, locked, playing, onSeek, headerW };
   const bars = useSection((s) => s.bars);
   // A press on a lane's empty space, until it is let go or becomes a marquee.
   const pressed = useRef<{ pointer: number; x: number } | null>(null);
@@ -752,7 +774,8 @@ export default function SongTimeline({
      */
     const copies = (times: number) => {
       const sel = useClipSelection.getState();
-      if (!chosen(latest.current.timeline).length) return false;
+      // The selection may name clips the window's own last edit made, not drawn yet: they go too.
+      if (!sel.picked.length) return false;
       const range = sel.range;
       void when((graph, own) => {
         const { timeline } = graph;
@@ -774,7 +797,7 @@ export default function SongTimeline({
     /** Delete the selected clips (⌫, or ⌘X after copying them). */
     const remove = (verb: string) => {
       const picked = useClipSelection.getState().picked;
-      if (!picked.some((p) => refIn(latest.current.timeline, p)) || latest.current.locked) return;
+      if (!picked.length || latest.current.locked) return;
       void when((graph, own) => {
         const refs = picked.flatMap((p) => refIn(graph.timeline, p) ?? []);
         if (refs.length) return send(graph, { op: "delete", clips: refs }, { name: `${verb} ${clipsWord(refs)}` }, undefined, own);
@@ -1219,7 +1242,7 @@ export default function SongTimeline({
         // Unless the window doesn't show its own last edit yet: then the drag is worked out anew,
         // when it goes, from the clips as the timeline draws them then (`drop`).
         const shown = leasable();
-        const drawn = latest.current.timeline, drawnAt = latest.current.revision;
+        const drawn = latest.current.drawn, drawnAt = latest.current.revision;
         const behind = !shown || shown.view.revision !== drawnAt;
         /** The drag with the pointer at `ev`, of the clips as `timeline` draws them: null when the one grabbed is gone. */
         const dragged = (timeline: TimelineView, ev: PointerEvent): Drag | null => {
@@ -1269,25 +1292,36 @@ export default function SongTimeline({
         let moved = false;
         let now: Drag | null = null;
         let last: PointerEvent | null = null;
-        // While the song plays, the drag is heard where it is (8b.7): a lease from the threshold on.
+        // While the song plays, the drag is heard where it is (8b.7): a lease from the threshold on,
+        // or, pressed before the window showed its own last edit, from once it does (`heardFrom`:
+        // the timeline whose clips the lease names).
         let lease: LaneLease | null = null;
+        let heardFrom: TimelineView | null = null;
         const move = (ev: PointerEvent) => {
           if (ev.pointerId !== pointer || latest.current.locked) return;
           if (!moved && Math.abs(ev.clientX - x0) < 4 && Math.abs(ev.clientY - y0) < 4) return;
-          const first = !moved;
           moved = true;
           last = ev;
           now = dragged(drawn, ev);
           if (!now) return cancel();
           setDrag(now);
-          const heard = gestureOf(now);
-          const graph = heard && first && !behind ? leasable() : null;
-          if (graph && heard) {
-            lease = leaseDrag(graph, heard.gesture, (why) => {
-              toast(why);
-              cancel();
-            });
-          } else if (heard) lease?.update(heard.gesture);
+          if (heardFrom) {
+            const d = dragged(heardFrom, ev);
+            const heard = d && gestureOf(d);
+            if (heard) lease?.update(heard.gesture);
+            return;
+          }
+          const graph = leasable();
+          if (!graph || (behind && !allMine(graph.session, drawnAt, graph.view.revision))) return;
+          const from = behind ? graph.timeline : drawn;
+          const d = dragged(from, ev);
+          const heard = d && gestureOf(d);
+          if (!heard) return;
+          heardFrom = from;
+          lease = leaseDrag(graph, heard.gesture, (why) => {
+            toast(why);
+            cancel();
+          });
         };
         const off = () => {
           for (const [type, f] of listeners) el.removeEventListener(type, f as EventListener);
@@ -1411,7 +1445,7 @@ export default function SongTimeline({
         });
       },
       join() {
-        if (!chosen(latest.current.timeline).length) return;
+        if (!useClipSelection.getState().picked.length) return;
         void when((graph, own) => {
           const picked = chosen(graph.timeline);
           if (!picked.length) return;
@@ -1422,9 +1456,9 @@ export default function SongTimeline({
         });
       },
       quantize() {
-        const drawn = chosen(latest.current.timeline);
-        if (!drawn.length) return;
-        if (!drawn.some((p) => p.lane.kind === "notes")) return toast("Only notes can be quantized: pick a notes clip.");
+        const picked = useClipSelection.getState().picked;
+        if (!picked.length) return;
+        if (!picked.some((p) => findLane(latest.current.timeline, p.module, p.lane)?.kind === "notes")) return toast("Only notes can be quantized: pick a notes clip.");
         // The roll's grid: the one notes are placed on.
         const g = useGrid.getState().notes;
         const grid = stepOf(g, zoomNow());
@@ -1436,10 +1470,11 @@ export default function SongTimeline({
         });
       },
       nudge(dir, bar) {
-        const picked = chosen(latest.current.timeline);
-        if (!picked.length || latest.current.locked) return;
+        if (!useClipSelection.getState().picked.length || latest.current.locked) return;
+        const picked = chosen(latest.current.drawn);
         const { meter } = latest.current.timeline;
-        const lo = Math.min(...picked.map((p) => p.clip.start));
+        // Where the earliest is drawn; a clip of the window's own last edit, not drawn yet, from bar 1.
+        const lo = picked.length ? Math.min(...picked.map((p) => p.clip.start)) : 0;
         const here = barAt(meter, lo).length;
         nudged.current = clean(nudged.current + dir * (bar ? here : stepOf(useGrid.getState().song, zoomNow(), here)));
         flush();

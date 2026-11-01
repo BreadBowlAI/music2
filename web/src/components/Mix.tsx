@@ -973,11 +973,12 @@ function Pan({
   const label = `${name} pan`;
   const toast = useStore((s) => s.toast);
   const blank = useMemo(() => centre(channel), [channel]);
-  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob.
+  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob, or
+  // shows a newer revision without it (undone before the window showed it).
   const [made, setMade] = useState<{ knob: KnobInfo; revision: number } | null>(null);
   useEffect(() => {
-    if (knob) setMade(null);
-  }, [knob]);
+    if (knob || (made && revision > made.revision)) setMade(null);
+  }, [knob, revision]);
   const live = knob ? { knob, revision } : (made ?? { knob: blank, revision });
   const first = !knob && !made;
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });

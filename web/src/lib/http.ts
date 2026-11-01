@@ -6,7 +6,7 @@
 // show (`shown`, lib/history).
 // `the_page_keeps_the_step_of_every_route_it_calls` (crates/server) checks no request goes another way.
 
-import { changed, owned, type StepName } from "./history";
+import { changed, flight, owned, type StepName } from "./history";
 import { useStore } from "./store";
 
 /** The routes whose answers name the step they took back, not one they made: never kept as the window's own. */
@@ -14,9 +14,17 @@ const TAKES_BACK = ["/api/graph/undo", "/api/graph/redo", "/api/graph/undo/skip"
 
 /** `fetch` for a request of the page's to the server: an answer that names a step is kept first. */
 export async function http(url: string, init?: RequestInit): Promise<Response> {
-  const res = await fetch(url, init);
-  if ((init?.method ?? "GET") !== "GET" && res.ok) await keep(new URL(url, location.href).pathname, res);
-  return res;
+  const path = new URL(url, location.href).pathname;
+  const post = (init?.method ?? "GET") !== "GET";
+  // An undo or a redo is a change on its way until its answer is kept: a gesture waits for it.
+  const landed = post && TAKES_BACK.includes(path) ? flight() : null;
+  try {
+    const res = await fetch(url, init);
+    if (post && res.ok) await keep(path, res);
+    return res;
+  } finally {
+    landed?.();
+  }
 }
 
 /** What an answer names of the song's history: the revision a change made, and its step. */

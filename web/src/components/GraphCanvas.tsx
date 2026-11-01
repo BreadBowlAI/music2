@@ -412,9 +412,10 @@ export function undoTop(graph: GraphState, id: "undo" | "redo") {
       if (now.graph?.session !== graph.session) return;
       if (!all) return void now.toast(`Nothing was ${id === "redo" ? "redone" : "undone"}: your last edit isn't answered yet. Try again in a moment.`);
       // The newest step this window kept since the first of those edits started (its answer may
-      // have come just before the press, the edit not over yet).
+      // have come just before the press, the edit not over yet). Refused because the newest is a
+      // step of the window's own the page didn't show yet (a take's pass), that one.
       const made = madeSince(graph.session, Math.min(...awaited.map((e) => e.since)));
-      return graphUndo(graph.session, id, id === "undo" && made ? made : atPress);
+      return graphUndo(graph.session, id, id === "undo" && made ? made : atPress, true);
     });
   return topped;
 }

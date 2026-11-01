@@ -91,6 +91,8 @@ check(await until(() => exists("tracks/drums.ts") && exists("tracks/snare.ts")),
 
 // ---------------------------------------------------------------- it plays (the Mix view)
 
+// The redo's files land before its revision is published: the state has the kit's strips once it is.
+await until(async () => ((await state()).mix?.strips ?? []).some((s) => s.channel === "snare"));
 const st = await state();
 const outputs = Object.fromEntries((st.mix?.strips ?? []).map((s) => [s.channel, s.output]));
 check(same([outputs["kick-2"], outputs.snare, outputs["hats-2"]], ["drums", "drums", "drums"]), `in the Mix view its tracks go to the Drums bus: ${JSON.stringify(outputs)}`);

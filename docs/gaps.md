@@ -177,6 +177,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip; a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go. Its tooltip says so.
 - **A clip dragged right after your own edit to it, while an agent or another program changes the song too**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, with words that say it was changed in another window or by an agent. Without a change made elsewhere at the same moment, it goes from your edit and lands.
+- **A clip dragged while the song plays, right after your own edit to it**, is heard from once the window shows that edit (a moment later): its lease names the clip as the state has it. Let go before then, it is heard when it lands.
 - **A gesture that waits more than 2 s** for the window to show your own last change (the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too.
 
 ## Notes
@@ -187,6 +188,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
 - **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
+- **A note dragged in Notes right after your own edit changed that very note** (an undo a moment before, the roll not showing it yet) is refused, with words that say the clip changed. A drag that adds notes, or moves notes your edit left alone, goes from your edit (AGENT-2); a key, a tool or the menu is made from the notes as your edit left them.
 - **The beat grid ([KIT-10](architecture.md#drum-kits)) is a first cut**: a click on a step doesn't sound the drum (Notes' audition does); a row's sound is changed on its Drum's card, not in the grid; the velocity lane shows one row at a time; nothing in the grid copies, repeats or shifts a pattern (the timeline's clip gestures do it to the clips); and its rows can't be dragged into another order (the timeline's order is theirs). Choking across tracks waits too (the design's D3).
 
 ## Automation

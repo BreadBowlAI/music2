@@ -14,7 +14,7 @@ import fs from "node:fs";
 import { check, done, open, PROJ, read, ROOT, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, state, hold, toasts, key, box, show } = await open(1440, 900);
+const { page, errors, api, state, caughtUp, hold, toasts, key, box, show } = await open(1440, 900);
 const has = async (sel) => !!(await page.$(sel));
 const { session } = await state();
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify({ session, ...body }) });
@@ -89,6 +89,8 @@ const beat = async (module, id, notes) => post("/lane", { revision: await revisi
 await beat(KICK, "kickbeat", Array.from({ length: 32 }, (_, i) => ({ pitch: 36, start: i, length: 0.25, velocity: 0.8 })));
 await beat(HATS, "hatsbeat", Array.from({ length: 32 }, (_, i) => ({ pitch: 42, start: i + 0.5, length: 0.1, velocity: 0.7 })));
 check(await until(async () => (await lane(KICK)).length === 32 && (await lane(HATS)).length === 32), "an agent writes a beat into the kit's lanes");
+// The page didn't write it: the grid below reads it once the page shows it.
+await caughtUp();
 await show("kick");
 check(await until(() => has('[data-module-tab="kick"][aria-selected=true]')) && !(await has('[data-view-tab="beat"]')), "first-song's own Kick, on the master, is in no kit: no Beat tab");
 await show("bass");

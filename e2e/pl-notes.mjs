@@ -326,6 +326,9 @@ await undoTo(base, "Delete every note");
 
 // ---------------------------------------------------------------- ⌥← and ⌥→ are the page's (X1); Ctrl-click on a Mac (X7)
 
+// ⌘A selects the notes the roll draws, and a note is pressed where it is drawn: the roll shows the
+// undo first (a read of what it draws, not a gesture's wait).
+await caughtUp();
 await page.focus("[data-testid=notes]");
 await key("Meta+a");
 await until(async () => (await shown()).every((x) => x.selected));

@@ -42,7 +42,7 @@ import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
-import { allMine, showsOwn, through } from "../lib/history";
+import { allMine, editing, showsOwn, through } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -358,7 +358,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const write =
       lease && gesture
         ? afterLaneWrites(latest.current, (within) => lease.finish(gesture, step, within)).then((r) => ({ revision: r.revision, clips }))
-        : writeLane(latest.current, module, lane, clips, b.revision, step, (now) => withClip(now, (c) => [{ id: ref.id, start: c.start, length: shape.length, notes: shape.notes }]));
+        : writeLane(latest.current, module, lane, clips, b.revision, step, (now) =>
+            withClip(now, (c) => {
+              const made = merged(b.clips[at], shape, c);
+              return made && [{ id: ref.id, start: c.start, length: made.length, notes: made.notes }];
+            }),
+          );
     write
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
@@ -377,12 +382,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   /**
    * The lane as `now` shows it, with this clip as `make` makes it from what `now` has of it (none:
-   * it goes): a write made anew from the lane as the window shows it. Null when the clip is gone.
+   * it goes): a write made anew from the lane as the window shows it. Null when the clip is gone, or
+   * `make` can't make it.
    */
-  const withClip = (now: GraphState, make: (c: NoteClip) => NoteClip[]): NoteClip[] | null => {
+  const withClip = (now: GraphState, make: (c: NoteClip) => NoteClip[] | null): NoteClip[] | null => {
     const l = findLane(now.timeline, module, lane);
     const i = l?.kind === "notes" ? clipIndex(l.clips, ref) : -1;
-    return l?.kind === "notes" && i >= 0 ? l.clips.flatMap((c, k) => (k === i ? make(c) : [c])) : null;
+    const made = l?.kind === "notes" && i >= 0 ? make(l.clips[i]) : null;
+    return l?.kind === "notes" && made ? l.clips.flatMap((c, k) => (k === i ? made : [c])) : null;
   };
 
   /** What the track is called, for the words of its edits ("Hook notes"). */
@@ -535,22 +542,47 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useEffect(() => look({ notes: pickedNotes.length ? { clip: { track: module, lane, id: ref.id }, notes: pickedNotes } : null }), [said, module, lane, ref.id]);
   useEffect(() => () => look({ notes: null }), []);
 
+  /**
+   * An edit of this clip (a key's, a tool's, the menu's), made from `c`, the clip as the roll draws
+   * it, and `from`, what that was made from. While the window doesn't show its own last edit yet (an
+   * undo a moment before) and the roll has no write of its own on its way, it is made when it goes
+   * instead, from the clip as the window shows it then (the gate, AGENT-2): never from notes an own
+   * edit has changed since.
+   */
+  const fromShown = (make: (c: Shape, from: Basis) => void) => {
+    if (!clip || locked) return;
+    const g = useStore.getState().graph;
+    if (draft || sending.current.busy || (g && showsOwn(g) && g.view.revision === latest.current.view.revision)) return make(clip, basis());
+    const own = editing();
+    through(latest.current.session, own)
+      .then((now) => {
+        const l = findLane(now.timeline, module, lane);
+        const c = findNoteClip(now.timeline, ref);
+        if (c && l?.kind === "notes") make({ length: c.length, notes: c.notes }, { revision: now.view.revision, clips: l.clips });
+      })
+      .catch((error) => toast(error instanceof Error ? error.message : String(error)))
+      .finally(() => own.end());
+  };
+
   /** Delete the notes at `which` (the selected ones). */
   const remove = (which: readonly number[] = picked, name?: string) => {
     if (!clip || !which.length) return;
     const gone = new Set(which);
-    commit({ length: clip.length, notes: clip.notes.filter((_, i) => !gone.has(i)) }, new Set(), basis(), name);
+    fromShown((clip, from) => commit({ length: clip.length, notes: clip.notes.filter((_, i) => !gone.has(i)) }, new Set(), from, name));
   };
 
   /** Copies of the notes at `which` (the selected ones) right after them; the copies are selected. */
   const duplicate = (which: readonly number[] = picked, name?: string) => {
     if (!clip || !which.length) return false;
-    const notes = which.map((i) => clip.notes[i]);
-    const from = Math.min(...notes.map((n) => n.start));
-    const span = Math.max(...notes.map((n) => n.start + n.length)) - from;
-    const by = snap ? Math.max(1, Math.ceil(span / snap - 1e-9)) * snap : span;
-    const copies = notes.map((n) => ({ ...n, start: clean(n.start + by) }));
-    commit({ length: clip.length, notes: [...clip.notes, ...copies] }, new Set(copies.map((_, k) => clip.notes.length + k)), basis(), name);
+    fromShown((clip, from) => {
+      const notes = which.flatMap((i) => (clip.notes[i] ? [clip.notes[i]] : []));
+      if (!notes.length) return;
+      const first = Math.min(...notes.map((n) => n.start));
+      const span = Math.max(...notes.map((n) => n.start + n.length)) - first;
+      const by = snap ? Math.max(1, Math.ceil(span / snap - 1e-9)) * snap : span;
+      const copies = notes.map((n) => ({ ...n, start: clean(n.start + by) }));
+      commit({ length: clip.length, notes: [...clip.notes, ...copies] }, new Set(copies.map((_, k) => clip.notes.length + k)), from, name);
+    });
     return true;
   };
 
@@ -603,28 +635,30 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       const label = t.kind === "swing" ? "swinging" : `${theory?.grooves.find((g) => g.name === t.name)?.label ?? t.name} on`;
       return act((c) => ({ op: "groove", clips: [c], ...(picked.length ? { notes: picked } : {}), groove }), `${label} ${who}`);
     }
-    let notes: Note[] | null = null;
-    let name = who;
-    switch (t.kind) {
-      case "transpose":
-        // On a folded kit, a row up or down is the next row shown (NOTE-8).
-        notes = rows && Math.abs(t.by) === 1 ? rowsMoved(clip.notes, picked, t.by as 1 | -1) : transpose(clip.notes, picked, t.by);
-        name = `transposing ${who}`;
-        break;
-      case "quantize":
-        notes = quantize(clip.notes, picked, gridStep, start, timeline.meter);
-        name = `quantizing ${who} to ${pickName(gridPick, gridTriplet)}`;
-        break;
-      case "legato":
-        notes = legato(clip.notes, picked);
-        name = `making ${who} legato`;
-        break;
-      case "humanize":
-        notes = humanize(clip.notes, picked, (b) => 1 / msOf(1, b));
-        name = `humanizing ${who}`;
-        break;
-    }
-    if (notes) commit({ length: clip.length, notes }, keep, basis(), name);
+    fromShown((clip, from) => {
+      let notes: Note[] | null = null;
+      let name = who;
+      switch (t.kind) {
+        case "transpose":
+          // On a folded kit, a row up or down is the next row shown (NOTE-8).
+          notes = rows && Math.abs(t.by) === 1 ? rowsMoved(clip.notes, picked, t.by as 1 | -1) : transpose(clip.notes, picked, t.by);
+          name = `transposing ${who}`;
+          break;
+        case "quantize":
+          notes = quantize(clip.notes, picked, gridStep, start, timeline.meter);
+          name = `quantizing ${who} to ${pickName(gridPick, gridTriplet)}`;
+          break;
+        case "legato":
+          notes = legato(clip.notes, picked);
+          name = `making ${who} legato`;
+          break;
+        case "humanize":
+          notes = humanize(clip.notes, picked, (b) => 1 / msOf(1, b));
+          name = `humanizing ${who}`;
+          break;
+      }
+      if (notes) commit({ length: clip.length, notes }, keep, from, name);
+    });
   };
 
   /**
@@ -633,15 +667,19 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
    */
   const nudge = (dp: number, dt: number) => {
     if (!clip || !picked.length) return;
-    const notes = picked.map((i) => clip.notes[i]);
-    // A step up or down: to the next note of the key with Lock to key on (NOTE-3), the next row
-    // shown on a folded kit (NOTE-8).
-    const oneStep = Math.abs(dp) === 1 ? (dp as 1 | -1) : 0;
-    dp = clamp(dp, -Math.min(...notes.map((n) => n.pitch)), TOP - Math.max(...notes.map((n) => n.pitch)));
-    dt = Math.max(dt, -Math.min(...notes.map((n) => n.start)));
-    if (!dp && !dt && !(oneStep && rows)) return;
-    const pitch = (p: number) => (oneStep && rows ? rowStep(p, oneStep) : oneStep && locking ? stepIn(keyed!, p, oneStep) : p + dp);
-    commit({ length: clip.length, notes: clip.notes.map((n, i) => (selected.has(i) ? { ...n, pitch: pitch(n.pitch), start: clean(n.start + dt) } : n)) }, selected);
+    const sel = selected;
+    fromShown((clip, from) => {
+      const notes = picked.flatMap((i) => (clip.notes[i] ? [clip.notes[i]] : []));
+      if (!notes.length) return;
+      // A step up or down: to the next note of the key with Lock to key on (NOTE-3), the next row
+      // shown on a folded kit (NOTE-8).
+      const oneStep = Math.abs(dp) === 1 ? (dp as 1 | -1) : 0;
+      const p = clamp(dp, -Math.min(...notes.map((n) => n.pitch)), TOP - Math.max(...notes.map((n) => n.pitch)));
+      const t = Math.max(dt, -Math.min(...notes.map((n) => n.start)));
+      if (!p && !t && !(oneStep && rows)) return;
+      const pitch = (q: number) => (oneStep && rows ? rowStep(q, oneStep) : oneStep && locking ? stepIn(keyed!, q, oneStep) : q + p);
+      commit({ length: clip.length, notes: clip.notes.map((n, i) => (sel.has(i) ? { ...n, pitch: pitch(n.pitch), start: clean(n.start + t) } : n)) }, sel, from);
+    });
   };
 
   /** Pitch `p` a row up (`dir` 1) or down (-1) on the rows shown; `p` itself at their end. */
@@ -662,7 +700,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   const setLength = (beats: number) => {
     if (!clip || !(beats > 0) || beats === clip.length) return;
-    commit({ length: beats, notes: clip.notes }, selected);
+    const sel = selected;
+    fromShown((clip, from) => commit({ length: beats, notes: clip.notes }, sel, from));
   };
 
   // In the desktop app ⌘D comes from the menu bar, through App's "duplicate" command; so does
@@ -1408,6 +1447,41 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
 // In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
 const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
+
+/**
+ * `shape`, made from clip `was`, made again on clip `now` (the clip as the window's own edits left it
+ * since: an undo a moment before): the notes `shape` took out of `was` come out of `now`, and those
+ * it put in go in, its length with them when it changed it. Null when a note it took out isn't in
+ * `now` (the window's own edit changed that very note): it can't be made again.
+ */
+function merged(was: { length: number; notes: Note[] }, shape: Shape, now: { length: number; notes: Note[] }): Shape | null {
+  if (sameNotes(was.notes, now.notes) && was.length === now.length) return shape;
+  const key = (n: Note) => [n.pitch, n.start, n.length, n.velocity].join(",");
+  const count = (notes: readonly Note[]) => notes.reduce((m, n) => m.set(key(n), (m.get(key(n)) ?? 0) + 1), new Map<string, number>());
+  const before = count(was.notes), after = count(shape.notes), have = count(now.notes);
+  // What the edit took out of `was`, and what it put in: as many of each note as it changed.
+  const out = new Map<string, number>(), put = new Map<string, number>();
+  for (const k of new Set([...before.keys(), ...after.keys()])) {
+    const d = (after.get(k) ?? 0) - (before.get(k) ?? 0);
+    if (d < 0) out.set(k, -d);
+    else if (d > 0) put.set(k, d);
+  }
+  for (const [k, n] of out) if ((have.get(k) ?? 0) < n) return null;
+  const notes: Note[] = [];
+  for (const n of now.notes) {
+    const left = out.get(key(n)) ?? 0;
+    if (left > 0) out.set(key(n), left - 1);
+    else notes.push(n);
+  }
+  for (const n of shape.notes) {
+    const left = put.get(key(n)) ?? 0;
+    if (left > 0) {
+      put.set(key(n), left - 1);
+      notes.push(n);
+    }
+  }
+  return { length: shape.length !== was.length ? shape.length : now.length, notes: notes.sort((a, b) => a.start - b.start || a.pitch - b.pitch) };
+}
 
 /** Whether two clips' notes are the same notes, in the same places. */
 function sameNotes(a: readonly Note[], b: readonly Note[]) {

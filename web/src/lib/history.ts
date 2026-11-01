@@ -114,6 +114,23 @@ export function editing(): Editing {
 /** The edits this window has on its way now. */
 export const onTheirWay = (): Editing[] => [...onItsWay];
 
+/**
+ * This window's undos and redos on their way. Not edits (Undo's own order is its own: one ⌘Z after
+ * another, each naming the top the one before left), but changes all the same: a gesture waits for
+ * them too.
+ */
+const flying = new Set<object>();
+
+/** An undo or a redo of this window is on its way from now: call what this returns once it is answered. */
+export function flight(): () => void {
+  const f = {};
+  flying.add(f);
+  return () => {
+    flying.delete(f);
+    wake();
+  };
+}
+
 /** Whether undo step `step` of `session` was made by an edit of this window. */
 export function madeHere(session: number, step: number | undefined): boolean {
   return step !== undefined && mine.session === session && mine.steps.includes(step);
@@ -203,19 +220,19 @@ function wake() {
 }
 useStore.subscribe((s, was) => s.graph !== was.graph && wake());
 
-/** This window's edits on their way now that started before `own` (all of them, without it). */
-function ahead(own?: Editing): Editing[] {
+/** This window's changes on their way now that started before `own` (all of them, without it): its edits, undos and redos. */
+function ahead(own?: Editing): object[] {
   const all = [...onItsWay];
   const at = own ? all.indexOf(own) : -1;
-  return at >= 0 ? all.slice(0, at) : all;
+  return [...(at >= 0 ? all.slice(0, at) : all), ...flying];
 }
 
 /**
- * Whether `graph` shows this window's own changes: none of `before` (by default, its edits on their
- * way now) is on its way still, and `graph` shows the newest revision its changes made.
+ * Whether `graph` shows this window's own changes: none of `before` (by default, its changes on
+ * their way now) is on its way still, and `graph` shows the newest revision its changes made.
  */
-export function showsOwn(graph: GraphState, before: readonly Editing[] = [...onItsWay]): boolean {
-  return !before.some((e) => onItsWay.has(e)) && (mine.session !== graph.session || graph.view.revision >= mine.revision);
+export function showsOwn(graph: GraphState, before: readonly object[] = ahead()): boolean {
+  return !before.some((e) => onItsWay.has(e as Editing) || flying.has(e)) && (mine.session !== graph.session || graph.view.revision >= mine.revision);
 }
 
 /**
