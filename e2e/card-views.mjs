@@ -309,6 +309,8 @@ const mark = async () => {
   const b = await box(`${clip} [data-step="sine"]`);
   return { x: b.x + 1, y: b.y + b.height / 2 };
 };
+// A mark is named by the clip as the page draws it, and the pick changed it: the page shows the pick first.
+await caughtUp();
 let m = await mark();
 await page.mouse.move(m.x, m.y);
 await page.mouse.down();
@@ -318,7 +320,6 @@ check(await until(() => file().clips[0]?.points[1]?.[0] > 2.5), `dragging sine's
 check(await until(async () => !!(await page.$(`${clip} [data-step="sine"][data-picked]`))), "and picks it");
 await key("Escape");
 check(await until(async () => !(await page.$(`${clip} [data-step="sine"][data-picked]`))), "Esc unpicks it");
-// A mark is named by the clip as the page draws it: the page shows the first drag's revision first.
 await caughtUp();
 m = await mark();
 await page.mouse.move(m.x, m.y);

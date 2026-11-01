@@ -7,47 +7,31 @@
 // revision, and the page reads it a moment later, so a file on disk doesn't mean the page has it.
 
 /**
- * Follow `page`'s requests to the song, and give `caughtUp(at)`: until the page's requests are
- * answered (each is, once its revision is published), and the page shows the revision the server
- * plays: at least the newest those answers named, and at least `at`. `state()` is the server's state
+ * Follow `page`'s requests to the song, and give `caughtUp(at)`: until none of them is on its way
+ * (each is answered once its revision is published, so the server's state has what they made) and
+ * the page shows the revision the server plays, at least `at`. `state()` is the server's state
  * (`GET /api/graph`); a change made elsewhere (a file written, `m2`) is the server's once that state
  * shows it, or pass its revision as `at`. A wait, not a check: only if they never meet does it
  * `check(false, …)`, saying both. Follow from the start: a request already on its way isn't counted.
  */
 export function following(page, state, check, ms = 8000) {
-  const toSong = (r) => r.method() !== "GET" && /\/api\/graph\//.test(r.url());
   const onTheirWay = new Set();
-  const made = new Map();
-  page.on("request", (r) => toSong(r) && onTheirWay.add(r));
+  page.on("request", (r) => r.method() !== "GET" && /\/api\/graph\//.test(r.url()) && onTheirWay.add(r));
+  page.on("requestfinished", (r) => onTheirWay.delete(r));
   page.on("requestfailed", (r) => onTheirWay.delete(r));
-  page.on("requestfinished", async (r) => {
-    if (!onTheirWay.has(r)) return;
-    try {
-      const { revision } = (await r.response()?.json().catch(() => null)) ?? {};
-      let session = Number(new URL(r.url()).searchParams.get("session")) || undefined;
-      try {
-        session ??= JSON.parse(r.postData() ?? "").session;
-      } catch {}
-      if (typeof revision === "number" && session !== undefined) made.set(session, Math.max(made.get(session) ?? 0, revision));
-    } finally {
-      onTheirWay.delete(r);
-    }
-  });
   return async (at = 0) => {
-    let server = -1, shown = -1, want = at;
+    let server = -1, shown = -1;
     const t = Date.now();
     while (Date.now() - t < ms) {
       if (onTheirWay.size === 0) {
-        const s = await state();
-        server = s?.view?.revision ?? -1;
-        want = Math.max(at, made.get(s?.session) ?? 0);
+        server = (await state())?.view?.revision ?? -1;
         shown = await page.$eval("[data-revision]", (e) => Number(e.dataset.revision)).catch(() => -1);
-        if (shown === server && shown >= want) return true;
+        if (shown === server && shown >= at) return true;
       }
       await new Promise((r) => setTimeout(r, 80));
     }
     const way = onTheirWay.size ? `, ${onTheirWay.size} of its requests on their way` : "";
-    check(false, `the page shows the revision the server plays${want ? `, ${want} or later` : ""}: it shows ${shown}, the server ${server}${way}`);
+    check(false, `the page shows the revision the server plays${at ? `, ${at} or later` : ""}: it shows ${shown}, the server ${server}${way}`);
     return false;
   };
 }
