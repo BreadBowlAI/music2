@@ -87,7 +87,7 @@ fn a_drum_routed_to_the_master_is_in_no_kit() {
 }
 
 // KIT-1: a track on the bus that plays no Drum is no row (the Keys, a pluck), nor is one that plays
-// two Drums, nor a Drum whose notes come from anything but a lane of its own.
+// two Drums.
 #[test]
 fn a_non_drum_track_on_the_bus_is_no_row() {
     let f = fixture(BUSES);
@@ -98,6 +98,27 @@ fn a_non_drum_track_on_the_bus_is_no_row() {
     assert!(s.accepted().compiled.flat.routes.contains(&("two".into(), "drums".into())), "the two Drums go to the bus");
     bus::route(&mut s, "keys", Some("drums")).unwrap();
     assert_eq!(rows(&s), [row("kick", "hits", Some("kick")), row("hats", "hits", Some("hats"))]);
+}
+
+// KIT-1: a Drum whose notes come from another track's lane (the Hats playing the Kick's hits, which
+// the Kick exports) has no lane of its own to write: its track is no row.
+#[test]
+fn a_drum_fed_from_another_tracks_lane_is_no_row() {
+    let f = fixture(BUSES);
+    f.write(
+        "tracks/kick.ts",
+        "import { ms, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { follow } from \"std/dsp\";\n\n\
+         export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const hits = lane.notes(\"hits\");\n  const out = drums.drum(hits);\n  \
+         return { out, env: follow(out, { release: ms(150) }), hits };\n});\n",
+    );
+    f.write(
+        "tracks/hats.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport kick from \"./kick\";\n\n\
+         export default track(\"hats\", { name: \"Hats\" }, () => drums.drum(kick.hits, { drum: \"hats\" }));\n",
+    );
+    let s = f.open();
+    assert!(s.accepted().compiled.flat.routes.contains(&("hats".into(), "drums".into())), "the Hats still go to the bus");
+    assert_eq!(rows(&s), [row("kick", "hits", Some("kick"))]);
 }
 
 // KIT-1: delete the bus (its outputs with it) and there is no kit; the Drum tracks stay, plain
@@ -265,7 +286,8 @@ fn a_step_holds_every_note_that_starts_in_it() {
     assert_eq!(v, [0.5, 0.5, 0.8, 0.5, 0.8]);
     go(&mut s, hits("kick", &[1.0], 0.25, Hit::Off));
     assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [1.3, 3.0, 4.0], "both that start in it");
-    go(&mut s, hits("kick", &[3.0], 2.0, Hit::Off));
+    // Steps of 3 beats: lines at 0 and 3 in each bar of 4, so the step at 3 ends at the bar line.
+    go(&mut s, hits("kick", &[3.0], 3.0, Hit::Off));
     assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [1.3, 4.0], "the step ends at the bar line");
 }
 
@@ -284,6 +306,38 @@ fn steps_are_refused_in_words() {
         refused(&mut s, hits("kick", &[0.0], 0.25, Hit::Velocity(1.5))),
         "edit rejected: A velocity is above 0 and at most 1, not 1.5."
     );
+    // A start that isn't on a line of the grid, counted from its bar's start (KIT-12), with nothing
+    // written; one a millionth from a line is on it.
+    let kick = f.read("data/kick/hits.json");
+    assert_eq!(
+        refused(&mut s, hits("kick", &[2.0, 0.1], 0.25, Hit::On)),
+        "edit rejected: 0.1 isn't where a step starts: on a grid of 0.25 beats, steps start at 0, 0.25, 0.5 and so on from each bar line."
+    );
+    assert_eq!(refused(&mut s, hits("kick", &[4.4], 0.5, Hit::Off)).contains("4.4 isn't where a step starts"), true);
+    assert_eq!(f.read("data/kick/hits.json"), kick, "nothing written");
+    go(&mut s, hits("kick", &[2.500001], 0.25, Hit::On));
+    let at: Vec<f64> = played(&s, "kick").iter().map(|n| n.0).filter(|t| (2.0..3.0).contains(t)).collect();
+    assert_eq!(at, [2.0, 2.5], "a millionth from a line is on it: the hit goes on the line");
+}
+
+// KIT-11: a hit a millionth before a line starts on it, as the lane format writes beats: it is in
+// the step at that line, so off there takes it and on there adds no second hit beside it. (The
+// web's grid pins the same place, `e2e/beat-grid.mjs`.)
+#[test]
+fn a_hit_a_millionth_before_a_line_is_in_that_lines_step() {
+    let f = fixture(BUSES);
+    f.write(
+        "data/kick/hits.json",
+        "{\"clips\": [\n  {\"id\": \"kkkkkkkk\", \"start\": 0, \"length\": 4, \"notes\": [\n    \
+         {\"pitch\": 36, \"start\": 0.999999, \"length\": 0.25}\n  ]}\n]}\n",
+    );
+    let mut s = f.open();
+    let done = go(&mut s, hits("kick", &[1.0], 0.25, Hit::On));
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no change", "no change"), "the step has its hit");
+    go(&mut s, hits("kick", &[0.75], 0.25, Hit::Off));
+    assert_eq!(played(&s, "kick").len(), 1, "the step before doesn't hold it");
+    go(&mut s, hits("kick", &[1.0], 0.25, Hit::Off));
+    assert!(played(&s, "kick").is_empty(), "off at 1 takes it");
 }
 
 // ---------------------------------------------------------------- + Drum (KIT-15)

@@ -648,3 +648,25 @@ fn two_new_tracks_of_one_name_stay_apart() {
     let song = f.read("song.ts");
     assert!(song.contains("vox: vox.out,\n      \"vox-2\": vox2.out"), "{song}");
 }
+
+// KIT-15: a new track's channel goes to a bus only when the mixer has that bus channel, refused in
+// words before anything is written; and the planner's assertion says where each new channel goes.
+#[test]
+fn a_new_track_goes_only_to_a_bus_channel_there_is() {
+    let f = fixture("core/session/tests/fixtures/buses");
+    let mut s = f.open();
+    let before = tree(&f);
+    let drum = |to: &str| NewTrack { play: Play::Instrument("@m2/drums:drum".into()), to: Some(to.into()), ..NewTrack::default() };
+    for to in ["verb2", "kick"] {
+        let e = add_tracks(&mut s, &[drum(to)], None, None).map(|_| ()).unwrap_err().to_string();
+        assert_eq!(e, format!("edit rejected: The mixer has no bus channel {to}, so no track can go to it."));
+    }
+    assert_eq!(tree(&f), before, "nothing written");
+    // The assertion, on a candidate where the Kick goes to the Drums bus.
+    let tx = crate::plan::planned(&s, (String::new(), String::new()), vec![], m2_song::tx::Expect::Identical);
+    let checked = s.check(&tx).unwrap();
+    assert!(goes_to(&checked, &[("kick".into(), Some("drums".into())), ("keys".into(), None)]).is_ok());
+    let e = goes_to(&checked, &[("kick".into(), None)]).unwrap_err().to_string();
+    assert_eq!(e, "edit rejected: adding the track would send it somewhere else than asked");
+    assert!(goes_to(&checked, &[("keys".into(), Some("drums".into()))]).is_err());
+}
