@@ -449,6 +449,7 @@ await page.click('[data-module-tab="hats"]');
 await key("Meta+v");
 check(await until(async () => starts(await shown("hats", "hits")) === "0,40"), `with Hats selected, ⌘V pastes the Kick clip onto the Hats lane: ${starts(await shown("hats", "hits"))}`);
 // In the app the menu bar's Copy runs the web view's command: the page takes its events (M7).
+await caughtUp();
 await clickClip("keys.chords", JSON.parse(fixture("data/keys/chords.json")).clips[0].id);
 const events = await page.evaluate(() => {
   const fire = (type) => {
