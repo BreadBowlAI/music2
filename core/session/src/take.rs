@@ -571,7 +571,9 @@ impl Session {
             Some(settled) => self.take_in_settled(draft, settled),
             None => TakenIn::default(),
         };
-        let recorded = lands && self.draft_errors.is_empty() && as_written(&self.accepted.snapshot);
+        // Taken into the revision that plays as written: one step, whatever the draft's errors (a
+        // lane file saved while the code is broken lands by WRITE-14's data path).
+        let recorded = lands && as_written(&self.accepted.snapshot);
         if recorded {
             self.record_tx(step);
         }
