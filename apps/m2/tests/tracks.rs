@@ -140,7 +140,7 @@ fn a_drum_machine_track_is_made_a_kit_from_the_terminal() {
     let said = ok(&["make-kit", dir, "beat"]);
     assert!(said.contains("made Beat a kit: its bus Beat (ID beat), and Kick, Snare and Hats going to it (revision"), "{said}");
     assert!(said.contains("Same drums, pitches, levels and lengths; each hit's noise comes out a little different."), "{said}");
-    assert!(said.contains("1 note the drum machine is silent at went"), "{said}");
+    assert!(said.contains("1 note went: the drum machine played nothing for it. It was on G3 (55)."), "{said}");
     assert!(
         std::fs::read_to_string(song.join("tracks/beat.ts"))
             .unwrap()

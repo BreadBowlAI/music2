@@ -205,7 +205,7 @@ pub const COMMANDS: &[Command] = &[
                 name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, \
                 its knobs and levels carried; one edit that undo takes back, verified",
         more: "It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's \
-               noise comes out a little different. Notes the drum machine is silent at go, and it says so. \
+               noise comes out a little different. Notes the drum machine played nothing for go, and it names them. \
                `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.",
     },
     Command {

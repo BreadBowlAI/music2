@@ -128,7 +128,7 @@ Add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and
 m2 make-kit <project> <track>
 ```
 
-Make a track that plays the drum machine a drum kit: the track becomes the kit's bus, keeping its name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, its knobs and levels carried; one edit that undo takes back, verified. It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's noise comes out a little different. Notes the drum machine is silent at go, and it says so. `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.
+Make a track that plays the drum machine a drum kit: the track becomes the kit's bus, keeping its name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, its knobs and levels carried; one edit that undo takes back, verified. It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's noise comes out a little different. Notes the drum machine played nothing for go, and it names them. `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.
 
 ## m2 import
 
