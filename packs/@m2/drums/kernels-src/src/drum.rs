@@ -1,6 +1,6 @@
 //! `drum`, the voice behind @m2/drums: an 808/909-style machine in one kernel that picks
 //! its drum when the note starts, either from the note's General MIDI pitch or from a
-//! fixed `model` (`m2_dsp::kit`). `one`, One drum's, is the same voice with its drum a menu
+//! fixed `model` (`m2_dsp::kit`, and `MORE` past its nine). `one`, the Drum's, is the same voice with its drum a menu
 //! (a choice, read when a hit starts) where the kit has `model`, cut by any hit on its lane when
 //! its drum chokes. Port order must match the pack's `m2pkg.toml`.
 //!
@@ -50,6 +50,22 @@ const TUNE: usize = 28;
 const DECAY: usize = 29;
 const PUSH: usize = 30;
 const INPUTS: usize = 31;
+
+/// The Drum's sounds past the first nine (KIT-20), from place 9: each the drum the drum machine plays
+/// at a General MIDI note, at any note: soft kick (35), snappy snare (40), ride (51), tambourine
+/// (54), high crash (57), high ride (59), high shaker (70) and claves (75).
+const MORE: [f32; 8] = [35.0, 40.0, 51.0, 54.0, 57.0, 59.0, 70.0, 75.0];
+
+/// What a note at `pitch` plays for `model`: the drum machine's map (`kind_of`: -1 the General MIDI
+/// kit, 0 to 8 the Drum's first nine), or for a model from 9 the drum the drum machine plays at that
+/// sound's note.
+fn drum_at(model: f32, pitch: f32) -> (Kind, f32, bool) {
+    let more = model.round() - 9.0;
+    match MORE.get(more as usize) {
+        Some(note) if more >= 0.0 => kind_of(-1.0, *note),
+        _ => kind_of(model, pitch),
+    }
+}
 
 /// The input that sets drum `kind`'s level in the kit, by group: kick; snare, clap and rim; hats;
 /// toms; cymbals and percussion.
@@ -227,7 +243,7 @@ pub struct Drum {
 impl Drum {
     fn start(&mut self, at: &dyn Fn(usize) -> f32) {
         let sr = self.sr;
-        let (kind, semis, alt) = kind_of(at(MODEL), at(PITCH));
+        let (kind, semis, alt) = drum_at(at(MODEL), at(PITCH));
         self.kind = kind;
         // One drum's knobs: its pitch moved by `tune` semitones, its decays `decay` times as long
         // (the rim's ring and the cowbell's too), and `push` added to a kick's punch or a snare's

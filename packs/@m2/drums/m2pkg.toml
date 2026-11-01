@@ -25,7 +25,7 @@ std = "0.7"
 
 [[kernel]]
 name = "drum"
-description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker. `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the drum machine. The Drum's own knobs (`one`) move whatever drum it plays; the drum machine leaves them at 0, 1 and 0, where they change no bit"
+description = "Drum voice, 808 and 909 style. `model` -1 plays the General MIDI kit by pitch (kick, snare, clap, hats, toms, rim, cowbell, cymbals, shakers); 0 kick, 1 snare, 2 clap, 3 hats (G#2 pedal, A#2 open), 4 tom (A2 at its tune), 5 rim, 6 cowbell, 7 cymbal, 8 shaker, then the drum machine's others at any note: 9 soft kick (its 35), 10 snappy snare (40), 11 ride (51), 12 tambourine (54), 13 high crash (57), 14 high ride (59), 15 high shaker (70), 16 claves (75). `hits` (from drumhit) fades it out when its choke group is hit again; `count` (from hitcount, outside the voices) seeds each hit's noise and metal; the levels move groups of the drum machine. The Drum's own knobs (`one`) move whatever drum it plays; the drum machine leaves them at 0, 1 and 0, where they change no bit"
 inputs = [
   "pitch: control<semitones>",
   "velocity: control<unit01> = 0.8",
@@ -63,13 +63,13 @@ outputs = ["out: audio<1>"]
 
 [[kernel]]
 name = "one"
-description = "The Drum's voice: the drum voice with its drum a menu, `drum` (kick, snare, clap, hats (G#2 pedal, A#2 open), tom (A2 at its tune), rim, cowbell, cymbal, shaker), read when a hit starts; any hit on its lane (from drumhit) fades out a drum that chokes (kick, snare, clap, hats, cymbal), as its single did. Its knobs move whatever drum it plays: `tune` its pitch in semitones, `decay` times its decays (the rim's ring and the cowbell's too), `push` added to a kick's punch or a snare's snap, or on any other drum how much harder (or softer, below 0) its first 15 ms are; at 0, 1 and 0 they change no bit"
+description = "The Drum's voice: the drum voice with its drum a menu, `drum` (kick, snare, clap, hats (G#2 pedal, A#2 open), tom (A2 at its tune), rim, cowbell, cymbal, shaker, and the drum machine's others: soft kick, snappy snare, ride, tambourine, high crash, high ride, high shaker, claves), read when a hit starts; any hit on its lane (from drumhit) fades out a drum that chokes (kick, snare, clap, hats, cymbal), as its single did. Its knobs move whatever drum it plays: `tune` its pitch in semitones, `decay` times its decays (the rim's ring and the cowbell's too), `push` added to a kick's punch or a snare's snap, or on any other drum how much harder (or softer, below 0) its first 15 ms are; at 0, 1 and 0 they change no bit"
 inputs = [
   "pitch: control<semitones>",
   "velocity: control<unit01> = 0.8",
   "hits: audio<1>",
   "count: audio<1>",
-  "drum: control<choice<kick|snare|clap|hats|tom|rim|cowbell|cymbal|shaker>> = 0",
+  "drum: control<choice<kick|snare|clap|hats|tom|rim|cowbell|cymbal|shaker|soft kick|snappy snare|ride|tambourine|high crash|high ride|high shaker|claves>> = 0",
   "kick_tune: control<hz> = 48 in 30..120",
   "kick_decay: control<seconds> = 0.45",
   "punch: control<unit01> = 0.5",

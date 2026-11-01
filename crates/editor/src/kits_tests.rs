@@ -382,7 +382,7 @@ fn plus_drum_is_refused_in_words() {
     let said = |r: Result<crate::tracks::Made, crate::EditError>| r.map(|m| m.module).unwrap_err().to_string();
     assert_eq!(
         said(kits::add_drum(&mut s, "drums", "gong")),
-        "edit rejected: A Drum plays \"kick\", \"snare\", \"clap\", \"hats\", \"tom\", \"rim\", \"cowbell\", \"cymbal\" or \"shaker\", not \"gong\"."
+        "edit rejected: A Drum plays \"kick\", \"snare\", \"clap\", \"hats\", \"tom\", \"rim\", \"cowbell\", \"cymbal\", \"shaker\", \"soft kick\", \"snappy snare\", \"ride\", \"tambourine\", \"high crash\", \"high ride\", \"high shaker\" or \"claves\", not \"gong\"."
     );
     assert_eq!(said(kits::add_drum(&mut s, "verb", "kick")), "edit rejected: Reverb is no drum kit's bus: no Drum track goes to it.");
 }

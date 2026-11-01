@@ -589,11 +589,33 @@ fn music2s_own_sounds_show_their_groups_and_views() {
     }
     // The Drum's menu (review Y11): its drums, a control, so a pick plays with no rebuild and can be
     // automated, labelled "sound" so its undo step reads "Drum sound" (KIT-2); its voices the one setting.
+    // Since KIT-20 every drum the drum machine plays, the nine first, then its others.
     let drum = view.modules.iter().find(|m| m.key == "t13").unwrap().nodes.iter().find(|n| n.title.as_deref() == Some("Drum")).unwrap();
     let menu = drum.knobs.iter().find(|k| k.slot.as_deref() == Some("drum")).expect("the Drum's menu");
     assert_eq!((menu.kind, menu.label.as_str()), (crate::kind::Kind::Choice, "sound"));
     let names: Vec<String> = menu.options.iter().map(|o| o.value.as_str().unwrap().to_string()).collect();
-    assert_eq!(names, ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"]);
+    assert_eq!(
+        names,
+        [
+            "kick",
+            "snare",
+            "clap",
+            "hats",
+            "tom",
+            "rim",
+            "cowbell",
+            "cymbal",
+            "shaker",
+            "soft kick",
+            "snappy snare",
+            "ride",
+            "tambourine",
+            "high crash",
+            "high ride",
+            "high shaker",
+            "claves"
+        ]
+    );
     assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);
 }
 

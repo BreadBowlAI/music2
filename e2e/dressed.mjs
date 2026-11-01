@@ -177,7 +177,11 @@ check((await page.$eval(menu, (e) => e.dataset.value)) === '"kick"', "at kick, i
 await page.click(`${menu} [data-testid=setting-menu]`);
 await page.waitForSelector("[data-testid=setting-options]");
 const drums = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
-check(JSON.stringify(drums) === '["kick","snare","clap","hats","tom","rim","cowbell","cymbal","shaker"]', `it lists the nine drums: ${JSON.stringify(drums)}`);
+check(
+  JSON.stringify(drums) ===
+    '["kick","snare","clap","hats","tom","rim","cowbell","cymbal","shaker","soft kick","snappy snare","ride","tambourine","high crash","high ride","high shaker","claves"]',
+  `it lists every drum of the drum machine, the nine first (KIT-20): ${JSON.stringify(drums)}`,
+);
 await linted("[data-testid=setting-options]", "the drum menu");
 n = posts.length;
 await page.click('[data-testid=setting-options] [data-option="snare"]');

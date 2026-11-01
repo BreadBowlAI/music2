@@ -38,19 +38,28 @@ pub struct GmDrum {
 }
 
 /// The General MIDI table (KIT-6): which of the Drum's sounds answers to each drum note, in its
-/// menu's order, and what a kit's track of each is called. The drum machine plays each note at a
-/// drum of its sound's family (at 54 a tambourine, the shaker's; at 75 claves, the rim's: the
-/// kernel's declared families), but 52, 53 and 55, where it is silent.
-pub const GM: [GmDrum; 9] = [
-    GmDrum { sound: "kick", notes: &[35, 36], own: 36, name: "Kick" },
-    GmDrum { sound: "snare", notes: &[38, 40], own: 38, name: "Snare" },
+/// menu's order, and what a kit's track of each is called. The drum machine plays at each note the
+/// very drum of its sound (KIT-20), but the toms, which it spreads 1.5 semitones a step where the
+/// Drum's tom is chromatic, and 52, 53 and 55, where it is silent (a MIDI file's Chinese cymbal and
+/// splash are the Cymbal's, its ride bell the Ride's).
+pub const GM: [GmDrum; 17] = [
+    GmDrum { sound: "kick", notes: &[36], own: 36, name: "Kick" },
+    GmDrum { sound: "snare", notes: &[38], own: 38, name: "Snare" },
     GmDrum { sound: "clap", notes: &[39], own: 39, name: "Clap" },
     GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42, name: "Hats" },
     GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45, name: "Toms" },
-    GmDrum { sound: "rim", notes: &[37, 75], own: 37, name: "Rim" },
+    GmDrum { sound: "rim", notes: &[37], own: 37, name: "Rim" },
     GmDrum { sound: "cowbell", notes: &[56], own: 56, name: "Cowbell" },
-    GmDrum { sound: "cymbal", notes: &[49, 51, 52, 53, 55, 57, 59], own: 49, name: "Cymbal" },
-    GmDrum { sound: "shaker", notes: &[54, 69, 70], own: 69, name: "Shaker" },
+    GmDrum { sound: "cymbal", notes: &[49, 52, 55], own: 49, name: "Cymbal" },
+    GmDrum { sound: "shaker", notes: &[69], own: 69, name: "Shaker" },
+    GmDrum { sound: "soft kick", notes: &[35], own: 35, name: "Soft kick" },
+    GmDrum { sound: "snappy snare", notes: &[40], own: 40, name: "Snappy snare" },
+    GmDrum { sound: "ride", notes: &[51, 53], own: 51, name: "Ride" },
+    GmDrum { sound: "tambourine", notes: &[54], own: 54, name: "Tambourine" },
+    GmDrum { sound: "high crash", notes: &[57], own: 57, name: "High crash" },
+    GmDrum { sound: "high ride", notes: &[59], own: 59, name: "High ride" },
+    GmDrum { sound: "high shaker", notes: &[70], own: 70, name: "High shaker" },
+    GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
 ];
 
 /// The Drum's sound that answers to General MIDI drum note `note`, if any (KIT-6).

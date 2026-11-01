@@ -123,7 +123,7 @@ fn a_drum_machine_lane_is_channel_10() {
 
 // KIT-9: a kit's Drum tracks go out on channel 10, each note at a General MIDI note of its sound:
 // one of them as it is (the hats' closed, pedal and open; a tom's), another sound's note to the
-// sound's own (the Kick's D2, the snare's, as 36), or for a tom to the nearest tom note; a note no
+// sound's own (the Kick's D2, the snare's, and its B1, the soft kick's, as 36), or for a tom to the nearest tom note; a note no
 // sound answers to as it is (C4). A Drum whose sound a lane plays keeps its notes' pitches; a clip
 // of it written alone goes out as the song does.
 #[test]
@@ -144,13 +144,13 @@ fn a_kits_tracks_go_out_as_general_midi_drums() {
     let keys = |name: &str| -> Vec<(u8, u8)> {
         parts.iter().find(|p| p.name.as_deref() == Some(name)).unwrap().notes.iter().map(|n| (n.channel, n.key)).collect()
     };
-    assert_eq!(keys("Kick"), [(9, 36), (9, 35), (9, 60)]);
+    assert_eq!(keys("Kick"), [(9, 36), (9, 36), (9, 60)]);
     assert_eq!(keys("Hats"), [(9, 42), (9, 44), (9, 46), (9, 42)]);
     assert_eq!(keys("Toms"), [(9, 45), (9, 43), (9, 60)]);
     let (clip, _) = export_clip(&s, "kick", "hits", "clip0000").unwrap();
     assert_eq!(
         written(&clip).1[1].notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(),
-        [(9, 36), (9, 35), (9, 60)],
+        [(9, 36), (9, 36), (9, 60)],
         "a clip alone too"
     );
     // The Kick's sound from a lane of names: the code works it out, so its notes keep their pitches.
@@ -765,16 +765,16 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
     let drums = file(1, vec![(Some("Kick"), kicks), (Some("Kit"), rest), (Some("Bass"), played(0, 40, 0, 96))]);
     let t = made(import_tracks(&mut s, &drums, "beat.mid", &at(None, 0.0), None).unwrap());
     let got: Vec<&str> = t.tracks.iter().map(|t| t.1.as_str()).collect();
-    assert_eq!(got, ["Drums", "Kick", "Snare", "Hats", "Toms", "Cymbal", "Percussion", "Bass"]);
+    assert_eq!(got, ["Drums", "Kick", "Snare", "Hats", "Toms", "Cymbal", "Ride", "Percussion", "Bass"]);
     let rev = s.accepted();
     let bus = &t.tracks[0].0;
     assert!(rev.compiled.ir.modules.iter().any(|m| m.key == *bus && m.bus), "the Drums bus is a bus");
     let routes: BTreeMap<String, String> = rev.compiled.flat.routes.iter().cloned().collect();
-    for (key, _) in &t.tracks[1..7] {
+    for (key, _) in &t.tracks[1..8] {
         assert_eq!(routes.get(key), Some(bus), "{key} goes to the bus");
         assert_eq!(player_of(rev, key, "hits").as_deref(), Some(DRUM), "{key} plays the Drum");
     }
-    assert!(!routes.contains_key(&t.tracks[7].0), "the bass goes to the master");
+    assert!(!routes.contains_key(&t.tracks[8].0), "the bass goes to the master");
     let notes = |k: usize| -> Vec<(f64, f64, f64)> {
         rev.compiled.data.notes(&t.tracks[k].0, "hits").iter().map(|n| (n.pitch, n.start, n.velocity)).collect()
     };
@@ -782,17 +782,18 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
     assert_eq!(notes(1), [(36.0, 0.0, v), (36.0, 2.0, v)], "both tracks' kicks on one Kick");
     assert_eq!(notes(3), [(42.0, 0.0, v), (46.0, 1.0, v), (44.0, 1.5, v)], "the hats keep closed, open and pedal");
     assert_eq!(notes(4), [(41.0, 2.0, v), (45.0, 2.5, v)], "the toms their pitches");
-    assert_eq!(notes(5), [(49.0, 3.0, v), (53.0, 3.5, v)], "the ride bell is the cymbal's");
-    assert_eq!(notes(6), [(62.0, 4.0, v), (81.0, 4.5, v)], "none lost");
+    assert_eq!(notes(5), [(49.0, 3.0, v)], "the crash on the Cymbal");
+    assert_eq!(notes(6), [(53.0, 3.5, v)], "the ride bell is the Ride's");
+    assert_eq!(notes(7), [(62.0, 4.0, v), (81.0, 4.5, v)], "none lost");
     let view = s.view();
     let sound = |k: usize| {
         let m = view.modules.iter().find(|m| m.key == t.tracks[k].0).unwrap();
         m.nodes.iter().flat_map(|n| &n.knobs).find(|k| k.slot.as_deref() == Some("drum")).map(|k| k.value.clone()).unwrap()
     };
-    let sounds: Vec<serde_json::Value> = (1..7).map(sound).collect();
-    assert_eq!(sounds, ["kick", "snare", "hats", "tom", "cymbal", "tom"].map(serde_json::Value::from));
+    let sounds: Vec<serde_json::Value> = (1..8).map(sound).collect();
+    assert_eq!(sounds, ["kick", "snare", "hats", "tom", "cymbal", "ride", "tom"].map(serde_json::Value::from));
     // One clip each, to the bar line after the drums' last note.
-    for k in 1..7 {
+    for k in 1..8 {
         let lane = rev.compiled.data.lane(&t.tracks[k].0, "hits").unwrap().clone();
         let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
         assert_eq!(clips.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(0.0, 8.0)], "{}", t.tracks[k].1);
