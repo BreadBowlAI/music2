@@ -80,6 +80,11 @@ fn each_old_song_builds_and_renders_once_upgraded() {
         assert!(wav.len() > 48_000 * 2 * 3, "{name} renders: {} bytes", wav.len());
         let o = m2_in(&home, &["upgrade", dir], &[]);
         assert!(o.status.success() && said(&o).contains("made for this music2 already"), "{name}: {}", said(&o));
+        // KIT-24: a song made for this music2 that plays the drum machine names it all the same.
+        if name.starts_with("sounds") {
+            assert!(said(&o).contains("to do when you choose (the upgrade doesn't):"), "{name}: {}", said(&o));
+            assert!(said(&o).contains("m2 make-kit <song> drums"), "{name}: {}", said(&o));
+        }
     }
 }
 
@@ -110,6 +115,9 @@ fn an_upgrade_keeps_the_songs_sound() {
     for song in [&five, &eight] {
         let o = m2_in(&home, &["upgrade", song.to_str().unwrap()], &[]);
         assert!(o.status.success(), "{}", said(&o));
+        // KIT-24: its drum machine is named, with Make it a kit, and left as it is: the bits hold.
+        assert!(said(&o).contains("tracks/drums.ts:11: `drums.kit` plays the drum machine"), "{}", said(&o));
+        assert!(said(&o).contains("Make it a kit (the Drums track's menu), or run m2 make-kit <song> drums"), "{}", said(&o));
     }
     for song in [&five, &eight] {
         let then = m2_song::Sha::of(&render(&home, song)).hex();

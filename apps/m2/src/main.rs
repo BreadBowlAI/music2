@@ -1569,6 +1569,7 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: 
     let (presets, notes): (Vec<_>, Vec<_>) = up.notes.iter().partition(|n| n.file.starts_with("Presets/"));
     if up.current() {
         println!("{} is made for this music2 already: nothing to upgrade", dir.display());
+        list("to do when you choose (the upgrade doesn't):", &notes);
         list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
         return Ok(());
     }

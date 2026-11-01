@@ -301,7 +301,10 @@ fn played(call: &str, notes: &[(u8, f64)], seconds: f64) -> Vec<f32> {
     );
     let at: Vec<String> =
         notes.iter().map(|(n, b)| format!("{{\"pitch\": {n}, \"start\": {b}, \"length\": 0.25, \"velocity\": 0.8}}")).collect();
-    f.write("data/t/hits.json", format!("{{\"clips\": [{{\"start\": 0, \"length\": {}, \"notes\": [{}]}}]}}", seconds * 2.0, at.join(", ")));
+    f.write(
+        "data/t/hits.json",
+        format!("{{\"clips\": [{{\"start\": 0, \"length\": {}, \"notes\": [{}]}}]}}", seconds * 2.0, at.join(", ")),
+    );
     let s = f.open();
     assert!(s.draft_errors.is_empty(), "{call}: {:?}", s.draft_errors);
     let rev = s.accepted();

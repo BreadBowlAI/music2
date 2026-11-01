@@ -702,6 +702,7 @@ impl<'t> Code<'t> {
                     self.drum(site, &sites, d, true);
                 }
                 Some("bass") if self.is(object, SYNTH_FROM, "synth", true) => self.bass(site),
+                Some("kit") if self.is(object, DRUMS_FROM, "drums", false) => self.machine(site, &sites),
                 None if self.core(object) == Some("kernel") => self.kernel(site),
                 _ => {}
             }
@@ -1094,6 +1095,40 @@ impl<'t> Code<'t> {
                 self.leave(site.start, format!("`synth.bass`'s options are worked out by code (`{opts}`)"), say);
             }
         }
+    }
+
+    /// `drums.kit(…)`, the drum machine: named, with Make it a kit and its command, and left as it is
+    /// (KIT-24): a kit can't keep each hit's noise (KIT-22), so it is the musician's own edit.
+    fn machine(&mut self, site: &Site, sites: &[Site]) {
+        self.handled.insert(site.start);
+        let track = self.module_of(site, sites).filter(|m| m != m2_song::ROOT);
+        let write = match &track {
+            Some(key) => {
+                let name = self.track_name(sites, key).unwrap_or_else(|| key.clone());
+                format!("Make it a kit (the {name} track's menu), or run m2 make-kit <song> {key}")
+            }
+            None => "put it on a track of its own, then Make it a kit in that track's menu".to_string(),
+        };
+        self.notes.push(Left {
+            file: self.file.clone(),
+            line: self.line_at(site.start),
+            what: format!(
+                "`{}` plays the drum machine on one track: Make it a kit puts each of its drums on a track of its own. {}",
+                site.callee.trim(),
+                crate::machine::KEEPS
+            ),
+            write,
+        });
+    }
+
+    /// The name track `key`'s `track(…)` call in this file gives it, if it says one.
+    fn track_name(&self, sites: &[Site], key: &str) -> Option<String> {
+        let call = sites.iter().find(|s| {
+            self.core(s.callee.trim()) == Some("track")
+                && s.args.first().is_some_and(|a| string(self.slice(a.span())).as_deref() == Some(key))
+        })?;
+        let Some(Arg::Object { start, end, .. }) = call.args.get(1) else { return None };
+        properties(self.text, (*start, *end))?.into_iter().find(|p| p.key == "name").and_then(|p| string(self.slice(p.value)))
     }
 
     /// `kernel("std:fm", …)`: the kernel's id in the pack it moved to (`m2_ir::MOVED_KERNELS`).
