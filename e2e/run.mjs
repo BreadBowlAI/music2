@@ -158,7 +158,7 @@ export const SUITES = [
   ["live3a", "fix", { expect: 49, s: 15, tier: "nightly", why: "speed: a ruler click and a seek land within 1 s" }],
   ["live3b", "proj", { clap: true, expect: 60, s: 37, tier: "nightly", why: "speed: previews answer within 150 ms during a compile; flake: its release writes another db() (HANDOFF.md; twice at half CPU, 2026-10-21)" }],
   ["ph-window", "none", { clap: true, expect: 9, s: 3 }],
-  ["s5-knobs", "fix", { expect: 142, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
+  ["s5-knobs", "fix", { expect: 147, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
   ["s6-builders", "fix", { expect: 56, s: 5 }],
   ["s6-write", "fix", { expect: 36, s: 7 }],
   ["s6-fixes", "fix", { expect: 19, s: 4 }],
