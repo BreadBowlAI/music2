@@ -438,7 +438,10 @@ fn a_drums_note_goes_out_as_its_sounds() {
     assert_eq!(out("kick", &[36, 35, 38, 60, 81, 24, 82, 0]), [36, 36, 36, 60, 81, 36, 36, 36]);
     assert_eq!(out("kick 2", &[35, 36, 24]), [35, 35, 35]);
     assert_eq!(out("hats", &[42, 44, 46, 36, 81]), [42, 44, 46, 42, 81]);
-    assert_eq!(out("tom", &[41, 44, 46, 49, 60, 37]), [41, 43, 45, 48, 60, 41]);
+    // A Toms track's keys by the toms' one table (KIT-6, the review's U6): the drum machine's toms as
+    // they were, and another key as the tom of the nearest key in it (the lower at an equal distance).
+    assert_eq!(out("tom", &[39, 42, 45, 48, 50, 53]), [41, 43, 45, 47, 48, 50]);
+    assert_eq!(out("tom", &[41, 44, 46, 49, 60, 37]), [43, 45, 45, 47, 60, 41]);
     assert_eq!(out("cymbal", &[52, 53, 55, 51, 56]), [52, 49, 55, 49, 49]);
     assert_eq!(out("ride", &[51, 53, 59, 49]), [51, 53, 51, 51]);
     assert_eq!(out("shaker", &[54, 70, 42]), [69, 69, 69]);

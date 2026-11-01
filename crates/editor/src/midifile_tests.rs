@@ -123,7 +123,7 @@ fn a_drum_machine_lane_is_channel_10() {
 
 // KIT-9: a kit's Drum tracks go out on channel 10, each note at a General MIDI note of its sound:
 // one of them as it is (the hats' closed, pedal and open; a tom's), another sound's note to the
-// sound's own (the Kick's D2, the snare's, and its B1, kick 2's, as 36), or for a tom to the nearest tom note; a note no
+// sound's own (the Kick's D2, the snare's, and its B1, kick 2's, as 36), or for a Toms track by the toms' table; a note no
 // sound answers to as it is (C4). A Drum whose sound a lane plays keeps its notes' pitches; a clip
 // of it written alone goes out as the song does.
 #[test]
@@ -146,7 +146,8 @@ fn a_kits_tracks_go_out_as_general_midi_drums() {
     };
     assert_eq!(keys("Kick"), [(9, 36), (9, 36), (9, 60)]);
     assert_eq!(keys("Hats"), [(9, 42), (9, 44), (9, 46), (9, 42)]);
-    assert_eq!(keys("Toms"), [(9, 45), (9, 43), (9, 60)]);
+    // The Toms by the toms' table (KIT-6): 45 as it is, 44 as the tom of the nearest key in it, 45.
+    assert_eq!(keys("Toms"), [(9, 45), (9, 45), (9, 60)]);
     let (clip, _) = export_clip(&s, "kick", "hits", "clip0000").unwrap();
     assert_eq!(
         written(&clip).1[1].notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(),
@@ -781,7 +782,7 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
     let v = 0.787;
     assert_eq!(notes(1), [(36.0, 0.0, v), (36.0, 2.0, v)], "both tracks' kicks on one Kick");
     assert_eq!(notes(3), [(42.0, 0.0, v), (46.0, 1.0, v), (44.0, 1.5, v)], "the hats keep closed, open and pedal");
-    assert_eq!(notes(4), [(41.0, 2.0, v), (45.0, 2.5, v)], "the toms their pitches");
+    assert_eq!(notes(4), [(39.0, 2.0, v), (45.0, 2.5, v)], "the toms at the keys the toms' table gives them (KIT-6)");
     assert_eq!(notes(5), [(49.0, 3.0, v)], "the crash on the Cymbal");
     assert_eq!(notes(6), [(53.0, 3.5, v)], "the ride bell is the Ride's");
     assert_eq!(notes(7), [(62.0, 4.0, v), (81.0, 4.5, v)], "none lost");

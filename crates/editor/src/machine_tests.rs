@@ -219,10 +219,7 @@ fn the_drum_machines_knobs_reach_its_drums() {
     let keys: Vec<&str> = made.tracks.iter().map(|m| m.module.as_str()).collect();
     assert_eq!(keys, ["kick", "kick-2", "snare-2", "hats", "toms", "ride"]);
     assert_eq!(call("kick"), "drums.drum(lane.notes(\"hits\"), { drum: \"kick\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })");
-    assert_eq!(
-        call("kick-2"),
-        "drums.drum(lane.notes(\"hits\"), { drum: \"kick 2\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })"
-    );
+    assert_eq!(call("kick-2"), "drums.drum(lane.notes(\"hits\"), { drum: \"kick 2\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })");
     assert_eq!(call("snare-2"), "drums.drum(lane.notes(\"hits\"), { drum: \"snare 2\", punch: 0.15, drive: 3, voices: 12 })");
     assert_eq!(call("hats"), "drums.drum(lane.notes(\"hits\"), { drum: \"hats\", decay: 2, drive: 3, voices: 12 })");
     assert_eq!(call("toms"), "drums.drum(lane.notes(\"hits\"), { drum: \"tom\", tune: -4.542139, decay: 0.877058, drive: 3, voices: 12 })");
@@ -310,4 +307,35 @@ fn a_track_it_cant_make_a_kit_of_is_refused_in_words() {
     f.write("tracks/beat.ts", "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"beat\", { name: \"Beat\" }, ({ lane }) => drums.drum(lane.notes(\"hits\")));\n");
     let mut s = f.open();
     assert_eq!(said(&mut s, "beat"), "edit rejected: Beat plays no drum machine.");
+}
+
+// KIT-6, KIT-9 (the review's U6): a kit made of a drum machine's tom fill goes out to a MIDI file as
+// the drum machine's toms it came from, every one apart, by the toms' one table; and comes back in
+// at the keys it went out from.
+#[test]
+fn a_kits_toms_go_round_as_the_drum_machines() {
+    let f = Fixture::new();
+    let fill: Vec<(f64, f64, f64)> =
+        [50.0, 48.0, 47.0, 45.0, 43.0, 41.0].iter().enumerate().map(|(i, k)| (*k, i as f64 * 0.5, 0.8)).collect();
+    machine_song(&f, "", &[(0.0, 4.0, &fill)]);
+    let mut s = f.open();
+    make_kit(&mut s, "beat").unwrap();
+    let keys = |s: &m2_session::Session, name: &str| -> Vec<u8> {
+        let smf = crate::smf::read(&crate::midifile::export_song(s).unwrap()).unwrap();
+        let track = smf.tracks.iter().find(|t| t.name.as_deref() == Some(name)).unwrap_or_else(|| panic!("{name}"));
+        let mut notes = track.notes();
+        notes.sort_by_key(|n| n.start);
+        notes.iter().map(|n| n.key).collect()
+    };
+    assert_eq!(keys(&s, "Toms"), [50, 48, 47, 45, 43, 41], "the toms as the drum machine's");
+    let smf = crate::smf::read(&crate::midifile::export_song(&s).unwrap()).unwrap();
+    let g = crate::testing::fixture("templates/empty");
+    let mut back = g.open();
+    crate::midifile::import_tracks(&mut back, &smf, "fill.mid", &crate::midifile::Place { after: None, at: 0.0 }, None).unwrap();
+    let toms = notes(&back, "toms");
+    assert_eq!(
+        toms[0].2.iter().map(|n| n.0).collect::<Vec<_>>(),
+        [53.0, 50.0, 48.0, 45.0, 42.0, 39.0],
+        "back at the keys they went out from"
+    );
 }

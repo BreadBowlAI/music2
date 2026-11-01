@@ -110,15 +110,6 @@ impl Carry {
     }
 }
 
-/// The tom's own pitch on the Drum, A2: where the drum machine spreads its toms from.
-const TOM: f64 = 45.0;
-
-/// Where a drum machine's tom note goes on the Drum's chromatic tom (KIT-22): the key that plays its
-/// tuning, 1.5 semitones a step from A2, rounded, so 48 and 50 come out half a semitone higher.
-fn tom_key(key: f64) -> f64 {
-    (TOM + (key - TOM) * 1.5).round()
-}
-
 /// A knob's value as the call writes it.
 #[derive(Clone, Debug)]
 enum Value {
@@ -290,7 +281,7 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
                 for n in &mut mine {
                     let key = n.pitch.round();
                     higher |= key == 48.0 || key == 50.0;
-                    n.pitch = tom_key(key);
+                    n.pitch = crate::drums::tom_key(key as u8).map_or(key, f64::from);
                 }
             }
             if mine.is_empty() {

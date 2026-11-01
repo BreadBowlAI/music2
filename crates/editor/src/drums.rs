@@ -66,6 +66,17 @@ pub const GM: [GmDrum; 17] = [
 /// splash, which a MIDI file brings in on the Cymbal and the Ride, and Make it a kit drops (KIT-22).
 pub const SILENT: [u8; 3] = [52, 53, 55];
 
+/// The drum machine's toms on the Drum's chromatic tom (KIT-6): each General MIDI tom note, and the
+/// key that plays its pitch on the Drum's tom, rounded (the drum machine spreads its toms 1.5
+/// semitones a step from A2). One table for Make it a kit, a MIDI file coming in and a Toms track
+/// going out, so a tom fill goes round as it came.
+pub const TOMS: [(u8, u8); 6] = [(41, 39), (43, 42), (45, 45), (47, 48), (48, 50), (50, 53)];
+
+/// The Drum tom's key for General MIDI tom note `note` ([`TOMS`]); None for another note.
+pub fn tom_key(note: u8) -> Option<u8> {
+    TOMS.iter().find(|(n, _)| *n == note).map(|(_, k)| *k)
+}
+
 /// The Drum's sound that answers to General MIDI drum note `note`, if any (KIT-6).
 pub fn sound_of(note: u8) -> Option<&'static str> {
     GM.iter().find(|g| g.notes.contains(&note)).map(|g| g.sound)
@@ -115,9 +126,12 @@ const GENERAL_MIDI: std::ops::RangeInclusive<u8> = 35..=81;
 /// sound's own, or for a tom the tom note nearest it (the lower at an equal distance).
 pub fn general_midi(sound: &str, key: u8) -> u8 {
     let notes = notes_of(sound);
+    let tom = TOMS.iter().find(|(_, k)| *k == key).map(|(n, _)| *n);
     match () {
-        _ if notes.contains(&key) || (sound_of(key).is_none() && GENERAL_MIDI.contains(&key)) => key,
-        _ if sound == "tom" => notes.iter().copied().min_by_key(|n| (n.abs_diff(key), *n)).unwrap_or(key),
+        _ if sound == "tom" && tom.is_some() => tom.unwrap_or(key),
+        _ if (sound != "tom" && notes.contains(&key)) || (sound_of(key).is_none() && GENERAL_MIDI.contains(&key)) => key,
+        // Another key of a tom: the tom of the nearest key in the toms' table.
+        _ if sound == "tom" => TOMS.iter().min_by_key(|(_, k)| (k.abs_diff(key), *k)).map_or(key, |(n, _)| *n),
         _ => own_note(sound).unwrap_or(key),
     }
 }
@@ -202,7 +216,15 @@ pub(crate) fn kit_of(
     let Split { lanes, left } = split(notes);
     let mut out = vec![kit_bus(None)];
     let named = |sound: &'static str| GM.iter().find(|g| g.sound == sound).map_or(sound, |g| g.name);
-    let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
+    let lanes = lanes.into_iter().map(|(sound, mut mine)| {
+        // A General MIDI tom at the key that plays its pitch on the Drum's tom (KIT-6).
+        if sound == "tom" {
+            for n in &mut mine {
+                n.pitch = tom_key(n.pitch.round().clamp(0.0, 127.0) as u8).map_or(n.pitch, f64::from);
+            }
+        }
+        (named(sound), sound, mine)
+    });
     let left = (!left.is_empty()).then_some(("Percussion", "tom", left));
     for (label, sound, mine) in lanes.chain(left) {
         let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;
