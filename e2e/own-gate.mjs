@@ -138,7 +138,7 @@ await key("Meta+z");
 // At once, while the ⌘Z is on its way: the pan, turned up.
 await turn(hatsPan, 30);
 const u = await (await undone).json();
-check(typeof u.revision === "number" && u.moved === true, `⌘Z of the track answers the revision it made, which moved ids: ${JSON.stringify({ revision: u.revision, moved: u.moved, file: u.file })}`);
+check(typeof u.revision === "number" && Array.isArray(u.moved) && u.moved.includes("song.ts"), `⌘Z of the track answers the revision it made, which moved ids in song.ts: ${JSON.stringify({ revision: u.revision, moved: u.moved, file: u.file })}`);
 check(await until(() => seen.includes(MOVED)), `the pan turned at once isn't sent, and says so: ${said()}`);
 check(await until(() => read("song.ts") !== song1), "the track is taken back");
 check(pan() === "0.5" && refusals.length === n && !seen.some((t) => /Nothing was changed/.test(t)), `nothing refused, nothing left waiting: ${pan()}, ${said()}`);

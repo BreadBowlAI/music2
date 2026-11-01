@@ -43,7 +43,10 @@ Every change answers, at its top:
 |---|---|
 | `revision` | The revision it made. Absent when it made none: a change of `layout.json` alone (the track order, colours, markers, the song's key) never does. |
 | `step` | Its undo step's id: what `m2 undo` and the Edit menu name it by. |
-| `moved` | Whether it moved ids: it added, removed or moved a call in the code (an effect wraps the calls inside it, so they count anew), or added, removed or re-keyed a track or a bus. Then the ids you read before it may name something else: read the song again before the next edit. |
+| `moved` | The files whose ids it moved: every code file it changed, but for a value written where it is (a knob, a menu, a switch), and none for a change of data alone (clips, notes). An undo or a redo moves what its change moved. An id you read before it, in one of these files, may name something else now: read the song again before the next edit there. |
+| `mixed` | Only when true: the revision also took in a file saved outside the app (by you, say) while the change was made. |
+
+A clip gesture (`/api/graph/clips`), bars (`/api/graph/sections`) and a take picked (`/api/graph/take`) may say the `revision` they were planned on: then they are refused, saying who, when what they name changed since (a clip, the bars, the Beat grid's lane). Markers (`/api/graph/markers`) and a track order (`/api/graph/layout`) may say the `base` list they were made from: then they are refused when that list changed since, so nothing is lost.
 
 An agent can also send any edit as a **Tx**: the files it reads, each with the hash (or the text) it was planned on, the changes, and what they may do to the song. The app checks it as it checks its own edits, writes it as one undo step, and refuses it if a file changed under it or the song would change in any other way ([WRITE-3](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md#the-two-write-primitives)). For example, deleting a data file no lane reads:
 
