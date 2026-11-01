@@ -347,8 +347,9 @@ fn stop_writes_one_tx_named_recording_on_bass() {
     assert!(r.clips().is_empty(), "one Undo takes it back");
 }
 
-// AGENT-2: the news that a take was written names its undo step, as an edit's answer does, so the
-// window that recorded it keeps it as its own: its ⌘Z takes it back before the window shows it.
+// AGENT-2: the news that a take was written names its undo step, and whether it moved ids, as an
+// edit's answer does, so the window that recorded it keeps it as its own: its ⌘Z takes it back
+// before the window shows it.
 #[test]
 fn a_takes_news_names_its_step() {
     let mut r = Rig::new();
@@ -364,6 +365,8 @@ fn a_takes_news_names_its_step() {
     assert_eq!((&top["name"], &top["source"]), (&json!("recording on Bass"), &json!("page")), "{top}");
     assert!(top["step"].is_u64(), "{top}");
     assert_eq!(said["written"]["step"], top["step"], "the take's step, by its id: {said}");
+    assert_eq!(said["written"]["moved"], json!(false), "notes written in a lane move no ids: {said}");
+    assert_eq!(said["written"]["undo_name"]["name"], json!("recording on Bass"), "and Undo's name for it: {said}");
 }
 
 #[test]

@@ -261,7 +261,7 @@ fn call_at(s: &Session, at: u64, node: &str) -> Result<Site, EditError> {
         let to = Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start)).cloned()
     };
-    carried().ok_or(EditError::Stale { current: accepted.number })
+    carried().ok_or_else(|| EditError::stale(s, at, node.rsplit_once('#').map_or("", |(file, _)| file)))
 }
 
 /// The sound call `node` (named at revision `at`) is: a component's instance.

@@ -672,7 +672,8 @@ pub struct Rename {
 /// closes the song is refused unless `anyway` says so (they would be lost). If the folder can't be
 /// renamed then, the name stays changed, the song opens again where it was, and the answer's
 /// `warning` says why (X21).
-/// Answers `{name, dir, warning}`.
+/// Answers `{name, dir, warning}`, and with the folder kept, the title's `revision`, `step` and
+/// `moved`, as every change answers (AGENT-2): a folder renamed opens the song as a new session.
 pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
     let dir = state.graph.dir_of(req.session)?;
     let dir = dir.canonicalize().unwrap_or(dir);
@@ -703,8 +704,17 @@ pub fn rename(state: &AppState, req: &Rename) -> Result<Value> {
             "{files} unsaved edits in the code editor. Renaming the folder closes the song without saving them. Save first, or rename anyway."
         );
     }
-    state.graph.title(req.session, name)?;
-    let Some(to) = to else { return Ok(json!({"name": name, "dir": dir, "warning": null})) };
+    let titled = state.graph.title(req.session, name)?;
+    let Some(to) = to else {
+        // The title's change, as every change answers it (AGENT-2).
+        let mut answer = json!({"name": name, "dir": dir, "warning": null});
+        for k in ["revision", "step", "moved"] {
+            if let Some(v) = titled.get(k) {
+                answer[k] = v.clone();
+            }
+        }
+        return Ok(answer);
+    };
     state.graph.close();
     // A folder made there since the check isn't replaced (a rename would replace an empty one).
     // The song's own folder in other capitals is (on a Mac, where they are one name).

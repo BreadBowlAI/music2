@@ -79,7 +79,7 @@ use m2_song::{Fix, NoteClip};
 
 pub use automate::Automated;
 pub use cable::{Inlet, Outlet};
-pub use controls::{Audition, Control, Declared};
+pub use controls::{Audition, Control, Declared, moved};
 pub use effect::EffectInfo;
 pub use mix::{Inserted, Loop, MasterStrip, MixView, Strip};
 pub use timeline::{TimelineLane, TimelineTrack, TimelineView};
@@ -119,6 +119,8 @@ pub enum EditError {
     /// List the controls again and retry.
     Stale {
         current: u64,
+        /// Who made the newest change that touched it since, when a step says (AGENT-2).
+        by: Option<m2_session::Source>,
     },
     /// The value is not what the caller expected: someone else changed it.
     Conflict {
@@ -140,8 +142,11 @@ impl std::fmt::Display for EditError {
         match self {
             EditError::NotFound(id) => write!(f, "no control `{id}` in that revision"),
             EditError::Missing(what) => write!(f, "{what}"),
-            EditError::Stale { current } => {
+            EditError::Stale { current, by: None } => {
                 write!(f, "the code changed around this control; it is revision {current} now, list the controls again")
+            }
+            EditError::Stale { current, by: Some(by) } => {
+                write!(f, "Nothing was changed: {} since. It is revision {current} now; list the controls again.", changed_it(by))
             }
             EditError::Conflict { current } => write!(f, "the value changed elsewhere (it is now {current})"),
             EditError::DraftInvalid(d) => write!(f, "the project doesn't compile right now ({} problems), so it can't be edited", d.len()),
@@ -150,6 +155,24 @@ impl std::fmt::Display for EditError {
             EditError::ReadOnly(why) => write!(f, "{why}"),
             EditError::Changed(files) => write!(f, "{}", Refusal::Conflict { files: files.clone() }),
         }
+    }
+}
+
+impl EditError {
+    /// The target named at revision `at`, in `file`, changed since: refused, saying who changed it
+    /// (AGENT-2).
+    pub fn stale(s: &Session, at: u64, file: &str) -> EditError {
+        EditError::Stale { current: s.accepted().number, by: s.changed_by(at, file) }
+    }
+}
+
+/// Who changed a gesture's target, as its refusal says it (AGENT-2): an agent by its name, outside
+/// the app, or in the app.
+pub fn changed_it(by: &m2_session::Source) -> String {
+    match by {
+        m2_session::Source::Agent(name) => format!("the agent {name} changed it"),
+        m2_session::Source::Outside => "it was changed outside the app".into(),
+        m2_session::Source::Page => "it was changed in the app".into(),
     }
 }
 

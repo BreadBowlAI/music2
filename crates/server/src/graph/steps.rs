@@ -114,6 +114,12 @@ impl Graph {
     /// names after it, of the revision `revision`; `named` false when no step has that revision
     /// (nothing changed, or it is gone).
     pub fn name_step(&self, token: u64, revision: u64, name: String, structural: bool) -> Result<Value> {
+        self.name_step_by(token, Some(revision), None, name, structural)
+    }
+
+    /// [`Graph::name_step`] by the revision the change made, or by its step's id (`step`, which wins):
+    /// a change of `layout.json` alone makes no revision (AGENT-2).
+    pub fn name_step_by(&self, token: u64, revision: Option<u64>, step: Option<u64>, name: String, structural: bool) -> Result<Value> {
         let name = name.trim().to_string();
         if name.is_empty() {
             bail!("a step's name can't be empty");
@@ -123,7 +129,11 @@ impl Graph {
             if o.token != token {
                 bail!("the open project changed; refresh the graph before editing");
             }
-            let named = o.session.name_step(revision, &name, structural);
+            let named = match (step, revision) {
+                (Some(id), _) => o.session.name_step_id(id, &name, structural),
+                (None, Some(revision)) => o.session.name_step(revision, &name, structural),
+                (None, None) => bail!("name the step by its revision or its id"),
+            };
             if named {
                 a.republish();
             }

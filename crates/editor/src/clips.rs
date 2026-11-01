@@ -280,6 +280,31 @@ pub struct ClipsEdited {
     pub made: Vec<(LaneAddr, String)>,
 }
 
+/// Who changed a clip a gesture names, as its refusal says it when no step says who.
+const ELSEWHERE: &str = "was changed in another window or by an agent";
+
+/// `e`, a clip gesture's refusal, saying who changed its lane, when a step says (AGENT-2).
+fn said_by(s: &Session, e: EditError) -> EditError {
+    match e {
+        EditError::Changed(mut files) => {
+            for f in &mut files {
+                if let (Some(why), Some(by)) = (f.why.as_mut(), s.changed_by(0, &f.file))
+                    && why.contains(ELSEWHERE)
+                {
+                    let who = match &by {
+                        m2_session::Source::Agent(name) => format!("the agent {name} changed"),
+                        m2_session::Source::Outside => "was changed outside the app".into(),
+                        m2_session::Source::Page => "was changed in the app".into(),
+                    };
+                    *why = why.replace(ELSEWHERE, &who);
+                }
+            }
+            EditError::Changed(files)
+        }
+        e => e,
+    }
+}
+
 /// The most copies one Repeat… makes (Q12).
 pub const REPEATS: u32 = 64;
 
@@ -1539,7 +1564,7 @@ impl Work<'_> {
         let i = match found {
             Ok(i) => i,
             Err(why) if r.sha.is_some() => {
-                return Err(changed(format!("{why} It was changed in another window or by an agent; try again."), r.id.clone()));
+                return Err(changed(format!("{why} It {ELSEWHERE}; try again."), r.id.clone()));
             }
             Err(why) => return Err(EditError::Missing(why)),
         };
@@ -1548,7 +1573,7 @@ impl Work<'_> {
             && *seen != sha(&c.line(&l.kind))
         {
             let what = format!("the {} clip at bar {}", l.track, arr.bar_at(c.start()).0 + 1);
-            let why = format!("is {what}, which was changed in another window or by an agent. It shows as it is now; try again");
+            let why = format!("is {what}, which {ELSEWHERE}. It shows as it is now; try again");
             return Err(changed(why, c.id().map(str::to_string)));
         }
         Ok((r.lane.clone(), i))
@@ -1721,7 +1746,7 @@ pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited,
     ready(s)?;
     let tx_id = tx_id.to_string();
     let rev = s.accepted();
-    let edits = apply_as(rev, g, &tx_id)?;
+    let edits = apply_as(rev, g, &tx_id).map_err(|e| said_by(s, e))?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
     let (ops, wrote) = lane_ops(rev, &edits)?;
     let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();

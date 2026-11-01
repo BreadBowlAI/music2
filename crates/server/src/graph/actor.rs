@@ -1881,14 +1881,12 @@ impl Actor {
         };
         // What plays takes the commit as the cells whose constants differ from it (an outside
         // change in the knob's file that rode along included), in the settle (RENDER-22).
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         match o.session.set(revision, &id, value, expect) {
             Ok(c) => {
-                let mut written = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
-                // The undo step it made, by its id, as every gesture answers (AGENT-2).
-                if o.session.last_step() > steps {
-                    written["step"] = json!(o.session.last_step());
-                }
+                let mut written = json!({"file": c.file, "before": c.before, "after": c.after});
+                // The revision and the undo step it made, as every change answers (AGENT-2).
+                before.tell(&o.session, &mut written);
                 self.settle(Some(Install { lease: Some(lease), id, origin: c.origin, value: c.value }));
                 Ok(Committed::Written(written))
             }
@@ -1974,13 +1972,11 @@ impl Actor {
         // outside change in the knob's own file rides along through the commit's baseline (R2).
         let target = self.unheld(token, revision, gesture, std::slice::from_ref(&id.to_string()))?.remove(0);
         let o = self.open.as_mut().context("no project is open")?;
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         match o.session.write(revision, id, &value, expect.as_ref()) {
             Ok(c) => {
-                let mut v = json!({"file": c.file, "before": c.before, "after": c.after, "revision": c.revision});
-                if o.session.last_step() > steps {
-                    v["step"] = json!(o.session.last_step());
-                }
+                let mut v = json!({"file": c.file, "before": c.before, "after": c.after});
+                before.tell(&o.session, &mut v);
                 self.settle(Some(Install { lease: None, id: target, origin: c.origin, value: c.value }));
                 Ok(v)
             }
@@ -2047,14 +2043,12 @@ impl Actor {
             }
         };
         let o = self.open.as_mut().context("no project is open")?;
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         match o.session.write_all(revision, &values) {
             Ok(done) => {
                 let first = &done[0];
-                let mut v = json!({"file": first.file, "before": first.before, "after": first.after, "revision": first.revision});
-                if o.session.last_step() > steps {
-                    v["step"] = json!(o.session.last_step());
-                }
+                let mut v = json!({"file": first.file, "before": first.before, "after": first.after});
+                before.tell(&o.session, &mut v);
                 let installs = done
                     .into_iter()
                     .zip(targets)
@@ -2105,7 +2099,7 @@ impl Actor {
         let o = self.open.as_mut().context("no project is open")?;
         let requested_ns = inner.now_ns();
         o.sent = None;
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         let (result, heard) = self.heard(edit);
         let compiled_ns = inner.now_ns();
         let s = self.settle(None);
@@ -2145,16 +2139,17 @@ impl Actor {
         // whoever sent it (PLANE-5).
         inner.notices.lock().extend(heard.told(result.as_ref().err().map(String::as_str)));
         let (e, more) = result.map_err(|e| anyhow!("{e}"))?;
-        let mut answer = json!({"file": e.file, "before": e.before, "after": e.after, "revision": e.revision});
+        let mut answer = json!({"file": e.file, "before": e.before, "after": e.after});
         if let (Some(a), Value::Object(more)) = (answer.as_object_mut(), more) {
             a.extend(more);
         }
-        // The undo step it made, by its id: what its toast's Undo names (AGENT-2); and its name, as
-        // the state says it, which `m2` says (AGENT-1).
-        let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
-        if let (Some(id), Some(o)) = (made, self.open.as_ref()) {
-            answer["step"] = json!(id);
-            answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
+        // The revision and the undo step it made, by its id: what its toast's Undo names
+        // (AGENT-2); and its name, as the state says it, which `m2` says (AGENT-1).
+        if let Some(o) = self.open.as_ref() {
+            before.tell(&o.session, &mut answer);
+            if before.made(&o.session).is_some() {
+                answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
+            }
         }
         Ok(answer)
     }
@@ -2278,14 +2273,13 @@ impl Actor {
         }
         self.arrive(Some(&[path.to_string()]))?;
         let o = self.open.as_mut().context("no project is open")?;
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         files::save(&mut o.session, path, base, text, self.caller.is_agent())?;
-        let made = o.session.last_step();
         self.settle(None);
         let mut state = self.inner.state().context("no project is open")?;
-        // The undo step it made, by its id, as every gesture answers (AGENT-2).
-        if made > steps {
-            state["step"] = json!(made);
+        // The revision and the undo step it made, as every change answers (AGENT-2).
+        if let Some(o) = self.open.as_ref() {
+            before.tell(&o.session, &mut state);
         }
         Ok(state)
     }
@@ -2379,7 +2373,7 @@ impl Actor {
             }
         }
         o.sent = None;
-        let steps = o.session.last_step();
+        let before = Before::of(&o.session);
         let commit = move |s: &mut Session| match seen {
             None => s.commit(tx),
             Some(hash) => s.commit_with(tx, |_, c| if c.hash == hash { Ok(()) } else { Err(()) }).map_err(|e| match e {
@@ -2398,8 +2392,6 @@ impl Actor {
         if let Some(busy) = self.taken_back.take() {
             return Ok((423, busy.json()));
         }
-        // The undo step it made, by its id (AGENT-2): what an agent names it by.
-        let made = self.open.as_ref().map(|o| o.session.last_step()).filter(|id| *id > steps);
         // Heard in the app, or said there to be not saved yet: the app hears how it ended too,
         // not only the agent (PLANE-5).
         let said = done.as_ref().err().map(|r| heard.said(&r.to_string()));
@@ -2408,9 +2400,13 @@ impl Actor {
         Ok(match done {
             Ok(c) => {
                 let mut answer = m2_editor::json::committed(&c);
-                if let (Some(id), Some(o)) = (made, self.open.as_ref()) {
-                    answer["step"] = json!(id);
-                    answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
+                // The revision and the undo step it made, by its id (AGENT-2): what an agent
+                // names it by.
+                if let Some(o) = self.open.as_ref() {
+                    before.tell(&o.session, &mut answer);
+                    if before.made(&o.session).is_some() {
+                        answer["undo_name"] = super::steps::named(o.session.step_names().0.as_ref(), &o.timeline);
+                    }
                 }
                 (200, answer)
             }
@@ -2476,4 +2472,39 @@ pub(super) fn nothing_to_render(s: &Session) -> Option<String> {
         None => format!(": {}", d.message),
     });
     Some(format!("Fix the code first: it doesn't compile right now{}", first.unwrap_or_default()))
+}
+
+/// The session as a change found it: what its answer says at its top, after it (AGENT-2).
+pub(super) struct Before {
+    accepted: Arc<Revision>,
+    steps: u64,
+}
+
+impl Before {
+    pub(super) fn of(s: &Session) -> Self {
+        Before { accepted: s.accepted_arc(), steps: s.last_step() }
+    }
+
+    /// The step the change made, if it made one.
+    pub(super) fn made(&self, s: &Session) -> Option<u64> {
+        Some(s.last_step()).filter(|id| *id > self.steps)
+    }
+
+    /// Say at the top of `answer` the revision the change made (none when it made none, as a
+    /// change of `layout.json` alone), its step, and whether it moved ids ([`m2_editor::moved`]),
+    /// as every change's answer says them, whatever the route: so a window keeps its own step
+    /// from the answer, and knows whether a gesture drawn before it may go from what it shows.
+    pub(super) fn tell(&self, s: &Session, answer: &mut Value) {
+        let Some(a) = answer.as_object_mut() else { return };
+        let now = s.accepted();
+        if now.number != self.accepted.number {
+            a.insert("revision".into(), json!(now.number));
+        } else {
+            a.remove("revision");
+        }
+        a.insert("moved".into(), json!(m2_editor::moved(&self.accepted, now)));
+        if let Some(id) = self.made(s) {
+            a.insert("step".into(), json!(id));
+        }
+    }
 }

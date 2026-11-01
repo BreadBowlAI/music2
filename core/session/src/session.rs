@@ -777,6 +777,35 @@ impl Session {
         self.steps
     }
 
+    /// [`Session::name_step`] by the step's id (AGENT-2): a change of `layout.json` alone makes no
+    /// revision to name it by.
+    pub fn name_step_id(&mut self, id: u64, name: &str, structural: bool) -> bool {
+        match self.history.iter_mut().chain(self.redo.iter_mut()).find(|t| t.id == id) {
+            Some(t) => {
+                t.name = Some((name.to_string(), structural));
+                self.unwritten = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Who made the newest change after revision `since` that touched `file` (AGENT-2: what a
+    /// gesture refused because its target changed says): the source of the newest undo step made
+    /// after `since` whose change touched it, while the file reads as that change left it. None when
+    /// no step says (a change that made no step, as git's, or an undo, came after, or the revision it
+    /// made is no longer remembered).
+    pub fn changed_by(&self, since: u64, file: &str) -> Option<Source> {
+        let t = self
+            .history
+            .iter()
+            .filter(|t| t.made > since && t.inverse.touched().iter().any(|p| p.to_string() == file))
+            .max_by_key(|t| t.made)?;
+        let path = Path::new(file);
+        let then = self.snapshot(t.made)?;
+        (then.files.get(path) == self.accepted.snapshot.files.get(path)).then(|| t.source.clone())
+    }
+
     /// Name the undo step of the change that made revision `made` (gaps #29): "Hats pan", and
     /// whether it adds or removes a part. Any depth of undo or redo. False when no step has it:
     /// it is gone, or nothing changed. The name follows the step through undo and redo.

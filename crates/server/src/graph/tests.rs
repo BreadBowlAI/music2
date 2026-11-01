@@ -798,7 +798,9 @@ fn returning_a_drag_to_its_start_closes_the_preview_without_rewriting_source() {
     let source = fixture.read("song.ts");
     graph.preview(token, revision, &id, "drag", 950.0).unwrap();
     let result = graph.set(token, revision, &id, "drag", 800.0, Some(800.0)).unwrap();
-    assert_eq!(result["revision"].as_u64().unwrap(), revision);
+    // It made no revision, so its answer names none (AGENT-2).
+    assert!(result["revision"].is_null() && result["step"].is_null(), "{result}");
+    assert_eq!(graph.state().unwrap()["view"]["revision"], json!(revision));
     assert_eq!(fixture.read("song.ts"), source);
     assert!(graph.leases().is_empty());
     assert_eq!(playing(&graph).0, revision);

@@ -7,7 +7,7 @@
 //! accepted one when no change touched its call (WRITE-12, WRITE-22): what a client a revision or
 //! two behind, or a gesture lease across a save, names.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -337,6 +337,23 @@ pub(crate) fn controls_in(rev: &Revision) -> Vec<Control> {
     found.into_values().collect()
 }
 
+/// Whether ids drawn at revision `before` may name something else at `after` (AGENT-2): a call of
+/// the project's own code added, removed, or moved among its file's calls (a control's id is its
+/// call's `file#ordinal`, counted in source order: an effect that wraps a chain counts every call
+/// inside it anew), or a module (a track, a bus) added, removed or re-keyed. A value, a setting, a
+/// label or a lane written moves none. What every change's answer says as `moved`, so a window
+/// moves a gesture drawn before it to the newer revision only when it moved none.
+pub fn moved(before: &Revision, after: &Revision) -> bool {
+    if before.code_rev == after.code_rev {
+        return false;
+    }
+    let calls = |r: &Revision| {
+        r.compiled.sites.iter().filter(|x| x.in_project).map(|x| (x.file.clone(), x.ordinal, x.callee.clone())).collect::<BTreeSet<_>>()
+    };
+    let modules = |r: &Revision| r.compiled.ir.modules.iter().map(|m| m.key.clone()).collect::<BTreeSet<_>>();
+    calls(before) != calls(after) || modules(before) != modules(after)
+}
+
 /// [`controls`] by id.
 pub fn controls_by_id(s: &Session) -> HashMap<String, Control> {
     controls(s).into_iter().map(|c| (c.id.clone(), c)).collect()
@@ -362,7 +379,8 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         return find(id).ok_or_else(|| EditError::NotFound(id.to_string()));
     }
     // Carry the target from revision `at`: its call must be untouched and in place.
-    let stale = EditError::Stale { current: accepted.number };
+    let file = id.rsplit_once('/').and_then(|(call, _)| call.rsplit_once('#')).map_or("", |(file, _)| file);
+    let stale = EditError::stale(s, at, file);
     let carried = || -> Option<Control> {
         let past = s.past(at)?;
         let (old, arg) = site_by_id(past.sites(), id)?;

@@ -127,7 +127,7 @@ fn unrelated_saves_survive_and_overlapping_ones_conflict() {
     let pan = control(&s, "song.ts", "0.hats.pan");
     std::fs::write(&song, now.replacen("pan: 0.45", "pan: 0.2", 1)).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Stale { current: 3 }));
+    assert_eq!(s.set(pan.revision, &pan.id, 0.6, Some(0.45)), Err(EditError::Stale { current: 3, by: None }));
     // Listed again, it shows 0.2; a caller still expecting 0.45 gets a conflict.
     let pan = control(&s, "song.ts", "0.hats.pan");
     assert_eq!(pan.value, 0.2);
@@ -230,7 +230,7 @@ fn a_stale_id_whose_call_changed_is_refused() {
     let edited = TWO_OSCS.replace("osc.sine(hz(110))", "osc.sine(hz(115))");
     std::fs::write(dir.join("song.ts"), &edited).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.set(sine.revision, &sine.id, 330.0, None), Err(EditError::Stale { current: 2 }));
+    assert_eq!(s.set(sine.revision, &sine.id, 330.0, None), Err(EditError::Stale { current: 2, by: None }));
     assert_eq!(std::fs::read_to_string(dir.join("song.ts")).unwrap(), edited);
     std::fs::remove_dir_all(dir).ok();
 }
@@ -457,8 +457,33 @@ fn a_control_is_carried_past_edits_above_and_below_its_call() {
     assert_eq!((again.literal.as_str(), again.revision), ("110", s.accepted().number));
     std::fs::write(dir.join("song.ts"), commented.replace("hz(110)", "hz(110 /* Hz */)")).unwrap();
     assert!(s.refresh());
-    assert_eq!(s.carry(again.revision, &again.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number }));
+    assert_eq!(s.carry(again.revision, &again.id, &s.controls_by_id()), Err(EditError::Stale { current: s.accepted().number, by: None }));
     assert_eq!(carried.audition(330.0), Ok(330.0));
     assert!(carried.audition(f64::NAN).is_err());
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// AGENT-2: whether a change moved ids, as each change's answer says (`moved`): a value written, or a
+// lane written, moves none; an effect added (a call that wraps the chain, so the calls inside it
+// are counted anew) moves them, and so does a track added.
+#[test]
+fn a_value_moves_no_ids_and_a_call_added_does() {
+    let dir = first_song();
+    let mut s = Session::open(&dir, std_packages()).unwrap();
+    let before = s.accepted_arc();
+    let pan = control(&s, "song.ts", "0.hats.pan");
+    s.set(pan.revision, &pan.id, 0.45, Some(0.3)).unwrap();
+    assert!(!moved(&before, s.accepted()), "a value written moves no ids");
+
+    let before = s.accepted_arc();
+    let pluck = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.file == "tracks/keys.ts" && x.callee == "pluck").unwrap();
+    let call = format!("{}#{}", pluck.file, pluck.ordinal);
+    s.add_effect(before.number, &call, "@m2/effects:reverb").unwrap();
+    assert!(moved(&before, s.accepted()), "an effect added moves them");
+
+    let before = s.accepted_arc();
+    crate::tracks::add(&mut s, "@m2/drums:drum", Some("Clap"), None, None).unwrap();
+    assert!(moved(&before, s.accepted()), "a track added moves them");
+    assert!(!moved(s.accepted(), s.accepted()), "nothing changed, nothing moved");
     std::fs::remove_dir_all(dir).ok();
 }

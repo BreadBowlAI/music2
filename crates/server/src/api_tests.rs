@@ -503,6 +503,136 @@ fn page_sources() -> BTreeMap<String, String> {
     all
 }
 
+/// `text`, a TypeScript file, with its comments and the insides of its strings blanked (each
+/// character a space, each line kept): what is left is code. A template string's `${…}` is code.
+fn code_of(text: &str) -> String {
+    #[derive(Clone, Copy, PartialEq)]
+    enum In {
+        Code,
+        Line,
+        Block,
+        Quote(char),
+        Template,
+    }
+    let mut out = String::with_capacity(text.len());
+    // The states to go back to: a `${` in a template is code until its `}`, at its brace depth.
+    let mut stack: Vec<(In, usize)> = vec![];
+    let (mut at, mut depth) = (In::Code, 0usize);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
+    while i < chars.len() {
+        let (c, next) = (chars[i], chars.get(i + 1).copied());
+        match at {
+            In::Code => match (c, next) {
+                ('/', Some('/')) => {
+                    at = In::Line;
+                    out.push_str("  ");
+                    i += 1;
+                }
+                ('/', Some('*')) => {
+                    at = In::Block;
+                    out.push_str("  ");
+                    i += 1;
+                }
+                ('"' | '\'', _) => {
+                    at = In::Quote(c);
+                    out.push(c);
+                }
+                ('`', _) => {
+                    at = In::Template;
+                    out.push(c);
+                }
+                ('{', _) => {
+                    depth += 1;
+                    out.push(c);
+                }
+                ('}', _) if depth == 0 && !stack.is_empty() => {
+                    (at, depth) = stack.pop().unwrap();
+                    out.push(c);
+                }
+                ('}', _) => {
+                    depth = depth.saturating_sub(1);
+                    out.push(c);
+                }
+                _ => out.push(c),
+            },
+            In::Line => {
+                if c == '\n' {
+                    at = In::Code;
+                }
+                out.push(blank(c));
+            }
+            In::Block => {
+                if c == '*' && next == Some('/') {
+                    at = In::Code;
+                    out.push_str("  ");
+                    i += 1;
+                } else {
+                    out.push(blank(c));
+                }
+            }
+            In::Quote(q) => {
+                if c == '\\' {
+                    out.push(' ');
+                    if let Some(n) = next {
+                        out.push(blank(n));
+                    }
+                    i += 1;
+                } else if c == q || c == '\n' {
+                    at = In::Code;
+                    out.push(c);
+                } else {
+                    out.push(blank(c));
+                }
+            }
+            In::Template => {
+                if c == '\\' {
+                    out.push(' ');
+                    if let Some(n) = next {
+                        out.push(blank(n));
+                    }
+                    i += 1;
+                } else if c == '`' {
+                    at = In::Code;
+                    out.push(c);
+                } else if c == '$' && next == Some('{') {
+                    stack.push((In::Template, depth));
+                    (at, depth) = (In::Code, 0);
+                    out.push_str("${");
+                    i += 1;
+                } else {
+                    out.push(blank(c));
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The words of a line of code: names, as JavaScript spells them.
+fn words(code: &str) -> impl Iterator<Item = &str> {
+    code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty())
+}
+
+// The reading of the page's code above: a `//` in a string hides nothing, a `fetch` in a comment or a
+// string is no request, a template's `${}` is code.
+#[test]
+fn the_page_scan_reads_past_comments_and_strings() {
+    let found = |text: &str| code_of(text).lines().any(|l| words(l).any(|w| w == "fetch"));
+    assert!(found("const u = \"http://x\"; fetch(u);"), "a URL's `//` hides nothing");
+    assert!(found("const u = 'a//b', v = await fetch(u);"));
+    assert!(found("const s = `${await fetch(\"/api\")}`;"), "a template's `${{}}` is code");
+    assert!(found("/* a */ fetch(x) /* b */"));
+    assert!(!found("// fetch(x)"), "a comment is no request");
+    assert!(!found("const s = \"fetch(x)\";"), "nor a string");
+    assert!(!found("/* fetch(x)\n fetch(y) */"));
+    assert!(!found("const s = `fetch(x) ${a}`;"));
+    assert!(!found("prefetch(x); x.fetched = 1;"), "nor another word");
+    assert_eq!(code_of("a\n\"b\nc"), "a\n\" \nc", "lines are kept");
+}
+
 // AGENT-2: the window keeps the step of every change it makes as its own as soon as the change's
 // answer comes, whatever the route. The page sends every request through one function, `http`
 // (web/src/lib/http.ts), which keeps the step of each answer that names one: so a route the page
@@ -515,18 +645,16 @@ fn the_page_keeps_the_step_of_every_route_it_calls() {
     assert!(page.len() > 50, "the page's sources: {} files", page.len());
     let way = "lib/http.ts";
     let http = page.get(way).expect("web/src/lib/http.ts: the page's one way to the server");
-    // No request goes another way: no `fetch` but in http.ts, no XHR, no beacon.
+    // No request goes another way: the name `fetch` nowhere in the code but in http.ts (read past
+    // comments and strings, so a `//` in a string hides nothing), no XHR, no beacon.
     let mut other = vec![];
     for (name, text) in &page {
-        for (n, line) in text.lines().enumerate() {
-            let code = line.split("//").next().unwrap_or("");
-            let fetches = code.contains("fetch(") && !code.contains("prefetch(");
-            if (fetches && name != way)
-                || code.contains("XMLHttpRequest")
-                || code.contains("sendBeacon")
-                || code.contains("new EventSource")
+        let code = code_of(text);
+        for (n, (line, shown)) in code.lines().zip(text.lines()).enumerate() {
+            if (words(line).any(|w| w == "fetch") && name != way)
+                || words(line).any(|w| ["XMLHttpRequest", "sendBeacon", "EventSource"].contains(&w))
             {
-                other.push(format!("web/src/{name}:{}: {}", n + 1, line.trim()));
+                other.push(format!("web/src/{name}:{}: {}", n + 1, shown.trim()));
             }
         }
     }

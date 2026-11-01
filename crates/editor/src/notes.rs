@@ -62,7 +62,7 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
         )));
     }
     // The lane's file as the edit was planned on it.
-    let planned_on = s.snapshot(at).ok_or(EditError::Stale { current: rev.number })?;
+    let planned_on = s.snapshot(at).ok_or_else(|| EditError::stale(s, at, &shown))?;
     let base = planned_on.files.get(&file).cloned();
     let now = rev.snapshot.files.get(&file).cloned();
     if base.is_none()
@@ -93,7 +93,7 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
     let was = match &base {
         Some(t) => Some(match rev.compiled.data.parsed(&addr, &LaneKind::Notes, t) {
             Some(d) => d.clone(),
-            None => Arc::new(LaneData::read(t, &LaneKind::Notes).map_err(|_| EditError::Stale { current: rev.number })?),
+            None => Arc::new(LaneData::read(t, &LaneKind::Notes).map_err(|_| EditError::stale(s, at, &shown))?),
         }),
         None => None,
     };
@@ -139,6 +139,18 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
         }
     })
     .map(|done| Edited { revision: done.number, file: file.display().to_string(), before, after })
+    .map_err(|e| match e {
+        // Changed since the window drew it: by whom, when a step says (AGENT-2).
+        EditError::Changed(mut files) => {
+            if let Some(by) = s.changed_by(at, &shown) {
+                for f in files.iter_mut().filter(|f| f.file == shown && f.clip.is_none()) {
+                    f.why = Some(format!("changed since the edit was planned: {}", crate::changed_it(&by)));
+                }
+            }
+            EditError::Changed(files)
+        }
+        e => e,
+    })
 }
 
 /// Where a lane is written: `data/<module>/<lane>.json`, as `DataPath` spells it.

@@ -401,7 +401,7 @@ pub(crate) fn current_site<'a>(s: &'a Session, at: u64, call: &str) -> Result<&'
         let to = m2_session::text::Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         sites.iter().find(|x| x.file == file && x.start == to && x.end == to + (old.end - old.start))
     };
-    carried().ok_or(EditError::Stale { current: accepted.number })
+    carried().ok_or_else(|| EditError::stale(s, at, file))
 }
 
 fn outlet(s: &Session, at: u64, id: &str) -> Result<Outlet, EditError> {

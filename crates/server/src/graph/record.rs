@@ -1522,15 +1522,23 @@ impl Graph {
         match self.place_takes(e.token, files, takes) {
             (Ok(v), _) => {
                 let revision = v["revision"].as_u64().unwrap_or(0);
-                if let Err(err) = self.name_step(e.token, revision, format!("recording on {label}"), false) {
+                let named = self.name_step(e.token, revision, format!("recording on {label}"), false);
+                if let Err(err) = &named {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
                 let first = &e.parts[0];
-                let mut w = json!({"revision": revision, "made": v["made"], "module": first.module(), "lane": first.lane()});
-                // The undo step it made, by its id, as an edit's answer names it: the window that
-                // recorded the take keeps it as its own (AGENT-2).
+                let mut w =
+                    json!({"revision": revision, "moved": v["moved"], "made": v["made"], "module": first.module(), "lane": first.lane()});
+                // The undo step it made, by its id, and whether it moved ids, as an edit's answer
+                // says them: the window that recorded the take keeps it as its own (AGENT-2).
                 if v["step"].is_u64() {
                     w["step"] = v["step"].clone();
+                    // And its name, as Undo says it: its ⌘Z names it before the window shows it.
+                    if let Ok(n) = &named
+                        && n["undo_name"]["step"] == v["step"]
+                    {
+                        w["undo_name"] = n["undo_name"].clone();
+                    }
                 }
                 if let Some(Part::Audio { file, .. }) = e.parts.iter().find(|p| matches!(p, Part::Audio { .. }))
                     && let Audio::Written(f) = &**file
@@ -1592,8 +1600,10 @@ impl Graph {
         };
         let (done, _) = self.clips_why(token, gesture, None);
         let v = done?;
-        let revision = v["revision"].as_u64().unwrap_or(0);
-        if let Err(err) = self.name_step(token, revision, format!("{label} take {}", take + 1), false) {
+        // Named by its id: the take it had already makes no change, and no step (AGENT-2).
+        if let Some(step) = v["step"].as_u64()
+            && let Err(err) = self.name_step_by(token, None, Some(step), format!("{label} take {}", take + 1), false)
+        {
             eprintln!("music2: couldn't name the take's undo step: {err:#}");
         }
         Ok(v)

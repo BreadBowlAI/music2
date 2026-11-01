@@ -222,7 +222,7 @@ fn audition_refuses_stale_controls_invalid_drafts_and_nonfinite_values() {
     // A save that touches the control's own call makes the old drag stale.
     std::fs::write(fixture.0.join("song.ts"), format!("// Saved elsewhere.\n{}", original.replace("hz(800)", "hz(801)"))).unwrap();
     assert!(session.refresh());
-    assert_eq!(session.preview(control.revision, &control.id, 950.0), Err(EditError::Stale { current: 3 }));
+    assert_eq!(session.preview(control.revision, &control.id, 950.0), Err(EditError::Stale { current: 3, by: None }));
     let current = session.controls().into_iter().next().unwrap();
     std::fs::write(fixture.0.join("song.ts"), "(").unwrap();
     assert!(session.refresh());
