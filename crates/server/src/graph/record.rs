@@ -182,7 +182,8 @@ struct Take {
     pass: u32,
     /// Where the notes clip of this pass starts: a bar line, or `from` itself for a punch.
     start: f64,
-    notes: Option<NotesPart>,
+    /// Its notes lanes: the one it records on, or a kit's every Drum track's (KIT-26).
+    notes: Vec<NotesPart>,
     audio: Vec<AudioPart>,
     began: Instant,
 }
@@ -407,11 +408,11 @@ impl Take {
         }
     }
 
-    fn on(&mut self, key: (u32, u32), pitch: f64, velocity: f64, clock: u64, at: Place) -> bool {
+    fn on(&mut self, lane: (&str, &str), key: (u32, u32), pitch: f64, velocity: f64, clock: u64, at: Place) -> bool {
         self.heard(at);
         let Some(start) = self.admit(clock, at) else { return false };
         self.off(key, at);
-        let Some(n) = self.notes.as_mut() else { return false };
+        let Some(n) = self.notes.iter_mut().find(|n| (n.module.as_str(), n.lane.as_str()) == lane) else { return false };
         n.held.insert(key, (start, pitch, velocity));
         true
     }
@@ -420,7 +421,7 @@ impl Take {
         self.heard(at);
         let beat = self.beat(at.1);
         let end = self.until().map_or(beat, |u| beat.min(u));
-        let Some(n) = self.notes.as_mut() else { return false };
+        let Some(n) = self.notes.iter_mut().find(|n| n.held.contains_key(&key)) else { return false };
         let Some((start, pitch, velocity)) = n.held.remove(&key) else { return false };
         n.notes.push(Note { pitch, start, length: (end - start).max(SHORTEST), velocity });
         true
@@ -436,12 +437,18 @@ impl Take {
         }
     }
 
-    /// This pass's notes clip, ended at `beat`: held notes end there, and the clip spans whole bars,
-    /// at least one, to the bar line after its last note's end (a note the grid moved later too:
-    /// the review's R6); a punch's covers exactly what was recorded. None when nothing was played.
-    fn notes_clip(&mut self, beat: f64) -> Option<Part> {
+    /// This pass's notes clips, one for each lane that was played, ended at `beat`.
+    fn notes_clips(&mut self, beat: f64) -> Vec<Part> {
+        (0..self.notes.len()).filter_map(|i| self.notes_clip(i, beat)).collect()
+    }
+
+    /// This pass's notes clip of lane `i`, ended at `beat`: held notes end there, and the clip spans
+    /// whole bars, at least one, to the bar line after its last note's end (a note the grid moved
+    /// later too: the review's R6); a punch's covers exactly what was recorded. None when nothing
+    /// was played.
+    fn notes_clip(&mut self, i: usize, beat: f64) -> Option<Part> {
         let how = self.how();
-        let n = self.notes.as_mut()?;
+        let n = self.notes.get_mut(i)?;
         for (start, pitch, velocity) in std::mem::take(&mut n.held).into_values() {
             n.notes.push(Note { pitch, start, length: (beat - start).max(SHORTEST), velocity });
         }
@@ -475,10 +482,10 @@ impl Take {
     /// it (MON-11). The next pass starts at the loop's start.
     fn next_pass(&mut self) -> Option<Ended> {
         let Span::Loop { start, end, .. } = self.span else { return None };
-        let part = self.notes_clip(end);
+        let parts = self.notes_clips(end);
         self.pass += 1;
         self.start = if self.punch && !self.overdub { start } else { bar_before(&self.arrangement, start) };
-        part.map(|p| Ended { token: self.token, tempo: self.tempo.clone(), parts: vec![p] })
+        (!parts.is_empty()).then(|| Ended { token: self.token, tempo: self.tempo.clone(), parts })
     }
 
     /// The take, ended at `at`: its last notes pass, and each audio lane's file, told how long it is.
@@ -491,7 +498,7 @@ impl Take {
             }
         }
         let beat = self.beat(at.1).max(self.pass_from(self.pass));
-        let mut parts: Vec<Part> = self.notes_clip(beat).into_iter().collect();
+        let mut parts: Vec<Part> = self.notes_clips(beat);
         // As long as it played, from where it started: whole frames.
         let frames = self.since(at).round().max(0.0) as u64;
         let how = if self.punch { How::Replace } else { How::New };
@@ -536,11 +543,14 @@ impl Take {
     /// What the windows see: its phase, lanes, start, and its notes so far (a held one to `now`).
     fn shown(&self, now: Option<f64>) -> Value {
         let mut notes = vec![];
-        if let Some(n) = &self.notes {
-            notes.extend(n.notes.iter().map(|n| json!({"pitch": n.pitch, "start": n.start, "length": n.length, "velocity": n.velocity})));
-            for (start, pitch, velocity) in n.held.values() {
+        for part in &self.notes {
+            // Each note on its lane: a kit's take has a lane for each Drum track (KIT-26).
+            let (module, lane) = (&part.module, &part.lane);
+            let said = |n: &Note| json!({"pitch": n.pitch, "start": n.start, "length": n.length, "velocity": n.velocity, "module": module, "lane": lane});
+            notes.extend(part.notes.iter().map(said));
+            for (start, pitch, velocity) in part.held.values() {
                 let length = now.map_or(SHORTEST, |n| (n - start).max(SHORTEST));
-                notes.push(json!({"pitch": pitch, "start": start, "length": length, "velocity": velocity, "held": true}));
+                notes.push(json!({"pitch": pitch, "start": start, "length": length, "velocity": velocity, "held": true, "module": module, "lane": lane}));
             }
         }
         let from = self.pass_from(self.pass);
@@ -601,7 +611,7 @@ impl Recorder {
     /// while one records (D8), else the armed notes track's (MON-9).
     pub(super) fn lane(&self, token: Option<u64>) -> Option<(String, String)> {
         if let Some(t) = self.take.as_ref().filter(|t| Some(t.token) == token) {
-            return t.notes.as_ref().map(|n| (n.module.clone(), n.lane.clone()));
+            return t.notes.first().map(|n| (n.module.clone(), n.lane.clone()));
         }
         let a = &self.arms;
         (Some(a.token) == token).then(|| a.armed.iter().find(|(_, (_, audio))| !audio).map(|(m, (l, _))| (m.clone(), l.clone()))).flatten()
@@ -610,10 +620,8 @@ impl Recorder {
     /// The take's notes heard: called by audition for each On it sends from a source that records
     /// (`source`'s id), on `device`.
     pub(super) fn on(&mut self, device: &Device, lane: (&str, &str), key: (u32, u32), pitch: f64, velocity: f64) {
-        let Some(t) = self
-            .take
-            .as_mut()
-            .filter(|t| t.epoch == device.epoch && t.notes.as_ref().is_some_and(|n| (n.module.as_str(), n.lane.as_str()) == lane))
+        let Some(t) =
+            self.take.as_mut().filter(|t| t.epoch == device.epoch && t.notes.iter().any(|n| (n.module.as_str(), n.lane.as_str()) == lane))
         else {
             return;
         };
@@ -623,13 +631,12 @@ impl Recorder {
             return;
         }
         let t = self.take.as_mut().expect("a take");
-        self.changed |= t.on(key, pitch, velocity, heard.0, at);
+        self.changed |= t.on(lane, key, pitch, velocity, heard.0, at);
     }
 
     /// A note let go, as audition sends its Off.
     pub(super) fn off(&mut self, device: &Device, key: (u32, u32)) {
-        let Some(t) = self.take.as_mut().filter(|t| t.epoch == device.epoch && t.notes.as_ref().is_some_and(|n| n.held.contains_key(&key)))
-        else {
+        let Some(t) = self.take.as_mut().filter(|t| t.epoch == device.epoch && t.notes.iter().any(|n| n.held.contains_key(&key))) else {
             return;
         };
         t.resolve(&device.player);
@@ -646,8 +653,7 @@ impl Recorder {
         let keys: Vec<(u32, u32)> = self
             .take
             .as_ref()
-            .and_then(|t| t.notes.as_ref())
-            .map(|n| n.held.keys().filter(|k| k.0 == id).copied().collect())
+            .map(|t| t.notes.iter().flat_map(|n| n.held.keys().filter(|k| k.0 == id).copied()).collect())
             .unwrap_or_default();
         if let Some(d) = device {
             keys.into_iter().for_each(|k| self.off(d, k));
@@ -795,10 +801,20 @@ pub(super) fn prune_arms(cp: &mut ControlPlane, token: u64) {
 /// first.
 pub(super) fn recording_on(cp: &ControlPlane, token: u64) -> Option<String> {
     let t = cp.record.take.as_ref().filter(|t| t.token == token)?;
-    t.notes.as_ref().map(|n| n.module.clone()).or_else(|| t.audio.first().map(|a| a.module.clone()))
+    t.notes.first().map(|n| n.module.clone()).or_else(|| t.audio.first().map(|a| a.module.clone()))
 }
 
 /// The track's name as the timeline shows it, for the undo step.
+/// What a take that ended is called, by its lanes' tracks: "Bass", "Vox, Guitar", or a kit's
+/// take by the kit (KIT-26: "Drums").
+fn take_label(cp: &ControlPlane, parts: &[Part]) -> String {
+    let kit = parts.first().and_then(|p| super::midi::Pads::of(cp, p.module()));
+    match kit {
+        Some(k) if parts.iter().all(|p| k.rows.iter().any(|(m, ..)| m == p.module())) => k.label,
+        _ => parts.iter().map(|p| label_of(cp, p.module())).collect::<Vec<_>>().join(", "),
+    }
+}
+
 pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open
         .as_ref()
@@ -1008,7 +1024,7 @@ impl Graph {
             bail!("Fix the code first: it doesn't compile right now.");
         }
         let plays = p.engine.plays.as_ref().filter(|pl| pl.epoch == device.epoch);
-        let mut notes = None;
+        let mut notes = vec![];
         for (i, (m, l, audio)) in lanes.iter().enumerate() {
             let fits = plays.is_some_and(|pl| if *audio { audio_slot(pl, m, l).is_some() } else { plays_notes(pl, m, l) });
             if !fits && lanes.len() == 1 {
@@ -1018,7 +1034,17 @@ impl Graph {
                 bail!("{} can't record now: its lane `{l}` isn't in the song. Arm it again.", labels[i]);
             }
             if !audio {
-                notes = Some(NotesPart { module: m.clone(), lane: l.clone(), notes: vec![], held: BTreeMap::new() });
+                // A Drum track of a kit records the kit: each of its Drum tracks' lanes, where the
+                // pads' hits go (KIT-26).
+                let kit = super::midi::Pads::of(&cp, m).map(|k| k.rows).unwrap_or_default();
+                let mine = kit.into_iter().map(|(m, l, _)| (m, l)).filter(|(m, l)| plays.is_some_and(|pl| plays_notes(pl, m, l)));
+                let mine: Vec<(String, String)> = mine.collect();
+                let parts = if mine.is_empty() { vec![(m.clone(), l.clone())] } else { mine };
+                for (m, l) in parts {
+                    if !notes.iter().any(|n: &NotesPart| n.module == m && n.lane == l) {
+                        notes.push(NotesPart { module: m, lane: l, notes: vec![], held: BTreeMap::new() });
+                    }
+                }
             }
         }
         let arrangement = p.engine.accepted.project.arrangement.clone();
@@ -1105,7 +1131,7 @@ impl Graph {
             let unit = take.arrangement.meter_at(from).unit as f64;
             take.lead = 4.0 / unit * 60.0 / take.tempo.bpm_at(from) * rate;
         }
-        take.start = match (take.punch && !take.overdub, take.notes.is_some()) {
+        take.start = match (take.punch && !take.overdub, !take.notes.is_empty()) {
             (true, _) | (false, false) => from,
             (false, true) => bar_before(&take.arrangement, from),
         };
@@ -1379,8 +1405,7 @@ impl Graph {
             if let Some(said_now) = waits(&mut cp) {
                 said.push(said_now);
             }
-            let labels: Vec<String> =
-                ended.iter().map(|e| e.parts.iter().map(|p| label_of(&cp, p.module())).collect::<Vec<_>>().join(", ")).collect();
+            let labels: Vec<String> = ended.iter().map(|e| take_label(&cp, &e.parts)).collect();
             (ended, labels)
         };
         // Its stream stops; the next R opens it again.

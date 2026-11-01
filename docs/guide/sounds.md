@@ -193,6 +193,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | The whole kit quieter, or glued together | the Drums bus: its fader, or an effect on it |
 | A beat, by clicking boxes | select a drum or the bus, then **Beat** (⌥5) in the dock: [the beat grid](window.md#the-beat-grid) |
 | One more drum in the kit | **+ Drum** in the beat grid's header |
+| Play the kit on pads (a MIDI pad controller or keyboard) | select the kit's bus or any of its drums: each pad plays the drum that answers to its General MIDI note, on that drum's track. A pad no drum answers to plays nothing, and a message says which, once |
 
 The kits that come with `@m2/drums`:
 

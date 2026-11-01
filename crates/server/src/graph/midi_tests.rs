@@ -391,3 +391,40 @@ fn a_keyboard_let_go_centres_its_bend() {
     assert_eq!(graph.midi(Event::Unplugged("Keys")).as_deref(), Some("Keys was unplugged. Its notes stopped."));
     eventually("unplugged", || wheels(&graph) == 0);
 }
+
+/// A kit: a Drums bus, and a Kick, a Snare and two Hats tracks going to it.
+const KIT: &str = "import { bus, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { gain } from 'std/dsp';\n\
+                   import { master, mixer } from 'std/mix';\n\
+                   const d = bus('drums', { name: 'Drums' }, ({ input }) => gain(input));\n\
+                   const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                   const s = track('snare', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'snare' }));\n\
+                   const h = track('hats', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   const h2 = track('hats2', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   export default song(() => master(mixer({ drums: d.out, kick: { in: k.out, to: 'drums' }, snare: { in: s.out, to: 'drums' }, \
+                   hats: { in: h.out, to: 'drums' }, hats2: { in: h2.out, to: 'drums' } })));\n";
+
+// KIT-25: with a kit's Drum track (or its bus) what keys play, a key goes to the kit's Drum track
+// whose sound answers to its note, at its own pitch, the first of two with one sound; the state
+// names the kit. A note no Drum answers to plays nothing, and is said once.
+#[test]
+fn a_key_plays_the_kits_drum_that_answers_to_it() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", KIT);
+    let graph = fixture.open();
+    graph.midi(Event::Plugged("Keys"));
+    for target in ["kick", "drums"] {
+        graph.midi_target(Some((target.into(), "hits".into()))).unwrap();
+        assert_eq!(graph.midi_state()["target"]["kit"], json!("drums"), "{target}");
+        for (key, lane) in [(38, "snare"), (42, "hats"), (46, "hats"), (36, "kick")] {
+            send(&graph, &[0x90, key, 100]);
+            eventually("the key sounds", || live(&graph) == 1);
+            assert_eq!(graph.held_lanes("midi:Keys"), [(lane.to_string(), "hits".to_string())], "{target}: {key}");
+            send(&graph, &[0x80, key, 0]);
+            eventually("let go", || live(&graph) == 0);
+        }
+    }
+    let said = graph.midi(Event::Bytes("Keys", &[0x90, 60, 100]));
+    assert_eq!(said.as_deref(), Some("No drum of the Drums kit answers to C4 (60). + Drum in Beat adds one."));
+    stays(&graph, 0, "it plays nothing");
+    assert_eq!(graph.midi(Event::Bytes("Keys", &[0x90, 60, 100])), None, "said once");
+}

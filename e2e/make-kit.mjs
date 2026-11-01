@@ -1,15 +1,16 @@
 // Make it a kit (KIT-22 to KIT-24), as a musician does it: first-song's Hats track, made to play the
 // drum machine by an outside edit, offers Make it a kit in its track menu, with its words, and on the
 // drum machine's card. Making it one is one undo step: the track is the kit's bus, a Drum track goes
-// to it, the bus is selected and Beat shows the kit's rows; the toast says what it keeps. Undo puts
-// the drum machine back, offered again. The lint, and a picture.
+// to it, the bus is selected and Beat shows the kit's rows; the toast says what it keeps. A MIDI pad
+// then plays the kit by sound (KIT-25): F#2 the Hats 2 track (its meter moves), C4 nothing, said.
+// Undo puts the drum machine back, offered again. The lint, and a picture.
 //
 //   node e2e/make-kit.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { check, done, open, PROJ, read, ROOT, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, state, toasts, key, view } = await open(1440, 900);
+const { page, errors, api, state, toasts, key, view } = await open(1440, 900);
 const has = async (sel) => !!(await page.$(sel));
 const KEEPS = "Same drums, pitches, levels and lengths; each hit's noise comes out a little different";
 const hats = read("tracks/hats.ts");
@@ -52,6 +53,31 @@ check(await until(() => has('[data-view-tab="beat"]')), "the dock has a Beat tab
 await view("beat");
 check(await until(() => has('[data-testid=beat-row][data-row="hats-2"]')), "Beat shows the kit's row");
 await page.screenshot({ path: `${ROOT}/make-kit.png` });
+
+// ---------------------------------------------------------------- a pad plays the kit by sound
+
+// The server's meters messages, as the page gets them: each track's peaks (linear).
+const meters = [];
+const cdp = await page.createCDPSession();
+await cdp.send("Network.enable");
+cdp.on("Network.webSocketFrameReceived", ({ response }) => {
+  try {
+    const m = JSON.parse(response.payloadData);
+    if (m.t === "meters") meters.push(m.tracks ?? {});
+  } catch {}
+});
+const inject = (body) => api("/midi/inject", { method: "POST", body: JSON.stringify(body) });
+await inject({ device: "Pads", plugged: true });
+check(await until(async () => (await state()).midi?.target?.kit === "hats"), `with the bus selected, keys play its kit: ${JSON.stringify((await state()).midi?.target)}`);
+await page.keyboard.press("Space");
+const from = meters.length;
+await inject({ device: "Pads", bytes: [144, 42, 110] });
+check(await until(() => meters.slice(from).some((m) => Math.max(0, ...(m["hats-2"] ?? [])) > 0), 6000), "an F#2 pad plays the Hats 2 track: its meter moves");
+await inject({ device: "Pads", bytes: [128, 42, 0] });
+await page.keyboard.press("Space");
+await inject({ device: "Pads", bytes: [144, 60, 110] });
+check(await until(async () => (await toasts()).some((t) => t.includes("No drum of the Hats kit answers to C4 (60). + Drum in Beat adds one."))), "a C4 pad plays nothing, and says so");
+await inject({ device: "Pads", bytes: [128, 60, 0] });
 
 // ---------------------------------------------------------------- one undo puts it back
 

@@ -253,6 +253,12 @@ impl Graph {
         }
     }
 
+    /// The lanes the notes `client` holds sound on, by handle: what a test reads.
+    #[cfg(test)]
+    pub(super) fn held_lanes(&self, client: &str) -> Vec<(String, String)> {
+        self.inner.control.lock().audition.by_client.get(client).map(|s| s.held.values().cloned().collect()).unwrap_or_default()
+    }
+
     /// The window `client` closed: every note it holds is let go.
     pub(super) fn audition_gone(&self, client: &str) {
         let device = self.inner.current_device();

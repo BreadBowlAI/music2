@@ -38,6 +38,12 @@ export function playTarget(graph: GraphState | null, selected: string | null, cl
   if (!graph || !selected || selected === "song") return null;
   const track = graph.timeline.tracks.find((t) => t.module === selected && t.track);
   if (!track) return null;
+  // A kit's bus plays its first Drum track: a MIDI pad there plays the kit by sound (KIT-25).
+  const kit = graph.view.drum_kits?.find((k) => k.bus === selected);
+  if (kit?.rows.length) {
+    const row = kit.rows[0];
+    return { module: row.track, lane: row.lane, label: kit.label, colour: track.colour };
+  }
   const notes = track.lanes.filter((l) => l.kind === "notes");
   const clip = clips[selected];
   const lane = (clip?.module === selected ? notes.find((l) => l.key === clip.lane) : undefined) ?? notes[0];
