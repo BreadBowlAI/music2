@@ -95,8 +95,8 @@ await page.mouse.down();
 for (let i = 1; i <= 12; i++) await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - (30 * i) / 12);
 await page.mouse.up();
 check(await until(() => /positionA: 0\.1\b/.test(read(file))), `30 px up moves it a tenth of its range: ${read(file).match(/wavetable\(lane[^\n]*/)?.[0]}`);
-const said = await toasts();
-check(refused.length === 0 && !said.some((t) => /changed around this control|Nothing was changed|The song changed/.test(t)), `the drag right after ⇧⌘Z is not refused: ${JSON.stringify({ refused, said })}`);
+const shownToasts = await toasts();
+check(refused.length === 0 && !shownToasts.some((t) => /changed around this control|Nothing was changed|The song changed/.test(t)), `the drag right after ⇧⌘Z is not refused: ${JSON.stringify({ refused, shownToasts })}`);
 
 // ---------------------------------------------------------------- the pictures
 
