@@ -168,7 +168,7 @@ export const drum = component(
   (x: Audio, p: any) => kernel<Audio>("test:drum", {}),
 );
 "#;
-    let e = described(effect).err().expect("an effect with kits builds");
+    let e = described(effect).expect_err("an effect with kits builds");
     let says = "editor.kits: only an instrument (editor.category, notes first) names kits";
     assert!(e.iter().any(|d| d.message.contains(says)), "{says}\n{e:?}");
 }
