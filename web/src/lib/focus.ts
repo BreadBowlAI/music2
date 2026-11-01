@@ -13,6 +13,7 @@ import { useClipSelection } from "./clips";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** A clip as an agent names it: its track's key, its lane's key and its id. */
 export interface ClipAt {
@@ -82,7 +83,7 @@ export function postFocus(again = false) {
   last = body;
   // Not a write: it works in a read-only window too. A refusal (the song changed meanwhile) is
   // followed by the next change's post.
-  void fetch("/api/focus", { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) }, body }).catch(() => {});
+  void http("/api/focus", { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) }, body }).catch(() => {});
 }
 
 /** Post the record 200 ms after the last change to it. */

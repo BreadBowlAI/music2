@@ -7,6 +7,7 @@ import { barAt } from "./graph";
 import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** A marker: where, in beats, and its name (one line, 1 to 40 characters). */
 export interface Marker {
@@ -72,14 +73,14 @@ export async function writeMarkers(list: Marker[], step: Step) {
   usePendingMarkers.setState({ pending: { list: sorted, since } });
   const ours = editing();
   try {
-    const res = await fetch("/api/graph/markers", {
+    const res = await http("/api/graph/markers", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, markers: sorted }),
     });
     const r = await readJson(res);
     if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
-    if (r.before !== r.after) recorded(graph.session, r, step, ours);
+    if (r.before !== r.after) recorded(graph.session, r, step);
   } catch (error) {
     usePendingMarkers.setState({ pending: null });
     toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));

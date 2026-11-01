@@ -1557,7 +1557,7 @@ function KnobControl({
 
   const descriptor = g.descriptor;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   // Drawn from the middle when its span is centred on zero (a pan, a bipolar amount).
   const range = span(descriptor);
   const bipolar = range.lo < 0 && range.hi > 0 && Math.abs(range.lo + range.hi) <= 1e-9 * range.hi;
@@ -1680,7 +1680,7 @@ function KnobControl({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={why}
           onAutomate={automate}
           onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
@@ -1731,21 +1731,17 @@ function PickControl({
   const why = useContext(Locked);
   const glows = useGlows("knobs", knob.id);
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
-  const [saving, setSaving] = useState(false);
   const off = editable ? null : `${why ?? "It can't be edited right now"}.`;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, picking one writes it in";
   const how = `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`;
   const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
-  /** A pick: its option's value written into the code, one undo step named "Wobble shape". */
-  const pick = (v: number | string | boolean) => {
-    setSaving(true);
-    graphApi
-      .setValue(session, revision, knob.id, v, { name: knobStep(owner, knob, label) })
-      .catch((error) => toast(words(error)))
-      .finally(() => setSaving(false));
-  };
-  const blocked = off ?? (saving ? "Saving…" : null);
+  /**
+   * A pick: its option's value written into the code, one undo step named "Wobble shape". Picked
+   * while the window doesn't show its own last edit yet, it goes once it does (the gate).
+   */
+  const pick = (v: number | string | boolean) =>
+    void graphApi.setValue(session, revision, knob.id, v, { name: knobStep(owner, knob, label) }).catch((error) => toast(words(error)));
   return (
     <div
       onContextMenu={(e) => {
@@ -1778,9 +1774,9 @@ function PickControl({
         {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
       </div>
       {knob.kind === "switch" ? (
-        <SwitchValue value={knob} label={label} off={blocked} onFlip={pick} />
+        <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
       ) : (
-        <MenuValue value={knob} label={label} off={blocked} title={title} onPick={pick} />
+        <MenuValue value={knob} label={label} off={off} title={title} onPick={pick} />
       )}
       <HomeMarker home={knob.home} label={label} />
       {menu && (
@@ -1789,7 +1785,7 @@ function PickControl({
           label={label}
           value={knob.value}
           at={menu}
-          editable={editable && !saving}
+          editable={editable}
           locked={why}
           onAutomate={() => {
             setMenu(null);

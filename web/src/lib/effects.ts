@@ -5,9 +5,10 @@
 // own.
 
 import { lockReason, readJson, type ViewNode } from "./graph";
-import { editing, recorded, type Step } from "./history";
+import { editing, goes, recorded, type Step } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** An effect card's ⋯ menu, as the view says it: each row's words when it can't run here. */
 export interface EffectMenu {
@@ -69,22 +70,26 @@ const message = (error: unknown) => (error instanceof Error ? error.message : St
 
 /** POST an effect edit; an error answer throws with the server's words. */
 async function post(path: string, body: unknown): Promise<Edited> {
-  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as Edited;
 }
 
-/** Run an edit of the open song, as `step`: Undo's once it commits; a refusal's words in a toast. */
-async function edit(path: string, body: Record<string, unknown>, step: Step) {
+/**
+ * Run an edit of effect card `body.node`, as `step`: Undo's once it commits; a refusal's words in a
+ * toast. It goes through the gate (lib/history): once the window shows its own last edit.
+ */
+async function edit(path: string, body: { node: string } & Record<string, unknown>, step: Step) {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return toast(`${why}.`);
   const ours = editing();
   try {
-    const r = await post(path, { session: graph.session, revision: graph.view.revision, ...body });
-    if (r.before !== r.after) recorded(graph.session, r, step, ours);
+    const revision = await goes(graph.session, graph.view.revision, [body.node], ours);
+    const r = await post(path, { session: graph.session, revision, ...body });
+    if (r.before !== r.after) recorded(graph.session, r, step);
   } catch (error) {
     toast(message(error));
   } finally {

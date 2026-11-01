@@ -13,6 +13,7 @@ import { send, type Done, type Gesture } from "./clips";
 import { clientId, readJson, type GraphState } from "./graph";
 import { editing, type Editing, type Step } from "./history";
 import { token } from "./native";
+import { http } from "./http";
 
 /** How often a still drag tells the server it lives (its lease ends after 10 s of nothing). */
 const KEEPALIVE_MS = 2000;
@@ -30,7 +31,7 @@ export interface LaneLease {
 }
 
 const post = async (path: string, body: unknown) => {
-  const res = await fetch(`/api/graph/lane/lease/${path}`, {
+  const res = await http(`/api/graph/lane/lease/${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: JSON.stringify(body),

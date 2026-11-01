@@ -4,8 +4,9 @@
 // file, so it has no Undo.
 
 import { readJson } from "./graph";
-import { editing, recorded } from "./history";
+import { editing, goes, recorded } from "./history";
 import { token } from "./native";
+import { http } from "./http";
 
 export interface PresetName {
   name: string;
@@ -49,7 +50,7 @@ interface Loaded {
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 async function request<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await http(url, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...auth },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -77,7 +78,10 @@ export const presetsApi = {
       "/api/graph/preset/save",
       { session, revision, node, name, replace },
     ),
-  /** Load preset `name` into the call: one undoable edit, named for Undo. */
+  /**
+   * Load preset `name` into the call `node` names at revision `at`: one undoable edit, named for
+   * Undo. It goes through the gate (lib/history): once the window shows its own last edit.
+   */
   load: (
     session: number,
     at: number,
@@ -86,15 +90,10 @@ export const presetsApi = {
     name: string,
   ) => {
     const ours = editing();
-    return request<Loaded>("/api/graph/preset/load", {
-      session,
-      at,
-      node,
-      from,
-      name,
-    })
+    return goes(session, at, [node], ours)
+      .then((at) => request<Loaded>("/api/graph/preset/load", { session, at, node, from, name }))
       .then((r) => {
-        if (r.changed) recorded(session, r, { name: `loading ${name}` }, ours);
+        if (r.changed) recorded(session, r, { name: `loading ${name}` });
         return r;
       })
       .finally(() => ours.end());

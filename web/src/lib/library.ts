@@ -8,6 +8,7 @@ import { create } from "zustand";
 import { on } from "./events";
 import { readJson } from "./graph";
 import { token } from "./native";
+import { http } from "./http";
 
 export type ItemKind = "instrument" | "sound" | "effect" | "sample" | "plugin";
 
@@ -104,7 +105,7 @@ interface Answer {
 /** The items `q` finds, best first; with `fits` (the playhead's beat), only loops that fit the song there (LIB-1). */
 export async function searchLibrary(q: string, fits: number | null = null): Promise<Answer> {
   const at = fits === null ? "" : `&fits=${fits}`;
-  const res = await fetch(`/api/library?q=${encodeURIComponent(q)}${at}`, { headers: auth });
+  const res = await http(`/api/library?q=${encodeURIComponent(q)}${at}`, { headers: auth });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return { items: data.items ?? [], library: data.library ?? [], libraryMore: data.library_more ?? 0, registry: data.registry ?? null, folders: data.folders };
@@ -192,8 +193,8 @@ export interface SampleFolder {
 /** Your sample folders; or, with `change`, add one or remove one first. */
 export async function sampleFolders(change?: { add: string } | { remove: string }): Promise<SampleFolder[]> {
   const res = change
-    ? await fetch("/api/library/folders", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(change) })
-    : await fetch("/api/library/folders", { headers: auth });
+    ? await http("/api/library/folders", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(change) })
+    : await http("/api/library/folders", { headers: auth });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data.folders ?? [];
@@ -239,7 +240,7 @@ export async function togglePreview(item: LibraryItem): Promise<string | null | 
   const mine = asked;
   usePreview.setState({ loading: item.id });
   try {
-    const res = await fetch(`/api/library/preview?id=${encodeURIComponent(item.id)}`, { headers: auth });
+    const res = await http(`/api/library/preview?id=${encodeURIComponent(item.id)}`, { headers: auth });
     if (!res.ok) throw new Error((await readJson(res)).error ?? `HTTP ${res.status}`);
     const blob = await res.blob();
     if (mine !== asked) return undefined;
@@ -300,7 +301,7 @@ export async function getFromLibrary(item: LibraryItem, sample?: { session: numb
   useGetting.setState({ id: item.id, label: item.label, done: 0, total: item.library?.size ?? 0, installing: false }, true);
   try {
     const body = sample ? { id: item.id, session: sample.session, to: sample.to } : { id: item.id };
-    const res = await fetch("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+    const res = await http("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     return data as Got;
@@ -314,7 +315,7 @@ export async function getMissing(pack: string, version: string): Promise<Got> {
   const id = `${pack}@${version}`;
   useGetting.setState({ id, label: `${pack} ${version}`, done: 0, total: 0, installing: false }, true);
   try {
-    const res = await fetch("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ pack, version }) });
+    const res = await http("/api/library/get", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ pack, version }) });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     return data as Got;
@@ -325,7 +326,7 @@ export async function getMissing(pack: string, version: string): Promise<Got> {
 
 /** Stop the Get running: nothing of it is kept. Once it is being installed it can't be: why, in words. */
 export async function cancelGet(): Promise<string | null> {
-  const res = await fetch("/api/library/get/cancel", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" });
+  const res = await http("/api/library/get/cancel", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: "{}" });
   const data = await readJson(res);
   return data.cancelled === false && data.why ? data.why : null;
 }
@@ -342,7 +343,7 @@ export interface MissingPack {
 
 /** The open song's locked versions that aren't installed. */
 export async function missingPacks(): Promise<MissingPack[]> {
-  const res = await fetch("/api/library/missing", { headers: auth });
+  const res = await http("/api/library/missing", { headers: auth });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data.missing ?? [];

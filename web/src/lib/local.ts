@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { readJson } from "./graph";
 import { token } from "./native";
 import { useStore } from "./store";
+import { http } from "./http";
 
 declare module "./graph" {
   interface GraphState {
@@ -55,7 +56,7 @@ export function flushLocal(): Promise<void> {
   const set = waiting;
   waiting = {};
   if (session === null || Object.keys(set).length === 0) return Promise.resolve();
-  return fetch("/api/graph/view", {
+  return http("/api/graph/view", {
     method: "POST",
     headers: { "content-type": "application/json", ...auth },
     body: JSON.stringify({ session, set }),

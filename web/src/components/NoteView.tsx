@@ -41,7 +41,8 @@ import GridChip from "./GridChip";
 import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
-import { afterLaneWrites, hasOwnId, lanesShown } from "../lib/graph";
+import { afterLaneWrites, hasOwnId } from "../lib/graph";
+import { showsOwn, through } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -357,7 +358,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const write =
       lease && gesture
         ? afterLaneWrites(latest.current, (within) => lease.finish(gesture, step, within)).then((r) => ({ revision: r.revision, clips }))
-        : writeLane(latest.current, module, lane, clips, b.revision, step);
+        : writeLane(latest.current, module, lane, clips, b.revision, step, (now) => withClip(now, (c) => [{ id: ref.id, start: c.start, length: shape.length, notes: shape.notes }]));
     write
       .then((r) => void (written.current = { revision: r.revision, clips: r.clips }))
       .catch((error) => {
@@ -374,6 +375,16 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       });
   };
 
+  /**
+   * The lane as `now` shows it, with this clip as `make` makes it from what `now` has of it (none:
+   * it goes): a write made anew from the lane as the window shows it. Null when the clip is gone.
+   */
+  const withClip = (now: GraphState, make: (c: NoteClip) => NoteClip[]): NoteClip[] | null => {
+    const l = findLane(now.timeline, module, lane);
+    const i = l?.kind === "notes" ? clipIndex(l.clips, ref) : -1;
+    return l?.kind === "notes" && i >= 0 ? l.clips.flatMap((c, k) => (k === i ? make(c) : [c])) : null;
+  };
+
   /** What the track is called, for the words of its edits ("Hook notes"). */
   const trackName = () => moduleName(latest.current.view.modules.find((m) => m.key === module) ?? { key: module });
 
@@ -385,8 +396,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const g = latest.current;
     const l = findLane(g.timeline, module, lane);
     const i = l?.kind === "notes" ? clipIndex(l.clips, ref) : -1;
-    if (locked || laneWriting(g) || !l || l.kind !== "notes" || i < 0 || l.clips[i].notes.length) return;
-    writeLane(g, module, lane, l.clips.filter((_, k) => k !== i), g.view.revision, { name: `deleting a ${trackName()} clip` }).catch((error) =>
+    if (locked || !l || l.kind !== "notes" || i < 0 || l.clips[i].notes.length) return;
+    writeLane(g, module, lane, l.clips.filter((_, k) => k !== i), g.view.revision, { name: `deleting a ${trackName()} clip` }, (now) => withClip(now, () => [])).catch((error) =>
       toast(error instanceof Error ? error.message : String(error)),
     );
   };
@@ -415,22 +426,24 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   /**
    * A clip gesture on this clip that the server works out (a groove, NOTE-7; a paste, NOTE-5),
-   * sent after this view's lane writes on their way, once the graph shows what they wrote: it names
-   * the clip with the hash the graph drew it with, so the server refuses it over a change it
-   * missed, and a change made elsewhere since the roll drew the notes (by their places) refuses it
-   * here. One Tx, one undo step named `name`. Its notes show when the graph does; with `select`,
-   * the notes it added are then selected.
+   * sent after this view's lane writes on their way, once the window shows its own edits (the gate,
+   * lib/history): it names the clip with the hash the graph draws it with then, so the server
+   * refuses it over a change it missed, and a change made elsewhere since the roll drew the notes
+   * (by their places) refuses it here, unless the roll drew them before the window showed its own
+   * last edit (then it goes from the notes as shown). One Tx, one undo step named `name`. Its notes
+   * show when the graph does; with `select`, the notes it added are then selected.
    */
   const act = (make: (clip: ServerRef) => ClipGesture, name: string, select = false) => {
     if (locked) return;
     const before = clip?.notes ?? [];
+    const asShown = !draft && showsOwn(latest.current);
     afterLaneWrites(latest.current, async (within) => {
-      const g = await graphShowing(lanesShown);
+      const g = await through(latest.current.session, within);
       const l = findLane(g.timeline, module, lane);
       const c = l ? serverRef(l, ref) : null;
       const now = findNoteClip(g.timeline, ref);
       if (!c || !now) throw new Error("This clip is gone.");
-      if (!sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
+      if (asShown && !sameNotes(now.notes, before)) throw new Error(`${trackName()}'s clip was changed in another window or by an agent. It shows as it is now; try again.`);
       return sendGesture(g, make(c), { name }, undefined, within);
     })
       .then((done) => {
@@ -455,7 +468,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const graph = latest.current;
     const lane0 = findLane(graph.timeline, module, lane);
     const named = lane0?.kind === "notes" && lane0.clips.every((_, i) => hasOwnId(lane0.clips, i));
-    const free = !locked && named && !!gesture && !sending.current.busy && !written.current && !laneWriting(graph);
+    const free = !locked && named && !!gesture && !sending.current.busy && !written.current && !laneWriting(graph) && showsOwn(graph);
     leased.current = {
       g,
       lease: free
@@ -1394,24 +1407,6 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
 // In a narrow dock (the browser open in a small window) the tools' dividers go before any tool does.
 const Divider = () => <div className="w-px h-5 shrink-0 bg-line @max-[900px]/dock:hidden" />;
-
-/** The graph once `ok` holds of it (it shows a revision), at most 10 s from now. */
-function graphShowing(ok: (g: GraphState) => boolean): Promise<GraphState> {
-  return new Promise((resolve, reject) => {
-    const now = useStore.getState().graph;
-    if (now && ok(now)) return resolve(now);
-    const done = (f: () => void) => {
-      clearTimeout(timer);
-      stop();
-      f();
-    };
-    const timer = setTimeout(() => done(() => reject(new Error("The app didn't show the last edit in time; try again."))), 10000);
-    const stop = useStore.subscribe((s) => {
-      const g = s.graph;
-      if (g && ok(g)) done(() => resolve(g));
-    });
-  });
-}
 
 /** Whether two clips' notes are the same notes, in the same places. */
 function sameNotes(a: readonly Note[], b: readonly Note[]) {

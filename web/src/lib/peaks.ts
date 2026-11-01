@@ -8,6 +8,7 @@ import { create } from "zustand";
 import type { AudioClip } from "./graph";
 import { token } from "./native";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** For each bucket of `bucket` frames, for each channel: its lowest, then its highest sample, × 127. */
 export interface Peaks {
@@ -49,7 +50,7 @@ async function ask(session: number, asset: string, key: string) {
   asking.add(key);
   let peaks: Peaks | typeof MISSING = MISSING;
   try {
-    const res = await fetch(`/api/graph/audio/peaks?session=${session}&asset=${encodeURIComponent(asset)}`, { headers: auth });
+    const res = await http(`/api/graph/audio/peaks?session=${session}&asset=${encodeURIComponent(asset)}`, { headers: auth });
     if (res.ok) peaks = readPeaks(await res.arrayBuffer()) ?? MISSING;
   } catch {
     // Unread: drawn as a missing file until the song changes, then asked again.

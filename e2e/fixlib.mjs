@@ -29,12 +29,25 @@ export const check = (ok, what) => {
  * The app at `width`×`height`. The side browser starts hidden: these suites are about the timeline
  * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
  * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
+ *
+ * `late` (ms; by default `E2E_LATE_READS`, else none): the page's own reads of the song's state
+ * (`GET /api/graph`) are held back that long, as on a page that hears of each change late. The
+ * suite's own reads (`api`, `state`) never wait.
  */
-export async function open(width = 1440, height = 900, { browser: side = false, pc = false } = {}) {
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
   const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
   await page.setViewport({ width, height });
+  if (late > 0) {
+    await page.setRequestInterception(true);
+    page.on("request", (r) => {
+      if (r.isInterceptResolutionHandled()) return;
+      const read = r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"];
+      if (read) setTimeout(() => r.continue().catch(() => {}), late);
+      else r.continue().catch(() => {});
+    });
+  }
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -56,7 +69,8 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   const api = (path, opts = {}) =>
     page.evaluate(
       async (token, path, opts) => {
-        const r = await fetch(`/api/graph${path}`, { ...opts, headers: { "x-m2-token": token, "content-type": "application/json" } });
+        // `x-e2e`: the suite's own read, never held back (`late`).
+        const r = await fetch(`/api/graph${path}`, { ...opts, headers: { "x-m2-token": token, "content-type": "application/json", "x-e2e": "1" } });
         return { status: r.status, body: await r.json().catch(() => ({})) };
       },
       sess.page_token,

@@ -11,6 +11,7 @@ import { exportMidi } from "./midiFiles";
 import { native, nativeAction, revealLabel, token } from "./native";
 import { listed, listenedWords, listening, muteInSongCall, setMute, type Listening } from "./overlays";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** A stems export's stem being rendered: its track's name, its number and how many there are. */
 export type Stem = { name: string; n: number; of: number };
@@ -80,7 +81,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 /** POST `body` to the stems route `path`, answering its JSON; an error answer throws with the server's words. */
 async function stemsCall<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api/graph/stems${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(`/api/graph/stems${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;

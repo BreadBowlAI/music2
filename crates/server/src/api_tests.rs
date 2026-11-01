@@ -481,3 +481,72 @@ fn the_refusals_read_as_the_contract_quotes_them() {
     let quoted = contract.lines().find(|l| l.contains("`Route::refusal`")).unwrap_or_default();
     assert!(quoted.contains(&format!("\"{play}\"")), "AGENT-11's Today quotes {play:?}:\n{quoted}");
 }
+
+/// Every `.ts` and `.tsx` file of the page (`web/src`), with what it holds, by its path there.
+fn page_sources() -> BTreeMap<String, String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src");
+    let mut all = BTreeMap::new();
+    let mut stack = vec![src.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                let name = p.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+                all.insert(name, std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+    all
+}
+
+// AGENT-2: the window keeps the step of every change it makes as its own as soon as the change's
+// answer comes, whatever the route. The page sends every request through one function, `http`
+// (web/src/lib/http.ts), which keeps the step of each answer that names one: so a route the page
+// starts to call can't be forgotten. Only the answers that name the step they took back (an undo, a
+// redo, a skip) are left out. This lists the routes that write that the page calls, and checks that
+// none of its requests goes another way.
+#[test]
+fn the_page_keeps_the_step_of_every_route_it_calls() {
+    let page = page_sources();
+    assert!(page.len() > 50, "the page's sources: {} files", page.len());
+    let way = "lib/http.ts";
+    let http = page.get(way).expect("web/src/lib/http.ts: the page's one way to the server");
+    // No request goes another way: no `fetch` but in http.ts, no XHR, no beacon.
+    let mut other = vec![];
+    for (name, text) in &page {
+        for (n, line) in text.lines().enumerate() {
+            let code = line.split("//").next().unwrap_or("");
+            let fetches = code.contains("fetch(") && !code.contains("prefetch(");
+            if (fetches && name != way) || code.contains("XMLHttpRequest") || code.contains("sendBeacon") || code.contains("new EventSource") {
+                other.push(format!("web/src/{name}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(other.is_empty(), "requests that don't go through http (web/src/{way}):\n{}", other.join("\n"));
+
+    // The routes whose answers are kept by no window: exactly those that name the step they took
+    // back, each a write.
+    let line = http.lines().find(|l| l.contains("const TAKES_BACK")).expect("http.ts names the routes that take a step back: TAKES_BACK");
+    let named: BTreeSet<&str> = line.split('"').skip(1).step_by(2).collect();
+    assert_eq!(named, BTreeSet::from(["/api/graph/undo", "/api/graph/redo", "/api/graph/undo/skip"]), "{line}");
+    for path in &named {
+        assert!(api::find("POST", path).is_some_and(|r| r.writes), "{path} is a write of the table");
+    }
+
+    // The routes that write which the page calls: each by its whole path, or, in graph.ts, as its
+    // `/api/graph` call ("/set").
+    let all: String = page.values().map(String::as_str).collect();
+    let graph = page.get("lib/graph.ts").unwrap();
+    let calls = |r: &Route| {
+        let whole = [format!("\"{}\"", r.path), format!("`{}`", r.path), format!("\"{}?", r.path), format!("`{}?", r.path)];
+        let short = r.path.strip_prefix("/api/graph").filter(|p| !p.is_empty()).map(|p| format!("(\"{p}\""));
+        whole.iter().any(|w| all.contains(w.as_str())) || short.is_some_and(|s| graph.contains(&s))
+    };
+    let written: Vec<String> = api::all().into_iter().filter(|r| r.writes && calls(r)).map(|r| format!("{} {}", r.method, r.path)).collect();
+    for known in ["POST /api/graph/midifile/import", "POST /api/graph/audio/import", "POST /api/graph/sample", "POST /api/library/sample", "POST /api/graph/clips"] {
+        assert!(written.iter().any(|w| w == known), "the page calls {known}: the list found {written:?}");
+    }
+    println!("the routes that write which the page calls, each answer's step kept by http:\n{}", written.join("\n"));
+}

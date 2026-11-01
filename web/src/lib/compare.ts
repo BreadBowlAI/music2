@@ -18,6 +18,7 @@ import type { StepName } from "./history";
 import { token } from "./native";
 import { stepped } from "./notice";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** What the pill compares, as the server says it. */
 export interface Comparing {
@@ -71,7 +72,7 @@ interface Answer {
 }
 
 async function post(body: object): Promise<{ status: number; json: Answer }> {
-  const res = await fetch("/api/graph/compare", { method: "POST", headers: headers(), body: JSON.stringify(body) });
+  const res = await http("/api/graph/compare", { method: "POST", headers: headers(), body: JSON.stringify(body) });
   return { status: res.status, json: await res.json().catch(() => ({})) };
 }
 

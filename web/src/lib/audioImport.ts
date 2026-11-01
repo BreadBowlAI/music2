@@ -14,6 +14,8 @@ import { useStore } from "./store";
 import { trackMade } from "./events";
 import { undoAction } from "../components/GraphCanvas";
 import { dropOnRecording, recordingHint, type RecordingTarget } from "./recording";
+import { http } from "./http";
+import { editing, goes } from "./history";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -55,7 +57,7 @@ async function post(graph: GraphState, files: Incoming[], to: Target): Promise<I
   const paths = files.flatMap((f) => ("path" in f ? [f.path] : []));
   let res: Response;
   if (paths.length === files.length) {
-    res = await fetch("/api/graph/audio/import", {
+    res = await http("/api/graph/audio/import", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, paths, to }),
@@ -65,7 +67,7 @@ async function post(graph: GraphState, files: Incoming[], to: Target): Promise<I
     if (blobs.reduce((n, b) => n + b.size, 0) > UPLOAD) throw new Error(tooBig(files));
     const list = files.map((f, i) => ({ name: f.name, size: blobs[i].size }));
     const q = `session=${graph.session}&files=${encodeURIComponent(JSON.stringify(list))}&to=${encodeURIComponent(JSON.stringify(to))}`;
-    res = await fetch(`/api/graph/audio/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: new Blob(blobs) });
+    res = await http(`/api/graph/audio/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: new Blob(blobs) });
   }
   if (res.status === 413) throw new Error(tooBig(files));
   const json = await readJson(res);
@@ -83,8 +85,10 @@ export async function bringIn(files: Incoming[], to: Target) {
   if (!graph || files.length === 0) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
+  // On its way until it is answered: an Undo pressed meanwhile waits for it (AGENT-2).
+  const ours = editing();
   try {
-    const done = await post(graph, files, to);
+    const done = await post(graph, files, to).finally(() => ours.end());
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
     const refs = done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
@@ -140,10 +144,14 @@ export async function addSample(item: LibraryItem, to: Target | RecordingTarget)
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
-  const body =
-    to.kind === "recording" ? { session: graph.session, id: item.id, at: graph.view.revision, call: to.call, setting: to.setting } : { session: graph.session, id: item.id, to };
+  // On its way until it is answered (Undo waits for it); onto a card, through the gate (lib/history).
+  const ours = editing();
   try {
-    const res = await fetch("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+    const body =
+      to.kind === "recording"
+        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, [to.call], ours), call: to.call, setting: to.setting }
+        : { session: graph.session, id: item.id, to };
+    const res = await http("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) }).finally(() => ours.end());
     const done = (await readJson(res)) as SampleAdded & { error?: string };
     if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
     if (to.kind === "recording") {
@@ -274,12 +282,13 @@ export async function addAudioTrack(after: string | null) {
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
+  const ours = editing();
   try {
-    const res = await fetch("/api/graph/audio/track", {
+    const res = await http("/api/graph/audio/track", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, ...(after ? { after } : {}) }),
-    });
+    }).finally(() => ours.end());
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
     const fresh = await graphApi.get();

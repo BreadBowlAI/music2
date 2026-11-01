@@ -7,11 +7,12 @@
 // can hold several clips, across tracks.
 
 import { create } from "zustand";
-import { clipIndex, findLane, hasOwnId, laneWriting, readJson, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
+import { clipIndex, findLane, hasOwnId, readJson, sameClip, type ClipRef, type GraphState, type TimelineLane, type TimelineView } from "./graph";
 import { beatNow } from "./clock";
 import { clean } from "./grid";
 import { editing, recorded, type Editing, type Step } from "./history";
 import { token } from "./native";
+import { http } from "./http";
 
 /** A lane's address, as the server writes it: module and lane keys. */
 export interface LaneAddr {
@@ -106,17 +107,6 @@ export function refIn(timeline: TimelineView, ref: ClipRef) {
  */
 export const playhead = () => clean(Math.round(beatNow() * 960) / 960);
 
-/** Gestures of the open project on their way, and the newest revision one made. */
-let sent = { session: 0, revision: 0, pending: 0 };
-
-/**
- * Whether the timeline can't take a gesture now: one is on its way, or made a revision `graph`
- * doesn't show yet, or the roll's lane write is. A gesture names clips as the timeline draws them,
- * so it waits until the timeline shows the last edit.
- */
-export const busy = (graph: GraphState) =>
-  laneWriting(graph) || (sent.session === graph.session && (sent.pending > 0 || graph.view.revision < sent.revision));
-
 /** Why a gesture was refused: the server's words. `changed`: a clip it names changed since (409). */
 export class Refused extends Error {
   constructor(
@@ -133,13 +123,10 @@ export class Refused extends Error {
  * and answers as `/api/graph/clips` does (a drag's lease, 8b.7).
  */
 export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }, edit?: Editing): Promise<Done> {
-  if (sent.session !== graph.session) sent = { session: graph.session, revision: 0, pending: 0 };
-  const q = sent;
-  q.pending++;
-  // On its way: as part of `edit` (a drag let go, which ends it), else as one of its own.
+  // On its way: as part of `edit` (a gesture's own, which its caller ends), else as one of its own.
   const ours = edit ?? editing();
   try {
-    const res = await fetch(via?.path ?? "/api/graph/clips", {
+    const res = await http(via?.path ?? "/api/graph/clips", {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
       body: JSON.stringify(via?.body ?? { session: graph.session, gesture }),
@@ -147,13 +134,11 @@ export async function send(graph: GraphState, gesture: Gesture, step: Step, via?
     const json = await readJson(res);
     if (!res.ok) throw new Refused(json.error ?? `HTTP ${res.status}`, res.status === 409);
     const done = json as Done;
-    q.revision = Math.max(q.revision, done.revision);
     // A gesture that changed nothing says "no change" on both sides. One whose words read the same
     // before and after (a quantize: the same clip, its notes moved) is still a step.
-    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done, step, ours);
+    if (done.before !== done.after || done.before !== "no change") recorded(graph.session, done, step);
     return done;
   } finally {
-    q.pending--;
     if (!edit) ours.end();
   }
 }
@@ -232,7 +217,7 @@ export function copiedOf(timeline: TimelineView, picked: readonly ClipRef[]): Co
 export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: number, name: string) {
   const ours = editing();
   try {
-    const res = await fetch("/api/graph/automate/remove", {
+    const res = await http("/api/graph/automate/remove", {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
       body: JSON.stringify({ session: graph.session, module: addr.module, lane: addr.lane, beat }),
@@ -240,7 +225,7 @@ export async function removeAutomation(graph: GraphState, addr: LaneAddr, beat: 
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
     const done = json as { file: string; before: string; after: string; revision: number; step?: number };
-    if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true }, ours);
+    if (done.before !== done.after) recorded(graph.session, done, { name: `removing the ${name} automation`, structural: true });
     return done;
   } finally {
     ours.end();

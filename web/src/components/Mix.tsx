@@ -721,7 +721,7 @@ function Fader({
   const [typing, setTyping] = useState<{ text: string; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
 
   /** `n` steps (taste.md §5.2), written as one edit half a second after the last. */
   const step = (n: number) => g.step((v) => faderStep(v, n));
@@ -924,7 +924,7 @@ function Fader({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -1053,7 +1053,7 @@ function Pan({
     return true;
   };
 
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const unit = Math.min(1, Math.max(0, toUnit(k, value)));
   const grip = useKnobDrag({
     value: unit,
@@ -1169,7 +1169,7 @@ function Pan({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -1340,7 +1340,7 @@ function SendKnob({
   const svg = useRef<SVGSVGElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const clamp = (u: number) => Math.min(1, Math.max(0, u));
   const unit = clamp(toUnit(k, value));
   const reset = clamp(toUnit(k, k.default ?? value));

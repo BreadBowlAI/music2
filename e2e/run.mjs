@@ -191,6 +191,7 @@ export const SUITES = [
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
   ["library", "library", { expect: 38, s: 9 }],
+  ["own-edits", "fix", { expect: 25, s: 6 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

@@ -18,6 +18,7 @@ import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { controlLabel, graphApi, inSentence, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
 import { useStore } from "../lib/store";
+import { editing, goes } from "../lib/history";
 import { words } from "./Settings";
 
 /** How tall each view is on its card, in px. */
@@ -94,10 +95,23 @@ const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) =>
  * (`/preview` begins each knob's lease under one gesture, and keeps it alive while held still; one
  * in flight for each knob, the newest sent when it lands), and all of them written at release by
  * one `/set` with `with`: one undo step. A release refused, or a drag let go of, ends every lease.
+ * It goes through the gate (`goes`, lib/history): begun while the window doesn't show its own last
+ * edit yet, its first value waits until it does, and it goes from there (`revision`).
  */
 function useViewDrag(p: ViewProps) {
   const toast = useStore((s) => s.toast);
-  type Live = { token: string; knobs: NumberKnob[]; values: number[]; begun: boolean[]; flying: (Promise<void> | null)[]; queued: boolean[]; keep: number };
+  type Live = {
+    token: string;
+    knobs: NumberKnob[];
+    values: number[];
+    begun: boolean[];
+    flying: (Promise<void> | null)[];
+    queued: boolean[];
+    keep: number;
+    revision: number;
+    /** Once it is through the gate; false when it gave up there (said in words). */
+    ready: Promise<boolean>;
+  };
   const live = useRef<Live | null>(null);
   /** Send knob `i`'s newest value, unless one is on its way: then once that lands. */
   const send = (d: Live, i: number) => {
@@ -108,8 +122,8 @@ function useViewDrag(p: ViewProps) {
     d.begun[i] = true;
     d.queued[i] = false;
     const k = d.knobs[i];
-    d.flying[i] = graphApi
-      .preview(p.session, p.revision, k.id, d.token, d.values[i])
+    d.flying[i] = d.ready
+      .then((ok) => (ok ? graphApi.preview(p.session, d.revision, k.id, d.token, d.values[i]) : undefined))
       .catch((e) => toast(words(e)))
       .finally(() => {
         d.flying[i] = null;
@@ -135,7 +149,21 @@ function useViewDrag(p: ViewProps) {
     /** A drag of `knobs` begins. */
     begin(knobs: NumberKnob[]) {
       const n = knobs.length;
-      const d: Live = { token: crypto.randomUUID(), knobs, values: knobs.map((k) => k.value), begun: Array(n).fill(false), flying: Array(n).fill(null), queued: Array(n).fill(false), keep: 0 };
+      const d: Live = {
+        token: crypto.randomUUID(),
+        knobs,
+        values: knobs.map((k) => k.value),
+        begun: Array(n).fill(false),
+        flying: Array(n).fill(null),
+        queued: Array(n).fill(false),
+        keep: 0,
+        revision: p.revision,
+        ready: Promise.resolve(true),
+      };
+      d.ready = goes(p.session, p.revision, knobs.map((k) => k.id)).then(
+        (at) => ((d.revision = at), true),
+        (e) => (toast(words(e)), false),
+      );
       // Held still, each lease is kept alive (the server ends one nobody moves for 10 s).
       d.keep = window.setInterval(() => live.current === d && d.knobs.forEach((_, i) => d.begun[i] && send(d, i)), 2000);
       live.current = d;
@@ -157,13 +185,20 @@ function useViewDrag(p: ViewProps) {
       if (d.knobs.every((k, i) => d.values[i] === k.value)) return cancel();
       live.current = null;
       clearInterval(d.keep);
-      await landed(d);
-      const all = d.knobs.map((k, i): [string, number] => [k.id, d.values[i]]);
-      await graphApi.setWith(p.session, p.revision, d.token, all, { name }).catch((e) => {
-        toast(words(e));
-        // The server ended them with the refusal; say so to any it may have missed.
-        for (const [i, k] of d.knobs.entries()) if (d.begun[i]) void graphApi.cancel(p.session, k.id, d.token).catch(() => {});
-      });
+      // An edit on its way from the release: a gesture after it, or an Undo, waits for it (AGENT-2).
+      const ours = editing();
+      try {
+        if (!(await d.ready)) return;
+        await landed(d);
+        const all = d.knobs.map((k, i): [string, number] => [k.id, d.values[i]]);
+        await graphApi.setWith(p.session, d.revision, d.token, all, { name }, ours).catch((e) => {
+          toast(words(e));
+          // The server ended them with the refusal; say so to any it may have missed.
+          for (const [i, k] of d.knobs.entries()) if (d.begun[i]) void graphApi.cancel(p.session, k.id, d.token).catch(() => {});
+        });
+      } finally {
+        ours.end();
+      }
     },
     cancel,
   };

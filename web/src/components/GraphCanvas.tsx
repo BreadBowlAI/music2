@@ -18,8 +18,9 @@ import {
 import { setClock } from "../lib/clock";
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { useSection } from "../lib/sections";
-import { madeHere, onTheirWay, said, tookBack, type StepName } from "../lib/history";
+import { madeHere, newestMade, onTheirWay, said, tookBack, type StepName } from "../lib/history";
 import { forget, stepped } from "../lib/notice";
+import { ending as takeEnding, useRecord } from "../lib/record";
 import { HEADS_W, HEADS_W_SMALL, WIDE } from "../lib/layout";
 import { flushLocal } from "../lib/local";
 import { canvas, useShell } from "../lib/shell";
@@ -81,7 +82,11 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     canvas.loopSelection = () => loopSelection(latest.current.graph.timeline, latest.current.status.beat, setLoop);
     // Space and Play: stop leaves the playhead where it stopped, and play carries on from there
     // (GarageBand, taste.md §5.1).
-    canvas.play = () => void graphApi.transport("toggle").then(poll, failed);
+    canvas.play = () => {
+      // A stop ends this window's take: it is written, an edit on its way until it is.
+      if (useRecord.getState().take?.phase === "take") takeEnding();
+      void graphApi.transport("toggle").then(poll, failed);
+    };
     canvas.home = () => seek(0);
     return () => {
       for (const k of ["loop", "loopSelection", "play", "home"] as const) delete canvas[k];
@@ -397,6 +402,7 @@ export function undoTop(graph: GraphState, id: "undo" | "redo") {
   waiting = true;
   const shown = useStore.getState().graph ?? graph;
   const atPress = (id === "redo" ? shown.redo_name : shown.undo_name)?.step ?? 0;
+  const before = newestMade(graph.session);
   const answered = Promise.all(awaited.map((e) => e.done)).then(() => true);
   const late = new Promise<false>((resolve) => setTimeout(() => resolve(false), EDITS_WAIT_MS));
   topped = topped
@@ -406,8 +412,9 @@ export function undoTop(graph: GraphState, id: "undo" | "redo") {
       const now = useStore.getState();
       if (now.graph?.session !== graph.session) return;
       if (!all) return void now.toast(`Nothing was ${id === "redo" ? "redone" : "undone"}: your last edit isn't answered yet. Try again in a moment.`);
-      const made = awaited.flatMap((e) => e.steps);
-      return graphUndo(graph.session, id, id === "undo" && made.length ? Math.max(...made) : atPress);
+      // The newest step this window's edits made since the press, if they made one.
+      const made = newestMade(graph.session);
+      return graphUndo(graph.session, id, id === "undo" && made > before ? made : atPress);
     });
   return topped;
 }
