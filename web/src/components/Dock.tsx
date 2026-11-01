@@ -1,11 +1,12 @@
 import clsx from "clsx";
-import { ChevronDown, ChevronUp, CodeXml, Piano, SlidersHorizontal, SlidersVertical } from "lucide-react";
+import { ChevronDown, ChevronUp, CodeXml, Drum, Piano, SlidersHorizontal, SlidersVertical } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { findNoteClip, moduleName, type GraphState } from "../lib/graph";
+import { dockView, findNoteClip, kitOf, moduleName, type GraphState } from "../lib/graph";
 import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
+import BeatView from "./BeatView";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import CodeView from "./CodeView";
 import Mix from "./Mix";
@@ -27,17 +28,24 @@ const VIEW: Record<DockView, { label: string; Icon: typeof Piano; tab: string }>
   // The id the graph tab had: the Device view shows the track's sound (its patch, until the chain view).
   device: { label: "Device", Icon: SlidersHorizontal, tab: "graph" },
   notes: { label: "Notes", Icon: Piano, tab: "notes" },
+  beat: { label: "Beat", Icon: Drum, tab: "beat" },
   mix: { label: "Mix", Icon: SlidersVertical, tab: "mix" },
   code: { label: "Code", Icon: CodeXml, tab: "code" },
 };
 
+/** The switcher's order: Beat beside Notes (KIT-10), shown only while a drum kit's track is selected. */
+const TABS: DockView[] = ["device", "notes", "beat", "mix", "code"];
+
 /**
  * The dock (taste.md §3.5): a 32px header (the selection, the view switcher, the view's tools, hide)
  * over the view. Its view is one choice for the window; what is selected decides only what it shows
- * (§3.7). Hidden (E), its header stays, to bring it back.
+ * (§3.7), and Notes shows in Beat's place while the selection is in no drum kit (KIT-10). Hidden
+ * (E), its header stays, to bring it back.
  */
 export default function Dock({ graph, module }: { graph: GraphState; module: string }) {
-  const view = useShell((s) => s.view);
+  const chosen = useShell((s) => s.view);
+  const view = dockView(graph, chosen, module);
+  const kit = kitOf(graph, module);
   const open = useShell((s) => s.dock);
   const saved = useShell((s) => s.height);
   // Held to the window: the lanes never get less than three rows and the Song's (§3.8).
@@ -66,7 +74,7 @@ export default function Dock({ graph, module }: { graph: GraphState; module: str
           <TrackName module={module} label={label} track={!!shown?.track} testid="module-title" className="min-w-0 text-sm font-semibold text-fg" />
         </div>
         <div role="tablist" aria-label="Views" className="shrink-0 h-ctl-sm flex items-center gap-0.5 p-0.5 rounded-sm bg-hover">
-          {VIEWS.map((v, i) => {
+          {TABS.filter((v) => v !== "beat" || kit).map((v) => {
             const { label, Icon, tab } = VIEW[v];
             return (
               <Segment
@@ -76,7 +84,7 @@ export default function Dock({ graph, module }: { graph: GraphState; module: str
                 aria-controls="dock-body"
                 data-view-tab={tab}
                 on={view === v}
-                title={`${label} (${opt(String(i + 1))})`}
+                title={`${label} (${opt(String(VIEWS.indexOf(v) + 1))})`}
                 onClick={() => useShell.getState().setView(v)}
               >
                 <Icon size={14} />
@@ -130,6 +138,7 @@ export default function Dock({ graph, module }: { graph: GraphState; module: str
 /** The view's body. Memoized: the playback status re-renders the canvas five times a second. */
 const Body = memo(function Body({ graph, module, view, open }: { graph: GraphState; module: string; view: DockView; open: boolean }) {
   const clip = useShell((s) => s.clips[module]);
+  const kit = kitOf(graph, module);
   // Once opened, the code editor stays mounted, hidden behind the other views: its unsaved text,
   // history and ⌘S hook outlive a look at the graph or a clip.
   const [coded, setCoded] = useState(view === "code");
@@ -144,6 +153,7 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
         ) : (
           <Empty testid="notes">Select a clip, or double-click in the timeline to make one.</Empty>
         ))}
+      {open && view === "beat" && kit && <BeatView graph={graph} kit={kit} module={module} />}
       {open && view === "mix" && <Mix graph={graph} />}
       {/* No module before the code first compiles (WRITE-20): the editor opens on the song's files. */}
       {coded && (

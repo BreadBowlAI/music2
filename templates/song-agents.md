@@ -38,7 +38,7 @@ Below, `.` is this song's folder.
 | `m2 add-kit . "808 kit"` | add a drum kit: a Drums bus and a Drum track for each drum (`808 kit`, `909 kit`, `Basic kit`) |
 | `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound |
 | `m2 clips . <gesture> <clip>…` | make, move, split, join or delete clips |
-| `m2 clips . json -` | any other clip gesture, as JSON: a chord built on the song's key (`stamp`), a feel (`groove`), notes pasted into a clip (`paste` with `into`); `m2 call . /api/theory` lists the scales, chords and grooves |
+| `m2 clips . json -` | any other clip gesture, as JSON: a chord built on the song's key (`stamp`), a feel (`groove`), notes pasted into a clip (`paste` with `into`), a drum's steps as the beat grid writes them (`hits`); `m2 call . /api/theory` lists the scales, chords and grooves |
 | `m2 edit . <file> --old <text> --new <text>` | change text in one file of the song |
 | `m2 write . <file> -` | write a whole file, from standard input |
 | `m2 listen . --bars 9-16` | measure how it sounds: loudness, peaks, bands, masking |

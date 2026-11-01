@@ -366,7 +366,7 @@ fn planned_call_forms_are_current() {
         forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label, "")));
     }
     // Each kit's tracks (KIT-5), each call with the kit's values, under the key and name it proposes.
-    for k in crate::drums::kits(&s) {
+    for k in crate::drums::presets(&s) {
         let i = s.instruments().into_iter().find(|i| i.component == k.component).expect("the kit's instrument");
         let d = &s.catalog().components[&k.component];
         for t in &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks {
@@ -381,6 +381,15 @@ fn planned_call_forms_are_current() {
             ));
         }
     }
+    // + Drum in the beat grid (KIT-15): a Drum track playing the sound picked.
+    let drum = s.instruments().into_iter().find(|i| i.component == crate::drums::DRUM).expect("the Drum is listed");
+    let d = &s.catalog().components[crate::drums::DRUM];
+    let snare = crate::kits::sound_value(d, "snare").expect("the Drum's snare");
+    let (values, _) = crate::tracks::values_text(d, &[snare], &s.accepted().compiled.units).unwrap();
+    forms.push(format!(
+        "    // + Drum: a Drum playing a snare\n    {},\n",
+        crate::tracks::track_call_text(&drum, "snare", "Snare", &values)
+    ));
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(
         "    // clap:m2.probe added as a track\n    {},\n",

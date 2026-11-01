@@ -665,6 +665,18 @@ fn run(args: Vec<String>) -> Result<()> {
                 return Ok(());
             }
             println!("revision {}", v.revision);
+            // Each drum kit (KIT-1): its name and bus, then each row's track, lane and sound.
+            let label = |key: &str| v.modules.iter().find(|m| m.key == key).map_or(key.to_string(), |m| m.label.clone());
+            for k in &v.drum_kits {
+                let rows: Vec<String> = k
+                    .rows
+                    .iter()
+                    .map(|r| {
+                        format!("{} ({}/{}, {})", label(&r.track), r.track, r.lane, r.sound.as_deref().unwrap_or("its sound set by code"))
+                    })
+                    .collect();
+                println!("kit {} ({}): {}", k.label, k.bus, rows.join(" · "));
+            }
             for m in &v.modules {
                 let shown = if m.label == m.key { m.key.clone() } else { format!("{} ({})", m.label, m.key) };
                 println!("\n{shown}{}", if m.track { " (track)" } else { "" });
@@ -882,7 +894,7 @@ fn run(args: Vec<String>) -> Result<()> {
             // KIT-5: what + Track ▸ Drum kit does, a kit by its name.
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            let kits = m2_editor::drums::kits(&s);
+            let kits = m2_editor::drums::presets(&s);
             let names: Vec<String> = kits.iter().map(|k| k.name.clone()).collect();
             let kit = match kits.iter().filter(|k| k.name == wanted).collect::<Vec<_>>().as_slice() {
                 [k] => (*k).clone(),

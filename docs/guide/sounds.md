@@ -190,6 +190,8 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | The kick louder | the Kick track's fader |
 | Reverb on the snare alone | an effect on the Snare track |
 | The whole kit quieter, or glued together | the Drums bus: its fader, or an effect on it |
+| A beat, by clicking boxes | select a drum or the bus, then **Beat** (⌥5) in the dock: [the beat grid](window.md#the-beat-grid) |
+| One more drum in the kit | **+ Drum** in the beat grid's header |
 
 The kits that come with `@m2/drums`:
 

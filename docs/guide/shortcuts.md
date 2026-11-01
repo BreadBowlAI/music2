@@ -55,6 +55,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
+| ⌥5 | Alt+5 | Beat, the beat grid, while a drum kit's track is selected ([The beat grid](window.md#the-beat-grid)) |
 | E | E | Show or hide the dock |
 | ⌘F | Ctrl+F | Find instruments, sounds and effects ([Finding sounds](finding-sounds.md)) |
 | ⌥⌘B | Ctrl+Alt+B | Show or hide the browser |

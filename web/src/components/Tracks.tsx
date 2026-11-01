@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type Kit } from "../lib/graph";
+import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
@@ -78,14 +78,14 @@ function nameOf(graph: GraphState, module: string) {
 }
 
 /** The graph as the server has it now, so what an edit made can be selected at once. */
-async function refreshed() {
+export async function refreshed() {
   const graph = await graphApi.get();
   useStore.getState().set({ graph });
   return graph;
 }
 
 /** Select a track an edit made and light its row (taste.md §2.13): nothing else opens, so Space, M and S work at once. */
-function arrived(module: string, lane: string | undefined) {
+export function arrived(module: string, lane: string | undefined) {
   useShell.getState().select(module);
   if (lane) trackMade(module, lane);
 }
@@ -137,10 +137,10 @@ export async function addTrack(instrument: Instrument, after: string | null): Pr
 export const KITS = "Drum kit (several tracks)";
 
 /** A row of + Track's list: an instrument, a plugin, an audio track, or a kit (KIT-5), which says so. */
-export type Row = Instrument & { kit?: Kit };
+export type Row = Instrument & { kit?: KitPreset };
 
 /** The kits as + Track's rows, each its kit's, by the id `kit:<instrument>/<name>`, in the kits' group. */
-export function kitRows(kits: Kit[]): Row[] {
+export function kitRows(kits: KitPreset[]): Row[] {
   return kits.map((k) => ({
     component: `kit:${k.component}/${k.name}`,
     label: k.name,
@@ -155,7 +155,7 @@ export function kitRows(kits: Kit[]): Row[] {
 }
 
 /** Add kit `kit` below `after` (else last), KIT-5: its bus and tracks, the first track selected and lit, with an Undo. */
-export async function addKit(kit: Kit, after: string | null) {
+export async function addKit(kit: KitPreset, after: string | null) {
   const graph = writable();
   if (!graph) return;
   lastAdded = `kit:${kit.component}/${kit.name}`;
@@ -355,7 +355,7 @@ function InstrumentPicker({
   // + Track's groups: the Drums, then the kits (KIT-5), then the instruments; they end with Audio
   // (lane A's Q8), then Plugins (gaps #32). Change Instrument has no kits, Audio or Plugins.
   const listed = graph.instruments;
-  const kits = graph.kits;
+  const kits = graph.kit_presets;
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => {
     if (!swap) wantPlugins();

@@ -443,8 +443,10 @@ pub const COMMANDS: &[Command] = &[
                 sends it",
         more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with \
                `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
-               song's key) and `groove` (swing, laid back, pushed or accents). `m2 call <song> /api/theory` \
-               lists the chords and grooves.",
+               song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a \
+               Drum's lane: `{\"op\": \"hits\", \"module\": \"kick\", \"lane\": \"hits\", \"at\": [0, 1], \"step\": 0.25, \
+               \"to\": \"on\"}`, `to` being `on`, `off` or `{\"velocity\": 0.5}`). `m2 call <song> /api/theory` lists \
+               the chords and grooves.",
     },
     Command {
         name: "sections",

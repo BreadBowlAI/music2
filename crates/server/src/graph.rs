@@ -1895,6 +1895,20 @@ impl Graph {
         })
     }
 
+    /// Add a Drum track playing `sound` to the drum kit of bus `bus` (KIT-15). The answer: the
+    /// edit, and the new track's `module` and `label`.
+    pub fn kit_drum(&self, token: u64, bus: &str, sound: &str) -> Result<Value> {
+        let (bus, sound) = (bus.to_string(), sound.to_string());
+        let made = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = m2_editor::kits::add_drum(s, &bus, &sound)?;
+                Ok((made.edited, json!({"module": made.module, "label": made.label})))
+            })
+        })?;
+        self.forget_made(&made);
+        Ok(made)
+    }
+
     /// Duplicate track `module`: its code, data and channel, below it in its colour.
     pub fn duplicate_track(&self, token: u64, module: &str) -> Result<Value> {
         let module = module.to_string();

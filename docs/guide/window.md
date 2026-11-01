@@ -2,7 +2,7 @@
 
 **In short**
 - The top bar plays, records, loops and sets the tempo, time signature and key.
-- The timeline shows each track's clips; the dock below shows the selected track as Device, Notes, Mix or Code.
+- The timeline shows each track's clips; the dock below shows the selected track as Device, Notes, Mix or Code, and a drum kit's tracks in Beat too.
 - The browser on the left lists instruments and effects. Help ▸ Make Your First Song teaches the basics.
 
 ## The top bar
@@ -61,7 +61,7 @@ Down the left (⌥⌘B shows or hides it): the instruments (Drums, Instruments, 
 
 ## The dock below the timeline
 
-It shows the selected track (or the Song) in one of four views, picked with the switcher in its header or ⌥1 to ⌥4: **Device**, **Notes**, **Mix** and **Code**. The view stays what you picked while you select other tracks. Drag the line between the timeline and the dock to resize it; double-click it, or press E, to hide or show the dock.
+It shows the selected track (or the Song) in one of four views, picked with the switcher in its header or ⌥1 to ⌥4: **Device**, **Notes**, **Mix** and **Code**. A drum kit's track has a fifth, **Beat** (⌥5), beside Notes: [the beat grid](#the-beat-grid). The view stays what you picked while you select other tracks. Drag the line between the timeline and the dock to resize it; double-click it, or press E, to hide or show the dock.
 
 - **Device:** the track's sound as boxes and knobs.
   - Drag a knob up or down to hear it (300 pixels take it across its whole range; hold ⇧ for a tenth of that, to fine-tune); let go to write the number into the code. ⌥-click a knob to put it back at its default (the middle of its range when its control declares no default).
@@ -134,6 +134,26 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   - Right-click a note (or empty grid) for the note menu: up or down a semitone or an octave, **Quantize** (Q: onto the grid), **Legato** (each note lasts until the next starts), **Humanize** (timing and loudness a little off, so it sounds played), **Swing** (50% to 71%: every second eighth, or sixteenth on a finer grid, a little later; about 66% is a shuffle), the grooves (**Laid back** and **Pushed**: the notes between the beats a little late or early; **Accents**: loud on the beat, softer between), Duplicate and Delete. It acts on the selected notes, or with none, on every note of the clip, as one undo step.
   - The drum machine's rows say their drum (Kick, Snare, Closed hat) instead of C2, and so do its notes. Its roll is folded: only the drums the clip uses show (the whole kit while it has none), and a row stays while the roll is open, even when its notes go. ↑ and ↓ move a drum to the next row shown. **Fold** in the header shows every row. With the song's key set, the rows not in the key are shaded (never on the drum machine), and the header has **Lock to key** and **Chord ▾** ([Key, scale and chords](music-basics.md#key-scale-and-chords)).
   - Lock to key, Fold and the row height are kept for the song on this computer (`.music2/view.json`), not in the song.
+
+## The beat grid
+
+In short: the beat grid writes a drum beat by clicking boxes, one row for each drum of a kit. It is the dock's **Beat** view (⌥5), beside Notes.
+
+| Word | What it means |
+|---|---|
+| **Drum kit** | Several Drum tracks (one drum each: Kick, Snare, Hats…) whose output is one bus, so the kit has one fader too. Make one with **+ Track ▸ Drum kit (several tracks)**, or from a Group bus in Mix: set each drum's output to it. |
+| **Step** | One box of the grid: a sixteenth note by default (1/16, four to a beat). Its length is the grid's choice in the header, 1/4 to 1/64, or triplets. |
+| **Hit** | A note on a drum's lane: one hit of the drum. A step is lit when a hit starts in it. |
+| **Velocity** | How hard a hit is played, from soft (at the bottom) to loud (at the top). |
+
+- **Open it:** select a kit's bus, or one of its drums, then click **Beat** (or press ⌥5). Each row is one drum track: its colour, its name, and its sound when the name doesn't say it. Clicking a name selects that track. With a track that is in no kit, the dock shows Notes in Beat's place, and ⌥5 says why nothing opened. A kit's bus says in its timeline row that it is the kit, and which drums play into it.
+- **Write a beat:** click a step to put a hit there; click a lit step to take its hit away. Drag along a row to light, or clear, every step you pass. Each click or drag is one undo step. ⌘1 and ⌘2 make the steps shorter or longer (⌘3: triplets), as the grid menu in the header does.
+- **Where the notes go:** each row is its track's own notes lane, so the timeline and Notes show the same hits, and an edit in one shows in the others. A hit goes into the clip that holds its step; a step in no clip gets a new clip, its bar long. A hit is one step long, at the drum's own note: the note most of the row's hits play, or for a new row its sound's General MIDI note (General MIDI: the standard that gives each drum a note number, so pads and MIDI files agree), such as Kick C2, Snare D2, Hats F#2 (the closed hat). An open hat is a note at A#2: write it in Notes, and the grid shows it as a hit.
+- **Notes off the grid:** a hit that starts between two steps is drawn as a dark mark where it starts; hold the mouse over it to see where, as bar.beat.sixteenth. The grid never moves it. Clicking its step takes it away, as any hit. How long a hit is doesn't matter: a drum sounds the same, so a short or long hit that starts on a step is on the grid.
+- **Velocity:** the lane at the bottom shows the selected row's hits as bars. Drag a bar up or down to play that hit louder or softer: one undo step.
+- **+ Drum** in the header adds a drum to the kit: pick its sound (Kick, Snare, Clap, Hats, Tom, Rim, Cowbell, Cymbal or Shaker). It is a new track named by the sound (Toms for the tom, as a kit names it), going to the kit's bus, below the kit's last drum, and selected. One Undo takes it back.
+- Scroll to move along the song; ⌘ + scroll, or the zoom buttons, zoom. Click the bar numbers to play from there. The grid shows the song's bars and one bar more, to write the next bar in.
+- For agents: `m2 graph` says each kit on a line of its own (`kit Drums (drums): Kick (kick/hits, kick) · …`), and the clip gesture `hits` writes steps as the grid does ([m2 commands](commands.md#m2-clips)).
 
 ## Help
 

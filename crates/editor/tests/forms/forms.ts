@@ -1523,6 +1523,8 @@ export default song(({ lane, time }) => {
     track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare" })),
     // Basic kit's Hats added as a track
     track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats" })),
+    // + Drum: a Drum playing a snare
+    track("snare", { name: "Snare" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "snare" })),
     // clap:m2.probe added as a track
     track("m2-probe", { name: "m2 probe" }, ({ lane }) => plugin("clap:m2.probe", { notes: lane.notes("notes"), key: "m2-probe" })),
     // an audio track added

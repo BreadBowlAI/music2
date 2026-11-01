@@ -68,6 +68,11 @@ export type Gesture =
   | { op: "points"; clip: ServerRef; points: [number, number][] | [number, string | boolean][] }
   /** The roll's edit of one notes clip: all its notes, and its length. */
   | { op: "notes"; clip: ServerRef; notes: { pitch: number; start: number; length: number; velocity: number }[]; length?: number }
+  /**
+   * The beat grid's steps (KIT-12) on a Drum track's lane: each from a beat of `at` to the next line
+   * of a grid of `step` beats (cut at its bar's end), turned on, off, or to a velocity.
+   */
+  | ({ op: "hits"; at: number[]; step: number; to: "on" | "off" | { velocity: number } } & LaneAddr)
   /** An audio clip's volume (dB), fades (seconds), direction and Follow tempo: those given (lane A's A3, sx's D11). */
   | { op: "audio"; clip: ServerRef; gain_db?: number; fade_in?: number; fade_out?: number; reverse?: boolean; follow?: boolean };
 

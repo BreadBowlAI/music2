@@ -423,8 +423,8 @@ pub enum Play {
 /// A track to add: what it plays, its name (else the instrument's, or "Audio"), its key (else one
 /// proposed from its name, ID-2), and its lane's first clips, as the lane format writes them (each
 /// gets a fresh id, as a gesture mints one). An instrument's track (or a bus) may write `values` of
-/// its controls in its call, as an insert carries them (a kit's, KIT-5), and a track may go to a bus
-/// of the same list, `to`, by its place there, before its own.
+/// its controls in its call, as an insert carries them (a kit's, KIT-5; + Drum's sound, KIT-15), and
+/// its channel may go to a bus, `to`, instead of the master.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewTrack {
     pub play: Play,
@@ -432,9 +432,18 @@ pub struct NewTrack {
     pub key: Option<String>,
     pub clips: Vec<serde_json::Value>,
     pub values: Vec<Insert>,
-    pub to: Option<usize>,
+    pub to: Option<Goes>,
     /// Its channel's fader, in dB as written (a kit's bus's, KIT-4); none leaves it out (0 dB).
     pub db: Option<Spelled>,
+}
+
+/// The bus a new track's channel goes to (RENDER-34): one the mixer has, by its channel's key (+ Drum
+/// adds a Drum to a kit's, KIT-15), or one made in the same call, by its place in the list, before
+/// the track's own (a kit's bus, KIT-5).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Goes {
+    Bus(String),
+    New(usize),
 }
 
 /// The lane an audio track plays its clips from.
@@ -494,6 +503,7 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let rev = s.accepted();
     let mixer = the_mixer(rev)?;
     let before = crate::bus::routing(rev, &mixer);
+    let there = crate::bus::bus_channels(rev, &mixer);
     let song_text = rev.snapshot.files[Path::new(&mixer.file)].clone();
     let taken = taken(rev);
     let tx_id = m2_song::tx::random_id();
@@ -557,10 +567,12 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
                 .find(|b| !bindings.contains(b) && free_binding(&song_text, b) == *b)
                 .expect("a free binding");
         }
-        // A channel that goes to a new bus says so; a bus channel reads its bus as it is (RENDER-34).
-        let to = match t.to {
-            Some(b) if b < n && matches!(tracks[b].play, Play::Bus(_)) => Some(keys_made[b].clone()),
-            Some(_) => return Err(EditError::Rejected("a new track goes to a new bus listed before it".into())),
+        // A channel that goes to a bus says so; a bus channel reads its bus as it is (RENDER-34).
+        let to = match &t.to {
+            Some(Goes::New(b)) if *b < n && matches!(tracks[*b].play, Play::Bus(_)) => Some(keys_made[*b].clone()),
+            Some(Goes::New(_)) => return Err(EditError::Rejected("a new track goes to a new bus listed before it".into())),
+            Some(Goes::Bus(c)) if there.contains_key(c) => Some(c.clone()),
+            Some(Goes::Bus(c)) => return Err(EditError::Rejected(format!("The mixer has no bus channel {c}, so no track can go to it."))),
             None => None,
         };
         // Its fader, when given, as a channel's `db` (a kit's bus's, KIT-4), before where it goes.

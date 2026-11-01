@@ -894,7 +894,7 @@ impl Open {
                 "effects": s.effects(),
                 "instruments": s.instruments(),
                 // The kits the instruments name, which + Track's Drum kit makes (KIT-5).
-                "kits": m2_editor::drums::kits(s),
+                "kit_presets": m2_editor::drums::presets(s),
                 "palette": m2_editor::layout::DEFAULT_ORDER,
                 "diagnostics": diagnostics,
                 "problems": problems,

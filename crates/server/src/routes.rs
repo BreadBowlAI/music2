@@ -126,7 +126,7 @@ crate::api::routes! {
         "Add a track playing an instrument, by its component id as the state's instruments list it",
         r#"{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}"#;
     POST "/api/graph/track/kit" => track_kit; writes, agents,
-        "Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kits list it",
+        "Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kit_presets list it",
         r#"{"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}"#;
     POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
         "Copy a track: its code, its clips with new ids, its plugin states and its channel",

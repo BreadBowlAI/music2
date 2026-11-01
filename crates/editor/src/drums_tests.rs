@@ -43,7 +43,7 @@ const DRUM: &str = "@m2/drums:drum";
 fn the_kits_are_the_packs_own() {
     let f = fixture("templates/empty");
     let s = f.open();
-    let kits = kits(&s);
+    let kits = presets(&s);
     let got: Vec<(&str, &str, &str, Vec<&str>)> = kits
         .iter()
         .map(|k| (k.name.as_str(), k.component.as_str(), k.instrument.as_str(), k.tracks.iter().map(String::as_str).collect()))
@@ -155,7 +155,7 @@ fn a_kit_nobody_names_is_refused() {
 // on the eighths (the last open), a cymbal, the rim and the cowbell on offbeats, a tom fill.
 #[test]
 fn every_kit_plays_its_beat_under_its_peak_and_as_loud_as_the_drum_machine() {
-    let all = kits(&fixture("templates/empty").open());
+    let all = presets(&fixture("templates/empty").open());
     assert_eq!(all.len(), 3, "@m2/drums' three");
     for kit in all {
         let f = fixture("templates/empty");
@@ -237,7 +237,7 @@ fn each_sound_answers_to_its_general_midi_notes() {
     let rows = &s.catalog().components["@m2/drums:drum-kit"].editor.notes;
     assert!(rows.keys().all(|n| sound_of(*n).is_some()), "{rows:?}");
     // The presets' words for each sound are the table's.
-    for k in kits(&s) {
+    for k in presets(&s) {
         let d = &s.catalog().components[&k.component];
         for t in &d.editor.kits.iter().find(|x| x.name == k.name).unwrap().tracks {
             let place = t.values.iter().find(|v| v.slot == "drum").map_or(0.0, |v| v.value.value) as usize;

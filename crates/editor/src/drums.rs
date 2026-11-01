@@ -1,5 +1,6 @@
-//! Drum kits (KIT-1 to KIT-9; the design is `docs/designs/drums/design.md`): a kit is a Drums bus
-//! and the Drum tracks that go to it, worked out from the song, never stored.
+//! The Drum and the kits the packs name (KIT-2 to KIT-9; the design is `docs/designs/drums/design.md`).
+//! Which kits a song has, a Drums bus and the Drum tracks that go to it, worked out from the song,
+//! is [`crate::kits`]' (KIT-1).
 //!
 //! - **The General MIDI table** (KIT-6): which of the Drum's sounds answers to each drum note, one
 //!   table for [`split`] (a drum machine's lane by sound, KIT-7), a MIDI file's drums coming in as
@@ -17,10 +18,10 @@ use serde::Serialize;
 
 use crate::EditError;
 use crate::bus::BusKind;
-use crate::tracks::{self, Made, NewTrack, Play};
+use crate::tracks::{self, Goes, Made, NewTrack, Play};
 
-/// The Drum, which a kit's tracks play.
-const DRUM: &str = "@m2/drums:drum";
+/// The Drum, by its ComponentId: one drum on a track, which a kit's tracks play.
+pub const DRUM: &str = "@m2/drums:drum";
 
 /// What a kit's bus is called: a kit's name is its bus's label (KIT-1).
 pub const BUS: &str = "Drums";
@@ -108,9 +109,10 @@ pub fn general_midi(sound: &str, key: u8) -> u8 {
     }
 }
 
-/// A kit an instrument names (KIT-3), as + Track's Drum kit lists it.
+/// A kit an instrument names (KIT-3), as + Track's Drum kit lists it: a preset a new kit is made
+/// from, not a kit of the song ([`crate::kits::DrumKit`]).
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct KitInfo {
+pub struct KitPreset {
     /// Its name: "808 kit".
     pub name: String,
     /// The instrument its tracks play, by ComponentId (`@m2/drums:drum`), and what it is called.
@@ -125,13 +127,13 @@ pub struct KitInfo {
 
 /// Every kit the instruments + Track lists name, in the list's order, each in the order its
 /// instrument names them.
-pub fn kits(s: &Session) -> Vec<KitInfo> {
+pub fn presets(s: &Session) -> Vec<KitPreset> {
     let catalog = s.catalog();
     tracks::instruments(s)
         .into_iter()
         .filter_map(|i| catalog.components.get(&i.component).map(|d| (i, d)))
         .flat_map(|(i, d)| {
-            d.editor.kits.iter().map(move |k| KitInfo {
+            d.editor.kits.iter().map(move |k| KitPreset {
                 name: k.name.clone(),
                 component: i.component.clone(),
                 instrument: i.label.clone(),
@@ -162,7 +164,7 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
         play: Play::Instrument(component.to_string()),
         label: Some(t.name.clone()),
         values: t.values.clone(),
-        to: Some(0),
+        to: Some(Goes::New(0)),
         ..NewTrack::default()
     });
     tracks::add_tracks(s, &std::iter::once(kit_bus(k.db.clone())).chain(made).collect::<Vec<_>>(), after, None)
@@ -197,34 +199,26 @@ pub(crate) fn kit_of(
             label: Some(label.to_string()),
             clips: vec![clip(mine)?],
             values: vec![menu],
-            to: Some(bus),
+            to: Some(Goes::New(bus)),
             ..NewTrack::default()
         });
     }
     Ok(out)
 }
 
-/// The sound each track's Drum plays, by its key (KIT-9): the name its menu holds, a value the code
-/// writes or leaves out. None for a track whose Drum's sound the code works out (a lane, a signal),
-/// or that plays no Drum, or two.
+/// The sound each track's Drum plays, by its key (KIT-9), as a song's kits say it
+/// ([`crate::kits::drum`]): the name its menu holds, a value the code writes or leaves out. None for
+/// a track whose Drum's sound the code works out (a lane, a signal), that plays no Drum, or two, or
+/// whose Drum plays another track's lane.
 pub(crate) fn sounds_played(s: &Session) -> BTreeMap<String, &'static str> {
-    let view = crate::view::view(s);
-    let mut out = BTreeMap::new();
-    for m in &view.modules {
-        let menus: Vec<&str> = m
-            .nodes
-            .iter()
-            .flat_map(|n| &n.knobs)
-            .filter(|k| k.component.as_deref() == Some(DRUM) && k.slot.as_deref() == Some("drum"))
-            .filter_map(|k| k.value.as_str())
-            .collect();
-        if let [one] = menus[..]
-            && let Some(g) = GM.iter().find(|g| g.sound == one)
-        {
-            out.insert(m.key.clone(), g.sound);
-        }
-    }
-    out
+    let rev = s.accepted();
+    rev.compiled
+        .ir
+        .modules
+        .iter()
+        .filter_map(|m| crate::kits::drum(rev, &m.key))
+        .filter_map(|r| Some((r.track, GM.iter().find(|g| Some(g.sound) == r.sound.as_deref())?.sound)))
+        .collect()
 }
 
 #[cfg(test)]

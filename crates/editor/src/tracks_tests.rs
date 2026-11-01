@@ -524,7 +524,7 @@ fn the_instruments_are_stds_sounds_in_order() {
     assert!(list.iter().all(|i| i.component != "@m2/drums:drum-kit"), "the drum machine is left out (KIT-2)");
     assert_eq!(s.catalog().components["@m2/drums:drum-kit"].label, "Drum machine", "though code plays it, by that name");
     assert_eq!((list[0].name.as_str(), list[0].module.as_str()), ("drums.drum", "@m2/drums"), "imported as a member of its object");
-    let kits: Vec<String> = crate::drums::kits(&s).into_iter().map(|k| k.name).collect();
+    let kits: Vec<String> = crate::drums::presets(&s).into_iter().map(|k| k.name).collect();
     assert_eq!(kits, ["808 kit", "909 kit", "Basic kit"], "the kits, rows of their own");
     let rows: Vec<&str> = list.iter().map(|i| i.label.as_str()).chain(kits.iter().map(String::as_str)).collect();
     for (k, a) in rows.iter().enumerate() {
@@ -654,4 +654,31 @@ fn two_new_tracks_of_one_name_stay_apart() {
     assert_eq!(made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(), [("vox", "Vox"), ("vox-2", "Vox 2")]);
     let song = f.read("song.ts");
     assert!(song.contains("vox: vox.out,\n      \"vox-2\": vox2.out"), "{song}");
+}
+
+// KIT-15, KIT-5: a new track's channel goes to a bus the mixer has, or to one made before it in the
+// same call; anything else is refused in words before anything is written. The planner's assertion
+// says where every channel goes, the new ones as asked and the others as they were.
+#[test]
+fn a_new_track_goes_only_to_a_bus_there_is() {
+    let f = fixture("core/session/tests/fixtures/buses");
+    let mut s = f.open();
+    let before = tree(&f);
+    let drum = |to: Goes| NewTrack { play: Play::Instrument("@m2/drums:drum".into()), to: Some(to), ..NewTrack::default() };
+    for to in ["verb2", "kick"] {
+        let e = add_tracks(&mut s, &[drum(Goes::Bus(to.into()))], None, None).map(|_| ()).unwrap_err().to_string();
+        assert_eq!(e, format!("edit rejected: The mixer has no bus channel {to}, so no track can go to it."));
+    }
+    let e = add_tracks(&mut s, &[drum(Goes::New(0))], None, None).map(|_| ()).unwrap_err().to_string();
+    assert_eq!(e, "edit rejected: a new track goes to a new bus listed before it");
+    assert_eq!(tree(&f), before, "nothing written");
+    // The assertion, on a candidate where the Kick goes to the Drums bus.
+    let tx = crate::plan::planned(&s, (String::new(), String::new()), vec![], m2_song::tx::Expect::Identical);
+    let checked = s.check(&tx).unwrap();
+    let rev = s.accepted();
+    let routes = crate::bus::routing(rev, &the_mixer(rev).unwrap());
+    assert_eq!(routed_as(&checked, &routes, &[]), Ok(()));
+    assert_eq!(routed_as(&checked, &routes, &[("kick".into(), Some("drums".into()))]), Ok(()));
+    assert_eq!(routed_as(&checked, &routes, &[("kick".into(), None)]), Err("route more than it says".into()));
+    assert_eq!(routed_as(&checked, &routes, &[("snare".into(), Some("drums".into()))]), Err("route more than it says".into()));
 }
