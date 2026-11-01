@@ -14,7 +14,10 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, key, view, box } = await open(1440, 900);
+const { page, errors, api, key, view, box, toasts } = await open(1440, 900);
+/** Every answer of a knob's routes that refused something, as it came. */
+const refused = [];
+page.on("response", (r) => r.status() >= 400 && /\/api\/graph\/(preview|set)\b/.test(r.url()) && refused.push(`${r.url().replace(/^.*\/api/, "/api")} ${r.status()}`));
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 /** The lint over what is inside `sel`. */
@@ -92,6 +95,8 @@ await page.mouse.down();
 for (let i = 1; i <= 12; i++) await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - (30 * i) / 12);
 await page.mouse.up();
 check(await until(() => /positionA: 0\.1\b/.test(read(file))), `30 px up moves it a tenth of its range: ${read(file).match(/wavetable\(lane[^\n]*/)?.[0]}`);
+const said = await toasts();
+check(refused.length === 0 && !said.some((t) => /changed around this control|Nothing was changed|The song changed/.test(t)), `the drag right after ⇧⌘Z is not refused: ${JSON.stringify({ refused, said })}`);
 
 // ---------------------------------------------------------------- the pictures
 

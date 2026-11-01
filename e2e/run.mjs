@@ -187,14 +187,15 @@ export const SUITES = [
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
-  ["wavetable", "fix", { expect: 31, s: 6 }],
+  ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
   ["library", "library", { expect: 38, s: 9 }],
-  ["own-edits", "fix", { expect: 25, s: 6 }],
+  ["own-edits", "fix", { expect: 43, s: 6 }],
+  ["own-gate", "fix", { expect: 30, s: 12 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

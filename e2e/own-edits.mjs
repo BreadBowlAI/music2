@@ -9,9 +9,9 @@
 //  - ⌘Z right after a MIDI file came in, and right after an audio file did: each taken back;
 // and no refusal is shown, nor answered.
 // node own-edits.mjs <root> <home> <project>
-import { check, done, open, read, until } from "./fixlib.mjs";
+import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 
-const { page, errors, toasts, key, box, view, show } = await open(1440, 900, { late: 400 });
+const { page, errors, toasts, key, box, view, show, api, state } = await open(1440, 900, { late: 400 });
 /** Every answer that refused something, as it came. */
 const refusals = [];
 page.on("response", (r) => r.status() >= 400 && /\/api\//.test(r.url()) && refusals.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "/api")} ${r.status()}`));
@@ -158,6 +158,107 @@ await dropFile(ruler.x + 8 * PPB + 6, Math.max(...rows) + 20, "tone.wav", "audio
 check((await answered).ok() && read("song.ts") !== songAt, "a WAV dropped below the tracks comes in on a new track");
 await key("Meta+z");
 check(await until(() => read("song.ts") === songAt), "and ⌘Z at once takes the track back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- ⌘Z right after + Track ▸ Audio track
+const songB = read("song.ts");
+n = refusals.length;
+answered = page.waitForResponse((r) => r.url().includes("/api/graph/audio/track"), { timeout: 8000 });
+await page.keyboard.press("Escape");
+await page.click("[data-testid=add-track]");
+await page.waitForSelector("[data-testid=instrument-list] input");
+await page.keyboard.type("audio");
+await page.keyboard.press("Enter");
+check((await answered).ok() && read("song.ts") !== songB, "+ Track ▸ Audio track adds one");
+await key("Meta+z");
+check(await until(() => read("song.ts") === songB), "and ⌘Z at once takes it back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- ⌘Z right after a sample from the library
+const songC = read("song.ts");
+n = refusals.length;
+await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+await key("Meta+KeyF");
+await page.waitForSelector("[data-spotlight] input");
+const found = page.waitForResponse((r) => r.url().includes(`/api/library?q=${encodeURIComponent("kick one-shot")}`), { timeout: 10000 });
+await page.type("[data-spotlight] input", "kick one-shot");
+await found;
+await until(async () => !!(await page.$('[data-spotlight-item="sample:std:samples/kit/kick.wav"]')), 5000);
+await key("ArrowDown");
+await key("ArrowUp");
+answered = page.waitForResponse((r) => r.url().includes("/api/library/sample"), { timeout: 10000 });
+await key("Enter");
+check((await answered).ok() && read("song.ts") !== songC, "the library's kick, Enter: it comes in on a new track");
+await key("Meta+z");
+check(await until(() => read("song.ts") === songC), "and ⌘Z at once takes it back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- ⌘Z right after a Sampler's file
+await page.keyboard.press("Escape");
+const songD = read("song.ts");
+await page.click("[data-testid=add-track]");
+await page.waitForSelector("[data-testid=instrument-list] input");
+await page.keyboard.type("sampler");
+await page.keyboard.press("Enter");
+check(await until(() => read("song.ts") !== songD && (() => { try { return read("tracks/sampler.ts").includes("sampler("); } catch { return false; } })()), "+ Track ▸ Sampler adds one");
+await view("graph");
+const sampler = '[data-module="sampler"] [data-recording-call]';
+await until(async () => !!(await page.$(sampler)), 8000);
+await page.$eval(sampler, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+const samplerFile = read("tracks/sampler.ts");
+const sb = await box(sampler);
+n = refusals.length;
+answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/graph/sample", { timeout: 8000 });
+await dropFile(sb.x + sb.width / 2, sb.y + sb.height / 2, "tone.wav", "audio/wav", wav());
+check((await answered).ok() && read("tracks/sampler.ts") !== samplerFile, `a WAV dropped on the Sampler's card: its call names it (${read("tracks/sampler.ts").match(/sampler\([^\n]*/)?.[0]})`);
+await key("Meta+z");
+check(await until(() => read("tracks/sampler.ts") === samplerFile), "and ⌘Z at once takes it back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- ⌘Z right after a take
+const record = async () => (await state()).record ?? null;
+const inject = (body) => api("/midi/inject", { method: "POST", body: JSON.stringify(body) });
+const bassNotes = read("data/bass/notes.json");
+await page.click('[data-module-tab="bass"] [data-testid=track-label]');
+await inject({ device: "Test Keys", plugged: true });
+await sleep(300);
+const pressR = async () => {
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  await page.keyboard.press("r");
+};
+await pressR();
+check(await until(async () => (await record())?.phase === "take", 5000), "R counts in, then records on Bass");
+await inject({ device: "Test Keys", bytes: [0x90, 45, 100] });
+await sleep(400);
+await inject({ device: "Test Keys", bytes: [0x80, 45, 0] });
+n = refusals.length;
+await pressR();
+check(await until(() => read("data/bass/notes.json") !== bassNotes, 5000), "R again: the take is written");
+await key("Meta+z");
+check(await until(() => read("data/bass/notes.json") === bassNotes), "and ⌘Z at once takes it back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- ⌘Z right after a paste of bars
+await view("graph");
+const kickHits = read("data/kick/hits.json");
+await page.click('[data-track="bass"] [data-module-tab]');
+const ruler2 = await box("[data-testid=ruler]");
+// Bars 1 to 8, along the ruler's top band.
+await page.mouse.move(ruler2.x + 31.6 * PPB, ruler2.y + 7);
+await page.mouse.down();
+await page.mouse.move(ruler2.x + 0.3 * PPB, ruler2.y + 7, { steps: 12 });
+await page.mouse.up();
+check(await until(async () => !!(await page.$("[data-testid=section]"))), "bars selected along the ruler");
+await key("Meta+c");
+await sleep(300);
+await api("/seek", { method: "POST", body: JSON.stringify({ beat: 64 }) });
+await until(() => page.$eval("[data-testid=playhead]", (e) => Math.abs(Number(e.dataset.beat) - 64) < 1e-3));
+n = refusals.length;
+answered = page.waitForResponse((r) => new URL(r.url()).pathname === "/api/graph/sections", { timeout: 8000 });
+await key("Meta+v");
+check((await answered).ok() && read("data/kick/hits.json") !== kickHits, "⌘C, then ⌘V at bar 17: the bars are pasted");
+await key("Meta+z");
+check(await until(() => read("data/kick/hits.json") === kickHits), "and ⌘Z at once takes the paste back");
 check(await quiet(n), `nothing refused: ${await said()}`);
 
 done(errors);
