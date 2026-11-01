@@ -69,7 +69,7 @@ import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
-import { KEEPS, makeKit } from "./Tracks";
+import { makeKit } from "./Tracks";
 import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
 import { useFolded } from "../lib/folded";
@@ -900,6 +900,7 @@ function NodeCard({
   const tracks = useContext(Tracks);
   // The drum machine's card offers Make it a kit (KIT-24), on a track that plays it.
   const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
   const sound =
     node.kind === "call" &&
     !mixing &&
@@ -967,7 +968,7 @@ function NodeCard({
           <button
             className="shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
             data-make-kit={module}
-            title={why ?? `Make it a kit: each drum on a track of its own. ${KEEPS}.`}
+            title={why ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
             disabled={!editable}
             onMouseDown={(e) => e.preventDefault()}
             onClick={() => void makeKit(module)}

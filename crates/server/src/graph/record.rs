@@ -804,7 +804,6 @@ pub(super) fn recording_on(cp: &ControlPlane, token: u64) -> Option<String> {
     t.notes.first().map(|n| n.module.clone()).or_else(|| t.audio.first().map(|a| a.module.clone()))
 }
 
-/// The track's name as the timeline shows it, for the undo step.
 /// What a take that ended is called, by its lanes' tracks: "Bass", "Vox, Guitar", or a kit's
 /// take by the kit (KIT-26: "Drums").
 fn take_label(cp: &ControlPlane, parts: &[Part]) -> String {
@@ -815,6 +814,7 @@ fn take_label(cp: &ControlPlane, parts: &[Part]) -> String {
     }
 }
 
+/// The track's name as the timeline shows it, for the undo step.
 pub(super) fn label_of(cp: &ControlPlane, module: &str) -> String {
     cp.open
         .as_ref()

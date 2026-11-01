@@ -171,8 +171,6 @@ export async function addKit(kit: KitPreset, after: string | null) {
   }
 }
 
-/** Make it a kit's words (KIT-22): what it keeps, wherever it is offered. */
-export const KEEPS = "Same drums, pitches, levels and lengths; each hit's noise comes out a little different";
 
 /**
  * Make it a kit (KIT-22): drum machine track `module` becomes a kit's bus, with a Drum track for each
@@ -603,7 +601,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
         </MenuRow>
       )}
       {graph.drum_machines?.includes(module) && (
-        <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={KEEPS} onClick={run(() => void makeKit(module))}>
+        <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={graph.make_kit_keeps} onClick={run(() => void makeKit(module))}>
           Make it a kit
         </MenuRow>
       )}

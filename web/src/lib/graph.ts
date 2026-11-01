@@ -645,6 +645,8 @@ export interface GraphState extends GraphStatus {
   kit_presets?: KitPreset[];
   /** The tracks that play the drum machine, by key: each one's menu and card offer Make it a kit (KIT-24). */
   drum_machines?: string[];
+  /** What Make it a kit keeps, in its words, wherever it is offered (KIT-22). */
+  make_kit_keeps?: string;
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */

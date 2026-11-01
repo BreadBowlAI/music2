@@ -4088,6 +4088,8 @@ fn the_make_kit_route_makes_a_drum_machine_track_a_kit() {
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
     assert_eq!(running.state.graph.state().unwrap()["drum_machines"], json!(["hats"]));
+    // Its words, one copy, the page's too (KIT-22).
+    assert_eq!(running.state.graph.state().unwrap()["make_kit_keeps"], json!(m2_editor::machine::KEEPS));
     let (status, refused) = post("/api/graph/track/make-kit", json!({"session": session, "track": "kick"}));
     assert!(status >= 400 && refused["error"].as_str().unwrap_or("").contains("Kick plays no drum machine."), "{status} {refused:#}");
     let (status, made) = post("/api/graph/track/make-kit", json!({"session": session, "track": "hats"}));

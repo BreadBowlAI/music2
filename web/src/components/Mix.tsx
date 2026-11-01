@@ -34,7 +34,7 @@ import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKno
 import { useGlows } from "../lib/notice";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
-import { Colours, KEEPS, makeKit, openChangeInstrument } from "./Tracks";
+import { Colours, makeKit, openChangeInstrument } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
@@ -601,6 +601,7 @@ function StripMenu({
   const inSong = useStore((s) => modules.length > 0 && modules.every((m) => s.graph?.overlays?.heard[m] === "muted-in-song"));
   // It plays the drum machine: Make it a kit (KIT-24).
   const machine = useStore((s) => !!module && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps);
   const run = (f: () => void) => () => {
     onClose();
     f();
@@ -643,7 +644,7 @@ function StripMenu({
             </MenuRow>
           )}
           {machine && (
-            <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={KEEPS} onClick={run(() => void makeKit(module))}>
+            <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={keeps} onClick={run(() => void makeKit(module))}>
               Make it a kit
             </MenuRow>
           )}
