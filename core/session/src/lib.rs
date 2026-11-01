@@ -523,8 +523,9 @@ export default song(() => v.out);
     }
 
     // FMT-3, PACK-2, PACK-23: every project the repo ships asks for what this build has: the SDK and
-    // the bundled std; and every pack it ships needs no more than that, asking for the SDK's major. So a std bump that leaves a
-    // manifest behind fails here, with no grep needed.
+    // the bundled std; and every pack it ships needs no more than that, asking for the SDK's major and
+    // the minor its code uses. So a std bump that leaves a manifest behind fails here, with no grep
+    // needed.
     #[test]
     fn every_shipped_manifest_is_met() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -532,9 +533,23 @@ export default song(() => v.out);
         let mut unmet = vec![];
         let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
         let mut packs = 0;
-        // PACK-23: and each pack that runs code asks for this app's major of @m2/core alone
-        // (`"@m2/core" = "2"`); a pack of recordings alone may ask for none.
+        // PACK-23: and each pack that runs code asks for this app's major of @m2/core, and the minor
+        // its code uses: `"2"`, or `"2.1"` once it labels a setting (CARD-34), what its descriptors
+        // show; a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
+        let uses = |name: &str, dir: &Path| -> String {
+            let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
+            let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
+            let entries = |d: &m2_script::Descriptor| {
+                d.controls.iter().filter_map(|c| c.each.as_deref()).flat_map(|e| e.settings.clone()).collect::<Vec<_>>()
+            };
+            let labelled = mine.clone().any(|(_, d)| d.settings.iter().chain(entries(d).iter()).any(|x| x.label.is_some()));
+            match (major.as_deref(), labelled) {
+                (Some(m), true) => format!("{m}.1"),
+                (Some(m), false) => m.to_string(),
+                (None, _) => "?".into(),
+            }
+        };
         for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures", "packs"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
@@ -546,10 +561,11 @@ export default song(() => v.out);
                     let m = m2_song::pack::PkgManifest::at(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
                     unmet.extend(m2_song::pack::meets(&m.dependencies, sdk, std).err().map(|why| format!("{name}: {why}")));
                     let core = m.dependencies.get("@m2/core").map(|r| r.to_string());
-                    if core.is_some() && core != major || core.is_none() && d.join("src").exists() {
+                    let wants = d.join("src").exists().then(|| uses(&m.package.name.to_string(), &d));
+                    if core.is_some() && core != wants || core.is_none() && wants.is_some() {
                         unmet.push(format!(
-                            "{name}: asks for @m2/core {core:?}, not \"{}\" alone (PACK-23)",
-                            major.as_deref().unwrap_or("?")
+                            "{name}: asks for @m2/core {core:?}, not \"{}\", the major and the minor its code uses (PACK-23)",
+                            wants.as_deref().unwrap_or("?")
                         ));
                     }
                 }

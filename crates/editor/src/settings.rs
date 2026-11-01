@@ -45,6 +45,9 @@ pub struct Setting {
     /// What it is called (CARD-34): its label, else its name; a dictionary entry's by its key first
     /// (`vox.to`).
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with (`vox`), said apart (CARD-34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     pub kind: Kind,
     /// A whole number (`setting.int`): a fraction is refused.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -251,9 +254,11 @@ impl<'a> Call<'a> {
             },
             _ => None,
         };
+        let name = kind::named(d.label.as_deref(), &slot);
         Setting {
             id: format!("{}#{}/@{slot}", self.site.file, self.site.ordinal),
-            label: kind::named(d.label.as_deref(), &slot),
+            label: name.label,
+            entry: name.entry,
             slot,
             kind,
             whole,

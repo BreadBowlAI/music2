@@ -322,7 +322,8 @@ fn effects_that_follow_the_song_show_no_time_node() {
 fn a_name_written_at_two_inputs_of_one_call_is_an_edge_into_each() {
     for (call, labels) in [
         ("mixer({ left: { in: dry, pan: -1 }, right: { in: dry, pan: 1 } })", ["left.in", "right.in"]),
-        ("add(dry, dry)", ["input 1", "input 2"]),
+        // Each named as the control it is (CARD-34), whatever feeds it: `add`'s `a` and `b`.
+        ("add(dry, dry)", ["a", "b"]),
     ] {
         let fixture = Fixture::song(&format!(
             "import {{ hz, song }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ add }} from \"std/math\";\n\

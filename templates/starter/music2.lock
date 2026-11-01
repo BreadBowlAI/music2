@@ -13,4 +13,4 @@ hash = "sha256:e49f20aefced6adbff11d6556f367f647b5c3accc68d94f5f64f7d47a23e0aef"
 [[pack]]
 name = "@m2/synths"
 version = "2.0.0"
-hash = "sha256:3141c540eafb3d1bff421a115c41d54cd490c222783dbb68b2fcb0e11e587f05"
+hash = "sha256:04470bf491b3f5fb1a50de2534e438c0cebd78fcb64a61d04956d3db7bd557ac"

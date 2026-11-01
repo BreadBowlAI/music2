@@ -68,7 +68,7 @@ interface Props {
 export function SettingRow(p: Props) {
   const { x, owner, session, revision, editable, locked, tracks } = p;
   const toast = useStore((s) => s.toast);
-  const label = controlLabel(x.label, tracks);
+  const label = controlLabel(x, tracks);
   const where = `In your code: ${x.file}, line ${x.line}`;
   const off = !editable ? `${locked ?? "It can't be edited right now"}.` : null;
   /** Write `value`: one edit, named "LFO shape" by its label (CARD-34); a refusal says why. */

@@ -2,12 +2,13 @@
 // shape as a menu, at its default (sine, in grey) and saying a change rebuilds the sound; picking
 // saw writes `shape: "saw"` into its call, one undo step ("Undo LFO shape"), and ⌘Z takes the code
 // back byte for byte. A track whose sound is a component of the song's own (Box) shows a switch, a
-// number box and a recording, each row named by its setting's label ("Hold A") or its name
-// (Voices, CARD-34): the switch writes `held: true`, one undo step ("Undo Box hold A"); the number
-// box refuses 2.5 in words, writing nothing, and writes 6 on Return; a WAV dropped on the recording
-// (as a browser drops it) comes into assets/ and the call names it (`sample: "tone.wav"`), one undo
-// step ("Undo setting Box to tone.wav"), its waveform drawn; and a track's menu lists the song's
-// tracks as the timeline has them, and writes the key picked. Each state linted.
+// number box and a recording, each row named by its label ("Hold A"; "Approx. track" and a knob's
+// "1.5x speed", a dot in them only text) or its name (Voices, CARD-34): the switch writes
+// `held: true`, one undo step ("Undo Box hold A"); the number box refuses 2.5 in words, writing
+// nothing, and writes 6 on Return; a WAV dropped on the recording (as a browser drops it) comes into
+// assets/ and the call names it (`sample: "tone.wav"`), one undo step ("Undo setting Box to
+// tone.wav"), its waveform drawn; and a track's menu lists the song's tracks as the timeline has
+// them, and writes the key picked, one undo step ("Undo Box approx. track"). Each state linted.
 //
 //   node e2e/cards.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -118,7 +119,7 @@ check(await until(async () => (await row(lfo, "shape"))?.value === "sine"), `and
 const song = read("song.ts");
 write(
   "tracks/box.ts",
-  `import { component, port, setting, track } from "@m2/core";
+  `import { component, control, port, setting, track } from "@m2/core";
 import { sampler } from "std/sampler";
 
 const box = component(
@@ -126,10 +127,11 @@ const box = component(
     id: "box",
     label: "Box",
     inputs: { notes: port.notes() },
-    settings: { held: setting.bool(false).label("hold A"), voices: setting.int(4), sample: setting.asset().optional(), follows: setting.key().optional() },
+    controls: { speed: control.frac(1).range(0, 1).label("1.5x speed") },
+    settings: { held: setting.bool(false).label("hold A"), voices: setting.int(4), sample: setting.asset().optional(), follows: setting.key().optional().label("approx. track") },
     output: port.audio(),
   },
-  (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? "gate" : "oneshot", voices: p.voices }),
+  (notes, p) => sampler(notes, { sample: p.sample, mode: p.held ? "gate" : "oneshot", voices: p.voices, velocity: p.speed }),
 );
 
 export default track("box", { name: "Box" }, ({ lane }) => box(lane.notes("notes")));
@@ -147,6 +149,12 @@ await linted(card, "Box's card");
 // A setting is named by its label where it has one ("hold A"), by its name where it hasn't (CARD-34).
 const names = await page.$$eval(`${card} [data-setting] > span:first-child`, (els) => els.map((e) => e.textContent));
 check(names[0] === "Hold A" && names[1] === "Voices", `its rows say its label, or its name: ${JSON.stringify(names)}`);
+// A dot in a label is only text: no row reads an entry out of it, as `m2 graph` doesn't (review L1).
+const dotted = {
+  knob: await page.$eval(`${card} [data-knob="1.5x speed"]`, (e) => e.textContent).catch(() => null),
+  row: await page.$eval(`${card} [data-setting="follows"] > span:first-child`, (e) => e.textContent).catch(() => null),
+};
+check(!!dotted.knob?.includes("1.5x speed") && dotted.row === "Approx. track", `a label with a dot reads as written: ${JSON.stringify(dotted)}`);
 
 // A switch.
 const sw = `${card} [data-setting="held"] [role=switch]`;
@@ -183,6 +191,7 @@ const headers = await page.$$eval("[data-module-tab] [data-testid=track-label]",
 check(listed.length > 3 && JSON.stringify(listed) === JSON.stringify(headers.filter((h) => h !== "Song")), `its menu lists the song's tracks in the timeline's order: ${JSON.stringify(listed)} (${JSON.stringify(headers)})`);
 await page.click('[data-testid=setting-options] [data-option="Hats"]');
 check(await until(() => read("tracks/box.ts").includes('{ held: true, voices: 6, follows: "hats" }')), `picking Hats writes its key: ${read("tracks/box.ts").match(/box\(lane.*\)/)?.[0]}`);
+check(await stepIs("Box approx. track"), `one undo step, named by its label with its dot: ${await undoTitle()}`);
 
 // A recording: a WAV dropped on it.
 fs.mkdirSync(`${ROOT}/files`, { recursive: true });

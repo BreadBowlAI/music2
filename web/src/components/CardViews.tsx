@@ -87,7 +87,7 @@ function drawn(p: ViewProps, parts: [string, ViewPart][]): { parts: Drawn[] } | 
 const inRange = (k: NumberKnob | null, v: number) => (k?.range ? Math.min(k.range[1], Math.max(k.range[0], v)) : v);
 
 /** What an undo step of a view's drag is called: the card and what moved ("Wobble decay and sustain"). */
-const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) => inSentence(controlLabel(d.knob?.label ?? d.name))).join(" and ")}`;
+const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) => inSentence(controlLabel(d.knob ?? { label: d.name }))).join(" and ")}`;
 
 /**
  * One drag of a view over the knobs it moves (WRITE-22, CARD-22): each value heard as it moves

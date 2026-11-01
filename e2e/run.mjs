@@ -179,7 +179,7 @@ export const SUITES = [
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
   ["ab-sampler", "export", { expect: 23, s: 4 }],
-  ["cards", "fix", { expect: 34, s: 6 }],
+  ["cards", "fix", { expect: 36, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["mixing", "fix", { expect: 25, s: 5 }],

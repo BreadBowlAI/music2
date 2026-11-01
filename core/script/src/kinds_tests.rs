@@ -497,3 +497,22 @@ fn a_settings_label_is_one_short_line() {
     // 24 characters, any of them, is a label.
     declared("", "n: setting.int(1).label(\"twenty-four characters!!\")", "{}").unwrap_or_else(|e| panic!("{e:?}"));
 }
+
+// CARD-34 (review L7): the SDK itself writes a setting's `label` only when it is given. Its JSON for a
+// setting with none has no `label` key at all, not a null that serde would read back as none.
+#[test]
+fn the_sdk_writes_a_settings_label_only_when_given() {
+    let lib = "import { component, kernel, setting } from \"@m2/core\";\n\
+               export const c = component({ id: \"c\", settings: { tableA: setting.int(1).label(\"table A\"), voices: setting.int(8) } }, (p: any) => kernel(\"test:c\", {}));\n";
+    let song = "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n";
+    let code: BTreeMap<String, String> =
+        [("lib/c.ts", lib), ("song.ts", song)].iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
+    let mut o = Options::new(code, "song.ts");
+    o.time_limit = Duration::from_secs(2);
+    let [_, _, components, _] = on_own_thread(|| run_sdk(&o).map(|(json, _)| json)).unwrap_or_else(|e| panic!("{e:?}"));
+    let all: serde_json::Value = serde_json::from_str(&components).unwrap();
+    let c = all.as_array().unwrap().iter().find(|d| d["id"] == "c").expect("c's descriptor");
+    let settings = c["settings"].as_array().unwrap();
+    assert_eq!(settings[0]["label"], "table A", "{c}");
+    assert!(!settings[1].as_object().unwrap().contains_key("label"), "a setting with no label has no label key: {}", settings[1]);
+}

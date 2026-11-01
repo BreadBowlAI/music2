@@ -79,17 +79,40 @@ pub fn of_setting(d: &SettingDesc) -> (Kind, bool, Vec<Choice>) {
     }
 }
 
-/// What a control or a setting is called (CARD-34), declared at `slot` with `label`: its label when
-/// it has one, else its name. A dictionary entry's is named by its key first (`channels.vox.to` is
-/// `vox.to`), then its label or its name (`vox.goes to`). The card, its undo steps, `m2 graph` and
-/// the API all name a value by this.
-pub fn named(label: Option<&str>, slot: &str) -> String {
-    let key = slot.split_once('.').map_or(slot, |(_, rest)| rest);
-    match (label, key.rsplit_once('.')) {
-        (Some(label), Some((entry, _))) => format!("{entry}.{label}"),
+/// What a control or a setting is called (CARD-34): the one rule every name of a value on a card, in
+/// its undo steps, in `m2 graph` and in the API follows.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Name {
+    /// Its label, else its name; a dictionary entry's after the entry's key (`vox.to`, `vox.goes to`).
+    pub label: String,
+    /// A dictionary entry's key, which `label` starts with (`vox`): the window names the entry by its
+    /// track. Said apart, so no one looks for an entry in a label's own dots ("approx. time").
+    pub entry: Option<String>,
+}
+
+/// What the control or setting declared at `slot` with `label` is called (CARD-34): its label when it
+/// has one, else its name. A dictionary entry's (`channels.vox.to`) is named by its key first, then
+/// its label or its name (`vox.to`, `vox.goes to`), its key apart.
+pub fn named(label: Option<&str>, slot: &str) -> Name {
+    let Some((_, key)) = slot.split_once('.') else {
+        return Name { label: label.unwrap_or(slot).to_string(), entry: None };
+    };
+    let (entry, path) = match key.rsplit_once('.') {
+        Some((path, _)) => (path.split('.').next().map(str::to_string), Some(path)),
+        None => (None, None),
+    };
+    let label = match (label, path) {
+        (Some(label), Some(path)) => format!("{path}.{label}"),
         (Some(label), None) => label.to_string(),
         (None, _) => key.to_string(),
-    }
+    };
+    Name { label, entry }
+}
+
+/// What a value no declaration names is called, by where it is written in its call after its
+/// argument (`ceiling`, `hats.in`): a property of a property is a dictionary entry's, by its key.
+pub fn written(path: &[String]) -> Name {
+    Name { label: path.join("."), entry: path.first().filter(|_| path.len() > 1).cloned() }
 }
 
 /// What a cell's number is, as the code writes it (CARD-20): a choice's place as its name, a

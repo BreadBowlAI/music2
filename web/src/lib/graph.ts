@@ -29,6 +29,8 @@ export interface Setting {
   id: string;
   slot: string;
   label: string;
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
   kind: ValueKind;
   /** A whole number: a fraction is refused. */
   whole?: boolean;
@@ -47,6 +49,8 @@ export interface Setting {
 interface KnobCommon {
   id: string;
   label: string;
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
   /** The text written in the code (`0.3`, `"square"`); empty while the control plays its default. */
   literal: string;
   unit: string | null;
@@ -102,11 +106,11 @@ export interface ViewNode {
   file: string | null;
   line: number | null;
   knobs: Knob[];
-  readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null; home: Home }[];
+  readonly: { label: string; entry?: string; expression: string; reason: string; file: string | null; line: number | null; home: Home }[];
   /** The `const` this node's signal is bound to, if a cable can start here. */
   outlet: string | null;
   /** Inputs connected by a cable: `label ← name`. */
-  inlets: { id: string; label: string; name: string; from: string }[];
+  inlets: { id: string; label: string; entry?: string; name: string; from: string }[];
   /** Whether its result is audio, which an effect can go after. */
   audio: boolean;
   /** The component it is a call of (`@m2/effects:delay`), whatever name the code calls it by (PKG-9). */
@@ -165,6 +169,8 @@ export type PortKind = "audio" | "control" | "notes";
 export interface InputPort {
   id: string;
   label: string;
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
   kind: PortKind;
   knob?: string;
   inlet?: string;
@@ -222,17 +228,19 @@ const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export const laneTitle = (lane: { key: string; label?: string | null }) => (lane.label && lane.label !== lane.key ? lane.label : sentence(lane.key.replace(/-/g, " ")));
 /** What a mixer channel's control is called (taste.md's words: `channels.hats.db` is "Hats volume"); its input is the channel itself. */
 const CHANNEL: Record<string, string> = { db: "volume", pan: "pan", in: "" };
+/** A value's name as the server says it (CARD-34): its label, and a dictionary entry's key apart, which the label starts with. */
+export interface Named { label: string; entry?: string | null }
 /**
  * A control's or an input's name on screen, by the one rule lane headers use too (taste.md §3.4):
  * the key in sentence case (`feedback` → Feedback); a level (`db`: the master's, a gain's) is
- * Volume, never "Db", which reads as a note. A mixer channel's (`hats.db`) names its track, by
- * `track` when it is one: Hats volume. Never the slot path.
+ * Volume, never "Db", which reads as a note. A dictionary entry's (`hats.db`, its `entry` `hats`)
+ * names its track, by `track` when it is one: Hats volume. Never the slot path, and never an entry
+ * read out of a label's own dots ("Approx. time", CARD-34).
  */
-export function controlLabel(label: string, track?: (key: string) => string | undefined) {
-  const dot = label.indexOf(".");
-  if (dot < 0) return sentence(label === "db" ? "volume" : label);
-  const ch = label.slice(0, dot), rest = label.slice(dot + 1);
-  const who = track?.(ch) ?? sentence(ch);
+export function controlLabel(x: Named, track?: (key: string) => string | undefined) {
+  if (!x.entry) return sentence(x.label === "db" ? "volume" : x.label);
+  const rest = x.label.slice(x.entry.length + 1);
+  const who = track?.(x.entry) ?? sentence(x.entry);
   const word = CHANNEL[rest] ?? rest;
   return word ? `${who} ${word}` : who;
 }
@@ -242,6 +250,14 @@ export function controlLabel(label: string, track?: (key: string) => string | un
  * unless it starts with a word in capitals ("LFO rate"). CARD-34.
  */
 export const inSentence = (name: string) => (/^\p{Lu}\p{Lu}/u.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1));
+/**
+ * What an undo step that changes knob `k`, shown as `shown`, is called (CARD-34): a dictionary
+ * entry's by its own name ("Hats volume"); a value a sound declares after the card's name, as a
+ * sentence says it ("Wavetable table A"); anything else (a plugin's parameter, a kernel's port) in
+ * the lowercase words its code address is ("Surge XT filter_cutoff_42"), which music2 didn't write.
+ */
+export const knobStep = (owner: string, k: Named & { slot: string | null }, shown: string) =>
+  k.entry ? shown : `${owner} ${k.slot ? inSentence(shown) : shown.toLowerCase()}`;
 /** What to show for a module: its label, and "Song" for the root module unless it has one. */
 export const moduleName = (m: { key: string; label?: string | null }) => (m.key === "song" && (!m.label || m.label === "song") ? "Song" : labelOf(m));
 /** The key, to show beside a name that doesn't already say it (`Lead Vox` · `lead-vox`, not `Bass` · `bass`); "" otherwise. */

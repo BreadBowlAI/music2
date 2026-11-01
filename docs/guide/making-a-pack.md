@@ -51,7 +51,12 @@ std = "0.4"                    # the std you made it with, or any newer one
 
 Every key is checked: one music2 doesn't know is an error, so a typo never goes unseen.
 
-`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"2"` is any 2.x. Write the major alone, `"2"`, as music2's own packs do: `"2.3"` would shut out the music2 versions between 2.0 and 2.3. Ask for a later one only when your pack uses something it added: a setting's label is new in 2.1, so a pack that labels a setting asks for `"2.1"`.
+`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"2"` is any 2.x, and `"2.1"` any 2.x from 2.1. Ask for the version your pack's code needs:
+
+| Your code uses | Ask for | Why |
+|---|---|---|
+| nothing added since 2.0 | `"2"` | a later minor, `"2.3"`, would shut out the music2 versions between 2.0 and 2.3 |
+| a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` does | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
 
 ### music2's promise to your pack
 
