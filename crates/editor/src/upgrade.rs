@@ -231,7 +231,7 @@ fn moved_import(module: &str, name: &str) -> Option<&'static str> {
         return Some("std/dsp");
     }
     let sub = module.strip_prefix("std/")?;
-    m2_script::MOVED.iter().find(|(m, names, _)| *m == sub && (names.is_empty() || names.contains(&name))).map(|(.., pack)| *pack)
+    m2_script::MOVED.iter().find(|(m, names, ..)| *m == sub && (names.is_empty() || names.contains(&name))).map(|(_, _, pack, _)| *pack)
 }
 
 /// How a knob of a drum One drum plays now reads there (wave 3, CARD-33).
