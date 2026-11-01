@@ -241,6 +241,11 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     let header = req.headers().get("x-m2-token").and_then(|v| v.to_str().ok());
     let query: Vec<&str> = req.uri().query().map_or(vec![], |q| q.split('&').filter_map(|kv| kv.strip_prefix("token=")).collect());
     let carries = |key: &str| header.is_some_and(|h| same_key(h, key)) || query.iter().any(|q| same_key(q, key));
+    // The page's window (AGENT-2): what its changes are judged by, against others'.
+    let window = carries(&s.page_token)
+        .then(|| req.headers().get("x-m2-window").and_then(|v| v.to_str().ok()).map(|w| w.chars().take(64).collect::<String>()))
+        .flatten()
+        .filter(|w| !w.is_empty());
     let caller = if carries(&s.page_token) {
         crate::caller::Caller::Page
     } else if carries(&s.token) {
@@ -249,7 +254,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     } else {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     };
-    crate::caller::serving(caller, next.run(req)).await
+    crate::caller::serving_in(caller, window, next.run(req)).await
 }
 
 /// Whether `given` is the key `key` (AGENT-10), compared in constant time: every byte is looked at
@@ -879,13 +884,16 @@ struct LayoutReq {
     /// Write the defaults over a `layout.json` that doesn't read.
     #[serde(default)]
     reset: bool,
+    /// The order a new `order` was made from (AGENT-2): refused when the tracks moved since.
+    #[serde(default)]
+    base: Option<Vec<String>>,
 }
 
 /// Reorder or recolour tracks: a write of `layout.json` only, with no revision (PLANE-3).
 async fn graph_layout(State(s): S, Json(r): Json<LayoutReq>) -> ApiResult {
     let state = s.clone();
     let colour = r.colour.map(|c| (c.module, c.colour));
-    let result = blocking(move || state.graph.layout(r.session, r.order, colour, r.reset)).await;
+    let result = blocking(move || state.graph.layout_from(r.session, r.order, colour, r.reset, r.base)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

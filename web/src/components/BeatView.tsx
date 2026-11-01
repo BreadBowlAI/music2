@@ -9,6 +9,7 @@ import { chord, mod } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { editing, goesFrom, lanesOf } from "../lib/history";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
@@ -213,24 +214,29 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
 
   // ---------------------------------------------------------------- writing
 
-  /** The grid's gestures on their way, one after another, so they land in the order made. */
-  const queue = useRef<Promise<unknown>>(Promise.resolve());
-
   /**
-   * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. It goes once
-   * the gestures before it have landed: each was decided from what the grid showed, theirs included.
+   * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. An edit on
+   * its way from the click, it goes through the window's one gate (AGENT-2, `goesFrom` in
+   * lib/history): once the window shows its own edits before it, so the grid's clicks land in the
+   * order made, each decided from what the grid showed, theirs included. It names steps by their
+   * beats, so it says the revision it goes from: refused, saying who, when its lane changed after
+   * it (bars inserted elsewhere, say); after its own edit that moved ids, not at all (`MOVED`).
    */
   const write = (row: DrumRow, a: Omit<Asked, "revision">, step: string) => {
     const mine: Asked = { ...a, revision: Infinity };
     setAsked((all) => [...all, mine]);
     const size = grid.step;
-    queue.current = queue.current
-      .then(() => send(latest.current, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }))
-      .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision } : x))))
+    const own = editing();
+    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(row.track)], own, true)
+      // From its base: refused, saying who, when its lane changed after it (bars inserted).
+      .then((f) => send(f.graph, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own, f.base))
+      // One that changed nothing made no revision: shown at once.
+      .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision ?? 0 } : x))))
       .catch((error) => {
         setAsked((all) => all.filter((x) => x !== mine));
         toast(message(error));
-      });
+      })
+      .finally(() => own.end());
   };
 
   /** Whether step `s` of row `track` is on: as the newest gesture on it asked, else whether a hit starts in it (`hits`, by step). */

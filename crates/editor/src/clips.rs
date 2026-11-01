@@ -280,6 +280,33 @@ pub struct ClipsEdited {
     pub made: Vec<(LaneAddr, String)>,
 }
 
+/// Who changed a clip a gesture names, as its refusal says it when no step says who.
+const ELSEWHERE: &str = "was changed in another window or by an agent";
+
+/// `e`, a clip gesture's refusal, saying who made the newest change to its lane after the revision
+/// the gesture goes from (`since`; else ever, as far as the session remembers), an undo by its
+/// sender (AGENT-2).
+fn said_by(s: &Session, e: EditError, since: u64) -> EditError {
+    match e {
+        EditError::Changed(mut files) => {
+            for f in &mut files {
+                if let (Some(why), Some(by)) = (f.why.as_mut(), s.changed_by(since, &f.file))
+                    && why.contains(ELSEWHERE)
+                {
+                    let who = match &by {
+                        m2_session::Source::Agent(name) => format!("the agent {name} changed"),
+                        m2_session::Source::Outside => "was changed outside the app".into(),
+                        m2_session::Source::Page => "was changed in the app".into(),
+                    };
+                    *why = why.replace(ELSEWHERE, &who);
+                }
+            }
+            EditError::Changed(files)
+        }
+        e => e,
+    }
+}
+
 /// The most copies one Repeat… makes (Q12).
 pub const REPEATS: u32 = 64;
 
@@ -287,7 +314,18 @@ pub const REPEATS: u32 = 64;
 /// a fresh id for a clip on a lane, as often as asked; one the lane has is asked again. Pure: the
 /// same revision, gesture and ids give the same edits.
 pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> String) -> Result<Vec<LaneEdit>, EditError> {
-    let mut w = Work { rev, lanes: BTreeMap::new() };
+    apply_then(rev, None, g, mint)
+}
+
+/// [`apply`], refusing a clip it names that `then`, the files as of the revision the gesture goes
+/// from, has otherwise (AGENT-2).
+fn apply_then(
+    rev: &Revision,
+    then: Option<(&m2_song::Snapshot, BTreeSet<String>)>,
+    g: &Gesture,
+    mint: &mut dyn FnMut(&LaneAddr) -> String,
+) -> Result<Vec<LaneEdit>, EditError> {
+    let mut w = Work { rev, lanes: BTreeMap::new(), then };
     let arr = &rev.project.arrangement;
     match g {
         Gesture::Create { lane, start, length } => {
@@ -1456,6 +1494,9 @@ impl Lane {
 struct Work<'a> {
     rev: &'a Revision,
     lanes: BTreeMap<LaneAddr, Lane>,
+    /// The files as of the revision the gesture goes from, when it says one: a clip it names that
+    /// changed after it is refused (AGENT-2).
+    then: Option<(&'a m2_song::Snapshot, BTreeSet<String>)>,
 }
 
 impl Work<'_> {
@@ -1539,16 +1580,32 @@ impl Work<'_> {
         let i = match found {
             Ok(i) => i,
             Err(why) if r.sha.is_some() => {
-                return Err(changed(format!("{why} It was changed in another window or by an agent; try again."), r.id.clone()));
+                return Err(changed(format!("{why} It {ELSEWHERE}; try again."), r.id.clone()));
             }
             Err(why) => return Err(EditError::Missing(why)),
         };
         let c = &l.was[i];
+        // Changed after the revision the gesture goes from: refused, as a hash that differs is.
+        let lane_file = DataPath::lane(&r.lane).to_string();
+        let folder = format!("data/{}", r.lane.module);
+        let then_line =
+            self.then.as_ref().filter(|(_, others)| others.contains(&lane_file) || others.contains(&folder)).map(|(then, _)| {
+                let text = then.files.get(&DataPath::lane(&r.lane).path());
+                let read = text.and_then(|t| LaneData::read(t, &l.kind).ok());
+                read.and_then(|d| clips_of(&d).into_iter().find(|x| x.id().is_some() && x.id() == c.id()).map(|x| x.line(&l.kind)))
+            });
+        if let Some(was) = then_line
+            && was.as_deref() != Some(c.line(&l.kind).as_str())
+        {
+            let what = format!("the {} clip at bar {}", l.track, arr.bar_at(c.start()).0 + 1);
+            let why = format!("is {what}, which {ELSEWHERE}. It shows as it is now; try again");
+            return Err(changed(why, c.id().map(str::to_string)));
+        }
         if let Some(seen) = &r.sha
             && *seen != sha(&c.line(&l.kind))
         {
             let what = format!("the {} clip at bar {}", l.track, arr.bar_at(c.start()).0 + 1);
-            let why = format!("is {what}, which was changed in another window or by an agent. It shows as it is now; try again");
+            let why = format!("is {what}, which {ELSEWHERE}. It shows as it is now; try again");
             return Err(changed(why, c.id().map(str::to_string)));
         }
         Ok((r.lane.clone(), i))
@@ -1683,7 +1740,7 @@ pub fn apply_as(rev: &Revision, g: &Gesture, tx_id: &str) -> Result<Vec<LaneEdit
 /// `g` with each clip it names pinned to its hash in `rev`, where the gesture carries none: what a
 /// lane lease saw, so an outside change to a clip it drags ends the lease (WRITE-22a).
 pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
-    let mut w = Work { rev, lanes: BTreeMap::new() };
+    let mut w = Work { rev, lanes: BTreeMap::new(), then: None };
     let mut g = g.clone();
     let mut pin = |r: &mut ClipRef| -> Result<(), EditError> {
         if r.sha.is_none() {
@@ -1718,10 +1775,37 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
 
 /// [`edit`] as the Tx with id `tx_id`: the clips it makes get the ids [`apply_as`] gives them.
 pub fn edit_as(s: &mut Session, g: &Gesture, tx_id: &str) -> Result<ClipsEdited, EditError> {
+    edit_since(s, g, tx_id, None)
+}
+
+/// [`edit_as`] for a gesture that goes from revision `since` (AGENT-2): a clip it names that changed
+/// after it is refused, saying who changed it; so are the Beat grid's steps (`hits`), named by their
+/// beats, when their lane changed after it.
+pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>) -> Result<ClipsEdited, EditError> {
     ready(s)?;
+    // Named by beats (all but an audio clip's own settings): another's change that moved beats
+    // since makes it name other music, whatever lane it names (AGENT-2).
+    if let Some(since) = since
+        && !matches!(g, Gesture::Audio { .. })
+    {
+        crate::beats_since(s, since, "where the song's music is")?;
+    }
+    if let (Gesture::Hits { lane, .. }, Some(since)) = (g, since) {
+        let file = DataPath::lane(lane).to_string();
+        let folder = format!("data/{}/", lane.module);
+        crate::unchanged_since(s, since, &file, |p| p == file || p == folder.trim_end_matches('/'))?;
+    }
     let tx_id = tx_id.to_string();
     let rev = s.accepted();
-    let edits = apply_as(rev, g, &tx_id)?;
+    // A clip it names as of `since` is checked only where another changed its lane since: the
+    // window's own changes are what it drew on (AGENT-2).
+    let then = since.filter(|n| *n < rev.number).and_then(|n| s.snapshot(n).map(|t| (t, s.others_paths_since(n))));
+    let mut n = 0;
+    let mut mint = |lane: &LaneAddr| {
+        n += 1;
+        ClipId::derive(&tx_id, lane, n - 1)
+    };
+    let edits = apply_then(rev, then, g, &mut mint).map_err(|e| said_by(s, e, since.unwrap_or(0)))?;
     let made: Vec<(LaneAddr, String)> = edits.iter().flat_map(|e| e.made.iter().map(|id| (e.lane.clone(), id.clone()))).collect();
     let (ops, wrote) = lane_ops(rev, &edits)?;
     let shown = edits.first().map(|e| DataPath::lane(&e.lane).to_string()).unwrap_or_default();

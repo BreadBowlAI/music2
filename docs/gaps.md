@@ -176,6 +176,12 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip; a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go. Its tooltip says so.
+- **A clip dragged right after your own edit to it, when an agent's change came between your press and that edit**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, saying it was changed in the app. A change made elsewhere after your edit doesn't do this: the gesture goes from your edit.
+- **A clip refused because it changed since names who last changed its lane** after the gesture's base (an agent by its name, outside the app, or in the app), which may not be who changed that clip: an agent's change to one clip, then another program's to another clip of the lane, names the program.
+- **Bars inserted, deleted, duplicated or pasted right after any change of your own** (before the window shows it) do nothing, and say "The song changed while you pressed. Try again.": the bars were drawn by their beats, which your change may have moved. Pressed again, they go.
+- **A gesture refused over a revision that took in a file saved outside the app with your own change** (`mixed`) names outside the app, even when it was your part that changed its target.
+- **A clip dragged while the song plays, right after your own edit to it**, is heard from once the window shows that edit (a moment later): its lease names the clip as the state has it. Let go before then, it is heard when it lands.
+- **A gesture that waits 2 s with nothing moving** (none of your changes before it answered, the window showing nothing new: the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too, and give up after 2 s of it.
 
 ## Notes
 
@@ -185,6 +191,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
 - **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
+- **A note dragged in Notes right after your own edit changed that very note** (an undo a moment before, the roll not showing it yet) is refused, with words that say the clip changed. A drag that adds notes, or moves notes your edit left alone, goes from your edit (AGENT-2); a key, a tool or the menu is made from the notes as your edit left them.
 - **The beat grid ([KIT-10](architecture.md#drum-kits)) is a first cut**: a click on a step doesn't sound the drum (Notes' audition does); a row's sound is changed on its Drum's card, not in the grid; the velocity lane shows one row at a time; nothing in the grid copies, repeats or shifts a pattern (the timeline's clip gestures do it to the clips); and its rows can't be dragged into another order (the timeline's order is theirs). Choking across tracks waits too (the design's D3).
 
 ## Automation
@@ -246,6 +253,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin's menu says the names its default state gives its steps**, asked once when it is described (CARD-6). Surge XT marks none of its parameters stepped, so its filter types and the like are knobs, as numbers from 0 to 1.
 - **A mixer channel's `to` is offered only on the song's one mixer** (Master and its bus channels, CARD-2); on any other mixer it says **edit in code**. A key setting of a pack's sound offers the song's tracks, and the build judges the one picked.
 - **Settings have no glow and no pointer**: an agent's change to a setting doesn't light it, and `m2 point` can't point at one (AGENT-5 and AGENT-6 name knobs).
+- **A change named by a track's key goes at once, without the gate** (AGENT-2): adding, deleting, duplicating or re-keying a track, its instrument, label, colour or mute in song, a bus, a send or a route, Make it a kit, the tempo, the meter, the title, markers, the song's key, and a file brought in. None names an id your own change can move, so none can land on another call; but one pressed right after you re-keyed a track names it by its old key, and is refused: there is no such track. The track order goes one move after another, each from the one before (a quick second move keeps the first).
 
 ## Problems and help
 

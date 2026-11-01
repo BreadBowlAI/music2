@@ -2,7 +2,8 @@ import clsx from "clsx";
 import { RotateCcw, Spline } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { display, graphApi, picks, type Home, type Knob, type NumberKnob as KnobInfo } from "../lib/graph";
+import { display, graphApi, picks, type GraphState, type Home, type Knob, type NumberKnob as KnobInfo } from "../lib/graph";
+import { carried, editing, fileOf, goesFrom } from "../lib/history";
 import { useStore } from "../lib/store";
 import { guideDid } from "../lib/guide";
 
@@ -33,6 +34,12 @@ export function Bubble({ at, children }: { at: { x: number; y: number }; childre
   );
 }
 
+/** The control `id` names in `graph`: the knob a gesture goes on, as that state has it. */
+function knobIn(graph: GraphState | null, id: string): Knob | undefined {
+  for (const m of graph?.view.modules ?? []) for (const n of m.nodes) for (const k of n.knobs) if (k.id === id) return k;
+  return undefined;
+}
+
 /** One drag (or run of steps) of one control: the lease it holds on the server, and how it ends. */
 interface Gesture {
   token: string;
@@ -53,9 +60,12 @@ interface Gesture {
  * A control over an owned source value (WRITE-22): each move is heard at once (`/preview`, which
  * begins the gesture's lease and keeps it alive while held still), and letting go writes it once
  * (`/set`), one undo step named `name`. A save elsewhere doesn't end a gesture: the server carries
- * it to the new revision, or refuses it as stale if the save touched this value. Unmounting cancels
- * a drag, but a released one still commits: selecting another module right after letting go must
- * not lose the value. Values here are the control's own (dB, Hz), never a position.
+ * it to the new revision, or refuses it as stale if the save touched this value. A gesture begun
+ * while the window doesn't show its own last edit yet (this control's last value, being written)
+ * goes through the gate (AGENT-2): its first preview waits until the window shows that edit, and it
+ * goes from there. Unmounting cancels a drag, but a released one still commits: selecting another
+ * module right after letting go must not lose the value. Values here are the control's own (dB, Hz),
+ * never a position.
  */
 export function useKnobGesture({
   session,
@@ -79,7 +89,6 @@ export function useKnobGesture({
 }) {
   const toast = useStore((s) => s.toast);
   const [value, setValue] = useState(knob.value);
-  const [saving, setSaving] = useState(false);
   const latest = useRef(knob.value);
   const dragging = useRef<Gesture | null>(null);
   const active = useRef<Gesture | null>(null);
@@ -89,7 +98,8 @@ export function useKnobGesture({
   // moves for 10 s (WRITE-22's leases, C6).
   const keepalive = useRef<number | null>(null);
   const mounted = useRef(true);
-  const committing = useRef(false);
+  // The commits on their way: until they are answered the control shows what it was let go at.
+  const committing = useRef(0);
   // A run of steps (the wheel, ↑ ↓) is one gesture, written once they stop for a moment.
   const idle = useRef<number | null>(null);
   const held = useRef(hold);
@@ -116,7 +126,7 @@ export function useKnobGesture({
   }, []);
 
   useEffect(() => {
-    if (!dragging.current && !committing.current) {
+    if (!dragging.current && committing.current === 0) {
       setValue(knob.value);
       latest.current = knob.value;
     }
@@ -156,13 +166,37 @@ export function useKnobGesture({
     });
   };
 
-  /** A gesture on this control, or (`on`) on a control the page has no view of yet: a first pan's new knob, in the revision that wrote it. */
+  /**
+   * A gesture on this control, or (`on`) on a control the page has no view of yet: a first pan's new
+   * knob, in the revision that wrote it. It goes through the gate (`goesFrom`, lib/history): from
+   * the revision the window shows once it shows its own last edit, the control as that revision has
+   * it, and what it is there, which the commit expects to find, when only the window's own edits that
+   * moved no ids came since; else from the revision it was drawn at; after an edit of its own that
+   * moved ids, not at all (`MOVED`).
+   */
   const begin = (on?: { knob: KnobInfo; revision: number }): Gesture => {
     const k = on?.knob ?? knob;
     const gesture: Gesture = {
       token: crypto.randomUUID(), session, revision: on?.revision ?? revision, knob: k, start: k.value,
       previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
     };
+    if (!on) {
+      // From its base (the window's newest own revision right after the one drawn), once the window
+      // shows its own last change: the server carries it, or refuses it saying who changed it after
+      // that; after its own change that moved ids in the knob's file, not at all (`Moved`).
+      const drawn = useStore.getState().graph;
+      gesture.previews = goesFrom(session, gesture.revision, [fileOf(k.id)]).then(
+        (f) => {
+          if (!f.shown) return;
+          const now = knobIn(f.graph, carried(k.id, f.graph, drawn));
+          if (!now || picks(now)) return;
+          gesture.revision = f.base;
+          gesture.knob = now;
+          gesture.start = now.value;
+        },
+        (error) => fail(gesture, error),
+      );
+    }
     active.current = gesture;
     held.current?.(gesture.token, true);
     return gesture;
@@ -191,8 +225,9 @@ export function useKnobGesture({
       return;
     }
     gesture.released = true;
-    committing.current = true;
-    setSaving(true);
+    committing.current++;
+    // An edit on its way from the release: a gesture after it, or an Undo, waits for it (AGENT-2).
+    const ours = editing();
     try {
       await gesture.previews;
       if (gesture.failed || gesture.cancelled) {
@@ -202,7 +237,7 @@ export function useKnobGesture({
       // Returning to the starting value still needs a reliable commit: the
       // final audition message may have been dropped by the audio queue.
       gesture.submitted = true;
-      const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start, { name });
+      const change = await graphApi.set(gesture.session, gesture.revision, gesture.knob.id, gesture.token, v, gesture.start, { name }, ours);
       // The code doesn't compile right now: the value plays on, and is saved once it does (C5).
       // The control shows the value, so a change makes no toast (taste.md §2.14); one that waits for the code to compile says so.
       if (change.pending) toast(`${label} is saved once the code compiles again`);
@@ -216,14 +251,14 @@ export function useKnobGesture({
     } finally {
       if (active.current === gesture) active.current = null;
       held.current?.(gesture.token, false);
-      committing.current = false;
-      if (mounted.current) setSaving(false);
+      committing.current--;
+      ours.end();
     }
   };
 
   /** A move to value `v`: heard while dragged; on its own (a double-click, the menu's reset, a typed value) one whole gesture. */
   const change = (v: number) => {
-    if ((!editable && !dragging.current) || committing.current) return;
+    if (!editable && !dragging.current) return;
     const gesture = dragging.current ?? begin();
     if (gesture.failed) return;
     setValue(v);
@@ -243,9 +278,11 @@ export function useKnobGesture({
     // A run of steps still open goes on as this drag: one gesture, one edit.
     if (idle.current != null) clearTimeout(idle.current);
     idle.current = null;
-    if (dragging.current || !editable || committing.current) return;
+    if (dragging.current || !editable) return;
     dragging.current = begin(on);
-    latest.current = dragging.current.knob.value;
+    // From the value it shows: the last one it was let go at, though the window may not show that
+    // edit yet; a first pan's from its new knob's.
+    if (on) latest.current = dragging.current.knob.value;
     stopKeepalive();
     keepalive.current = window.setInterval(() => {
       const gesture = dragging.current;
@@ -297,12 +334,7 @@ export function useKnobGesture({
     timer.current = null;
     setValue(knob.value);
     latest.current = knob.value;
-    committing.current = true;
-    setSaving(true);
-    void cancel(gesture).finally(() => {
-      committing.current = false;
-      if (mounted.current) setSaving(false);
-    });
+    void cancel(gesture);
   };
 
   /** Show `v` with no gesture on the server yet (a first pan, while its pan is being written). */
@@ -313,7 +345,6 @@ export function useKnobGesture({
 
   return {
     value,
-    saving,
     /** The control the drag in progress began on (its id and range), else this one. */
     descriptor: dragging.current?.knob ?? knob,
     dragging: () => dragging.current !== null,

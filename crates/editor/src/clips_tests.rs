@@ -627,7 +627,8 @@ fn a_gesture_on_a_changed_clip_is_changed() {
         Err(EditError::Changed(files)) => {
             let said = EditError::Changed(files.clone()).to_string();
             assert_eq!((files[0].file.as_str(), files[0].clip.as_deref()), ("data/kick/hits.json", Some("my53vvkc")));
-            assert!(said.contains("the Kick clip at bar 1") && said.contains("changed in another window or by an agent"), "{said}");
+            // By who changed it: a file saved outside the app, taken in (AGENT-2).
+            assert!(said.contains("the Kick clip at bar 1") && said.contains("was changed outside the app"), "{said}");
         }
         other => panic!("{other:?}"),
     }

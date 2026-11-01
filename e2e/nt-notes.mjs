@@ -16,7 +16,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, posts, api, state, box, key, drag } = await open(1440, 900);
+const { page, errors, posts, api, state, caughtUp, box, key, drag } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 
 /** The song's own view settings on this machine. */
@@ -182,6 +182,8 @@ check(await until(async () => (await notesOf("keys", "chords")).filter(([, s]) =
 await key("Meta+z");
 await key("Meta+z");
 check(await until(async () => (await notesOf("keys", "chords")).length === 6), "two ⌘Z take both back");
+// ⌘A and ⌘C take the notes the page shows: the page shows the two undos first.
+await caughtUp();
 
 // ---------------------------------------------------------------- copy and paste between clips (NOTE-5)
 

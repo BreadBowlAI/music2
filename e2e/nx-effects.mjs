@@ -6,7 +6,7 @@
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, toasts, show, view, key, box } = await open(1440, 900);
+const { page, errors, toasts, show, view, key, box, caughtUp } = await open(1440, 900);
 const orig = { keys: read("tracks/keys.ts"), song: read("song.ts") };
 
 /** The lint over what is inside `sel`. */
@@ -134,6 +134,9 @@ check((await toasts()).length === 0, `no toast (${(await toasts()).join(" | ")})
 check(await until(async () => /^Undo moving Delay before Reverb \(/.test(await undoTitle())), `Undo: ${await undoTitle()}`);
 await key("Meta+z");
 check(await until(() => read("tracks/keys.ts") === chain), "⌘Z puts them back");
+// The menu's words are the state the page shows: the undo's first, so the swap's ("Delay is the first
+// effect here", greyed too) can't pass for the outside save's below.
+await caughtUp();
 
 // Next to each other in the sound, but not written one inside the other: greyed, with Q26's words.
 write("tracks/keys.ts", chain.replace(`({ lane }) => ${delayed}`, `({ lane }) => {\n  const wet = ${reverbed};\n  return delay(wet, { time: 0.25, feedback: 0.3, mix: 0.3 });\n}`));

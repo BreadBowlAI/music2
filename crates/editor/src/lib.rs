@@ -119,6 +119,8 @@ pub enum EditError {
     /// List the controls again and retry.
     Stale {
         current: u64,
+        /// Who made the newest change that touched it since, when a step says (AGENT-2).
+        by: Option<m2_session::Source>,
     },
     /// The value is not what the caller expected: someone else changed it.
     Conflict {
@@ -140,8 +142,11 @@ impl std::fmt::Display for EditError {
         match self {
             EditError::NotFound(id) => write!(f, "no control `{id}` in that revision"),
             EditError::Missing(what) => write!(f, "{what}"),
-            EditError::Stale { current } => {
+            EditError::Stale { current, by: None } => {
                 write!(f, "the code changed around this control; it is revision {current} now, list the controls again")
+            }
+            EditError::Stale { current, by: Some(by) } => {
+                write!(f, "Nothing was changed: {} since. It is revision {current} now; list the controls again.", changed_it(by))
             }
             EditError::Conflict { current } => write!(f, "the value changed elsewhere (it is now {current})"),
             EditError::DraftInvalid(d) => write!(f, "the project doesn't compile right now ({} problems), so it can't be edited", d.len()),
@@ -150,6 +155,74 @@ impl std::fmt::Display for EditError {
             EditError::ReadOnly(why) => write!(f, "{why}"),
             EditError::Changed(files) => write!(f, "{}", Refusal::Conflict { files: files.clone() }),
         }
+    }
+}
+
+impl EditError {
+    /// The target named at revision `at`, in `file`, changed since: refused, saying who changed it
+    /// (AGENT-2).
+    pub fn stale(s: &Session, at: u64, file: &str) -> EditError {
+        EditError::Stale { current: s.accepted().number, by: s.changed_by(at, file) }
+    }
+}
+
+/// Refused unless no change after revision `since`, the one a gesture goes from, touched a path
+/// `touched` says (AGENT-2): `what` is its target, as its words name it. A change the session no
+/// longer remembers the author of is taken to have touched it.
+pub fn unchanged_since(s: &Session, since: u64, what: &str, touched: impl Fn(&str) -> bool) -> Result<(), EditError> {
+    let by = match (s.remembers_since(since), s.changed_by_any(since, touched)) {
+        (true, None) => return Ok(()),
+        (true, Some(by)) => Some(by),
+        (false, _) => None,
+    };
+    let who = by.as_ref().map_or_else(|| "it was changed".to_string(), changed_it);
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("changed since you drew it: {who}. Nothing was changed; it shows as it is now, try again")),
+    }]))
+}
+
+/// Refused, saying who, when a change after revision `since` made by anyone but the window that
+/// asks moved beats (AGENT-2): a gesture named by beats then names other music, whatever lane.
+pub fn beats_since(s: &Session, since: u64, what: &str) -> Result<(), EditError> {
+    let by = match (s.remembers_since(since), s.beats_moved_since(since)) {
+        (true, None) => return Ok(()),
+        (true, Some(by)) => Some(by),
+        (false, _) => None,
+    };
+    let who = by.as_ref().map_or_else(|| "it was changed".to_string(), changed_it);
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("moved since you drew it: {who}. Nothing was changed; it shows as it is now, try again")),
+    }]))
+}
+
+/// Refused, saying who last changed `layout.json`, when a list of it (`what`: the markers, the
+/// track order) isn't what the change was made from (AGENT-2): no change of it is lost silently.
+pub fn list_since(s: &Session, what: &str, same: bool) -> Result<(), EditError> {
+    if same {
+        return Ok(());
+    }
+    let who = s.stepped_by("layout.json").map_or_else(|| "it was changed".to_string(), |by| changed_it(&by));
+    Err(EditError::Changed(vec![m2_session::ConflictFile {
+        file: what.to_string(),
+        current: None,
+        clip: None,
+        why: Some(format!("changed since you drew them: {who}. Nothing was changed; they show as they are now, try again")),
+    }]))
+}
+
+/// Who changed a gesture's target, as its refusal says it (AGENT-2): an agent by its name, outside
+/// the app, or in the app.
+pub fn changed_it(by: &m2_session::Source) -> String {
+    match by {
+        m2_session::Source::Agent(name) => format!("the agent {name} changed it"),
+        m2_session::Source::Outside => "it was changed outside the app".into(),
+        m2_session::Source::Page => "it was changed in the app".into(),
     }
 }
 

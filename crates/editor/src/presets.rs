@@ -261,7 +261,10 @@ fn call_at(s: &Session, at: u64, node: &str) -> Result<Site, EditError> {
         let to = Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start)).cloned()
     };
-    carried().ok_or(EditError::Stale { current: accepted.number })
+    let file = node.rsplit_once('#').map_or("", |(file, _)| file);
+    // Changed since only by the window that asks, moving no ids: the same call now (AGENT-2).
+    let own = || s.only_own_since(at, file).then(|| find(&accepted.compiled.sites)).flatten();
+    carried().or_else(own).ok_or_else(|| EditError::stale(s, at, file))
 }
 
 /// The sound call `node` (named at revision `at`) is: a component's instance.

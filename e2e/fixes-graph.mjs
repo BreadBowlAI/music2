@@ -3,7 +3,7 @@
 // files, and diagnostics columns.  node fixes-graph.mjs <root> <home> <project>
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag } = await open();
+const { browser, page, errors, posts, api, state, caughtUp, toasts, show, view, key, box, drag } = await open();
 const keysOriginal = read("tracks/keys.ts");
 const plus = (after) => `[data-module="keys"] button[aria-label="Add an effect after ${after}"]`;
 
@@ -203,6 +203,8 @@ const more = keysClips.map((c, i) => (i === 0 ? { ...c, notes: [...c.notes, { pi
 r = await api("/lane", { method: "POST", body: JSON.stringify({ session: s.session, revision: s.view.revision, module: "keys", lane: "chords", clips: more }) });
 check(r.status === 200, "a note added to Keys");
 const notesAfter = read("data/keys/chords.json");
+// Undo takes back the step the page shows, and the page didn't make this one: it shows it first.
+await caughtUp();
 await page.click('button[aria-label="Undo"]');
 check(await until(() => read("data/keys/chords.json") !== notesAfter), "Undo takes the note back");
 await page.click('button[aria-label="Undo"]');

@@ -362,7 +362,8 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         return find(id).ok_or_else(|| EditError::NotFound(id.to_string()));
     }
     // Carry the target from revision `at`: its call must be untouched and in place.
-    let stale = EditError::Stale { current: accepted.number };
+    let file = id.rsplit_once('/').and_then(|(call, _)| call.rsplit_once('#')).map_or("", |(file, _)| file);
+    let stale = EditError::stale(s, at, file);
     let carried = || -> Option<Control> {
         let past = s.past(at)?;
         let (old, arg) = site_by_id(past.sites(), id)?;
@@ -372,7 +373,19 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         let site = accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start))?;
         find(&format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
     };
-    carried().ok_or(stale)
+    // Changed since only by the window that asks, moving no ids (AGENT-2): the id names the same
+    // control now; one its own value wrote in gave it a new id, by the same call and slot.
+    let own = || -> Option<Control> {
+        if !s.only_own_since(at, file) {
+            return None;
+        }
+        find(id).or_else(|| {
+            let slot = id.rsplit_once("/@").map(|(_, slot)| slot)?;
+            let call = id.rsplit_once('/')?.0;
+            controls(s).into_iter().find(|c| c.id.starts_with(&format!("{call}/")) && c.declared.first().is_some_and(|d| d.slot == slot))
+        })
+    };
+    carried().or_else(own).ok_or(stale)
 }
 
 /// The call `id` names (`tracks/bass.ts#8/1`), and the argument path after it.

@@ -18,13 +18,15 @@ import { listed } from "./overlays";
 import { useShell } from "./shell";
 import { useStore } from "./store";
 import { undoAction } from "../components/GraphCanvas";
+import { http } from "./http";
+import { editing } from "./history";
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, "");
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(path, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;
@@ -123,7 +125,7 @@ export const bpm = (n: number) => String(Math.round(n * 100) / 100);
 async function send(graph: GraphState, file: MidiIncoming, to: MidiTarget, tempo?: TempoChoice): Promise<Imported> {
   let res: Response;
   if ("path" in file) {
-    res = await fetch("/api/graph/midifile/import", {
+    res = await http("/api/graph/midifile/import", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, path: file.path, to, ...(tempo ? { tempo } : {}) }),
@@ -131,7 +133,7 @@ async function send(graph: GraphState, file: MidiIncoming, to: MidiTarget, tempo
   } else {
     if (file.file.size > MAX_BYTES) throw new Error(`${file.name} is over 16 MB: music2 brings in MIDI files up to 16 MB.`);
     const q = `session=${graph.session}&name=${encodeURIComponent(file.name)}&to=${encodeURIComponent(JSON.stringify(to))}${tempo ? `&tempo=${tempo}` : ""}`;
-    res = await fetch(`/api/graph/midifile/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: file.file });
+    res = await http(`/api/graph/midifile/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: file.file });
   }
   const json = await readJson(res);
   if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -149,8 +151,10 @@ export async function bringMidi(file: MidiIncoming, to: MidiTarget, tempo?: Temp
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
+  // On its way until it is answered: an Undo pressed meanwhile waits for it (AGENT-2).
+  const ours = editing();
   try {
-    const done = await send(graph, file, to, tempo);
+    const done = await send(graph, file, to, tempo).finally(() => ours.end());
     if ("asks" in done) return void useMidiAsk.setState({ ask: { file, to, fileBpm: done.asks.file_bpm, songBpm: done.asks.song_bpm } });
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });

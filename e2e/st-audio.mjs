@@ -46,7 +46,7 @@ function wav(dir, name, seconds, f, rate = 48000) {
   fs.writeFileSync(`${dir}/${name}`, b);
 }
 
-const { page, errors, key, api, show, toasts, box, drag } = await open(1440, 900);
+const { page, errors, key, api, show, toasts, box, drag, caughtUp } = await open(1440, 900);
 const peaksAsked = [];
 page.on("request", (r) => r.url().includes("/api/graph/audio/peaks") && peaksAsked.push(decodeURIComponent(r.url().replace(/^.*asset=/, ""))));
 
@@ -205,6 +205,7 @@ check(fs.existsSync(`${PROJ}/assets/hit.wav`), "the files stay in assets/");
 
 // Not a WAV: refused in words, nothing added. The undo's revision first: its files land before it.
 await until(async () => (await api("")).body.view.revision > imported);
+await caughtUp();
 const revision = (await api("")).body.view.revision;
 await importVia("Meta+Shift+KeyI", [`${files}/song.mp3`]);
 check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
@@ -283,6 +284,8 @@ const rows = async () => {
   await page.keyboard.press("Escape");
   return r;
 };
+// The menu's rows are the state the page shows: the fade's, once it shows it.
+await caughtUp();
 const listed = await rows();
 const at = (id) => listed.findIndex((r) => r[0] === id);
 check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("follow") === at("reverse") + 1 && at("unfade") === at("follow") + 1, `Volume…, Reverse, Follow tempo and Remove fades come after Split: ${listed.map((r) => r[0])}`);

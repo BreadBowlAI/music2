@@ -9,6 +9,7 @@ import { create } from "zustand";
 import { readJson } from "./graph";
 import { editing, recorded } from "./history";
 import { token } from "./native";
+import { http } from "./http";
 
 /** A key as `layout.json` writes it: its root ("C#", "Eb") and its scale by name ("harmonic-minor"). */
 export interface SongKey {
@@ -137,7 +138,7 @@ export const useTheory = create<{ theory: Theory | null }>(() => ({ theory: null
 let asked: Promise<void> | null = null;
 /** Read the table, once per page; what lists it shows it when it lands. */
 export function loadTheory() {
-  asked ??= fetch("/api/theory", { headers: token ? { "x-m2-token": token } : {} })
+  asked ??= http("/api/theory", { headers: token ? { "x-m2-token": token } : {} })
     .then(async (res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       useTheory.setState({ theory: (await readJson(res)) as Theory });
@@ -154,7 +155,7 @@ export function loadTheory() {
 export async function setSongKey(session: number, key: SongKey | null) {
   const ours = editing();
   try {
-    const res = await fetch("/api/graph/song-key", {
+    const res = await http("/api/graph/song-key", {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
       body: JSON.stringify({ session, key }),
@@ -162,7 +163,7 @@ export async function setSongKey(session: number, key: SongKey | null) {
     const done = await readJson(res);
     if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
     // Setting the key it has already changes nothing, and is no step. The server names the key.
-    if (done.before !== "no change") recorded(session, done, { name: key ? `key ${done.after}` : "taking out the key" }, ours);
+    if (done.before !== "no change") recorded(session, done, { name: key ? `key ${done.after}` : "taking out the key" });
     return done as { revision: number; before: string; after: string };
   } finally {
     ours.end();

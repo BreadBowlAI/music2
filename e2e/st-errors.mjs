@@ -8,7 +8,7 @@ import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 
-const { browser, page, errors, state, view, status } = await open(1440, 900);
+const { browser, page, errors, state, caughtUp, view, status } = await open(1440, 900);
 const bannerItems = () => page.$$eval("[data-testid=compile-banner] li", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
 const clean = async (sel, what) => {
   const bad = [...new Set([...(await page.evaluate(lint, sel)), ...(await page.evaluate(tips, sel))])];
@@ -134,6 +134,8 @@ write(
   hats0.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";\nimport { sum } from "std/math";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'sum($&, lane.audio("loop"))'),
 );
 check(await until(async () => (await state()).problems?.some((p) => p.code === "asset.missing"), 10000), "a clip whose sound file isn't in assets/");
+// The pill opens only once the page shows the revision that has the problem.
+await caughtUp();
 await status();
 await page.waitForSelector('[data-testid=attention] [data-problem="asset.missing"]');
 const asset = await page.$eval('[data-testid=attention] [data-problem="asset.missing"]', (e) => ({

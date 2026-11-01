@@ -34,6 +34,7 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
     }
     let c = resolve(s, at, id)?;
     c.numbered()?;
+    let expect = expect.filter(|_| !own_since(s, at, &c.file));
     one(s, &c, &Json::from(value), expect.map(Json::from).as_ref())
 }
 
@@ -46,7 +47,14 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: f64, expect: Option<f64>) 
 pub fn write(s: &mut Session, at: u64, id: &str, value: &Json, expect: Option<&Json>) -> Result<Committed, EditError> {
     ready(s)?;
     let c = resolve(s, at, id)?;
+    let expect = expect.filter(|_| !own_since(s, at, &c.file));
     one(s, &c, value, expect)
+}
+
+/// Whether the control's file changed since revision `at` only by the window that asks (AGENT-2):
+/// then what it expects is what that window saw before its own change, which is no conflict.
+fn own_since(s: &Session, at: u64, file: &str) -> bool {
+    at < s.accepted().number && s.only_own_since(at, file)
 }
 
 /// What a control is called in words: its declared label.
@@ -274,6 +282,8 @@ pub(crate) fn commit(
     let mut edits: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
     let mut inserts: BTreeMap<(String, u32), Vec<(Insertion, String)>> = BTreeMap::new();
     let mut anchors = vec![];
+    // A number written in a unit call of its own (`db(-3)`) adds a call: that moves ids (AGENT-2).
+    let adds_call = parts.iter().any(|p| p.insertion.as_ref().is_some_and(|(i, _)| i.spelling.is_some()));
     for p in parts {
         match (&p.rewrite, &p.insertion) {
             (Some(r), _) => edits.entry(p.file.clone()).or_default().push(r.clone()),
@@ -296,7 +306,8 @@ pub(crate) fn commit(
         let old = s.accepted().snapshot.files[Path::new(&file)].clone();
         ops.push(plan::text_edit(&path(&file)?, &old, &e));
     }
-    let tx = plan::planned(s, label, ops, Expect::Values(anchors));
+    let mut tx = plan::planned(s, label, ops, Expect::Values(anchors));
+    tx.in_place = !adds_call;
     plan::run_as(s, tx, said, |_, _| Ok(()))
 }
 

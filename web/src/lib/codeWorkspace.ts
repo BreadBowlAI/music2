@@ -243,7 +243,7 @@ export class Workspace {
         d.base = text;
         d.saved = version;
         // A save that compiles is a new revision and an undo step: the top bar's Undo names it.
-        if (r.graph.view.revision > was && !r.graph.view.draft_errors.length) recorded(this.session, { revision: r.graph.view.revision, step: r.step }, { name: "the code edit" }, ours);
+        if (r.graph.view.revision > was && !r.graph.view.draft_errors.length) recorded(this.session, { revision: r.graph.view.revision, step: r.step }, { name: "the code edit" });
         onGraph(r.graph);
       } else if (r.current === text) {
         // Someone wrote exactly this already.

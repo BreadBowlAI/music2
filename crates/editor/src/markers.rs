@@ -69,7 +69,19 @@ fn number(beat: f64) -> J {
 /// Set the song's markers to `markers`, the whole list (any order). Refused, in words, while
 /// `layout.json` doesn't read, for two on one beat, a beat before the start, or a name that isn't
 /// one line of 1 to 40 characters. Every other key of the file stays as it was.
-pub fn set(s: &mut Session, mut markers: Vec<Marker>) -> Result<Edited, EditError> {
+pub fn set(s: &mut Session, markers: Vec<Marker>) -> Result<Edited, EditError> {
+    set_from(s, markers, None)
+}
+
+/// [`set`], made from the list `base` (AGENT-2): refused, saying who changed them, when the markers
+/// aren't that list now, so a marker added or moved elsewhere meanwhile is never lost.
+pub fn set_from(s: &mut Session, mut markers: Vec<Marker>, base: Option<Vec<Marker>>) -> Result<Edited, EditError> {
+    if let Some(mut base) = base {
+        base.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        let now = on_disk(&s.accepted().project.dir);
+        let same = now.len() == base.len() && now.iter().zip(&base).all(|(a, b)| same_beat(a.beat, b.beat) && a.name == b.name);
+        crate::list_since(s, "the markers", same)?;
+    }
     let read = layout::read_disk(&s.accepted().project.dir);
     let mut l = match read {
         Read::Valid(l) => l,

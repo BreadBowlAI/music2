@@ -148,6 +148,8 @@ check(await until(() => takes().length === 1, 5000), `one new clip in the lane f
 const t1 = takes()[0];
 check(t1 && t1.start % 4 === 0 && t1.length % 4 === 0 && t1.length >= 4, `over whole bars (${t1?.start} for ${t1?.length})`);
 check(t1?.notes.length === 2 && t1.notes[0].pitch === "A2" && Math.abs(t1.notes[0].velocity - 100 / 127) < 1e-9, `with the notes played, at their velocity (${JSON.stringify(t1?.notes)})`);
+// The take's file lands before its revision is published.
+await until(async () => (await state()).view.revision > before);
 check((await state()).view.revision === before + 1, "one Tx");
 check(await until(() => page.$(`[data-clip="${t1?.id}"][data-picked]`), 3000), "the new clip is selected");
 check(await until(async () => (await undoTitle()).startsWith("Undo recording on Bass"), 3000), `Undo names it: ${await undoTitle()}`);

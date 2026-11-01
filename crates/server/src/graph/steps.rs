@@ -114,6 +114,12 @@ impl Graph {
     /// names after it, of the revision `revision`; `named` false when no step has that revision
     /// (nothing changed, or it is gone).
     pub fn name_step(&self, token: u64, revision: u64, name: String, structural: bool) -> Result<Value> {
+        self.name_step_by(token, Some(revision), None, name, structural)
+    }
+
+    /// [`Graph::name_step`] by the revision the change made, or by its step's id (`step`, which wins):
+    /// a change of `layout.json` alone makes no revision (AGENT-2).
+    pub fn name_step_by(&self, token: u64, revision: Option<u64>, step: Option<u64>, name: String, structural: bool) -> Result<Value> {
         let name = name.trim().to_string();
         if name.is_empty() {
             bail!("a step's name can't be empty");
@@ -123,7 +129,11 @@ impl Graph {
             if o.token != token {
                 bail!("the open project changed; refresh the graph before editing");
             }
-            let named = o.session.name_step(revision, &name, structural);
+            let named = match (step, revision) {
+                (Some(id), _) => o.session.name_step_id(id, &name, structural),
+                (None, Some(revision)) => o.session.name_step(revision, &name, structural),
+                (None, None) => bail!("name the step by its revision or its id"),
+            };
             if named {
                 a.republish();
             }
@@ -158,6 +168,9 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) 
     let (undo, again) = o.session.step_names();
     let top = if redo { again } else { undo };
     let took = named(top.as_ref(), &o.timeline);
+    // It moves what the step's change moved, whichever way (AGENT-2).
+    let moved = top.as_ref().map(|t| t.moved.clone()).unwrap_or_default();
+    let beats = top.as_ref().is_some_and(|t| t.beats);
     // AGENT-4: an agent's undo takes back only its own newest step.
     if let crate::caller::Caller::Agent { name, .. } = &a.caller
         && !redo
@@ -193,6 +206,10 @@ pub(super) fn stepped(a: &mut Actor, token: u64, redo: bool, step: Option<u64>) 
     // The step it took back, by its id, and the tops after it: what the window's next Undo
     // and Redo name, before its state is read again (AGENT-2).
     v["step"] = took["step"].clone();
+    v["moved"] = json!(moved);
+    if beats {
+        v["beats"] = json!(true);
+    }
     if let Some(o) = a.open.as_ref() {
         let (undo, redo) = o.session.step_names();
         v["undo_name"] = named(undo.as_ref(), &o.timeline);

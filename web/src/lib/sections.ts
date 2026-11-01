@@ -13,10 +13,11 @@
 import { create } from "zustand";
 import { barAt, readJson, type GraphState, type Meter } from "./graph";
 import { send, useClipboard, useClipSelection, type Done, type LaneAddr } from "./clips";
-import type { Step } from "./history";
+import type { Editing, Step } from "./history";
 import { token } from "./native";
 import { usePoints } from "./points";
 import { useShell } from "./shell";
+import { http } from "./http";
 
 /** A copied section (ARR-5): its bars, `[start, end)` in beats, and every lane's kind and the clips that overlap them. */
 export interface Section {
@@ -90,7 +91,7 @@ export function snapBars(meter: readonly Meter[], lo: number, hi: number) {
 
 /** A copy of bars `start` to `end` of the open song, made by the server (ARR-5). Refused, it throws its words. */
 export async function copyBars(graph: GraphState, start: number, end: number): Promise<Section> {
-  const res = await fetch("/api/graph/sections/copy", {
+  const res = await http("/api/graph/sections/copy", {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: JSON.stringify({ session: graph.session, start, end }),
@@ -100,8 +101,13 @@ export async function copyBars(graph: GraphState, start: number, end: number): P
   return json.section as Section;
 }
 
-/** Send one section gesture: one Tx, one undo step named `step`. Refused, it throws the server's words. */
-export function sendSection(graph: GraphState, gesture: SectionGesture, step: Step): Promise<Done> {
+/**
+ * Send one section gesture: one Tx, one undo step named `step`. Refused, it throws the server's
+ * words. `edit`: the gesture's own edit on its way, which its caller ends.
+ */
+export function sendSection(graph: GraphState, gesture: SectionGesture, step: Step, edit?: Editing, from?: number): Promise<Done> {
   // Through the clips' `send`, whose answer this route shares: an edit on its way, as theirs are.
-  return send(graph, gesture as never, step, { path: "/api/graph/sections", body: { session: graph.session, gesture } });
+  // `from`: the revision its bars were drawn at, which the server refuses it over a change since.
+  const body = { session: graph.session, gesture, ...(from !== undefined ? { revision: from } : {}) };
+  return send(graph, gesture as never, step, { path: "/api/graph/sections", body }, edit);
 }

@@ -1032,11 +1032,13 @@ impl Graph {
         debug_assert!(!m2_plugins::on_main_thread(), "the plugin main thread waited for the session");
         // Who asked (AGENT-10): the job is theirs, the steps it records too.
         let caller = crate::caller::now();
+        let window = crate::caller::window();
         let (tx, rx) = mpsc::sync_channel(1);
         self.jobs
             .send(Box::new(move |a: &mut Actor| {
                 let before = a.before();
                 a.asked_by(caller);
+                a.asked_in(window);
                 let r = f(a);
                 let r = a.answered(r);
                 // A change may let a pending commit be written (C5): before the reply, so the
@@ -1988,9 +1990,22 @@ impl Graph {
     /// A layout write (FMT-19): the tracks' new `order`, one track's `colour`, or with `reset` the
     /// defaults over a file that doesn't read. No revision (PLANE-3); one undo step.
     pub fn layout(&self, token: u64, order: Option<Vec<String>>, colour: Option<(String, String)>, reset: bool) -> Result<Value> {
+        self.layout_from(token, order, colour, reset, None)
+    }
+
+    /// [`Graph::layout`], a new order made from the order `base`: refused when the tracks moved
+    /// since (AGENT-2).
+    pub fn layout_from(
+        &self,
+        token: u64,
+        order: Option<Vec<String>>,
+        colour: Option<(String, String)>,
+        reset: bool,
+        base: Option<Vec<String>>,
+    ) -> Result<Value> {
         self.edit(token, move |s| match (order, colour, reset) {
             (_, _, true) => m2_editor::layout::reset(s),
-            (Some(order), None, false) => s.reorder(&order),
+            (Some(order), None, false) => m2_editor::layout::reorder_from(s, &order, base.as_deref()),
             (None, Some((module, colour)), false) => s.recolour(&module, &colour),
             _ => Err(m2_editor::EditError::Rejected("a layout write is an order, a colour or a reset".into())),
         })

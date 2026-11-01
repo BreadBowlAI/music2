@@ -27,6 +27,7 @@ import { holdTarget, currentRecordTarget } from "./playTarget";
 import { request } from "./projects";
 import { settingsApi } from "./settings";
 import { useStore } from "./store";
+import { editing, owned, type Editing, type StepName } from "./history";
 
 /** A note of the take, in song beats; `held`: its key is still down (it grows to the playhead). */
 export interface TakeNote {
@@ -188,6 +189,7 @@ export async function startRecording() {
       punch: o.punch,
       overdub: o.overdub,
     });
+    mine = { session: graph.session, ending: null, recorded: take.phase === "take" };
     show(take);
   } catch (error) {
     toastError(error);
@@ -200,6 +202,7 @@ export async function startRecording() {
 export async function stopRecording() {
   const graph = useStore.getState().graph;
   if (!graph) return;
+  ending();
   try {
     await request("/api/graph/record/stop", { session: graph.session });
   } catch (error) {
@@ -212,6 +215,9 @@ export async function cancelRecording() {
   const graph = useStore.getState().graph;
   if (!graph) return;
   show(null);
+  // Nothing is written: nothing to wait for (AGENT-2).
+  mine?.ending?.end();
+  mine = null;
   try {
     await request("/api/graph/record/cancel", { session: graph.session });
   } catch (error) {
@@ -279,9 +285,24 @@ function selectWritten(graph: GraphState | null) {
   toSelect = null;
 }
 
+/**
+ * The take this window started, until the news of how it ended (AGENT-2): each pass and the take
+ * it writes is this window's own step, and from its end (R, or Space) until that news it is an edit
+ * on its way, which an Undo waits for. `recorded`: it got past its count-in; one cancelled before
+ * writes nothing, so nothing waits for it.
+ */
+let mine: { session: number; ending: Editing | null; recorded: boolean } | null = null;
+
+/** This window's take is ending (R, Space, the take's end heard): an edit on its way until the news of how it ended (at most 5 s). */
+export function ending() {
+  if (!mine || mine.ending || !mine.recorded) return;
+  const e = (mine.ending = editing());
+  setTimeout(() => e.end(), 5000);
+}
+
 interface TakeMsg extends Partial<Take> {
-  /** `note`: what to say about an audio take (the disk was slow, the input went away). */
-  written?: { revision: number; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
+  /** `note`: what to say about an audio take (the disk was slow, the input went away). `step`: its undo step, by its id. */
+  written?: { revision: number; step?: number; moved?: string[]; mixed?: boolean; undo_name?: StepName | null; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
   empty?: boolean;
   /** The code doesn't compile: the take is written once it does. */
   waiting?: string;
@@ -290,6 +311,17 @@ interface TakeMsg extends Partial<Take> {
 
 on<TakeMsg>("take", (m) => {
   const { toast, graph } = useStore.getState();
+  // A take of this window's: what it wrote is its own step; once the take is over, how it ended
+  // was the last news of it.
+  if (mine && graph?.session === mine.session && m.written) owned(mine.session, m.written);
+  if (mine && m.phase === "take") mine.recorded = true;
+  // Over: written, or found empty, once it recorded; cancelled in its count-in, nothing to wait for.
+  if (mine && m.phase === null && !mine.recorded) mine = null;
+  if (mine && m.phase === null) ending();
+  if (mine && (m.written || m.empty || m.waiting || m.error) && !useRecord.getState().take) {
+    mine.ending?.end();
+    mine = null;
+  }
   if (m.written) {
     toSelect = m.written.made[0] ?? null;
     selectWritten(graph);

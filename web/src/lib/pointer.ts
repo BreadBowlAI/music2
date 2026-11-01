@@ -9,6 +9,7 @@ import { unfoldFor } from "./folded";
 import { token } from "./native";
 import { canvas, useShell } from "./shell";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** A pointer as the server shows it. */
 export interface Pointer {
@@ -64,7 +65,7 @@ export function dismissPointer() {
   const p = usePointer.getState().pointer;
   if (!p) return;
   usePointer.setState({ pointer: null });
-  void fetch("/api/point", {
+  void http("/api/point", {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: JSON.stringify({ session: p.session, clear: true }),

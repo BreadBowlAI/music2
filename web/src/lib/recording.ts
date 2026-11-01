@@ -10,6 +10,8 @@ import type { DropFile } from "./drop";
 import { token } from "./native";
 import { useStore } from "./store";
 import { undoAction } from "../components/GraphCanvas";
+import { http } from "./http";
+import { editing, fileOf, goes } from "./history";
 
 /** A drop on a recording: the call, the setting it is (`sample`), and the card's title ("Sampler"). */
 export type RecordingTarget = { kind: "recording"; call: string; setting: string; title: string };
@@ -39,15 +41,18 @@ export async function dropOnRecording(files: DropFile[], t: RecordingTarget) {
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
   const [f] = files;
+  // On its way from the drop (Undo waits for it), and through the gate (lib/history): once the
+  // window shows its own last edit.
+  const ours = editing();
   try {
-    const at = graph.view.revision;
+    const at = await goes(graph.session, graph.view.revision, [fileOf(t.call)], ours);
     let res: Response;
     if (f.path) {
       const body = JSON.stringify({ session: graph.session, at, call: t.call, setting: t.setting, file: f.path });
-      res = await fetch("/api/graph/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body });
+      res = await http("/api/graph/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body });
     } else if (f.file) {
       const q = `session=${graph.session}&at=${at}&call=${encodeURIComponent(t.call)}&setting=${encodeURIComponent(t.setting)}&name=${encodeURIComponent(f.name)}`;
-      res = await fetch(`/api/graph/sample?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: f.file });
+      res = await http(`/api/graph/sample?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: f.file });
     } else return;
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -56,5 +61,7 @@ export async function dropOnRecording(files: DropFile[], t: RecordingTarget) {
     toast(`${t.title} plays ${json.asset}`, undoAction(graph.session, json.step));
   } catch (error) {
     toast(`Nothing was changed: ${words(error)}`);
+  } finally {
+    ours.end();
   }
 }

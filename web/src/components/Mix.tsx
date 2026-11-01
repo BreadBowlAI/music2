@@ -729,7 +729,7 @@ function Fader({
   const [typing, setTyping] = useState<{ text: string; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
 
   /** `n` steps (taste.md §5.2), written as one edit half a second after the last. */
   const step = (n: number) => g.step((v) => faderStep(v, n));
@@ -932,7 +932,7 @@ function Fader({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -981,11 +981,12 @@ function Pan({
   const label = `${name} pan`;
   const toast = useStore((s) => s.toast);
   const blank = useMemo(() => centre(channel), [channel]);
-  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob.
+  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob, or
+  // shows a newer revision without it (undone before the window showed it).
   const [made, setMade] = useState<{ knob: KnobInfo; revision: number } | null>(null);
   useEffect(() => {
-    if (knob) setMade(null);
-  }, [knob]);
+    if (knob || (made && revision > made.revision)) setMade(null);
+  }, [knob, revision]);
   const live = knob ? { knob, revision } : (made ?? { knob: blank, revision });
   const first = !knob && !made;
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });
@@ -1016,7 +1017,7 @@ function Pan({
     graphApi
       .mixInsert(session, channel, "pan", 0, { name: label })
       .then((r) => {
-        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision };
+        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision ?? live.revision };
         setMade(m);
         if (now.cancelled) return g.show(0);
         g.start(m);
@@ -1061,7 +1062,7 @@ function Pan({
     return true;
   };
 
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const unit = Math.min(1, Math.max(0, toUnit(k, value)));
   const grip = useKnobDrag({
     value: unit,
@@ -1177,7 +1178,7 @@ function Pan({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -1348,7 +1349,7 @@ function SendKnob({
   const svg = useRef<SVGSVGElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const clamp = (u: number) => Math.min(1, Math.max(0, u));
   const unit = clamp(toUnit(k, value));
   const reset = clamp(toUnit(k, k.default ?? value));

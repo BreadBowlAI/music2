@@ -18,7 +18,7 @@
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
-const { browser, page, errors, posts, api, state, toasts, key, box, drag, view } = await open(1440, 900);
+const { browser, page, errors, posts, api, state, caughtUp, toasts, key, box, drag, view } = await open(1440, 900);
 const status = async () => (await api("/status")).body;
 const clips = (path) => JSON.parse(read(path)).clips;
 const near = (a, b) => Math.abs(a - b) < 1e-3;
@@ -351,6 +351,8 @@ write("data/hats/hits.json", fixture("data/hats/hits.json"));
 write("data/keys/chords.json", fixture("data/keys/chords.json"));
 const K = kickClip.clips[0].id, H = JSON.parse(fixture("data/hats/hits.json")).clips[0].id;
 await until(async () => starts(await shown("hats", "hits")) === "0" && (await shown("kick", "hits"))[0]?.length === 31 && (await shown("keys", "chords")).length === 1);
+// A gesture names a clip by the hash the page drew: the page shows the outside writes first.
+await caughtUp();
 await key("Escape");
 await key("Escape");
 await playAt(0);
@@ -381,6 +383,9 @@ check(await until(async () => (await pickedIn("kick.hits")).join() === kickCopy.
 check(await until(async () => (await undoNow()).startsWith("Undo duplicating a Kick clip")), `Undo names it: ${await undoNow()}`);
 await key("Meta+z");
 await until(async () => starts(await shown("kick", "hits")) === "0");
+// The marquee starts on empty lane space as the page draws it: the page shows the undo first (a
+// read of what it draws, not a gesture's wait).
+await caughtUp();
 
 // ---------------------------------------------------------------- the marquee keeps its empty bars
 const kickRow = await rowOf("kick.hits");
@@ -455,6 +460,7 @@ const loose = JSON.parse(fixture("data/kick/hits.json"));
 loose.clips[0].notes = loose.clips[0].notes.map((x, i) => ({ ...x, start: x.start + (i % 2 ? 0.06 : -0.04 * (x.start > 0)) }));
 write("data/kick/hits.json", JSON.stringify(loose, null, 2));
 await until(async () => Math.abs((await shown("kick", "hits"))[0].notes[1]?.start - 1.06) < 1e-9);
+await caughtUp();
 await clickClip("kick.hits", K);
 n = posts.length;
 await key("q");

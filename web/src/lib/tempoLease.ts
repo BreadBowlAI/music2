@@ -11,6 +11,7 @@
 import { clientId, readJson } from "./graph";
 import { editing, recorded, type Step } from "./history";
 import { token } from "./native";
+import { http } from "./http";
 
 /** How often a still drag tells the server it lives (its lease ends after 10 s of nothing). */
 const KEEPALIVE_MS = 2000;
@@ -35,7 +36,7 @@ export interface TempoLease {
 }
 
 const post = async (path: string, body: unknown) => {
-  const res = await fetch(`/api/graph/tempo/lease/${path}`, {
+  const res = await http(`/api/graph/tempo/lease/${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: JSON.stringify(body),
@@ -92,7 +93,7 @@ export function begin(session: number, at: number, ended: (why: string) => void)
         const id = await lease;
         const done: TempoDone =
           id === null
-            ? await fetch("/api/graph/tempo", {
+            ? await http("/api/graph/tempo", {
                 method: "POST",
                 headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
                 body: JSON.stringify({ session, at, bpm }),
@@ -102,7 +103,7 @@ export function begin(session: number, at: number, ended: (why: string) => void)
                 return json;
               })
             : await post("commit", { lease: id, bpm });
-        if (done.before !== done.after) recorded(session, done, step, ours);
+        if (done.before !== done.after) recorded(session, done, step);
         return done;
       } finally {
         ours.end();

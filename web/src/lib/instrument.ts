@@ -13,6 +13,7 @@ import { editing, recorded } from "./history";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
+import { http } from "./http";
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
@@ -68,7 +69,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
   const session = graph.session;
   const ours = editing();
   try {
-    const res = await fetch("/api/graph/track/instrument", {
+    const res = await http("/api/graph/track/instrument", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session, module, component: instrument.component }),
@@ -76,7 +77,7 @@ export async function changeInstrument(module: string, instrument: Instrument) {
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     const r = data as Edited;
-    recorded(session, r, { name: `changing ${name}'s instrument`, structural: true }, ours);
+    recorded(session, r, { name: `changing ${name}'s instrument`, structural: true });
     toast(`${name} plays ${instrument.label} now`, undoAction(session, r.step));
     guideDid("sound");
   } catch (error) {

@@ -3,6 +3,7 @@
 
 import { clientId, type GraphState } from "./graph";
 import { token } from "./native";
+import { http } from "./http";
 
 /**
  * A file of the accepted revision. `draft` is set when the disk says otherwise (saved, but
@@ -35,7 +36,7 @@ export type Saved = { ok: true; graph: GraphState; step?: number } | { ok: false
 const headers: Record<string, string> = { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) };
 
 async function request<T>(method: string, path: string, body?: unknown): Promise<{ status: number; data: T & { error?: string } }> {
-  const res = await fetch(`/api/graph${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
+  const res = await http(`/api/graph${path}`, { method, headers, body: body === undefined ? undefined : JSON.stringify(body) });
   return { status: res.status, data: await res.json().catch(() => ({})) };
 }
 

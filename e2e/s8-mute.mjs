@@ -19,7 +19,7 @@ import path from "node:path";
 import { HOME, PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintlib } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, toasts, key, box } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, toasts, key, box } = await open(1440, 900);
 // The Export dialog (studio C3): Song is chosen and Export… has the focus, so Return goes on to the question.
 const go = async () => {
   await page.waitForSelector("[data-testid=export-dialog]", { timeout: 5000 });
@@ -314,6 +314,8 @@ check(await toasted("Undid mute in song"), "and says “Undid mute in song”");
 check(await until(async () => (await overlays()).heard.kick === "heard" && (await struck("kick")) === "none" && !(await pressed("mute", "kick"))), "Kick is heard again: no strike, M off");
 await key("Meta+Shift+z");
 check(await until(() => read("tracks/kick.ts").includes("muted: true")), "redo mutes it in the song again");
+// The menu offers what the page shows: Unmute in song, once it shows the redo.
+await caughtUp();
 check(await openMenu("kick"), "its menu opens");
 await page.click("[data-testid=mute-in-song]");
 check(await until(() => read("tracks/kick.ts") === kickTs), "Unmute in song takes the option out");
@@ -339,6 +341,8 @@ const idle = () => until(async () => !(await page.$("[data-testid=export-progres
 // A button of the question, clicked as itself: the last export's long toast may lie over it.
 const answer = (id) => page.$eval(`[data-testid=${id}]`, (b) => b.click());
 
+// M mutes while you listen only once the page shows Kick unmuted in the song (else it opens a menu).
+await caughtUp();
 await page.click('[data-mute="kick"]');
 await settled(["kick"], []);
 await key("Meta+Shift+e");
@@ -375,6 +379,7 @@ check(await until(() => read("tracks/kick.ts") === kickTs), "⌘Z puts tracks/ki
 await sleep(300);
 check(same((await overlays()).mute, []), "and doesn't bring back the listening mute");
 
+await caughtUp();
 await page.click('[data-mute="kick"]');
 await settled(["kick"], []);
 await key("Meta+Shift+e");
@@ -462,6 +467,9 @@ await settled(["kick"], []);
 const songTs = read("song.ts");
 write("song.ts", songTs.replace("export default", "export default )"));
 check(await until(async () => (await state()).view.draft_errors.length > 0, 10000), "the code is broken");
+// The question says what the page shows: once its status says the code doesn't compile (that is
+// no new revision, so caughtUp can't tell).
+await until(async () => !!(await page.$("[data-status~=compile]")));
 await key("Meta+Shift+e");
 await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });

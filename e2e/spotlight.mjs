@@ -15,18 +15,16 @@
 import fs from "node:fs";
 import { check, done, HOME, open, PROJ, read, sess, sleep, until } from "./fixlib.mjs";
 
-const { page, errors, toasts, state, key } = await open(1440, 900, { browser: true });
+const { page, errors, toasts, state, key, hold: holdBack } = await open(1440, 900, { browser: true });
 
 // Requests held back until released, to stand in for a slow answer (a plugin scan, a busy session,
 // a preview rendering); then they go on, or get `answer`.
 const holds = [];
-await page.setRequestInterception(true);
-page.on("request", async (r) => {
+await holdBack((r) => {
   const h = holds.find((h) => r.url().includes(h.part));
-  if (!h) return void r.continue();
+  if (!h) return 0;
   if (!h.every) holds.splice(holds.indexOf(h), 1);
-  await h.until;
-  void (h.answer ? r.respond(h.answer) : r.continue());
+  return { until: h.until, answer: h.answer };
 });
 /** Hold the next request whose URL has `part` (with `every`, each one) until the function it returns is called. */
 const hold = (part, answer, every = false) => {

@@ -112,6 +112,6 @@ pub fn run_as(
 pub fn unmoved(s: &Session, checked: &Checked) -> Result<(), EditError> {
     match std::ptr::eq(checked.baseline(), s.accepted()) {
         true => Ok(()),
-        false => Err(EditError::Stale { current: s.accepted().number }),
+        false => Err(EditError::Stale { current: s.accepted().number, by: None }),
     }
 }

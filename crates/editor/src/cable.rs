@@ -401,7 +401,9 @@ pub(crate) fn current_site<'a>(s: &'a Session, at: u64, call: &str) -> Result<&'
         let to = m2_session::text::Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         sites.iter().find(|x| x.file == file && x.start == to && x.end == to + (old.end - old.start))
     };
-    carried().ok_or(EditError::Stale { current: accepted.number })
+    // Changed since only by the window that asks, moving no ids: the same call now (AGENT-2).
+    let own = || s.only_own_since(at, file).then(|| sites.iter().find(|x| x.file == file && x.ordinal == ordinal)).flatten();
+    carried().or_else(own).ok_or_else(|| EditError::stale(s, at, file))
 }
 
 fn outlet(s: &Session, at: u64, id: &str) -> Result<Outlet, EditError> {

@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, box, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
@@ -35,6 +35,8 @@ async function setBass(notes) {
   }
   await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === notes.length);
   await sleep(150);
+  // The roll writes the lane as the page shows it: the page shows this write first.
+  await caughtUp();
   return read(FILE);
 }
 const revision = async () => (await state()).view.revision;
@@ -324,6 +326,9 @@ await undoTo(base, "Delete every note");
 
 // ---------------------------------------------------------------- ⌥← and ⌥→ are the page's (X1); Ctrl-click on a Mac (X7)
 
+// ⌘A selects the notes the roll draws, and a note is pressed where it is drawn: the roll shows the
+// undo first (a read of what it draws, not a gesture's wait).
+await caughtUp();
 await page.focus("[data-testid=notes]");
 await key("Meta+a");
 await until(async () => (await shown()).every((x) => x.selected));

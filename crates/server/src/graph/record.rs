@@ -32,7 +32,8 @@
 //! - **The code must compile** (the review's R1): R is refused while it doesn't, as every edit is. A
 //!   take that ends while it doesn't waits in the queue, said once, and is written once it does.
 //! - **The windows hear** `{"t": "take", …}`: the take's phase and notes when they change, then
-//!   `written`, `empty`, or `error`.
+//!   `written` (with its undo step's id, `step`, which the window that recorded it keeps as its
+//!   own: AGENT-2), `empty`, or `error`.
 //! - **The input's problems** (the ex plan's slice 3) go through the fault ring (RENDER-25), named
 //!   by the input's [`InputNamer`]: an input chosen that isn't there (the player reports it as it
 //!   opens), an input gone during a take, and the OS refusing the microphone during one, which the
@@ -1521,11 +1522,28 @@ impl Graph {
         match self.place_takes(e.token, files, takes) {
             (Ok(v), _) => {
                 let revision = v["revision"].as_u64().unwrap_or(0);
-                if let Err(err) = self.name_step(e.token, revision, format!("recording on {label}"), false) {
+                let named = self.name_step(e.token, revision, format!("recording on {label}"), false);
+                if let Err(err) = &named {
                     eprintln!("music2: couldn't name the recording's undo step: {err:#}");
                 }
                 let first = &e.parts[0];
-                let mut w = json!({"revision": revision, "made": v["made"], "module": first.module(), "lane": first.lane()});
+                let mut w =
+                    json!({"revision": revision, "moved": v["moved"], "made": v["made"], "module": first.module(), "lane": first.lane()});
+                // A lane write that took an outside change in with it, as any change says (AGENT-2).
+                if v["mixed"] == json!(true) {
+                    w["mixed"] = json!(true);
+                }
+                // The undo step it made, by its id, and whether it moved ids, as an edit's answer
+                // says them: the window that recorded the take keeps it as its own (AGENT-2).
+                if v["step"].is_u64() {
+                    w["step"] = v["step"].clone();
+                    // And its name, as Undo says it: its ⌘Z names it before the window shows it.
+                    if let Ok(n) = &named
+                        && n["undo_name"]["step"] == v["step"]
+                    {
+                        w["undo_name"] = n["undo_name"].clone();
+                    }
+                }
                 if let Some(Part::Audio { file, .. }) = e.parts.iter().find(|p| matches!(p, Part::Audio { .. }))
                     && let Audio::Written(f) = &**file
                 {
@@ -1546,7 +1564,7 @@ impl Graph {
 
     /// Choose take `take` (from 0) of an audio clip whose file is a take over a loop (MON-11): its
     /// offset moves to the same place in that pass. One Tx, one undo step, "Vox take 2".
-    pub fn choose_take(&self, token: u64, clip: m2_editor::clips::ClipRef, take: usize) -> Result<Value> {
+    pub fn choose_take(&self, token: u64, clip: m2_editor::clips::ClipRef, take: usize, since: Option<u64>) -> Result<Value> {
         let (dir, label) = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;
@@ -1584,10 +1602,12 @@ impl Graph {
             follow: None,
             offset: Some(offset),
         };
-        let (done, _) = self.clips_why(token, gesture, None);
+        let (done, _) = self.clips_why_since(token, gesture, None, since);
         let v = done?;
-        let revision = v["revision"].as_u64().unwrap_or(0);
-        if let Err(err) = self.name_step(token, revision, format!("{label} take {}", take + 1), false) {
+        // Named by its id: the take it had already makes no change, and no step (AGENT-2).
+        if let Some(step) = v["step"].as_u64()
+            && let Err(err) = self.name_step_by(token, None, Some(step), format!("{label} take {}", take + 1), false)
+        {
             eprintln!("music2: couldn't name the take's undo step: {err:#}");
         }
         Ok(v)

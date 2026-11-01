@@ -497,7 +497,9 @@ pub fn set(s: &mut Session, at: u64, id: &str, value: &Json, expect: Option<&Jso
         lanes: vec![],
         modules: vec![],
     });
-    let tx = plan::planned(s, label.clone(), vec![op], expect);
+    let mut tx = plan::planned(s, label.clone(), vec![op], expect);
+    // A menu, a switch, a file's name: written where it is, no call added (AGENT-2).
+    tx.in_place = true;
     let said = |why: &str| EditError::Rejected(format!("setting {} would change more than its call ({why})", now.label));
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;

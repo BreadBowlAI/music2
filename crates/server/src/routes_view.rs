@@ -47,13 +47,16 @@ async fn graph_view(State(s): S, Json(r): Json<ViewReq>) -> ApiResult {
 struct MarkersReq {
     session: u64,
     markers: Vec<Marker>,
+    /// The list it was made from (AGENT-2): refused when the markers changed since.
+    #[serde(default)]
+    base: Option<Vec<Marker>>,
 }
 
 /// The ruler's markers (Q13): `{session, markers: [{beat, name}]}`, the whole list, written into
 /// `layout.json`. One undo step with no revision. A write. Answers `{file, before, after, revision}`.
 async fn graph_markers(State(s): S, Json(r): Json<MarkersReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.markers(r.session, r.markers)).await;
+    let result = blocking(move || state.graph.markers_from(r.session, r.markers, r.base)).await;
     s.graph_changed();
     Ok(Json(result?))
 }
