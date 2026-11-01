@@ -756,13 +756,21 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                     l.track, l.label
                 )));
             };
-            // Each beat's bar, from its start to its end; each step from its start to the next line,
-            // or its bar's end.
+            // Each beat's bar, from its start to its end; each step from its start to the grid's next
+            // line, the lines counted from its bar's start as the grid draws them, or the bar's end.
             let bar = |a: f64| {
                 let start = a - arr.bar_at(a).1;
                 (start, start + arr.meter_at(start).bar())
             };
-            let steps: Vec<(f64, f64)> = at.iter().map(|a| (*a, (a + step).min(bar(*a).1))).collect();
+            let steps: Vec<(f64, f64)> = at
+                .iter()
+                .map(|a| {
+                    let (start, end) = bar(*a);
+                    // A start the lane wrote to a millionth is on its line.
+                    let next = ((a - start + 1e-6) / step).floor() + 1.0;
+                    (*a, clean(start + next * step).min(end))
+                })
+                .collect();
             hits(l, &steps, *to, row.sound.as_deref(), bar);
         }
         Gesture::Quantize { clips, notes, grid, ends } => {

@@ -326,3 +326,18 @@ fn plus_drum_is_refused_in_words() {
     );
     assert_eq!(said(kits::add_drum(&mut s, "verb", "kick")), "edit rejected: Reverb is no drum kit's bus: no Drum track goes to it.");
 }
+
+// KIT-11, KIT-12: a step ends at the grid's next line from its bar's start, as the grid draws it:
+// triplet steps, whose starts the lane writes to a millionth, never reach into the next step.
+#[test]
+fn triplet_steps_end_at_the_next_line() {
+    let f = fixture(BUSES);
+    f.write("data/kick/hits.json", "{\"clips\": []}\n");
+    let mut s = f.open();
+    let third = 1.0 / 6.0;
+    let line = |k: f64| (k * third * 1e6).round() / 1e6;
+    go(&mut s, hits("kick", &[line(0.0), line(1.0), line(2.0)], third, Hit::On));
+    assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [0.0, line(1.0), line(2.0)]);
+    go(&mut s, hits("kick", &[line(1.0)], third, Hit::Off));
+    assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [0.0, line(2.0)], "only the hit that starts in it");
+}
