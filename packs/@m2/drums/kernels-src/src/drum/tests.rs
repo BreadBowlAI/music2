@@ -514,26 +514,40 @@ fn one(drum: f32, pitch: f32, frames: usize, changes: &[(usize, f32)], hits: &dy
     play::<One>(frames, BLOCK, &input).left()
 }
 
-/// The menu's drums, by place: each with a pitch it plays on.
-const MENU: [(&str, f32); 9] = [
+/// The menu's drums, by place, grouped by family (KIT-20): each with the General MIDI note it is the
+/// drum machine's drum at.
+const MENU: [(&str, f32); 17] = [
     ("kick", 36.0),
+    ("kick 2", 35.0),
     ("snare", 38.0),
+    ("snare 2", 40.0),
     ("clap", 39.0),
     ("hats", 42.0),
     ("tom", 45.0),
     ("rim", 37.0),
+    ("claves", 75.0),
     ("cowbell", 56.0),
     ("cymbal", 49.0),
+    ("cymbal 2", 57.0),
+    ("ride", 51.0),
+    ("ride 2", 59.0),
     ("shaker", 69.0),
+    ("shaker 2", 70.0),
+    ("tambourine", 54.0),
 ];
+
+/// The nine first sounds, by the drum voice's own model (0 to 8): the rest are the drum machine's
+/// drum at their note.
+const NINE: [&str; 9] = ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"];
 
 // CARD-33 (review Y11): One drum's drum is a menu, a control its kernel reads when a hit starts:
 // each place plays the drum the kit's kernel plays with that model, bit for bit.
 #[test]
 fn one_drum_plays_each_drum_as_the_drum_kernel_does() {
     for (place, (name, pitch)) in MENU.iter().enumerate() {
+        // One of the nine by the drum kernel's model; another by the drum machine's map at its note.
         let mut p = patch(&[]);
-        p[MODEL] = place as f32;
+        p[MODEL] = NINE.iter().position(|n| n == name).map_or(-1.0, |m| m as f32);
         let drum = hit(&p, *pitch, 0.8, s(2.0), &|_| 0.0).left();
         assert_eq!(one(place as f32, *pitch, s(2.0), &[], &|_| 0.0), drum, "{name}");
     }
@@ -552,7 +566,7 @@ fn one_drum_chokes_on_any_hit_where_its_drum_chokes() {
             |hits: f32| peak_in(&one(place as f32, *pitch, s(0.3), &[], &|t| if t == at { hits } else { 0.0 }), at + s(0.01), s(0.02));
         let free = after(0.0);
         assert!(free > 0.0, "{name} rings");
-        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "cymbal");
+        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "cymbal" | "kick 2" | "snare 2" | "cymbal 2");
         // A hit marked in the tom's group (no choke group: the field alone) and one in the kick's.
         for hits in [h, h + 1.0, 2.0 * h + 4096.0] {
             assert_eq!(after(hits) == 0.0, chokes, "{name}, a hit marked {hits}");
@@ -590,38 +604,6 @@ fn every_knob_of_one_drum_moves_every_drum_it_offers() {
     }
 }
 
-/// The family of each drum the drum machine plays (KIT-6): the place in the Drum's menu (`MENU`) of
-/// the Drum's sound it belongs to. A family is one synthesis of this kernel: the rim and the claves
-/// ring resonators, the shaker and the tambourine filter noise, a crash and a ride are one metal.
-const FAMILY: [(Kind, usize); 14] = [
-    (Kind::Kick, 0),
-    (Kind::Snare, 1),
-    (Kind::Clap, 2),
-    (Kind::ClosedHat, 3),
-    (Kind::PedalHat, 3),
-    (Kind::OpenHat, 3),
-    (Kind::Tom, 4),
-    (Kind::Rim, 5),
-    (Kind::Claves, 5),
-    (Kind::Cowbell, 6),
-    (Kind::Crash, 7),
-    (Kind::Ride, 7),
-    (Kind::Shaker, 8),
-    (Kind::Tambourine, 8),
-];
-
-/// The synthesis a hit of the drum machine (`model` -1) or of the Drum at `place` makes at `pitch`.
-fn synthesis(model: f32, pitch: f32) -> std::mem::Discriminant<Sound> {
-    let mut d = Drum::new(&Cfg::new(48_000.0, BLOCK, 1));
-    let p = patch(&[(MODEL, model)]);
-    d.start(&|port| match port {
-        PITCH => pitch,
-        VELOCITY => 0.8,
-        _ => p[port],
-    });
-    std::mem::discriminant(&d.sound)
-}
-
 /// The editor's General MIDI table (`GM` in `crates/editor/src/drums.rs`), read from its source:
 /// each sound and its notes, in its order.
 fn general_midi() -> Vec<(String, Vec<u8>)> {
@@ -637,26 +619,23 @@ fn general_midi() -> Vec<(String, Vec<u8>)> {
         .collect()
 }
 
-// KIT-6 (review K6): the families are declared, not heard. Each drum the drum machine plays is made
-// by the very synthesis the Drum makes for its family's sound; the editor's table gives every note
-// the drum machine plays to the sound of its drum's family, in the Drum's menu order, and the notes
-// it gives that the drum machine leaves silent are 52, 53 and 55.
+// KIT-6, KIT-20: the editor's table, read from its source and in the Drum's menu order, gives every
+// note the drum machine plays to the sound whose Drum plays its very bits there (the hats' pedal and
+// open too), but the toms, which the drum machine spreads 1.5 semitones a step and the Drum's tom
+// plays chromatically; the notes it gives that the drum machine leaves silent are 52, 53 and 55.
 #[test]
-fn the_families_are_the_tables() {
-    let family = |kind: Kind| FAMILY.iter().find(|(k, _)| *k == kind).map(|(_, place)| *place);
-    for (kind, place) in FAMILY {
-        let pitch = (0..128).map(|n| n as f32).find(|n| kind_of(-1.0, *n).0 == kind).expect("a note the drum machine plays it on");
-        assert_eq!(synthesis(-1.0, pitch), synthesis(place as f32, MENU[place].1), "{kind:?} is of the {}'s family", MENU[place].0);
-    }
+fn the_table_is_the_drum_machines() {
     let gm = general_midi();
     let sounds: Vec<&str> = gm.iter().map(|(s, _)| s.as_str()).collect();
     assert_eq!(sounds, MENU.map(|(name, _)| name), "the table is in the Drum's menu order");
     let mut silent = vec![];
     for (place, (sound, notes)) in gm.iter().enumerate() {
         for &n in notes {
-            match kind_of(-1.0, n as f32).0 {
-                Kind::Silent => silent.push(n),
-                kind => assert_eq!(family(kind), Some(place), "{n} ({kind:?}) is the {sound}'s"),
+            let n = n as f32;
+            match (sound.as_str(), kind_of(-1.0, n).0) {
+                (_, Kind::Silent) => silent.push(n as u8),
+                ("tom", _) => assert_eq!(sound_at(place as f32, n), (Kind::Tom, n - 45.0, false), "the tom at {n} is chromatic"),
+                _ => assert!(one(place as f32, n, s(4.0), &[], &|_| 0.0) == kit(n), "the {sound} at {n}: the drum machine's bits"),
             }
         }
     }
@@ -666,5 +645,148 @@ fn the_families_are_the_tables() {
         if kind_of(-1.0, n as f32).0 != Kind::Silent {
             assert!(gm.iter().any(|(_, notes)| notes.contains(&n)), "the drum machine plays {n}, which the table gives no sound");
         }
+    }
+}
+
+// KIT-20 (the review's U2): each other drum is the drum machine's at its own note, at any note: the
+// same drum, tuning and variant; its noise, seeded by the key it is on, follows the note, so at its
+// own note it plays the drum machine's very bits, and at another note the same drum, other noise.
+#[test]
+fn each_other_drum_is_the_drum_machines_at_its_note() {
+    for (place, (name, note)) in MENU.iter().enumerate().filter(|(_, (n, _))| !NINE.contains(n)) {
+        assert_ne!(kind_of(-1.0, *note).0, Kind::Silent, "{name}");
+        for pitch in [0.0, 24.0, 36.0, *note, 60.0, 127.0] {
+            assert_eq!(sound_at(place as f32, pitch), kind_of(-1.0, *note), "{name} at {pitch}");
+        }
+        assert!(one(place as f32, *note, s(4.0), &[], &|_| 0.0) == kit(*note), "{name} at its own note: the drum machine's bits");
+    }
+    // A place past the menu plays nothing, as before.
+    assert_eq!(sound_at(17.0, 36.0).0, Kind::Silent);
+    assert_eq!(sound_at(99.0, 36.0).0, Kind::Silent);
+}
+
+/// The bits of `x` as one number (FNV-1a over each sample's bits), for a test to pin.
+fn digest(x: &[f32]) -> u64 {
+    x.iter().flat_map(|v| v.to_bits().to_le_bytes()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The nine first sounds' bits at twelve notes, as `@m2/drums` 2.1.0 played them before KIT-20
+/// (`digest`): (place in today's menu, note, bits).
+const BEFORE: [(usize, f32, u64); 108] = [
+    (0, 24.0, 0x5abff48f9174b16e),
+    (0, 30.0, 0x527424f270cda65d),
+    (0, 34.0, 0xb8a5d00fd86df6f8),
+    (0, 41.0, 0x6757fcb6f7b1095b),
+    (0, 44.0, 0xe4e23b7661a65eed),
+    (0, 52.0, 0x86d93e53d25d446a),
+    (0, 53.0, 0x18cfa3ff8f155cb1),
+    (0, 55.0, 0xed2debad3fce25d6),
+    (0, 60.0, 0x8ceba9e403150a92),
+    (0, 71.0, 0x7bdcb18bb2b353c5),
+    (0, 38.0, 0x3e34fb8d036ca970),
+    (0, 36.0, 0x57fe6447165f9748),
+    (2, 24.0, 0x2739d56addf83f5f),
+    (2, 30.0, 0x6678570242d46b3e),
+    (2, 34.0, 0x8deeb26d242547a3),
+    (2, 41.0, 0x8c52c3629c1349bb),
+    (2, 44.0, 0xb136402f6576f2d6),
+    (2, 52.0, 0xe30ca1d3af264612),
+    (2, 53.0, 0xab483eb500aed0a7),
+    (2, 55.0, 0xb6ad3729b803fb77),
+    (2, 60.0, 0x5b85e8a6bea285d9),
+    (2, 71.0, 0x0dbef5f93b1a42bf),
+    (2, 38.0, 0x5262f74f91635b45),
+    (2, 36.0, 0xcd0a9e6ee705b910),
+    (4, 24.0, 0x34c3ce67a7680da1),
+    (4, 30.0, 0x059e0abf6b754d4e),
+    (4, 34.0, 0x25575b9686575736),
+    (4, 41.0, 0xcba539abaadea2d2),
+    (4, 44.0, 0x281958ce58f0f130),
+    (4, 52.0, 0x75c1ec39569c4c76),
+    (4, 53.0, 0xbf3994bf34cbb433),
+    (4, 55.0, 0x8b3ded5d97881704),
+    (4, 60.0, 0xc446663a91b2ca57),
+    (4, 71.0, 0x58c69cb720f006e1),
+    (4, 38.0, 0xc33bf6b90fffaa5e),
+    (4, 36.0, 0xba8ab20b8db42f65),
+    (5, 24.0, 0xa6cbee5ab5da352f),
+    (5, 30.0, 0x9752736c1541d1be),
+    (5, 34.0, 0x88c989b997fed5bd),
+    (5, 41.0, 0x97507637686a0be1),
+    (5, 44.0, 0x7f3f1b19fd2f1944),
+    (5, 52.0, 0xe0bfcf985fe536fb),
+    (5, 53.0, 0x3b1386dc985936ea),
+    (5, 55.0, 0x7d61470f8a4a2e70),
+    (5, 60.0, 0xeb40f85251012a97),
+    (5, 71.0, 0x8c00c3ffd113f8db),
+    (5, 38.0, 0xd2a266a223f17630),
+    (5, 36.0, 0x528547e966958e9d),
+    (6, 24.0, 0x56d2df68af22e945),
+    (6, 30.0, 0xd4937d0a4ebfe2b7),
+    (6, 34.0, 0x48590b5715f3a6be),
+    (6, 41.0, 0x2fb6eef832b2d73f),
+    (6, 44.0, 0x1026162839012af8),
+    (6, 52.0, 0x8534476d88ac8960),
+    (6, 53.0, 0x2851aac300820358),
+    (6, 55.0, 0x98afb62df05d76e9),
+    (6, 60.0, 0x564c8e08ee8c1a66),
+    (6, 71.0, 0x742a5afa2f0aa51b),
+    (6, 38.0, 0xddf72580da10612b),
+    (6, 36.0, 0x3e163667efc6416f),
+    (7, 24.0, 0x430ba0f549fae92b),
+    (7, 30.0, 0x430ba0f549fae92b),
+    (7, 34.0, 0x430ba0f549fae92b),
+    (7, 41.0, 0x430ba0f549fae92b),
+    (7, 44.0, 0x430ba0f549fae92b),
+    (7, 52.0, 0x430ba0f549fae92b),
+    (7, 53.0, 0x430ba0f549fae92b),
+    (7, 55.0, 0x430ba0f549fae92b),
+    (7, 60.0, 0x430ba0f549fae92b),
+    (7, 71.0, 0x430ba0f549fae92b),
+    (7, 38.0, 0x430ba0f549fae92b),
+    (7, 36.0, 0x430ba0f549fae92b),
+    (9, 24.0, 0x06977af6a342ea00),
+    (9, 30.0, 0x9c8a6a8691727fb4),
+    (9, 34.0, 0xd6b2ef0f5654d9f9),
+    (9, 41.0, 0x708e1de101f28fa1),
+    (9, 44.0, 0x6a555359226f6158),
+    (9, 52.0, 0x50782e30c0b43c5c),
+    (9, 53.0, 0xdeaaf3f6ea5a2c19),
+    (9, 55.0, 0x0e0c882a8d449611),
+    (9, 60.0, 0xea07c21340ef2cca),
+    (9, 71.0, 0x47ce347b1351b4f0),
+    (9, 38.0, 0x8f959ca1d9b9b2cd),
+    (9, 36.0, 0x43286ec066c01c76),
+    (10, 24.0, 0xdbd0631d3379ebb2),
+    (10, 30.0, 0x5e6948933430a62a),
+    (10, 34.0, 0x6a299d1b90554bbe),
+    (10, 41.0, 0x18d7b117b220d9bd),
+    (10, 44.0, 0xd23483f07a882969),
+    (10, 52.0, 0xbecee51b79e9fe56),
+    (10, 53.0, 0x2e696e3771af4821),
+    (10, 55.0, 0x2762b430c24ddae1),
+    (10, 60.0, 0xce56e93b7c636040),
+    (10, 71.0, 0x698222d8c92b2772),
+    (10, 38.0, 0x7e321e5ff2e1410f),
+    (10, 36.0, 0x0f2a4535fa23cbbd),
+    (14, 24.0, 0x0470d3e46c3c3b9e),
+    (14, 30.0, 0x2be99759fe6fa346),
+    (14, 34.0, 0x0721e7eb231380bc),
+    (14, 41.0, 0xd4b6573a025fcf7b),
+    (14, 44.0, 0xb54f5815d1fd37b2),
+    (14, 52.0, 0x528a9d4056be5354),
+    (14, 53.0, 0xfb8fb7a6294ed02a),
+    (14, 55.0, 0x6bd36b69c7e6f71b),
+    (14, 60.0, 0x3f40a3abd423f94c),
+    (14, 71.0, 0xc6d51a1f0fc92aaf),
+    (14, 38.0, 0xc1ff160ad744bd23),
+    (14, 36.0, 0xe0b12c76cdddce71),
+];
+
+// KIT-20: the nine first sounds play as they did, every bit, pinned: the menu grew at its end.
+#[test]
+fn the_first_nine_play_as_before() {
+    for (place, n, bits) in BEFORE {
+        assert_eq!(digest(&one(place as f32, n, s(4.0), &[], &|_| 0.0)), bits, "{} at {n}", MENU[place].0);
     }
 }

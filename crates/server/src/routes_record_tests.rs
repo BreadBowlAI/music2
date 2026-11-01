@@ -15,12 +15,17 @@ const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } fr
 
 /// A project of [`SONG`] in a folder of its own, named `name`.
 fn project(name: &str) -> std::path::PathBuf {
+    project_of(name, SONG)
+}
+
+/// A project of `song` in a folder of its own, named `name`.
+fn project_of(name: &str, song: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-record-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
-    std::fs::write(dir.join("song.ts"), SONG).unwrap();
+    std::fs::write(dir.join("song.ts"), song).unwrap();
     dir
 }
 
@@ -304,5 +309,71 @@ fn the_inject_api_needs_an_open_input() {
     let (status, answer) = post(&running.url, "/api/graph/input/inject", &json!({"samples": [0.0, 0.5]}));
     assert_eq!(status, 400, "{answer:#}");
     assert_eq!(answer["error"], json!("Nothing is recording from the sound input."));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A kit: a Drums bus, and a Kick, a Snare and two Hats tracks going to it.
+const KIT: &str = "import { bus, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { gain } from 'std/dsp';\n\
+                   import { master, mixer } from 'std/mix';\n\
+                   const d = bus('drums', { name: 'Drums' }, ({ input }) => gain(input));\n\
+                   const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                   const s = track('snare', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'snare' }));\n\
+                   const h = track('hats', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   const h2 = track('hats2', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   export default song(() => master(mixer({ drums: d.out, kick: { in: k.out, to: 'drums' }, snare: { in: s.out, to: 'drums' }, \
+                   hats: { in: h.out, to: 'drums' }, hats2: { in: h2.out, to: 'drums' } })));\n";
+
+// KIT-26: a take on a Drum track of a kit records the kit: each pad's hit on the lane of the Drum
+// track that answers to it (the first Hats of two), one Tx, one undo step named by the kit, which
+// takes every lane's clip back.
+#[test]
+fn a_take_on_a_kit_writes_each_hit_on_its_drums_lane() {
+    let dir = project_of("kit", KIT);
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    let state = running.state.clone();
+    let session = state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let mut events = state.events.subscribe();
+    use m2_os::midi::Event;
+    state.midi(Event::Plugged("Keys"));
+    let (status, take) =
+        post(&running.url, "/api/graph/record/start", &json!({"session": session, "module": "snare", "lane": "hits", "count_in": false}));
+    assert_eq!(status, 200, "{take:#}");
+    let lanes: Vec<&str> = take["lanes"].as_array().unwrap().iter().map(|l| l["module"].as_str().unwrap()).collect();
+    assert_eq!(lanes, ["kick", "snare", "hats", "hats2"], "the kit's every Drum track");
+    std::thread::sleep(Duration::from_millis(300));
+    for key in [36, 38, 42] {
+        state.midi(Event::Bytes("Keys", &[0x90, key, 100]));
+        std::thread::sleep(Duration::from_millis(120));
+        state.midi(Event::Bytes("Keys", &[0x80, key, 0]));
+    }
+    let (status, _) = post(&running.url, "/api/graph/record/stop", &json!({"session": session}));
+    assert_eq!(status, 200);
+    let t = Instant::now();
+    let mut written = None;
+    while written.is_none() && t.elapsed() < Duration::from_secs(5) {
+        match events.try_recv() {
+            Ok(m) => {
+                let v: Value = serde_json::from_str(&m).unwrap();
+                if v["t"] == "take" && v.get("written").is_some() {
+                    written = Some(v);
+                }
+            }
+            Err(_) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    assert!(written.is_some(), "the take is written");
+    let notes = |module: &str| -> Vec<f64> {
+        let Ok(text) = std::fs::read_to_string(dir.join(format!("data/{module}/hits.json"))) else { return vec![] };
+        let Ok(m2_song::LaneData::Notes(clips)) = m2_song::LaneData::read(&text, &m2_song::LaneKind::Notes) else { panic!("{text}") };
+        clips.iter().flat_map(|c| c.notes.iter().map(|n| n.pitch)).collect()
+    };
+    assert_eq!((notes("kick"), notes("snare"), notes("hats"), notes("hats2")), (vec![36.0], vec![38.0], vec![42.0], vec![]));
+    assert_eq!(state.graph.undo_names().0.as_deref(), Some("recording on Drums"));
+    state.graph.undo(session).unwrap();
+    assert_eq!((notes("kick"), notes("snare"), notes("hats")), (vec![], vec![], vec![]), "one undo takes the take back");
     let _ = std::fs::remove_dir_all(&dir);
 }

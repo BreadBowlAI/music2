@@ -28,7 +28,7 @@ use crate::tracks::{self, Instrument, instrument_binding};
 use crate::{EditError, Edited, ready};
 
 /// Where a module's code is: the file its function is in (`src` is `file:line:column`).
-fn file_of(m: &Module) -> Option<&str> {
+pub(crate) fn file_of(m: &Module) -> Option<&str> {
     m.src.as_deref().and_then(|s| s.rsplitn(3, ':').nth(2))
 }
 
@@ -45,12 +45,12 @@ fn each<'a>(nodes: &'a [Node], out: &mut Vec<&'a Node>) {
 /// What plays a track's notes: its instrument calls (the outermost frames of a component that
 /// takes notes first and makes audio, listed or not: @m2/synths' simple `hat` has no
 /// category) and the plugins it gives notes to.
-struct Players<'a> {
-    calls: Vec<&'a Site>,
-    plugins: usize,
+pub(crate) struct Players<'a> {
+    pub calls: Vec<&'a Site>,
+    pub plugins: usize,
 }
 
-fn players<'a>(rev: &'a Revision, m: &Module) -> Players<'a> {
+pub(crate) fn players<'a>(rev: &'a Revision, m: &Module) -> Players<'a> {
     let compiled = &rev.compiled;
     let instrument = |id: Option<&str>| {
         id.and_then(|id| compiled.components.get(id)).is_some_and(|d| {
@@ -115,10 +115,22 @@ fn computed(text: &str, arg: &Arg, name: &str, units: &[m2_script::UnitCtor]) ->
     }
 }
 
-/// The edits of `file`'s import statements that import `binding` from `from`, and take out every
-/// name only bytes `gone` read: as one edit of the imports' bytes (trimmed to what differs), so no
-/// node's name moves. None when they don't change.
-fn import_edits(text: &str, from: &str, binding: &str, gone: &[(u32, u32)]) -> Option<(u32, u32, String)> {
+/// The edits of `file`'s import statements that import each binding of `adds` from its module, and
+/// take out every name only bytes `gone` read: as one edit of the imports' bytes (trimmed to what
+/// differs), so no node's name moves. None when they don't change.
+pub(crate) fn import_edits(text: &str, adds: &[(&str, &str)], gone: &[(u32, u32)]) -> Option<(u32, u32, String)> {
+    import_edits_with(text, adds, gone, |_| vec![])
+}
+
+/// [`import_edits`], with the lines `more` places in the imports as they are then (each an offset
+/// in that text and what goes there): a new track's default import, in the same edit (Make it a
+/// kit's, where the bus is written in the mixer's file, KIT-22).
+pub(crate) fn import_edits_with(
+    text: &str,
+    adds: &[(&str, &str)],
+    gone: &[(u32, u32)],
+    more: impl Fn(&str) -> Vec<(u32, String)>,
+) -> Option<(u32, u32, String)> {
     let imports: Vec<(u32, u32)> = statements(text).into_iter().filter(|s| s.2).map(|s| (s.0, s.1)).collect();
     // The imports' bytes, through the end of the last one's line; none: the top of the file.
     let (start, end) = match (imports.first(), imports.last()) {
@@ -135,7 +147,14 @@ fn import_edits(text: &str, from: &str, binding: &str, gone: &[(u32, u32)]) -> O
         at = *b as usize;
     }
     after.push_str(&text[at..]);
-    if let Some((i, line)) = import_insertion(&after, from, binding) {
+    for (from, binding) in adds {
+        if let Some((i, line)) = import_insertion(&after, from, binding) {
+            after.insert_str(i as usize, &line);
+        }
+    }
+    let mut lines = more(&after);
+    lines.sort_by_key(|l| std::cmp::Reverse(l.0));
+    for (i, line) in lines {
         after.insert_str(i as usize, &line);
     }
     let new = &after[start..after.len() - (text.len() - end)];
@@ -194,7 +213,7 @@ pub fn swap(s: &mut Session, module: &str, component: &str) -> Result<Edited, Ed
     let callee_kept = if old_binding == binding { old_binding.len() as u32 } else { 0 };
     let gone = [(call.start + callee_kept, n0), (n1, call.end)];
     let mut ranges = vec![Range::bytes(call.start, call.end)];
-    if let Some((a, b, t)) = import_edits(&text, &from, &binding, &gone) {
+    if let Some((a, b, t)) = import_edits(&text, &[(&from, &binding)], &gone) {
         if b > call.start {
             return Err(EditError::Rejected(format!("{}'s imports aren't at its top, so change {label}'s instrument in code.", call.file)));
         }

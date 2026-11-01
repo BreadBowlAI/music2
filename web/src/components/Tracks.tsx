@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
@@ -166,6 +166,28 @@ export async function addKit(kit: KitPreset, after: string | null) {
     // Its tracks' lane, as + Track lists its instrument (a drum's, `hits`).
     arrived(r.tracks[0]?.module ?? r.module, graph.instruments?.find((i) => i.component === kit.component)?.lane);
     toast(`Added the ${kit.name}: ${r.tracks.map((t) => t.label).join(", ")}, going to ${r.label}`, undoAction(graph.session, r.step));
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+
+/**
+ * Make it a kit (KIT-22): drum machine track `module` becomes a kit's bus, with a Drum track for each
+ * sound its notes use going to it. The bus is selected, so Beat shows the kit; the toast says what
+ * it made and what went, with an Undo.
+ */
+export async function makeKit(module: string) {
+  const graph = writable();
+  if (!graph) return;
+  const name = nameOf(graph, module);
+  const toast = useStore.getState().toast;
+  try {
+    const r = await graphApi.makeKit(graph.session, module, name);
+    await refreshed();
+    useShell.getState().select(r.module);
+    const said = r.said.map((s) => `${s[0].toUpperCase()}${s.slice(1)}.`);
+    toast([`Made ${name} a kit: ${r.tracks.map((t) => t.label).join(", ")}, going to it.`, `${r.keeps}`, ...said].join(" "), undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -576,6 +598,11 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
           onClick={() => openChangeInstrument(module, anchor)}
         >
           Change instrument…
+        </MenuRow>
+      )}
+      {graph.drum_machines?.includes(module) && (
+        <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={graph.make_kit_keeps} onClick={run(() => void makeKit(module))}>
+          Make it a kit
         </MenuRow>
       )}
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>

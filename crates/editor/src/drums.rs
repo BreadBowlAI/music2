@@ -38,20 +38,44 @@ pub struct GmDrum {
 }
 
 /// The General MIDI table (KIT-6): which of the Drum's sounds answers to each drum note, in its
-/// menu's order, and what a kit's track of each is called. The drum machine plays each note at a
-/// drum of its sound's family (at 54 a tambourine, the shaker's; at 75 claves, the rim's: the
-/// kernel's declared families), but 52, 53 and 55, where it is silent.
-pub const GM: [GmDrum; 9] = [
-    GmDrum { sound: "kick", notes: &[35, 36], own: 36, name: "Kick" },
-    GmDrum { sound: "snare", notes: &[38, 40], own: 38, name: "Snare" },
+/// menu's order, and what a kit's track of each is called. The drum machine plays at each note the
+/// very drum of its sound (KIT-20), but the toms, which it spreads 1.5 semitones a step where the
+/// Drum's tom is chromatic, and 52, 53 and 55, where it is silent (a MIDI file's Chinese cymbal and
+/// splash are the Cymbal's, its ride bell the Ride's).
+pub const GM: [GmDrum; 17] = [
+    GmDrum { sound: "kick", notes: &[36], own: 36, name: "Kick" },
+    GmDrum { sound: "kick 2", notes: &[35], own: 35, name: "Kick 2" },
+    GmDrum { sound: "snare", notes: &[38], own: 38, name: "Snare" },
+    GmDrum { sound: "snare 2", notes: &[40], own: 40, name: "Snare 2" },
     GmDrum { sound: "clap", notes: &[39], own: 39, name: "Clap" },
     GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42, name: "Hats" },
     GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45, name: "Toms" },
-    GmDrum { sound: "rim", notes: &[37, 75], own: 37, name: "Rim" },
+    GmDrum { sound: "rim", notes: &[37], own: 37, name: "Rim" },
+    GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
     GmDrum { sound: "cowbell", notes: &[56], own: 56, name: "Cowbell" },
-    GmDrum { sound: "cymbal", notes: &[49, 51, 52, 53, 55, 57, 59], own: 49, name: "Cymbal" },
-    GmDrum { sound: "shaker", notes: &[54, 69, 70], own: 69, name: "Shaker" },
+    GmDrum { sound: "cymbal", notes: &[49, 52, 55], own: 49, name: "Cymbal" },
+    GmDrum { sound: "cymbal 2", notes: &[57], own: 57, name: "Cymbal 2" },
+    GmDrum { sound: "ride", notes: &[51, 53], own: 51, name: "Ride" },
+    GmDrum { sound: "ride 2", notes: &[59], own: 59, name: "Ride 2" },
+    GmDrum { sound: "shaker", notes: &[69], own: 69, name: "Shaker" },
+    GmDrum { sound: "shaker 2", notes: &[70], own: 70, name: "Shaker 2" },
+    GmDrum { sound: "tambourine", notes: &[54], own: 54, name: "Tambourine" },
 ];
+
+/// The notes of the table the drum machine is silent at (KIT-6): a Chinese cymbal, a ride bell and a
+/// splash, which a MIDI file brings in on the Cymbal and the Ride, and Make it a kit drops (KIT-22).
+pub const SILENT: [u8; 3] = [52, 53, 55];
+
+/// The drum machine's toms on the Drum's chromatic tom (KIT-6): each General MIDI tom note, and the
+/// key that plays its pitch on the Drum's tom, rounded (the drum machine spreads its toms 1.5
+/// semitones a step from A2). One table for Make it a kit, a MIDI file coming in and a Toms track
+/// going out, so a tom fill goes round as it came.
+pub const TOMS: [(u8, u8); 6] = [(41, 39), (43, 42), (45, 45), (47, 48), (48, 50), (50, 53)];
+
+/// The Drum tom's key for General MIDI tom note `note` ([`TOMS`]); None for another note.
+pub fn tom_key(note: u8) -> Option<u8> {
+    TOMS.iter().find(|(n, _)| *n == note).map(|(_, k)| *k)
+}
 
 /// The Drum's sound that answers to General MIDI drum note `note`, if any (KIT-6).
 pub fn sound_of(note: u8) -> Option<&'static str> {
@@ -102,9 +126,12 @@ const GENERAL_MIDI: std::ops::RangeInclusive<u8> = 35..=81;
 /// sound's own, or for a tom the tom note nearest it (the lower at an equal distance).
 pub fn general_midi(sound: &str, key: u8) -> u8 {
     let notes = notes_of(sound);
+    let tom = TOMS.iter().find(|(_, k)| *k == key).map(|(n, _)| *n);
     match () {
-        _ if notes.contains(&key) || (sound_of(key).is_none() && GENERAL_MIDI.contains(&key)) => key,
-        _ if sound == "tom" => notes.iter().copied().min_by_key(|n| (n.abs_diff(key), *n)).unwrap_or(key),
+        _ if sound == "tom" && tom.is_some() => tom.unwrap_or(key),
+        _ if (sound != "tom" && notes.contains(&key)) || (sound_of(key).is_none() && GENERAL_MIDI.contains(&key)) => key,
+        // Another key of a tom: the tom of the nearest key in the toms' table.
+        _ if sound == "tom" => TOMS.iter().min_by_key(|(_, k)| (k.abs_diff(key), *k)).map_or(key, |(n, _)| *n),
         _ => own_note(sound).unwrap_or(key),
     }
 }
@@ -189,7 +216,15 @@ pub(crate) fn kit_of(
     let Split { lanes, left } = split(notes);
     let mut out = vec![kit_bus(None)];
     let named = |sound: &'static str| GM.iter().find(|g| g.sound == sound).map_or(sound, |g| g.name);
-    let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
+    let lanes = lanes.into_iter().map(|(sound, mut mine)| {
+        // A General MIDI tom at the key that plays its pitch on the Drum's tom (KIT-6).
+        if sound == "tom" {
+            for n in &mut mine {
+                n.pitch = tom_key(n.pitch.round().clamp(0.0, 127.0) as u8).map_or(n.pitch, f64::from);
+            }
+        }
+        (named(sound), sound, mine)
+    });
     let left = (!left.is_empty()).then_some(("Percussion", "tom", left));
     for (label, sound, mine) in lanes.chain(left) {
         let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;

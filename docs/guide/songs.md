@@ -53,3 +53,23 @@
 - If something can't be rewritten exactly (a knob your code works out, say, or hats whose closed and open lengths differ), nothing is written. The status lists each place by file and line, with the line to write. Change those by hand, then upgrade again.
 - From the terminal, `m2 upgrade <song>` does the same, and prints each line before (`-`) and after (`+`). `m2 upgrade <song> --check` only shows what it would change. With the app open, the app makes the change, as one undo step.
 - Your own presets don't change: they are yours, outside the song. `m2 upgrade` names those for a sound that moved, with what to do.
+- A track that plays the old **drum machine** (`drums.kit`: a whole beat on one track) still plays, and the upgrade doesn't touch it. It names the track under "to do when you choose", apart from what to check: **Make it a kit** (below) turns it into a [drum kit](sounds.md#drum-kits) when you choose. Where it can't yet (the track plays another instrument too, say), it says what to change first.
+
+### A drum machine track becomes a drum kit
+
+**In short:** right-click the track (or its ⋯), then **Make it a kit**, or `m2 make-kit <song> <track>`. Each drum the drum machine played gets a track of its own, all going to the old track, which is now the kit's bus. One Undo takes it all back.
+
+| Was | Is now |
+|---|---|
+| one track playing `drums.kit(lane.notes("beat"))` | that track, as the kit's **bus**: its name, fader, effects and sends stay |
+| the snare, clap, hats… notes on its one lane | a Drum track for each drum (Snare, Clap, Hats, Ride…), with its notes, going to the bus |
+| its knobs (`kickTune`, `hatDecay`, `snap`…) | each Drum's `tune`, `decay` and `punch`, as the upgrade converts them |
+| its levels (`hatLevel: 2`) | each drum track's fader (+2 dB) |
+
+- Same drums, pitches, levels and lengths; each hit's noise comes out a little different. (Each hit's noise starts where its track's count of hits says, and a kit's track counts only its own.)
+- Its toms move to the notes that play the same pitch on the Drum's tom, which steps a semitone a note: C3 and D3 come out half a semitone higher.
+- The kick and kick 2 cut each other off on the drum machine, and so do the snare and snare 2, and the cymbal and cymbal 2. On two tracks they don't: where your beat plays both of a pair, it says so.
+- Notes the drum machine played nothing for (General MIDI's 52, 53 and 55, and notes it has no drum for) go, and the message names them. A drum machine that plays only such notes, or none, isn't made a kit.
+- It says, and changes nothing, where it can't carry the sound exactly: a knob your code works out, a knob's lane that moves two of the new drums, one lane two knobs read, a level on a lane, hats whose lengths one `decay` can't keep. Change those by hand first.
+- The track can be in its own file or in `song.ts`. The new tracks' imports and mixer channels go right after the bus's.
+- The card of a drum machine has the same button. The drum machine stays in `@m2/drums` until music2 1.0, so a song that plays it keeps working.

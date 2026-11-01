@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Drum, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -34,7 +34,7 @@ import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKno
 import { useGlows } from "../lib/notice";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
-import { Colours, openChangeInstrument } from "./Tracks";
+import { Colours, makeKit, openChangeInstrument } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
@@ -599,6 +599,9 @@ function StripMenu({
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const current = useStore((s) => s.graph?.timeline.tracks.find((t) => t.module === module)?.colour);
   const inSong = useStore((s) => modules.length > 0 && modules.every((m) => s.graph?.overlays?.heard[m] === "muted-in-song"));
+  // It plays the drum machine: Make it a kit (KIT-24).
+  const machine = useStore((s) => !!module && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps);
   const run = (f: () => void) => () => {
     onClose();
     f();
@@ -638,6 +641,11 @@ function StripMenu({
               onClick={run(() => openChangeInstrument(module, anchor))}
             >
               Change instrument…
+            </MenuRow>
+          )}
+          {machine && (
+            <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={keeps} onClick={run(() => void makeKit(module))}>
+              Make it a kit
             </MenuRow>
           )}
           <MenuRow

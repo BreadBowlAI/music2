@@ -128,6 +128,9 @@ crate::api::routes! {
     POST "/api/graph/track/kit" => track_kit; writes, agents,
         "Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kit_presets list it",
         r#"{"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}"#;
+    POST "/api/graph/track/make-kit" => track_make_kit; writes, agents,
+        "Make a track that plays the drum machine a kit: the track its bus, a Drum track for each sound its notes use going to it (the state's drum_machines lists them)",
+        r#"{"session": 7, "track": "beat"}"#;
     POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
         "Copy a track: its code, its clips with new ids, its plugin states and its channel",
         r#"{"session": 7, "module": "keys"}"#;
@@ -790,6 +793,23 @@ struct KitReq {
 async fn track_kit(State(s): S, Json(r): Json<KitReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.add_kit(r.session, &r.component, &r.kit, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct MakeKitReq {
+    session: u64,
+    /// The track that plays the drum machine, by its key.
+    track: String,
+}
+
+/// Make a drum machine track a kit (KIT-22, KIT-24): the track its bus, a Drum track for each
+/// sound going to it, one undo step. Answers the bus (`module`, `label`), its `tracks`, what it
+/// keeps (`keeps`), what went (`said`) and the new Mix view, `mix`.
+async fn track_make_kit(State(s): S, Json(r): Json<MakeKitReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.make_kit(r.session, &r.track)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -63,6 +63,11 @@ pub struct Upgraded {
     /// What to check by hand, written all the same: a sound it converts as well as it can, and the
     /// musician's presets (`Presets/…`) that name a sound that moved, which stay as they are.
     pub notes: Vec<Left>,
+    /// What to do when you choose, which the upgrade doesn't: each track that plays the drum
+    /// machine, with Make it a kit and its command where it can make a kit of it, else what to do by
+    /// hand first (KIT-24).
+    #[serde(default)]
+    pub choose: Vec<Left>,
     /// The revision it made, as one undo step; None with `--check`, with nothing to change, with
     /// something left, or when the song wouldn't build after it.
     pub written: Option<u64>,
@@ -128,6 +133,7 @@ pub fn upgrade(s: &mut Session, check: bool, presets: Option<&Path>) -> Result<U
     };
     // All or nothing: while anything is left, nothing is written.
     if plan.files.is_empty() || !out.left.is_empty() {
+        out.choose = chosen(s, plan.choose);
         return Ok(out);
     }
     let files: Vec<(PathBuf, Base, String)> = plan
@@ -143,7 +149,24 @@ pub fn upgrade(s: &mut Session, check: bool, presets: Option<&Path>) -> Result<U
         }
         Err(r) => return Err(crate::refused(s, r)),
     }
+    out.choose = chosen(s, plan.choose);
     Ok(out)
+}
+
+/// The drum machine tracks named, each with what to do: Make it a kit where it can make a kit of
+/// it, else its refusal, what to do by hand first (KIT-24); as they are while the song doesn't build
+/// here (an old song, with `--check`).
+fn chosen(s: &Session, choose: Vec<(Left, Option<String>)>) -> Vec<Left> {
+    let builds = s.draft_errors.is_empty() && s.accepted().has_code();
+    choose
+        .into_iter()
+        .map(|(mut l, track)| {
+            if builds && let Some(why) = track.and_then(|t| crate::machine::refusal(s.accepted(), &t)) {
+                l.write = why;
+            }
+            l
+        })
+        .collect()
 }
 
 /// The files the upgrade would change, by their paths: what the app checks against what the
@@ -164,6 +187,8 @@ struct Plan {
     files: Vec<Planned>,
     left: Vec<Left>,
     notes: Vec<Left>,
+    /// Each drum machine track named, by its key when it is a track's.
+    choose: Vec<(Left, Option<String>)>,
 }
 
 /// The modules whose names still mean what they meant before wave 3 renamed them: std's that
@@ -200,12 +225,13 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     let app = m2_session::app(&s.packages);
     newer(&manifest, &app)?;
     let old = old_modules(&manifest, &app);
-    let (mut left, mut notes, mut code_files, mut packs) = (vec![], vec![], vec![], BTreeSet::new());
+    let (mut left, mut notes, mut choose, mut code_files, mut packs) = (vec![], vec![], vec![], vec![], BTreeSet::new());
     let mut lanes: BTreeMap<String, (Knob, Left)> = BTreeMap::new();
     for mut f in code(files, &old) {
         left.extend(f.unparsed.take());
         left.append(&mut f.left);
         notes.append(&mut f.notes);
+        choose.append(&mut f.choose);
         packs.extend(f.packs.iter().cloned());
         for (lane, knob, at) in f.lanes.drain(..) {
             match lanes.get(&lane) {
@@ -271,7 +297,7 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     if let Some(dir) = presets {
         notes.extend(preset_notes(dir, s.catalog()));
     }
-    Ok(Plan { files: out, left, notes })
+    Ok(Plan { files: out, left, notes, choose })
 }
 
 /// Refused, saying so, for a song made for a newer music2 than this: it can't be moved back.
@@ -319,7 +345,7 @@ fn moved_module(module: &str) -> bool {
 /// values the old drum played: the old drum clamped its value to `lo..hi` first, and the Drum plays
 /// a length 0.05 to 20 times its own.
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum Knob {
+pub(crate) enum Knob {
     /// A tune or tone in Hz: semitones from the drum's own pitch, 12 × log2(Hz ÷ own).
     Tune { own: f64, lo: f64, hi: f64 },
     /// A decay in seconds: times the drum's own length, seconds ÷ own.
@@ -337,13 +363,13 @@ const fn decay(own: f64, lo: f64, hi: f64) -> Option<Knob> {
 }
 
 /// The hats single's closed and open hats' decays, as the Drum's `decay` reads them.
-const CLOSED: Knob = Knob::Decay { own: 0.045, lo: 0.005, hi: 2.0 };
-const OPEN: Knob = Knob::Decay { own: 0.45, lo: 0.02, hi: 5.0 };
+pub(crate) const CLOSED: Knob = Knob::Decay { own: 0.045, lo: 0.005, hi: 2.0 };
+pub(crate) const OPEN: Knob = Knob::Decay { own: 0.45, lo: 0.02, hi: 5.0 };
 
 impl Knob {
     /// `x`, in the old knob's base unit, as the Drum's knob reads it; None where the Drum can't
     /// play it.
-    fn convert(self, x: f64) -> Option<f64> {
+    pub(crate) fn convert(self, x: f64) -> Option<f64> {
         if !x.is_finite() {
             return None;
         }
@@ -355,7 +381,7 @@ impl Knob {
     }
 
     /// The unit a lane of it is in, before and after.
-    fn unit(self) -> (&'static str, &'static str) {
+    pub(crate) fn unit(self) -> (&'static str, &'static str) {
         match self {
             Knob::Tune { .. } => ("hz", "semitones"),
             Knob::Decay { .. } => ("seconds", "scalar"),
@@ -364,7 +390,7 @@ impl Knob {
     }
 
     /// The unit constructors of @m2/core a value of it may be written with, and their scale.
-    fn spellings(self) -> &'static [(&'static str, f64)] {
+    pub(crate) fn spellings(self) -> &'static [(&'static str, f64)] {
         match self {
             Knob::Tune { .. } => &[("hz", 1.0), ("khz", 1000.0)],
             Knob::Decay { .. } => &[("secs", 1.0), ("ms", 0.001)],
@@ -602,6 +628,8 @@ struct Code<'t> {
     /// typo in it wasn't made for an older one (`needed`).
     unparsed: Option<Left>,
     notes: Vec<Left>,
+    /// Each drum machine it plays, named, by the track's key when it is a track's (KIT-24).
+    choose: Vec<(Left, Option<String>)>,
     /// The packs its rewritten code plays.
     packs: BTreeSet<PackName>,
     /// Each lane file a converted knob reads, how, and where it is read.
@@ -651,6 +679,7 @@ impl<'t> Code<'t> {
             left: vec![],
             unparsed,
             notes: vec![],
+            choose: vec![],
             packs: BTreeSet::new(),
             lanes: vec![],
             drums,
@@ -702,6 +731,7 @@ impl<'t> Code<'t> {
                     self.drum(site, &sites, d, true);
                 }
                 Some("bass") if self.is(object, SYNTH_FROM, "synth", true) => self.bass(site),
+                Some("kit") if self.is(object, DRUMS_FROM, "drums", false) => self.machine(site, &sites),
                 None if self.core(object) == Some("kernel") => self.kernel(site),
                 _ => {}
             }
@@ -1096,6 +1126,41 @@ impl<'t> Code<'t> {
         }
     }
 
+    /// `drums.kit(…)`, the drum machine: named, with Make it a kit and its command, and left as it is
+    /// (KIT-24): a kit can't keep each hit's noise (KIT-22), so it is the musician's own edit.
+    fn machine(&mut self, site: &Site, sites: &[Site]) {
+        self.handled.insert(site.start);
+        let track = self.module_of(site, sites).filter(|m| m != m2_song::ROOT);
+        let write = match &track {
+            Some(key) => {
+                let name = self.track_name(sites, key).unwrap_or_else(|| key.clone());
+                format!("Make it a kit (the {name} track's menu), or run m2 make-kit <song> {key}")
+            }
+            None => "put it on a track of its own, then Make it a kit in that track's menu".to_string(),
+        };
+        let left = Left {
+            file: self.file.clone(),
+            line: self.line_at(site.start),
+            what: format!(
+                "`{}` plays the drum machine on one track: Make it a kit puts each of its drums on a track of its own. {}",
+                site.callee.trim(),
+                crate::machine::KEEPS
+            ),
+            write,
+        };
+        self.choose.push((left, track));
+    }
+
+    /// The name track `key`'s `track(…)` call in this file gives it, if it says one.
+    fn track_name(&self, sites: &[Site], key: &str) -> Option<String> {
+        let call = sites.iter().find(|s| {
+            self.core(s.callee.trim()) == Some("track")
+                && s.args.first().is_some_and(|a| string(self.slice(a.span())).as_deref() == Some(key))
+        })?;
+        let Some(Arg::Object { start, end, .. }) = call.args.get(1) else { return None };
+        properties(self.text, (*start, *end))?.into_iter().find(|p| p.key == "name").and_then(|p| string(self.slice(p.value)))
+    }
+
     /// `kernel("std:fm", …)`: the kernel's id in the pack it moved to (`m2_ir::MOVED_KERNELS`).
     fn kernel(&mut self, site: &Site) {
         let Some(first) = site.args.first() else { return };
@@ -1396,7 +1461,7 @@ fn prop_removal(props: &[Property], p: &Property) -> Edit {
 
 /// A number literal, maybe negative: `0.6`, `-3`, `1_000`; none in another base or with an
 /// exponent.
-fn literal(text: &str) -> Option<f64> {
+pub(crate) fn literal(text: &str) -> Option<f64> {
     let t = text.trim();
     let digits = t.strip_prefix('-').map_or(t, str::trim_start);
     if !digits.starts_with(|c: char| c.is_ascii_digit() || c == '.') || !digits.chars().all(|c| c.is_ascii_digit() || c == '.' || c == '_')
@@ -1408,7 +1473,7 @@ fn literal(text: &str) -> Option<f64> {
 }
 
 /// A plain string literal's text: `"hats"`, `'hz'`; none with an escape or a `${`.
-fn string(text: &str) -> Option<String> {
+pub(crate) fn string(text: &str) -> Option<String> {
     let q = text.chars().next().filter(|q| matches!(q, '"' | '\'' | '`'))?;
     let inner = text.strip_prefix(q)?.strip_suffix(q)?;
     (!inner.contains(['\\', q]) && !inner.contains("${")).then(|| inner.to_string())
@@ -1421,7 +1486,7 @@ fn number(x: f64) -> String {
 
 /// A converted value as the upgrade writes it: in the fewest decimals, from three, that give it
 /// back to half a millionth (`0.706724` semitones, `0.666667` times, `0.15`).
-fn exact(v: f64) -> String {
+pub(crate) fn exact(v: f64) -> String {
     for d in 3..=9 {
         let scale = 10f64.powi(d);
         let r = (v * scale).round() / scale;
@@ -1492,7 +1557,7 @@ fn shown(text: &str, edits: &[Edit]) -> Vec<String> {
 /// and how many points; None when it is in that unit already. A lane moves in straight lines in
 /// its own unit: Hz in a straight line bend in semitones, so a tune lane gets points between, as
 /// many as keep it within a cent of the old line.
-fn convert_lane(text: &str, knob: Knob) -> Result<Option<(String, usize)>, String> {
+pub(crate) fn convert_lane(text: &str, knob: Knob) -> Result<Option<(String, usize)>, String> {
     let (from, to) = knob.unit();
     let data = LaneData::read(text, &LaneKind::Control { unit: None }).map_err(|e| format!("it doesn't read as a lane: {e:?}"))?;
     let LaneData::Control { unit, mut clips } = data else { return Err("it isn't a control lane".into()) };

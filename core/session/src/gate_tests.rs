@@ -719,13 +719,15 @@ fn peak(x: &[[f32; 2]]) -> f32 {
 }
 
 /// std's mixer and master before every channel and the master had a gain (8b.3), as a project's
-/// own file: a channel's `db` optional, no master `db`, nothing to make the master stereo.
-const OLD_MIX: &str = r#"import { component, control, each, kernel, port, signature, type Audio, type Params, type Signal, type Value } from "@m2/core";
+/// own file: a channel's `db` optional, no master `db`, nothing to make the master stereo. Buses
+/// came later (RENDER-34): a channel that goes to one (`to`) feeds it as today's mixer does, so a
+/// song with a kit's bus (KIT-22: the sounds example) compares too; it has no sends.
+const OLD_MIX: &str = r#"import { busOf, component, control, each, feed, kernel, port, setting, signature, type Audio, type Params, type Signal, type Value } from "@m2/core";
 import { gain, pan } from "std/dsp";
 import { limit } from "std/fx";
 import { sum } from "std/math";
 
-export type Channel = Audio | { in: Audio; db?: Value; pan?: Value };
+export type Channel = Audio | { in: Audio; db?: Value; pan?: Value; to?: string };
 
 export const mixer = component(
   {
@@ -737,20 +739,29 @@ export const mixer = component(
         in: port.audio(),
         db: control.db(0).range(-60, 12).optional(),
         pan: control.bipolar(0).range(-1, 1).optional().smooth(),
+        to: setting.key().optional(),
       }),
     },
     output: port.audio(),
     positional: ["channels"],
   },
   function mixer({ channels }: Params): Audio {
-    const strips = Object.values(channels as Record<string, { in: Audio; db?: Signal; pan?: Signal }>).map((c) => {
+    const chans = Object.values(channels as Record<string, { in: Audio; db?: Signal; pan?: Signal; to?: string }>);
+    const keys = Object.keys(channels as object);
+    const strips = chans.map((c) => {
       let x = c.in;
       if (c.pan !== undefined) x = pan(x, c.pan);
       if (c.db !== undefined) x = gain(x, c.db);
       return x;
     });
     if (strips.length === 0) return kernel("std:scale", { in: kernel("std:sine", { freq: 0 }), by: 0 });
-    return sum(...strips);
+    for (const [i, k] of keys.entries()) {
+      const b = busOf(chans[i].in);
+      if (b === undefined) continue;
+      const into = strips.filter((_, j) => chans[j].to === k);
+      feed(b, into.length === 0 ? kernel("std:scale", { in: kernel("std:sine", { freq: 0 }), by: 0 }) : sum(...into));
+    }
+    return sum(...strips.filter((_, j) => chans[j].to === undefined));
   },
 );
 
@@ -787,7 +798,13 @@ fn the_mixer_and_master_gains_change_no_bit() {
         f.write("old-mix.ts", OLD_MIX);
         f.write("song.ts", song.replace("from \"std/mix\"", "from \"./old-mix\""));
         let before = f.open();
-        assert!(before.problems().is_empty(), "{name}: {:?}", before.problems());
+        // The code's errors are apart from the song's problems (DIAG-1): it must build, or it renders nothing.
+        assert!(
+            before.draft_errors.is_empty() && before.problems().is_empty(),
+            "{name}: {:?} {:?}",
+            before.draft_errors,
+            before.problems()
+        );
         let ((gains_before, stereo_before), then) = heard(before);
         // Today's graph has more: a gain for each channel that didn't write one, the master's, and its stereo.
         assert!(gains > gains_before, "{name}: {gains} gains today against {gains_before} before");

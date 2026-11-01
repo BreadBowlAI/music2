@@ -35,6 +35,7 @@ pub mod layout;
 pub mod lens;
 pub mod library;
 pub mod listen;
+pub mod machine;
 pub mod markers;
 pub mod midifile;
 pub mod mix;

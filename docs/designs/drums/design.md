@@ -86,6 +86,12 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
 - **`m2 upgrade`** turns a song's Drum kit track into a kit group: one Drum track per drum its lane uses, each with the
   notes of that drum, the kit's knobs carried to each Drum, and a Drums bus with the kit's old fader and effects. One
   undo step. Same sound, except that each drum now has its own voices.
+- *Amended by track `kit-upgrade` (2026-11-01):* it is **Make it a kit**, the musician's own edit on a drum machine
+  track, not part of `m2 upgrade`, which names the track and writes nothing for it: each hit's noise is seeded from its
+  count on its own lane, so a lane of several drums can't keep its bits as a kit (KIT-22), and an upgrade keeps a
+  song's sound exactly. The drum machine stays, unlisted, until 1.0 (KIT-24).
+- *Also from track `kit-upgrade`:* every drum the drum machine plays is a sound of the Drum's own menu (a ride, a
+  tambourine, claves, a second kick…), so each of its notes moves onto a track that plays that very drum (KIT-20).
 
 ## 6. Decisions for the owner
 
