@@ -173,6 +173,13 @@ pub fn scale(bits: u16) -> f32 {
     1.0 / (1u64 << (bits - 1)) as f32
 }
 
+/// A float WAV's sample as music2 plays it: one that isn't a number (NaN), or is infinite, is 0
+/// (FMT-24), so one in a file can't spread through a kernel and silence a song. Whole decodes and
+/// reads in pieces ([`crate::stream::Wav::read`]) both pass every float sample through it.
+pub fn finite(x: f32) -> f32 {
+    if x.is_finite() { x } else { 0.0 }
+}
+
 /// Decode the WAV or FLAC file at `path` whole (integer or float, any channels; past the first two
 /// dropped), at its own rate: one whose header says more than [`WHOLE`] samples is refused before
 /// a sample is decoded ([`TooLong`]).
@@ -192,7 +199,7 @@ fn load_wav(path: &Path) -> Result<Asset> {
     let h = Header { kind: Kind::Wav, channels: spec.channels, rate: spec.sample_rate, bits: spec.bits_per_sample, frames };
     budget(&h).with_context(|| format!("reading {}", path.display()))?;
     let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => r.samples::<f32>().collect::<Result<_, _>>()?,
+        hound::SampleFormat::Float => r.samples::<f32>().map(|s| s.map(finite)).collect::<Result<_, _>>()?,
         hound::SampleFormat::Int => {
             let scale = scale(spec.bits_per_sample);
             r.samples::<i32>().map(|s| s.map(|v| v as f32 * scale)).collect::<Result<_, _>>()?

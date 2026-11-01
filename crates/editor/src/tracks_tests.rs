@@ -100,14 +100,14 @@ fn every_listed_instrument_adds_confined_and_the_song_sounds_the_same() {
     let mut s = f.open();
     let before = render(&s, 2.0);
     let list = s.instruments();
-    assert_eq!(list.len(), 15);
+    assert_eq!(list.len(), 16);
     for i in &list {
         let made = s.add_track(&i.component, None, None, None).unwrap_or_else(|e| panic!("{}: {e}", i.component));
         let text = f.read(&made.edited.file);
         assert!(text.contains(&format!("{}(lane.notes(\"{}\"))", i.name, i.lane)), "{text}");
         assert!(f.0.join(format!("data/{}/{}.json", made.module, i.lane)).exists(), "{}", i.component);
     }
-    assert_eq!(order(&s).len(), 4 + 15);
+    assert_eq!(order(&s).len(), 4 + 16);
     assert_eq!(render(&s, 2.0), before);
 }
 
@@ -511,6 +511,7 @@ fn the_instruments_are_stds_sounds_in_order() {
         inst("@m2/synths:synth-sub", "808 sub"),
         inst("@m2/synths:synth-bass", "Synth bass"),
         inst("@m2/synths:synth-strings", "Strings"),
+        inst("@m2/wavetable:wavetable", "Wavetable"),
         ("std:sampler", "Sampler", "Sampler", "notes"),
         design("@m2/synths:fm-custom", "FM synth"),
         design("@m2/synths:synth-custom", "Polysynth"),

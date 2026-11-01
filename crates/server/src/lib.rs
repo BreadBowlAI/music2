@@ -630,7 +630,7 @@ mod tests {
             .map(|p| format!("{} {}", p.name, p.version))
             .collect();
         assert_eq!(installed, bundled);
-        assert_eq!(installed.len(), 4);
+        assert_eq!(installed.len(), 5);
         // A new song from the starter template, locked to them (PACK-18), builds from this store
         // alone: no registry, no network.
         let song = project::create(&home, "Song", &resources::templates_dir().join("starter")).unwrap();

@@ -40,11 +40,12 @@ pub fn own(name: &PackName, version: &Version, hash: &Sha) -> bool {
 }
 
 /// The `m2pkg.toml` of each pack this source tree bundles, compiled in: what music2 comes with.
-const BUNDLES: [&str; 4] = [
+const BUNDLES: [&str; 5] = [
     include_str!("../../../../packs/@m2/drums/m2pkg.toml"),
     include_str!("../../../../packs/@m2/effects/m2pkg.toml"),
     include_str!("../../../../packs/@m2/mixing/m2pkg.toml"),
     include_str!("../../../../packs/@m2/synths/m2pkg.toml"),
+    include_str!("../../../../packs/@m2/wavetable/m2pkg.toml"),
 ];
 
 /// The version of `name` this music2 comes with (PACK-15), if it is one of its own packs: the one

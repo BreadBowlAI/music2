@@ -470,7 +470,8 @@ const PIECE: u64 = 65_536;
 /// Measure the WAV or FLAC file at `path` (told by its first bytes, FMT-24), reading it once to its
 /// end as it will play: why it can't be, in words after its name (`doesn't read as a WAV file
 /// (…)`). A file the library can't offer is refused as an import refuses it: a rate outside 8,000
-/// to 384,000 Hz, over 3 hours, a sample that isn't a number, a FLAC music2 doesn't read.
+/// to 384,000 Hz, over 3 hours, a FLAC music2 doesn't read. A float sample that isn't a number reads
+/// as 0, as it plays (FMT-24).
 pub fn measure(path: &Path) -> Result<Measured, String> {
     use m2_runtime::decode::{self, Kind};
     let kind = match decode::kind_of(path).map_err(|e| format!("can't be read ({e})"))? {
@@ -530,9 +531,6 @@ fn measure_wav(path: &Path) -> Result<Measured, String> {
         let to = wav.frames().min(at + PIECE);
         wav.read(at, to, &mut bytes, &mut piece).map_err(|e| format!("{e:#}"))?;
         peak = piece.iter().flatten().fold(peak, |p, s| p.max(s.abs()));
-        if !peak.is_finite() {
-            return Err("it holds a sample that isn't a number".into());
-        }
         at = to;
     }
     let hash = m2_song::Sha::of_file(path).map_err(|e| e.to_string())?.hex();

@@ -193,6 +193,9 @@ fn audition_never_waits_for_a_compile() {
          export default song(() => sum(k.out, b.out));\n",
     );
     let graph = std::sync::Arc::new(fixture.open());
+    // The compile is a request that starts after the save. The actor is still busy with the one
+    // before for a moment after answering it, and that request isn't the compile.
+    let saved = graph.now_ns();
     let saver = {
         let (g, dir) = (graph.clone(), fixture.0.clone());
         std::thread::spawn(move || {
@@ -200,7 +203,7 @@ fn audition_never_waits_for_a_compile() {
             g.poll()
         })
     };
-    eventually("the session compiles", || graph.busy().is_some());
+    eventually("the session compiles", || graph.busy().is_some_and(|since| since >= saved));
     let busy_from = graph.busy().unwrap();
     let t = Instant::now();
     graph.audition("w1", on("hits", 1, 36.0)).unwrap();
@@ -208,13 +211,15 @@ fn audition_never_waits_for_a_compile() {
     eventually("the note sounds", || live(&graph) == 1);
     let heard = graph.now_ns();
     assert!(saver.join().unwrap(), "the slow save was taken in");
+    // The actor keeps a request's span once its answer is sent: wait for it.
+    eventually("the compile's span is kept", || graph.busy_spans().iter().any(|s| s.0 == busy_from));
     let (start, end) = *graph.busy_spans().iter().rev().find(|s| s.0 == busy_from).expect("the compile's span");
     let compile_ms = (end - start) as f64 / 1e6;
     if compile_ms < 500.0 {
         eprintln!("void: the compile took only {compile_ms:.0} ms");
         return;
     }
-    eprintln!("audition: sent in {sent_ms:.2} ms, heard {:.0} ms before a {compile_ms:.0} ms compile ended", (end - heard) as f64 / 1e6);
+    eprintln!("audition: sent in {sent_ms:.2} ms, heard {:.0} ms into a {compile_ms:.0} ms compile", (heard - start) as f64 / 1e6);
     assert!(sent_ms < 20.0, "sending took {sent_ms:.1} ms");
     assert!(heard < end, "heard only after the compile ended");
 }
