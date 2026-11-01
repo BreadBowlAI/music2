@@ -1,10 +1,36 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-10-30 (the packs night, then the registry day). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-01 (the packs night, the registry day, then the typed-sounds build). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
+- **The typed-sounds build (2026-10-31 to 11-01) made each sound's type its interface, and moved the sounds into
+  packs** (#48 to #66; each track built by one agent, attacked by a reviewer agent, every finding fixed with a test
+  seen failing first, `ci/check.sh --pr` passed on each; tracks were landed in batches to save CI rounds). Design:
+  [docs/designs/cards/design.md](docs/designs/cards/design.md), with §7.1 for the owner's "most things should go
+  inside packs".
+  - **Cards drawn from types**: settings on a card as menus, switches, number boxes and waveforms (CARD-1 to CARD-7);
+    choice and switch controls whose unit is their list of options, lanes of names, views and groups, all checked by
+    TypeScript and again by the build (CARD-10 to CARD-17); the envelope, filter, keys and scope views, groups on the
+    card, one undo step for a view's drag (CARD-20 to CARD-29); a setting has a label (CARD-34). `@m2/core` 2.1.0.
+  - **std is a toolbox; the sounds are packs**: five bundled packs, installed into the store at start and recorded
+    by hash in `packs/versions.toml`: `@m2/synths` (wave-shape menu, envelope and filter views), `@m2/drums` (the kit
+    and **One drum**, one drum with a sound menu), `@m2/effects`, `@m2/mixing` (8-band EQ, gate, transient shaper,
+    de-esser, multiband) and `@m2/wavetable` (a wavetable synth; drop a WAV as a table). Each first-party pack builds
+    its own kernels from source in the repo (`std/build.sh`, ABI-10) and runs trusted like std (ABI-11). std 0.9.0
+    keeps the generic blocks. **The pack format is frozen** as `@m2/core` 2 (PACK-22 to PACK-24); songs keep no
+    backwards compatibility before 1.0 (FMT-3a, the owner's words).
+  - **`m2 upgrade <song>`** (and **Upgrade it** in the status) moves an old song to today's std and packs in one
+    undo step, keeping its sound bit for bit where it can and naming what it can't (FMT-25, WRITE-21a).
+  - **The engine**: a time limit on a pack's own kernels (ABI-6, ABI-7; std's run unchecked: the checks cost 16 to
+    24 %); event inputs for kernels and the sustain pedal (ABI-8, ABI-9, RENDER-35 to RENDER-39); taps for meters
+    after the fader, loudness and a scope's stream (TAP-1 to TAP-9).
+  - **Gaps closed**: recording (arm, punch, a take per loop pass, overdub, inputs 3–4; #24, #25), sections (#23),
+    scales, lock to key, chord stamps and grooves (#6, #15, #16, #3), undo that survives closing and unsaved code
+    through a crash (#29, #30; snapshots dropped for git, the owner's choice), meters after the fader (#20), `m2`
+    refusing flags it doesn't know (#50), the Mac graph's flicker (a Fit/scrollbar loop, #60).
+  - Next: the owner's yes to the drums design note (below), then `m2 upgrade` on the owner's own songs.
 - **The registry day (2026-10-30) let music2 get packs from the internet** (#39 to #46; each track reviewed by a
   skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
   - **FLAC** is read wherever WAV is (the `claxon` crate, FMT-24). A FLAC brought into a song lands as a WAV of the same
@@ -167,12 +193,17 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `live3b` | "its release writes db(-32) into song.ts" | once, at load 45–74, before step 7 |
 | `s5-knobs` | page detached after a double-click on a knob at its default | from before the platform step |
 | `pl-sounds-fix` | "one revision, and song.ts as it was" right after Return in Change instrument | once, 2026-10-30, track F's check; passed on the retry. The check reads the revision as soon as `tracks/hats.ts` is written, so the file may land before its revision is counted |
-| `audition_never_waits_for_a_compile`, `midi_never_waits_for_a_compile` | "the compile's span" not found; a subtract overflow | once each, at load 9–10; alone 3 of 3 pass |
 | `s8-clips` | "the left edge dragged a bar right: 8+28" | once, beside other tracks' builds; passed on its retry |
 | `st-audio-fix` | "and adds nothing": the revision moved after an MP3 was refused | once, passed on its retry |
 | `nx-effects-fix` | "and says why: Move left (off)": the tooltip read before it changed | once, passed on its retry |
 | `st-errors` | waited over 30 s for the Needs attention row of a missing sound file | once, at load 9; alone it passes |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
+| `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read": its reader thread wasn't scheduled within 40 callbacks | once each in three checks at load 50 to 70 (2026-10-31); moved to the nightly tier unchanged (`ci/nightly-tests.txt`) |
+| `pl-notes` | "the focus is back in the roll" after two Escapes | under heavy load, on main too (4 of 8 at load 60); cause not found |
+| `pl-zoom-fix`, `ag-notice-fix`, `spotlight-fix`, `s8-songbar-fix`, `ports-proj`, `notes-proj`, `start-proj` | one check each, under load beside other agents' builds | each passed on its retry, 2026-10-31 |
+| `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |
+| `a_hung_host_process_is_ended_and_said` | the plugin host's timing | once, passed on retry |
+| Suites that change code, then drag a knob at once | the drag starts from the page's older revision and the server refuses it | found in `wavetable` (fixed in #65: wait until the page shows the revision the server plays); others may race the same way |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
 | `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read. The next Mac nightly (`53382be`, run 40666853783) passed it with no retry |
 | `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
@@ -201,28 +232,33 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **The Mac's one more `ci/check.sh`**, at 48 kHz (above), when the owner has time. Fix on Linux what it finds.
-2. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms), the contract's Deferred row):
-   `core/os/src/windows/`, the Windows twin of every piece in `m2-os`, the tests' `cfg(unix)` fixes, and the build
-   (MSVC, QuickJS under `cl.exe`, `llvm-rc` for the desktop app). Platform design §8 lists the Unix-only spots.
-   Known already: `push_tree` opens files read-only, but `FlushFileBuffers` needs write access.
-3. **The top gaps**, if the owner asks for features ([docs/gaps.md](docs/gaps.md), most visible first): the rest of
-   recording (#24, #25), audio clips (#18), the Sampler (#22),
-   meters after the fader (#20), sections (#23), scale help (#16).
+1. **The drums design note** ([docs/designs/drums/design.md](docs/designs/drums/design.md), proposed, sent to
+   the owner 2026-11-01): Drum is the one building block, a kit is a group of Drum tracks
+   under one bus, a beat grid across them (FL Studio's way). Ask for the owner's yes on D1 to D4; then land the note
+   (Status: Accepted) and build its tracks `kits`, `beat`, `kit-upgrade`.
+2. **The owner's own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"). Presets
+   saved for the old single drums are named, not converted (gaps).
+3. **The Mac's one more `ci/check.sh`**, at 48 kHz. macOS is unverified since `e38c131`, and everything in the
+   typed-sounds build has run only on Linux and GitHub's Mac runner.
 4. **The registry, live**: the owner makes the Cloudflare R2 bucket and its address (D10), then the repo
-   `BreadBowlAI/music2-registry` from `registry/`, with its secrets and branch rules (`registry/README.md`, "Setting
-   it up"). Then a music2 release with `m2 registry`, then `DEFAULT_REGISTRY` set to the address, then
-   `@m2/grand-piano` listed (the Salamander's own FLACs can be used now). Then big instruments streamed from disk
-   (#22); then gaps #39 and #46 to #49.
-5. **Open owner decisions** (below): ask them, with the recommendation.
-6. **Opening the repository to everyone:** the owner's one-time GitHub steps are in [docs/maintainers.md](docs/maintainers.md). Part 1 is done, all but making it public.
+   `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
+   `m2 registry`, `DEFAULT_REGISTRY` set, and `@m2/grand-piano` listed, then the five `@m2/` packs listed too.
+5. **More sounds, inside packs** (the owner's rule): a flanger and a convolution reverb in `@m2/effects`, sampled
+   drum kits (free-licence recordings; big ones need the bucket), an EQ view of the whole curve (a new view word,
+   CARD), and the arpeggiator, which needs kernels that can play notes (ABI-2's event outputs): a design note first.
+6. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
+7. **A sweep of the browser suites** for the knob-drag race (Known flakes, last row).
+8. **Open owner decisions** (below).
 
-The owner wants music2 to become a full DAW whose sounds mostly come from packs (2026-10-30), with the architecture right and tokens conserved: no polish passes.
+The owner wants music2 to be a novel, type-safe DAW built from first principles, simple yet elegant, with std as
+small as possible and most sounds in packs (2026-10-31).
 
 ## Open owner decisions (ask, with a recommendation)
 
 | Question | What was built | Recommendation |
 |---|---|---|
+| The drums design note's D1 to D4: "Drum" for One drum; the one-track drum machine removed once the beat grid exists; cut groups across tracks later; the beat grid as its own tab. | The note only (proposed). One drum is labelled "One drum" for now (the + Track list's near-label rule, build-notes-taste T3). | Yes to all four, as the note recommends. |
+| Dependabot #29 (Swatinem/rust-cache 2.9.3 in `release.yml`). | Waits: a workflow change needs the owner's review. | Approve it. |
 | The bucket's address (packs design D10). D1 is decided: Cloudflare R2, the list on GitHub (2026-10-30). | Everything but the bucket: `DEFAULT_REGISTRY` is empty, so the library shows only with `M2_REGISTRY` or the setting. | The bucket's own `r2.dev` address to start (the robot must read it, not a cache); a name of ours (`packs.<domain>`) in front for the app later. |
 | A Settings field for the registry's address. | None: the environment or `settings.json`. | Not until there is a default; then a field for a mirror. |
 | How big the cache of previews and got files may grow. | Never pruned. | A limit (2 GB), the oldest out first. |
@@ -243,14 +279,16 @@ invisible Xvfb screen, with pictures sent to the owner.
 
 ## Your own songs (for the owner)
 
-**In short:** a song you made before std 0.4 needs one line changed. Then it plays as before, or very nearly.
+**In short:** a song made with an older music2 opens with "Made for an older music2: Upgrade it" in its status. Press
+it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step, which Undo takes back.
 
 | | |
 |---|---|
-| Which songs | Songs in `~/Music/music2` that ask for std "0.1", "0.2" or "0.3". |
-| What you see | The song opens but stays silent. The yellow bar at the top says the code doesn't compile: "This app has std 0.4. To use it, change the std line in music2.toml to std = "0.4". The song may sound a little different." |
-| What to do | Open the song's `music2.toml` in a text editor. Change the std line to `std = "0.4"`. Save. The app takes the change in. |
-| The sound | A "0.3" song sounds exactly the same: std 0.4 only adds buses. A "0.1" or "0.2" song: nearly the same. The Lead, 808 sub and Synth bass now hear each note's own velocity. Notes you play on a keyboard sound exactly as before. |
+| Which songs | Any song asking for std "0.2" to "0.8", or using the old drums and synths from before the sounds moved into packs. |
+| What it changes | The std line and the pack lines, the imports, the single drums (now One drum, with their knob values converted), and the lock. Nothing else. |
+| The sound | The same, bit for bit, where it can be; anything it can't convert exactly is named with its file and line, and then nothing is written. |
+| Presets | Your saved presets for the old single drums aren't changed: the upgrade names them, so you can save them again. |
+| First try | `m2 upgrade <song> --check` shows what it would change, and writes nothing. |
 
 ## Where things are
 
