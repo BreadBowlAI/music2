@@ -187,6 +187,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | You want | Do this |
 |---|---|
 | A kit | **+ Track** (⌘T) ▸ **Drum kit (several tracks)** ▸ a kit, or `m2 add-kit . "808 kit"` |
+| A kit of an old drum machine track | right-click it, then **Make it a kit**, or `m2 make-kit . <track>` ([more](songs.md#a-drum-machine-track-becomes-a-drum-kit)) |
 | The kick louder | the Kick track's fader |
 | Reverb on the snare alone | an effect on the Snare track |
 | The whole kit quieter, or glued together | the Drums bus: its fader, or an effect on it |
@@ -205,4 +206,4 @@ The kits that come with `@m2/drums`:
 - The bus's fader starts where the kit puts it (808 kit −4 dB, 909 kit −3.8, Basic kit −2), so a beat of the whole kit stays under full scale, about as loud as the drum machine's was. Move it in the Mix view.
 - In code a kit is only that: tracks whose mixer channel goes to the bus, `kick: { in: kick.out, to: "drums" }`. Send a track elsewhere, or delete the bus, and it is a plain track again.
 - A MIDI file's drums come in as a kit, a track for each drum the file uses (Kick, Snare, Hats…), even when you drop the file on a Drum's row; notes no drum answers to go on a Percussion track, which plays them as a tom. A kit's tracks go out to a MIDI file as General MIDI drums: a Kick track's notes on another drum's note, or off General MIDI's drums (C1), as C2 (36); a Percussion track's notes as they are.
-- A Drum plays every note as its one sound, so a few of the drum machine's drums sound a little different on a kit: a ride is the cymbal's crash, a tambourine its shaker, claves its rim, and the toms step a semitone a note.
+- A Drum plays every note as its one sound. Every drum the drum machine played is a sound of the Drum's menu, so each comes in on a track of its own: a ride on a Ride track, a tambourine on a Tambourine track, claves on a Claves track. Only the toms differ: a Drum's tom steps a semitone a note, where General MIDI's toms (F2 to D3) are a semitone and a half apart.
