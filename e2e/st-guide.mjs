@@ -68,7 +68,7 @@ check(!!card, "Help ▸ Make Your First Song shows the browser, the guide at its
 const steps = (p = page) => p.$$eval("[data-testid=guide] [data-step]", (els) => els.map((e) => ({ id: e.dataset.step, done: e.dataset.done !== undefined, now: e.dataset.current !== undefined, text: e.innerText.replace(/\s+/g, " ").trim() })));
 const s0 = await steps(app);
 check(
-  s0.length === 7 && s0.every((s) => !s.done) && s0[0].now && s0[0].text === "1 Add drums. Press ⌘T and pick a drum kit, such as Basic kit.",
+  s0.length === 7 && s0.every((s) => !s.done) && s0[0].now && s0[0].text === "1 Add drums. Press ⌘T, type basic, and press Return: a drum kit, a Kick, a Snare and Hats.",
   `seven steps, none ticked, the first the current one, with what to do: ${s0[0]?.text}`,
 );
 check(s0[1].text === "2 Make a beat." && !s0[1].now, `the others just their title: ${s0[1].text}`);
@@ -124,7 +124,14 @@ const notes = async (module, lane, n) => {
   }
 };
 
-await addTrack("basic kit");
+// ⌘T then Return adds the list's first row, one Drum: not a kit, so Add drums waits (review K11).
+await addTrack("");
+await page.waitForSelector('[data-track="drum"]', { timeout: 6000 }).catch(() => {});
+await sleep(500);
+check(!!(await page.$('[data-track="drum"]')) && !(await steps()).find((s) => s.id === "drums")?.done, "1. one Drum alone isn't a kit: Add drums waits");
+await key("Meta+z");
+await page.waitForFunction(() => !document.querySelector('[data-track="drum"]'), { timeout: 6000 }).catch(() => {});
+await addTrack("basic");
 check(await ticked("drums"), "1. a Basic kit added: Add drums ticks");
 check((await current()) === "beat", "and Make a beat is the current step");
 await notes("kick", "hits", 4);
@@ -215,7 +222,7 @@ check(await until(async () => (await local())?.open === true), "the new song kee
 const pc = await open(1440, 900, { browser: true, pc: true });
 await pc.page.waitForSelector("[data-testid=guide]");
 const pcFirst = (await steps(pc.page))[0]?.text ?? "";
-check(pcFirst === "1 Add drums. Press Ctrl+T and pick a drum kit, such as Basic kit.", `a PC's page says Ctrl+T: ${pcFirst}`);
+check(pcFirst === "1 Add drums. Press Ctrl+T, type basic, and press Return: a drum kit, a Kick, a Snare and Hats.", `a PC's page says Ctrl+T: ${pcFirst}`);
 await pc.browser.close();
 
 await browser.close();

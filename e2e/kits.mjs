@@ -1,6 +1,7 @@
 // Drum kits (KIT-2, KIT-5): + Track's Drums are Drum and FM metal, and no drum machine; the kits the
 // packs name are a group of their own, "Drum kit (several tracks)", right after the Drums, each row
-// saying its tracks, its foot what it writes. Typing "basic kit" and Enter adds a Drums bus and the
+// saying its tracks, its foot what it writes. Typing "basic kit" and Enter adds a Drums bus (its fader
+// at the kit's -2 dB) and the
 // kit's tracks (Kick 2, Snare, Hats 2, as first-song has a Kick and Hats) below the selected track,
 // each a Drum going to the bus, the first selected, with a toast and one undo step named for the
 // kit; one undo takes it all back, a redo puts it again. A beat in its lanes plays: in the Mix view
@@ -70,9 +71,10 @@ const rev0 = await revision();
 await page.keyboard.press("Enter");
 check(await until(() => exists("tracks/drums.ts") && exists("tracks/hats-2.ts")), "Enter adds the kit: its bus's file and its tracks'");
 check(
-  read("tracks/drums.ts").includes('bus("drums", { name: "Drums" }, ({ input }) => gain(input, { db: -6 }))') &&
+  read("tracks/drums.ts").includes('bus("drums", { name: "Drums" }, ({ input }) => gain(input))') &&
+    /drums: \{ in: \w+\.out, db: -2 \}/.test(read("song.ts")) &&
     read("tracks/kick-2.ts").includes('track("kick-2", { name: "Kick 2" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "kick" }))'),
-  `a Drums bus, and a Drum playing each drum: ${read("tracks/kick-2.ts").split("\n").at(-2)}`,
+  `a Drums bus, its fader at the kit's -2 dB, and a Drum playing each drum: ${read("tracks/kick-2.ts").split("\n").at(-2)}`,
 );
 check(
   ['"kick-2": { in: kick2.out, to: "drums" }', 'snare: { in: snare.out, to: "drums" }', '"hats-2": { in: hats2.out, to: "drums" }'].every((c) => read("song.ts").includes(c)),

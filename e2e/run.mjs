@@ -127,7 +127,7 @@ export const SUITES = [
   ["dsp", "proj", { expect: 33, s: 3 }],
   ["start", "proj", { expect: 24, s: 3 }],
   ["start", "empty", { expect: 14, s: 2 }],
-  ["st-guide", "none", { expect: 38, s: 7 }],
+  ["st-guide", "none", { expect: 39, s: 7 }],
   ["fixes-graph", "fix", { expect: 42, s: 8 }],
   ["fixes-notes", "fix", { expect: 37, s: 6 }],
   ["attention", "attn", { expect: 60, s: 6, tier: "nightly", why: "flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded" }],

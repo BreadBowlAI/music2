@@ -200,6 +200,7 @@ The kits that come with `@m2/drums`:
 | Basic kit | Kick, Snare, Hats | three drums to start a beat |
 
 - Each track is a Drum, its knobs set for the kit. Any note plays its drum, but the Hats track plays closed, pedal and open hats by the note (F#2, G#2 and A#2), so a closed hat cuts an open one off.
-- The bus starts 6 dB down (its `gain`, a knob on its card), so the whole kit hitting at once stays under full scale.
+- The bus's fader starts where the kit puts it (808 kit −4 dB, 909 kit −3.8, Basic kit −2), so a beat of the whole kit stays under full scale, about as loud as the drum machine's was. Move it in the Mix view.
 - In code a kit is only that: tracks whose mixer channel goes to the bus, `kick: { in: kick.out, to: "drums" }`. Send a track elsewhere, or delete the bus, and it is a plain track again.
-- A MIDI file's drums come in as a kit, a track for each drum the file uses (Kick, Snare, Hats…); notes no drum answers to go on a Percussion track, which plays them as a tom. A kit's tracks go out to a MIDI file as General MIDI drums: a Kick track's notes as C2 (36), whatever note they are on.
+- A MIDI file's drums come in as a kit, a track for each drum the file uses (Kick, Snare, Hats…), even when you drop the file on a Drum's row; notes no drum answers to go on a Percussion track, which plays them as a tom. A kit's tracks go out to a MIDI file as General MIDI drums: a Kick track's notes on another drum's note, or off General MIDI's drums (C1), as C2 (36); a Percussion track's notes as they are.
+- A Drum plays every note as its one sound, so a few of the drum machine's drums sound a little different on a kit: a ride is the cymbal's crash, a tambourine its shaker, claves its rim, and the toms step a semitone a note.

@@ -136,20 +136,21 @@ export async function addTrack(instrument: Instrument, after: string | null): Pr
 /** + Track's group of kits (KIT-5): several tracks at once, worded so beside the Drum. */
 export const KITS = "Drum kit (several tracks)";
 
-/**
- * The kits as + Track's rows, each standing in for its kit by the component `kit:<instrument>/<name>`,
- * and found by the group's words too: typing "drum" lists the Drum and the kits.
- */
-export function kitRows(kits: Kit[]): Instrument[] {
+/** A row of + Track's list: an instrument, a plugin, an audio track, or a kit (KIT-5), which says so. */
+export type Row = Instrument & { kit?: Kit };
+
+/** The kits as + Track's rows, each its kit's, by the id `kit:<instrument>/<name>`, in the kits' group. */
+export function kitRows(kits: Kit[]): Row[] {
   return kits.map((k) => ({
     component: `kit:${k.component}/${k.name}`,
     label: k.name,
-    name: KITS,
+    name: "",
     module: "",
     description: `${k.tracks.join(", ")} and a Drums bus`,
     category: KITS,
-    lane: "hits",
+    lane: "",
     pack: k.pack,
+    kit: k,
   }));
 }
 
@@ -162,7 +163,8 @@ export async function addKit(kit: Kit, after: string | null) {
   try {
     const r = await graphApi.addKit(graph.session, kit, after);
     await refreshed();
-    arrived(r.tracks[0]?.module ?? r.module, r.tracks.length ? "hits" : undefined);
+    // Its tracks' lane, as + Track lists its instrument (a drum's, `hits`).
+    arrived(r.tracks[0]?.module ?? r.module, graph.instruments?.find((i) => i.component === kit.component)?.lane);
     toast(`Added the ${kit.name}: ${r.tracks.map((t) => t.label).join(", ")}, going to ${r.label}`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
@@ -297,6 +299,9 @@ function fileOf(graph: GraphState, module: string) {
   return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+/** A row's id in the page: its component's, with nothing an id can't hold (a kit's name has spaces). */
+const rowId = (r: Row) => `instrument-${encodeURIComponent(r.component)}`;
+
 /** A key the way a new track's is proposed (ID-2), for the list's foot: close enough to say where it goes. */
 function proposed(label: string, taken: Set<string>) {
   const base = label.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "track";
@@ -305,15 +310,16 @@ function proposed(label: string, taken: Set<string>) {
 }
 
 /**
- * Instruments matching `query`, in their groups (drums first): by name, as a typeahead takes it
- * ("plu" is Pluck, though a description says "plus"), else by description or category.
+ * Rows matching `query`, in their groups (drums first): by name, as a typeahead takes it ("plu" is
+ * Pluck, though a description says "plus"), a kit by its group's words too ("drum" lists the Drum
+ * and the kits); else by description or category.
  */
-export function instrumentGroups(list: Instrument[], query: string) {
+export function instrumentGroups<R extends Row>(list: R[], query: string) {
   const q = query.trim().toLowerCase();
-  const by = (fields: (i: Instrument) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
-  const named = by((i) => [i.label, i.name]);
+  const by = (fields: (i: R) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
+  const named = by((i) => [i.label, i.name, ...(i.kit ? [i.category] : [])]);
   const hits = !q ? list : named.length ? named : by((i) => [i.description, i.category]);
-  const groups: { name: string; items: Instrument[] }[] = [];
+  const groups: { name: string; items: R[] }[] = [];
   for (const i of hits) {
     const g = groups.find((x) => x.name === i.category) ?? (groups.push({ name: i.category, items: [] }), groups[groups.length - 1]);
     g.items.push(i);
@@ -354,7 +360,7 @@ function InstrumentPicker({
   useEffect(() => {
     if (!swap) wantPlugins();
   }, [swap]);
-  const all = useMemo(() => {
+  const all = useMemo((): Row[] => {
     const instruments = listed ?? [];
     if (swap) return instruments;
     const drums = instruments.filter((i) => i.category === "Drums").length;
@@ -374,12 +380,11 @@ function InstrumentPicker({
   useLayoutEffect(() => field.current?.focus(), []);
   const taken = new Set(graph.view.modules.map((m) => m.key));
   const name = swap ? nameOf(graph, swap) : "";
-  const pick = (i: Instrument | undefined) => {
+  const pick = (i: Row | undefined) => {
     if (!i) return;
     onClose();
     if (i === AUDIO_TRACK) return void addAudioTrack(after);
-    const kit = kits?.find((k) => i.component === `kit:${k.component}/${k.name}`);
-    if (kit) return void addKit(kit, after);
+    if (i.kit) return void addKit(i.kit, after);
     if (!swap) return void addTrack(i, after);
     // The one it plays: nothing to change.
     if (i.component !== playing?.component) void changeInstrument(swap, i);
@@ -411,7 +416,7 @@ function InstrumentPicker({
           role="combobox"
           aria-expanded
           aria-controls="instrument-options"
-          aria-activedescendant={current ? `instrument-${current.component}` : undefined}
+          aria-activedescendant={current ? rowId(current) : undefined}
           spellCheck={false}
           className="flex-1 min-w-0 bg-transparent outline-none text-base text-fg placeholder:text-fg-off"
           onChange={(e) => {
@@ -440,7 +445,7 @@ function InstrumentPicker({
               return (
                 <div
                   key={i.component}
-                  id={`instrument-${i.component}`}
+                  id={rowId(i)}
                   role="option"
                   aria-selected={on}
                   aria-checked={swap ? ticked : undefined}
@@ -471,7 +476,7 @@ function InstrumentPicker({
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
               : current === AUDIO_TRACK
                 ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
-                : current.category === KITS
+                : current.kit
                   ? `tracks/${proposed("Drums", taken)}.ts · bus(…), and a track for each drum going to it`
                   : isPlugin(current.component)
                     ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
