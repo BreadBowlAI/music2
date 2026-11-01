@@ -836,14 +836,25 @@ function edit<T extends { revision: number; before: string; after: string; pendi
 
 /**
  * What an upgrade did (FMT-25): each file it changed, with its lines before and after; what it left
- * to change by hand; the revision it made, or null when nothing was written, and then why (`refused`:
- * what doesn't build after it).
+ * to change by hand (then nothing was written) and what to check; the revision it made, or null when
+ * nothing was written, and then why (`refused`: what doesn't build after it).
  */
 export interface Upgraded {
   changes: { file: string; lines: string[] }[];
-  left: { file: string; line: number; what: string; write: string }[];
+  /** What it can't convert exactly: while any is left, nothing is written. */
+  left: UpgradePlace[];
+  /** What to check by hand though it was written, and the musician's presets of sounds that moved (`Presets/…`), never changed. */
+  notes: UpgradePlace[];
   written: number | null;
   refused: string[];
+}
+
+/** A place an upgrade names: its file and line (0: the whole file), what is there, and what to write. */
+export interface UpgradePlace {
+  file: string;
+  line: number;
+  what: string;
+  write: string;
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
