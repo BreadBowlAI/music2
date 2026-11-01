@@ -132,7 +132,11 @@ fn a_drum_machine_track_becomes_a_kit_in_one_undo_step() {
     assert_eq!(notes(&s, "hats"), [(0.0, 4.0, vec![(42.0, 0.0), (46.0, 1.5)]), (4.0, 4.0, vec![(42.0, 0.5)])]);
     assert_eq!(notes(&s, "toms"), [(0.0, 4.0, vec![(39.0, 2.5), (50.0, 3.0)])], "41 and 48 on the keys that play their tuning");
     assert_eq!(notes(&s, "ride"), [(0.0, 4.0, vec![(51.0, 2.0)])]);
-    assert!(made.said.iter().any(|w| w.contains("2 notes") && w.contains("silent")), "{:?}", made.said);
+    assert!(
+        made.said.iter().any(|w| w == "2 notes went: E3 (52) and C4 (60), which the drum machine played nothing for"),
+        "{:?}",
+        made.said
+    );
     assert!(made.said.iter().any(|w| w.contains("toms") && w.contains("half a semitone")), "{:?}", made.said);
     let rev = s.accepted();
     assert!(rev.compiled.ir.modules.iter().any(|m| m.key == "beat" && m.bus), "the track is a bus");
@@ -259,11 +263,16 @@ fn a_knobs_lane_moves_to_the_drum_it_moves() {
 fn what_it_cant_carry_is_named_and_nothing_is_written() {
     for (options, said) in [
         (", { drive: lane.control(\"grit\", \"db\", 0) }", "its `drive` is on a lane, and it moves 2 Drums"),
-        (", { hatLevel: lane.control(\"lift\", \"db\", 0) }", "its `hatLevel` is on a lane, and a fader takes no lane"),
+        (
+            ", { hatLevel: lane.control(\"lift\", \"db\", 0) }",
+            "its `hatLevel` is on a lane: the drum machine sets a hit's level as it starts, and a fader would move it while it rings",
+        ),
+        (", { kickTune: lane.control(\"t\", \"hz\", 100), hatTone: lane.control(\"t\", \"hz\", 100) }", "its lane t moves two knobs"),
+        (", { hatDecay: 0.09 }", "its closed hats ring 90 ms and its pedal hats 25 ms"),
         (", { kickTune: 48 + 2 }", "its `kickTune` is worked out by code (`48 + 2`)"),
     ] {
         let f = Fixture::new();
-        machine_song(&f, options, &[(0.0, 4.0, &[(36.0, 0.0, 0.9), (42.0, 1.0, 0.6)])]);
+        machine_song(&f, options, &[(0.0, 4.0, &[(36.0, 0.0, 0.9), (42.0, 1.0, 0.6), (44.0, 2.0, 0.6)])]);
         let before = tree(&f);
         let mut s = f.open();
         assert!(s.draft_errors.is_empty(), "{options}: {:?}", s.draft_errors);
@@ -303,6 +312,14 @@ fn a_track_it_cant_make_a_kit_of_is_refused_in_words() {
     let mut s = f.open();
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     assert!(said(&mut s, "beat").contains("Beat's channel, beat, plays it through other code"), "{}", said(&mut s, "beat"));
+    // Two drum machines on one track.
+    f.write(
+        "tracks/beat.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { sum } from \"std/math\";\n\n\
+         export default track(\"beat\", { name: \"Beat\" }, ({ lane }) => sum(drums.kit(lane.notes(\"hits\")), drums.kit(lane.notes(\"more\"))));\n",
+    );
+    let mut s = f.open();
+    assert_eq!(said(&mut s, "beat"), "edit rejected: Beat plays two drum machines: put each on a track of its own first.");
     // No drum machine at all.
     f.write("tracks/beat.ts", "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"beat\", { name: \"Beat\" }, ({ lane }) => drums.drum(lane.notes(\"hits\")));\n");
     let mut s = f.open();
@@ -338,4 +355,46 @@ fn a_kits_toms_go_round_as_the_drum_machines() {
         [53.0, 50.0, 48.0, 45.0, 42.0, 39.0],
         "back at the keys they went out from"
     );
+}
+
+// KIT-22 (the review's U5): a drum machine with no note a Drum can play is no kit: refused, saying
+// what it holds; one with no notes at all, saying so.
+#[test]
+fn a_drum_machine_with_nothing_to_play_is_refused_in_words() {
+    for (clips, words) in [
+        (&[][..], "edit rejected: Beat's drum machine plays no notes: delete it, or add a kit with + Track ▸ Drum kit."),
+        (
+            &[(0.0, 4.0, &[(52.0, 0.0, 0.8), (60.0, 1.0, 0.8), (60.0, 2.0, 0.8)][..])][..],
+            "edit rejected: Beat's drum machine plays only notes it has no drum for, E3 (52) and C4 (60): delete them, or delete it.",
+        ),
+    ] {
+        let f = Fixture::new();
+        machine_song(&f, "", clips);
+        let before = tree(&f);
+        let mut s = f.open();
+        assert_eq!(make_kit(&mut s, "beat").map(|m| m.bus).unwrap_err().to_string(), words);
+        assert!(tree(&f) == before, "nothing written");
+    }
+}
+
+// KIT-21, KIT-22 (the review's U3): where the lane plays both drums of one of the drum machine's
+// choke groups, Make it a kit says they no longer cut each other off, each on a track of its own;
+// a lane of one of a pair says nothing of it.
+#[test]
+fn a_pair_that_no_longer_cuts_each_other_off_is_said() {
+    let pairs = |notes: &[(f64, f64, f64)]| {
+        let f = Fixture::new();
+        machine_song(&f, "", &[(0.0, 4.0, notes)]);
+        let mut s = f.open();
+        make_kit(&mut s, "beat").unwrap().said.into_iter().filter(|w| w.contains("cut each other off")).collect::<Vec<_>>()
+    };
+    assert_eq!(
+        pairs(&[(36.0, 0.0, 0.9), (35.0, 0.5, 0.2), (38.0, 1.0, 0.8), (40.0, 1.5, 0.8), (49.0, 2.0, 0.6), (57.0, 3.0, 0.6)]),
+        [
+            "the kick and kick 2 no longer cut each other off: each is on a track of its own",
+            "the snare and snare 2 no longer cut each other off: each is on a track of its own",
+            "the cymbal and cymbal 2 no longer cut each other off: each is on a track of its own",
+        ]
+    );
+    assert!(pairs(&[(36.0, 0.0, 0.9), (38.0, 1.0, 0.8), (57.0, 2.0, 0.6)]).is_empty(), "one of each pair: nothing to say");
 }

@@ -177,6 +177,9 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
     let machine = |site: &Site| m.frames.iter().any(|f| f.site == site.id && f.component.as_deref() == Some(MACHINE));
     let call = match (players.calls.as_slice(), players.plugins) {
         ([call], 0) if machine(call) => *call,
+        (calls, _) if calls.iter().filter(|c| machine(c)).count() > 1 => {
+            return refused(format!("{label} plays two drum machines: put each on a track of its own first."));
+        }
         (calls, _) if calls.iter().any(|c| machine(c)) => {
             return refused(format!(
                 "{label} plays the drum machine and another instrument: put the drum machine on a track of its own first."
@@ -269,13 +272,17 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
         _ => vec![],
     };
     let mut by_sound: BTreeMap<usize, Vec<serde_json::Value>> = BTreeMap::new();
-    let (mut gone, mut higher) = (0, false);
+    // The notes that go, by key, and how many.
+    let (mut gone, mut gone_keys, mut higher) = (0, BTreeSet::new(), false);
+    let key_of = |n: &m2_song::Note| n.pitch.round().clamp(0.0, 127.0) as u8;
     for c in &clips {
         let parts = split(&c.notes);
         gone += parts.left.len();
+        gone_keys.extend(parts.left.iter().map(key_of));
         for (sound, mut mine) in parts.lanes {
-            let silent = |n: &m2_song::Note| SILENT.contains(&(n.pitch.round() as u8));
+            let silent = |n: &m2_song::Note| SILENT.contains(&key_of(n));
             gone += mine.iter().filter(|n| silent(n)).count();
+            gone_keys.extend(mine.iter().filter(|n| silent(n)).map(key_of));
             mine.retain(|n| !silent(n));
             if sound == "tom" {
                 for n in &mut mine {
@@ -293,6 +300,18 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
         }
     }
     let used: Vec<&str> = by_sound.keys().map(|p| GM[*p].sound).collect();
+    // The notes it goes without, by name: "E3 (52) and C4 (60)".
+    let named: Vec<String> =
+        gone_keys.iter().map(|k| format!("{} ({k})", m2_song::lane::pitch_name(f64::from(*k)).unwrap_or_default())).collect();
+    // A drum machine with nothing a Drum can play is no kit.
+    if used.is_empty() {
+        return refused(match gone {
+            0 => format!("{label}'s drum machine plays no notes: delete it, or add a kit with + Track ▸ Drum kit."),
+            _ => {
+                format!("{label}'s drum machine plays only notes it has no drum for, {}: delete them, or delete it.", crate::listed(&named))
+            }
+        });
+    }
     let hats: BTreeSet<Hat> = by_sound
         .get(&GM.iter().position(|g| g.sound == "hats").expect("the hats"))
         .into_iter()
@@ -305,13 +324,22 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
         })
         .collect();
 
-    // Each knob's lane: the one Drum it moves, or named.
+    // Each knob's lane: the one Drum it moves, or named; a lane two knobs read, named.
+    let mut read: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, _, v, _) in &given {
+        if let Value::Lane { key, .. } = v {
+            *read.entry(key.as_str()).or_default() += 1;
+        }
+    }
     for (key, carry, v, at) in &given {
-        let Value::Lane { unit, .. } = v else { continue };
+        let Value::Lane { unit, key: lane, .. } = v else { continue };
         let moves = carry.moves(&used);
         let why = match carry {
+            _ if read[lane.as_str()] > 1 => Some(format!("its lane {lane} moves two knobs: give each its own lane")),
             _ if unit != carry.unit().0 => Some(format!("its `{key}` is on a lane in {unit}, not {}", carry.unit().0)),
-            Carry::Level(_) => Some(format!("its `{key}` is on a lane, and a fader takes no lane")),
+            Carry::Level(_) => Some(format!(
+                "its `{key}` is on a lane: the drum machine sets a hit's level as it starts, and a fader would move it while it rings"
+            )),
             Carry::TomTune => Some(format!(
                 "its `{key}` is on a lane: the Drum rings a tom longer the lower it is tuned, where the drum machine's tom rang the same"
             )),
@@ -410,9 +438,13 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
     let mut said = vec![];
     if gone > 0 {
         let s = if gone == 1 { "" } else { "s" };
-        said.push(format!(
-            "{gone} note{s} the drum machine is silent at went (General MIDI's 52, 53 and 55, and notes it has no drum for)"
-        ));
+        said.push(format!("{gone} note{s} went: {}, which the drum machine played nothing for", crate::listed(&named)));
+    }
+    // A pair of one of the drum machine's choke groups, each on a track of its own now (KIT-21).
+    for (a, b) in [("kick", "kick 2"), ("snare", "snare 2"), ("cymbal", "cymbal 2")] {
+        if used.contains(&a) && used.contains(&b) {
+            said.push(format!("the {a} and {b} no longer cut each other off: each is on a track of its own"));
+        }
     }
     if used.contains(&"tom") {
         said.push(match higher {
@@ -458,10 +490,33 @@ fn hats_decay(given: &[Given], played: &BTreeSet<Hat>) -> Result<Option<HatDecay
         ([], None) => Ok(None),
         ([], Some(f)) if same => Ok(Some(HatDecay::Factor(*f))),
         ([(key, fallback, knob)], None) => Ok(Some(HatDecay::Lane(key.clone(), *fallback, *knob))),
-        _ => Err("its closed and open hats ring for other lengths than each other's, and the Drum's one `decay` sets every hat's: \
-                  give them lengths ten times apart (45 ms and 450 ms are its own) first"
-            .into()),
+        _ => Err(hats_said(given, played)),
     }
+}
+
+/// Why no one `decay` keeps the lengths of the hats `played`: each played kind's length, as the
+/// drum machine rings it ("its closed hats ring 90 ms and its pedal hats 25 ms").
+fn hats_said(given: &[Given], played: &BTreeSet<Hat>) -> String {
+    let ms = |hat: Hat, own: f64, knob: Knob| match given.iter().find(|(_, c, ..)| matches!(c, Carry::Hat(h) if *h == hat)).map(|g| &g.2) {
+        Some(Value::Number(x)) => match knob {
+            Knob::Decay { lo, hi, .. } => format!("{} ms", exact(x.clamp(lo, hi) * 1000.0)),
+            _ => format!("{} ms", exact(x * 1000.0)),
+        },
+        Some(Value::Lane { key, .. }) => format!("as its lane {key} says"),
+        None => format!("{} ms", exact(own * 1000.0)),
+    };
+    let rings: Vec<String> = played
+        .iter()
+        .map(|h| match h {
+            Hat::Closed => format!("its closed hats ring {}", ms(Hat::Closed, 0.045, CLOSED)),
+            Hat::Pedal => "its pedal hats 25 ms".to_string(),
+            Hat::Open => format!("its open hats {}", ms(Hat::Open, 0.45, OPEN)),
+        })
+        .collect();
+    format!(
+        "{}, and the Drum's one `decay` sets every hat's length from its own 45, 25 and 450 ms: give them lengths in that proportion first",
+        crate::listed(&rings)
+    )
 }
 
 /// A knob's value written at `span`: a number, a unit constructor of it (`hz(50)`, `ms(30)`), or a
