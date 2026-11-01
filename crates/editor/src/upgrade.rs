@@ -93,7 +93,10 @@ pub fn needed(s: &Session) -> bool {
     let lock = files.get(Path::new(m2_song::path::LOCK)).and_then(|t| Lock::read(t).ok()).unwrap_or_default();
     let old = old_modules(&m, &app);
     m.dependencies.iter().any(|(name, dep)| dep.requirement().is_some_and(|req| older(name, req, &app).is_some()))
-        || lock.packs.iter().any(|l| pack::comes_with(&l.name).is_some_and(|v| l.version < v))
+        || lock
+            .packs
+            .iter()
+            .any(|l| pack::comes_with(&l.name).is_some_and(|v| l.version < v || (l.version == v && !pack::own(&l.name, &v, &l.hash))))
         || code(files, &old).any(|f| !f.edits.is_empty() || !f.left.is_empty())
 }
 
@@ -245,10 +248,11 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     // The lock, as `m2 pack lock` writes it from the manifest as it will be (PACK-8).
     let lock_text = text_of(m2_song::path::LOCK);
     let mut locked = lock_text.as_deref().and_then(|t| Lock::read(t).ok()).unwrap_or_default();
-    // music2's own packs move to the versions it comes with: an older one the store keeps may be
-    // made for an older @m2/core, which this app can't run (PACK-22).
+    // music2's own packs move to the versions it comes with, its very files: an older one the store
+    // keeps may be made for an older @m2/core, which this app can't run (PACK-22), and a lock of the
+    // same version with other files names a build from before its release.
     let kept = locked.packs.len();
-    locked.packs.retain(|l| pack::comes_with(&l.name).is_none_or(|v| v == l.version));
+    locked.packs.retain(|l| pack::comes_with(&l.name).is_none_or(|v| v == l.version && pack::own(&l.name, &l.version, &l.hash)));
     // Only a song that moves is locked again: one made for this music2 keeps its lock, or none.
     let moves = !edits.is_empty() || locked.packs.len() != kept;
     let new_manifest = Manifest::read(&manifest_after).map_err(|d| EditError::Rejected(d.message))?;

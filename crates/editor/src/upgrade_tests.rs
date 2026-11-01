@@ -658,3 +658,22 @@ fn edits_that_clash_are_refused() {
     assert_eq!(apply("abcdef", &[(1, 3, "X".into()), (4, 5, "Y".into())]).unwrap(), "aXdYf");
     assert!(apply("abcdef", &[(1, 4, "X".into()), (3, 5, "Y".into())]).is_err());
 }
+
+// FMT-25: a song locked to the version of one of music2's own packs this app comes with, but with
+// other files (a build of it from before its release), is locked to the files this app comes with.
+#[test]
+fn an_own_pack_locked_with_other_files_is_locked_again() {
+    let f = Fixture::new();
+    old_kick_song(&f);
+    f.write("music2.toml", manifest("\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n"));
+    let drums = PackName::new("@m2/drums").unwrap();
+    let now = m2_song::pack::comes_with(&drums).unwrap();
+    let other = "sha256:3c38e9f58adb6324635f8600a4433d1676d6645245a9d539efc4776f261df380";
+    f.write("music2.lock", format!("[[pack]]\nname = \"@m2/drums\"\nversion = \"{now}\"\nhash = \"{other}\"\n"));
+    let (up, s) = upgraded(&f);
+    let lock = m2_song::pack::Lock::read(&f.read("music2.lock")).unwrap();
+    assert_eq!(lock.packs.len(), 1);
+    assert!(m2_song::pack::own(&drums, &lock.packs[0].version, &lock.packs[0].hash), "the files music2 comes with: {lock:?}");
+    assert!(up.changes.iter().any(|c| c.file == "music2.lock"), "{:?}", up.changes);
+    drop(s);
+}
