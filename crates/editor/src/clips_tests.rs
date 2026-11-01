@@ -1245,6 +1245,30 @@ fn a_take_replaces_its_range_as_split_cuts() {
     assert_eq!(f.read("data/kick/hits.json"), before, "one undo");
 }
 
+// KIT-26: a punched take of no notes (a kit's lane not played, once another was) leaves its range
+// empty: the clip under it cut at both edges, and no clip of its own. One undo puts every byte back.
+#[test]
+fn an_empty_take_leaves_its_range_empty() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = f.read("data/kick/hits.json");
+    let t = Taken { lane: addr("kick/hits"), clip: take(8.5, 4.0, &[]), how: How::Replace };
+    let done = go(&mut s, Gesture::Record { takes: vec![t] });
+    let c = clips(&s, "kick/hits");
+    assert_eq!(c.len(), 2, "{c:?}");
+    assert_eq!(
+        (c[0].0.as_deref(), c[0].1, c[0].2, c[1].1, c[1].2),
+        (Some("my53vvkc"), 0.0, 8.5, 12.5, 19.5),
+        "the parts before and after: {c:?}"
+    );
+    assert!(done.made.is_empty(), "no clip of its own: {:?}", done.made);
+    let starts: Vec<f64> = notes(&s, "kick/hits").iter().map(|n| n.start).collect();
+    let want: Vec<f64> = (0..=8).chain(13..32).map(f64::from).collect();
+    assert_eq!(starts, want, "nothing between");
+    s.undo().unwrap();
+    assert_eq!(f.read("data/kick/hits.json"), before, "one undo");
+}
+
 // MON-12: with Overdub, a take's notes go into the clip that holds its first note, which grows to
 // hold them; a take over no clip makes its own.
 #[test]

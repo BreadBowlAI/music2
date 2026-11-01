@@ -256,7 +256,7 @@ pub enum How {
     New,
     /// Over its range only: a clip that crosses an edge of it is cut there, as Split cuts it, and
     /// whatever lies inside goes (MON-10, Punch). A clip that can't be cut (its pitch changed, or
-    /// reversed and warped) stays whole.
+    /// reversed and warped) stays whole. A notes take of no notes leaves the range empty (KIT-26).
     Replace,
     /// A notes take's notes into the clip that holds its first note (of several, the one that
     /// starts last), which grows to hold them; a clip of its own when none does (MON-12, Overdub).
@@ -571,7 +571,10 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                                 (None, None) => l.keep[i] = None,
                             }
                         }
-                        l.added.push((c, true));
+                        // A take of no notes leaves its range empty (a kit's lane not played, KIT-26).
+                        if !matches!(&c, Clip::Notes(n) if n.notes.is_empty()) {
+                            l.added.push((c, true));
+                        }
                     }
                     How::Into => {
                         let Clip::Notes(take) = &c else {

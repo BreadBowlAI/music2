@@ -184,6 +184,8 @@ struct Take {
     start: f64,
     /// Its notes lanes: the one it records on, or a kit's every Drum track's (KIT-26).
     notes: Vec<NotesPart>,
+    /// Whether they are a kit's: a punch replaces every one of them once any is played (KIT-26).
+    kit: bool,
     audio: Vec<AudioPart>,
     began: Instant,
 }
@@ -437,9 +439,26 @@ impl Take {
         }
     }
 
-    /// This pass's notes clips, one for each lane that was played, ended at `beat`.
+    /// This pass's notes clips, one for each lane that was played, ended at `beat`. A punch on a kit
+    /// replaces every lane of it once any is played: each other one is left empty over the range
+    /// (KIT-26).
     fn notes_clips(&mut self, beat: f64) -> Vec<Part> {
-        (0..self.notes.len()).filter_map(|i| self.notes_clip(i, beat)).collect()
+        let parts: Vec<Option<Part>> = (0..self.notes.len()).map(|i| self.notes_clip(i, beat)).collect();
+        let whole = self.kit && self.how() == How::Replace && parts.iter().any(Option::is_some);
+        let (start, end) = (self.start, beat.max(self.start + SHORTEST));
+        parts
+            .into_iter()
+            .zip(&self.notes)
+            .filter_map(|(p, n)| match p {
+                None if whole => Some(Part::Notes {
+                    module: n.module.clone(),
+                    lane: n.lane.clone(),
+                    clip: json!({"start": start, "length": end - start, "notes": []}),
+                    how: How::Replace,
+                }),
+                p => p,
+            })
+            .collect()
     }
 
     /// This pass's notes clip of lane `i`, ended at `beat`: held notes end there, and the clip spans
@@ -1024,7 +1043,7 @@ impl Graph {
             bail!("Fix the code first: it doesn't compile right now.");
         }
         let plays = p.engine.plays.as_ref().filter(|pl| pl.epoch == device.epoch);
-        let mut notes = vec![];
+        let (mut notes, mut kit_take) = (vec![], false);
         for (i, (m, l, audio)) in lanes.iter().enumerate() {
             let fits = plays.is_some_and(|pl| if *audio { audio_slot(pl, m, l).is_some() } else { plays_notes(pl, m, l) });
             if !fits && lanes.len() == 1 {
@@ -1039,6 +1058,7 @@ impl Graph {
                 let kit = super::midi::Pads::of(&cp, m).map(|k| k.rows).unwrap_or_default();
                 let mine = kit.into_iter().map(|(m, l, _)| (m, l)).filter(|(m, l)| plays.is_some_and(|pl| plays_notes(pl, m, l)));
                 let mine: Vec<(String, String)> = mine.collect();
+                kit_take |= !mine.is_empty();
                 let parts = if mine.is_empty() { vec![(m.clone(), l.clone())] } else { mine };
                 for (m, l) in parts {
                     if !notes.iter().any(|n: &NotesPart| n.module == m && n.lane == l) {
@@ -1095,6 +1115,7 @@ impl Graph {
             pass: 0,
             start: 0.0,
             notes,
+            kit: kit_take,
             audio: parts,
             began: Instant::now(),
         };

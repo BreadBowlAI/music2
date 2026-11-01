@@ -1949,6 +1949,133 @@ fn overdub_merges_into_the_clip_under_it() {
     assert!(notes[0] == (48.0, 0.0) && notes[1].0 == 60.0 && on.has(notes[1].1), "both: {notes:?}");
 }
 
+/// A song with a kit: a Drums bus, and Kick, Snare and Hats going to it, each from its lane `hits`;
+/// and Bass, which the rig selects.
+const KIT: &str = "import { bus, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { gain } from 'std/dsp';\n\
+                   import { master, mixer } from 'std/mix';\n\
+                   const d = bus('drums', { name: 'Drums' }, ({ input }) => gain(input));\n\
+                   const k = track('kick', { name: 'Kick' }, ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                   const s = track('snare', { name: 'Snare' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'snare' }));\n\
+                   const h = track('hats', { name: 'Hats' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                   export default song(() => master(mixer({ drums: d.out, kick: { in: k.out, to: 'drums' }, snare: { in: s.out, to: 'drums' }, \
+                   hats: { in: h.out, to: 'drums' }, bass: b.out })));\n";
+
+/// The kit's Drum tracks, each with what lane `hits` holds: its notes in song time, as (pitch, start).
+fn kit_notes(r: &Rig) -> [(&'static str, Vec<(f64, f64)>); 3] {
+    ["kick", "snare", "hats"].map(|m| {
+        let text = std::fs::read_to_string(r.fixture.0.join(format!("data/{m}/hits.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let mut out = vec![];
+        for c in v["clips"].as_array().unwrap() {
+            let at = c["start"].as_f64().unwrap();
+            for i in 0..c["notes"].as_array().unwrap().len() {
+                let (p, s, _, _) = note(c, i);
+                out.push((p, ((at + s) * 4.0).round() / 4.0));
+            }
+        }
+        out.sort_by(|a, b| a.1.total_cmp(&b.1));
+        (m, out)
+    })
+}
+
+/// The lane `hits` of `module`'s clips, as (start, length).
+fn kit_clips(r: &Rig, module: &str) -> Vec<(f64, f64)> {
+    let text = std::fs::read_to_string(r.fixture.0.join(format!("data/{module}/hits.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
+    let v: Value = serde_json::from_str(&text).unwrap();
+    v["clips"].as_array().unwrap().iter().map(|c| (c["start"].as_f64().unwrap(), c["length"].as_f64().unwrap())).collect()
+}
+
+/// `pitch` struck at `beat` and let go a quarter beat later.
+fn hit(r: &mut Rig, pitch: u8, beat: f64) {
+    r.to(beat);
+    r.key(&[0x90, pitch, 100]);
+    r.to(beat + 0.25);
+    r.key(&[0x80, pitch, 0]);
+}
+
+/// Every beat of 16 on lane `hits` of the kit's every track, each at `pitch` 48.
+fn kit_base() -> Vec<(String, String)> {
+    ["kick", "snare", "hats"].iter().map(|m| (format!("data/{m}/hits.json"), base(16))).collect()
+}
+
+// KIT-26: a punch on a kit replaces every Drum track's lane between the loop's edges once any is
+// played there: the Kick's hit is its lane's one note there, and the Snare's and the Hats' lanes,
+// not played, are left empty there; the notes before and after stay. One undo puts it all back.
+#[test]
+fn a_punch_on_a_kit_replaces_every_drums_lane_in_its_range() {
+    let files = kit_base();
+    let mut files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    files.push(("song.ts", KIT));
+    let mut r = Rig::with(&files);
+    let before = kit_notes(&r);
+    r.graph.set_loop(Some((4.0, 8.0)), Some(false)).unwrap();
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "kick", "hits", Options { punch: true, ..Default::default() }).unwrap();
+    hit(&mut r, 36, 5.0);
+    r.to(8.5);
+    assert!(r.written()["written"].is_object());
+    let outside = |b: f64| !(4.0..8.0).contains(&b);
+    let base: Vec<(f64, f64)> = (0..16).map(f64::from).filter(|b| outside(*b)).map(|b| (48.0, b)).collect();
+    let mut kick = base.clone();
+    kick.insert(4, (36.0, 5.0));
+    assert_eq!(kit_notes(&r), [("kick", kick), ("snare", base.clone()), ("hats", base)]);
+    assert_eq!(kit_clips(&r, "snare"), [(0.0, 4.0), (8.0, 8.0)], "no clip of its own there");
+    assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Drums"));
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), before, "one undo");
+}
+
+// KIT-26: Overdub on a kit puts each hit into the clip under it on its own Drum track's lane; a lane
+// not played is left as it was.
+#[test]
+fn overdub_on_a_kit_puts_each_hit_into_its_lanes_clip() {
+    let files = kit_base();
+    let mut files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    files.push(("song.ts", KIT));
+    let mut r = Rig::with(&files);
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "snare", "hits", Options { overdub: true, ..Default::default() }).unwrap();
+    hit(&mut r, 36, 0.5);
+    hit(&mut r, 38, 1.5);
+    r.to(2.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let base: Vec<(f64, f64)> = (0..16).map(|b| (48.0, f64::from(b))).collect();
+    let with = |p: f64, at: f64| {
+        let mut v = base.clone();
+        v.push((p, at));
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v
+    };
+    assert_eq!(kit_notes(&r), [("kick", with(36.0, 0.5)), ("snare", with(38.0, 1.5)), ("hats", base.clone())]);
+    for m in ["kick", "snare", "hats"] {
+        assert_eq!(kit_clips(&r, m), [(0.0, 16.0)], "{m}: one clip, the one under it");
+    }
+}
+
+// KIT-26: over a loop, each pass of a kit's take is one Tx of every lane played: the first pass's
+// Kick and Snare in one undo step, the second's Hats in another.
+#[test]
+fn each_pass_over_a_loop_on_a_kit_is_one_step() {
+    let mut r = Rig::with(&[("song.ts", KIT)]);
+    r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "hats", "hits", Options::default()).unwrap();
+    hit(&mut r, 36, 1.0);
+    hit(&mut r, 38, 2.0);
+    hit(&mut r, 42, 5.0);
+    r.to(8.5);
+    r.writes(2);
+    r.graph.transport("stop").unwrap();
+    assert_eq!(r.written(), json!({"t": "take", "empty": true}), "the third pass: nothing played");
+    assert_eq!(kit_notes(&r), [("kick", vec![(36.0, 1.0)]), ("snare", vec![(38.0, 2.0)]), ("hats", vec![(42.0, 1.0)])]);
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), [("kick", vec![(36.0, 1.0)]), ("snare", vec![(38.0, 2.0)]), ("hats", vec![])], "the second pass");
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), [("kick", vec![]), ("snare", vec![]), ("hats", vec![])], "the first pass, both lanes");
+}
+
 // MON-9: one notes track is armed at a time; while one is, the keyboards play it and Record records
 // it, whatever a window selects.
 #[test]
