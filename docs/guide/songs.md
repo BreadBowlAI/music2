@@ -33,23 +33,23 @@
 
 **In short**
 - A song made with an older music2 opens, but stays silent until it is upgraded.
-- **Upgrade it** in the status pill, or `m2 upgrade <song>`, moves it in one step. One Undo takes it all back.
+- **Upgrade it** in the status pill, or `m2 upgrade <song>`, moves it in one step, keeping its sound. One Undo takes it all back.
 
-- music2 moves sounds between versions: its synths, drums and effects are packs of their own now (`@m2/synths`, `@m2/drums`, `@m2/effects`), and **One drum** plays what nine separate drums played. A song made before that asks for an older music2 in its `music2.toml` (`std = "0.4"`, say), so it doesn't build here.
-- The status pill in the top bar says **Made for an older music2**. Click it, then **Upgrade it**. music2 rewrites the song for this version as one change, and a message says which files changed. **Undo** (⌘Z) puts every file back as it was.
+- music2 moves sounds between versions: its synths, drums and effects are packs of their own now (`@m2/synths`, `@m2/drums`, `@m2/effects`), and **One drum** plays what nine separate drums played. A song made before that asks for an older music2 in its `music2.toml` (`std = "0.4"`, say), or plays sounds no pack has now, so it doesn't build here.
+- The status pill in the top bar says **Made for an older music2**. Click it, then **Upgrade it**. music2 rewrites the song for this version as one change, and a message says how many files changed, with **Undo** (⌘Z puts every file back as it was; ⇧⌘Z, or Upgrade it again, writes it back).
 - What it changes, and nothing else (not your notes, your mix or your comments):
 
 | Was | Is now |
 |---|---|
 | `"@m2/core" = "1"`, `std = "0.4"` to `"0.8"` | `"@m2/core" = "2"`, `std = "0.9"`, a line for each pack the song plays, and `music2.lock` (the exact versions) |
 | `import { synth } from "std/synth"` | `import { synth } from "@m2/synths"` (a pack: a set of sounds) |
-| `kick(notes)`, `drums.snare(notes)` | One drum: `drums.drum(notes)`, `drums.drum(notes, { drum: "snare" })` |
+| `kick(notes)`, `drums.snare(notes)` | One drum: `drums.drum(notes)`, `drums.drum(notes, { drum: "snare", voices: 4 })` (`voices`: how many hits ring at once) |
 | a drum's `tune: hz(50)` (in Hz, how many times a second it shakes) | `tune` in semitones (one piano key each) from the drum's own pitch |
 | a drum's `decay: ms(30)` (in seconds) | `decay` as times the drum's own length: 1 is its own, 2 twice as long |
 | a kick's `punch`, a snare's `snap` (0 to 1) | `punch`, −1 to 1: 0 is the drum's own |
 | `synth.bass(notes, { decay })` | `biteDecay`: the bass's `decay` is how its notes fade now |
 
-- A drum may sound a little different: the simple kick and hat were other sounds than One drum's.
-- If something can't be rewritten for you (a knob your code works out, say), nothing is written. The message lists each place by file and line, with the line to write. Change those by hand, then upgrade again.
+- The nine separate drums keep their sound exactly. The simple kick and hat (`kick` and `hat` from `std/instruments`) become One drum's kick and hats, which are other sounds: the status says so, by file and line, until you press **Done**.
+- If something can't be rewritten exactly (a knob your code works out, say, or hats whose closed and open lengths differ), nothing is written. The status lists each place by file and line, with the line to write. Change those by hand, then upgrade again.
 - From the terminal, `m2 upgrade <song>` does the same, and prints each line before (`-`) and after (`+`). `m2 upgrade <song> --check` only shows what it would change. With the app open, the app makes the change, as one undo step.
-- Your own presets for the old single drums don't move: they are outside the song.
+- Your own presets don't change: they are yours, outside the song. `m2 upgrade` names those for a sound that moved, with what to do.
