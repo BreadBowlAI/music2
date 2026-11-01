@@ -424,6 +424,14 @@ impl App {
         Ok(v)
     }
 
+    /// `m2 upgrade` while the app has the song open (AGENT-14): the app runs it, as this agent's one
+    /// undo step there. What it did.
+    pub fn upgrade(&mut self) -> Result<m2_editor::upgrade::Upgraded> {
+        let w = who();
+        let v = self.write("/api/graph/upgrade", &json!({"session": self.session, "check": false, "as": w.by, "why": w.why}), true)?;
+        Ok(serde_json::from_value(v["upgraded"].clone())?)
+    }
+
     /// `m2 undo` (AGENT-4): take back the newest step in the app, only while it is this agent's.
     pub fn undo(&self) -> Result<Value> {
         let w = who();

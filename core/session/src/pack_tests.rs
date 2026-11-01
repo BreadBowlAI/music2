@@ -768,8 +768,9 @@ fn a_song_made_before_wave_3_is_told_the_line_to_write() {
     let mut pk = bundled_store(&root);
     let now = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
     let first = format!(
-        "music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
+        "{}music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
          <song>`. The song's code may need changes",
+        m2_song::UPGRADE,
         now.0
     );
     let song = root.join("song");
@@ -821,5 +822,29 @@ fn following_a_moved_kernels_words_builds() {
     let new = "import { song, track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nconst t = track(\"t\", ({ lane }) => synth.custom(lane.notes(\"n\")));\nexport default song(() => t.out);\n";
     a_song(&song, &format!("{line}\n"), new, None);
     compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("following {said:?}: {e:?}"));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// The upgrade review's G7 (PKG-17): an import from a std module that moved into a pack names the
+// line `[dependencies]` needs for the version music2 comes with now, never an older major.
+#[test]
+fn a_moved_imports_words_name_the_line_a_song_writes_today() {
+    let root = scratch("moved-import");
+    let mut pk = bundled_store(&root);
+    let song = root.join("song");
+    for (import, plays, pack) in [
+        ("import { pad } from \"std/instruments\"", "pad", "@m2/synths"),
+        ("import { drums } from \"std/drums\"", "drums.kit", "@m2/drums"),
+    ] {
+        let code = format!(
+            "import {{ song, track }} from \"@m2/core\";\n{import};\nconst t = track(\"t\", ({{ lane }}) => {plays}(lane.notes(\"n\")));\n\
+             export default song(() => t.out);\n"
+        );
+        a_song(&song, "", &code, None);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        let now = m2_song::pack::comes_with(&PackName::new(pack).unwrap()).unwrap();
+        let line = format!("\"{pack}\" = \"{}\"", m2_song::Requirement::admitting(now));
+        assert!(e.iter().any(|d| d.message.contains(&line)), "{import}: {e:?}");
+    }
     std::fs::remove_dir_all(&root).ok();
 }

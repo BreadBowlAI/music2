@@ -129,11 +129,12 @@ fn randomness_and_outside_files_are_refused() {
 // to import from and the line to add, as `pkg.missing`.
 #[test]
 fn a_moved_std_module_names_the_pack_to_use() {
-    for (module, name, pack) in [
-        ("std/instruments", "kick", "@m2/synths"),
-        ("std/synth", "synth", "@m2/synths"),
-        ("std/fm", "fm", "@m2/synths"),
-        ("std/drums", "drums", "@m2/drums"),
+    // The line to write is for the version music2 comes with now (the upgrade review's G7).
+    for (module, name, pack, line) in [
+        ("std/instruments", "kick", "@m2/synths", "2"),
+        ("std/synth", "synth", "@m2/synths", "2"),
+        ("std/fm", "fm", "@m2/synths", "2"),
+        ("std/drums", "drums", "@m2/drums", "2"),
     ] {
         let song =
             format!("import {{ song }} from \"@m2/core\";\nimport {{ {name} }} from \"{module}\";\nexport default song(() => {name});\n");
@@ -142,7 +143,7 @@ fn a_moved_std_module_names_the_pack_to_use() {
         assert!(e.message.starts_with(&format!("`{module}` is no longer std's: since std 0.7 its sounds are in the pack {pack}")), "{e}");
         assert!(
             e.message.contains(&format!("Import them from \"{pack}\""))
-                && e.message.contains(&format!("\"{pack}\" = \"1\" under [dependencies]")),
+                && e.message.contains(&format!("\"{pack}\" = \"{line}\" under [dependencies]")),
             "{e}"
         );
         // In the file that imports it, as every import's error is (the editor finds the line).

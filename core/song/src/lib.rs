@@ -43,7 +43,7 @@ pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
     AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, StepsOf, canonical, parse_pitch,
 };
-pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, Version};
+pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, UPGRADE, Version};
 pub use pack::{Lock, PackName};
 pub use path::{AssetName, Class, DataPath, dir_hash};
 pub use tx::{Anchor, Base, Confined, Declared, DeltaHash, Expect, ModuleChange, Op as TxOp, Payload, Pos, Range, Spot, Tx, TxPath};
