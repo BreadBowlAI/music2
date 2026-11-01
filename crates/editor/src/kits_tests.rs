@@ -313,7 +313,7 @@ fn steps_are_refused_in_words() {
         refused(&mut s, hits("kick", &[2.0, 0.1], 0.25, Hit::On)),
         "edit rejected: 0.1 isn't where a step starts: on a grid of 0.25 beats, steps start at 0, 0.25, 0.5 and so on from each bar line."
     );
-    assert_eq!(refused(&mut s, hits("kick", &[4.4], 0.5, Hit::Off)).contains("4.4 isn't where a step starts"), true);
+    assert!(refused(&mut s, hits("kick", &[4.4], 0.5, Hit::Off)).contains("4.4 isn't where a step starts"));
     assert_eq!(f.read("data/kick/hits.json"), kick, "nothing written");
     go(&mut s, hits("kick", &[2.500001], 0.25, Hit::On));
     let at: Vec<f64> = played(&s, "kick").iter().map(|n| n.0).filter(|t| (2.0..3.0).contains(t)).collect();
