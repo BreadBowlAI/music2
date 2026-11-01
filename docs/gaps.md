@@ -133,7 +133,6 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A preset holds no table**: the tables are settings, so Slow pad, Round bass, Sharp lead and Short pluck play whatever tables the card has.
 - **Changing a wavetable's table ends the notes that are playing**: a table is a setting, made when the sound is built, so picking another from the menu rebuilds the sound (RENDER-26a).
 - **A file in `fileA` (or `fileB`) plays in place of the table menu, which still shows its pick**: changing the menu then changes nothing you hear, yet rebuilds the sound. Only the guide says that the file wins.
-- **A setting has no label of its own**: the card names it by its slot, so the wavetable's table A reads `TableA`, and its undo step "Wavetable tablea".
 - **Every wavetable sound holds 11.8 MiB**, whatever tables it plays: its voices share their tables in the module's static memory, sized for two tables of 64 frames, since the kernel ABI gives a sandbox's states no other way to share what they make.
 - **`steal: "none"` waits for a voice to fall silent**, not for its key to be let go.
 - **The side browser lists no sounds**: its search is ⌘F's, but it shows only instruments, effects and plugins. Sounds are in ⌘F and on each card's Presets.

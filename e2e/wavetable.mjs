@@ -1,8 +1,9 @@
 // The wavetable synth, a bundled pack (PACK-27). + Track lists Wavetable among its instruments, as
 // music2's own; picking it adds a track that plays it, the song listing and locking its pack
 // (PACK-10). Its card in Device shows its groups (Oscillators, Filter, Envelopes, LFO, Unison, then
-// More); table A is a menu of the five built-in tables, and picking vowels writes `tableA:
-// "vowels"`, one undo step that ⌘Z takes back byte for byte; position A dragged up writes a new
+// More); its settings read by their labels (Table A, never TableA: CARD-34); table A is a menu of
+// the five built-in tables, and picking vowels writes `tableA: "vowels"`, one undo step ("Undo
+// Wavetable table A") that ⌘Z takes back byte for byte; position A dragged up writes a new
 // position; the amp envelope's picture draws its three corners, and the filter envelope's and the
 // filter's pictures are there too. A note played on it from a MIDI keyboard (M2_MIDI=inject) moves
 // its header's meter, and stops when the key is let go. Each state linted.
@@ -58,6 +59,9 @@ await page.screenshot({ path: `${ROOT}/wavetable-card.png` });
 
 const fresh = read(file);
 const steps = await undoTitle();
+// Its tables and files are named by their labels, never `TableA` (CARD-34).
+const rows = await page.$$eval(`${card} [data-setting] > span:first-child`, (els) => els.map((e) => e.textContent));
+check(rows.includes("Table A") && rows.includes("Table B") && !rows.some((r) => /Table[AB]|File[AB]/.test(r ?? "")), `its settings by their labels: ${JSON.stringify(rows)}`);
 await page.click(`${card} [data-setting="tableA"] [data-testid=setting-menu]`);
 await page.waitForSelector("[data-testid=setting-options]");
 const options = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
@@ -66,7 +70,7 @@ await linted("[data-testid=setting-options]", "the table's menu");
 await page.click('[data-testid=setting-options] [data-option="vowels"]');
 const vowels = fresh.replace('wavetable(lane.notes("notes"))', 'wavetable(lane.notes("notes"), { tableA: "vowels" })');
 check(await until(() => read(file) === vowels), `picking vowels writes it into the call: ${read(file).match(/wavetable\(lane[^\n]*/)?.[0]}`);
-check(await until(async () => (await undoTitle()) !== steps && (await undoTitle())?.startsWith("Undo Wavetable")), `one undo step: ${await undoTitle()}`);
+check(await until(async () => (await undoTitle()) !== steps && (await undoTitle()) === "Undo Wavetable table A (⌘Z)"), `one undo step, named by its label (CARD-34): ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read(file) === fresh), "⌘Z takes the code back, byte for byte");

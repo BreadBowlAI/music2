@@ -23,4 +23,4 @@ hash = "sha256:04470bf491b3f5fb1a50de2534e438c0cebd78fcb64a61d04956d3db7bd557ac"
 [[pack]]
 name = "@m2/wavetable"
 version = "1.0.0"
-hash = "sha256:ed3edcb302775582ba93a7ad912e84b0aaa533ed33e83b8458e511dc509dd123"
+hash = "sha256:4ebe170580d1c6fc791c29edd164b784ba990bb9350468285143ffb518ca0720"

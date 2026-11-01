@@ -183,7 +183,7 @@ export const SUITES = [
   ["card-views", "fix", { expect: 61, s: 12 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
-  ["wavetable", "fix", { expect: 30, s: 6 }],
+  ["wavetable", "fix", { expect: 31, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],

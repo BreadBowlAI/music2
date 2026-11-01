@@ -56,7 +56,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | Your code uses | Ask for | Why |
 |---|---|---|
 | nothing added since 2.0 | `"2"` | a later minor, `"2.3"`, would shut out the music2 versions between 2.0 and 2.3 |
-| a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` does | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
+| a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` and `@m2/wavetable` do | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
 
 ### music2's promise to your pack
 

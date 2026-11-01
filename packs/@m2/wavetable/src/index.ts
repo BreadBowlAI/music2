@@ -68,10 +68,10 @@ export const wavetable = component(
     },
     // What each oscillator plays, the unison voices (1 to 8) and the notes at once (1: one at a time).
     settings: {
-      tableA: setting.choice(TABLES, "basic"),
-      fileA: setting.asset().optional(),
-      tableB: setting.choice(TABLES, "basic"),
-      fileB: setting.asset().optional(),
+      tableA: setting.choice(TABLES, "basic").label("table A"),
+      fileA: setting.asset().optional().label("file A"),
+      tableB: setting.choice(TABLES, "basic").label("table B"),
+      fileB: setting.asset().optional().label("file B"),
       unison: setting.int(1),
       voices: setting.int(8),
     },

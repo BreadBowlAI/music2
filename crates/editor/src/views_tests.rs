@@ -603,7 +603,8 @@ fn music2s_own_sounds_show_their_groups_and_views() {
 #[test]
 fn music2s_own_values_read_as_words() {
     let f = Fixture::new();
-    f.write("music2.toml", MANIFEST);
+    // Every bundled pack (PACK-15), the song needing each so the catalog holds them all.
+    f.write("music2.toml", &format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
     f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nexport default song(() => mixer({}));\n");
     let s = f.open();
     let catalog = s.catalog();
@@ -619,6 +620,9 @@ fn music2s_own_values_read_as_words() {
         }
     }
     assert!(seen > 200, "{seen} values");
+    for pack in ["@m2/drums", "@m2/effects", "@m2/mixing", "@m2/synths", "@m2/wavetable"] {
+        assert!(catalog.components.keys().any(|id| id.starts_with(&format!("{pack}:"))), "{pack} is in the catalog");
+    }
     assert!(wrong.is_empty(), "shown by a name in camelCase, so it wants a label (CARD-34): {wrong:?}");
 }
 
