@@ -570,7 +570,6 @@ pub fn place_with(s: &mut Session, files: &[Imported], at: &Target, follow: &[Op
                 .map(|(i, f)| NewTrack {
                     play: Play::Audio,
                     label: Some(track_label(f)),
-                    key: None,
                     clips: vec![clip_at(f, beat, &tempo, follows(i))],
                     ..NewTrack::default()
                 })

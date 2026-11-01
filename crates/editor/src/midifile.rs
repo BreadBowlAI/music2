@@ -10,8 +10,14 @@
 //! change from [`program_for`] when the table knows its sound, on channel 10 for a drum's lane and
 //! on channels 1 to 9 and 11 to 16 in order for the rest (the 17th on share 16). Notes are cut at
 //! their clips' edges, as they play; a velocity becomes `round(v × 127)` in 1 to 127, a tuned pitch
-//! the nearest key. Two notes of one pitch that overlap: the first ends where the second starts
-//! (D37). Tracks muted in the song are left out, as the audio export leaves them out.
+//! the nearest key, and a Drum's key one of its sound's General MIDI notes (KIT-9). Two notes of
+//! one pitch that overlap: the first ends where the second starts (D37). Tracks muted in the song
+//! are left out, as the audio export leaves them out.
+//!
+//! A file's drums, every part on channel 10, come in as one kit (KIT-8): a Drums bus and a Drum
+//! track for each sound their notes use.
+
+use std::collections::BTreeMap;
 
 use m2_ir::{Node, Op, split_ref};
 use m2_script::component::PortKind;
@@ -24,8 +30,10 @@ use crate::timeline::{self, TimelineLane};
 
 /// Ticks a beat in the files music2 writes.
 pub const TICKS: u16 = 960;
-/// What a part on channel 10 plays: General MIDI's drums, as `@m2/drums` names its notes.
-pub const DRUM_KIT: &str = "@m2/drums:drum-kit";
+/// What a part on channel 10 plays: the Drum, a track for each sound its notes use (KIT-8).
+pub const DRUM: &str = "@m2/drums:drum";
+/// The drum machine, which no list offers (KIT-2): a lane of it is drums, on channel 10.
+pub const DRUM_MACHINE: &str = "@m2/drums:drum-kit";
 /// Channel 10, as files count channels from 0.
 const DRUM_CHANNEL: u8 = 9;
 
@@ -69,11 +77,11 @@ const SOUNDS: &[Sound] = &[
 /// @m2/synths' simple drums, which have no category: their lanes are drums too.
 const PLAIN_DRUMS: &[&str] = &["@m2/synths:kick", "@m2/synths:hat"];
 
-/// The sound a part plays (Q33): channel 10 plays the Drum kit; else its program's family;
-/// with no program, Synth bass when its notes average below C3, else FM keys.
+/// The sound a part plays (Q33): channel 10 the Drum (KIT-8); else its program's family; with no
+/// program, Synth bass when its notes average below C3, else FM keys.
 pub fn sound_for(drums: bool, program: Option<u8>, average_pitch: f64) -> &'static str {
     if drums {
-        return DRUM_KIT;
+        return DRUM;
     }
     match program {
         Some(p) => {
@@ -130,9 +138,10 @@ pub fn player_of(rev: &Revision, module: &str, lane: &str) -> Option<String> {
     }
 }
 
-/// Whether `component` plays drums: the Drum kit, any of the Drums group, @m2/synths' simple kick and hat.
+/// Whether `component` plays drums: the drum machine, any of the Drums group, @m2/synths' simple kick and hat.
 fn is_drums(rev: &Revision, component: &str) -> bool {
-    PLAIN_DRUMS.contains(&component)
+    component == DRUM_MACHINE
+        || PLAIN_DRUMS.contains(&component)
         || rev.compiled.components.get(component).is_some_and(|d| d.editor.category.as_deref() == Some("Drums"))
 }
 
@@ -184,6 +193,22 @@ fn note_events(clips: &[NoteClip], channel: u8, from: f64) -> Vec<(u64, Event)> 
     out
 }
 
+/// `clips` as they go out (KIT-9): a Drum playing `sound` writes each note at one of its sound's
+/// General MIDI notes; any other lane, and a Drum whose sound the code works out, as they are.
+fn as_drums(clips: &[NoteClip], sound: Option<&str>) -> Vec<NoteClip> {
+    let Some(sound) = sound else { return clips.to_vec() };
+    let mut out = clips.to_vec();
+    for n in out.iter_mut().flat_map(|c| c.notes.iter_mut()) {
+        n.pitch = crate::drums::general_midi(sound, n.pitch.round().clamp(0.0, 127.0) as u8) as f64;
+    }
+    out
+}
+
+/// The sound the Drum playing lane `lane` of `module` plays, when its menu is a value (KIT-9).
+fn drum_of(sounds: &BTreeMap<String, &'static str>, player: Option<&str>, module: &str) -> Option<&'static str> {
+    player.filter(|p| *p == DRUM).and_then(|_| sounds.get(module).copied())
+}
+
 /// The events of one lane's MIDI track: its program change, then its notes.
 fn lane_track(name: String, program: Option<u8>, channel: u8, clips: &[NoteClip], from: f64) -> SmfTrack {
     let mut events: Vec<(u64, Event)> = program.map(|program| (0, Event::Program { channel, program })).into_iter().collect();
@@ -203,6 +228,7 @@ pub fn export_song(s: &Session) -> Result<Vec<u8>, EditError> {
     let rev = s.accepted();
     let view = timeline::timeline(s);
     let muted = |module: &str| rev.compiled.ir.modules.iter().any(|m| m.key == module && m.muted);
+    let sounds = crate::drums::sounds_played(s);
     let mut tracks = vec![SmfTrack { name: Some(song_name(rev)), events: tempo_events(&rev.project.arrangement, 0.0), end: 0 }];
     let mut next = 0u8;
     for t in view.tracks.iter().filter(|t| !muted(&t.module)) {
@@ -226,7 +252,8 @@ pub fn export_song(s: &Session) -> Result<Vec<u8>, EditError> {
                 }
             };
             let program = player.as_deref().filter(|_| !drums).and_then(program_for);
-            let track = lane_track(name, program, channel, clips, 0.0);
+            let clips = as_drums(clips, drum_of(&sounds, player.as_deref(), &t.module));
+            let track = lane_track(name, program, channel, &clips, 0.0);
             if track.events.iter().any(|e| matches!(e.1, Event::NoteOn { .. })) {
                 tracks.push(track);
             }
@@ -260,6 +287,7 @@ pub fn export_clip(s: &Session, module: &str, lane: &str, id: &str) -> Result<(V
     let drums = player.as_deref().is_some_and(|p| is_drums(rev, p));
     let channel = if drums { DRUM_CHANNEL } else { 0 };
     let program = player.as_deref().filter(|_| !drums).and_then(program_for);
+    let clip = &as_drums(std::slice::from_ref(clip), drum_of(&crate::drums::sounds_played(s), player.as_deref(), module))[0];
     let mut notes = lane_track(t.label.clone(), program, channel, std::slice::from_ref(clip), clip.start);
     notes.end = notes.end.max(tick(clip.length));
     let mut tempo = SmfTrack { name: Some(song_name(rev)), events: tempo_events(&rev.project.arrangement, clip.start), end: 0 };
@@ -277,13 +305,17 @@ pub const LAST_BAR: u64 = 9_999;
 /// The shortest note brought in, in beats (D10).
 pub const SHORTEST: f64 = 1.0 / 64.0;
 
-/// A part of a MIDI file: one track's notes on one channel (Q32), what becomes a track.
+/// A part of a MIDI file: one track's notes on one channel (Q32), what becomes a track; a part of
+/// the drums, a kit's tracks (KIT-8).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Part {
-    /// The track's name, or the sound's label when the track has none or makes several parts.
+    /// The track's name, or the sound's label when the track has none or makes several parts (the
+    /// drums' is Drums).
     pub label: String,
     /// The sound it plays (Q33).
     pub component: String,
+    /// On channel 10: the drums.
+    pub drums: bool,
     /// Its notes, in beats from the file's start, by start.
     pub notes: Vec<Note>,
 }
@@ -401,7 +433,8 @@ pub fn bring(file: &Smf, name: &str, label_of: &dyn Fn(&str) -> String) -> Resul
             };
             let program = program(&t.events).or_else(|| file.tracks.iter().find_map(|o| program(&o.events)));
             let average = mine.iter().map(|n| n.key as f64).sum::<f64>() / mine.len() as f64;
-            let component = sound_for(ch == DRUM_CHANNEL, program, average).to_string();
+            let drums = ch == DRUM_CHANNEL;
+            let component = sound_for(drums, program, average).to_string();
             let named = t.name.clone().filter(|n| !n.is_empty() && channels.len() == 1);
             let notes = mine
                 .iter()
@@ -413,7 +446,8 @@ pub fn bring(file: &Smf, name: &str, label_of: &dyn Fn(&str) -> String) -> Resul
                     velocity: (n.velocity as f64 / 127.0 * 1000.0).round() / 1000.0,
                 })
                 .collect();
-            parts.push(Part { label: named.unwrap_or_else(|| label_of(&component)), component, notes });
+            let unnamed = || if drums { crate::drums::BUS.to_string() } else { label_of(&component) };
+            parts.push(Part { label: named.unwrap_or_else(unnamed), component, drums, notes });
         }
     }
     if parts.is_empty() {
@@ -531,6 +565,16 @@ fn labels(s: &Session) -> impl Fn(&str) -> String + use<> {
     }
 }
 
+/// Whether `file`, dropped onto lane `lane` of track `module`, goes into it whole (Q36, KIT-8): a
+/// file of one part, but drums never into a Drum's lane, which plays every note as its one sound:
+/// they come in as a kit after the track. A drum machine's lane plays General MIDI, so it takes them.
+pub fn into_lane(s: &Session, file: &Smf, module: &str, lane: &str) -> bool {
+    match bring(file, "", &|c| c.to_string()).map(|b| b.parts) {
+        Ok(parts) => matches!(parts.as_slice(), [p] if !(p.drums && player_of(s.accepted(), module, lane).as_deref() == Some(DRUM))),
+        Err(_) => false,
+    }
+}
+
 /// Bring a one-part MIDI file in onto notes lane `lane` of track `module`, at beat `at` (Q36, D11):
 /// one clip from `at` to the bar line after its last note, by the song's tempo and time signatures
 /// (its notes go by beats; no question). One `Clips` Tx, one undo step. Refused in words when the
@@ -558,6 +602,11 @@ pub fn import_into(
             brought.parts.len()
         )));
     };
+    if part.drums && player_of(s.accepted(), module, lane).as_deref() == Some(DRUM) {
+        return Err(EditError::Rejected(format!(
+            "{name} is drums, which come in as a kit: drop it below the tracks or on a track's name."
+        )));
+    }
     let length = clip_length(&s.accepted().project.arrangement, at, part.end());
     let clip = NoteClip { id: None, other_id: None, start: at, length, notes: part.notes.clone() };
     let lane = m2_song::LaneAddr {
@@ -593,8 +642,9 @@ pub enum Imported {
 
 /// Bring a MIDI file in as new tracks at `place` (Q32 to Q36, D10): [`bring`], then
 /// [`tempo_plan`] from the place's beat; each part a notes track playing its sound, with one clip
-/// from that beat to the bar line after its last note; all of it one `tracks::add_tracks` Tx, one
-/// undo step, the tempo in it. Answers the question, writing nothing, when it is due and `choice`
+/// from that beat to the bar line after its last note, but the drums, every part on channel 10,
+/// one kit where the first of them is (KIT-8); all of it one `tracks::add_tracks` Tx, one undo
+/// step, the tempo in it. Answers the question, writing nothing, when it is due and `choice`
 /// is None. Refused in words, nothing written: no notes, over 32 parts, a note past bar 9,999, the
 /// code doesn't compile.
 pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, choice: Option<TempoChoice>) -> Result<Imported, EditError> {
@@ -617,15 +667,27 @@ pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, cho
     if brought.parts.iter().any(|p| timing.bar_at(at + p.end()).0 >= LAST_BAR) {
         return Err(EditError::Rejected(format!("{name} has a note past bar 9,999: music2 brings in notes up to there.")));
     }
+    let clip_of = |notes: Vec<Note>, end: f64| {
+        let clip = NoteClip { id: None, other_id: None, start: at, length: clip_length(timing, at, end), notes };
+        serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))
+    };
+    // The drums, every part on channel 10, by start: one kit.
+    let mut drums: Vec<Note> = brought.parts.iter().filter(|p| p.drums).flat_map(|p| p.notes.iter().cloned()).collect();
+    drums.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let drums_end = brought.parts.iter().filter(|p| p.drums).map(Part::end).fold(0.0, f64::max);
     let mut new = vec![];
-    for p in &brought.parts {
-        let clip = NoteClip { id: None, other_id: None, start: at, length: clip_length(timing, at, p.end()), notes: p.notes.clone() };
-        let clip = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
+    for (i, p) in brought.parts.iter().enumerate() {
+        if p.drums {
+            if !brought.parts[..i].iter().any(|q| q.drums) {
+                let first = new.len();
+                new.extend(crate::drums::kit_of(&drums, first, |notes| clip_of(notes, drums_end))?);
+            }
+            continue;
+        }
         new.push(crate::tracks::NewTrack {
             play: crate::tracks::Play::Instrument(p.component.clone()),
             label: Some(p.label.clone()),
-            key: None,
-            clips: vec![clip],
+            clips: vec![clip_of(p.notes.clone(), p.end())?],
             ..crate::tracks::NewTrack::default()
         });
     }

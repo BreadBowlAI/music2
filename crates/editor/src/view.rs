@@ -40,7 +40,7 @@ pub struct GraphView {
     pub revision: u64,
     pub modules: Vec<ModuleView>,
     /// The song's drum kits (KIT-1): each bus and the Drum tracks that go to it.
-    pub kits: Vec<crate::kits::Kit>,
+    pub drum_kits: Vec<crate::kits::DrumKit>,
     /// Why the files on disk don't compile right now (the view shows the last
     /// revision that did).
     pub draft_errors: Vec<String>,
@@ -1238,7 +1238,7 @@ pub fn view(session: &Session) -> GraphView {
     GraphView {
         revision: rev.number,
         modules,
-        kits: crate::kits::kits(session),
+        drum_kits: crate::kits::drum_kits(session),
         draft_errors: session.draft_errors.iter().map(|d| d.to_string()).collect(),
     }
 }

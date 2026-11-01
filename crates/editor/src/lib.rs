@@ -18,6 +18,7 @@ pub mod changed;
 pub mod clips;
 pub mod controls;
 pub mod data;
+pub mod drums;
 pub mod effect;
 pub mod explain;
 pub mod faults;
@@ -176,6 +177,15 @@ pub(crate) fn refused(s: &Session, r: Refusal) -> EditError {
             EditError::DraftInvalid(s.draft_errors.clone())
         }
         _ => r.into(),
+    }
+}
+
+/// Names as words: "Kick", "Kick and Bass", "Kick, Bass and Hats".
+pub fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
     }
 }
 

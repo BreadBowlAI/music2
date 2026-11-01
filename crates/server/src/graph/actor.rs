@@ -893,6 +893,8 @@ impl Open {
                 "redo_end": s.redo_end().map(|e| e.as_str()),
                 "effects": s.effects(),
                 "instruments": s.instruments(),
+                // The kits the instruments name, which + Track's Drum kit makes (KIT-5).
+                "kit_presets": m2_editor::drums::presets(s),
                 "palette": m2_editor::layout::DEFAULT_ORDER,
                 "diagnostics": diagnostics,
                 "problems": problems,

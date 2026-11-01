@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { Plus, ZoomIn, ZoomOut } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { send } from "../lib/clips";
-import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, position, type GraphState, type Kit, type KitRow, type Meter, type TimelineView } from "../lib/graph";
+import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, position, type GraphState, type DrumKit, type DrumRow, type Meter, type TimelineView } from "../lib/graph";
 import { clean, GRID_VIEW, useGrid } from "../lib/grid";
 import { ROLL_RULER_H } from "../lib/layout";
 import { chord, mod } from "../lib/native";
@@ -12,6 +12,7 @@ import { useStore } from "../lib/store";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
+import { arrived, refreshed } from "./Tracks";
 import { PlayLine, Ruler } from "./NoteView";
 import { Button, EmptyState, keepFocus, MenuRow, Popover } from "./ui";
 
@@ -52,7 +53,7 @@ interface Step { start: number; end: number; odd: boolean }
 interface Asked { track: string; at: number[]; to: "on" | "off" | { velocity: number }; revision: number }
 
 /** The notes row `row`'s lane plays, by start. */
-function hitsOf(timeline: TimelineView, row: KitRow): Hit[] {
+function hitsOf(timeline: TimelineView, row: DrumRow): Hit[] {
   const lane = findLane(timeline, row.track, row.lane);
   if (lane?.kind !== "notes") return [];
   const out: Hit[] = [];
@@ -133,7 +134,7 @@ function drumSounds(graph: GraphState): string[] {
 }
 
 /** The beat grid of `kit`, with `module` (a row's track, or the bus) selected. */
-export default function BeatView({ graph, kit, module }: { graph: GraphState; kit: Kit; module: string }) {
+export default function BeatView({ graph, kit, module }: { graph: GraphState; kit: DrumKit; module: string }) {
   const toast = useStore((s) => s.toast);
   const { timeline } = graph;
   const { meter } = timeline;
@@ -219,7 +220,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
    * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. It goes once
    * the gestures before it have landed: each was decided from what the grid showed, theirs included.
    */
-  const write = (row: KitRow, a: Omit<Asked, "revision">, step: string) => {
+  const write = (row: DrumRow, a: Omit<Asked, "revision">, step: string) => {
     const mine: Asked = { ...a, revision: Infinity };
     setAsked((all) => [...all, mine]);
     const size = grid.step;
@@ -249,7 +250,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     return stepAt(steps, x / ppb);
   };
 
-  const onRowDown = (e: React.PointerEvent<HTMLDivElement>, row: KitRow, hits: Map<number, Hit[]>) => {
+  const onRowDown = (e: React.PointerEvent<HTMLDivElement>, row: DrumRow, hits: Map<number, Hit[]>) => {
     if (e.button !== 0 || locked || drag.current) return;
     const s = stepOf(e);
     if (!s) return;
@@ -260,7 +261,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     drag.current = { track: row.track, at: [s.start], to: isOn(row.track, hits, s) ? "off" : "on", revision: Infinity, pointer: e.pointerId };
     redraw();
   };
-  const onRowMove = (e: React.PointerEvent<HTMLDivElement>, row: KitRow, hits: Map<number, Hit[]>) => {
+  const onRowMove = (e: React.PointerEvent<HTMLDivElement>, row: DrumRow, hits: Map<number, Hit[]>) => {
     const d = drag.current;
     if (!d || d.pointer !== e.pointerId || d.track !== row.track) return;
     const s = stepOf(e);
@@ -270,7 +271,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     d.at.push(s.start);
     redraw();
   };
-  const onRowUp = (e: React.PointerEvent<HTMLDivElement>, row: KitRow, cancelled = false) => {
+  const onRowUp = (e: React.PointerEvent<HTMLDivElement>, row: DrumRow, cancelled = false) => {
     const d = drag.current;
     if (!d || d.pointer !== e.pointerId) return;
     drag.current = null;
@@ -485,7 +486,7 @@ function Cells({
   onMove,
   onUp,
 }: {
-  row: KitRow;
+  row: DrumRow;
   meter: Meter[];
   steps: Step[];
   /** The steps drawn: those near what shows. */
@@ -558,7 +559,7 @@ function Cells({
 }
 
 /** + Drum (KIT-15): a menu of the Drum's sounds; the one picked is a new row of the kit, as one undo step. */
-function AddDrum({ graph, kit, locked }: { graph: GraphState; kit: Kit; locked: string | null }) {
+function AddDrum({ graph, kit, locked }: { graph: GraphState; kit: DrumKit; locked: string | null }) {
   const toast = useStore((s) => s.toast);
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const sounds = drumSounds(graph);
@@ -566,8 +567,10 @@ function AddDrum({ graph, kit, locked }: { graph: GraphState; kit: Kit; locked: 
     setMenu(null);
     graphApi
       .kitDrum(graph.session, kit.bus, sound)
-      .then((r) => {
-        useShell.getState().select(r.module);
+      .then(async (r) => {
+        // Selected once the song shows it, as + Track's new tracks are: its row is the one worked on.
+        await refreshed();
+        arrived(r.module, graph.instruments?.find((i) => i.component === "@m2/drums:drum")?.lane);
         toast(`Added ${r.label} to ${kit.label}`, undoAction(graph.session, r.step));
       })
       .catch((error) => toast(message(error)));

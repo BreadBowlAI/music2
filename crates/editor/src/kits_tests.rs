@@ -3,14 +3,14 @@
 
 use m2_session::Session;
 
-use crate::kits::{self, Kit, Row};
+use crate::kits::{self, DrumKit, DrumRow};
 use crate::testing::{Fixture, fixture};
 use crate::{Deleted, Gestures, bus};
 
 const BUSES: &str = "core/session/tests/fixtures/buses";
 
-fn row(track: &str, lane: &str, sound: Option<&str>) -> Row {
-    Row { track: track.into(), lane: lane.into(), sound: sound.map(str::to_string) }
+fn row(track: &str, lane: &str, sound: Option<&str>) -> DrumRow {
+    DrumRow { track: track.into(), lane: lane.into(), sound: sound.map(str::to_string) }
 }
 
 /// A track file playing the Drum at `sound` from lane `hits`, as the code writes one.
@@ -36,8 +36,8 @@ fn with_track(f: &Fixture, key: &str, text: &str, entry: &str) {
     f.write("song.ts", song);
 }
 
-fn rows(s: &Session) -> Vec<Row> {
-    match &kits::kits(s)[..] {
+fn rows(s: &Session) -> Vec<DrumRow> {
+    match &kits::drum_kits(s)[..] {
         [kit] => kit.rows.clone(),
         other => panic!("one kit, not {other:?}"),
     }
@@ -54,7 +54,10 @@ fn a_bus_with_three_drums_is_one_kit_in_track_order() {
     let kick = row("kick", "hits", Some("kick"));
     let hats = row("hats", "hits", Some("hats"));
     let snare = row("snare", "hits", Some("snare"));
-    assert_eq!(kits::kits(&s), [Kit { bus: "drums".into(), label: "Drums".into(), rows: vec![kick.clone(), hats.clone(), snare.clone()] }]);
+    assert_eq!(
+        kits::drum_kits(&s),
+        [DrumKit { bus: "drums".into(), label: "Drums".into(), rows: vec![kick.clone(), hats.clone(), snare.clone()] }]
+    );
     // The timeline's order: the Snare moved up above the Hats.
     let mut s = s;
     let order: Vec<String> = ["kick", "snare", "hats", "drums", "bass", "keys", "verb", "echo"].map(String::from).into();
@@ -63,7 +66,7 @@ fn a_bus_with_three_drums_is_one_kit_in_track_order() {
     // The song's view carries it, as the web and `m2 graph --json` read it.
     let v = serde_json::to_value(s.view()).unwrap();
     assert_eq!(
-        v["kits"],
+        v["drum_kits"],
         serde_json::json!([{"bus": "drums", "label": "Drums", "rows": [
             {"track": "kick", "lane": "hits", "sound": "kick"},
             {"track": "snare", "lane": "hits", "sound": "snare"},
@@ -127,12 +130,12 @@ fn a_drum_fed_from_another_tracks_lane_is_no_row() {
 fn deleting_the_bus_leaves_no_kit() {
     let f = fixture(BUSES);
     let mut s = f.open();
-    assert_eq!(kits::kits(&s).len(), 1);
+    assert_eq!(kits::drum_kits(&s).len(), 1);
     match s.delete_track("drums", true).unwrap() {
         Deleted::Done { .. } => {}
         other => panic!("deleted, not {other:?}"),
     }
-    assert!(kits::kits(&s).is_empty(), "{:?}", kits::kits(&s));
+    assert!(kits::drum_kits(&s).is_empty(), "{:?}", kits::drum_kits(&s));
     let modules = &s.accepted().compiled.ir.modules;
     assert!(modules.iter().any(|m| m.key == "kick") && modules.iter().any(|m| m.key == "hats"));
 }

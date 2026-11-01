@@ -34,7 +34,8 @@ Below, `.` is this song's folder.
 | `m2 check .` | build the song, and say what is wrong |
 | `m2 controls .` | every knob, with its id |
 | `m2 set . <id> <value>` | turn one knob |
-| `m2 add-track . <instrument>` | add a track (`synth.pluck`, `drums.kit`…) |
+| `m2 add-track . <instrument>` | add a track (`synth.pluck`, `drums.drum`…) |
+| `m2 add-kit . "808 kit"` | add a drum kit: a Drums bus and a Drum track for each drum (`808 kit`, `909 kit`, `Basic kit`) |
 | `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound |
 | `m2 clips . <gesture> <clip>…` | make, move, split, join or delete clips |
 | `m2 clips . json -` | any other clip gesture, as JSON: a chord built on the song's key (`stamp`), a feel (`groove`), notes pasted into a clip (`paste` with `into`), a drum's steps as the beat grid writes them (`hits`); `m2 call . /api/theory` lists the scales, chords and grooves |

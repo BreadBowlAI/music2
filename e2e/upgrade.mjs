@@ -3,7 +3,7 @@
 // @m2/core 1, the simple kick and hat of @m2/synths 1), as a copy of an old song would be. The song
 // stops building, and the status pill says first that it was made for an older music2; its popover
 // offers Upgrade it. That writes the song as m2 upgrade does, one write, one undo step named
-// Upgrade: the kick One drum's (today's file byte for byte), the hat One drum's hats, the manifest's
+// Upgrade: the kick the Drum's (today's file byte for byte), the hat the Drum's hats, the manifest's
 // lines and the lock today's. The song builds again; a message says what changed, with Undo, and
 // the popover lists what to check by hand (the simple kick and hat, other sounds), until Done. ⌘Z
 // puts every file back byte for byte and the pill comes back; ⇧⌘Z writes the upgrade again, and so
@@ -43,8 +43,8 @@ const n = posts.length;
 const ids = async () => (await pill()).ids.split(" ");
 const upgradedFiles = () => FILES.map((f) => read(f)).join("\0");
 await page.click("[data-testid=upgrade-run]");
-check(await until(() => read("tracks/kick.ts") === today["tracks/kick.ts"], 15000), "Upgrade it writes the kick as One drum's: today's file, byte for byte");
-check(read("tracks/hats.ts").includes('drums.drum(lane.notes("hits"), { drum: "hats" })'), "the hat is One drum's hats");
+check(await until(() => read("tracks/kick.ts") === today["tracks/kick.ts"], 15000), "Upgrade it writes the kick as the Drum's: today's file, byte for byte");
+check(read("tracks/hats.ts").includes('drums.drum(lane.notes("hits"), { drum: "hats" })'), "the hat is the Drum's hats");
 const manifest = read("music2.toml");
 check(['"@m2/core" = "2"', 'std = "0.9"', '"@m2/synths" = "2"', '"@m2/drums" = "2"'].every((l) => manifest.includes(`${l}\n`)), `music2.toml asks for this music2: ${manifest}`);
 check(read("music2.lock") === today["music2.lock"], "music2.lock locks today's packs");

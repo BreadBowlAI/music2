@@ -114,6 +114,14 @@ m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
 
 Add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
 
+## m2 add-kit
+
+```
+m2 add-kit <project> <kit> [--after ID]
+```
+
+Add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes back, verified. It is what + Track ▸ Drum kit does. `m2 add-kit . "808 kit" --after keys` puts the kit below that track. The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.
+
 ## m2 import
 
 ```
@@ -258,7 +266,7 @@ Apply a fix a problem offers (`assign-clip-ids`, `repin-asset`, …). `finish-tx
 m2 upgrade <project> [--check]
 ```
 
-Move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its lock, its imports of what moved into the packs, the single drums as One drum with their knobs converted, and renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then builds; `--check` says what it would change, and writes nothing. It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it again. What it converts as well as it can (the simple kick and hat, other sounds than One drum's) it names to check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).
+Move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its lock, its imports of what moved into the packs, the single drums as the Drum with their knobs converted, and renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then builds; `--check` says what it would change, and writes nothing. It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it again. What it converts as well as it can (the simple kick and hat, other sounds than the Drum's) it names to check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).
 
 ## m2 tx
 

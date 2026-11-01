@@ -1807,6 +1807,26 @@ impl Graph {
         Ok(added)
     }
 
+    /// Add kit `kit` of instrument `component` (KIT-5), below track `after`: a Drums bus and the
+    /// kit's tracks, each going to it, one undo step. The answer names the bus (`module`, `label`),
+    /// its `tracks` (`{module, label}`) and the Mix view after it (`mix`).
+    pub fn add_kit(&self, token: u64, component: &str, kit: &str, after: Option<String>) -> Result<Value> {
+        let (component, kit) = (component.to_string(), kit.to_string());
+        let added = self.call(move |a| {
+            a.edit_and(token, |s| {
+                let made = m2_editor::drums::add_kit(s, &component, &kit, after.as_deref())?;
+                let tracks: Vec<Value> = made[1..].iter().map(|m| json!({"module": m.module, "label": m.label})).collect();
+                Ok((made[0].edited.clone(), json!({"module": made[0].module, "label": made[0].label, "tracks": tracks, "mix": s.mix()})))
+            })
+        })?;
+        let keys: Vec<String> = std::iter::once(&added)
+            .chain(added["tracks"].as_array().into_iter().flatten())
+            .filter_map(|t| t["module"].as_str().map(String::from))
+            .collect();
+        self.forget_overlays(&keys);
+        Ok(added)
+    }
+
     /// A track just made under a key a gone track's mute or solo was kept for starts heard (Q7).
     fn forget_made(&self, made: &Value) {
         if let Some(k) = made["module"].as_str() {

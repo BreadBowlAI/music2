@@ -22,42 +22,42 @@ fn refusal(r: Result<Edited, EditError>) -> String {
     }
 }
 
-// First-song's hats play the Drum, its menu at hats: to the drum kit, the call reads the same
-// notes, its plain setting goes with the old call, and `drums`, the binding both share, stays
-// imported. One revision, labelled as the toast says it.
+// First-song's hats play the Drum, its menu at hats: to FM metal, the call reads the same notes,
+// its plain settings go with the old call, and so does `drums`, which nothing else reads, for
+// `fm`. One revision, labelled as the toast says it.
 #[test]
 fn swap_replaces_the_call_and_its_import() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let rev = s.accepted().number;
-    let done = swap(&mut s, "hats", "@m2/drums:drum-kit").unwrap();
+    let done = swap(&mut s, "hats", "@m2/synths:fm-metal").unwrap();
     assert_eq!(
         f.read("tracks/hats.ts"),
-        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
-         export default track(\"hats\", { name: \"Hats\" }, ({ lane }) => drums.kit(lane.notes(\"hits\")));\n"
+        "import { track } from \"@m2/core\";\nimport { fm } from \"@m2/synths\";\n\n\
+         export default track(\"hats\", { name: \"Hats\" }, ({ lane }) => fm.metal(lane.notes(\"hits\")));\n"
     );
-    assert_eq!((done.file.as_str(), done.before.as_str(), done.after.as_str()), ("tracks/hats.ts", "Hats", "Hats plays Drum kit"));
+    assert_eq!((done.file.as_str(), done.before.as_str(), done.after.as_str()), ("tracks/hats.ts", "Hats", "Hats plays FM metal"));
     assert_eq!(done.revision, rev + 1, "one revision");
     assert!(!s.refresh(), "the session took in its own write");
 }
 
 // An import the rest of the file still reads stays (`ms`, read by the kick's `follow`), and so
-// does the binding the new instrument shares with the old (`drums`, from the Drum to the kit and back).
+// does the binding the new instrument shares with the old (`synth`, from the pad to the strings).
 #[test]
 fn swap_keeps_a_used_import() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
-    swap(&mut s, "kick", "@m2/drums:drum-kit").unwrap();
+    swap(&mut s, "kick", "@m2/synths:fm-metal").unwrap();
     assert_eq!(
         f.read("tracks/kick.ts"),
-        "import { ms, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { follow } from \"std/dsp\";\n\n\
-         export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const out = drums.kit(lane.notes(\"hits\"));\n  \
+        "import { ms, track } from \"@m2/core\";\nimport { follow } from \"std/dsp\";\nimport { fm } from \"@m2/synths\";\n\n\
+         export default track(\"kick\", { name: \"Kick\" }, ({ lane }) => {\n  const out = fm.metal(lane.notes(\"hits\"));\n  \
          // Exported so other tracks can duck to the kick.\n  return { out, env: follow(out, { release: ms(150) }) };\n});\n"
     );
-    swap(&mut s, "hats", "@m2/drums:drum-kit").unwrap();
-    let kit = f.read("tracks/hats.ts");
-    swap(&mut s, "hats", "@m2/drums:drum").unwrap();
-    assert_eq!(f.read("tracks/hats.ts"), kit.replace("drums.kit(", "drums.drum("), "the drums import stays as it was");
+    swap(&mut s, "keys", "@m2/synths:synth-pad").unwrap();
+    let pad = f.read("tracks/keys.ts");
+    swap(&mut s, "keys", "@m2/synths:synth-strings").unwrap();
+    assert_eq!(f.read("tracks/keys.ts"), pad.replace("synth.pad(", "synth.strings("), "the synths import stays as it was");
 }
 
 // First-song's bass sets its cutoff from a lane and an LFO: changing its instrument would lose
@@ -98,9 +98,11 @@ fn swap_refuses_two_instruments() {
     let f2 = fixture("templates/starter");
     let mut s2 = f2.open();
     assert_eq!(refusal(swap(&mut s2, "clap", "@m2/synths:synth-pad")), "Clap is built from parts, not one instrument. Change it in code.");
-    swap(&mut s2, "hats", "@m2/drums:drum-kit").unwrap();
-    assert_eq!(refusal(swap(&mut s2, "hats", "@m2/drums:drum-kit")), "Hats plays Drum kit already.");
+    swap(&mut s2, "hats", "@m2/synths:fm-metal").unwrap();
+    assert_eq!(refusal(swap(&mut s2, "hats", "@m2/synths:fm-metal")), "Hats plays FM metal already.");
     assert!(matches!(swap(&mut s2, "hats", "std:no-such"), Err(EditError::NotFound(_))));
+    // The drum machine is no instrument to change to (KIT-2): code plays it, no list offers it.
+    assert!(matches!(swap(&mut s2, "hats", "@m2/drums:drum-kit"), Err(EditError::NotFound(_))));
 }
 
 // The starter's bass writes plain settings: they go with the old call, and so does `hz`, which
@@ -134,7 +136,7 @@ fn swap_drops_plain_settings() {
 #[test]
 fn undo_puts_every_byte_back() {
     for (fixture_dir, module, to) in [
-        ("examples/first-song", "hats", "@m2/drums:drum-kit"),
+        ("examples/first-song", "hats", "@m2/synths:fm-metal"),
         ("templates/starter", "bass", "@m2/synths:synth-pad"),
         ("templates/starter", "hook", "@m2/synths:fm-bell"),
     ] {

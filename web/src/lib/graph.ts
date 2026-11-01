@@ -209,6 +209,12 @@ export function fromPack(item: { pack?: PackFrom }): string {
  */
 export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string; pack?: PackFrom }
 
+/**
+ * A kit an instrument names (KIT-3): a preset + Track's Drum kit makes a kit from, a Drums bus and
+ * these tracks, each playing `component`. Not a kit of the song: that is a `DrumKit`.
+ */
+export interface KitPreset { name: string; component: string; instrument: string; tracks: string[]; pack?: PackFrom }
+
 /** What reads a track a delete would take out: the track it is in, the call, and where. */
 export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
 
@@ -223,18 +229,18 @@ export interface GraphView {
   revision: number;
   modules: ModuleView[];
   /** The song's drum kits (KIT-1): each bus and the Drum tracks that go to it. Absent from older servers. */
-  kits?: Kit[];
+  drum_kits?: DrumKit[];
   draft_errors: string[];
 }
 
 /** A drum kit (KIT-1): a bus, by its key, named by its label, and its Drum tracks in the timeline's order. */
-export interface Kit { bus: string; label: string; rows: KitRow[] }
+export interface DrumKit { bus: string; label: string; rows: DrumRow[] }
 /** A Drum track of a kit: its key, the notes lane its Drum plays, and the sound it plays (null when the code works it out). */
-export interface KitRow { track: string; lane: string; sound: string | null }
+export interface DrumRow { track: string; lane: string; sound: string | null }
 
 /** The kit `module` is the bus of, or a row of; null when it is in none (KIT-10). */
 export const kitOf = (graph: GraphState, module: string | null) =>
-  (module && graph.view.kits?.find((k) => k.bus === module || k.rows.some((r) => r.track === module))) || null;
+  (module && graph.view.drum_kits?.find((k) => k.bus === module || k.rows.some((r) => r.track === module))) || null;
 
 /**
  * The view the dock shows for `module`: the window's view, but Notes in Beat's place while `module`
@@ -635,6 +641,8 @@ export interface GraphState extends GraphStatus {
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */
   instruments?: Instrument[];
+  /** The kit presets the instruments name, which + Track's Drum kit makes a kit from (KIT-5). */
+  kit_presets?: KitPreset[];
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
@@ -993,6 +1001,21 @@ export const graphApi = {
       session,
       (r) => ({ name: `adding ${r.label}`, structural: true }),
       call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
+    ),
+  /**
+   * Add kit `kit` (KIT-5): a Drums bus and the kit's tracks, each going to it, below `after` in the
+   * layout. One undoable edit; the answer names the bus and its tracks.
+   */
+  addKit: (session: number, kit: KitPreset, after: string | null) =>
+    edit(
+      session,
+      { name: `adding the ${kit.name}`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[] }>("/track/kit", {
+        session,
+        component: kit.component,
+        kit: kit.name,
+        after: after ?? undefined,
+      }),
     ),
   /**
    * A mixer channel's first pan (design-8b §5.3): optional control `control` (`pan`) of channel
