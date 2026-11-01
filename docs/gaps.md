@@ -176,9 +176,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip; a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go. Its tooltip says so.
-- **A clip dragged right after your own edit to it, while an agent or another program changes the song too**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, with words that say it was changed in another window or by an agent. Without a change made elsewhere at the same moment, it goes from your edit and lands.
+- **A clip dragged right after your own edit to it, while an agent or another program changes the song too**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, saying it was changed in the app. Without a change made elsewhere at the same moment, it goes from your edit and lands.
+- **A clip refused because it changed since names who last changed its lane** (an agent by its name, outside the app, or in the app), which may not be who changed that clip: an agent's change to one clip, then yours to another clip of the lane, names you. A change that made no undo step (git's) names no one: "changed in another window or by an agent".
 - **A clip dragged while the song plays, right after your own edit to it**, is heard from once the window shows that edit (a moment later): its lease names the clip as the state has it. Let go before then, it is heard when it lands.
-- **A gesture that waits more than 2 s** for the window to show your own last change (the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too.
+- **A gesture that waits 2 s with nothing moving** (none of your changes before it answered, the window showing nothing new: the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too, and give up after 2 s of it.
 
 ## Notes
 
@@ -250,6 +251,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin's menu says the names its default state gives its steps**, asked once when it is described (CARD-6). Surge XT marks none of its parameters stepped, so its filter types and the like are knobs, as numbers from 0 to 1.
 - **A mixer channel's `to` is offered only on the song's one mixer** (Master and its bus channels, CARD-2); on any other mixer it says **edit in code**. A key setting of a pack's sound offers the song's tracks, and the build judges the one picked.
 - **Settings have no glow and no pointer**: an agent's change to a setting doesn't light it, and `m2 point` can't point at one (AGENT-5 and AGENT-6 name knobs).
+- **A change named by a track's key goes at once, without the gate** (AGENT-2): adding, deleting, duplicating or re-keying a track, its instrument, label, colour or mute in song, a bus, a send or a route, Make it a kit, the tempo, the meter, the title, markers, the song's key, and a file brought in. None names an id your own change can move, so none can land on another call; but one pressed right after you re-keyed a track names it by its old key, and is refused: there is no such track. The track order goes one move after another, each from the one before (a quick second move keeps the first).
 
 ## Problems and help
 

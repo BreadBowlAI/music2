@@ -35,7 +35,15 @@ m2 call ~/Music/music2/song /api/graph/effect/bypass '{"revision": 12, "node": "
 
 ## Edits
 
-Edits name the open project's `session` and the `revision` they were planned against, so a stale edit is refused rather than landing on the wrong thing. While the song is open read-only (another program holds it), every route that writes answers 423 with the reason, and changes nothing.
+Edits name the open project's `session` and the `revision` they were planned against, so a stale edit is refused rather than landing on the wrong thing. The refusal says who changed it since, when it knows: "the agent Claude changed it", "it was changed outside the app", or "it was changed in the app". While the song is open read-only (another program holds it), every route that writes answers 423 with the reason, and changes nothing.
+
+Every change answers, at its top:
+
+| Field | Meaning |
+|---|---|
+| `revision` | The revision it made. Absent when it made none: a change of `layout.json` alone (the track order, colours, markers, the song's key) never does. |
+| `step` | Its undo step's id: what `m2 undo` and the Edit menu name it by. |
+| `moved` | Whether it moved ids: it added, removed or moved a call in the code (an effect wraps the calls inside it, so they count anew), or added, removed or re-keyed a track or a bus. Then the ids you read before it may name something else: read the song again before the next edit. |
 
 An agent can also send any edit as a **Tx**: the files it reads, each with the hash (or the text) it was planned on, the changes, and what they may do to the song. The app checks it as it checks its own edits, writes it as one undo step, and refuses it if a file changed under it or the song would change in any other way ([WRITE-3](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md#the-two-write-primitives)). For example, deleting a data file no lane reads:
 
