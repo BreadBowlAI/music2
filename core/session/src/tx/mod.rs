@@ -977,7 +977,7 @@ impl Session {
             // The draft rule (C7): a Tx touching code needs the draft's code to compile; one
             // touching only data needs an accepted code revision to read its lanes against.
             let code = touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest));
-            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() {
+            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() && !self.lands_on_accepted(tx) {
                 let mut d = built(self.draft_errors.clone());
                 if !code {
                     d.insert(0, Diagnostic::error("code.build", "the project's code has never compiled, so its lanes aren't known yet"));
@@ -1098,8 +1098,10 @@ impl Session {
         // interrupted commit itself left the code broken, everything waits, and Finish and
         // Discard must still apply.
         let recovery = matches!(tx.expect, Expect::Journal(_));
+        // One that makes the draft the revision that plays takes in what waits whole.
+        let lands = !recovery && !self.waiting.is_empty() && self.lands_on_accepted(tx);
         for (p, b) in &tx.base {
-            if !recovery && self.waits(p) {
+            if !recovery && !lands && self.waits(p) {
                 conflicts.push(changed(p, &currents[p], Some("changed on disk together with code that doesn't compile yet".into())));
             }
             if p.is_text()
@@ -1907,6 +1909,31 @@ impl Session {
         tx
     }
 
+    /// Whether committing `tx` leaves the draft as the accepted revision has it: it writes back (or
+    /// removes) exactly the files where the draft differs from the revision that plays. Such a Tx
+    /// builds whatever the draft's errors, as it makes the draft that revision: the draft rule
+    /// lets it through (an upgrade redone after its undo, FMT-25).
+    pub(crate) fn lands_on_accepted(&self, tx: &Tx) -> bool {
+        let snap = &self.accepted.snapshot;
+        if !self.accepted.has_code() {
+            return false;
+        }
+        let mut writes = BTreeMap::new();
+        for op in &tx.ops {
+            let (file, bytes) = match op {
+                Op::Write { file, bytes: Payload::Text(t) } => (file, Some(t.as_bytes())),
+                Op::Remove { file } => (file, None),
+                _ => return false,
+            };
+            writes.insert(file.path(), bytes);
+        }
+        let lands = writes.iter().all(|(p, bytes)| match bytes {
+            Some(b) => !snap.not_utf8.contains_key(p) && snap.files.get(p).map(|t| t.as_bytes()) == Some(*b),
+            None => !snap.files.contains_key(p) && !snap.binaries.contains_key(p),
+        });
+        lands && changed_paths(&self.draft, snap).iter().all(|p| writes.contains_key(p))
+    }
+
     /// Whether undo step `step` would go ahead now, without compiling: writer access, the draft
     /// rule, no target waiting, and every base applies to the accepted revision (WRITE-21).
     pub(crate) fn can_tx(&self, step: &TxStep) -> bool {
@@ -1921,14 +1948,17 @@ impl Session {
             return Some(Blocked::ReadOnly);
         }
         let touched = tx.touched();
-        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() {
+        let lands = self.lands_on_accepted(tx);
+        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() && !lands {
             return Some(Blocked::Draft);
         }
-        if touched.iter().any(|p| self.waits(p)) {
+        if touched.iter().any(|p| self.waits(p)) && !lands {
             return Some(Blocked::Waiting);
         }
         let changed = Some(Blocked::Changed);
-        let snap = &self.accepted.snapshot;
+        // What its bases are judged against: the revision that plays, or, for one that lands on
+        // it from a draft that waits, the draft (the files on disk).
+        let snap = if lands { &self.draft } else { &self.accepted.snapshot };
         for op in &tx.ops {
             match op {
                 Op::TextEdit { file, edits } => {

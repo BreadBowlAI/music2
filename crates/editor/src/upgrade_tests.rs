@@ -257,6 +257,46 @@ fn one_undo_puts_every_file_back() {
     assert_eq!(bytes(&f), before, "every file as it was, the lock gone");
 }
 
+/// An old song (std 0.4, the simple kick) in `f`: its files as bytes.
+fn old_kick_song(f: &Fixture) -> Vec<(PathBuf, Vec<u8>)> {
+    f.write("music2.toml", manifest("\"@m2/core\" = \"1\"\nstd = \"0.4\"\n"));
+    f.write("song.ts", song_of(&["kick"]));
+    f.write(
+        "tracks/kick.ts",
+        "import { ms, track } from \"@m2/core\";\nimport { follow } from \"std/dsp\";\nimport { kick } from \"std/instruments\";\n\n\
+         export default track(\"kick\", ({ lane }) => {\n  const out = kick(lane.notes(\"hits\"));\n  return { out, env: follow(out, { release: ms(150) }) };\n});\n",
+    );
+    bytes(f)
+}
+
+// FMT-25 (the review's G1): once an upgrade is undone, the old files don't build, so the song plays
+// the upgraded revision still. Redo puts the upgrade back, and upgrading again writes it again:
+// each lands on the revision that plays, so it builds, whatever the old files' errors.
+#[test]
+fn after_undo_redo_and_upgrading_again_each_write_the_upgrade() {
+    let f = Fixture::new();
+    let before = old_kick_song(&f);
+    let mut s = f.open();
+    assert!(upgrade(&mut s, false).unwrap().written.is_some());
+    let upgraded = bytes(&f);
+    s.undo().unwrap();
+    assert_eq!(bytes(&f), before);
+    assert!(!s.draft_errors.is_empty(), "the old files don't build");
+    assert!(s.can_redo(), "redo lands on the revision that plays");
+    s.redo().unwrap_or_else(|e| panic!("redo: {e:?}"));
+    assert_eq!(bytes(&f), upgraded, "redo writes the upgrade back, byte for byte");
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    s.undo().unwrap();
+    assert_eq!(bytes(&f), before);
+    let again = upgrade(&mut s, false).unwrap();
+    assert!(again.refused.is_empty() && again.left.is_empty(), "{:?} {:?}", again.refused, again.left);
+    assert!(again.written.is_some(), "upgraded again");
+    assert_eq!(bytes(&f), upgraded, "the same files as the first time");
+    assert!(s.can_undo(), "one undo step again");
+    s.undo().unwrap();
+    assert_eq!(bytes(&f), before);
+}
+
 // FMT-25: a song locked to an older version of one of music2's own packs, which its store still
 // holds, made for an older @m2/core, is locked to the version this music2 comes with: never kept
 // on one this app can't run.

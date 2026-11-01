@@ -866,7 +866,7 @@ impl Session {
             return Err(StepError::ReadOnly(r.message));
         }
         let code = tx.touched().iter().any(|p| matches!(p.class(), m2_song::Class::Code | m2_song::Class::Manifest));
-        if code && !self.draft_errors.is_empty() {
+        if code && !self.draft_errors.is_empty() && !self.lands_on_accepted(&tx) {
             return Err(StepError::DraftInvalid(self.draft_errors.clone()));
         }
         self.built(&tx, raw).map_err(StepError::Refused)
@@ -929,7 +929,7 @@ impl Session {
         let code = tx.touched().iter().any(|p| matches!(p.class(), m2_song::Class::Code | m2_song::Class::Manifest));
         let refused = if let Some(r) = self.writable() {
             Some(StepError::ReadOnly(r.message))
-        } else if code && !self.draft_errors.is_empty() {
+        } else if code && !self.draft_errors.is_empty() && !self.lands_on_accepted(&tx) {
             Some(StepError::DraftInvalid(self.draft_errors.clone()))
         } else {
             None

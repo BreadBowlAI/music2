@@ -790,3 +790,27 @@ fn following_a_moved_kernels_words_builds() {
     compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("following {said:?}: {e:?}"));
     std::fs::remove_dir_all(&root).ok();
 }
+
+// The upgrade review's G7 (PKG-17): an import from a std module that moved into a pack names the
+// line `[dependencies]` needs for the version music2 comes with now, never an older major.
+#[test]
+fn a_moved_imports_words_name_the_line_a_song_writes_today() {
+    let root = scratch("moved-import");
+    let mut pk = bundled_store(&root);
+    let song = root.join("song");
+    for (import, plays, pack) in [
+        ("import { pad } from \"std/instruments\"", "pad", "@m2/synths"),
+        ("import { drums } from \"std/drums\"", "drums.kit", "@m2/drums"),
+    ] {
+        let code = format!(
+            "import {{ song, track }} from \"@m2/core\";\n{import};\nconst t = track(\"t\", ({{ lane }}) => {plays}(lane.notes(\"n\")));\n\
+             export default song(() => t.out);\n"
+        );
+        a_song(&song, "", &code, None);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        let now = m2_song::pack::comes_with(&PackName::new(pack).unwrap()).unwrap();
+        let line = format!("\"{pack}\" = \"{}\"", m2_song::Requirement::admitting(now));
+        assert!(e.iter().any(|d| d.message.contains(&line)), "{import}: {e:?}");
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
