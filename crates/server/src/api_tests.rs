@@ -521,7 +521,11 @@ fn the_page_keeps_the_step_of_every_route_it_calls() {
         for (n, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
             let fetches = code.contains("fetch(") && !code.contains("prefetch(");
-            if (fetches && name != way) || code.contains("XMLHttpRequest") || code.contains("sendBeacon") || code.contains("new EventSource") {
+            if (fetches && name != way)
+                || code.contains("XMLHttpRequest")
+                || code.contains("sendBeacon")
+                || code.contains("new EventSource")
+            {
                 other.push(format!("web/src/{name}:{}: {}", n + 1, line.trim()));
             }
         }
@@ -546,8 +550,15 @@ fn the_page_keeps_the_step_of_every_route_it_calls() {
         let short = r.path.strip_prefix("/api/graph").filter(|p| !p.is_empty()).map(|p| format!("(\"{p}\""));
         whole.iter().any(|w| all.contains(w.as_str())) || short.is_some_and(|s| graph.contains(&s))
     };
-    let written: Vec<String> = api::all().into_iter().filter(|r| r.writes && calls(r)).map(|r| format!("{} {}", r.method, r.path)).collect();
-    for known in ["POST /api/graph/midifile/import", "POST /api/graph/audio/import", "POST /api/graph/sample", "POST /api/library/sample", "POST /api/graph/clips"] {
+    let written: Vec<String> =
+        api::all().into_iter().filter(|r| r.writes && calls(r)).map(|r| format!("{} {}", r.method, r.path)).collect();
+    for known in [
+        "POST /api/graph/midifile/import",
+        "POST /api/graph/audio/import",
+        "POST /api/graph/sample",
+        "POST /api/library/sample",
+        "POST /api/graph/clips",
+    ] {
         assert!(written.iter().any(|w| w == known), "the page calls {known}: the list found {written:?}");
     }
     println!("the routes that write which the page calls, each answer's step kept by http:\n{}", written.join("\n"));
