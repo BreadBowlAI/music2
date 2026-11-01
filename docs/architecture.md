@@ -1619,8 +1619,46 @@ A lane of names declared twice agrees when its fallbacks name one option (one le
 
 **In short:** a drum kit is a group of Drum tracks that play into one bus: each drum has its own track, lane, fader and effects, and the kit has one fader too. Nothing about a kit is stored: it is worked out from the tracks and their outputs. The beat grid shows a kit's tracks as rows of steps. The design is [Drums, the FL way](designs/drums/design.md). Rule KIT-1 is what a kit is; KIT-2 to KIT-9 the Drum, its notes and making a kit (track `kits`); KIT-10 to KIT-19 the beat grid (track `beat`); KIT-20 and on, the old drum machine's songs and pads (track `kit-upgrade`).
 
-**KIT-1.** A drum kit MUST be worked out from the song, never stored: a bus ([RENDER-34](#buses)) and every track that plays `@m2/drums`' Drum (`drums.drum`) and whose channel's output is that bus, in the song's track order. A track is in at most one kit, as its output names one bus. Deleting the bus, or sending a Drum track elsewhere, takes it out of the kit, and nothing else changes. A kit's name is its bus's label. One function MUST say which kits a song has, and the song's view, the beat grid, pads and `m2 graph` all read it: each kit's bus, its label and its rows, each row a track with its notes lane and the sound its Drum plays (null when the code works it out).
+**KIT-1.** A drum kit MUST be worked out from the song, never stored: a bus ([RENDER-34](#buses)) and every Drum track whose channel's output is that bus, in the song's track order (the timeline's, [FMT-19](#presentation-and-local-files)). A Drum track is a track that plays one `@m2/drums` Drum (`drums.drum`), from a notes lane of its own: a track with two Drums, or whose Drum's notes come from anything but one of its lanes, is in no kit. A track is in at most one kit, as its output names one bus. Deleting the bus, or sending a Drum track elsewhere, takes it out of the kit, and nothing else changes. A kit's name is its bus's label. One function MUST say which kits a song has, and the song's view, the beat grid, pads and `m2 graph` all read it: each kit's bus, its label and its rows, each row a track with its notes lane and the sound its Drum plays: its `drum` as written, or the default when the call leaves it out; null when the code works it out (a lane plays it, or a value no build can know).
 - *Why:* one building block, the Drum on a track, and a group made of what music2 already has (tracks and a bus), so nothing new is saved or kept in step ([Drums](designs/drums/design.md) §2).
+
+**KIT-10.** The beat grid is a view of the dock, **Beat**, beside Notes (⌥5), shown while the selected track is a kit's bus or one of its rows. It shows that kit: a row per row of KIT-1, in its order, each with its track's colour, its name and its sound, then a column per step (KIT-11) across the song's bars and one bar more; a ruler of bars that plays from where it is clicked; the playhead; and a velocity lane for one row (KIT-13). It scrolls and zooms (⌘ + wheel, its zoom buttons) as Notes does. The dock's view stays the window's one choice ([taste.md §3.7](designs/step8/taste.md)): while the selection is in no kit, the dock shows Notes in Beat's place, and Beat again once a kit's track is selected. Clicking a row's name selects its track. Nothing of the grid is saved but its step, with the song's view settings, as the roll's grid is.
+- *Why:* D4: a grid of tracks is a different thing from a grid of pitches, and it is a kit's, so it shows when a kit is what you work on.
+
+**KIT-11.** A step is the span from one line of the grid to the next. The grid's step is its own choice, as the roll's is: 1/4 to 1/64, in triplets or not, 1/16 at first; its lines start again at each bar line, so a bar's last step is cut at the bar line. A row's hits are the notes its lane plays, each cut to its clip ([FMT-8a](#lane-files-and-clip-ids)), wherever they are: a step is on when a hit starts in it. A hit that starts after its step's start, or lasts other than its step, is off the grid: drawn where it starts and as long as it lasts, and never moved by the grid.
+- *Why:* the grid shows what plays, and a note written in Notes or by an agent keeps its place.
+
+**KIT-12.** The grid writes a row's lane only through one clip gesture, `hits` ([WRITE-10](#expectations-and-the-delta)'s clip gestures: `Confined { lanes }`, one Tx, one undo step). It names steps of one lane by their starts and the grid's step, and says what each becomes:
+
+| `to` | What each step becomes |
+|---|---|
+| `on` | where no hit starts in it, a hit at its start, a step long, at the row's pitch (KIT-14) and the lane format's velocity (0.8) |
+| `off` | every note that starts in it goes, off the grid or not |
+| `{ "velocity": v }` | every note that starts in it plays at `v`, above 0 and at most 1 |
+
+A hit goes into the clip that holds its start (of several, the one that starts last); a hit in no clip goes into a new clip the length of its bar, cut short where another clip is, which the gesture's other hits in that bar share. A lane no Drum track plays is refused. In the grid: a click on a step turns it on, or off when it is on; a drag along the row from it does the same to every step it crosses, as one gesture; dragging a hit's bar in the velocity lane sets its step's velocity, as one gesture.
+- *Why:* what a step means is decided once, in the editor ([WRITE-9](#expectations-and-the-delta)), so the app, `m2 clips` and agents write the same notes. The lane is the one the timeline and Notes show, so an edit in any of them shows in the others.
+
+**KIT-13.** The velocity lane shows one row's hits, each a bar as tall as its velocity, as the roll's velocity lane does: the selected track's row, or the kit's first row while the bus is selected. Its foot names the row.
+
+**KIT-14.** A new hit plays at the pitch most of its row's notes play (of a tie, the lowest), and on a row with no notes at its sound's own note: the first General MIDI note of that drum.
+
+| Sound | Note |
+|---|---|
+| kick | C2 (36) |
+| snare | D2 (38) |
+| clap | D#2 (39) |
+| hats | F#2 (42), the closed hat |
+| tom | A2 (45), the tom's own pitch |
+| rim | C#2 (37) |
+| cowbell | G#3 (56) |
+| cymbal | C#3 (49), the crash |
+| shaker | A4 (69) |
+
+A Drum whose sound the code works out writes A2 (45), which plays every sound as itself.
+- *Why:* any note plays a Drum, so a row keeps the pitch its notes have, and a new row writes the note a pad or a MIDI file uses for that drum. The hats row writes the closed hat: most hats in a beat are closed; an open hat is a note at A#2 (46), written in Notes or by a pad, and the grid then shows it as a hit like any other. The tom is chromatic around A2, so its own note is the one that plays it as it is.
+
+**KIT-15.** **+ Drum** in the grid adds one Drum track to the kit, as one undo step: a track playing the Drum at the sound picked from its menu (the Drum's sounds), its `drum` written, named by the sound (`Snare`, `Snare 2`…), with an empty `hits` lane, its mixer channel going to the kit's bus (`to`), placed in the timeline after the kit's last row. It is add a track's Tx ([WRITE-10](#expectations-and-the-delta)), and the planner also asserts the new channel's output.
 
 ## Packs
 
