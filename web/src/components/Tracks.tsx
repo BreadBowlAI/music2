@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
+import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
@@ -78,14 +78,14 @@ function nameOf(graph: GraphState, module: string) {
 }
 
 /** The graph as the server has it now, so what an edit made can be selected at once. */
-async function refreshed() {
+export async function refreshed() {
   const graph = await graphApi.get();
   useStore.getState().set({ graph });
   return graph;
 }
 
 /** Select a track an edit made and light its row (taste.md §2.13): nothing else opens, so Space, M and S work at once. */
-function arrived(module: string, lane: string | undefined) {
+export function arrived(module: string, lane: string | undefined) {
   useShell.getState().select(module);
   if (lane) trackMade(module, lane);
 }
@@ -128,6 +128,44 @@ export async function addTrack(instrument: Instrument, after: string | null): Pr
     arrived(r.module, instrument.lane);
     toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.step));
     return r.module;
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/** + Track's group of kits (KIT-5): several tracks at once, worded so beside the Drum. */
+export const KITS = "Drum kit (several tracks)";
+
+/** A row of + Track's list: an instrument, a plugin, an audio track, or a kit (KIT-5), which says so. */
+export type Row = Instrument & { kit?: KitPreset };
+
+/** The kits as + Track's rows, each its kit's, by the id `kit:<instrument>/<name>`, in the kits' group. */
+export function kitRows(kits: KitPreset[]): Row[] {
+  return kits.map((k) => ({
+    component: `kit:${k.component}/${k.name}`,
+    label: k.name,
+    name: "",
+    module: "",
+    description: `${k.tracks.join(", ")} and a Drums bus`,
+    category: KITS,
+    lane: "",
+    pack: k.pack,
+    kit: k,
+  }));
+}
+
+/** Add kit `kit` below `after` (else last), KIT-5: its bus and tracks, the first track selected and lit, with an Undo. */
+export async function addKit(kit: KitPreset, after: string | null) {
+  const graph = writable();
+  if (!graph) return;
+  lastAdded = `kit:${kit.component}/${kit.name}`;
+  const toast = useStore.getState().toast;
+  try {
+    const r = await graphApi.addKit(graph.session, kit, after);
+    await refreshed();
+    // Its tracks' lane, as + Track lists its instrument (a drum's, `hits`).
+    arrived(r.tracks[0]?.module ?? r.module, graph.instruments?.find((i) => i.component === kit.component)?.lane);
+    toast(`Added the ${kit.name}: ${r.tracks.map((t) => t.label).join(", ")}, going to ${r.label}`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -261,6 +299,9 @@ function fileOf(graph: GraphState, module: string) {
   return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+/** A row's id in the page: its component's, with nothing an id can't hold (a kit's name has spaces). */
+const rowId = (r: Row) => `instrument-${encodeURIComponent(r.component)}`;
+
 /** A key the way a new track's is proposed (ID-2), for the list's foot: close enough to say where it goes. */
 function proposed(label: string, taken: Set<string>) {
   const base = label.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "track";
@@ -269,15 +310,16 @@ function proposed(label: string, taken: Set<string>) {
 }
 
 /**
- * Instruments matching `query`, in their groups (drums first): by name, as a typeahead takes it
- * ("plu" is Pluck, though a description says "plus"), else by description or category.
+ * Rows matching `query`, in their groups (drums first): by name, as a typeahead takes it ("plu" is
+ * Pluck, though a description says "plus"), a kit by its group's words too ("drum" lists the Drum
+ * and the kits); else by description or category.
  */
-export function instrumentGroups(list: Instrument[], query: string) {
+export function instrumentGroups<R extends Row>(list: R[], query: string) {
   const q = query.trim().toLowerCase();
-  const by = (fields: (i: Instrument) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
-  const named = by((i) => [i.label, i.name]);
+  const by = (fields: (i: R) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
+  const named = by((i) => [i.label, i.name, ...(i.kit ? [i.category] : [])]);
   const hits = !q ? list : named.length ? named : by((i) => [i.description, i.category]);
-  const groups: { name: string; items: Instrument[] }[] = [];
+  const groups: { name: string; items: R[] }[] = [];
   for (const i of hits) {
     const g = groups.find((x) => x.name === i.category) ?? (groups.push({ name: i.category, items: [] }), groups[groups.length - 1]);
     g.items.push(i);
@@ -310,13 +352,20 @@ function InstrumentPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  // + Track's groups end with Audio (lane A's Q8), then Plugins (gaps #32); Change Instrument has neither.
+  // + Track's groups: the Drums, then the kits (KIT-5), then the instruments; they end with Audio
+  // (lane A's Q8), then Plugins (gaps #32). Change Instrument has no kits, Audio or Plugins.
   const listed = graph.instruments;
+  const kits = graph.kit_presets;
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => {
     if (!swap) wantPlugins();
   }, [swap]);
-  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK, ...pluginInstruments(plugins)])], [listed, swap, plugins]);
+  const all = useMemo((): Row[] => {
+    const instruments = listed ?? [];
+    if (swap) return instruments;
+    const drums = instruments.filter((i) => i.category === "Drums").length;
+    return [...instruments.slice(0, drums), ...kitRows(kits ?? []), ...instruments.slice(drums), AUDIO_TRACK, ...pluginInstruments(plugins)];
+  }, [listed, kits, swap, plugins]);
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
   const playing = swap ? currentInstrument(graph, swap) : undefined;
@@ -331,10 +380,11 @@ function InstrumentPicker({
   useLayoutEffect(() => field.current?.focus(), []);
   const taken = new Set(graph.view.modules.map((m) => m.key));
   const name = swap ? nameOf(graph, swap) : "";
-  const pick = (i: Instrument | undefined) => {
+  const pick = (i: Row | undefined) => {
     if (!i) return;
     onClose();
     if (i === AUDIO_TRACK) return void addAudioTrack(after);
+    if (i.kit) return void addKit(i.kit, after);
     if (!swap) return void addTrack(i, after);
     // The one it plays: nothing to change.
     if (i.component !== playing?.component) void changeInstrument(swap, i);
@@ -366,7 +416,7 @@ function InstrumentPicker({
           role="combobox"
           aria-expanded
           aria-controls="instrument-options"
-          aria-activedescendant={current ? `instrument-${current.component}` : undefined}
+          aria-activedescendant={current ? rowId(current) : undefined}
           spellCheck={false}
           className="flex-1 min-w-0 bg-transparent outline-none text-base text-fg placeholder:text-fg-off"
           onChange={(e) => {
@@ -395,7 +445,7 @@ function InstrumentPicker({
               return (
                 <div
                   key={i.component}
-                  id={`instrument-${i.component}`}
+                  id={rowId(i)}
                   role="option"
                   aria-selected={on}
                   aria-checked={swap ? ticked : undefined}
@@ -426,9 +476,11 @@ function InstrumentPicker({
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
               : current === AUDIO_TRACK
                 ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
-                : isPlugin(current.component)
-                  ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
-                  : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+                : current.kit
+                  ? `tracks/${proposed("Drums", taken)}.ts · bus(…), and a track for each drum going to it`
+                  : isPlugin(current.component)
+                    ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
+                    : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}

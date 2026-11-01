@@ -1,6 +1,7 @@
 // The graph view of the open song project: types, API, layout.
 
 import { editing, recorded, type Editing, type Step, type StepName } from "./history";
+import type { DockView } from "./shell";
 import { token } from "./native";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
@@ -208,6 +209,12 @@ export function fromPack(item: { pack?: PackFrom }): string {
  */
 export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string; pack?: PackFrom }
 
+/**
+ * A kit an instrument names (KIT-3): a preset + Track's Drum kit makes a kit from, a Drums bus and
+ * these tracks, each playing `component`. Not a kit of the song: that is a `DrumKit`.
+ */
+export interface KitPreset { name: string; component: string; instrument: string; tracks: string[]; pack?: PackFrom }
+
 /** What reads a track a delete would take out: the track it is in, the call, and where. */
 export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
 
@@ -218,7 +225,28 @@ export interface Dependent { module: string; label: string; component: string; f
  */
 export interface ModuleView { key: string; label: string; track: boolean; nodes: ViewNode[]; edges: [string, string][]; port_edges: PortEdge[] }
 
-export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
+export interface GraphView {
+  revision: number;
+  modules: ModuleView[];
+  /** The song's drum kits (KIT-1): each bus and the Drum tracks that go to it. Absent from older servers. */
+  drum_kits?: DrumKit[];
+  draft_errors: string[];
+}
+
+/** A drum kit (KIT-1): a bus, by its key, named by its label, and its Drum tracks in the timeline's order. */
+export interface DrumKit { bus: string; label: string; rows: DrumRow[] }
+/** A Drum track of a kit: its key, the notes lane its Drum plays, and the sound it plays (null when the code works it out). */
+export interface DrumRow { track: string; lane: string; sound: string | null }
+
+/** The kit `module` is the bus of, or a row of; null when it is in none (KIT-10). */
+export const kitOf = (graph: GraphState, module: string | null) =>
+  (module && graph.view.drum_kits?.find((k) => k.bus === module || k.rows.some((r) => r.track === module))) || null;
+
+/**
+ * The view the dock shows for `module`: the window's view, but Notes in Beat's place while `module`
+ * is in no drum kit (KIT-10). The window's choice stays Beat, so selecting a kit's track shows it again.
+ */
+export const dockView = (graph: GraphState, view: DockView, module: string | null): DockView => (view === "beat" && !kitOf(graph, module) ? "notes" : view);
 
 /** What to show for a lane or a module: its label, which defaults to its key. */
 export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
@@ -613,6 +641,8 @@ export interface GraphState extends GraphStatus {
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */
   instruments?: Instrument[];
+  /** The kit presets the instruments name, which + Track's Drum kit makes a kit from (KIT-5). */
+  kit_presets?: KitPreset[];
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
@@ -973,6 +1003,21 @@ export const graphApi = {
       call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
     ),
   /**
+   * Add kit `kit` (KIT-5): a Drums bus and the kit's tracks, each going to it, below `after` in the
+   * layout. One undoable edit; the answer names the bus and its tracks.
+   */
+  addKit: (session: number, kit: KitPreset, after: string | null) =>
+    edit(
+      session,
+      { name: `adding the ${kit.name}`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[] }>("/track/kit", {
+        session,
+        component: kit.component,
+        kit: kit.name,
+        after: after ?? undefined,
+      }),
+    ),
+  /**
    * A mixer channel's first pan (design-8b §5.3): optional control `control` (`pan`) of channel
    * `channel` written into its entry as `value`. One undoable edit; the answer names the new knob
    * (`control`) in the revision it made, which the drag then leases.
@@ -987,6 +1032,9 @@ export const graphApi = {
     edit(session, step, call<Edit>("/mix/send", { session, channel, bus, action, pre })),
   /** Send channel `channel` to bus channel `to` instead of the master, or (null) back to the master. One undoable edit. */
   mixRoute: (session: number, channel: string, to: string | null, step: Step) => edit(session, step, call<Edit>("/mix/route", { session, channel, to })),
+  /** + Drum (KIT-15): a Drum track playing `sound` added to the kit of bus `bus`, named by it. One undoable edit. */
+  kitDrum: (session: number, bus: string, sound: string) =>
+    edit(session, (r) => ({ name: `adding ${r.label}`, structural: true }), call<Edit & { module: string; label: string }>("/kit/drum", { session, bus, sound })),
   /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
   duplicateTrack: (session: number, module: string, name: string) =>
     edit(

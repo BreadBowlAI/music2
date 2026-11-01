@@ -1,7 +1,7 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (a drum machine), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser and a multiband compressor).
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser and a multiband compressor).
 - std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 22 effects in seven groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
@@ -54,7 +54,9 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   | `digital` | hard, glassy waves, harmonics switched on and off in steps |
 
   Or play your own: drop a WAV on the oscillator's file on the card (`fileA`, `fileB`), and it is that oscillator's table, in place of the menu's. A wavetable file is frames of 2048 samples one after another, as Serum and Vital save theirs; a file shorter than that is one cycle of a wave (a single-cycle file). Up to 64 frames are kept: a file with more gives 64 spread evenly through it. Each oscillator has `position`, `pitch` (in semitones: 12 is an octave up) and `level`; B starts silent (`levelB` 0). Then a filter: `filter` is its shape (`lowpass` keeps the lows, `highpass` the highs, `bandpass` the middle, `notch` all but the middle), with `cutoff`, `q` (the bump at the cutoff), `keytrack` (higher notes open it more) and `filterEnv` (how many octaves its own envelope opens it). Two envelopes, each with its picture on the card: the amp's (`attack`, `decay`, `sustain`, `release`) and the filter's (`filterAttack` and the rest). An LFO, a slow wave from each note's start: `lfoRate`, how far it moves both positions (`lfoPosition`) and the cutoff (`lfoCutoff`, in octaves). `unison` (a setting, 1 to 8) plays each note as that many copies, `detune` semitones apart at the edges and `spread` wide. With `voices: 1` it plays one note at a time, sliding over `glide`. Its presets: Slow pad, Round bass, Sharp lead and Short pluck; a preset sets the knobs, not the tables. A high note never folds back into a low hum (aliasing): each table is kept as a copy for each octave, holding only the harmonics that fit under it.
-- **Drums** (`@m2/drums`: `import { drums } from "@m2/drums"`), an 808/909-style drum machine. `drums.kit` plays a whole beat from one notes lane, each drum on its General MIDI note, the numbers drum parts usually use:
+- **Drums** (`@m2/drums`: `import { drums } from "@m2/drums"`), 808/909-style drums. `drums.drum` (**Drum** in **+ Track**) plays one drum on every note, the one its menu picks: `drum: "kick"` (the default), `"snare"`, `"clap"`, `"hats"` (closed, with G#2 pedal and A#2 open), `"tom"` (tuned by the note: A2 plays at the drum's own pitch), `"rim"`, `"cowbell"`, `"cymbal"` or `"shaker"`. Its menu is "sound" on its card: a pick plays from the next hit, and a lane can change it as the song plays (Automate). Its knobs move whichever drum it plays: `tune` (semitones up or down from the drum's own), `decay` ("decay ×" on the card: how long it rings, times its own; 2 is twice as long), `punch` ("punch ±": more, or less, of a kick's thump or a snare's snap, and on the others of each hit's first moment; from -1 to 1) and `drive`. A kick, snare, clap, hats or cymbal cuts off the one before it at its next hit; a tom, rim, cowbell or shaker rings on. No two hits are quite the same, as on an analog machine (each catches its noise and metal at a new place), yet every render of a song is. Several Drums make a drum kit: see [Drum kits](#drum-kits) below.
+
+  `drums.kit` (**Drum machine**) is the older way: a whole beat from one notes lane, each drum on its General MIDI note. **+ Track** no longer offers it, and a song that plays it plays as before; a drum kit does what it did, with each drum on a track of its own. Its notes, the numbers drum parts usually use:
 
   | Note | Drum | Note | Drum |
   |---|---|---|---|
@@ -66,9 +68,7 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   | G#3 (56) | cowbell | F#3 (54) | tambourine |
   | A4, A#4 (69, 70) | shakers | D#5 (75) | claves |
 
-  A hit cuts off the drum before it, as on a drum machine: a kick the kick still ringing, a closed hat an open one. Toms, rim, cowbell, ride and shakers ring on. No two hits are quite the same, as on an analog machine (each catches its noise and metal at a new place), yet every render of a song is. The kit's knobs are `kickTune`, `kickDecay`, `punch` (from a deep 808 boom to a hard 909 thump), `snareTune`, `snap`, `hatDecay`, `openDecay`, `hatTone`, `tomTune`, `drive`, and a level in dB for each group: `kickLevel`, `snareLevel` (with the clap and rim), `hatLevel`, `tomLevel` and `percLevel` (cymbals and the rest). Its card shows them in groups: Kick, Snare & clap, Hats, Toms and Percussion.
-
-  `drums.drum` (**One drum** in **+ Track**) plays one drum on every note, the one its menu picks: `drum: "kick"` (the default), `"snare"`, `"clap"`, `"hats"` (closed, with G#2 pedal and A#2 open), `"tom"` (tuned by the note: A2 plays at the drum's own pitch), `"rim"`, `"cowbell"`, `"cymbal"` or `"shaker"`. Its menu is "sound" on its card: a pick plays from the next hit, and a lane can change it as the song plays (Automate). Its knobs move whichever drum it plays: `tune` (semitones up or down from the drum's own), `decay` ("decay ×" on the card: how long it rings, times its own; 2 is twice as long), `punch` ("punch ±": more, or less, of a kick's thump or a snare's snap, and on the others of each hit's first moment; from -1 to 1) and `drive`. A kick, snare, clap, hats or cymbal cuts off the one before it at its next hit; a tom, rim, cowbell or shaker rings on. The kit comes out as one sound, so a drum you want to treat on its own (a kick for the bass to duck under, a snare with a reverb of its own) goes on a lane of its own, played by One drum, as `examples/sounds` does with its kick: `drums.drum(lane.notes("kick"), { tune: 0.7 })`.
+  Its knobs are `kickTune`, `kickDecay`, `punch` (from a deep 808 boom to a hard 909 thump), `snareTune`, `snap`, `hatDecay`, `openDecay`, `hatTone`, `tomTune`, `drive`, and a level in dB for each group: `kickLevel`, `snareLevel` (with the clap and rim), `hatLevel`, `tomLevel` and `percLevel` (cymbals and the rest).
 - **Sampler** (`std/sampler`, std 0.2.1): `sampler` plays a WAV file from the song's `assets/` folder on every note, higher or lower by how far the note is from `root` (60, C4): `sampler(lane.notes("notes"), { sample: "pluck.wav" })`. Or one file for each range of notes, each from its root up to the next one's: `{ zones: { 36: "kick.wav", 38: "snare.wav" } }`. It plays the whole file however short the note (`mode: "oneshot"`), or stops with the note, fading over `release` (`mode: "gate"`). Knobs: `tune` (semitones), `level`, `attack`, `release`, and `velocity` (std 0.5.0): how much playing harder makes a note louder, from 0 (not at all) to 1 (all the way, the default). In the app, drop a WAV on its card in Device. [`examples/sampler`](https://github.com/BreadBowlAI/music2/tree/main/examples/sampler) plays drums and a melody from three short files.
 
   **Recorded instruments: `regions`** (std 0.5.0). A real piano, guitar or drum kit is many recordings: each note, played soft and hard, sometimes twice so repeats don't sound the same. `regions` maps them, one region a recording, with the ideas of SFZ (the open format free sampled instruments use). Give one of `sample`, `zones` and `regions`. Only `file` is needed; the rest have defaults:
@@ -118,7 +118,7 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
 
   The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
-- **The first instruments** (`@m2/synths`): `bass`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `synth.pluck` and `synth.pad`. The drums are the kit's (`drums.kit`) and One drum's (`drums.drum`); the starter song plays its kick and hats on One drum.
+- **The first instruments** (`@m2/synths`): `bass`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `synth.pluck` and `synth.pad`. The drums are the Drum's (`drums.drum`), alone or in a [drum kit](#drum-kits); the starter song plays its kick and hats on the Drum.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
@@ -174,3 +174,35 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 **Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how.
 
 `m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `@m2/effects:delay` or `std:eq3`) and where they can go.
+
+## Drum kits
+
+**In short:** a drum kit is several Drum tracks and a **Drums** bus they all go to. Each drum has its own track, lane, fader and effects, and the bus is the kit's one fader. Mix each drum alone on its track, and the whole kit on the bus.
+
+| Word | Meaning |
+|---|---|
+| **Drum** | one drum on one track, picked from its menu (see Drums above) |
+| **bus** | a track the others go to, with its own fader and effects; the Mix view shows it after the tracks |
+
+| You want | Do this |
+|---|---|
+| A kit | **+ Track** (⌘T) ▸ **Drum kit (several tracks)** ▸ a kit, or `m2 add-kit . "808 kit"` |
+| The kick louder | the Kick track's fader |
+| Reverb on the snare alone | an effect on the Snare track |
+| The whole kit quieter, or glued together | the Drums bus: its fader, or an effect on it |
+| A beat, by clicking boxes | select a drum or the bus, then **Beat** (⌥5) in the dock: [the beat grid](window.md#the-beat-grid) |
+| One more drum in the kit | **+ Drum** in the beat grid's header |
+
+The kits that come with `@m2/drums`:
+
+| Kit | Tracks | What it is like |
+|---|---|---|
+| 808 kit | Kick, Snare, Clap, Hats, Toms, Rim, Cowbell, Cymbal | the Roland TR-808: a long, deep kick, toms and a cymbal that ring |
+| 909 kit | Kick, Snare, Clap, Hats, Toms, Rim, Cymbal | the TR-909: a punchy kick, a snappy snare, brighter hats |
+| Basic kit | Kick, Snare, Hats | three drums to start a beat |
+
+- Each track is a Drum, its knobs set for the kit. Any note plays its drum, but the Hats track plays closed, pedal and open hats by the note (F#2, G#2 and A#2), so a closed hat cuts an open one off.
+- The bus's fader starts where the kit puts it (808 kit −4 dB, 909 kit −3.8, Basic kit −2), so a beat of the whole kit stays under full scale, about as loud as the drum machine's was. Move it in the Mix view.
+- In code a kit is only that: tracks whose mixer channel goes to the bus, `kick: { in: kick.out, to: "drums" }`. Send a track elsewhere, or delete the bus, and it is a plain track again.
+- A MIDI file's drums come in as a kit, a track for each drum the file uses (Kick, Snare, Hats…), even when you drop the file on a Drum's row; notes no drum answers to go on a Percussion track, which plays them as a tom. A kit's tracks go out to a MIDI file as General MIDI drums: a Kick track's notes on another drum's note, or off General MIDI's drums (C1), as C2 (36); a Percussion track's notes as they are.
+- A Drum plays every note as its one sound, so a few of the drum machine's drums sound a little different on a kit: a ride is the cymbal's crash, a tambourine its shaker, claves its rim, and the toms step a semitone a note.

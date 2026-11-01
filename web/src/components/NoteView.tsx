@@ -1759,8 +1759,25 @@ const Lanes = memo(function Lanes({
   );
 });
 
-/** Bar numbers of the song, the clip's extent in its track's colour, and a click to play from there. */
-const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { width: number; ppb: number; meter: Meter[]; start: number; length: number; tone: TrackColor }) {
+/**
+ * Bar numbers of the song from beat `start`, and a click to play from there; with a clip's `length`
+ * and its track's `tone`, the clip's extent in that colour and its End. The beat grid's ruler too.
+ */
+export const Ruler = memo(function Ruler({
+  width,
+  ppb,
+  meter,
+  start,
+  length,
+  tone,
+}: {
+  width: number;
+  ppb: number;
+  meter: Meter[];
+  start: number;
+  length?: number;
+  tone?: TrackColor;
+}) {
   const shown = barList(meter, start + width / ppb).filter((b) => b.start >= start - 1e-9);
   return (
     <div
@@ -1774,7 +1791,7 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { 
         void graphApi.seek(Math.max(0, Math.round(start + beat))).catch(() => {});
       }}
     >
-      <div className="absolute bottom-0 left-0 h-[3px] rounded-r-xs" style={{ width: length * ppb, background: tone.bar }} />
+      {length !== undefined && tone && <div className="absolute bottom-0 left-0 h-[3px] rounded-r-xs" style={{ width: length * ppb, background: tone.bar }} />}
       {shown.map((b) => {
         // Narrow bars are numbered every second or fourth.
         const w = b.length * ppb;
@@ -1786,12 +1803,14 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { 
           </div>
         );
       })}
-      <div
-        className="absolute bottom-[5px] -translate-x-full pointer-events-none text-xs leading-none font-medium px-1 py-px rounded-xs text-white"
-        style={{ left: length * ppb - 3, background: tone.ink }}
-      >
-        End
-      </div>
+      {length !== undefined && tone && (
+        <div
+          className="absolute bottom-[5px] -translate-x-full pointer-events-none text-xs leading-none font-medium px-1 py-px rounded-xs text-white"
+          style={{ left: length * ppb - 3, background: tone.ink }}
+        >
+          End
+        </div>
+      )}
       <PlayCap start={start} ppb={ppb} />
     </div>
   );
@@ -1804,7 +1823,7 @@ const Ruler = memo(function Ruler({ width, ppb, meter, start, length, tone }: { 
  * the transport clock (taste.md TL-9). Hidden outside the grid: a line past its end would widen the
  * scrolling area.
  */
-function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: number }) {
+export function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(
     () =>
@@ -1820,7 +1839,7 @@ function PlayLine({ start, ppb, width }: { start: number; ppb: number; width: nu
   return <div ref={ref} data-testid="roll-playhead" className="absolute top-0 bottom-0 z-10 w-px bg-fg-strong pointer-events-none" />;
 }
 
-function PlayCap({ start, ppb }: { start: number; ppb: number }) {
+export function PlayCap({ start, ppb }: { start: number; ppb: number }) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(
     () =>

@@ -77,6 +77,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "View",
     keys: [
       ["Device / Notes / Mix / Code", [1, 2, 3, 4].map((n) => opt(String(n))).join(" / ")],
+      ["Beat, with a drum kit's track selected", opt("5")],
       // The grid of the timeline or of Notes: whichever was last pointed at.
       ["Narrower / wider grid", `${chord("1")} / ${chord("2")}`],
       ["Triplet grid", chord("3")],

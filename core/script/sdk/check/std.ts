@@ -79,7 +79,7 @@ export const instruments: Audio[] = [
   fm.bell(notes, { decay: secs(6) }),
   fm.metal(notes, { drop: semis(12), feedback: 0.6, decay: ms(300) }),
   drums.kit(notes, { kickTune: hz(52), hatDecay: ms(30), drive: db(6), hatLevel: db(4), kickLevel: db(-2) }),
-  // One drum from its menu, a setting; its knobs move the drum it plays.
+  // The Drum from its menu, a setting; its knobs move the drum it plays.
   drums.drum(notes),
   drums.drum(notes, { drum: "snare", punch: 0.2 }),
   drums.drum(notes, { drum: "tom", tune: semis(-3), decay: 1.5, voices: 8 }),

@@ -136,7 +136,7 @@ fn wraps(with: &Compiled, without: &Ir, site: u32) -> bool {
 /// std's) as itself, so the call reads as the descriptor wrote it; in another spelling with its
 /// constructor (`ms(45)`), never a base value with float noise. The constructors the text needs
 /// imported come back with it.
-fn insert_text(v: &Spelled, units: &[m2_script::UnitCtor]) -> (String, Option<String>) {
+pub(crate) fn insert_text(v: &Spelled, units: &[m2_script::UnitCtor]) -> (String, Option<String>) {
     let number = |x: f64| if x == 0.0 { "0".to_string() } else { x.to_string() };
     match v.spelled.as_deref().and_then(|s| units.iter().find(|u| u.name == s)) {
         Some(u) if u.scale != 1.0 => (format!("{}({})", u.name, number(v.written)), Some(u.name.clone())),

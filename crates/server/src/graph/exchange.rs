@@ -176,22 +176,22 @@ impl Graph {
         let file = m2_editor::smf::read(&bytes).map_err(|e| anyhow!("{name} {e}"))?;
         // AGENT-2: an agent's step is named by its words.
         let step = crate::caller::now().why().unwrap_or_else(|| format!("importing {name}"));
-        // Into the lane only a file of one part; anything else is new tracks (Q36).
-        let one_part = midifile::bring(&file, &name, &|c| c.to_string()).is_ok_and(|b| b.parts.len() == 1);
-        let place = match &target {
-            MidiTarget::Lane { .. } if one_part => None,
-            MidiTarget::Lane { module, beat, .. } | MidiTarget::Track { module, beat } => {
-                Some(Place { after: Some(module.clone()), at: *beat })
-            }
-            MidiTarget::Below { beat } => Some(Place { after: None, at: *beat }),
-        };
-        let structural = place.is_some();
         // The question, kept beside the edit, which wrote nothing.
         let asked: Arc<Mutex<Option<midifile::Asks>>> = Arc::default();
         let found = asked.clone();
         let named = step.clone();
         let done = self.call(move |a| {
             a.edit_and(token, |s| {
+                // Into the lane only a file of one part, and drums only into a lane that isn't a
+                // Drum's; anything else is new tracks after it (Q36, KIT-8).
+                let place = match &target {
+                    MidiTarget::Lane { module, lane, .. } if midifile::into_lane(s, &file, module, lane) => None,
+                    MidiTarget::Lane { module, beat, .. } | MidiTarget::Track { module, beat } => {
+                        Some(Place { after: Some(module.clone()), at: *beat })
+                    }
+                    MidiTarget::Below { beat } => Some(Place { after: None, at: *beat }),
+                };
+                let structural = place.is_some();
                 let (edited, more) = match (&target, &place) {
                     (MidiTarget::Lane { module, lane, beat }, None) => {
                         let done = midifile::import_into(s, &file, &name, module, lane, *beat)?;

@@ -186,6 +186,17 @@ A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code ed
 
 A song still writes the name: `subOctave: -2`. A label is one line of 1 to 24 characters, with no space at either end. A setting's label needs `@m2/core` 2.1.
 
+**Kits.** A drum (an instrument of category "Drums") can name kits: several tracks of it at once, that **+ Track ▸ Drum kit (several tracks)** makes, each going to one Drums bus ([Drum kits](sounds.md#drum-kits)). Each kit is a name, its tracks, and its bus's fader in dB (`db`, 0 when left out). Each track is a `name` and values of the instrument's own knobs and menus, written as a call writes them: a menu by one of its names, a switch `true` or `false`, a number as a quantity (`ms(80)`, `semis(2)`) or a plain number in the knob's base unit (`80` on an `ms` knob is 80 seconds, as in a call):
+
+```ts
+editor: {
+  category: "Drums",
+  kits: { "Basic kit": { db: -2, tracks: [{ name: "Kick", drum: "kick" }, { name: "Snare", drum: "snare", tune: semis(2) }, { name: "Hats", drum: "hats" }] } },
+},
+```
+
+A value the instrument doesn't have (`drum: "kik"`, a knob it hasn't got, `hz(2)` on a knob in semitones) is a red line under that track, and the build refuses it in words; so are kits on an instrument that isn't a drum. A kit's name and a track's are one line of 1 to 24 characters. Kits need `@m2/core` 2.2: say `"@m2/core" = "2.2"` in `m2pkg.toml`.
+
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 
 ## Kernels of its own

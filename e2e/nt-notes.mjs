@@ -6,13 +6,14 @@
 // as one undo step, I for the next inversion. In a pentatonic key only chords all in the key are
 // placed, and Lock to key leaves a stamped chord as it is; over the blues' blue note the pointer
 // says why there is none. Notes copied in Keys' roll paste into Bass's clip at the playhead (or at
-// its start), one undo step, selected, naming the clip by the hash the window drew. A Drum kit's
+// its start), one undo step, selected, naming the clip by the hash the window drew. A drum machine's
 // roll folds to the drums its clip uses (the kit's rows while it has none), no row goes while the
 // roll is open, ↑ moves to the next row shown, and Fold shows every row. ⌘↓ makes rows taller.
 // The view settings land in .music2/view.json, never in the song.
 //
 //   node e2e/nt-notes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
-import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
+import fs from "node:fs";
+import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, posts, api, state, box, key, drag } = await open(1440, 900);
@@ -277,9 +278,13 @@ await page.click('[data-testid=chord-menu] [data-chord="none"]');
 
 // ---------------------------------------------------------------- folded drum rows (NOTE-8)
 
-const added = await post("/track/add", { session: (await state()).session, component: "@m2/drums:drum-kit" });
-check(added.status === 200, `a Drum kit track is added (${added.status})`);
-await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
+// The drum machine names its rows; no list offers it now (KIT-2), so it is written in code, over a
+// Drum + Track adds.
+const added = await post("/track/add", { session: (await state()).session, component: "@m2/drums:drum", key: "drum-kit", label: "Drum machine" });
+check(added.status === 200, `a drum machine track is added (${added.status})`);
+await until(() => fs.existsSync(`${PROJ}/tracks/drum-kit.ts`));
+write("tracks/drum-kit.ts", read("tracks/drum-kit.ts").replace("drums.drum(", "drums.kit("));
+await until(async () => Object.keys((await state()).timeline.tracks.find((t) => t.module === "drum-kit")?.lanes?.[0]?.names ?? {}).length > 0);
 const writeKit = async (notes) => {
   const st = await state();
   return post("/lane", { session: st.session, revision: st.view.revision, module: "drum-kit", lane: "hits", clips: [{ id: "kitbeat1", start: 0, length: 4, notes }] });

@@ -100,14 +100,14 @@ fn every_listed_instrument_adds_confined_and_the_song_sounds_the_same() {
     let mut s = f.open();
     let before = render(&s, 2.0);
     let list = s.instruments();
-    assert_eq!(list.len(), 16);
+    assert_eq!(list.len(), 15);
     for i in &list {
         let made = s.add_track(&i.component, None, None, None).unwrap_or_else(|e| panic!("{}: {e}", i.component));
         let text = f.read(&made.edited.file);
         assert!(text.contains(&format!("{}(lane.notes(\"{}\"))", i.name, i.lane)), "{text}");
         assert!(f.0.join(format!("data/{}/{}.json", made.module, i.lane)).exists(), "{}", i.component);
     }
-    assert_eq!(order(&s).len(), 4 + 16);
+    assert_eq!(order(&s).len(), 4 + 15);
     assert_eq!(render(&s, 2.0), before);
 }
 
@@ -126,12 +126,12 @@ fn adding_to_the_empty_template_fills_its_mixer() {
             "import { master, mixer } from \"std/mix\";",
             "import { master, mixer } from \"std/mix\";\nimport drumsTrack from \"./tracks/drums\";",
         )
-        .replace("      // drums: beat.out, // drums\n", "      // drums: beat.out, // drums\n      drums: drumsTrack.out,\n");
+        .replace("      // beat: beat.out, // drums\n", "      // beat: beat.out, // drums\n      drums: drumsTrack.out,\n");
     assert_eq!(f.read("song.ts"), want);
     assert!(f.read("tracks/drums.ts").contains("drums.drum(lane.notes(\"hits\"))"));
     assert_eq!(f.read("data/drums/hits.json"), m2_song::canonical(&LaneData::Notes(vec![])));
     // A second, into the object with one property on its line now.
-    s.add_track("@m2/drums:drum-kit", None, Some("kit"), Some("drums")).unwrap();
+    s.add_track("@m2/drums:drum", None, Some("kit"), Some("drums")).unwrap();
     assert!(f.read("song.ts").contains("      drums: drumsTrack.out,\n      kit: kit.out,\n"), "{}", f.read("song.ts"));
 }
 
@@ -484,10 +484,12 @@ fn near(a: &str, b: &str) -> bool {
     word || letter
 }
 
-// T3, the + Track list: music2's ready-made sounds first, in groups (drums from a `hits` lane): the
-// drum kit, then One drum and FM metal; then the instruments; then the sampler; then the two with
-// every knob. @m2/synths' first three instruments have fuller ones in the polysynth, so they have no
-// category and the list leaves them out (PACK-15). No two rows are hard to tell apart.
+// T3, the + Track list: music2's ready-made sounds first, in groups (drums from a `hits` lane): Drum
+// and FM metal; then the instruments; then the sampler; then the two with every knob. @m2/synths'
+// first three instruments have fuller ones in the polysynth, so they have no category and the list
+// leaves them out (PACK-15); so does the drum machine, since "Drum kit" names a group of Drum tracks
+// (KIT-2), whose kits + Track lists in a group of their own (KIT-5). No two rows, an instrument's or
+// a kit's, are hard to tell apart.
 #[test]
 fn the_instruments_are_stds_sounds_in_order() {
     let f = fixture("templates/empty");
@@ -499,8 +501,7 @@ fn the_instruments_are_stds_sounds_in_order() {
     let inst = |c, l| (c, l, "Instruments", "notes");
     let design = |c, l| (c, l, "Sound design", "notes");
     let want = [
-        drum("@m2/drums:drum-kit", "Drum kit"),
-        drum("@m2/drums:drum", "One drum"),
+        drum("@m2/drums:drum", "Drum"),
         drum("@m2/synths:fm-metal", "FM metal"),
         inst("@m2/synths:fm-keys", "FM keys"),
         inst("@m2/synths:fm-bell", "FM bell"),
@@ -520,13 +521,19 @@ fn the_instruments_are_stds_sounds_in_order() {
     let first = ["bass", "pluck", "pad"].map(|id| format!("@m2/synths:{id}"));
     assert!(list.iter().all(|i| !first.contains(&i.component)), "the first three are left out");
     assert!(first.iter().all(|c| s.catalog().components.contains_key(c)), "though the catalog has them, for code");
-    assert_eq!((list[0].name.as_str(), list[0].module.as_str()), ("drums.kit", "@m2/drums"), "imported as a member of its object");
-    for (k, a) in list.iter().enumerate() {
-        for b in &list[k + 1..] {
-            assert!(!near(&a.label, &b.label), "“{}” and “{}” are hard to tell apart", a.label, b.label);
+    assert!(list.iter().all(|i| i.component != "@m2/drums:drum-kit"), "the drum machine is left out (KIT-2)");
+    assert_eq!(s.catalog().components["@m2/drums:drum-kit"].label, "Drum machine", "though code plays it, by that name");
+    assert_eq!((list[0].name.as_str(), list[0].module.as_str()), ("drums.drum", "@m2/drums"), "imported as a member of its object");
+    let kits: Vec<String> = crate::drums::presets(&s).into_iter().map(|k| k.name).collect();
+    assert_eq!(kits, ["808 kit", "909 kit", "Basic kit"], "the kits, rows of their own");
+    let rows: Vec<&str> = list.iter().map(|i| i.label.as_str()).chain(kits.iter().map(String::as_str)).collect();
+    for (k, a) in rows.iter().enumerate() {
+        for b in &rows[k + 1..] {
+            assert!(!near(a, b), "“{a}” and “{b}” are hard to tell apart");
         }
     }
     assert!(near("Pad", "Synth pad") && near("Hat", "Hats") && near("Drum", "Drums") && !near("Synth pad", "Synth pluck"));
+    assert!(near("Drum", "Drum kit") && !near("Drum", "Drum kit (several tracks)") && near("808 kit", "808 kat"));
     assert!(s.effects().iter().all(|e| !e.component.contains("kick")), "an instrument isn't an effect");
 }
 
@@ -549,7 +556,7 @@ fn the_empty_templates_comment_reads_true_after_add() {
 // ---------------------------------------------------------------- several tracks in one Tx (P0.3, built in lane A)
 
 fn audio_track(label: &str, clips: Vec<serde_json::Value>) -> NewTrack {
-    NewTrack { play: Play::Audio, label: Some(label.into()), key: None, clips }
+    NewTrack { play: Play::Audio, label: Some(label.into()), clips, ..NewTrack::default() }
 }
 
 // WRITE-10: two new tracks are one Tx, one undo step: their files, imports, channels, lanes and
@@ -560,7 +567,7 @@ fn two_tracks_in_one_tx_are_one_undo_step() {
     let mut s = f.open();
     let before = tree(&f);
     let number = s.accepted().number;
-    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), label: None, key: None, clips: vec![] };
+    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), ..NewTrack::default() };
     let made = add_tracks(&mut s, &[pluck, audio_track("Vox", vec![])], Some("kick"), None).unwrap();
     assert_eq!(s.accepted().number, number + 1, "one revision");
     assert_eq!(
@@ -647,4 +654,31 @@ fn two_new_tracks_of_one_name_stay_apart() {
     assert_eq!(made.iter().map(|m| (m.module.as_str(), m.label.as_str())).collect::<Vec<_>>(), [("vox", "Vox"), ("vox-2", "Vox 2")]);
     let song = f.read("song.ts");
     assert!(song.contains("vox: vox.out,\n      \"vox-2\": vox2.out"), "{song}");
+}
+
+// KIT-15, KIT-5: a new track's channel goes to a bus the mixer has, or to one made before it in the
+// same call; anything else is refused in words before anything is written. The planner's assertion
+// says where every channel goes, the new ones as asked and the others as they were.
+#[test]
+fn a_new_track_goes_only_to_a_bus_there_is() {
+    let f = fixture("core/session/tests/fixtures/buses");
+    let mut s = f.open();
+    let before = tree(&f);
+    let drum = |to: Goes| NewTrack { play: Play::Instrument("@m2/drums:drum".into()), to: Some(to), ..NewTrack::default() };
+    for to in ["verb2", "kick"] {
+        let e = add_tracks(&mut s, &[drum(Goes::Bus(to.into()))], None, None).map(|_| ()).unwrap_err().to_string();
+        assert_eq!(e, format!("edit rejected: The mixer has no bus channel {to}, so no track can go to it."));
+    }
+    let e = add_tracks(&mut s, &[drum(Goes::New(0))], None, None).map(|_| ()).unwrap_err().to_string();
+    assert_eq!(e, "edit rejected: a new track goes to a new bus listed before it");
+    assert_eq!(tree(&f), before, "nothing written");
+    // The assertion, on a candidate where the Kick goes to the Drums bus.
+    let tx = crate::plan::planned(&s, (String::new(), String::new()), vec![], m2_song::tx::Expect::Identical);
+    let checked = s.check(&tx).unwrap();
+    let rev = s.accepted();
+    let routes = crate::bus::routing(rev, &the_mixer(rev).unwrap());
+    assert_eq!(routed_as(&checked, &routes, &[]), Ok(()));
+    assert_eq!(routed_as(&checked, &routes, &[("kick".into(), Some("drums".into()))]), Ok(()));
+    assert_eq!(routed_as(&checked, &routes, &[("kick".into(), None)]), Err("route more than it says".into()));
+    assert_eq!(routed_as(&checked, &routes, &[("snare".into(), Some("drums".into()))]), Err("route more than it says".into()));
 }

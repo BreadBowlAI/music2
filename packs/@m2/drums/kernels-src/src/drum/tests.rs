@@ -589,3 +589,82 @@ fn every_knob_of_one_drum_moves_every_drum_it_offers() {
         }
     }
 }
+
+/// The family of each drum the drum machine plays (KIT-6): the place in the Drum's menu (`MENU`) of
+/// the Drum's sound it belongs to. A family is one synthesis of this kernel: the rim and the claves
+/// ring resonators, the shaker and the tambourine filter noise, a crash and a ride are one metal.
+const FAMILY: [(Kind, usize); 14] = [
+    (Kind::Kick, 0),
+    (Kind::Snare, 1),
+    (Kind::Clap, 2),
+    (Kind::ClosedHat, 3),
+    (Kind::PedalHat, 3),
+    (Kind::OpenHat, 3),
+    (Kind::Tom, 4),
+    (Kind::Rim, 5),
+    (Kind::Claves, 5),
+    (Kind::Cowbell, 6),
+    (Kind::Crash, 7),
+    (Kind::Ride, 7),
+    (Kind::Shaker, 8),
+    (Kind::Tambourine, 8),
+];
+
+/// The synthesis a hit of the drum machine (`model` -1) or of the Drum at `place` makes at `pitch`.
+fn synthesis(model: f32, pitch: f32) -> std::mem::Discriminant<Sound> {
+    let mut d = Drum::new(&Cfg::new(48_000.0, BLOCK, 1));
+    let p = patch(&[(MODEL, model)]);
+    d.start(&|port| match port {
+        PITCH => pitch,
+        VELOCITY => 0.8,
+        _ => p[port],
+    });
+    std::mem::discriminant(&d.sound)
+}
+
+/// The editor's General MIDI table (`GM` in `crates/editor/src/drums.rs`), read from its source:
+/// each sound and its notes, in its order.
+fn general_midi() -> Vec<(String, Vec<u8>)> {
+    const SOURCE: &str = include_str!("../../../../../../crates/editor/src/drums.rs");
+    SOURCE
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("GmDrum { sound: \""))
+        .map(|rest| {
+            let (sound, rest) = rest.split_once('"').expect("a sound");
+            let notes = rest.split_once("&[").and_then(|(_, r)| r.split_once(']')).expect("its notes").0;
+            (sound.to_string(), notes.split(',').map(|n| n.trim().parse().expect("a note")).collect())
+        })
+        .collect()
+}
+
+// KIT-6 (review K6): the families are declared, not heard. Each drum the drum machine plays is made
+// by the very synthesis the Drum makes for its family's sound; the editor's table gives every note
+// the drum machine plays to the sound of its drum's family, in the Drum's menu order, and the notes
+// it gives that the drum machine leaves silent are 52, 53 and 55.
+#[test]
+fn the_families_are_the_tables() {
+    let family = |kind: Kind| FAMILY.iter().find(|(k, _)| *k == kind).map(|(_, place)| *place);
+    for (kind, place) in FAMILY {
+        let pitch = (0..128).map(|n| n as f32).find(|n| kind_of(-1.0, *n).0 == kind).expect("a note the drum machine plays it on");
+        assert_eq!(synthesis(-1.0, pitch), synthesis(place as f32, MENU[place].1), "{kind:?} is of the {}'s family", MENU[place].0);
+    }
+    let gm = general_midi();
+    let sounds: Vec<&str> = gm.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(sounds, MENU.map(|(name, _)| name), "the table is in the Drum's menu order");
+    let mut silent = vec![];
+    for (place, (sound, notes)) in gm.iter().enumerate() {
+        for &n in notes {
+            match kind_of(-1.0, n as f32).0 {
+                Kind::Silent => silent.push(n),
+                kind => assert_eq!(family(kind), Some(place), "{n} ({kind:?}) is the {sound}'s"),
+            }
+        }
+    }
+    silent.sort();
+    assert_eq!(silent, [52, 53, 55]);
+    for n in 0..128u8 {
+        if kind_of(-1.0, n as f32).0 != Kind::Silent {
+            assert!(gm.iter().any(|(_, notes)| notes.contains(&n)), "the drum machine plays {n}, which the table gives no sound");
+        }
+    }
+}
