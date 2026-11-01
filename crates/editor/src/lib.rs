@@ -18,6 +18,7 @@ pub mod changed;
 pub mod clips;
 pub mod controls;
 pub mod data;
+pub mod drums;
 pub mod effect;
 pub mod explain;
 pub mod faults;

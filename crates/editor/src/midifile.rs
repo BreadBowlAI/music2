@@ -624,8 +624,8 @@ pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, cho
         new.push(crate::tracks::NewTrack {
             play: crate::tracks::Play::Instrument(p.component.clone()),
             label: Some(p.label.clone()),
-            key: None,
             clips: vec![clip],
+            ..crate::tracks::NewTrack::default()
         });
     }
     let written = arrangement.map(|a| a.canonical());

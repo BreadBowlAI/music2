@@ -488,7 +488,8 @@ fn near(a: &str, b: &str) -> bool {
 // and FM metal; then the instruments; then the sampler; then the two with every knob. @m2/synths'
 // first three instruments have fuller ones in the polysynth, so they have no category and the list
 // leaves them out (PACK-15); so does the drum machine, since "Drum kit" names a group of Drum tracks
-// (KIT-2). No two rows are hard to tell apart.
+// (KIT-2), whose kits + Track lists in a group of their own (KIT-5). No two rows, an instrument's or
+// a kit's, are hard to tell apart.
 #[test]
 fn the_instruments_are_stds_sounds_in_order() {
     let f = fixture("templates/empty");
@@ -523,12 +524,16 @@ fn the_instruments_are_stds_sounds_in_order() {
     assert!(list.iter().all(|i| i.component != "@m2/drums:drum-kit"), "the drum machine is left out (KIT-2)");
     assert_eq!(s.catalog().components["@m2/drums:drum-kit"].label, "Drum machine", "though code plays it, by that name");
     assert_eq!((list[0].name.as_str(), list[0].module.as_str()), ("drums.drum", "@m2/drums"), "imported as a member of its object");
-    for (k, a) in list.iter().enumerate() {
-        for b in &list[k + 1..] {
-            assert!(!near(&a.label, &b.label), "“{}” and “{}” are hard to tell apart", a.label, b.label);
+    let kits: Vec<String> = crate::drums::kits(&s).into_iter().map(|k| k.name).collect();
+    assert_eq!(kits, ["808 kit", "909 kit", "Basic kit"], "the kits, rows of their own");
+    let rows: Vec<&str> = list.iter().map(|i| i.label.as_str()).chain(kits.iter().map(String::as_str)).collect();
+    for (k, a) in rows.iter().enumerate() {
+        for b in &rows[k + 1..] {
+            assert!(!near(a, b), "“{a}” and “{b}” are hard to tell apart");
         }
     }
     assert!(near("Pad", "Synth pad") && near("Hat", "Hats") && near("Drum", "Drums") && !near("Synth pad", "Synth pluck"));
+    assert!(near("Drum", "Drum kit") && !near("Drum", "Drum kit (several tracks)") && near("808 kit", "808 kat"));
     assert!(s.effects().iter().all(|e| !e.component.contains("kick")), "an instrument isn't an effect");
 }
 
@@ -551,7 +556,7 @@ fn the_empty_templates_comment_reads_true_after_add() {
 // ---------------------------------------------------------------- several tracks in one Tx (P0.3, built in lane A)
 
 fn audio_track(label: &str, clips: Vec<serde_json::Value>) -> NewTrack {
-    NewTrack { play: Play::Audio, label: Some(label.into()), key: None, clips }
+    NewTrack { play: Play::Audio, label: Some(label.into()), clips, ..NewTrack::default() }
 }
 
 // WRITE-10: two new tracks are one Tx, one undo step: their files, imports, channels, lanes and
@@ -562,7 +567,7 @@ fn two_tracks_in_one_tx_are_one_undo_step() {
     let mut s = f.open();
     let before = tree(&f);
     let number = s.accepted().number;
-    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), label: None, key: None, clips: vec![] };
+    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), ..NewTrack::default() };
     let made = add_tracks(&mut s, &[pluck, audio_track("Vox", vec![])], Some("kick"), None).unwrap();
     assert_eq!(s.accepted().number, number + 1, "one revision");
     assert_eq!(

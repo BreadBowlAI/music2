@@ -83,7 +83,10 @@ fn kits_are_carried_in_order() {
                     ),
                 ],
             },
-            Kit { name: "Two".into(), tracks: vec![track("Snare", vec![value("drum", 1.0, None, 1.0), value("tune", -1.5, Some("semis"), -1.5)])] },
+            Kit {
+                name: "Two".into(),
+                tracks: vec![track("Snare", vec![value("drum", 1.0, None, 1.0), value("tune", -1.5, Some("semis"), -1.5)])]
+            },
         ]
     );
 }
@@ -92,7 +95,8 @@ fn kits_are_carried_in_order() {
 #[test]
 fn a_descriptor_with_no_kits_keeps_its_bytes() {
     let lib = drum("undefined");
-    let code: BTreeMap<String, String> = [("lib/drum.ts", lib.as_str()), ("song.ts", SONG)].iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
+    let code: BTreeMap<String, String> =
+        [("lib/drum.ts", lib.as_str()), ("song.ts", SONG)].iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
     let mut o = Options::new(code, "song.ts");
     o.time_limit = Duration::from_secs(2);
     let [_, _, components, _] = on_own_thread(|| run_sdk(&o).map(|run| run.json)).unwrap_or_else(|e| panic!("{e:?}"));
@@ -113,21 +117,45 @@ fn a_wrong_kit_is_refused_in_words() {
             r#"{ "Basic kit": [{ name: "Kick", drum: "kik" }] } as any"#,
             "editor.kits' \"Basic kit\": its track \"Kick\": drum is one of \"kick\", \"snare\", \"hats\", not \"kik\"",
         ),
-        (r#"{ "Basic kit": [{ name: "Kick", drum: 0 }] } as any"#, "its track \"Kick\": drum is one of \"kick\", \"snare\", \"hats\", not 0"),
+        (
+            r#"{ "Basic kit": [{ name: "Kick", drum: 0 }] } as any"#,
+            "its track \"Kick\": drum is one of \"kick\", \"snare\", \"hats\", not 0",
+        ),
         (r#"{ "Basic kit": [{ name: "Kick", soft: 1 }] } as any"#, "its track \"Kick\": soft is true or false, not 1"),
         (r#"{ "Basic kit": [{ name: "Kick", tune: "2" }] } as any"#, "its track \"Kick\": tune is a number, not \"2\""),
-        (r#"{ "Basic kit": [{ name: "Kick", decay: 5000 }] } as any"#, "its track \"Kick\": decay 5000 is outside its strict range 10..2000"),
+        (
+            r#"{ "Basic kit": [{ name: "Kick", decay: 5000 }] } as any"#,
+            "its track \"Kick\": decay 5000 is outside its strict range 10..2000",
+        ),
         (
             r#"{ "Basic kit": [{ name: "Kick", tunee: 2 }] } as any"#,
             "its track \"Kick\" sets \"tunee\", which isn't a control of this sound (controls: drum, tune, decay, soft)",
         ),
-        (r#"{ "Basic kit": [{ name: "Kick", voices: 2 }] } as any"#, "its track \"Kick\" sets \"voices\", which isn't a control of this sound"),
-        (r#"{ "Basic kit": [{ drum: "kick" }] } as any"#, "editor.kits' \"Basic kit\": a track's name must be one line of 1 to 24 characters"),
-        (r#"{ "Basic kit": [{ name: " Kick" }] } as any"#, "a track's name must be one line of 1 to 24 characters, with no space at either end, not \" Kick\""),
-        (r#"{ "Basic kit": [{ name: "Kick" }, { name: "Kick" }] } as any"#, "editor.kits' \"Basic kit\": the track \"Kick\" is named twice"),
+        (
+            r#"{ "Basic kit": [{ name: "Kick", voices: 2 }] } as any"#,
+            "its track \"Kick\" sets \"voices\", which isn't a control of this sound",
+        ),
+        (
+            r#"{ "Basic kit": [{ drum: "kick" }] } as any"#,
+            "editor.kits' \"Basic kit\": a track's name must be one line of 1 to 24 characters",
+        ),
+        (
+            r#"{ "Basic kit": [{ name: " Kick" }] } as any"#,
+            "a track's name must be one line of 1 to 24 characters, with no space at either end, not \" Kick\"",
+        ),
+        (
+            r#"{ "Basic kit": [{ name: "Kick" }, { name: "Kick" }] } as any"#,
+            "editor.kits' \"Basic kit\": the track \"Kick\" is named twice",
+        ),
         (r#"{ "Basic kit": [] }"#, "editor.kits' \"Basic kit\" has no track: a kit has one at least"),
-        (r#"{ "Basic kit": { name: "Kick" } } as any"#, "editor.kits' \"Basic kit\" must be a list of tracks, as [{ name: \"Kick\", drum: \"kick\" }]"),
-        (r#"{ "": [{ name: "Kick" }] }"#, "editor.kits: a kit's name must be one line of 1 to 24 characters, with no space at either end, not \"\""),
+        (
+            r#"{ "Basic kit": { name: "Kick" } } as any"#,
+            "editor.kits' \"Basic kit\" must be a list of tracks, as [{ name: \"Kick\", drum: \"kick\" }]",
+        ),
+        (
+            r#"{ "": [{ name: "Kick" }] }"#,
+            "editor.kits: a kit's name must be one line of 1 to 24 characters, with no space at either end, not \"\"",
+        ),
         (r#"{ "A kit's name far too long": [{ name: "Kick" }] }"#, "a kit's name must be one line of 1 to 24 characters"),
         ("[] as any", "editor.kits must be an object"),
     ] {

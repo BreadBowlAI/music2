@@ -286,7 +286,8 @@ const SPELLED: [(&str, &str); 2] =
 // or a switch's true or false, and a number's signal by name as `connect` does), each effect is added, and each instrument + Track lists is added as a
 // new track's `track(…)` call (8b.1); each mixer channel with no pan gets its first pan, and each
 // that leaves out its fader gets one in the style of a mixer whose other entries write `db(…)`
-// (8b.3b); every call so written is listed in tests/forms/forms.ts, which must be as recorded
+// (8b.3b), and each kit's tracks are added with their values (KIT-5); every call so written is
+// listed in tests/forms/forms.ts, which must be as recorded
 // here. `tsc -p crates/editor/tests/forms` type-checks it with web's tsc, in web's
 // `npm run typecheck` and so in `npm run build`.
 #[test]
@@ -362,7 +363,23 @@ fn planned_call_forms_are_current() {
         let binding = crate::tracks::instrument_binding(&i);
         assert!(imported.contains(binding), "every-component doesn't import {binding}, which a track playing {} imports", i.component);
         let key = crate::keys::propose(&i.label, |_| false);
-        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label)));
+        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label, "")));
+    }
+    // Each kit's tracks (KIT-5), each call with the kit's values, under the key and name it proposes.
+    for k in crate::drums::kits(&s) {
+        let i = s.instruments().into_iter().find(|i| i.component == k.component).expect("the kit's instrument");
+        let d = &s.catalog().components[&k.component];
+        for t in &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks {
+            let (values, ctors) = crate::tracks::values_text(d, &t.values, &s.accepted().compiled.units).unwrap();
+            assert!(ctors.is_empty(), "every-component imports no unit for {}'s {}", k.name, t.name);
+            let key = crate::keys::propose(&t.name, |_| false);
+            forms.push(format!(
+                "    // {}'s {} added as a track\n    {},\n",
+                k.name,
+                t.name,
+                crate::tracks::track_call_text(&i, &key, &t.name, &values)
+            ));
+        }
     }
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(

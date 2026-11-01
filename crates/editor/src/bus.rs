@@ -53,7 +53,7 @@ impl BusKind {
     }
 
     /// What a new one is called.
-    fn label(self) -> &'static str {
+    pub(crate) fn label(self) -> &'static str {
         match self {
             BusKind::Reverb => "Reverb",
             BusKind::Delay => "Delay",
@@ -64,7 +64,7 @@ impl BusKind {
     /// What it plays: a component (its ComponentId), by the name its package exports it as, and
     /// what its function returns. A Reverb or a Delay is `@m2/effects`', a pack music2 ships
     /// (PACK-15), added as any pack's item is (PACK-10); a Group is std's gain.
-    fn body(self) -> (&'static str, &'static str, &'static str) {
+    pub(crate) fn body(self) -> (&'static str, &'static str, &'static str) {
         match self {
             BusKind::Reverb => ("@m2/effects:reverb", "reverb", "reverb(input, { mix: 1 })"),
             BusKind::Delay => ("@m2/effects:delay", "delay", "delay(input, { mix: 1 })"),
@@ -86,7 +86,7 @@ pub(crate) fn bus_import(kind: BusKind) -> &'static str {
 }
 
 /// The text of a new bus file, importing what plays `kind` from `module`.
-fn bus_text(kind: BusKind, module: &str, key: &str, label: &str) -> String {
+pub(crate) fn bus_text(kind: BusKind, module: &str, key: &str, label: &str) -> String {
     format!(
         "import {{ bus }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
         bus_import(kind),
@@ -97,7 +97,7 @@ fn bus_text(kind: BusKind, module: &str, key: &str, label: &str) -> String {
 
 /// The module a bus of `kind` imports what plays it from: where the packages the lists offer export
 /// it (PACK-11), as an added effect is imported. None when no package offers it (a pack removed).
-fn bus_module(s: &Session, kind: BusKind) -> Option<String> {
+pub(crate) fn bus_module(s: &Session, kind: BusKind) -> Option<String> {
     let (component, name, _) = kind.body();
     let catalog = s.catalog();
     catalog.exports.get(component)?.iter().find(|e| e.name == name).map(|e| e.module.clone())
