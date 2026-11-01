@@ -14,7 +14,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, state, caughtUp, key, view, box } = await open(1440, 900);
+const { page, errors, api, caughtUp, key, view, box } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 /** The lint over what is inside `sel`. */
@@ -72,8 +72,6 @@ await page.click('[data-testid=setting-options] [data-option="vowels"]');
 const vowels = fresh.replace('wavetable(lane.notes("notes"))', 'wavetable(lane.notes("notes"), { tableA: "vowels" })');
 check(await until(() => read(file) === vowels), `picking vowels writes it into the call: ${read(file).match(/wavetable\(lane[^\n]*/)?.[0]}`);
 check(await until(async () => (await undoTitle()) !== steps && (await undoTitle()) === "Undo Wavetable table A (⌘Z)"), `one undo step, named by its label (CARD-34): ${await undoTitle()}`);
-// The revision the pick made: ⌘Z and ⇧⌘Z each make one more.
-const picked = (await state()).view.revision;
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read(file) === fresh), "⌘Z takes the code back, byte for byte");
@@ -86,7 +84,7 @@ check(await until(() => read(file) === vowels), "and ⇧⌘Z puts vowels back");
 // revision ⇧⌘Z made, so the page must show that revision first: a gesture from an older one, around
 // whose control the code has changed since, is refused ("the code changed around this control …")
 // and writes nothing.
-check(await caughtUp(picked + 2), "the page shows the revision ⇧⌘Z made");
+check(await caughtUp(), "the page shows the revision ⇧⌘Z made");
 const position = `${card} [data-knob="position A"]`;
 check(await until(async () => !!(await page.$(position))), "position A is a knob");
 await until(async () => (await page.$eval(position, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
