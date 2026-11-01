@@ -447,8 +447,8 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
     let becomes = bus_edits(rev, m, &text, call, &channel, &notes, &moved)?;
     let mut said = vec![];
     if gone > 0 {
-        let s = if gone == 1 { "" } else { "s" };
-        said.push(format!("{gone} note{s} went: {}, which the drum machine played nothing for", crate::listed(&named)));
+        let (s, them, they) = if gone == 1 { ("", "it", "It was") } else { ("s", "them", "They were") };
+        said.push(format!("{gone} note{s} went: the drum machine played nothing for {them}. {they} on {}.", crate::listed(&named)));
     }
     // A pair of one of the drum machine's choke groups, each on a track of its own now (KIT-21).
     for (a, b) in [("kick", "kick 2"), ("snare", "snare 2"), ("cymbal", "cymbal 2")] {

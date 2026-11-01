@@ -139,7 +139,7 @@ fn a_drum_machine_track_becomes_a_kit_in_one_undo_step() {
     assert_eq!(notes(&s, "toms"), [(0.0, 4.0, vec![(39.0, 2.5), (50.0, 3.0)])], "41 and 48 on the keys that play their tuning");
     assert_eq!(notes(&s, "ride"), [(0.0, 4.0, vec![(51.0, 2.0)])]);
     assert!(
-        made.said.iter().any(|w| w == "2 notes went: E3 (52) and C4 (60), which the drum machine played nothing for"),
+        made.said.iter().any(|w| w == "2 notes went: the drum machine played nothing for them. They were on E3 (52) and C4 (60)."),
         "{:?}",
         made.said
     );
