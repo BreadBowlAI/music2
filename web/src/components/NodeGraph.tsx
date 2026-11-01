@@ -31,6 +31,7 @@ import {
   findLane,
   fromUnit,
   graphApi,
+  knobStep,
   laneTitle,
   lockReason,
   moduleName,
@@ -883,7 +884,7 @@ function NodeCard({
     node.kind === "import"
       ? importTitle(node.label)
       : node.kind === "lane" || node.kind === "export"
-        ? controlLabel(node.label)
+        ? controlLabel({ label: node.label })
         : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
@@ -1322,9 +1323,9 @@ function InputRow({
   if (knob) {
     const key = knobKey(knob.id);
     // A menu or a switch (CARD-20, CARD-6): one click, one edit; never dragged.
-    if (picks(knob)) return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input.label, tracks)} owner={owner} session={session} revision={revision} editable={editable} />;
+    if (picks(knob)) return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />;
     return (
-      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input.label, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
+      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
     );
   }
 
@@ -1336,7 +1337,7 @@ function InputRow({
     return (
       <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
         <Dot id={input.id} kind={input.kind} filled />
-        <span className="text-fg-muted truncate">{controlLabel(inlet.label, tracks)}</span>
+        <span className="text-fg-muted truncate">{controlLabel(inlet, tracks)}</span>
         {/* Its home is a cable (HOME-1): what drives it, in place of a knob. */}
         <span className="text-fg-muted truncate" title={`Driven by ${inlet.name}.`}>← {inlet.name}</span>
         <button
@@ -1362,7 +1363,7 @@ function InputRow({
       >
         <Dot id={input.id} kind={input.kind} filled={false} />
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="text-fg-muted truncate">{controlLabel(source.label, tracks)}</span>
+          <span className="text-fg-muted truncate">{controlLabel(source, tracks)}</span>
           <span className="shrink-0 text-fg-faint">edit in code</span>
         </div>
         <div data-code className="font-mono text-xs text-fg truncate">{source.expression}</div>
@@ -1376,7 +1377,7 @@ function InputRow({
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
   // takes the automation out (KN-2).
   const driven = input.lane;
-  const label = controlLabel(input.label, tracks);
+  const label = controlLabel(input, tracks);
   const lane = driven && useStore.getState().graph ? findLane(useStore.getState().graph!.timeline, driven.module, driven.lane) : undefined;
   const laneName = lane ? laneTitle(lane) : label;
   return (
@@ -1507,7 +1508,7 @@ function KnobControl({
     knob,
     editable,
     // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
-    name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`,
+    name: knobStep(owner, knob, label),
     label,
     hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
   });
@@ -1740,7 +1741,7 @@ function PickControl({
   const pick = (v: number | string | boolean) => {
     setSaving(true);
     graphApi
-      .setValue(session, revision, knob.id, v, { name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}` })
+      .setValue(session, revision, knob.id, v, { name: knobStep(owner, knob, label) })
       .catch((error) => toast(words(error)))
       .finally(() => setSaving(false));
   };

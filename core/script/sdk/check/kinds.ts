@@ -1,6 +1,6 @@
 // The kinds a descriptor declares (CARD-10 to CARD-17): a choice and a switch among its controls,
 // its views and its groups, each typed against this very descriptor, as the code editor types
-// them. A line that should fail carries `@ts-expect-error`, so a type that stops refusing it fails
+// them; and a label (CARD-34). A line that should fail carries `@ts-expect-error`, so a type that stops refusing it fails
 // the check too. `kinds_tests.rs` builds the same sound and its mistakes, and the build refuses
 // each of them again, even through `as any`.
 
@@ -242,3 +242,26 @@ export const unannotated = component(
     return kernel<Audio>("std:svf", { cutoff: hz, q: some }) as Audio;
   },
 );
+
+// A setting's label, as a control's (CARD-34): one `.label()`, which takes text and gives back the
+// same declaration, so a labelled value is typed as it was, in its descriptor and in its calls.
+export const labelled = component(
+  {
+    id: "labelled",
+    controls: { level: control.db(0).label("loudness") },
+    settings: { tableA: setting.choice(["saw", "sine"], "saw").label("table A"), voices: setting.int(8).label("notes at once").optional() },
+    output: port.audio(),
+  },
+  ({ level, tableA, voices }) => {
+    const table: "saw" | "sine" = tableA;
+    const n: number | undefined = voices;
+    return kernel<Audio>("test:labelled", { level, table: table === "saw" ? 0 : 1, voices: n ?? 8 }) as Audio;
+  },
+);
+export const labelledCalls: Audio[] = [labelled(), labelled({ tableA: "sine", voices: 4, level: -6 })];
+// @ts-expect-error a labelled choice still takes only its names
+labelled({ tableA: "square" });
+// @ts-expect-error a label is text
+setting.int(8).label(8);
+// @ts-expect-error a label is text, a control's too
+control.db(0).label(true);

@@ -596,3 +596,70 @@ fn music2s_own_sounds_show_their_groups_and_views() {
     assert_eq!(names, ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"]);
     assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);
 }
+
+// CARD-34: every value of std and music2's own packs reads as words on its card. A control or a
+// setting whose name is written in camelCase (`subOctave`, `tableA`) has a label ("sub octave"), so
+// the card, its undo step and `m2 graph` never show the code's spelling.
+#[test]
+fn music2s_own_values_read_as_words() {
+    let f = Fixture::new();
+    // Every bundled pack (PACK-15), the song needing each so the catalog holds them all.
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
+    f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nexport default song(() => mixer({}));\n");
+    let s = f.open();
+    let catalog = s.catalog();
+    let camel = |name: &str| name.as_bytes().windows(2).any(|w| w[0].is_ascii_lowercase() && w[1].is_ascii_uppercase());
+    let (mut seen, mut wrong) = (0, vec![]);
+    for (id, d) in catalog.components.iter().filter(|(id, _)| id.starts_with("@m2/") || id.starts_with("std:")) {
+        let controls = d.controls.iter().filter(|c| c.each.is_none()).map(|c| (&c.name, &c.label));
+        for (name, label) in controls.chain(d.settings.iter().map(|x| (&x.name, &x.label))) {
+            seen += 1;
+            if camel(&crate::kind::named(label.as_deref(), name).label) {
+                wrong.push(format!("{id}: {name}"));
+            }
+        }
+    }
+    assert!(seen > 200, "{seen} values");
+    for pack in ["@m2/drums", "@m2/effects", "@m2/mixing", "@m2/synths", "@m2/wavetable"] {
+        assert!(catalog.components.keys().any(|id| id.starts_with(&format!("{pack}:"))), "{pack} is in the catalog");
+    }
+    assert!(wrong.is_empty(), "shown by a name in camelCase, so it wants a label (CARD-34): {wrong:?}");
+}
+
+// CARD-34 (review L2): every row of a card is named by the one rule, whatever drives its value: a
+// value the code works out, a cable, or a signal written in the call. EQ3's frequencies are "low
+// frequency", "mid frequency" and "high frequency" in each, never `lowFreq`; and the read-only
+// value and the cable themselves (what `m2 graph` prints) say so too.
+#[test]
+fn every_row_of_a_card_is_named_by_its_label() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "song.ts",
+        r#"import { hz, song } from "@m2/core";
+import { lfo } from "std/control";
+import { osc } from "std/dsp";
+import { eq3 } from "std/fx";
+import { xrange } from "std/math";
+import { mixer } from "std/mix";
+
+export default song(({ time }) => {
+  const sweep = xrange(lfo(time.beats), hz(500), hz(2000));
+  return mixer({ a: eq3(osc.saw(110), { lowFreq: 100 * 2, midFreq: sweep, highFreq: xrange(lfo(time.beats, { period: 2 }), hz(3000), hz(6000)) }) });
+});
+"#,
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{:?} {:?}", s.draft_errors, s.problems());
+    let view = s.view();
+    let card = view.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("EQ3")).expect("EQ3's card");
+    let row = |slot: &str| {
+        let p = card.inputs.iter().find(|p| p.slot.as_deref() == Some(slot)).unwrap_or_else(|| panic!("no {slot} in {:?}", card.inputs));
+        (p.label.as_str(), p.entry.as_deref(), p.readonly.is_some(), p.inlet.is_some())
+    };
+    assert_eq!(row("lowFreq"), ("low frequency", None, true, false), "worked out by the code");
+    assert_eq!(row("midFreq"), ("mid frequency", None, false, true), "fed by a cable");
+    assert_eq!(row("highFreq").0, "high frequency", "fed by a signal written in the call");
+    assert_eq!(card.readonly.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["low frequency"]);
+    assert_eq!(card.inlets.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["mid frequency"]);
+}

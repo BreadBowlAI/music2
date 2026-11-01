@@ -95,7 +95,7 @@ export const synth = {
       },
       // Read when a note starts: unison voices (1 to 7), the sub's octave (0, -1 or -2) and
       // the seed of the voices' start phases and noise.
-      settings: { voices: setting.int(8), unison: setting.int(1), subOctave: setting.int(-1), seed: setting.number(1) },
+      settings: { voices: setting.int(8), unison: setting.int(1), subOctave: setting.int(-1).label("sub octave"), seed: setting.number(1) },
       output: port.audio(),
       // The + Track list (PKG-7) puts the ready-made sounds first, and this, with every knob, last.
       editor: {

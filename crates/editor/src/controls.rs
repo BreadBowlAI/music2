@@ -64,8 +64,11 @@ pub struct Declared {
     pub component: String,
     /// The slot (`time`, `channels.hats.db`).
     pub slot: String,
-    /// What a knob is called: the control's label, else its name (`hats.db` in a dictionary).
+    /// What a knob is called (CARD-34): the control's label, else its name; a dictionary entry's by
+    /// its key first (`hats.db`, `hats.loudness`).
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with (`hats`), said apart.
+    pub entry: Option<String>,
     /// The range a knob shows (a hint, PKG-8) and whether it moves logarithmically: the
     /// declared ones when the value has the declared unit, an `accepts` entry's for its unit,
     /// else none.
@@ -201,13 +204,14 @@ pub(crate) fn declared(compiled: &Compiled, m: &Module, origin: &Origin, unit: O
     let slot = origin.control.as_ref()?;
     let desc = component_of(compiled, m, slot.frame)?;
     let c = desc.control(&slot.slot)?;
-    // A dictionary entry's control is named by its key: `hats.db`.
-    let name = slot.slot.split_once('.').map_or(slot.slot.as_str(), |(_, rest)| rest);
     let range = desc.range_for(&slot.slot, unit);
+    // A dictionary entry's control is named by its key first: `hats.db` (CARD-34).
+    let name = crate::kind::named(c.label.as_deref(), &slot.slot);
     Some(Declared {
         component: desc.id.clone(),
         slot: slot.slot.clone(),
-        label: c.label.clone().unwrap_or_else(|| name.to_string()),
+        label: name.label,
+        entry: name.entry,
         range: range.map(|r| r.0),
         log: range.is_some_and(|r| r.1),
         default: c.default.as_ref().filter(|_| unit == c.unit).map(|d| d.value),

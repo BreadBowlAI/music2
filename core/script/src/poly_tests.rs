@@ -56,8 +56,8 @@ fn poly_options_reach_the_ir() {
     assert_eq!((voices, alloc), (1, Alloc { mode: Mode::Mono, retrigger: true, steal: Steal::None }));
     assert!(matches!(glide, Some(Op::Const { value: 0.05, unit: None })), "{glide:?}");
     assert_eq!(
-        SDK_VERSION, "2.0.0",
-        "additions to @m2/core (FMT-2): the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0, editor.unlisted in 1.10.0; a filter view's resonance, and the pack contract frozen (PACK-22), in 2.0.0"
+        SDK_VERSION, "2.1.0",
+        "additions to @m2/core (FMT-2): the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0, editor.unlisted in 1.10.0; a filter view's resonance, and the pack contract frozen (PACK-22), in 2.0.0; a setting's label in 2.1.0"
     );
 }
 

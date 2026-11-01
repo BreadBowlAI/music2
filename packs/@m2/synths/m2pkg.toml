@@ -11,9 +11,10 @@ tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
 wasm = "kernels/synths.wasm"
 
 [dependencies]
-# @m2/core 2, the pack contract (PACK-22): any 2.x runs it, and a change to @m2/core that would
-# break it is a 3.0.0.
-"@m2/core" = "2"
+# @m2/core 2.1, the pack contract (PACK-22) and the minor it uses (PACK-23): synth.custom labels a
+# setting (CARD-34), which came in 2.1. So any 2.x from 2.1 runs it, an older one says in words that
+# it needs 2.1, and a change to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.1"
 # The std kernels its sounds play are all in std 0.7 and later; the voices are its own.
 std = "0.7"
 

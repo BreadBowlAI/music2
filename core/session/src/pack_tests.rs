@@ -138,10 +138,10 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
     for (asks, said) in [
         (
             "1",
-            "is made for @m2/core 1, and this app has @m2/core 2.0.0, whose changes may break it. Get a version of it made for \
+            "is made for @m2/core 1, and this app has @m2/core 2.1.0, whose changes may break it. Get a version of it made for \
              @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
         ),
-        ("3", "is made for @m2/core 3, newer than this app's 2.0.0. Update music2 to use it"),
+        ("3", "is made for @m2/core 3, newer than this app's 2.1.0. Update music2 to use it"),
     ] {
         let root = scratch(&format!("core-{asks}"));
         copy(&fixtures(), &root);
@@ -153,6 +153,36 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
         let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
         assert_eq!(codes(&e), ["pkg.broken"]);
         assert!(e[0].message.starts_with("@test/tiny") && e[0].message.contains(said), "{asks}: {}", e[0].message);
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+// PACK-22: an addition to @m2/core is a minor that every 2.x pack still builds with. A pack made for
+// 2.0, the frozen contract, builds, its descriptors as they were; one made for 2.1 may label a
+// setting (CARD-34), and the label reaches its descriptor.
+#[test]
+fn a_pack_made_for_an_older_minor_of_core_still_builds() {
+    for asks in ["2", "2.0", "2.1"] {
+        let root = scratch(&format!("core-minor-{asks}"));
+        copy(&fixtures(), &root);
+        let manifest = root.join("tiny/m2pkg.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, text.replace("\"@m2/core\" = \"2\"", &format!("\"@m2/core\" = \"{asks}\""))).unwrap();
+        if asks == "2.1" {
+            let index = root.join("tiny/src/index.ts");
+            let code = std::fs::read_to_string(&index).unwrap();
+            let code = code.replace("import { component, control,", "import { component, control, setting,").replace(
+                "controls: { brightness: control.hz(1800).range(200, 20000) },",
+                "controls: { brightness: control.hz(1800).range(200, 20000) },\n    settings: { voices: setting.int(12).label(\"notes at once\") },",
+            );
+            std::fs::write(&index, code).unwrap();
+        }
+        let mut pk = packages(&root.join("no-store"));
+        let c = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{asks}: {d:?}"));
+        assert_eq!(c.packs.len(), 1, "{asks}");
+        let keys = &c.components["@test/tiny:tiny-keys"];
+        let labels: Vec<Option<&str>> = keys.settings.iter().map(|s| s.label.as_deref()).collect();
+        assert_eq!(labels, if asks == "2.1" { vec![Some("notes at once")] } else { vec![] }, "{asks}");
         std::fs::remove_dir_all(&root).ok();
     }
 }
@@ -755,7 +785,11 @@ fn a_song_made_before_wave_3_is_told_the_line_to_write() {
     let dir = Store::at(root.join("store")).version_dir(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0));
     copy(&m2_song::pack::source_packs().join("@m2/synths"), &dir);
     let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
-    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"").replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"1\"");
+    // Made for @m2/core 1, whatever minor of 2 the bundled one asks for (PACK-23).
+    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"");
+    let toml: String =
+        toml.lines().map(|l| if l.starts_with("\"@m2/core\" = ") { "\"@m2/core\" = \"1\"" } else { l }).map(|l| format!("{l}\n")).collect();
+    assert!(toml.contains("\"@m2/core\" = \"1\""), "{toml}");
     std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
     let listing = Listing::of(&dir).unwrap();
     std::fs::write(dir.join(LISTING), listing.text()).unwrap();
