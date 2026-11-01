@@ -217,13 +217,13 @@ fn the_drum_machines_knobs_reach_its_drums() {
         text[text.find("drums.drum(").unwrap()..text.rfind(");").unwrap()].to_string()
     };
     let keys: Vec<&str> = made.tracks.iter().map(|m| m.module.as_str()).collect();
-    assert_eq!(keys, ["kick", "hats", "toms", "soft-kick", "snappy-snare", "ride"]);
+    assert_eq!(keys, ["kick", "kick-2", "snare-2", "hats", "toms", "ride"]);
     assert_eq!(call("kick"), "drums.drum(lane.notes(\"hits\"), { drum: \"kick\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })");
     assert_eq!(
-        call("soft-kick"),
-        "drums.drum(lane.notes(\"hits\"), { drum: \"soft kick\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })"
+        call("kick-2"),
+        "drums.drum(lane.notes(\"hits\"), { drum: \"kick 2\", tune: 0.706724, punch: 0.1, drive: 3, voices: 12 })"
     );
-    assert_eq!(call("snappy-snare"), "drums.drum(lane.notes(\"hits\"), { drum: \"snappy snare\", punch: 0.15, drive: 3, voices: 12 })");
+    assert_eq!(call("snare-2"), "drums.drum(lane.notes(\"hits\"), { drum: \"snare 2\", punch: 0.15, drive: 3, voices: 12 })");
     assert_eq!(call("hats"), "drums.drum(lane.notes(\"hits\"), { drum: \"hats\", decay: 2, drive: 3, voices: 12 })");
     assert_eq!(call("toms"), "drums.drum(lane.notes(\"hits\"), { drum: \"tom\", tune: -4.542139, decay: 0.877058, drive: 3, voices: 12 })");
     assert_eq!(call("ride"), "drums.drum(lane.notes(\"hits\"), { drum: \"ride\", drive: 3, voices: 12 })");

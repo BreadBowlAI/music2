@@ -222,7 +222,7 @@ await page.click("[data-testid=add-drum]");
 await page.waitForSelector("[data-testid=add-drum-menu]");
 const sounds = await page.$$eval("[data-testid=add-drum-menu] [data-sound]", (els) => els.map((e) => e.dataset.sound));
 check(
-  sounds.join() === "kick,snare,clap,hats,tom,rim,cowbell,cymbal,shaker,soft kick,snappy snare,ride,tambourine,high crash,high ride,high shaker,claves",
+  sounds.join() === "kick,kick 2,snare,snare 2,clap,hats,tom,rim,claves,cowbell,cymbal,cymbal 2,ride,ride 2,shaker,shaker 2,tambourine",
   `+ Drum offers the Drum's sounds, the drum machine's every drum (KIT-20) (${sounds})`,
 );
 await page.click('[data-testid=add-drum-menu] [data-sound="clap"]');

@@ -44,22 +44,22 @@ pub struct GmDrum {
 /// splash are the Cymbal's, its ride bell the Ride's).
 pub const GM: [GmDrum; 17] = [
     GmDrum { sound: "kick", notes: &[36], own: 36, name: "Kick" },
+    GmDrum { sound: "kick 2", notes: &[35], own: 35, name: "Kick 2" },
     GmDrum { sound: "snare", notes: &[38], own: 38, name: "Snare" },
+    GmDrum { sound: "snare 2", notes: &[40], own: 40, name: "Snare 2" },
     GmDrum { sound: "clap", notes: &[39], own: 39, name: "Clap" },
     GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42, name: "Hats" },
     GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45, name: "Toms" },
     GmDrum { sound: "rim", notes: &[37], own: 37, name: "Rim" },
+    GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
     GmDrum { sound: "cowbell", notes: &[56], own: 56, name: "Cowbell" },
     GmDrum { sound: "cymbal", notes: &[49, 52, 55], own: 49, name: "Cymbal" },
-    GmDrum { sound: "shaker", notes: &[69], own: 69, name: "Shaker" },
-    GmDrum { sound: "soft kick", notes: &[35], own: 35, name: "Soft kick" },
-    GmDrum { sound: "snappy snare", notes: &[40], own: 40, name: "Snappy snare" },
+    GmDrum { sound: "cymbal 2", notes: &[57], own: 57, name: "Cymbal 2" },
     GmDrum { sound: "ride", notes: &[51, 53], own: 51, name: "Ride" },
+    GmDrum { sound: "ride 2", notes: &[59], own: 59, name: "Ride 2" },
+    GmDrum { sound: "shaker", notes: &[69], own: 69, name: "Shaker" },
+    GmDrum { sound: "shaker 2", notes: &[70], own: 70, name: "Shaker 2" },
     GmDrum { sound: "tambourine", notes: &[54], own: 54, name: "Tambourine" },
-    GmDrum { sound: "high crash", notes: &[57], own: 57, name: "High crash" },
-    GmDrum { sound: "high ride", notes: &[59], own: 59, name: "High ride" },
-    GmDrum { sound: "high shaker", notes: &[70], own: 70, name: "High shaker" },
-    GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
 ];
 
 /// The notes of the table the drum machine is silent at (KIT-6): a Chinese cymbal, a ride bell and a

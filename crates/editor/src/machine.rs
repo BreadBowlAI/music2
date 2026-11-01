@@ -61,8 +61,8 @@ enum Carry {
     Level(&'static [&'static str]),
 }
 
-const KICKS: &[&str] = &["kick", "soft kick"];
-const SNARES: &[&str] = &["snare", "snappy snare"];
+const KICKS: &[&str] = &["kick", "kick 2"];
+const SNARES: &[&str] = &["snare", "snare 2"];
 
 /// The drum machine's knobs, as `@m2/drums` declares them, and how each is carried. The ranges are
 /// those its kernel clamps each value to.
@@ -78,10 +78,10 @@ const KNOBS: [(&str, Carry); 15] = [
     ("tomTune", Carry::TomTune),
     ("drive", Carry::Every("drive")),
     ("kickLevel", Carry::Level(KICKS)),
-    ("snareLevel", Carry::Level(&["snare", "snappy snare", "clap", "rim"])),
+    ("snareLevel", Carry::Level(&["snare", "snare 2", "clap", "rim"])),
     ("hatLevel", Carry::Level(&["hats"])),
     ("tomLevel", Carry::Level(&["tom"])),
-    ("percLevel", Carry::Level(&["cowbell", "cymbal", "shaker", "ride", "tambourine", "high crash", "high ride", "high shaker", "claves"])),
+    ("percLevel", Carry::Level(&["claves", "cowbell", "cymbal", "cymbal 2", "ride", "ride 2", "shaker", "shaker 2", "tambourine"])),
 ];
 
 impl Carry {

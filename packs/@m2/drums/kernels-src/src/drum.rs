@@ -1,8 +1,8 @@
 //! `drum`, the voice behind @m2/drums: an 808/909-style machine in one kernel that picks
 //! its drum when the note starts, either from the note's General MIDI pitch or from a
-//! fixed `model` (`m2_dsp::kit`, and `MORE` past its nine). `one`, the Drum's, is the same voice with its drum a menu
-//! (a choice, read when a hit starts) where the kit has `model`, cut by any hit on its lane when
-//! its drum chokes. Port order must match the pack's `m2pkg.toml`.
+//! fixed `model` (`m2_dsp::kit`). `one`, the Drum's, is the same voice with its drum a menu (a
+//! choice, read when a hit starts, its place read by [`SOUNDS`]) where the kit has `model`, cut by
+//! any hit on its lane when its drum chokes. Port order must match the pack's `m2pkg.toml`.
 //!
 //! Every drum is a one-shot: it reads its settings on its first sample, starts from exactly
 //! 0, and ends in exact silence at -90 dB. A hit in its choke group (from `drumhit`) fades
@@ -51,19 +51,46 @@ const DECAY: usize = 29;
 const PUSH: usize = 30;
 const INPUTS: usize = 31;
 
-/// The Drum's sounds past the first nine (KIT-20), from place 9: each the drum the drum machine plays
-/// at a General MIDI note, at any note: soft kick (35), snappy snare (40), ride (51), tambourine
-/// (54), high crash (57), high ride (59), high shaker (70) and claves (75).
-const MORE: [f32; 8] = [35.0, 40.0, 51.0, 54.0, 57.0, 59.0, 70.0, 75.0];
+/// What a place of the Drum's menu plays (KIT-20): one of the drum voice's own models (0 to 8),
+/// or the drum the drum machine plays at a General MIDI note, at any note.
+#[derive(Clone, Copy)]
+enum Plays {
+    Model(f32),
+    Note(f32),
+}
 
-/// What a note at `pitch` plays for `model`: the drum machine's map (`kind_of`: -1 the General MIDI
-/// kit, 0 to 8 the Drum's first nine), or for a model from 9 the drum the drum machine plays at that
-/// sound's note.
-fn drum_at(model: f32, pitch: f32) -> (Kind, f32, bool) {
-    let more = model.round() - 9.0;
-    match MORE.get(more as usize) {
-        Some(note) if more >= 0.0 => kind_of(-1.0, *note),
-        _ => kind_of(model, pitch),
+/// The Drum's menu, by place, grouped by family as `@m2/drums` declares it (`DRUMS`): kick, kick 2,
+/// snare, snare 2, clap, hats, tom, rim, claves, cowbell, cymbal, cymbal 2, ride, ride 2, shaker,
+/// shaker 2, tambourine. A song writes a sound by its name: its place reads it here.
+const SOUNDS: [Plays; 17] = [
+    Plays::Model(0.0),
+    Plays::Note(35.0),
+    Plays::Model(1.0),
+    Plays::Note(40.0),
+    Plays::Model(2.0),
+    Plays::Model(3.0),
+    Plays::Model(4.0),
+    Plays::Model(5.0),
+    Plays::Note(75.0),
+    Plays::Model(6.0),
+    Plays::Model(7.0),
+    Plays::Note(57.0),
+    Plays::Note(51.0),
+    Plays::Note(59.0),
+    Plays::Model(8.0),
+    Plays::Note(70.0),
+    Plays::Note(54.0),
+];
+
+/// What a note at `pitch` plays on the Drum whose menu is at `place` ([`SOUNDS`]); a place off the
+/// menu as the drum machine's map reads it (NaN and below 0 its General MIDI kit, past it nothing).
+fn sound_at(place: f32, pitch: f32) -> (Kind, f32, bool) {
+    let at = place.round();
+    match SOUNDS.get(at as usize).filter(|_| at >= 0.0) {
+        Some(Plays::Model(m)) => kind_of(*m, pitch),
+        Some(Plays::Note(n)) => kind_of(-1.0, *n),
+        None if at >= 0.0 => (Kind::Silent, 0.0, false),
+        None => kind_of(place, pitch),
     }
 }
 
@@ -243,7 +270,7 @@ pub struct Drum {
 impl Drum {
     fn start(&mut self, at: &dyn Fn(usize) -> f32) {
         let sr = self.sr;
-        let (kind, semis, alt) = drum_at(at(MODEL), at(PITCH));
+        let (kind, semis, alt) = if self.one { sound_at(at(MODEL), at(PITCH)) } else { kind_of(at(MODEL), at(PITCH)) };
         self.kind = kind;
         // One drum's knobs: its pitch moved by `tune` semitones, its decays `decay` times as long
         // (the rim's ring and the cowbell's too), and `push` added to a kick's punch or a snare's
@@ -655,8 +682,8 @@ fn any_hit(kind: Kind, h: f32) -> bool {
 
 export!(drum, Drum);
 
-/// One drum's voice, `@m2/drums:one`: [`Drum`] with its drum a menu (its port 4, `drum`, a choice
-/// whose places are the models 0 to 8), cut by any hit on its lane when its drum chokes.
+/// The Drum's voice, `@m2/drums:one`: [`Drum`] with its drum a menu (its port 4, `drum`, a choice
+/// whose places [`SOUNDS`] reads), cut by any hit on its lane when its drum chokes.
 pub struct One(Drum);
 
 impl Kernel for One {

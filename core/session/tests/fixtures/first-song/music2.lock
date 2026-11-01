@@ -3,7 +3,7 @@
 [[pack]]
 name = "@m2/drums"
 version = "2.1.0"
-hash = "sha256:3da71addcc4fbc793a1ed378fcb6f01e2e06443ea4dba4d123d6d099c24ad5b3"
+hash = "sha256:c4c4613ba06a176560460243dac1a32746ec9d07d3f5e8ccbbaf9bc9e20663bb"
 
 [[pack]]
 name = "@m2/synths"

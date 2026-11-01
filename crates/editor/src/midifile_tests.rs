@@ -123,7 +123,7 @@ fn a_drum_machine_lane_is_channel_10() {
 
 // KIT-9: a kit's Drum tracks go out on channel 10, each note at a General MIDI note of its sound:
 // one of them as it is (the hats' closed, pedal and open; a tom's), another sound's note to the
-// sound's own (the Kick's D2, the snare's, and its B1, the soft kick's, as 36), or for a tom to the nearest tom note; a note no
+// sound's own (the Kick's D2, the snare's, and its B1, kick 2's, as 36), or for a tom to the nearest tom note; a note no
 // sound answers to as it is (C4). A Drum whose sound a lane plays keeps its notes' pitches; a clip
 // of it written alone goes out as the song does.
 #[test]

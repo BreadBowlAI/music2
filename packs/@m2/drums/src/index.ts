@@ -19,30 +19,29 @@
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
 
 /**
- * The drums the Drum can play, as its menu names them: their places are the drum kernel's models.
- * The first nine, then (KIT-20) the drum machine's others, each the drum it plays at a General MIDI
- * note, at any note: soft kick (35), snappy snare (40), ride (51), tambourine (54), high crash (57),
- * high ride (59), high shaker (70) and claves (75). A new one goes at the end, so every written
- * value keeps its place.
+ * The drums the Drum can play, as its menu names them, grouped by family: each other drum the drum
+ * machine plays beside the drum it is most like, named as General MIDI names it (KIT-20). A song
+ * writes a sound by its name; the `one` kernel reads its place (`SOUNDS` in kernels-src), so the
+ * order is for reading, and each name plays what it always played.
  */
 const DRUMS = [
   "kick",
+  "kick 2",
   "snare",
+  "snare 2",
   "clap",
   "hats",
   "tom",
   "rim",
+  "claves",
   "cowbell",
   "cymbal",
-  "shaker",
-  "soft kick",
-  "snappy snare",
+  "cymbal 2",
   "ride",
+  "ride 2",
+  "shaker",
+  "shaker 2",
   "tambourine",
-  "high crash",
-  "high ride",
-  "high shaker",
-  "claves",
 ] as const;
 
 /**
@@ -164,9 +163,9 @@ export const drums = {
 
   /**
    * One drum on every note, the one its menu picks: kick, snare, clap, hats (G#2 pedal, A#2 open),
-   * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal or shaker, or another drum the
-   * drum machine plays (a soft kick, a snappy snare, a ride, a tambourine, a high crash, a high ride,
-   * a high shaker or claves: KIT-20), as the drum machine plays it at its note. The menu is a
+   * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal (a crash) or shaker, or another
+   * drum the drum machine plays (kick 2, snare 2, claves, cymbal 2, ride, ride 2, shaker 2, tambourine:
+   * KIT-20), as the drum machine plays it at its note. The menu is a
    * control: a pick plays from the next hit, and a lane can automate it. Its knobs move whichever it
    * plays: `tune` in semitones from the drum's own, `decay` times its own length, and `punch` more or
    * less of a kick's thump or a snare's snap, or on the others of the hit's first 15 ms. At 0, 1

@@ -2,7 +2,7 @@
 
 **In short**
 - music2's 808/909-style drums, as a pack that ships with music2 and installs into your store when it starts.
-- `drums.drum` (Drum) plays one drum on every note, the one its menu picks: kick, snare, clap, hats, tom, rim, cowbell, cymbal or shaker, or another of the drum machine's (soft kick, snappy snare, ride, tambourine, high crash, high ride, high shaker, claves) (`drums.drum(notes, { drum: "snare" })`), with its tune, decay and punch.
+- `drums.drum` (Drum) plays one drum on every note, the one its menu picks: kick, snare, clap, hats, tom, rim, cowbell, cymbal or shaker, or another drum the drum machine plays, beside its family (kick 2, snare 2, claves, cymbal 2, ride, ride 2, shaker 2, tambourine) (`drums.drum(notes, { drum: "snare" })`), with its tune, decay and punch.
 - Its kits, 808 kit, 909 kit and Basic kit, are what + Track's Drum kit makes: several Drum tracks that go to one Drums bus, each drum mixed on its own.
 - `drums.kit` (Drum machine) plays a whole beat from one notes lane, each drum on its General MIDI note (C2 kick, D2 snare, F#2 closed hat …). No list offers it now; songs that play it play as before.
 

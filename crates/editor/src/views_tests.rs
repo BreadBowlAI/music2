@@ -598,22 +598,22 @@ fn music2s_own_sounds_show_their_groups_and_views() {
         names,
         [
             "kick",
+            "kick 2",
             "snare",
+            "snare 2",
             "clap",
             "hats",
             "tom",
             "rim",
+            "claves",
             "cowbell",
             "cymbal",
-            "shaker",
-            "soft kick",
-            "snappy snare",
+            "cymbal 2",
             "ride",
-            "tambourine",
-            "high crash",
-            "high ride",
-            "high shaker",
-            "claves"
+            "ride 2",
+            "shaker",
+            "shaker 2",
+            "tambourine"
         ]
     );
     assert_eq!(drum.settings.iter().map(|x| x.slot.as_str()).collect::<Vec<_>>(), ["voices"]);

@@ -179,7 +179,7 @@ await page.waitForSelector("[data-testid=setting-options]");
 const drums = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
 check(
   JSON.stringify(drums) ===
-    '["kick","snare","clap","hats","tom","rim","cowbell","cymbal","shaker","soft kick","snappy snare","ride","tambourine","high crash","high ride","high shaker","claves"]',
+    '["kick","kick 2","snare","snare 2","clap","hats","tom","rim","claves","cowbell","cymbal","cymbal 2","ride","ride 2","shaker","shaker 2","tambourine"]',
   `it lists every drum of the drum machine, the nine first (KIT-20): ${JSON.stringify(drums)}`,
 );
 await linted("[data-testid=setting-options]", "the drum menu");

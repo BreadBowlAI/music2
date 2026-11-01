@@ -213,22 +213,22 @@ fn each_sound_answers_to_its_general_midi_notes() {
     let got: Vec<(&str, &[u8], u8, &str)> = GM.iter().map(|g| (g.sound, g.notes, g.own, g.name)).collect();
     let want: [(&str, &[u8], u8, &str); 17] = [
         ("kick", &[36], 36, "Kick"),
+        ("kick 2", &[35], 35, "Kick 2"),
         ("snare", &[38], 38, "Snare"),
+        ("snare 2", &[40], 40, "Snare 2"),
         ("clap", &[39], 39, "Clap"),
         ("hats", &[42, 44, 46], 42, "Hats"),
         ("tom", &[41, 43, 45, 47, 48, 50], 45, "Toms"),
         ("rim", &[37], 37, "Rim"),
+        ("claves", &[75], 75, "Claves"),
         ("cowbell", &[56], 56, "Cowbell"),
         ("cymbal", &[49, 52, 55], 49, "Cymbal"),
-        ("shaker", &[69], 69, "Shaker"),
-        ("soft kick", &[35], 35, "Soft kick"),
-        ("snappy snare", &[40], 40, "Snappy snare"),
+        ("cymbal 2", &[57], 57, "Cymbal 2"),
         ("ride", &[51, 53], 51, "Ride"),
+        ("ride 2", &[59], 59, "Ride 2"),
+        ("shaker", &[69], 69, "Shaker"),
+        ("shaker 2", &[70], 70, "Shaker 2"),
         ("tambourine", &[54], 54, "Tambourine"),
-        ("high crash", &[57], 57, "High crash"),
-        ("high ride", &[59], 59, "High ride"),
-        ("high shaker", &[70], 70, "High shaker"),
-        ("claves", &[75], 75, "Claves"),
     ];
     assert_eq!(got, want);
     let s = fixture("templates/empty").open();
@@ -418,10 +418,10 @@ fn split_gives_each_sound_its_own_notes() {
         got,
         [
             ("kick", vec![n(36.0, 0.0, 1.0)]),
+            ("kick 2", vec![n(35.0, 3.0, 0.8)]),
             ("snare", vec![n(38.0, 1.0, 0.9)]),
             ("hats", vec![n(42.0, 0.0, 0.5), n(46.0, 0.5, 0.6), n(43.7, 1.5, 0.4)]),
             ("tom", vec![n(41.0, 2.0, 0.8), n(48.0, 2.5, 0.8)]),
-            ("soft kick", vec![n(35.0, 3.0, 0.8)]),
         ]
     );
     assert_eq!(s.left, [n(60.0, 0.5, 0.7), n(81.0, 3.5, 0.3)], "never dropped");
@@ -436,7 +436,7 @@ fn split_gives_each_sound_its_own_notes() {
 fn a_drums_note_goes_out_as_its_sounds() {
     let out = |sound: &str, keys: &[u8]| keys.iter().map(|k| general_midi(sound, *k)).collect::<Vec<u8>>();
     assert_eq!(out("kick", &[36, 35, 38, 60, 81, 24, 82, 0]), [36, 36, 36, 60, 81, 36, 36, 36]);
-    assert_eq!(out("soft kick", &[35, 36, 24]), [35, 35, 35]);
+    assert_eq!(out("kick 2", &[35, 36, 24]), [35, 35, 35]);
     assert_eq!(out("hats", &[42, 44, 46, 36, 81]), [42, 44, 46, 42, 81]);
     assert_eq!(out("tom", &[41, 44, 46, 49, 60, 37]), [41, 43, 45, 48, 60, 41]);
     assert_eq!(out("cymbal", &[52, 53, 55, 51, 56]), [52, 49, 55, 49, 49]);
