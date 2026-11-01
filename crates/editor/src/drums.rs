@@ -58,11 +58,11 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
     let inst = listed.ok_or_else(|| EditError::NotFound(format!("{component}: no instrument the lists offer is called that")))?;
     let d = s.catalog().components[component].clone();
     let Some(k) = d.editor.kits.iter().find(|k| k.name == kit) else {
-        let names: Vec<&str> = d.editor.kits.iter().map(|k| k.name.as_str()).collect();
-        return Err(EditError::Rejected(match names.split_last() {
-            None => format!("{} has no kits.", inst.label),
-            Some((last, [])) => format!("{} has no kit called {kit}: its kit is {last}.", inst.label),
-            Some((last, rest)) => format!("{} has no kit called {kit}: its kits are {} and {last}.", inst.label, rest.join(", ")),
+        let names: Vec<String> = d.editor.kits.iter().map(|k| k.name.clone()).collect();
+        return Err(EditError::Rejected(match names.len() {
+            0 => format!("{} has no kits.", inst.label),
+            1 => format!("{} has no kit called {kit}: its kit is {}.", inst.label, names[0]),
+            _ => format!("{} has no kit called {kit}: its kits are {}.", inst.label, crate::listed(&names)),
         }));
     };
     let bus = NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), ..NewTrack::default() };

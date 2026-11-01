@@ -114,6 +114,14 @@ m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
 
 Add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
 
+## m2 add-kit
+
+```
+m2 add-kit <project> <kit> [--after ID]
+```
+
+Add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes back, verified. It is what + Track ▸ Drum kit does. `m2 add-kit . "808 kit" --after keys` puts the kit below that track. The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.
+
 ## m2 import
 
 ```

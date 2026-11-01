@@ -187,6 +187,17 @@ pub const COMMANDS: &[Command] = &[
                below that track.",
     },
     Command {
+        name: "add-kit",
+        also: &[],
+        usage: "m2 add-kit <project> <kit> [--after ID]",
+        words: "add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each \
+                a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes \
+                back, verified",
+        more: "It is what + Track ▸ Drum kit does. `m2 add-kit . \"808 kit\" --after keys` puts the kit below that track. \
+               The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit \
+               on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.",
+    },
+    Command {
         name: "import",
         also: &[],
         usage: "m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]",

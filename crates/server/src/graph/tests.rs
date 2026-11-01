@@ -3985,6 +3985,47 @@ fn the_bus_routes_answer_with_the_new_view() {
     assert!(!fixture.0.join("tracks/reverb.ts").exists());
 }
 
+// KIT-5: the state lists the kits the packs name, and `POST /api/graph/track/kit` adds one: a Drums
+// bus and its tracks, each going to it, after the track it names, answered with the bus, its
+// tracks and the new Mix view. One undo takes it all back; a kit nobody names is refused in words.
+#[test]
+fn the_kit_route_adds_a_bus_and_its_tracks() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let song = fixture.read("song.ts");
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
+    let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
+    let state = running.state.graph.state().unwrap();
+    let kits: Vec<&str> = state["kits"].as_array().unwrap().iter().map(|k| k["name"].as_str().unwrap()).collect();
+    assert_eq!(kits, ["808 kit", "909 kit", "Basic kit"]);
+    assert_eq!(
+        (&state["kits"][2]["component"], &state["kits"][2]["tracks"]),
+        (&json!("@m2/drums:drum"), &json!(["Kick", "Snare", "Hats"]))
+    );
+    let (status, made) =
+        post("/api/graph/track/kit", json!({"session": session, "component": "@m2/drums:drum", "kit": "Basic kit", "after": "kick"}));
+    assert_eq!((status, &made["module"], &made["label"]), (200, &json!("drums"), &json!("Drums")), "{made:#}");
+    let tracks: Vec<(&str, &str)> =
+        made["tracks"].as_array().unwrap().iter().map(|t| (t["module"].as_str().unwrap(), t["label"].as_str().unwrap())).collect();
+    assert_eq!(tracks, [("kick-2", "Kick 2"), ("snare", "Snare"), ("hats-2", "Hats 2")]);
+    let strips = made["mix"]["strips"].as_array().unwrap();
+    for (key, _) in &tracks {
+        let strip = strips.iter().find(|x| x["channel"] == *key).unwrap_or_else(|| panic!("{key}: {made:#}"));
+        assert_eq!(strip["output"], "drums", "{key} goes to the bus");
+    }
+    assert_eq!(
+        rows(&running.state.graph).iter().map(|r| r.0.as_str()).take(5).collect::<Vec<_>>(),
+        ["kick", "drums", "kick-2", "snare", "hats-2"]
+    );
+    let (status, refused) = post("/api/graph/track/kit", json!({"session": session, "component": "@m2/drums:drum", "kit": "Jazz kit"}));
+    assert!(status >= 400 && refused["error"].as_str().unwrap_or("").contains("Drum has no kit called Jazz kit"), "{status} {refused:#}");
+    running.state.graph.undo(session).unwrap();
+    assert_eq!(fixture.read("song.ts"), song);
+    assert!(!fixture.0.join("tracks/drums.ts").exists() && !fixture.0.join("tracks/snare.ts").exists());
+}
+
 /// `n` blocks of 128 frames, both channels, interleaved.
 fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
     let mut out = vec![];

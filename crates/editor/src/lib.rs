@@ -179,6 +179,15 @@ pub(crate) fn refused(s: &Session, r: Refusal) -> EditError {
     }
 }
 
+/// Names as words: "Kick", "Kick and Bass", "Kick, Bass and Hats".
+pub fn listed(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// A gesture that writes code plans on the accepted revision, which needs the draft to compile
 /// (the draft rule, C7): otherwise there is no base to edit.
 pub(crate) fn ready(s: &Session) -> Result<(), EditError> {

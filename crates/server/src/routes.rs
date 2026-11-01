@@ -125,6 +125,9 @@ crate::api::routes! {
     POST "/api/graph/track/add" => track_add; writes, agents,
         "Add a track playing an instrument, by its component id as the state's instruments list it",
         r#"{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}"#;
+    POST "/api/graph/track/kit" => track_kit; writes, agents,
+        "Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kits list it",
+        r#"{"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}"#;
     POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
         "Copy a track: its code, its clips with new ids, its plugin states and its channel",
         r#"{"session": 7, "module": "keys"}"#;
@@ -766,6 +769,27 @@ struct TrackAddReq {
 async fn track_add(State(s): S, Json(r): Json<TrackAddReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.add_track(r.session, &r.component, r.label, r.key, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct KitReq {
+    session: u64,
+    /// The instrument that names it, by ComponentId (`@m2/drums:drum`), as the state's `kits` say.
+    component: String,
+    /// The kit, by its name (`808 kit`).
+    kit: String,
+    /// The track it goes below in the layout (the selected one); else last.
+    #[serde(default)]
+    after: Option<String>,
+}
+
+/// Add a drum kit (+ Track ▸ Drum kit, KIT-5): a Drums bus and the kit's tracks, each going to it,
+/// one undo step. Answers the bus (`module`, `label`), its `tracks` and the new Mix view, `mix`.
+async fn track_kit(State(s): S, Json(r): Json<KitReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.add_kit(r.session, &r.component, &r.kit, r.after)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

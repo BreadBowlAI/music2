@@ -878,6 +878,36 @@ fn run(args: Vec<String>) -> Result<()> {
                 made.label, inst.label, made.module, made.edited.file, made.edited.revision
             );
         }
+        Some("add-kit") => {
+            // KIT-5: what + Track ▸ Drum kit does, a kit by its name.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let wanted = arg(2)?;
+            let kits = m2_editor::drums::kits(&s);
+            let names: Vec<String> = kits.iter().map(|k| k.name.clone()).collect();
+            let kit = match kits.iter().filter(|k| k.name == wanted).collect::<Vec<_>>().as_slice() {
+                [k] => (*k).clone(),
+                [] => bail!("no kit `{wanted}`: the kits are {}", m2_editor::listed(&names)),
+                many => {
+                    let whose: Vec<String> = many.iter().map(|k| format!("{} ({})", k.instrument, k.component)).collect();
+                    bail!(
+                        "{} instruments name a kit `{wanted}`: {}. Add it in the app, or with POST /api/graph/track/kit",
+                        many.len(),
+                        whose.join(", ")
+                    )
+                }
+            };
+            let after = flag(&args, "--after");
+            let made = m2_editor::drums::add_kit(&mut s, &kit.component, &kit.name, after.as_deref()).map_err(|e| anyhow!("{e}"))?;
+            let tracks: Vec<String> = made[1..].iter().map(|m| m.label.clone()).collect();
+            println!(
+                "added {}: {} (ID {}), and {} going to it (revision {})",
+                kit.name,
+                made[0].label,
+                made[0].module,
+                m2_editor::listed(&tracks),
+                made[0].edited.revision
+            );
+        }
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);
