@@ -197,6 +197,7 @@ export const SUITES = [
   ["own-edits", "fix", { expect: 43, s: 6 }],
   ["own-gate", "fix", { expect: 30, s: 12 }],
   ["own-base", "fix", { expect: 36, s: 20 }],
+  ["own-window", "fix", { expect: 15, s: 15 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
