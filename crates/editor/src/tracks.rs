@@ -250,11 +250,16 @@ pub(crate) fn sorted(mut edits: Vec<(u32, u32, String)>) -> Result<Vec<(u32, u32
     Ok(edits)
 }
 
-/// The `track(…)` call a new track file makes, playing `inst` from its lane: also checked as a
-/// call form (PKG-11, `planned_call_forms_are_current`).
-pub(crate) fn track_call_text(inst: &Instrument, key: &str, label: &str) -> String {
+/// The `track(…)` call a new track file makes, playing `inst` from its lane with `values` written
+/// into the instrument's call (`{ drum: "snare" }`): also checked as a call form (PKG-11,
+/// `planned_call_forms_are_current`).
+pub(crate) fn track_call_text(inst: &Instrument, key: &str, label: &str, values: &[(String, String)]) -> String {
     let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
-    format!("track({}{options}, ({{ lane }}) => {}(lane.notes({})))", quoted(key), inst.name, quoted(&inst.lane))
+    let values = match values {
+        [] => String::new(),
+        v => format!(", {{ {} }}", v.iter().map(|(name, code)| format!("{}: {code}", prop_key(name))).collect::<Vec<_>>().join(", ")),
+    };
+    format!("track({}{options}, ({{ lane }}) => {}(lane.notes({}){values}))", quoted(key), inst.name, quoted(&inst.lane))
 }
 
 /// What a track file imports to play `inst`: `pluck`, or for `synth.pad` the object, `synth`.
@@ -262,8 +267,8 @@ pub(crate) fn instrument_binding(inst: &Instrument) -> &str {
     inst.name.split('.').next().unwrap_or(&inst.name)
 }
 
-/// The text of a new track file playing `inst` from lane `lane`.
-fn track_text(inst: &Instrument, key: &str, label: &str, file: &str) -> String {
+/// The text of a new track file playing `inst` from its lane, with `values` in its call.
+fn track_text(inst: &Instrument, key: &str, label: &str, file: &str, values: &[(String, String)]) -> String {
     // A project's own instrument is imported by its path from the track's folder.
     let from = match inst.module.ends_with(".ts") {
         true => specifier(file, &inst.module),
@@ -273,7 +278,7 @@ fn track_text(inst: &Instrument, key: &str, label: &str, file: &str) -> String {
         "import {{ track }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
         instrument_binding(inst),
         quoted(&from),
-        track_call_text(inst, key, label)
+        track_call_text(inst, key, label, values)
     )
 }
 
@@ -368,25 +373,42 @@ fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     }
 }
 
+/// The assertion that each new channel (by its key) goes where it was asked: to its bus, or to the
+/// master.
+fn goes_to(checked: &Checked, routed: &[(String, Option<String>)]) -> Result<(), EditError> {
+    let Mixing::One(m) = mix::mixer(checked.candidate()) else {
+        return Err(EditError::Rejected("adding the track would lose the mixer".into()));
+    };
+    let routes = crate::bus::routing(checked.candidate(), &m);
+    match routed.iter().all(|(key, to)| routes.get(key).and_then(|r| r.to.as_ref()) == to.as_ref()) {
+        true => Ok(()),
+        false => Err(EditError::Rejected("adding the track would send it somewhere else than asked".into())),
+    }
+}
+
 /// What a new track plays: an instrument (its ComponentId, `@m2/synths:synth-pluck`) or an installed
 /// instrument plugin (`clap:<id>`, gaps #32) from a notes lane, or audio clips from an audio lane
 /// (lane A's A2).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum Play {
     Instrument(String),
     Plugin(String),
+    #[default]
     Audio,
 }
 
 /// A track to add: what it plays, its name (else the instrument's, or "Audio"), its key (else one
 /// proposed from its name, ID-2), and its lane's first clips, as the lane format writes them (each
-/// gets a fresh id, as a gesture mints one).
-#[derive(Clone, Debug, PartialEq)]
+/// gets a fresh id, as a gesture mints one). An instrument's call gets `values`, each a control's
+/// name and its code (`drum`, `"snare"`); its channel goes to the bus channel `to`, else the master.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct NewTrack {
     pub play: Play,
     pub label: Option<String>,
     pub key: Option<String>,
     pub clips: Vec<serde_json::Value>,
+    pub values: Vec<(String, String)>,
+    pub to: Option<String>,
 }
 
 /// The lane an audio track plays its clips from.
@@ -406,7 +428,7 @@ pub fn add(s: &mut Session, component: &str, label: Option<&str>, key: Option<&s
         true => Play::Plugin(component.to_string()),
         false => Play::Instrument(component.to_string()),
     };
-    let one = NewTrack { play, label: label.map(str::to_string), key: key.map(str::to_string), clips: vec![] };
+    let one = NewTrack { play, label: label.map(str::to_string), key: key.map(str::to_string), ..NewTrack::default() };
     Ok(add_tracks(s, &[one], after, None)?.remove(0))
 }
 
@@ -433,6 +455,10 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     let catalog = instruments(s);
     let rev = s.accepted();
     let mixer = the_mixer(rev)?;
+    let buses = crate::bus::bus_channels(rev, &mixer);
+    if let Some(to) = tracks.iter().filter_map(|t| t.to.as_deref()).find(|to| !buses.contains_key(*to)) {
+        return Err(EditError::Rejected(format!("The mixer has no bus channel {to}, so no track can go to it.")));
+    }
     let song_text = rev.snapshot.files[Path::new(&mixer.file)].clone();
     let taken = taken(rev);
     let tx_id = m2_song::tx::random_id();
@@ -490,7 +516,10 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
                 .find(|b| !bindings.contains(b) && free_binding(&song_text, b) == *b)
                 .expect("a free binding");
         }
-        entries.push(format!("{}: {binding}.out", prop_key(&key)));
+        entries.push(match &t.to {
+            Some(bus) => format!("{}: {{ in: {binding}.out, to: {} }}", prop_key(&key), quoted(bus)),
+            None => format!("{}: {binding}.out", prop_key(&key)),
+        });
         imports.push(import_edit(&song_text, &mixer.file, &file, &binding));
         let k = Key::new(&key).map_err(EditError::Rejected)?;
         let lane_key = match (inst, plugin) {
@@ -503,7 +532,7 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
         let data = with_fresh_ids(&t.clips, &kind, &tx_id, &lane)?;
         let new_file = path(&file)?;
         let text = match (inst, plugin) {
-            (Some(i), _) => track_text(i, &key, &label, &file),
+            (Some(i), _) => track_text(i, &key, &label, &file, &t.values),
             (None, Some((id, _))) => crate::plugins::track_text(id, &key, &label),
             (None, None) => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
         };
@@ -576,12 +605,14 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
     }
     let said = |why: &str| EditError::Rejected(format!("adding {shown} would change more than adding tracks ({why})"));
     let made: Vec<(String, String)> = keys_made.iter().map(|k| (k.clone(), k.clone())).collect();
+    let routed: Vec<(String, Option<String>)> = keys_made.iter().zip(tracks).map(|(k, t)| (k.clone(), t.to.clone())).collect();
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         for id in plugins.keys() {
             crate::plugins::installed_in(checked, id)?;
         }
-        adds(checked, &made)
+        adds(checked, &made)?;
+        goes_to(checked, &routed)
     })?;
     let edited = Edited { revision: done.number, file: files[0].clone(), before: String::new(), after: shown };
     Ok(keys_made

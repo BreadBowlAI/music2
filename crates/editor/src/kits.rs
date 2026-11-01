@@ -13,7 +13,8 @@ use serde::Serialize;
 
 use crate::controls::walk;
 use crate::mix::{self, Mixing};
-use crate::{bus, kind, layout};
+use crate::tracks::{self, Made, NewTrack, Play};
+use crate::{EditError, bus, kind, layout};
 
 /// The Drum, by its ComponentId: one drum on a track.
 pub const DRUM: &str = "@m2/drums:drum";
@@ -62,6 +63,39 @@ pub fn kits(s: &Session) -> Vec<Kit> {
     }
     kits.sort_by_key(|k| place(&k.bus));
     kits
+}
+
+/// Add a Drum track to the kit of bus `bus` (KIT-15): playing `sound` (one of the Drum's), its
+/// `drum` written, named by it, its channel going to the bus, in the timeline after the kit's last
+/// row. Add a track's one Tx, one undo step.
+pub fn add_drum(s: &mut Session, bus: &str, sound: &str) -> Result<Made, EditError> {
+    let sounds: Vec<String> = s
+        .catalog()
+        .components
+        .get(DRUM)
+        .and_then(|d| d.control("drum"))
+        .map(|c| kind::of_unit(c.unit.clone()).1.into_iter().map(|o| o.label).collect())
+        .unwrap_or_default();
+    if !sounds.iter().any(|x| x == sound) {
+        return Err(EditError::Rejected(format!("A Drum plays {}, not {sound:?}.", kind::one_of(&sounds))));
+    }
+    let rev = s.accepted();
+    let Some(kit) = kits(s).into_iter().find(|k| k.bus == bus) else {
+        return Err(EditError::Rejected(format!("{} is no drum kit's bus: no Drum track goes to it.", bus::label_of(rev, bus))));
+    };
+    let Mixing::One(m) = mix::mixer(rev) else { unreachable!("a kit is a mixer's") };
+    let channel = bus::bus_channels(rev, &m).into_iter().find(|(_, b)| b == bus).map(|(c, _)| c);
+    let mut label = sound.to_string();
+    label[..1].make_ascii_uppercase();
+    let drum = NewTrack {
+        play: Play::Instrument(DRUM.into()),
+        label: Some(label),
+        values: vec![("drum".into(), tracks::quoted(sound))],
+        to: channel,
+        ..NewTrack::default()
+    };
+    let after = kit.rows.last().map(|r| r.track.clone());
+    Ok(tracks::add_tracks(s, &[drum], after.as_deref(), None)?.remove(0))
 }
 
 /// Track `module` as a row, when it is a Drum track: one Drum, from a notes lane of its own.

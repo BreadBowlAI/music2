@@ -282,3 +282,47 @@ fn steps_are_refused_in_words() {
         "edit rejected: A velocity is above 0 and at most 1, not 1.5."
     );
 }
+
+// ---------------------------------------------------------------- + Drum (KIT-15)
+
+// KIT-15: + Drum adds a Drum track to the kit as one undo step: playing the sound picked, its `drum`
+// written, named by it, its channel going to the kit's bus, in the timeline after the kit's last
+// row. A second of one sound is named apart.
+#[test]
+fn plus_drum_adds_a_row_routed_to_the_bus() {
+    let f = fixture(BUSES);
+    let mut s = f.open();
+    let song = f.read("song.ts");
+    let made = kits::add_drum(&mut s, "drums", "snare").unwrap();
+    assert_eq!((made.module.as_str(), made.label.as_str()), ("snare", "Snare"));
+    assert_eq!(
+        f.read("tracks/snare.ts"),
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
+         export default track(\"snare\", { name: \"Snare\" }, ({ lane }) => drums.drum(lane.notes(\"hits\"), { drum: \"snare\" }));\n"
+    );
+    let now = f.read("song.ts");
+    assert!(now.contains("      snare: { in: snare.out, to: \"drums\" },\n"), "{now}");
+    assert_eq!(rows(&s), [row("kick", "hits", Some("kick")), row("hats", "hits", Some("hats")), row("snare", "hits", Some("snare"))]);
+    assert_eq!(&crate::layout::view(&s).order[..4], ["kick", "hats", "snare", "drums"], "after the kit's last row");
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("song.ts"), song, "one undo takes it all back");
+    assert!(!f.0.join("tracks/snare.ts").exists());
+    assert_eq!(rows(&s).len(), 2);
+    crate::redo(&mut s).unwrap();
+    let again = kits::add_drum(&mut s, "drums", "snare").unwrap();
+    assert_eq!((again.module.as_str(), again.label.as_str()), ("snare-2", "Snare 2"));
+    assert_eq!(rows(&s).last(), Some(&row("snare-2", "hits", Some("snare"))));
+}
+
+// KIT-15: + Drum is refused in words for a sound the Drum hasn't got, or a bus that is no kit's.
+#[test]
+fn plus_drum_is_refused_in_words() {
+    let f = fixture(BUSES);
+    let mut s = f.open();
+    let said = |r: Result<crate::tracks::Made, crate::EditError>| r.map(|m| m.module).unwrap_err().to_string();
+    assert_eq!(
+        said(kits::add_drum(&mut s, "drums", "gong")),
+        "edit rejected: A Drum plays \"kick\", \"snare\", \"clap\", \"hats\", \"tom\", \"rim\", \"cowbell\", \"cymbal\" or \"shaker\", not \"gong\"."
+    );
+    assert_eq!(said(kits::add_drum(&mut s, "verb", "kick")), "edit rejected: Reverb is no drum kit's bus: no Drum track goes to it.");
+}

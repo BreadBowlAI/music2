@@ -572,6 +572,7 @@ pub fn place_with(s: &mut Session, files: &[Imported], at: &Target, follow: &[Op
                     label: Some(track_label(f)),
                     key: None,
                     clips: vec![clip_at(f, beat, &tempo, follows(i))],
+                    ..NewTrack::default()
                 })
                 .collect();
             let made = tracks::add_tracks(s, &new, after, None)?;

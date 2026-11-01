@@ -3993,6 +3993,50 @@ fn the_bus_routes_answer_with_the_new_view() {
     assert!(!fixture.0.join("tracks/reverb.ts").exists());
 }
 
+// KIT-1, KIT-12, KIT-15, through a running server: first-song's Kick and Hats sent to a Group bus
+// are a kit in the state's view; + Drum adds a Snare to it, one undo step, and a step written by the
+// clips route's `hits` lands on the Snare's lane at its own note.
+#[test]
+fn a_kit_shows_in_the_view_and_takes_a_drum_and_its_steps() {
+    let fixture = Fixture::new();
+    mixed(&fixture);
+    let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
+    let graph = &running.state.graph;
+    let session = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
+    let post = |path: &str, body: Value| crate::routes_8b::tests::post(&running.url, path, Some("t0k"), &body);
+    post("/api/graph/mix/bus", json!({"session": session, "kind": "group", "label": "Drums"}));
+    post("/api/graph/mix/route", json!({"session": session, "channel": "kick", "to": "drums"}));
+    post("/api/graph/mix/route", json!({"session": session, "channel": "hats", "to": "drums"}));
+    let rows = || -> Vec<String> {
+        let kits = graph.state().unwrap()["view"]["kits"].clone();
+        kits[0]["rows"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{kits:#}"))
+            .iter()
+            .map(|r| format!("{}/{}={}", r["track"], r["lane"], r["sound"]))
+            .collect()
+    };
+    assert_eq!(rows(), [r#""kick"/"hits"="kick""#, r#""hats"/"hits"="hats""#]);
+    let song = fixture.read("song.ts");
+    let (status, made) = post("/api/graph/kit/drum", json!({"session": session, "bus": "drums", "sound": "snare"}));
+    assert_eq!((status, &made["module"], &made["label"]), (200, &json!("snare"), &json!("Snare")), "{made:#}");
+    assert_eq!(rows().last().unwrap(), r#""snare"/"hits"="snare""#);
+    let hit = json!({"op": "hits", "module": "snare", "lane": "hits", "at": [1], "step": 0.25, "to": "on"});
+    let (status, done) = post("/api/graph/clips", json!({"session": session, "gesture": hit}));
+    assert_eq!(status, 200, "{done:#}");
+    let lane = graph.state().unwrap()["timeline"]["tracks"].as_array().unwrap().iter().find(|t| t["module"] == "snare").unwrap()["lanes"]
+        [0]
+    .clone();
+    assert_eq!(lane["clips"][0]["notes"], json!([{"pitch": 38.0, "start": 1.0, "length": 0.25, "velocity": 0.8}]), "{lane:#}");
+    let (status, refused) = post("/api/graph/kit/drum", json!({"session": session, "bus": "drums", "sound": "gong"}));
+    assert!(status >= 400 && refused["error"].as_str().unwrap_or("").contains("not \"gong\""), "{status} {refused:#}");
+    graph.undo(session).unwrap();
+    graph.undo(session).unwrap();
+    assert_eq!(fixture.read("song.ts"), song, "two undos: the step, then the Snare");
+    assert!(!fixture.0.join("tracks/snare.ts").exists());
+}
+
 /// `n` blocks of 128 frames, both channels, interleaved.
 fn stereo(dc: &mut Dc, n: usize) -> Vec<f32> {
     let mut out = vec![];

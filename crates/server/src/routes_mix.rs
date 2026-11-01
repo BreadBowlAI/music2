@@ -1,5 +1,6 @@
 //! Lane A's routes (polish), in the one route table (AGENT-8): change a track's instrument, and its
-//! ID; and the bus routes (RENDER-34): add a bus, change a send, route a channel.
+//! ID; the bus routes (RENDER-34): add a bus, change a send, route a channel; and a drum kit's + Drum
+//! (KIT-15).
 
 use std::sync::Arc;
 
@@ -33,6 +34,9 @@ crate::api::routes! {
     POST "/api/graph/mix/route" => mix_route; writes, agents,
         "Send a channel to a group bus, or back to the master (to: null)",
         r#"{"session": 7, "channel": "keys", "to": "group"}"#;
+    POST "/api/graph/kit/drum" => kit_drum; writes, agents,
+        "Add a Drum track to a drum kit, by its bus: playing a sound of the Drum's, named by it, going to the bus",
+        r#"{"session": 7, "bus": "drums", "sound": "snare"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -145,6 +149,24 @@ struct RouteReq {
 async fn mix_route(State(s): S, Json(r): Json<RouteReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.mix_route(r.session, &r.channel, r.to)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct DrumReq {
+    session: u64,
+    /// The kit's bus, by its key (the view's `kits`).
+    bus: String,
+    /// What it plays: one of the Drum's sounds (`snare`).
+    sound: String,
+}
+
+/// + Drum in the beat grid (KIT-15): `{session, bus, sound}`, one Tx and one undo step. A write.
+/// Answers the edit and the new track's `{module, label}`.
+async fn kit_drum(State(s): S, Json(r): Json<DrumReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.kit_drum(r.session, &r.bus, &r.sound)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

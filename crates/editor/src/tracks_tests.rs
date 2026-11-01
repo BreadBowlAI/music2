@@ -549,7 +549,7 @@ fn the_empty_templates_comment_reads_true_after_add() {
 // ---------------------------------------------------------------- several tracks in one Tx (P0.3, built in lane A)
 
 fn audio_track(label: &str, clips: Vec<serde_json::Value>) -> NewTrack {
-    NewTrack { play: Play::Audio, label: Some(label.into()), key: None, clips }
+    NewTrack { play: Play::Audio, label: Some(label.into()), key: None, clips, ..NewTrack::default() }
 }
 
 // WRITE-10: two new tracks are one Tx, one undo step: their files, imports, channels, lanes and
@@ -560,7 +560,7 @@ fn two_tracks_in_one_tx_are_one_undo_step() {
     let mut s = f.open();
     let before = tree(&f);
     let number = s.accepted().number;
-    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), label: None, key: None, clips: vec![] };
+    let pluck = NewTrack { play: Play::Instrument("@m2/synths:synth-pluck".into()), ..NewTrack::default() };
     let made = add_tracks(&mut s, &[pluck, audio_track("Vox", vec![])], Some("kick"), None).unwrap();
     assert_eq!(s.accepted().number, number + 1, "one revision");
     assert_eq!(

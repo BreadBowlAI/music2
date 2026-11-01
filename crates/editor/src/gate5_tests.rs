@@ -362,7 +362,7 @@ fn planned_call_forms_are_current() {
         let binding = crate::tracks::instrument_binding(&i);
         assert!(imported.contains(binding), "every-component doesn't import {binding}, which a track playing {} imports", i.component);
         let key = crate::keys::propose(&i.label, |_| false);
-        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label)));
+        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label, &[])));
     }
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(

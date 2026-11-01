@@ -237,7 +237,7 @@ impl Graph {
         let words = crate::caller::now().why();
         let added = self.call(move |a| {
             a.edit_and(token, |s| {
-                let new = m2_editor::tracks::NewTrack { play: m2_editor::tracks::Play::Audio, label, key: None, clips: vec![] };
+                let new = m2_editor::tracks::NewTrack { play: m2_editor::tracks::Play::Audio, label, ..Default::default() };
                 let made = m2_editor::tracks::add_tracks(s, &[new], after.as_deref(), None)?.remove(0);
                 s.name_step(made.edited.revision, &words.unwrap_or_else(|| format!("adding {}", made.label)), true);
                 Ok((made.edited, json!({"module": made.module, "label": made.label})))
