@@ -1,0 +1,24 @@
+{
+  "order": ["drums", "kick", "snare", "clap", "hats", "toms", "cymbal", "ride", "perc", "sub", "bass", "chords", "lead", "arp", "pad", "strings", "keys", "bell", "fx"],
+  "tracks": {
+    "kick": { "colour": "rose" },
+    "drums": { "colour": "teal" },
+    "snare": { "colour": "teal" },
+    "clap": { "colour": "amber" },
+    "hats": { "colour": "indigo" },
+    "toms": { "colour": "green" },
+    "cymbal": { "colour": "plum" },
+    "ride": { "colour": "olive" },
+    "perc": { "colour": "amber" },
+    "sub": { "colour": "indigo" },
+    "bass": { "colour": "green" },
+    "chords": { "colour": "plum" },
+    "lead": { "colour": "olive" },
+    "arp": { "colour": "blue" },
+    "pad": { "colour": "coral" },
+    "strings": { "colour": "cyan" },
+    "keys": { "colour": "violet" },
+    "bell": { "colour": "lime" },
+    "fx": { "colour": "rose" }
+  }
+}

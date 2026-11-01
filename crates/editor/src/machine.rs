@@ -425,7 +425,7 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
     }
     if used.contains(&"tom") {
         said.push(match higher {
-            true => "its toms moved to the keys that play their pitch on the Drum's tom, the two highest half a semitone higher".into(),
+            true => "its toms moved to the keys that play their pitch on the Drum's tom; those on C3 and D3 (48, 50) play half a semitone higher".into(),
             false => "its toms moved to the keys that play their pitch on the Drum's tom".into(),
         });
     }

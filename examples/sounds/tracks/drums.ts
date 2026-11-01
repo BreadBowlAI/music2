@@ -1,14 +1,6 @@
-import { ms, track } from "@m2/core";
-import { follow } from "std/dsp";
-import { drums } from "@m2/drums";
-import { sum } from "std/math";
+import { bus } from "@m2/core";
+import { gain } from "std/dsp";
 
-// The beat on one lane: each drum on its General MIDI note (D2 snare, D#2 clap, F#2 closed
-// hat, A#2 open hat, ...). An open hat rings until the next hat closes it. The kick has a lane
-// of its own, so the sub and the chords can duck under it alone.
-export default track("drums", { name: "Drums" }, ({ lane }) => {
-  const kick = drums.drum(lane.notes("kick"), { tune: 0.7, punch: 0.1 });
-  const kit = drums.kit(lane.notes("beat"), { hatLevel: 2 });
-  // How loud the kick is right now, for ducking.
-  return { out: sum(kick, kit), kick: follow(kick, { release: ms(160) }) };
-});
+// The drum kit's bus: the Kick, Snare, Clap, Hats, Toms, Cymbal and Ride play into it, each on a
+// track of its own (Make it a kit made them of the drum machine), and this is the kit's one fader.
+export default bus("drums", { name: "Drums" }, ({ input }) => gain(input));

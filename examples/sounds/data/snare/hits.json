@@ -1,0 +1,24 @@
+{"clips": [
+  {"id": "nadakc1s", "start": 16, "length": 32, "notes": [
+    {"pitch": "D2", "start": 1, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 3, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 5, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 7, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 9, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 11, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 13, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 15.75, "length": 0.25, "velocity": 0.95},
+    {"pitch": "D2", "start": 17, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 19, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 21, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 23, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 25, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 27, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 29, "length": 0.25, "velocity": 0.9},
+    {"pitch": "D2", "start": 31.75, "length": 0.25, "velocity": 0.95}
+  ]},
+  {"id": "nbb3826n", "start": 48, "length": 16, "notes": [
+    {"pitch": "D2", "start": 2, "length": 0.25, "velocity": 0.85},
+    {"pitch": "D2", "start": 6, "length": 0.25, "velocity": 0.85}
+  ]}
+]}
