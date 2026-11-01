@@ -22,6 +22,7 @@
 | `release/` | the first release, 0.1.0: the downloads for the Mac and Linux, and the workflow that makes them from a tag |
 | `packs/` | the proposal for packs: instruments, effects, sounds and samples anyone can publish; the registry; ⌘F search (a draft, not built) |
 | `cards/` | typed sounds: std a toolbox and its sounds in `@m2/` packs, cards drawn from each sound's type (menus, switches, views), taps for meters and scopes, kernels with a time limit and events |
+| `drums/` | drums the FL way: one drum per track, a kit is a group of tracks under one bus, a beat grid across them (proposed) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 
