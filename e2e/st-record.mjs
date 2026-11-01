@@ -366,8 +366,8 @@ async function heard() {
   fs.rmSync(root, { recursive: true, force: true });
   fs.mkdirSync(`${root}/home/.music2`, { recursive: true });
   fs.cpSync(`${REPO}/templates/empty`, `${root}/proj`, { recursive: true });
-  // Its Drums track, with no clips: silent, so what plays is the clicks.
-  const song = fs.readFileSync(`${root}/proj/song.ts`, "utf8").replace("// const beat", "const beat").replace("// drums: beat.out, // drums", "drums: beat.out,");
+  // Its Beat track, with no clips: silent, so what plays is the clicks.
+  const song = fs.readFileSync(`${root}/proj/song.ts`, "utf8").replace("// const beat", "const beat").replace("// beat: beat.out, // drums", "beat: beat.out,");
   fs.writeFileSync(`${root}/proj/song.ts`, song);
   const capture = `${root}/played.f32`;
   const sessFile = `${root}/home/.music2/session.json`;

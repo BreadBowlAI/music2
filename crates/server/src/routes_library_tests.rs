@@ -128,7 +128,7 @@ fn the_library_route_answers_the_one_search() {
         (Some("instrument"), Some("Synth pluck"), Some("@m2/synths"), Some(true), Some(true))
     );
     let all = found(&running.url, "");
-    assert!(all.len() > 40 && all.contains(&"@m2/drums:drum-kit".to_string()), "every item with no words: {}", all.len());
+    assert!(all.len() > 40 && all.contains(&"@m2/drums:drum".to_string()), "every item with no words: {}", all.len());
 
     // With a song open: what its build offers.
     let dir = Scratch::new("route-song");

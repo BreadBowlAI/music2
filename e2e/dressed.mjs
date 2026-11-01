@@ -3,9 +3,9 @@
 // and picking sine writes `shape: "sine"`, one undo step, and the sound changes while it plays: the
 // scope's frames lose the saw's sharp edge (their slope's energy falls). Its
 // envelope's attack corner, dragged right, writes a longer attack; its filter's peak, dragged up, a
-// higher resonance in hundredths, and its words say resonance. The kick plays One drum: its menu (a
-// control) lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step named
-// by its label ("One drum sound"), ⌘Z taking it back byte for byte. Each card linted.
+// higher resonance in hundredths, and its words say resonance. The kick plays the Drum (KIT-2): its
+// menu (a control) lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step
+// named by its label ("Drum sound"), ⌘Z taking it back byte for byte. Each card linted.
 //
 //   node e2e/dressed.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -167,12 +167,12 @@ await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");
 await page.screenshot({ path: `${ROOT}/dressed-lead.png` });
 
-// ---------------------------------------------------------------- One drum's menu (CARD-33)
+// ---------------------------------------------------------------- the Drum's menu (CARD-33, KIT-2)
 
 await page.click('[data-module-tab="kick"] [data-testid=track-label]');
 await view("graph");
 const drum = '[data-module="kick"] [data-node="drums.drum"]';
-check(await until(async () => !!(await page.$(`${drum} [data-knob="sound"]`)), 15000), "the kick's One drum shows its drum menu");
+check(await until(async () => !!(await page.$(`${drum} [data-knob="sound"]`)), 15000), "the kick's Drum shows its drum menu");
 check(JSON.stringify(await page.$$eval(`${drum} [data-group]`, (els) => els.map((e) => e.textContent))) === '["Drum","More"]', "under its Drum group");
 const kick = read("tracks/kick.ts");
 const menu = `${drum} [data-knob="sound"]`;
@@ -187,10 +187,10 @@ n = posts.length;
 await page.click('[data-testid=setting-options] [data-option="snare"]');
 check(await until(() => read("tracks/kick.ts") === kick.replace('drums.drum(lane.notes("hits"))', 'drums.drum(lane.notes("hits"), { drum: "snare" })')), `picking the snare writes it: ${read("tracks/kick.ts").match(/drums\.drum\([^\n]*/)?.[0]}`);
 check(posts.slice(n).filter((p) => p.url === "/api/graph/set").length === 1, "one write");
-check(await stepIs("One drum sound"), `one undo step, named by its label: ${await undoTitle()}`);
+check(await stepIs("Drum sound"), `one undo step, named by its label: ${await undoTitle()}`);
 check(await until(async () => (await page.$eval(menu, (e) => e.dataset.value).catch(() => null)) === '"snare"'), "the menu shows the snare");
 for (const k of ["tune", "decay ×", "punch ±"]) check(!!(await page.$(`${drum} [data-knob="${k}"]`)), `its ${k} knob stays`);
-await linted(drum, "One drum's card");
+await linted(drum, "the Drum's card");
 await page.screenshot({ path: `${ROOT}/dressed-drum.png` });
 await page.mouse.click(10, 10);
 await key("Meta+z");

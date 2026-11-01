@@ -1,6 +1,6 @@
 // Make Your First Song (the studio plan's D3, Q47): seven steps in a card at the top of the side
-// browser, each ticking itself. Four tick from what the song shows (a drum track, its notes, a
-// bass, its notes); three from what is done while the guide is open (the song played, a sound
+// browser, each ticking itself. Four tick from what the song shows (a drum kit's track, its notes,
+// a bass, its notes); three from what is done while the guide is open (the song played, a sound
 // changed, an export finished). Kept per song in `.music2/view.json` as `guide: {open, folded,
 // done}`, local to this machine. A step done stays done.
 
@@ -25,8 +25,8 @@ export interface Guide {
 
 /** The steps, in order: what to do (`title`, then `hint`). Keys as this computer spells them. */
 export const STEPS: { id: StepId; title: string; hint: () => string }[] = [
-  { id: "drums", title: "Add drums.", hint: () => `Press ${chord("T")} and pick Drum kit.` },
-  { id: "beat", title: "Make a beat.", hint: () => "Double-click its row for a clip. In Notes, double-click in the Kick and Snare rows (or press B, then click)." },
+  { id: "drums", title: "Add drums.", hint: () => `Press ${chord("T")}, type basic, and press Return: a drum kit, a Kick, a Snare and Hats.` },
+  { id: "beat", title: "Make a beat.", hint: () => "Double-click (click twice, quickly) on the Kick's row for a clip. In Notes, double-click on four beats (or press B, then click)." },
   { id: "bass", title: "Add a bass.", hint: () => `Press ${chord("T")} and pick Synth bass or 808 sub.` },
   { id: "bassline", title: "Play some bass notes.", hint: () => "Make a clip on it. In Notes, double-click a few notes." },
   { id: "listen", title: "Listen.", hint: () => "Press Space. Press it again to stop." },
@@ -47,10 +47,15 @@ function notes(graph: GraphState, module: string) {
   return (t?.lanes ?? []).reduce((n, l) => n + (l.kind === "notes" ? l.clips.reduce((c, clip) => c + clip.notes.length, 0) : 0), 0);
 }
 
-/** The steps the song shows done now: a track of the Drums group and its notes, a bass and its notes. */
+/** Whether `module`'s channel goes to a bus: a drum of a kit does (KIT-1). */
+function inBus(graph: GraphState, module: string) {
+  return graph.mix.strips.some((s) => s.modules.includes(module) && !!s.output);
+}
+
+/** The steps the song shows done now: a kit's drum (a track of the Drums group going to a bus, KIT-1) and its notes, a bass and its notes. */
 export function seen(graph: GraphState): StepId[] {
   const drums = new Set((graph.instruments ?? []).filter((i) => i.category === "Drums").map((i) => i.component));
-  const kits = playing(graph, (c) => drums.has(c));
+  const kits = playing(graph, (c) => drums.has(c)).filter((m) => inBus(graph, m));
   const basses = playing(graph, (c) => BASSES.has(c));
   const out: StepId[] = [];
   if (kits.length) out.push("drums");

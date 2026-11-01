@@ -162,6 +162,29 @@ pub struct Editor {
     /// Said on purpose: code plays it, and no list offers it (PKG-7). Such a component has no category.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlisted: bool,
+    /// The kits an instrument names, in order (KIT-3): what + Track's Drum kit makes. Written only
+    /// when there are some, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits: Vec<Kit>,
+}
+
+/// A kit a drum names (KIT-3): its name, the tracks a new one makes, in order, and its bus's fader.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Kit {
+    pub name: String,
+    pub tracks: Vec<KitTrack>,
+    /// Its bus's fader in dB, as written (KIT-4): written only when given, so a kit that gives
+    /// none keeps its bytes; none is 0 dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<Spelled>,
+}
+
+/// One track of a kit: its name, and values of the instrument's own controls, in the order written,
+/// each as an insert carries one (a choice's place, a switch's 1 or 0).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KitTrack {
+    pub name: String,
+    pub values: Vec<Insert>,
 }
 
 /// A view (CARD-16): a picture over values the sound declares, by a name of its own (`amp`).

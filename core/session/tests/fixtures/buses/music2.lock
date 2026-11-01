@@ -2,8 +2,8 @@
 
 [[pack]]
 name = "@m2/drums"
-version = "2.0.0"
-hash = "sha256:fa027f39d888fc789f14f8359909e6505b190b6decd1e2ce2eac305afeac0289"
+version = "2.1.0"
+hash = "sha256:a9ef9018c94609731a6d91e2b7c6661bd56bce4b581e255eed5e65b164ee36d7"
 
 [[pack]]
 name = "@m2/effects"

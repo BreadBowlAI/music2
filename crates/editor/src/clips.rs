@@ -194,6 +194,15 @@ pub enum Gesture {
     Record {
         takes: Vec<Taken>,
     },
+    /// The beat grid's steps (KIT-12) on a Drum track's notes lane: each from a beat of `at` to the
+    /// next line of a grid of `step` beats, cut at its bar's end; `to` says what each becomes.
+    Hits {
+        #[serde(flatten)]
+        lane: LaneAddr,
+        at: Vec<f64>,
+        step: f64,
+        to: Hit,
+    },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
     /// added) and clips deleted by id.
     Set {
@@ -204,6 +213,18 @@ pub enum Gesture {
         #[serde(default)]
         delete: Vec<String>,
     },
+}
+
+/// What a step of the beat grid becomes (KIT-12).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Hit {
+    /// A hit at its start, a step long, at the row's pitch (KIT-14), where none starts in it.
+    On,
+    /// Every note that starts in it goes.
+    Off,
+    /// Every note that starts in it plays at this velocity: above 0, at most 1.
+    Velocity(f64),
 }
 
 /// A point's value as a gesture draws it: a number for automation; an option's name, or true or
@@ -715,6 +736,50 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
                 l.keep[i] = Some(Clip::Notes(c));
             }
         }
+        Gesture::Hits { lane, at, step, to } => {
+            if !(step.is_finite() && *step >= SHORTEST) {
+                return Err(EditError::Rejected("A step lasts at least 1/64 of a beat.".into()));
+            }
+            if at.iter().any(|a| !(a.is_finite() && *a >= 0.0)) {
+                return Err(EditError::Rejected("A step can't start before the song starts.".into()));
+            }
+            if let Hit::Velocity(v) = to
+                && !(v.is_finite() && *v > 0.0 && *v <= 1.0)
+            {
+                return Err(EditError::Rejected(format!("A velocity is above 0 and at most 1, not {v}.")));
+            }
+            let row = crate::kits::drum(rev, lane.module.as_str()).filter(|r| r.lane == lane.lane.as_str());
+            let l = w.lane(lane)?;
+            let Some(row) = row.filter(|_| l.kind == LaneKind::Notes) else {
+                return Err(EditError::Rejected(format!(
+                    "{}'s {} lane isn't a Drum's: the beat grid writes a Drum track's lane.",
+                    l.track, l.label
+                )));
+            };
+            // Each beat's bar, from its start to its end; each step from a line of the grid, counted
+            // from its bar's start as the grid draws them, to the next line or the bar's end.
+            // (A beat a millionth before a bar line is on it, so in the bar after it.)
+            let bar = |a: f64| {
+                let start = clean(a + SAME_PLACE - arr.bar_at(a + SAME_PLACE).1);
+                (start, start + arr.meter_at(start).bar())
+            };
+            let mut steps: Vec<(f64, f64)> = vec![];
+            for a in at {
+                let (start, end) = bar(*a);
+                let k = ((a - start) / step).round();
+                let line = clean(start + k * step);
+                if apart(*a, line).abs() > 1 || apart(end, line) <= 1 {
+                    let lines = [0.0, 1.0, 2.0].map(|k| number(clean(k * step))).join(", ");
+                    return Err(EditError::Rejected(format!(
+                        "{} isn't where a step starts: on a grid of {} beats, steps start at {lines} and so on from each bar line.",
+                        number(*a),
+                        number(*step)
+                    )));
+                }
+                steps.push((line, clean(start + (k + 1.0) * step).min(end)));
+            }
+            hits(l, &steps, *to, row.sound.as_deref(), bar);
+        }
         Gesture::Quantize { clips, notes, grid, ends } => {
             if !(grid.is_finite() && *grid > 0.0) {
                 return Err(EditError::Rejected("The grid is a number of beats above 0, such as 0.25 for sixteenths.".into()));
@@ -743,6 +808,88 @@ pub fn apply(rev: &Revision, g: &Gesture, mint: &mut dyn FnMut(&LaneAddr) -> Str
         }
     }
     Ok(w.finish(mint))
+}
+
+/// The beat grid's gesture on lane `l` (KIT-12), whose Drum plays `sound`: what `to` makes of each
+/// of `steps` (start, end). A hit goes into the clip that holds its start, else into a new clip of
+/// its bar (`bar`: a beat's bar, start and end), cut short at the clips beside it.
+fn hits(l: &mut Lane, steps: &[(f64, f64)], to: Hit, sound: Option<&str>, bar: impl Fn(f64) -> (f64, f64)) {
+    // A place starts in the step from `a` to `b` when it is at `a` or after it, and before `b`, a
+    // millionth either way being the same place (KIT-11).
+    let within = |t: f64, a: f64, b: f64| apart(t, a) >= -1 && apart(t, b) < -1;
+    let starts_in = |t: f64| steps.iter().any(|(a, b)| within(t, *a, *b));
+    // A note's start in song time, when it plays: cut to its clip (FMT-8a).
+    let start = |c: &NoteClip, n: &Note| {
+        let s = n.start.max(0.0);
+        (s < (n.start + n.length).min(c.length)).then_some(c.start + s)
+    };
+    match to {
+        Hit::Off | Hit::Velocity(_) => {
+            for k in l.keep.iter_mut().flatten() {
+                let Clip::Notes(c) = k else { continue };
+                let hit: Vec<bool> = c.notes.iter().map(|n| start(c, n).is_some_and(starts_in)).collect();
+                match to {
+                    Hit::Velocity(v) => c.notes.iter_mut().zip(&hit).filter(|(_, h)| **h).for_each(|(n, _)| n.velocity = v),
+                    _ => {
+                        let mut gone = hit.iter();
+                        c.notes.retain(|_| !gone.next().copied().unwrap_or(false));
+                    }
+                }
+            }
+        }
+        Hit::On => {
+            let playing = |l: &Lane| -> Vec<(f64, f64)> {
+                let clips = l.keep.iter().flatten().chain(l.added.iter().map(|(c, _)| c));
+                clips
+                    .filter_map(|c| if let Clip::Notes(c) = c { Some(c) } else { None })
+                    .flat_map(|c| c.notes.iter().filter_map(|n| Some((start(c, n)?, n.pitch))))
+                    .collect()
+            };
+            let pitch = crate::kits::pitch(playing(l).into_iter().map(|(_, p)| p), sound);
+            for (a, b) in steps {
+                if playing(l).iter().any(|(t, _)| within(*t, *a, *b)) {
+                    continue;
+                }
+                let holds = |c: &Clip| matches!(c, Clip::Notes(c) if within(*a, c.start, c.start + c.length));
+                let hit = |c: &NoteClip| Note { pitch, start: clean(a - c.start), length: clean(b - a), velocity: m2_song::lane::VELOCITY };
+                // Of the clips that hold it, the one that starts last.
+                let kept = l.keep.iter_mut().flatten().chain(l.added.iter_mut().map(|(c, _)| c)).filter(|c| holds(c));
+                match kept.max_by(|x, y| x.start().total_cmp(&y.start())) {
+                    Some(Clip::Notes(c)) => {
+                        let n = hit(c);
+                        c.notes.push(n);
+                    }
+                    _ => {
+                        let (mut lo, mut hi) = bar(*a);
+                        for c in l.keep.iter().flatten().chain(l.added.iter().map(|(c, _)| c)) {
+                            if apart(c.end(), *a) <= 1 {
+                                lo = lo.max(c.end());
+                            } else if apart(c.start(), *a) > 1 {
+                                hi = hi.min(c.start());
+                            }
+                        }
+                        let mut c = NoteClip { id: None, other_id: None, start: lo, length: clean(hi - lo), notes: vec![] };
+                        c.notes.push(hit(&c));
+                        l.added.push((Clip::Notes(c), true));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Two places in beats this close or closer are one: the lane format writes beats to a millionth
+/// (KIT-11). The beat grid's `SAME_PLACE` (`web/src/components/BeatView.tsx`) is the same.
+pub(crate) const SAME_PLACE: f64 = 1e-6;
+
+/// How far place `x` is after place `y`, in whole `SAME_PLACE`s (before: negative).
+fn apart(x: f64, y: f64) -> i64 {
+    ((x - y) / SAME_PLACE).round() as i64
+}
+
+/// Beats as the lane format writes them: no float noise past a millionth, as the roll writes them.
+fn clean(x: f64) -> f64 {
+    (x * 1e6).round() / 1e6 + 0.0
 }
 
 /// The song's key, to `what` with: refused in words while the song has none.
@@ -1557,7 +1704,11 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Audio { clip, .. }
         | Gesture::Stamp { clip, .. }
         | Gesture::Paste { into: Some(clip), .. } => pin(clip)?,
-        Gesture::Create { .. } | Gesture::Paste { into: None, .. } | Gesture::Set { .. } | Gesture::Record { .. } => {}
+        Gesture::Create { .. }
+        | Gesture::Paste { into: None, .. }
+        | Gesture::Hits { .. }
+        | Gesture::Set { .. }
+        | Gesture::Record { .. } => {}
     }
     Ok(g)
 }

@@ -1,5 +1,5 @@
-//! The track builders from the terminal (WRITE-10, WRITE-18): `m2 add-track`, `duplicate-track`,
-//! `delete-track` and `layout` on a copy of first-song.
+//! The track builders from the terminal (WRITE-10, WRITE-18): `m2 add-track`, `add-kit`,
+//! `duplicate-track`, `delete-track` and `layout` on a copy of first-song.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -73,5 +73,33 @@ fn tracks_are_added_duplicated_deleted_and_laid_out_from_the_terminal() {
     assert!(!out.status.success());
     ok(&["layout", dir, "order", "keys", "bass-2", "bass", "hats", "lead-vox"]);
     assert!(read("layout.json").contains("[\"keys\", \"bass-2\", \"bass\", \"hats\", \"lead-vox\"]"));
+    // KIT-5: a kit by its name, after a track: a Drums bus and its tracks, each going to it, named
+    // apart from the song's own (the kick is gone, the hats are there).
+    let said = ok(&["add-kit", dir, "Basic kit", "--after", "lead-vox"]);
+    assert!(said.contains("added Basic kit: Drums (ID drums), and Kick, Snare and Hats 2 going to it"), "{said}");
+    assert!(read("song.ts").contains("\"hats-2\": { in: hats2.out, to: \"drums\" }"), "{}", read("song.ts"));
+    assert!(
+        read("layout.json")
+            .contains("[\"keys\", \"bass-2\", \"bass\", \"hats\", \"lead-vox\", \"drums\", \"kick\", \"snare\", \"hats-2\"]"),
+        "{}",
+        read("layout.json")
+    );
+    // A kit no instrument names says which there are.
+    let out = m2(&["add-kit", dir, "Jazz kit"]);
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success() && err.contains("no kit `Jazz kit`: the kits are 808 kit, 909 kit and Basic kit"), "{err}");
+
     ok(&["check", dir]);
+}
+
+// KIT-1: `m2 graph` says each drum kit on a line of its own, after the revision: its name and bus,
+// then each row's track, lane and sound.
+#[test]
+fn m2_graph_says_each_drum_kit() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-kits-cli-{}", std::process::id())));
+    let song = temp.0.join("buses");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/buses"), &song);
+    let said = ok(&["graph", song.to_str().unwrap()]);
+    let kits: Vec<&str> = said.lines().filter(|l| l.starts_with("kit ")).collect();
+    assert_eq!(kits, ["kit Drums (drums): Kick (kick/hits, kick) · Hats (hats/hits, hats)"], "{said}");
 }

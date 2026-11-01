@@ -183,7 +183,7 @@ fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
     };
     rig.report(Code::TooSlow, rig.node("bass", delay));
     rig.report(Code::TooSlow, rig.node("hats", |op| matches!(op, FOp::Poly { .. })));
-    let said = [slow("Delay on Bass, from @m2/effects,"), slow("One drum on Hats, from @m2/drums,")];
+    let said = [slow("Delay on Bass, from @m2/effects,"), slow("Drum on Hats, from @m2/drums,")];
     assert_eq!(rig.told(), said);
     let listed: Vec<_> =
         said.iter().zip(["bass", "hats"]).map(|(w, k)| ("sound.too-slow".to_string(), Some(k.to_string()), w.clone())).collect();

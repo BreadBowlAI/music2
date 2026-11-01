@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed. The owner asked for this note on 2026-10-31 ("maybe I should use FL Studio because it's like RISC"; "yes" to a design note). Nothing is built until the owner says yes to it. |
+| **Status** | Accepted. The owner asked for this note on 2026-10-31 ("maybe I should use FL Studio because it's like RISC"; "yes" to a design note) and said "Yes" to it, D1 to D4 as recommended, on 2026-11-01. Rules: KIT-1 to KIT-n in the contract, written by the tracks of §7. |
 | **Written** | 2026-11-01, from `main` at 3eefd85 (wave 3 landed: One drum, `@m2/drums` 2.0.0) |
 | **Replaces** | The two drum instruments of today: **Drum kit** (a drum machine on one track) and **One drum** (one drum on one track) |
 
@@ -68,7 +68,7 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
 | Put reverb on the snare only | The Snare track's effects, as for any track |
 | Turn the whole kit down | The Drums bus's fader |
 | + Drum (in the grid) | One more Drum track in the kit |
-| Play pads on a MIDI pad controller | Each pad's note goes to the kit's track for that drum (a kit remembers which note each drum answers to, the General MIDI drum notes by default) |
+| Play pads on a MIDI pad controller | Each pad's note goes to the kit's track for that drum, by General MIDI's drum notes: a Drum answers to its sound's notes (a Hats track to the closed, pedal and open hat) |
 | Import a MIDI file with drums | One kit, one track per drum used |
 
 ## 4. Choking (one drum cutting another off)
@@ -98,13 +98,22 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
 
 ## 7. Plan
 
-Each step is a track with a builder, a reviewer and a fix round, as today's tracks were.
+Each step is a track with a builder, a reviewer and a fix round, as today's tracks were. `kits` and `beat` run side
+by side; `kit-upgrade` starts when both have landed.
 
 | Track | Builds |
 |---|---|
-| `kits` | Rename to Drum; + Track ▸ Drum kit makes a group (tracks + bus) from a kit preset; a kit's note map for pads and MIDI import |
-| `beat` | The beat grid view: rows of a kit's tracks, steps, velocity, one Tx per gesture, a browser suite |
-| `kit-upgrade` | `m2 upgrade` converts a Drum kit track into a group; the one-track drum machine leaves + Track |
+| `kits` | Rename to Drum; kit presets declared by the pack (`@m2/core` 2.2); + Track ▸ Drum kit makes a group (tracks + bus) as one undo step; one table from a Drum's sound to its General MIDI notes; a MIDI file's drums import as a kit |
+| `beat` | Which tracks make a kit (KIT-1, in the song's view); the beat grid: rows of a kit's tracks, steps, velocity, snap, notes off the grid, + Drum, one Tx per gesture, a browser suite |
+| `kit-upgrade` | `m2 upgrade` converts a Drum kit track into a group; pads on a MIDI controller play a kit's tracks; the one-track drum machine leaves + Track |
+
+### Decided by the lead (2026-11-01)
+
+| What | Decision | Why |
+|---|---|---|
+| Which note a Drum answers to | Its sound's General MIDI notes, worked out, never stored. Two Drums with the same sound: the first in the song's order answers | Nothing new to save or keep in step; a kit's tracks are already the facts |
+| Where kit presets live | In the pack that has the Drum (`@m2/drums`), as typed data its descriptor carries | The owner's rule: most things in packs |
+| The rules' prefix | KIT- | A new section of the contract, "Drum kits" |
 
 ## 8. Alternatives
 

@@ -21,6 +21,8 @@ pub enum View {
     Notes,
     Mix,
     Code,
+    /// The beat grid (KIT-10).
+    Beat,
 }
 
 /// A clip, by its track's key, its lane's key and its id: as `m2 clips` names it, `bass/notes:c3`.

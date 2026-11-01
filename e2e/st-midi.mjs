@@ -4,10 +4,12 @@
 // one-part MIDI file brought into Bass's notes lane (as a browser uploads it) is one clip and one
 // undo step named "importing riff.mid"; a text file named .mid is refused in words.
 // C2b: a three-part file dropped below the tracks asks the tempo question (the song has clips);
-// Return keeps 124 and makes three tracks, one Undo takes them all back; "Use 128" writes the
+// Return keeps 124 and makes its tracks, the drums a kit (a Drums bus, Kick 2 and Snare, KIT-8),
+// one Undo takes them all back; "Use 128" writes the
 // file's tempo from that bar; Esc writes nothing. A one-part file dropped on Bass goes into it, with
 // no question; a text file named .mid says its words. Then, in an empty song, File ▸ Import MIDI…
-// through the app's file chooser: Drums plays the Drum kit and Low the Synth bass, the song takes
+// through the app's file chooser: the drums a kit, Kick a Drum going to the Drums bus, and Low the
+// Synth bass; the song takes
 // the file's 128, and one Undo takes it all back.
 // node st-midi.mjs <root> <home> <project>
 import fs from "node:fs";
@@ -230,12 +232,12 @@ await lintIn(page, "[data-testid=midi-ask]", "the tempo question");
 if (process.env.ST_SHOT) await page.screenshot({ path: `${process.env.ST_SHOT}/midi-ask.png` });
 check(JSON.stringify(await tracksNow()) === JSON.stringify(before), "nothing written while it asks");
 await key("Enter");
-check(await until(async () => (await tracksNow()).length === before.length + 3), `Return keeps 124 and makes three tracks: ${await tracksNow()}`);
-check(JSON.stringify((await tracksNow()).slice(-3)) === JSON.stringify(["Drums", "Low", "Keys 2"]) && JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }]), `Drums, Low and Keys 2 at the end, the tempo kept: ${await tracksNow()} ${JSON.stringify(tempo())}`);
-check(await until(async () => (await toasts()).some((t) => t.startsWith("Imported groove.mid: Drums, Low and Keys 2"))), `a toast says what came in: ${(await toasts()).join(" | ")}`);
+check(await until(async () => (await tracksNow()).length === before.length + 5), `Return keeps 124 and makes its tracks: ${await tracksNow()}`);
+check(JSON.stringify((await tracksNow()).slice(-5)) === JSON.stringify(["Drums", "Kick 2", "Snare", "Low", "Keys 2"]) && JSON.stringify(tempo()) === JSON.stringify([{ beat: 0, bpm: 124 }]), `the kit (Drums, Kick 2, Snare), Low and Keys 2 at the end, the tempo kept: ${await tracksNow()} ${JSON.stringify(tempo())}`);
+check(await until(async () => (await toasts()).some((t) => t.startsWith("Imported groove.mid: Drums, Kick 2, Snare, Low and Keys 2"))), `a toast says what came in: ${(await toasts()).join(" | ")}`);
 check(await until(async () => (await undoTitle()).startsWith("Undo importing groove.mid")), `Undo names it: ${await undoTitle()}`);
 await key("Meta+z");
-check(await until(async () => JSON.stringify(await tracksNow()) === JSON.stringify(before)), `one ⌘Z takes all three back: ${await tracksNow()}`);
+check(await until(async () => JSON.stringify(await tracksNow()) === JSON.stringify(before)), `one ⌘Z takes them all back: ${await tracksNow()}`);
 // Use 128: the file's tempo from bar 3, the song's before it.
 await dropBytes(xAt(9), await yBelow(), "groove.mid", groove);
 await page.waitForSelector("[data-testid=midi-use]");
@@ -305,14 +307,17 @@ await app.goto(sess.url, { waitUntil: "domcontentloaded" });
 check(opened === 200 && !!(await app.waitForSelector("[data-testid=timeline]", { timeout: 10000 }).catch(() => null)), `an empty song opens in an app page: ${opened}`);
 await app.evaluate(() => window.__menu("import_midi"));
 const emptyTracks = () => !fs.existsSync(`${empty}/tracks`) ? [] : fs.readdirSync(`${empty}/tracks`, { withFileTypes: true }).filter((e) => e.isFile()).map((e) => e.name).sort();
-check(await until(() => emptyTracks().length === 3), `File ▸ Import MIDI… makes three tracks: ${emptyTracks()}`);
-const drumsTs = fs.readFileSync(`${empty}/tracks/drums.ts`, "utf8"), lowTs = fs.readFileSync(`${empty}/tracks/low.ts`, "utf8");
-check(/drums\.kit|drumKit/.test(drumsTs) && /synth\.bass|synthBass/.test(lowTs), `Drums plays the Drum kit and Low the Synth bass: ${drumsTs.split("\n").at(-2)} | ${lowTs.split("\n").at(-2)}`);
+check(await until(() => emptyTracks().length === 5), `File ▸ Import MIDI… makes its tracks: ${emptyTracks()}`);
+const kickTs = fs.readFileSync(`${empty}/tracks/kick.ts`, "utf8"), lowTs = fs.readFileSync(`${empty}/tracks/low.ts`, "utf8");
+const emptySong = fs.readFileSync(`${empty}/song.ts`, "utf8");
+check(/drums\.drum\(lane\.notes\("hits"\), \{ drum: "kick" \}\)/.test(kickTs) && emptySong.includes('kick: { in: kick.out, to: "drums" }') && /synth\.bass|synthBass/.test(lowTs), `the drums a kit, Kick a Drum going to the Drums bus, and Low the Synth bass: ${kickTs.split("\n").at(-2)} | ${lowTs.split("\n").at(-2)}`);
 const emptyTempo = () => JSON.parse(fs.readFileSync(`${empty}/data/arrangement.json`, "utf8")).tempo;
 check(JSON.stringify(emptyTempo()) === JSON.stringify([{ beat: 0, bpm: 128 }]) && !(await app.$("[data-testid=midi-ask]")), `the empty song takes the file's 128, with no question: ${JSON.stringify(emptyTempo())}`);
 const lowClips = JSON.parse(fs.readFileSync(`${empty}/data/low/notes.json`, "utf8")).clips;
 check(lowClips.length === 1 && lowClips[0].start === 0 && lowClips[0].notes.length === 2, `Low's notes in one clip from bar 1: ${JSON.stringify(lowClips).slice(0, 120)}`);
 if (process.env.ST_SHOT) await app.screenshot({ path: `${process.env.ST_SHOT}/midi-tracks.png` });
+// The files land before the page hears of the import: Undo means it once the page shows it on top.
+await until(async () => (await app.$eval('button[aria-label="Undo"]', (b) => b.title).catch(() => "")).startsWith("Undo importing groove.mid"));
 await app.evaluate(() => window.__menu("undo"));
 check(await until(() => emptyTracks().length === 0 && JSON.stringify(emptyTempo()) === JSON.stringify([{ beat: 0, bpm: 120 }])), `one Undo takes the tracks and the tempo back: ${emptyTracks()} ${JSON.stringify(emptyTempo())}`);
 

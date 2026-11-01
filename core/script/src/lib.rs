@@ -45,7 +45,7 @@ pub const SDK: &str = include_str!("../sdk/core.ts");
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
 /// requirement is checked against it (FMT-2, FMT-3). From 2.0.0 it is the pack contract: a change
 /// that breaks a pack's code is a new major (PACK-22).
-pub const SDK_VERSION: &str = "2.1.0";
+pub const SDK_VERSION: &str = "2.2.0";
 
 const CORE: &str = "@m2/core";
 
@@ -1451,6 +1451,8 @@ mod bus_tests;
 mod kernel_settings_tests;
 #[cfg(test)]
 mod kinds_tests;
+#[cfg(test)]
+mod kits_tests;
 #[cfg(test)]
 mod mute_tests;
 #[cfg(test)]

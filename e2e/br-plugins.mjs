@@ -48,7 +48,7 @@ if (await toasted("would reach")) await clickIn("[data-testid=toast] button", "A
 const wrapped = 'plugin("clap:m2.probe", { in: drums.drum(lane.notes("hits")), key: "m2-probe" })';
 check(await until(() => read("tracks/kick.ts").includes(`const out = ${wrapped};`)), "a drop onto Kick wraps its sound in the plugin, keyed");
 check(/import \{ ms, track, plugin \} from "@m2\/core";/.test(read("tracks/kick.ts")), "and imports plugin");
-check(await toasted("Added m2 probe after One drum"), "a toast says what was added, with Undo");
+check(await toasted("Added m2 probe after Drum"), "a toast says what was added, with Undo");
 await show("kick");
 check(await until(() => page.$$eval('[data-module="kick"] [data-node-title]', (els) => els.some((e) => e.textContent.includes("m2 probe")))), "the plugin's card shows in Kick");
 await page.click('button[aria-label="Undo"]');

@@ -1,5 +1,5 @@
 // 8b.5 Automation drawn in place (design-8b §7.5, taste.md TL-6, KN-2), U7: Automate on Kick's
-// Decay makes a lane named after the control ("Decay ×", One drum's label, `decay`); a double-click on its empty space
+// Decay makes a lane named after the control ("Decay ×", the Drum's label, `decay`); a double-click on its empty space
 // makes a clip holding the lane's value; on the curve a click adds a point and a drag moves it, ⌫
 // deletes it, and Draw mode (B) paints; a click on the clip's body away from the curve picks the
 // clip and adds no point; Remove automation, from the lane's header or from the input it drives in

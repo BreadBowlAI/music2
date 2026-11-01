@@ -92,9 +92,10 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("solo", "Solo", SOLO_KEY),
     // In the track's code: one undo step.
     ("mute_in_song", "Mute in Song", None),
-    // ⌥1 to ⌥4, X, A, E: the page's keys.
+    // ⌥1 to ⌥5, X, A, E: the page's keys. Beat (⌥5) shows while a drum kit's track is selected.
     ("view_device", "Device", None),
     ("view_notes", "Notes", None),
+    ("view_beat", "Beat", None),
     ("view_mix", "Mix", None),
     ("view_code", "Code", None),
     ("lanes", "Show Automation", None),
@@ -253,6 +254,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("view_device"),
         Item("view_notes"),
+        Item("view_beat"),
         Item("view_mix"),
         Item("view_code"),
         Line,

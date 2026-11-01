@@ -17,16 +17,7 @@ use serde::Serialize;
 use crate::plan::{self, path};
 use crate::rename::track_call;
 use crate::sites::properties;
-use crate::{EditError, Edited, ready};
-
-/// Labels as words: "Kick", "Kick and Bass", "Kick, Bass and Hats".
-fn listed(labels: &[String]) -> String {
-    match labels {
-        [] => String::new(),
-        [one] => one.clone(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-    }
-}
+use crate::{EditError, Edited, listed, ready};
 
 /// The edit that sets `muted` in the options of the `track()` call `site` of `m`, in `text`: none
 /// when it says so already.

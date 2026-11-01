@@ -187,6 +187,17 @@ pub const COMMANDS: &[Command] = &[
                below that track.",
     },
     Command {
+        name: "add-kit",
+        also: &[],
+        usage: "m2 add-kit <project> <kit> [--after ID]",
+        words: "add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each \
+                a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes \
+                back, verified",
+        more: "It is what + Track ▸ Drum kit does. `m2 add-kit . \"808 kit\" --after keys` puts the kit below that track. \
+               The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit \
+               on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.",
+    },
+    Command {
         name: "import",
         also: &[],
         usage: "m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]",
@@ -329,12 +340,12 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 upgrade <project> [--check]",
         words: "move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its \
-                lock, its imports of what moved into the packs, the single drums as One drum with their knobs converted, and \
+                lock, its imports of what moved into the packs, the single drums as the Drum with their knobs converted, and \
                 renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then \
                 builds; `--check` says what it would change, and writes nothing",
         more: "It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names \
                by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it \
-               again. What it converts as well as it can (the simple kick and hat, other sounds than One drum's) it names to \
+               again. What it converts as well as it can (the simple kick and hat, other sounds than the Drum's) it names to \
                check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song \
                made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. \
                See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).",
@@ -432,8 +443,10 @@ pub const COMMANDS: &[Command] = &[
                 sends it",
         more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with \
                `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
-               song's key) and `groove` (swing, laid back, pushed or accents). `m2 call <song> /api/theory` \
-               lists the chords and grooves.",
+               song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a \
+               Drum's lane: `{\"op\": \"hits\", \"module\": \"kick\", \"lane\": \"hits\", \"at\": [0, 1], \"step\": 0.25, \
+               \"to\": \"on\"}`, `to` being `on`, `off` or `{\"velocity\": 0.5}`). `m2 call <song> /api/theory` lists \
+               the chords and grooves.",
     },
     Command {
         name: "sections",

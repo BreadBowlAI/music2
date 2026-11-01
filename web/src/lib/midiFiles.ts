@@ -161,7 +161,11 @@ export async function bringMidi(file: MidiIncoming, to: MidiTarget, tempo?: Temp
     const refs = done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
     if (refs[0]) useShell.getState().select(refs[0].module);
     useClipSelection.getState().only(refs);
-    for (const t of done.tracks) trackMade(t.module, done.made.find((m) => m.module === t.module)?.lane ?? "notes");
+    // Each new track with its clip lights up; a kit's bus has no lane (KIT-8).
+    for (const t of done.tracks) {
+      const lane = done.made.find((m) => m.module === t.module)?.lane;
+      if (lane) trackMade(t.module, lane);
+    }
     const into = done.tracks.length ? `: ${listed(done.tracks.map((t) => t.label))}` : refs[0] ? ` into ${nameOf(fresh, refs[0].module)}` : "";
     toast(`Imported ${file.name}${into}`, undoAction(graph.session, done.step));
   } catch (error) {

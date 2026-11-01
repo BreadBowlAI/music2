@@ -39,7 +39,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘E | Ctrl+E | Split the selected clips at the playhead |
 | ⌘J | Ctrl+J | Join the selected clips |
 | ← → (⇧: a bar) | ← → (Shift: a bar) | Move the selected clips or notes by the grid |
-| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone (with **Lock to key** on, to the next note of the key; on a folded drum kit, to the next row shown) |
+| ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone (with **Lock to key** on, to the next note of the key; on the drum machine's folded rows, to the next row shown) |
 | ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
 | Delete | Backspace | Remove the selected clip or notes, or empty the selected bars |
 | Escape | Escape | Deselect |
@@ -55,6 +55,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Device / Notes / Mix / Code (X: Mix) |
+| ⌥5 | Alt+5 | Beat, the beat grid, while a drum kit's track is selected ([The beat grid](window.md#the-beat-grid)) |
 | E | E | Show or hide the dock |
 | ⌘F | Ctrl+F | Find instruments, sounds and effects ([Finding sounds](finding-sounds.md)) |
 | ⌥⌘B | Ctrl+Alt+B | Show or hide the browser |
