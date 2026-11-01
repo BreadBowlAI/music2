@@ -993,3 +993,96 @@ fn the_windows_own_change_never_refuses_its_gesture_whatever_came_between() {
     drop(running);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `method path` from the page's window `w`, with the session.
+fn win_as(r: &Run, w: &str, method: &str, path: &str, mut body: Value) -> (u16, Value) {
+    body["session"] = json!(r.session);
+    ask_in(&r.url, method, path, w, &body)
+}
+
+// AGENT-2 (the last look at own-edits, R1): a save that makes a waiting outside change build takes
+// it in as made outside the app: the answer says `mixed`, and the saving window's gesture drawn
+// before it, on the outside change, is refused naming outside, the outside value kept.
+#[test]
+fn a_save_that_takes_in_a_waiting_outside_change_is_mixed() {
+    let (dir, running, session) = serving("savemixed");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let drawn = r.revision();
+    let bright = r.knob("keys", "brightness");
+    let song = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    let broken = song.replacen("master(", "masterr(", 1);
+    let (status, _) = win(&r, "PUT", "/api/graph/file", json!({"path": "song.ts", "base": song, "text": broken}));
+    assert_eq!(status, 200);
+    let keys = std::fs::read_to_string(dir.join("tracks/keys.ts")).unwrap();
+    let outside = keys.replacen("pluck(lane.notes(\"chords\"))", "pluck(lane.notes(\"chords\"), { brightness: 3000 })", 1);
+    assert_ne!(outside, keys);
+    std::fs::write(dir.join("tracks/keys.ts"), &outside).unwrap();
+    running.state.graph.poll();
+    assert_eq!(r.revision(), drawn, "the outside change waits for the code to build");
+    let (status, saved) = win(&r, "PUT", "/api/graph/file", json!({"path": "song.ts", "base": broken, "text": song}));
+    assert_eq!((status, &saved["mixed"]), (200, &json!(true)), "the save took the outside change in: {:?}", saved.get("revision"));
+    let (status, refused) =
+        win(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": bright, "gesture": "set", "value": 4000, "expect": 5000}));
+    assert_ne!(status, 200, "{refused}");
+    assert!(refused.to_string().contains("changed outside the app"), "{refused}");
+    assert!(std::fs::read_to_string(dir.join("tracks/keys.ts")).unwrap().contains("brightness: 3000"), "the outside value is kept");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// AGENT-2 (the last look, R2): a window's own save that moved ids is kept as moving them: a value
+// named before it, by an id that names another control now, is refused, never written there.
+#[test]
+fn a_windows_own_save_that_moved_ids_refuses_its_value_named_before() {
+    let (dir, running, session) = serving("savemoved");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let drawn = r.revision();
+    let hats_db = r.knob("song", "hats.db");
+    let song = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    let hats = song.lines().find(|l| l.trim_start().starts_with("hats:")).unwrap().to_string();
+    let keys = song.lines().find(|l| l.trim_start().starts_with("keys:")).unwrap().to_string();
+    let swapped = song.replacen(&hats, "\u{0}", 1).replacen(&keys, &hats, 1).replacen('\u{0}', &keys, 1);
+    let (status, _) = win(&r, "PUT", "/api/graph/file", json!({"path": "song.ts", "base": song, "text": swapped}));
+    assert_eq!(status, 200);
+    let (status, a) =
+        win(&r, "POST", "/api/graph/set", json!({"revision": drawn, "id": hats_db, "gesture": "set", "value": -12.0, "expect": -6.0}));
+    let now = std::fs::read_to_string(dir.join("song.ts")).unwrap();
+    assert_ne!(status, 200, "refused: {a}");
+    assert!(now.contains("keys: { in: keys.out, db: db(-5)") && now.contains("hats: { in: hats.out, db: db(-6)"), "nothing written: {now}");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// AGENT-2 (the last look, R3): a value window B let go while the code didn't build is written, once
+// it builds, as B's, even in window A's job: A's gesture drawn before it is refused, B's value kept.
+#[test]
+fn a_pending_value_is_written_as_its_windows() {
+    let (dir, running, session) = serving("pending");
+    let r = Run { url: running.url.clone(), session, seen: BTreeSet::new() };
+    let drawn = r.revision();
+    let pan = r.knob("song", "hats.pan");
+    let song = std::fs::read_to_string(dir.join("tracks/keys.ts")).unwrap();
+    let broken = song.replacen("pluck(", "pluckk(", 1);
+    let (status, _) = win_as(&r, "wA", "PUT", "/api/graph/file", json!({"path": "tracks/keys.ts", "base": song, "text": broken}));
+    assert_eq!(status, 200);
+    let (status, a) =
+        win_as(&r, "wB", "POST", "/api/graph/preview", json!({"revision": drawn, "id": pan, "gesture": "b", "value": 0.2, "client": "wB"}));
+    assert_eq!(status, 200, "{a}");
+    let (status, a) = win_as(
+        &r,
+        "wB",
+        "POST",
+        "/api/graph/set",
+        json!({"revision": drawn, "id": pan, "gesture": "b", "value": 0.2, "expect": 0.3, "client": "wB"}),
+    );
+    assert_eq!((status, &a["pending"]), (200, &json!(true)), "pending while the code doesn't build: {a}");
+    let (status, _) = win_as(&r, "wA", "PUT", "/api/graph/file", json!({"path": "tracks/keys.ts", "base": broken, "text": song}));
+    assert_eq!(status, 200);
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("pan: 0.2"), "B's value written once it builds");
+    let (status, refused) =
+        win_as(&r, "wA", "POST", "/api/graph/set", json!({"revision": drawn, "id": pan, "gesture": "a", "value": 0.6, "expect": 0.3}));
+    assert_ne!(status, 200, "A's gesture drawn before B's value is refused: {refused}");
+    assert!(std::fs::read_to_string(dir.join("song.ts")).unwrap().contains("pan: 0.2"), "B's value is kept");
+    drop(running);
+    let _ = std::fs::remove_dir_all(&dir);
+}
