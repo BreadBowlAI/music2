@@ -227,7 +227,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     setAsked((all) => [...all, mine]);
     const size = grid.step;
     const own = editing();
-    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(row.track)], own)
+    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(row.track)], own, true)
       // From its base: refused, saying who, when its lane changed after it (bars inserted).
       .then((f) => send(f.graph, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own, f.base))
       // One that changed nothing made no revision: shown at once.

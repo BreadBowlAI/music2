@@ -81,6 +81,8 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
 interface Made {
   moved: readonly string[];
   own: boolean;
+  /** It moved beats (bars inserted or deleted, a tempo or a meter change). */
+  beats: boolean;
 }
 interface Mine {
   session: number;
@@ -161,9 +163,9 @@ export const madeSince = (session: number, since: number) => (mine.session === s
  * rode along), so it isn't the window's own alone. A change of `layout.json` alone makes no revision
  * (PLANE-3), and its answer names none.
  */
-export function changed(session: number, revision: number, moved: readonly string[], mixed = false) {
+export function changed(session: number, revision: number, moved: readonly string[], mixed = false, beats = false) {
   const m = minein(session);
-  m.revisions.set(revision, { moved, own: !mixed });
+  m.revisions.set(revision, { moved, own: !mixed, beats });
   m.revision = Math.max(m.revision, revision);
   wake();
 }
@@ -181,9 +183,10 @@ function touches(moved: string, targets: readonly string[]): boolean {
  * Where a gesture of `session` drawn at revision `drawn` goes from, the window showing `to`
  * (AGENT-2): its `base`, the window's newest own revision in the run of its own changes right after
  * `drawn` (none mixed), else `drawn`; and whether a change of the window's own since `drawn` moved
- * an id the gesture `targets` (then it isn't sent).
+ * an id the gesture `targets`, or, for a gesture named by beats (`beats`), moved beats (then it
+ * isn't sent).
  */
-export function baseOf(session: number, drawn: number, to: number, targets: Targets): { base: number; moved: boolean } {
+export function baseOf(session: number, drawn: number, to: number, targets: Targets, beats = false): { base: number; moved: boolean } {
   let base = drawn;
   let run = true;
   let moved = false;
@@ -191,7 +194,7 @@ export function baseOf(session: number, drawn: number, to: number, targets: Targ
   for (let r = drawn + 1; r <= to; r++) {
     const m = mine.revisions.get(r);
     const own = !!m?.own;
-    if (m && (targets === ALL || m.moved.some((f) => touches(f, targets)))) moved = true;
+    if (m && (targets === ALL || m.moved.some((f) => touches(f, targets)) || (beats && m.beats))) moved = true;
     if (run && own) base = r;
     else run = false;
   }
@@ -205,11 +208,11 @@ export function baseOf(session: number, drawn: number, to: number, targets: Targ
  * the step's name as the server says it (`undo_name`), Undo names it at once, so a ⌘Z pressed
  * before the state is read again takes back this edit, not the one before.
  */
-export function owned(session: number, answer: { revision?: number; step?: number; moved?: readonly string[]; mixed?: boolean; undo_name?: StepName | null }) {
+export function owned(session: number, answer: { revision?: number; step?: number; moved?: readonly string[]; mixed?: boolean; beats?: boolean; undo_name?: StepName | null }) {
   // An answer with no step changed nothing.
   if (answer.step === undefined) return;
   // Only an answer that says whether it moved ids names the revision the change made (lib/http).
-  if (answer.revision !== undefined && answer.moved !== undefined) changed(session, answer.revision, answer.moved, answer.mixed);
+  if (answer.revision !== undefined && answer.moved !== undefined) changed(session, answer.revision, answer.moved, answer.mixed, answer.beats);
   const m = minein(session);
   if (!m.steps.includes(answer.step)) m.steps.push(answer.step);
   const { graph, set } = useStore.getState();
@@ -349,9 +352,9 @@ export async function through(session: number, own?: Editing): Promise<GraphStat
  * `Moved` when a change of the window's own since `drawn` moved an id it targets: it is not sent.
  * Rejects with what to say when it gave up.
  */
-export async function goesFrom(session: number, drawn: number, targets: Targets, own?: Editing): Promise<{ base: number; shown: boolean; graph: GraphState }> {
+export async function goesFrom(session: number, drawn: number, targets: Targets, own?: Editing, beats = false): Promise<{ base: number; shown: boolean; graph: GraphState }> {
   const graph = await through(session, own);
-  const { base, moved } = baseOf(session, drawn, graph.view.revision, targets);
+  const { base, moved } = baseOf(session, drawn, graph.view.revision, targets, beats);
   if (moved) throw new Moved();
   return { base, shown: base > drawn, graph };
 }

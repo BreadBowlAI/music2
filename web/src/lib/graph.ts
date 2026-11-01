@@ -3,7 +3,7 @@
 import { ALL, editing, fileOf, gate, goesFrom, lanesOf, recorded, type Editing, type Step, type StepName, type Targets } from "./history";
 import type { DockView } from "./shell";
 import { token } from "./native";
-import { http } from "./http";
+import { http, windowId } from "./http";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
 export interface Slot { frame: number; slot: string; inherited?: boolean; smooth?: boolean }
@@ -799,7 +799,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
  * This window, one per page load. Its knob drags carry it, and so does its event socket: when the
  * window closes or reloads, the server ends the drags it left open (WRITE-22's leases, C6).
  */
-export const clientId: string = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `c${Date.now()}${Math.random()}`;
+export const clientId: string = windowId;
 
 /**
  * An answer that said OK but whose body never arrived whole: the window reloading while it waited,
@@ -1223,8 +1223,10 @@ export function writeLane(
       // no ids (an undo, a clip trimmed a moment before), it is made `again` from the lane as shown,
       // when it can be; after a change made elsewhere, from `base`, which the server refuses if the
       // lane changed since; after one of its own that moved ids, not at all.
-      const f = await goesFrom(graph.session, base, [lanesOf(module)], ours);
-      const remade = again && f.shown ? again(f.graph) : null;
+      const f = await goesFrom(graph.session, base, [lanesOf(module)], ours, true);
+      // Made again from the lane as the window shows it, whenever it shows a newer one: the server
+      // refuses it if another changed the lane after the base.
+      const remade = again && f.graph.view.revision > base ? again(f.graph) : null;
       const sent = named(remade ?? clips);
       // From its base: the server refuses it if the lane changed after it.
       const r = await graphApi.lane(graph.session, remade ? f.base : base, module, lane, sent, step, ours);

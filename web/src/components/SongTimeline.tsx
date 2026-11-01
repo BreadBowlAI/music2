@@ -687,12 +687,13 @@ export default function SongTimeline({
     };
     /**
      * A gesture of the timeline, drawn now (or at revision `drawnAt`, a drag's press): through the
-     * gate (`goesFrom`, lib/history), `act` with the state to go from, whose timeline names the clips (by
-     * the hash it draws them with), whether that is what the window shows once it shows its own last
-     * edit (`shown`: its base is newer than the revision drawn), the revision it goes from (`from`,
-     * its base, which it says to the server: a clip it names that changed after it is refused, saying
-     * who), and the gesture's own edit on its way, which `act` sends with. After its own edit that
-     * removed or renamed a track's data, nothing (`MOVED`, said). It is an edit on its way from the key or the click: a gesture after it, or an
+     * gate (`goesFrom`, lib/history), `act` with the state the window shows once it shows its own last
+     * edit, whose timeline names the clips (by the hash it draws them with), whether that is newer
+     * than the one drawn (`shown`), the revision it goes from (`from`, its base, which it says to the
+     * server: a clip it names that another changed after it is refused, saying who, and so is any
+     * gesture after another's change that moved beats), and the gesture's own edit on its way, which
+     * `act` sends with. After its own edit that removed or renamed a track's data, or moved beats,
+     * nothing (`MOVED`, said). It is an edit on its way from the key or the click: a gesture after it, or an
      * Undo, waits for it. Never dropped for the window's own edit; nothing while the song can't be
      * written.
      */
@@ -702,8 +703,10 @@ export default function SongTimeline({
       const own = editing();
       // Its clips are in the tracks' data: held back only by the window's own change that removed
       // or renamed a track's (a track deleted, its ID changed).
-      return goesFrom(drawn.session, drawnAt ?? drawn.view.revision, ["data/"], own)
-        .then((f) => (latest.current.locked ? undefined : act(f.shown || f.graph.view.revision === drawn.view.revision ? f.graph : drawn, own, f.shown, f.base)))
+      const at = drawnAt ?? drawn.view.revision;
+      // Named by beats: the window's own change since that moved beats holds it back too.
+      return goesFrom(drawn.session, at, ["data/"], own, true)
+        .then((f) => (latest.current.locked ? undefined : act(f.graph, own, f.graph.view.revision > at, f.base)))
         .catch((error) => useStore.getState().graph?.session === drawn.session && toast(error))
         .finally(() => own.end());
     };

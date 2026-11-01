@@ -12,14 +12,19 @@ import { useStore } from "./store";
 /** The routes whose answers name the step they took back, not one they made: never kept as the window's own. */
 const TAKES_BACK = ["/api/graph/undo", "/api/graph/redo", "/api/graph/undo/skip"];
 
-/** `fetch` for a request of the page's to the server: an answer that names a step is kept first. */
+/** This window, as every request of its says (`x-m2-window`, AGENT-2): the server keeps which window made each revision, and judges a gesture's target only by others' changes. */
+export const windowId: string = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `w${Date.now()}${Math.random()}`;
+
+/** `fetch` for a request of the page's to the server: it says its window, and an answer that names a step is kept first. */
 export async function http(url: string, init?: RequestInit): Promise<Response> {
   const path = new URL(url, location.href).pathname;
   const post = (init?.method ?? "GET") !== "GET";
   // An undo or a redo is a change on its way until its answer is kept: a gesture waits for it.
   const landed = post && TAKES_BACK.includes(path) ? flight() : null;
   try {
-    const res = await fetch(url, init);
+    const headers = new Headers(init?.headers);
+    headers.set("x-m2-window", windowId);
+    const res = await fetch(url, { ...init, headers });
     if (post && res.ok) await keep(path, res);
     return res;
   } finally {
@@ -33,6 +38,7 @@ interface Answer {
   step?: unknown;
   moved?: unknown;
   mixed?: unknown;
+  beats?: unknown;
   undo_name?: StepName | null;
 }
 
@@ -46,8 +52,9 @@ async function keep(path: string, res: Response) {
   const moved = Array.isArray(answer.moved) ? answer.moved.filter((m): m is string => typeof m === "string") : undefined;
   const revision = moved !== undefined && typeof answer.revision === "number" ? answer.revision : undefined;
   const mixed = answer.mixed === true;
+  const beats = answer.beats === true;
   // An undo, a redo: a change of the window's own, whose step isn't.
-  if (TAKES_BACK.includes(path)) return void (revision !== undefined && changed(session, revision, moved!, mixed));
-  if (typeof answer.step === "number") owned(session, { revision, step: answer.step, moved, mixed, undo_name: answer.undo_name });
-  else if (revision !== undefined) changed(session, revision, moved!, mixed);
+  if (TAKES_BACK.includes(path)) return void (revision !== undefined && changed(session, revision, moved!, mixed, beats));
+  if (typeof answer.step === "number") owned(session, { revision, step: answer.step, moved, mixed, beats, undo_name: answer.undo_name });
+  else if (revision !== undefined) changed(session, revision, moved!, mixed, beats);
 }

@@ -447,9 +447,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const drawnLane = findLane(latest.current.timeline, module, lane);
     const drawn = drawnLane ? serverRef(drawnLane, ref) : null;
     afterLaneWrites(latest.current, async (within) => {
-      const f = await goesFrom(latest.current.session, drawnAt, [lanesOf(module)], within);
-      const l = f.shown ? findLane(f.graph.timeline, module, lane) : null;
-      const c = f.shown ? l && serverRef(l, ref) : drawn;
+      const f = await goesFrom(latest.current.session, drawnAt, [lanesOf(module)], within, true);
+      // The clip as the window shows it: the server refuses it if another changed it after the base.
+      const l = findLane(f.graph.timeline, module, lane);
+      const c = (l && serverRef(l, ref)) ?? (f.graph.view.revision === drawnAt ? drawn : null);
       if (!c) throw new Error("This clip is gone.");
       return sendGesture(f.graph, make(c), { name }, undefined, within, f.base);
     })
@@ -556,9 +557,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (draft || sending.current.busy || (g && showsOwn(g) && g.view.revision === latest.current.view.revision)) return make(clip, basis());
     const drawn = { clip, basis: basis() };
     const own = editing();
-    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(module)], own)
+    const drawnAt = latest.current.view.revision;
+    goesFrom(latest.current.session, drawnAt, [lanesOf(module)], own, true)
       .then((f) => {
-        if (!f.shown) return make(drawn.clip, drawn.basis);
+        if (f.graph.view.revision === drawnAt) return make(drawn.clip, drawn.basis);
         const l = findLane(f.graph.timeline, module, lane);
         const c = findNoteClip(f.graph.timeline, ref);
         // From its base: the server refuses the write if the lane changed after it.
