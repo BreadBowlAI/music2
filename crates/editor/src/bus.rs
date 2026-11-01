@@ -88,10 +88,14 @@ pub(crate) fn bus_import(kind: BusKind) -> &'static str {
     kind.body().1
 }
 
-/// The text of a new bus file, importing what plays `kind` from `module`, its call writing `values`.
-pub(crate) fn bus_text(kind: BusKind, module: &str, key: &str, label: &str, values: &str) -> String {
+/// The text of a new bus file, importing what plays `kind` from `module`, its call writing
+/// `values`, with the unit constructors `ctors` they need imported beside `bus`.
+pub(crate) fn bus_text(kind: BusKind, module: &str, key: &str, label: &str, (values, ctors): &(String, Vec<String>)) -> String {
+    let mut core: Vec<&str> = ctors.iter().map(String::as_str).chain(["bus"]).collect();
+    core.sort();
     format!(
-        "import {{ bus }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        "import {{ {} }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        core.join(", "),
         bus_import(kind),
         quoted(module),
         bus_call_text(kind, key, label, values)
@@ -140,7 +144,7 @@ pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Optio
     let (song_file, new_file) = (path(&mixer.file)?, path(&file)?);
     let mut ops = vec![
         plan::text_edit(&song_file, &song_text, &edits),
-        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label, "").into()) },
+        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label, &Default::default()).into()) },
     ];
     let mut ranges = vec![
         (song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])),

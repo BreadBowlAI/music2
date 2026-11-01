@@ -1,6 +1,9 @@
 //! Drum kits (KIT-1 to KIT-9; the design is `docs/designs/drums/design.md`): a kit is a Drums bus
 //! and the Drum tracks that go to it, worked out from the song, never stored.
 //!
+//! - **The General MIDI table** (KIT-6): which of the Drum's sounds answers to each drum note, one
+//!   table for [`split`] (a drum machine's lane by sound, KIT-7), a MIDI file's drums coming in as
+//!   a kit (KIT-8) and a Drum's notes going out as General MIDI drums (KIT-9).
 //! - **The kits the packs name** (KIT-3, KIT-4): each instrument's `editor.kits`, as + Track's Drum
 //!   kit lists them, and adding one (KIT-5): a Drums bus and the kit's tracks, each going to it, in
 //!   one Tx, one undo step, through [`tracks::add_tracks`].
@@ -15,6 +18,12 @@ use serde::Serialize;
 use crate::EditError;
 use crate::bus::BusKind;
 use crate::tracks::{self, Made, NewTrack, Play};
+
+/// The Drum, which a kit's tracks play.
+const DRUM: &str = "@m2/drums:drum";
+
+/// What a kit's bus is called: a kit's name is its bus's label (KIT-1).
+pub const BUS: &str = "Drums";
 
 /// One of the Drum's sounds (KIT-6): its name on the Drum's menu, the General MIDI drum notes it
 /// answers to, and its own, the one music2 writes for it.
@@ -92,71 +101,6 @@ pub fn general_midi(sound: &str, key: u8) -> u8 {
     }
 }
 
-/// A kit of the Drum for `notes`, a drum machine's (KIT-8): a Drums bus, at place `bus` of the
-/// list it goes in, and a Drum track for each sound they use, by [`split`], named by its sound and
-/// going to the bus, with one clip of that sound's notes (`clip` makes it); the notes no sound
-/// answers to on Percussion, which plays the tom, each at its own pitch.
-pub(crate) fn kit_of(
-    notes: &[Note],
-    bus: usize,
-    clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
-) -> Result<Vec<NewTrack>, EditError> {
-    let Split { lanes, left } = split(notes);
-    let mut out = vec![kit_bus()];
-    let named = |sound: &str| sound[..1].to_uppercase() + &sound[1..];
-    let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
-    let left = (!left.is_empty()).then(|| ("Percussion".to_string(), "tom", left));
-    for (label, sound, mine) in lanes.chain(left) {
-        let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;
-        let menu = Insert { slot: "drum".into(), value: Spelled { value: place, spelled: None, written: place } };
-        out.push(NewTrack {
-            play: Play::Instrument(DRUM.into()),
-            label: Some(label),
-            clips: vec![clip(mine)?],
-            values: vec![menu],
-            to: Some(bus),
-            ..NewTrack::default()
-        });
-    }
-    Ok(out)
-}
-
-/// The sound each track's Drum plays, by its key (KIT-9): the name its menu holds, a value the code
-/// writes or leaves out. None for a track whose Drum's sound the code works out (a lane, a signal),
-/// or that plays no Drum, or two.
-pub(crate) fn sounds_played(s: &Session) -> BTreeMap<String, &'static str> {
-    let view = crate::view::view(s);
-    let mut out = BTreeMap::new();
-    for m in &view.modules {
-        let menus: Vec<&str> = m
-            .nodes
-            .iter()
-            .flat_map(|n| &n.knobs)
-            .filter(|k| k.component.as_deref() == Some(DRUM) && k.slot.as_deref() == Some("drum"))
-            .filter_map(|k| k.value.as_str())
-            .collect();
-        if let [one] = menus[..]
-            && let Some(g) = GM.iter().find(|g| g.sound == one)
-        {
-            out.insert(m.key.clone(), g.sound);
-        }
-    }
-    out
-}
-
-/// The Drum, which a kit's tracks play.
-const DRUM: &str = "@m2/drums:drum";
-
-/// What a kit's bus is called: a kit's name is its bus's label (KIT-1).
-pub const BUS: &str = "Drums";
-
-/// A kit's bus (KIT-5): a Group called Drums, its gain at −6 dB, so the kit's drums hitting together
-/// stay under full scale (KIT-4).
-pub(crate) fn kit_bus() -> NewTrack {
-    let db = Insert { slot: "db".into(), value: Spelled { value: -6.0, spelled: Some("db".into()), written: -6.0 } };
-    NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), values: vec![db], ..NewTrack::default() }
-}
-
 /// A kit an instrument names (KIT-3), as + Track's Drum kit lists it.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct KitInfo {
@@ -215,6 +159,65 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
         ..NewTrack::default()
     });
     tracks::add_tracks(s, &std::iter::once(kit_bus()).chain(made).collect::<Vec<_>>(), after, None)
+}
+
+/// A kit's bus (KIT-5): a Group called Drums, its gain at −6 dB, so the kit's drums hitting together
+/// stay under full scale (KIT-4).
+pub(crate) fn kit_bus() -> NewTrack {
+    let db = Insert { slot: "db".into(), value: Spelled { value: -6.0, spelled: Some("db".into()), written: -6.0 } };
+    NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), values: vec![db], ..NewTrack::default() }
+}
+
+/// A kit of the Drum for `notes`, a drum machine's (KIT-8): a Drums bus, at place `bus` of the
+/// list it goes in, and a Drum track for each sound they use, by [`split`], named by its sound and
+/// going to the bus, with one clip of that sound's notes (`clip` makes it); the notes no sound
+/// answers to on Percussion, which plays the tom, each at its own pitch.
+pub(crate) fn kit_of(
+    notes: &[Note],
+    bus: usize,
+    clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
+) -> Result<Vec<NewTrack>, EditError> {
+    let Split { lanes, left } = split(notes);
+    let mut out = vec![kit_bus()];
+    let named = |sound: &str| sound[..1].to_uppercase() + &sound[1..];
+    let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
+    let left = (!left.is_empty()).then(|| ("Percussion".to_string(), "tom", left));
+    for (label, sound, mine) in lanes.chain(left) {
+        let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;
+        let menu = Insert { slot: "drum".into(), value: Spelled { value: place, spelled: None, written: place } };
+        out.push(NewTrack {
+            play: Play::Instrument(DRUM.into()),
+            label: Some(label),
+            clips: vec![clip(mine)?],
+            values: vec![menu],
+            to: Some(bus),
+            ..NewTrack::default()
+        });
+    }
+    Ok(out)
+}
+
+/// The sound each track's Drum plays, by its key (KIT-9): the name its menu holds, a value the code
+/// writes or leaves out. None for a track whose Drum's sound the code works out (a lane, a signal),
+/// or that plays no Drum, or two.
+pub(crate) fn sounds_played(s: &Session) -> BTreeMap<String, &'static str> {
+    let view = crate::view::view(s);
+    let mut out = BTreeMap::new();
+    for m in &view.modules {
+        let menus: Vec<&str> = m
+            .nodes
+            .iter()
+            .flat_map(|n| &n.knobs)
+            .filter(|k| k.component.as_deref() == Some(DRUM) && k.slot.as_deref() == Some("drum"))
+            .filter_map(|k| k.value.as_str())
+            .collect();
+        if let [one] = menus[..]
+            && let Some(g) = GM.iter().find(|g| g.sound == one)
+        {
+            out.insert(m.key.clone(), g.sound);
+        }
+    }
+    out
 }
 
 #[cfg(test)]

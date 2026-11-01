@@ -245,10 +245,10 @@ fn groove() -> Vec<u8> {
     m2_editor::smf::write(&Smf { format: 1, ppq: 96, tracks })
 }
 
-// C2b, Q35, Q36: a file of two parts below the tracks asks the tempo question first, writing
-// nothing; answered Use, it is two new tracks and the file's tempo from the bar, one undo step
-// named on the server. As bytes (a browser) with Keep onto a track's row, and onto a notes lane
-// (two parts: new tracks after it, not into it).
+// C2b, Q35, Q36, KIT-8: a file of two parts below the tracks asks the tempo question first, writing
+// nothing; answered Use, it is new tracks (its drums a kit: a Drums bus, a Kick and a Snare) and
+// the file's tempo from the bar, one undo step named on the server. As bytes (a browser) with Keep
+// onto a track's row, and onto a notes lane (two parts: new tracks after it, not into it).
 #[test]
 fn an_import_below_asks_then_writes() {
     let dir = project("below");
@@ -280,8 +280,8 @@ fn an_import_below_asks_then_writes() {
         "{done:#}"
     );
     let labels: Vec<&str> = done["tracks"].as_array().unwrap().iter().filter_map(|t| t["label"].as_str()).collect();
-    assert_eq!(labels, ["Drums", "Low"]);
-    assert_eq!(done["made"].as_array().map(Vec::len), Some(2));
+    assert_eq!(labels, ["Drums", "Kick", "Snare", "Low"]);
+    assert_eq!(done["made"].as_array().map(Vec::len), Some(3), "a clip for each but the bus");
     let arrangement = m2_song::Arrangement::read(&std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap()).unwrap();
     let tempo: Vec<(f64, f64)> = arrangement.tempo.iter().map(|t| (t.beat, t.bpm)).collect();
     assert_eq!(tempo, [(0.0, 120.0), (4.0, 128.0)], "the file's tempo from bar 2");
@@ -289,10 +289,10 @@ fn an_import_below_asks_then_writes() {
     let q =
         |to: &Value| format!("/api/graph/midifile/import?session={session}&name=groove.mid&tempo=keep&to={}", urlencode(&to.to_string()));
     let (status, done) = upload(url, &q(&json!({"kind": "track", "module": "bass", "beat": 0})), &groove());
-    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(2)), "{done:#}");
+    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(4)), "{done:#}");
     // Onto Bass's notes lane: two parts are new tracks.
     let (status, done) = upload(url, &q(&json!({"kind": "lane", "module": "bass", "lane": "notes", "beat": 0})), &groove());
-    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(2)), "{done:#}");
+    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(4)), "{done:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

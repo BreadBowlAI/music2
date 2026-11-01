@@ -379,7 +379,7 @@ pub(crate) fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<()
 /// [`adds_one`] for several tracks at once: exactly the modules `made` names added, in any order,
 /// nothing of the song removed but an empty mixer's stand-in, no value changed, and each new track
 /// in its own channel.
-pub(crate) fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
+fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
     let d = &checked.delta;
     let refused = |why: &str| EditError::Rejected(format!("adding the track would {why}"));
     let mut want =
@@ -577,8 +577,7 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
             (None, Some((id, _)), _) => crate::plugins::track_text(id, &key, &label),
             (None, None, Some(kind)) => {
                 let d = &s.catalog().components[kind.body().0];
-                let (values, _) = values_text(d, &t.values, &rev.compiled.units)?;
-                crate::bus::bus_text(kind, &buses[kind.body().0], &key, &label, &values)
+                crate::bus::bus_text(kind, &buses[kind.body().0], &key, &label, &values_text(d, &t.values, &rev.compiled.units)?)
             }
             (None, None, None) => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
         };
