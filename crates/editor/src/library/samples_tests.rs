@@ -431,8 +431,9 @@ fn a_missing_folder_keeps_its_cache() {
     assert_eq!((back.items.len(), back.measured), (10, 0), "nothing measured again");
 }
 
-// LIB-5 (review D3): a file music2 can't play from the library (0 Hz, a sample that isn't a
-// number) is unreadable, not listed; and a bad entry in the cache costs only itself.
+// LIB-5 (review D3): a file music2 can't play from the library (0 Hz) is unreadable, not listed;
+// one with a sample that isn't a number plays, that sample as 0 (FMT-24), and is listed; and a bad
+// entry in the cache costs only itself.
 #[test]
 fn a_bad_file_costs_only_itself() {
     let t = Scratch::new("bad");
@@ -445,18 +446,19 @@ fn a_bad_file_costs_only_itself() {
     std::fs::write(folder.join("Inf Hat.wav"), raw_wav(&fmt_of(3, 1, 48_000, 192_000, 4, 32), &inf)).unwrap();
     let found = index(Root::Folder(&folder), Some(&cache));
     let labels: Vec<&str> = found.items.iter().map(|i| i.label.as_str()).collect();
-    assert_eq!(labels, ["Kick 01", "Snare 02"]);
-    assert_eq!(found.unreadable.len(), 2, "{:?}", found.unreadable);
-    assert!(found.unreadable.iter().any(|u| u.starts_with("Zero Rate Snare.wav") && u.contains("0 Hz")), "{:?}", found.unreadable);
-    assert!(found.unreadable.iter().any(|u| u.starts_with("Inf Hat.wav") && u.contains("isn't a number")), "{:?}", found.unreadable);
-    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 2, "the two that don't read, again; the rest from the cache");
+    assert_eq!(labels, ["Inf Hat", "Kick 01", "Snare 02"]);
+    let inf = found.items.iter().find(|i| i.label == "Inf Hat").unwrap();
+    assert_eq!(inf.sample.as_ref().map(|s| s.peak), Some(0.5), "its infinite sample reads as 0");
+    assert_eq!(found.unreadable.len(), 1, "{:?}", found.unreadable);
+    assert!(found.unreadable[0].starts_with("Zero Rate Snare.wav") && found.unreadable[0].contains("0 Hz"), "{:?}", found.unreadable);
+    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 1, "the one that doesn't read, again; the rest from the cache");
     // One entry spoilt by hand: only it is measured again.
     let file = cache_file(&cache, &folder);
     let text = std::fs::read_to_string(&file).unwrap();
     let at = text.find("\"seconds\":").unwrap();
     let spoilt = format!("{}\"seconds\":null,\"was\":{}", &text[..at], &text[at + "\"seconds\":".len()..]);
     std::fs::write(&file, spoilt).unwrap();
-    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 3, "one kept file, and the two that don't read");
+    assert_eq!(index(Root::Folder(&folder), Some(&cache)).measured, 2, "one kept file, and the one that doesn't read");
 }
 
 // LIB-5 (review D10): only plain files are read: a pipe named like a WAV never blocks the index.

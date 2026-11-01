@@ -1,0 +1,21 @@
+{
+  "m2preset": 1,
+  "name": "Round bass",
+  "sound": "@m2/wavetable:wavetable",
+  "values": {
+    "attack": 0.002,
+    "cutoff": 600,
+    "decay": 0.3,
+    "filterDecay": 0.25,
+    "filterEnv": 3,
+    "filterSustain": 0.1,
+    "keytrack": 0.5,
+    "levelB": 0.7,
+    "pitchB": -12,
+    "positionA": 0.67,
+    "positionB": 0,
+    "q": 1.5,
+    "release": 0.12,
+    "sustain": 0.8
+  }
+}

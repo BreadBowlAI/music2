@@ -282,5 +282,5 @@ fn every_factory_preset_loads() {
             n += 1;
         }
     }
-    assert_eq!(n, 20, "two each for Pluck, Pad, Bass, Reverb and Delay, and for each of @m2/mixing's five tools");
+    assert_eq!(n, 24, "two each for Pluck, Pad, Bass, Reverb and Delay, for each of @m2/mixing's five tools, and the Wavetable's four");
 }
