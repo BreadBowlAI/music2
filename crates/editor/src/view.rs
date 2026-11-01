@@ -39,6 +39,8 @@ pub struct GraphView {
     /// The accepted revision this view shows; edits name it.
     pub revision: u64,
     pub modules: Vec<ModuleView>,
+    /// The song's drum kits (KIT-1): each bus and the Drum tracks that go to it.
+    pub kits: Vec<crate::kits::Kit>,
     /// Why the files on disk don't compile right now (the view shows the last
     /// revision that did).
     pub draft_errors: Vec<String>,
@@ -1233,7 +1235,12 @@ pub fn view(session: &Session) -> GraphView {
         }
         modules.push(ModuleView { key: m.key.clone(), label: m.label().to_string(), track: m.track, nodes, edges, port_edges });
     }
-    GraphView { revision: rev.number, modules, draft_errors: session.draft_errors.iter().map(|d| d.to_string()).collect() }
+    GraphView {
+        revision: rev.number,
+        modules,
+        kits: crate::kits::kits(session),
+        draft_errors: session.draft_errors.iter().map(|d| d.to_string()).collect(),
+    }
 }
 
 #[cfg(test)]

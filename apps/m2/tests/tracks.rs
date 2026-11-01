@@ -75,3 +75,15 @@ fn tracks_are_added_duplicated_deleted_and_laid_out_from_the_terminal() {
     assert!(read("layout.json").contains("[\"keys\", \"bass-2\", \"bass\", \"hats\", \"lead-vox\"]"));
     ok(&["check", dir]);
 }
+
+// KIT-1: `m2 graph` says each drum kit on a line of its own, after the revision: its name and bus,
+// then each row's track, lane and sound.
+#[test]
+fn m2_graph_says_each_drum_kit() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-kits-cli-{}", std::process::id())));
+    let song = temp.0.join("buses");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/buses"), &song);
+    let said = ok(&["graph", song.to_str().unwrap()]);
+    let kits: Vec<&str> = said.lines().filter(|l| l.starts_with("kit ")).collect();
+    assert_eq!(kits, ["kit Drums (drums): Kick (kick/hits, kick) · Hats (hats/hits, hats)"], "{said}");
+}

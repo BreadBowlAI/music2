@@ -28,6 +28,7 @@ pub mod import;
 pub mod json;
 pub mod keys;
 pub mod kind;
+pub mod kits;
 pub mod label;
 pub mod layout;
 pub mod lens;
