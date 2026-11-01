@@ -18,7 +18,7 @@ import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { controlLabel, graphApi, inSentence, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
 import { useStore } from "../lib/store";
-import { editing, gate } from "../lib/history";
+import { editing, fileOf, gate } from "../lib/history";
 import { words } from "./Settings";
 
 /** How tall each view is on its card, in px. */
@@ -164,7 +164,7 @@ function useViewDrag(p: ViewProps) {
       };
       // Through the gate (AGENT-2): from what the window shows once it shows its own last change,
       // when only its own changes that moved no ids came since, each knob as it is called there.
-      d.ready = gate(p.session, p.revision).then(
+      d.ready = gate(p.session, p.revision, [...new Set(knobs.map((k) => fileOf(k.id)))]).then(
         (g) => ((d.revision = g.revision), (d.knobs = d.knobs.map((k) => ({ ...k, id: g.id(k.id) }))), true),
         (e) => (toast(words(e)), false),
       );

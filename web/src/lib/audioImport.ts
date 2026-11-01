@@ -15,7 +15,7 @@ import { trackMade } from "./events";
 import { undoAction } from "../components/GraphCanvas";
 import { dropOnRecording, recordingHint, type RecordingTarget } from "./recording";
 import { http } from "./http";
-import { editing, goes } from "./history";
+import { editing, fileOf, goes } from "./history";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -149,7 +149,7 @@ export async function addSample(item: LibraryItem, to: Target | RecordingTarget)
   try {
     const body =
       to.kind === "recording"
-        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, ours), call: to.call, setting: to.setting }
+        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, [fileOf(to.call)], ours), call: to.call, setting: to.setting }
         : { session: graph.session, id: item.id, to };
     const res = await http("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) }).finally(() => ours.end());
     const done = (await readJson(res)) as SampleAdded & { error?: string };

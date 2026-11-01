@@ -56,35 +56,58 @@ export const after = (list: Marker[], beat: number) => list.find((m) => m.beat >
  */
 export const useMarkerEdit = create<{ editing: { beat: number; from: Marker | null } | null }>(() => ({ editing: null }));
 
-/** The list as just sent, drawn until the timeline shows it (`since`: the list it was made from). */
-export const usePendingMarkers = create<{ pending: { list: Marker[]; since: Marker[] } | null }>(() => ({ pending: null }));
+/**
+ * The list as just sent, drawn until the timeline shows something newer than `since`, the list the
+ * server had when it was sent (`answered`: its write was answered).
+ */
+export const usePendingMarkers = create<{ pending: { list: Marker[]; since: Marker[]; answered: boolean } | null }>(() => ({ pending: null }));
+
+// Once its write is answered, a state that shows other markers than those it was made from ends it.
+useStore.subscribe((s) => {
+  const p = usePendingMarkers.getState().pending;
+  if (p?.answered && (!s.graph || !sameMarkers(markersOf(s.graph.timeline), p.since))) usePendingMarkers.setState({ pending: null });
+});
+
+/** Whether two lists are the same markers, by beat and name (never by which array they are). */
+export const sameMarkers = (a: readonly Marker[], b: readonly Marker[]) =>
+  a.length === b.length && a.every((m, i) => Math.abs(m.beat - b[i].beat) < 1e-6 && m.name === b[i].name);
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
+/** The window's marker writes, one after another: each made from the one before's result. */
+let queue: Promise<unknown> = Promise.resolve();
+
 /**
  * Write the song's markers: the whole list, one undo step named `step` ("Chorus at bar 17", "moving
- * Chorus"). Drawn at once; refused, the list goes back and a toast says why.
+ * Chorus"), made from the list `base` the window drew (AGENT-2): the server refuses it, saying who,
+ * when the markers changed since, so none is lost silently. Drawn at once; writes go one after
+ * another; refused, the list goes back and a toast says why.
  */
-export async function writeMarkers(list: Marker[], step: Step) {
+export function writeMarkers(list: Marker[], step: Step, base: Marker[]) {
   const { graph, toast } = useStore.getState();
-  if (!graph) return;
-  const since = markersOf(graph.timeline);
+  if (!graph) return Promise.resolve();
   const sorted = [...list].sort((a, b) => a.beat - b.beat);
-  usePendingMarkers.setState({ pending: { list: sorted, since } });
+  const pending = { list: sorted, since: markersOf(graph.timeline), answered: false };
+  usePendingMarkers.setState({ pending });
   const ours = editing();
-  try {
-    const res = await http("/api/graph/markers", {
-      method: "POST",
-      headers: { "content-type": "application/json", ...auth },
-      body: JSON.stringify({ session: graph.session, markers: sorted }),
-    });
-    const r = await readJson(res);
-    if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
-    if (r.before !== r.after) recorded(graph.session, r, step);
-  } catch (error) {
-    usePendingMarkers.setState({ pending: null });
-    toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));
-  } finally {
-    ours.end();
-  }
+  const write = queue.then(async () => {
+    try {
+      const res = await http("/api/graph/markers", {
+        method: "POST",
+        headers: { "content-type": "application/json", ...auth },
+        body: JSON.stringify({ session: graph.session, markers: sorted, base }),
+      });
+      const r = await readJson(res);
+      if (!res.ok) throw new Error(r.error ?? `HTTP ${res.status}`);
+      if (r.before !== r.after) recorded(graph.session, r, step);
+      if (usePendingMarkers.getState().pending === pending) usePendingMarkers.setState({ pending: { ...pending, answered: true } });
+    } catch (error) {
+      if (usePendingMarkers.getState().pending === pending) usePendingMarkers.setState({ pending: null });
+      toast((error instanceof Error ? error.message : String(error)).replace(/^edit rejected: /, ""));
+    } finally {
+      ours.end();
+    }
+  });
+  queue = write;
+  return write;
 }

@@ -63,7 +63,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
-import { editing, goesFrom, since, showsOwn, type Editing } from "../lib/history";
+import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
 import { look } from "../lib/focus";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import { dragsSound, droppedSound, loadSound } from "./Spotlight";
@@ -689,19 +689,21 @@ export default function SongTimeline({
      * A gesture of the timeline, drawn now (or at revision `drawnAt`, a drag's press): through the
      * gate (`goesFrom`, lib/history), `act` with the state to go from, whose timeline names the clips (by
      * the hash it draws them with), whether that is what the window shows once it shows its own last
-     * edit (`shown`: only its own edits that moved no ids came since), and the gesture's own edit on
-     * its way, which `act` sends with. Else the state as drawn: the server refuses the gesture if a
-     * clip it names changed since, saying who changed it. After its own edit that moved ids, nothing
-     * (`MOVED`, said). It is an edit on its way from the key or the click: a gesture after it, or an
+     * edit (`shown`: its base is newer than the revision drawn), the revision it goes from (`from`,
+     * its base, which it says to the server: a clip it names that changed after it is refused, saying
+     * who), and the gesture's own edit on its way, which `act` sends with. After its own edit that
+     * removed or renamed a track's data, nothing (`MOVED`, said). It is an edit on its way from the key or the click: a gesture after it, or an
      * Undo, waits for it. Never dropped for the window's own edit; nothing while the song can't be
      * written.
      */
-    const when = (act: (graph: GraphState, own: Editing, shown: boolean) => Promise<unknown> | void, drawnAt?: number) => {
+    const when = (act: (graph: GraphState, own: Editing, shown: boolean, from: number) => Promise<unknown> | void, drawnAt?: number) => {
       const drawn = useStore.getState().graph;
       if (!drawn || latest.current.locked) return Promise.resolve();
       const own = editing();
-      return goesFrom(drawn.session, drawnAt ?? drawn.view.revision, own)
-        .then((f) => (latest.current.locked ? undefined : act(f.shown || f.graph.view.revision === drawn.view.revision ? f.graph : drawn, own, f.shown)))
+      // Its clips are in the tracks' data: held back only by the window's own change that removed
+      // or renamed a track's (a track deleted, its ID changed).
+      return goesFrom(drawn.session, drawnAt ?? drawn.view.revision, ["data/"], own)
+        .then((f) => (latest.current.locked ? undefined : act(f.shown || f.graph.view.revision === drawn.view.revision ? f.graph : drawn, own, f.shown, f.base)))
         .catch((error) => useStore.getState().graph?.session === drawn.session && toast(error))
         .finally(() => own.end());
     };
@@ -734,13 +736,13 @@ export default function SongTimeline({
     const drop = (d: Drag, lease: LaneLease | null, again: { from: number; make: (timeline: TimelineView) => Drag | null } | null) => {
       setDrag({ ...d, landed: Infinity });
       let sent = false;
-      void when((graph, own, shown) => {
+      void when((graph, own, shown, from) => {
         const now = again && shown ? again.make(graph.timeline) : d;
         const made = now && gestureOf(now);
         if (!made || !made.step) return;
         sent = true;
         const { gesture, step } = made;
-        return (lease ? lease.finish(gesture, { name: step }, own) : send(graph, gesture, { name: step }, undefined, own)).then(
+        return (lease ? lease.finish(gesture, { name: step }, own) : send(graph, gesture, { name: step }, undefined, own, from)).then(
           (done) => {
             setDrag((was) => (was?.landed === Infinity ? { ...(now ?? was), landed: done.revision } : was));
             // Copies and clips moved to another lane are new there: they are the selection now.
@@ -781,7 +783,7 @@ export default function SongTimeline({
       // The selection may name clips the window's own last edit made, not drawn yet: they go too.
       if (!sel.picked.length) return false;
       const range = sel.range;
-      void when((graph, own) => {
+      void when((graph, own, _shown, from) => {
         const { timeline } = graph;
         const picked = chosen(timeline);
         if (!picked.length) return;
@@ -791,7 +793,7 @@ export default function SongTimeline({
         const grid = g.on ? stepOf(g, zoomNow(), barAt(timeline.meter, lo).length) : undefined;
         const what = clipsWord(picked.map((p) => p.ref));
         const gesture: Gesture = { op: "duplicate", clips: picked.map((p) => p.server), ...(range ? { range } : {}), ...(grid ? { grid } : {}), ...(times > 1 ? { times } : {}) };
-        return send(graph, gesture, { name: times > 1 ? `repeating ${what}` : `duplicating ${what}` }, undefined, own).then(
+        return send(graph, gesture, { name: times > 1 ? `repeating ${what}` : `duplicating ${what}` }, undefined, own, from).then(
           // The copies are the selection now; a marquee's bars move on with them, so ⌘D again goes on.
           (done) => pick(done, [], range ? [range[1], range[1] + times * (range[1] - range[0])] : null),
         );
@@ -802,9 +804,9 @@ export default function SongTimeline({
     const remove = (verb: string) => {
       const picked = useClipSelection.getState().picked;
       if (!picked.length || latest.current.locked) return;
-      void when((graph, own) => {
+      void when((graph, own, _shown, from) => {
         const refs = picked.flatMap((p) => refIn(graph.timeline, p) ?? []);
-        if (refs.length) return send(graph, { op: "delete", clips: refs }, { name: `${verb} ${clipsWord(refs)}` }, undefined, own);
+        if (refs.length) return send(graph, { op: "delete", clips: refs }, { name: `${verb} ${clipsWord(refs)}` }, undefined, own, from);
       });
       // Notes closes on a clip deleted (taste.md §3.7).
       const shell = useShell.getState();
@@ -818,14 +820,14 @@ export default function SongTimeline({
     const flush = () => {
       if (!nudged.current || nudging.current) return;
       nudging.current = true;
-      void when((graph, own) => {
+      void when((graph, own, _shown, from) => {
         const by = nudged.current;
         nudged.current = 0;
         const picked = chosen(graph.timeline);
         if (!by || !picked.length) return;
         const lo = Math.min(...picked.map((p) => p.clip.start));
         const move = clean(Math.max(by, -lo));
-        if (move) return send(graph, { op: "move", clips: picked.map((p) => p.server), by: move }, { name: `moving ${clipsWord(picked.map((p) => p.ref))}` }, undefined, own);
+        if (move) return send(graph, { op: "move", clips: picked.map((p) => p.server), by: move }, { name: `moving ${clipsWord(picked.map((p) => p.ref))}` }, undefined, own, from);
       }).finally(() => {
         nudging.current = false;
         // Asked for while this one went: they go next, from where it left the clips.
@@ -909,7 +911,7 @@ export default function SongTimeline({
     ) => {
       drawn.set(points);
       let sent = false;
-      void when((graph, own, shown) => {
+      void when((graph, own, shown, from) => {
         let named: ServerRef | null = server;
         let now: P[] | null = points;
         if (again && (again.from === undefined || shown)) {
@@ -922,7 +924,7 @@ export default function SongTimeline({
         }
         sent = true;
         const gesture = { op: "points", clip: named, points: now } as Gesture;
-        return (lease ? lease.finish(gesture, { name: step }, own) : send(graph, gesture, { name: step }, undefined, own)).then(
+        return (lease ? lease.finish(gesture, { name: step }, own) : send(graph, gesture, { name: step }, undefined, own, from)).then(
           (done) => drawn.landed(done.revision),
           (error) => {
             sent = false;
@@ -1316,7 +1318,7 @@ export default function SongTimeline({
             return;
           }
           const graph = leasable();
-          if (!graph || (behind && since(graph.session, drawnAt, graph.view.revision) !== "own")) return;
+          if (!graph || (behind && baseOf(graph.session, drawnAt, graph.view.revision, ["data/"]).base !== graph.view.revision)) return;
           const from = behind ? graph.timeline : drawn;
           const d = dragged(from, ev);
           const heard = d && gestureOf(d);
@@ -1370,7 +1372,7 @@ export default function SongTimeline({
         // The server gives it a new id (FMT-12); it is selected and opens once the timeline shows it.
         const m: Made = { revision: Infinity, clip: { module, lane: key, id: "" } };
         made.current = m;
-        void when((graph, own) => {
+        void when((graph, own, _shown, from) => {
           const lane = findLane(graph.timeline, module, key);
           if (!lane || lane.kind === "audio") return;
           // The bar clicked, after any clip before it and up to the next; one bar at most.
@@ -1381,7 +1383,7 @@ export default function SongTimeline({
           const length = Math.min(bar.length, next - start);
           if (!(length > 0) || lane.clips.some((c) => c.start < start + length && c.start + c.length > start)) return;
           const what = automation(lane) ? `${laneTitle(lane)} automation` : named(module);
-          return send(graph, { op: "create", module, lane: key, start, length }, { name: `adding a ${what} clip` }, undefined, own).then(
+          return send(graph, { op: "create", module, lane: key, start, length }, { name: `adding a ${what} clip` }, undefined, own, from).then(
             (done) => {
               const id = done.made.find((x) => x.module === module && x.lane === key)?.id;
               if (made.current !== m || !id) return;
@@ -1424,7 +1426,7 @@ export default function SongTimeline({
         const at = playhead();
         const any = useClipSelection.getState().picked.length > 0;
         const m = useShell.getState().selected;
-        void when((graph, own) => {
+        void when((graph, own, _shown, from) => {
           const { timeline } = graph;
           const crosses = (c: { start: number; length: number }) => c.start < at - 1e-9 && at < c.start + c.length - 1e-9;
           let targets: { ref: ClipRef; server: ServerRef }[];
@@ -1442,7 +1444,7 @@ export default function SongTimeline({
             );
           }
           if (!targets.length) return toast(`No ${any ? "selected " : ""}clip crosses the playhead at ${position(timeline.meter, at)}, so there is nothing to split.`);
-          return send(graph, { op: "split", clips: targets.map((t) => t.server), at }, { name: `splitting ${clipsWord(targets.map((t) => t.ref))}` }, undefined, own).then(
+          return send(graph, { op: "split", clips: targets.map((t) => t.server), at }, { name: `splitting ${clipsWord(targets.map((t) => t.ref))}` }, undefined, own, from).then(
             // Both halves of each are the selection.
             (done) => pick(done, targets.map((t) => t.ref)),
           );
@@ -1450,13 +1452,13 @@ export default function SongTimeline({
       },
       join() {
         if (!useClipSelection.getState().picked.length) return;
-        void when((graph, own) => {
+        void when((graph, own, _shown, from) => {
           const picked = chosen(graph.timeline);
           if (!picked.length) return;
           // The earliest keeps its id, and is the selection after.
           const first = [...picked].sort((a, b) => a.clip.start - b.clip.start)[0];
           const step = `joining ${picked.length === 1 ? clipsWord([first.ref]) : `${picked.length} ${named(first.ref.module)} clips`}`;
-          return send(graph, { op: "join", clips: picked.map((p) => p.server) }, { name: step }, undefined, own).then(() => useClipSelection.getState().only([first.ref]));
+          return send(graph, { op: "join", clips: picked.map((p) => p.server) }, { name: step }, undefined, own, from).then(() => useClipSelection.getState().only([first.ref]));
         });
       },
       quantize() {
@@ -1466,11 +1468,11 @@ export default function SongTimeline({
         // The roll's grid: the one notes are placed on.
         const g = useGrid.getState().notes;
         const grid = stepOf(g, zoomNow());
-        void when((graph, own) => {
+        void when((graph, own, _shown, from) => {
           const notes = chosen(graph.timeline).filter((p) => p.lane.kind === "notes");
           if (!notes.length) return;
           const step = `quantizing ${clipsWord(notes.map((p) => p.ref))} to ${pickName(g.pick, g.triplet)}`;
-          return send(graph, { op: "quantize", clips: notes.map((p) => p.server), grid }, { name: step }, undefined, own);
+          return send(graph, { op: "quantize", clips: notes.map((p) => p.server), grid }, { name: step }, undefined, own, from);
         });
       },
       nudge(dir, bar) {
@@ -1495,7 +1497,7 @@ export default function SongTimeline({
         if (!copied.length) return;
         const at = beat ?? playhead();
         const selected = useShell.getState().selected;
-        void when((graph, own) => {
+        void when((graph, own, _shown, base) => {
         const { timeline } = graph;
         let target = to;
         // From one lane: onto the selected track's lane of their kind (theirs, when it is their track).
@@ -1507,7 +1509,7 @@ export default function SongTimeline({
         }
         const into = target ?? copied[0];
         const step = `pasting ${copied.length === 1 ? `a ${named(into.module)} clip` : `${copied.length} clips`}`;
-        return send(graph, { op: "paste", clips: copied, at, ...(target ? { to: target } : {}) }, { name: step }, undefined, own).then((done) => pick(done));
+        return send(graph, { op: "paste", clips: copied, at, ...(target ? { to: target } : {}) }, { name: step }, undefined, own, base).then((done) => pick(done));
         });
       },
       loop: () => canvas.loopSelection?.(),
@@ -1598,9 +1600,11 @@ export default function SongTimeline({
       const drawn = useStore.getState().graph;
       if (!drawn || latest.current.locked) return;
       const own = editing();
-      // Bars by their beats: from what the window shows, unless its own edit since moved ids (`MOVED`).
-      void goesFrom(drawn.session, drawn.view.revision, own)
-        .then((f) => (latest.current.locked ? undefined : sendSection(f.graph, gesture, { name: step }, own).then(() => after?.())))
+      // Bars by their beats, as drawn: any change of the window's own since may have moved them, so
+      // then nothing (`MOVED`); else from the revision drawn, which the server refuses it over a
+      // change of the bars since, saying who.
+      void goesFrom(drawn.session, drawn.view.revision, ALL, own)
+        .then((f) => (latest.current.locked ? undefined : sendSection(f.graph, gesture, { name: step }, own, f.base).then(() => after?.())))
         .catch((error) => useStore.getState().graph?.session === drawn.session && toast(error))
         .finally(() => own.end());
     };

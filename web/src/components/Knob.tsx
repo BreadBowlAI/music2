@@ -3,7 +3,7 @@ import { RotateCcw, Spline } from "lucide-react";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { display, graphApi, picks, type GraphState, type Home, type Knob, type NumberKnob as KnobInfo } from "../lib/graph";
-import { carried, editing, goesFrom } from "../lib/history";
+import { carried, editing, fileOf, goesFrom } from "../lib/history";
 import { useStore } from "../lib/store";
 import { guideDid } from "../lib/guide";
 
@@ -181,16 +181,16 @@ export function useKnobGesture({
       previews: Promise.resolve(), previewed: false, released: false, cancelled: false, submitted: false, failed: false,
     };
     if (!on) {
-      // From what the window shows, once it shows its own last change, when every change since was
-      // its own and moved no ids; else from what it was drawn on, which the server carries or refuses
-      // saying who changed it; after its own change that moved ids, not at all (`Moved`).
+      // From its base (the window's newest own revision right after the one drawn), once the window
+      // shows its own last change: the server carries it, or refuses it saying who changed it after
+      // that; after its own change that moved ids in the knob's file, not at all (`Moved`).
       const drawn = useStore.getState().graph;
-      gesture.previews = goesFrom(session, gesture.revision).then(
+      gesture.previews = goesFrom(session, gesture.revision, [fileOf(k.id)]).then(
         (f) => {
           if (!f.shown) return;
           const now = knobIn(f.graph, carried(k.id, f.graph, drawn));
           if (!now || picks(now)) return;
-          gesture.revision = f.graph.view.revision;
+          gesture.revision = f.base;
           gesture.knob = now;
           gesture.start = now.value;
         },

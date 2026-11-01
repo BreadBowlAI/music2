@@ -1,6 +1,6 @@
 // The graph view of the open song project: types, API, layout.
 
-import { editing, gate, goesFrom, recorded, type Editing, type Step, type StepName } from "./history";
+import { ALL, editing, fileOf, gate, goesFrom, lanesOf, recorded, type Editing, type Step, type StepName, type Targets } from "./history";
 import type { DockView } from "./shell";
 import { token } from "./native";
 import { http } from "./http";
@@ -920,7 +920,7 @@ export interface UpgradePlace {
 }
 
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
-type Edit = { file: string; before: string; after: string; revision?: number; step?: number; moved?: boolean };
+type Edit = { file: string; before: string; after: string; revision?: number; step?: number; moved?: string[]; mixed?: boolean };
 /**
  * An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step (`newest`),
  * or the step undo can't take back, which can be skipped (`stuck`).
@@ -935,9 +935,9 @@ type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null
  * `id` calls it there.
  */
 const gated =
-  <T>(session: number, revision: number, send: (revision: number, id: (id: string) => string) => Promise<T>) =>
+  <T>(session: number, revision: number, targets: Targets, send: (revision: number, id: (id: string) => string) => Promise<T>) =>
   (ours: Editing) =>
-    gate(session, revision, ours).then((g) => send(g.revision, g.id));
+    gate(session, revision, targets, ours).then((g) => send(g.revision, g.id));
 
 export const graphApi = {
   get: () => call<GraphState>(""),
@@ -990,19 +990,19 @@ export const graphApi = {
     call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
   /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
   setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
-    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),
+    edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),
   connect: (session: number, revision: number, from: string, to: string, step: Step) =>
-    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/connect", { session, revision: at, from, to: as(to) }))),
+    edit(session, step, gated(session, revision, [fileOf(from), fileOf(to)], (at, as) => call<Edit>("/connect", { session, revision: at, from, to: as(to) }))),
   disconnect: (session: number, revision: number, id: string, step: Step) =>
-    edit(session, step, gated(session, revision, (at, as) => call<Edit>("/disconnect", { session, revision: at, id: as(id) }))),
+    edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/disconnect", { session, revision: at, id: as(id) }))),
   addEffect: (session: number, revision: number, node: string, effect: Effect) =>
     edit(
       session,
       { name: `adding ${effect.label}`, structural: true },
-      gated(session, revision, (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
+      gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
     ),
   removeEffect: (session: number, revision: number, node: string, step: Step) =>
-    edit(session, step, gated(session, revision, (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
+    edit(session, step, gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step, within?: Editing) =>
     edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips }), within),
@@ -1016,13 +1016,13 @@ export const graphApi = {
     edit<Edit & { lane: { module: string; lane: string }; name: string }>(
       session,
       (r) => ({ name: `automating ${r.name}`, structural: true }),
-      gated(session, revision, (at, as) => call("/automate", { session, revision: at, id: as(id) })),
+      gated(session, revision, [fileOf(id)], (at, as) => call("/automate", { session, revision: at, id: as(id) })),
     ),
   /** Apply a problem's fix, offered at `revision`, exactly as it came: its Tx, one undoable edit. */
   fix: (session: number, revision: number, fix: Fix) =>
     // Named by its own title, quoted: "Undid “Move all to Kick (kicks)”".
     // Its Tx is the one offered at `revision`: it waits at the gate, and goes from there.
-    edit(session, { name: `“${fix.title}”`, structural: true }, gated(session, revision, () => call<Edit>("/fix", { session, revision, fix }))),
+    edit(session, { name: `“${fix.title}”`, structural: true }, gated(session, revision, ALL, () => call<Edit>("/fix", { session, revision, fix }))),
   /**
    * Add a track playing `instrument` (WRITE-10): its file, its import and mixer channel, its lane and
    * its place below `after` in the layout. One undoable edit; the answer names the new track.
@@ -1104,7 +1104,8 @@ export const graphApi = {
   },
   /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
-  layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
+  /** `base`: the order a new `order` was made from, which the server refuses it over a move since (AGENT-2). */
+  layout: (session: number, change: { order?: string[]; base?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
     const ours = editing();
     return call<Edit>("/layout", { session, ...change })
       .then((r) => (recorded(session, r, step), r))
@@ -1222,10 +1223,11 @@ export function writeLane(
       // no ids (an undo, a clip trimmed a moment before), it is made `again` from the lane as shown,
       // when it can be; after a change made elsewhere, from `base`, which the server refuses if the
       // lane changed since; after one of its own that moved ids, not at all.
-      const f = await goesFrom(graph.session, base, ours);
+      const f = await goesFrom(graph.session, base, [lanesOf(module)], ours);
       const remade = again && f.shown ? again(f.graph) : null;
       const sent = named(remade ?? clips);
-      const r = await graphApi.lane(graph.session, remade ? f.graph.view.revision : base, module, lane, sent, step, ours);
+      // From its base: the server refuses it if the lane changed after it.
+      const r = await graphApi.lane(graph.session, remade ? f.base : base, module, lane, sent, step, ours);
       return { ...r, clips: sent };
     })
     .finally(() => ours.end());

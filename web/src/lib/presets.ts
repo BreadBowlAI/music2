@@ -4,7 +4,7 @@
 // file, so it has no Undo.
 
 import { readJson } from "./graph";
-import { editing, goes, recorded } from "./history";
+import { editing, fileOf, goes, recorded } from "./history";
 import { token } from "./native";
 import { http } from "./http";
 
@@ -90,7 +90,7 @@ export const presetsApi = {
     name: string,
   ) => {
     const ours = editing();
-    return goes(session, at, ours)
+    return goes(session, at, [fileOf(node)], ours)
       .then((at) => request<Loaded>("/api/graph/preset/load", { session, at, node, from, name }))
       .then((r) => {
         if (r.changed) recorded(session, r, { name: `loading ${name}` });

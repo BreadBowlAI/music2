@@ -9,7 +9,7 @@ import { chord, mod } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
-import { editing, goesFrom } from "../lib/history";
+import { editing, goesFrom, lanesOf } from "../lib/history";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
@@ -218,17 +218,18 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
    * Send what `a` asks of row `row` as one `hits` gesture: one undo step, named `step`. An edit on
    * its way from the click, it goes through the window's one gate (AGENT-2, `goesFrom` in
    * lib/history): once the window shows its own edits before it, so the grid's clicks land in the
-   * order made, each decided from what the grid showed, theirs included (it names steps by their
-   * beats, and says on or off: nothing a change elsewhere can make stale); after its own edit that
-   * moved ids, not at all (`MOVED`).
+   * order made, each decided from what the grid showed, theirs included. It names steps by their
+   * beats, so it says the revision it goes from: refused, saying who, when its lane changed after
+   * it (bars inserted elsewhere, say); after its own edit that moved ids, not at all (`MOVED`).
    */
   const write = (row: DrumRow, a: Omit<Asked, "revision">, step: string) => {
     const mine: Asked = { ...a, revision: Infinity };
     setAsked((all) => [...all, mine]);
     const size = grid.step;
     const own = editing();
-    goesFrom(latest.current.session, latest.current.view.revision, own)
-      .then((f) => send(f.graph, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own))
+    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(row.track)], own)
+      // From its base: refused, saying who, when its lane changed after it (bars inserted).
+      .then((f) => send(f.graph, { op: "hits", module: row.track, lane: row.lane, at: a.at, step: size, to: a.to }, { name: step }, undefined, own, f.base))
       // One that changed nothing made no revision: shown at once.
       .then((done) => setAsked((all) => all.map((x) => (x === mine ? { ...x, revision: done.revision ?? 0 } : x))))
       .catch((error) => {

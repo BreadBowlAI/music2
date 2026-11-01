@@ -11,7 +11,7 @@ import { token } from "./native";
 import { useStore } from "./store";
 import { undoAction } from "../components/GraphCanvas";
 import { http } from "./http";
-import { editing, goes } from "./history";
+import { editing, fileOf, goes } from "./history";
 
 /** A drop on a recording: the call, the setting it is (`sample`), and the card's title ("Sampler"). */
 export type RecordingTarget = { kind: "recording"; call: string; setting: string; title: string };
@@ -45,7 +45,7 @@ export async function dropOnRecording(files: DropFile[], t: RecordingTarget) {
   // window shows its own last edit.
   const ours = editing();
   try {
-    const at = await goes(graph.session, graph.view.revision, ours);
+    const at = await goes(graph.session, graph.view.revision, [fileOf(t.call)], ours);
     let res: Response;
     if (f.path) {
       const body = JSON.stringify({ session: graph.session, at, call: t.call, setting: t.setting, file: f.path });

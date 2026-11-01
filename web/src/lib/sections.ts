@@ -105,7 +105,9 @@ export async function copyBars(graph: GraphState, start: number, end: number): P
  * Send one section gesture: one Tx, one undo step named `step`. Refused, it throws the server's
  * words. `edit`: the gesture's own edit on its way, which its caller ends.
  */
-export function sendSection(graph: GraphState, gesture: SectionGesture, step: Step, edit?: Editing): Promise<Done> {
+export function sendSection(graph: GraphState, gesture: SectionGesture, step: Step, edit?: Editing, from?: number): Promise<Done> {
   // Through the clips' `send`, whose answer this route shares: an edit on its way, as theirs are.
-  return send(graph, gesture as never, step, { path: "/api/graph/sections", body: { session: graph.session, gesture } }, edit);
+  // `from`: the revision its bars were drawn at, which the server refuses it over a change since.
+  const body = { session: graph.session, gesture, ...(from !== undefined ? { revision: from } : {}) };
+  return send(graph, gesture as never, step, { path: "/api/graph/sections", body }, edit);
 }

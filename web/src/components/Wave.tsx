@@ -14,7 +14,7 @@ import { clipIndex, findLane, moduleName, type AudioClip, type ClipRef, type Tim
 import type { TrackColor } from "../lib/palette";
 import { beatAt, clipSeconds, MISSING, secondsAt, usePeaks, type Peaks, type Tempo } from "../lib/peaks";
 import { request } from "../lib/projects";
-import { editing, goesFrom } from "../lib/history";
+import { editing, goesFrom, lanesOf } from "../lib/history";
 import { useStore } from "../lib/store";
 import { useZoom } from "../lib/zoom";
 import type { MenuItem } from "./ClipMenu";
@@ -212,11 +212,11 @@ export async function sendAudio(lane: TimelineLane, ref: ClipRef, set: Omit<Extr
   if (!graph || !serverRef(lane, ref)) return null;
   const ours = editing();
   try {
-    const f = await goesFrom(graph.session, graph.view.revision, ours);
+    const f = await goesFrom(graph.session, graph.view.revision, [lanesOf(ref.module)], ours);
     const drawn = f.shown ? findLane(f.graph.timeline, ref.module, ref.lane) : lane;
     const clip = drawn && serverRef(drawn, ref);
     if (!clip) return null;
-    return await send(f.graph, { op: "audio", clip, ...set }, { name: name(trackName(ref.module)) }, undefined, ours);
+    return await send(f.graph, { op: "audio", clip, ...set }, { name: name(trackName(ref.module)) }, undefined, ours, f.base);
   } catch (error) {
     toast(error instanceof Error ? error.message.replace(/^edit rejected: /, "") : String(error));
     return null;
@@ -446,10 +446,10 @@ function takeRows(lane: TimelineLane, ref: ClipRef, c: AudioClip, off: string | 
     if (!graph) return;
     const ours = editing();
     try {
-      const f = await goesFrom(graph.session, graph.view.revision, ours);
+      const f = await goesFrom(graph.session, graph.view.revision, [lanesOf(ref.module)], ours);
       const drawn = f.shown ? findLane(f.graph.timeline, ref.module, ref.lane) : lane;
       const clip = drawn && serverRef(drawn, ref);
-      if (clip) await request("/api/graph/take", { session: graph.session, ...clip, take });
+      if (clip) await request("/api/graph/take", { session: graph.session, ...clip, take, revision: f.base });
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error));
     } finally {

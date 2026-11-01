@@ -27,11 +27,12 @@ export async function http(url: string, init?: RequestInit): Promise<Response> {
   }
 }
 
-/** What an answer says at its top of the song's history (AGENT-2): the revision the change made (none when it made none), its step, and whether it moved ids. */
+/** What an answer says at its top of the song's history (AGENT-2): the revision the change made (none when it made none), its step, the files whose ids it moved, and whether the revision also took in a change made elsewhere. */
 interface Answer {
   revision?: unknown;
   step?: unknown;
   moved?: unknown;
+  mixed?: unknown;
   undo_name?: StepName | null;
 }
 
@@ -42,10 +43,11 @@ async function keep(path: string, res: Response) {
   if (!answer || typeof answer !== "object") return;
   // Only a change's answer says `moved`: then its `revision` is the one the change made (another
   // answer's, as naming a step's, is the one shown).
-  const moved = typeof answer.moved === "boolean" ? answer.moved : undefined;
+  const moved = Array.isArray(answer.moved) ? answer.moved.filter((m): m is string => typeof m === "string") : undefined;
   const revision = moved !== undefined && typeof answer.revision === "number" ? answer.revision : undefined;
+  const mixed = answer.mixed === true;
   // An undo, a redo: a change of the window's own, whose step isn't.
-  if (TAKES_BACK.includes(path)) return void (revision !== undefined && changed(session, revision, !!moved));
-  if (typeof answer.step === "number") owned(session, { revision, step: answer.step, moved, undo_name: answer.undo_name });
-  else if (revision !== undefined) changed(session, revision, !!moved);
+  if (TAKES_BACK.includes(path)) return void (revision !== undefined && changed(session, revision, moved!, mixed));
+  if (typeof answer.step === "number") owned(session, { revision, step: answer.step, moved, mixed, undo_name: answer.undo_name });
+  else if (revision !== undefined) changed(session, revision, moved!, mixed);
 }

@@ -41,7 +41,7 @@ import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
 import { afterLaneWrites, hasOwnId } from "../lib/graph";
-import { editing, goesFrom, showsOwn } from "../lib/history";
+import { editing, goesFrom, lanesOf, showsOwn } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
@@ -447,11 +447,11 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     const drawnLane = findLane(latest.current.timeline, module, lane);
     const drawn = drawnLane ? serverRef(drawnLane, ref) : null;
     afterLaneWrites(latest.current, async (within) => {
-      const f = await goesFrom(latest.current.session, drawnAt, within);
+      const f = await goesFrom(latest.current.session, drawnAt, [lanesOf(module)], within);
       const l = f.shown ? findLane(f.graph.timeline, module, lane) : null;
       const c = f.shown ? l && serverRef(l, ref) : drawn;
       if (!c) throw new Error("This clip is gone.");
-      return sendGesture(f.graph, make(c), { name }, undefined, within);
+      return sendGesture(f.graph, make(c), { name }, undefined, within, f.base);
     })
       .then((done) => {
         if (!select || done.before === done.after) return;
@@ -556,12 +556,13 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (draft || sending.current.busy || (g && showsOwn(g) && g.view.revision === latest.current.view.revision)) return make(clip, basis());
     const drawn = { clip, basis: basis() };
     const own = editing();
-    goesFrom(latest.current.session, latest.current.view.revision, own)
+    goesFrom(latest.current.session, latest.current.view.revision, [lanesOf(module)], own)
       .then((f) => {
         if (!f.shown) return make(drawn.clip, drawn.basis);
         const l = findLane(f.graph.timeline, module, lane);
         const c = findNoteClip(f.graph.timeline, ref);
-        if (c && l?.kind === "notes") make({ length: c.length, notes: c.notes }, { revision: f.graph.view.revision, clips: l.clips });
+        // From its base: the server refuses the write if the lane changed after it.
+        if (c && l?.kind === "notes") make({ length: c.length, notes: c.notes }, { revision: f.base, clips: l.clips });
       })
       .catch((error) => toast(error instanceof Error ? error.message : String(error)))
       .finally(() => own.end());

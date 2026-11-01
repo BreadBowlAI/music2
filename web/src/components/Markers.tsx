@@ -10,18 +10,18 @@ import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { barAt, type TimelineView } from "../lib/graph";
 import { skipsSnap, snapSong } from "../lib/grid";
-import { barOf, markerAt, markersOf, NAME_MAX, nextName, PICKS, useMarkerEdit, usePendingMarkers, writeMarkers, type Marker } from "../lib/markers";
+import { barOf, type Marker, markerAt, markersOf, NAME_MAX, nextName, PICKS, sameMarkers, useMarkerEdit, usePendingMarkers, writeMarkers } from "../lib/markers";
 import { isMac, mod, opt } from "../lib/native";
 import { onBarLine, selectBars } from "../lib/sections";
 import { useStore } from "../lib/store";
 import PointMenu from "./ClipMenu";
 import { MenuRow, Popover } from "./ui";
 
-/** The markers as this window draws them: what it just sent, until the timeline shows it. */
+/** The markers as this window draws them: what it just sent, until the timeline shows something newer than the list it was made from. */
 export function useShownMarkers(timeline: TimelineView) {
   const list = markersOf(timeline);
   const pending = usePendingMarkers((s) => s.pending);
-  return pending && pending.since === list ? pending.list : list;
+  return pending && (!pending.answered || sameMarkers(pending.since, list)) ? pending.list : list;
 }
 
 /** Each marker's words for Undo: "Chorus at bar 17", "moving Chorus". */
@@ -55,7 +55,11 @@ export function RulerMarkers({
     ...list.map((m) => ({ m: drag && m === drag.from ? { ...m, beat: drag.to } : m, own: m })),
     ...(editing && !editing.from && !markerAt(list, editing.beat) ? [{ m: { beat: editing.beat, name: nextName(list) }, own: null }] : []),
   ].sort((a, b) => a.m.beat - b.m.beat);
-  const write = (next: Marker[], step: string) => void writeMarkers(next, { name: step });
+  // Each change made from the list as drawn now, which it says (AGENT-2): the server refuses it,
+  // saying who, when the markers changed since, so no marker is lost.
+  const shown = useRef(list);
+  shown.current = list;
+  const write = (next: Marker[], step: string) => void writeMarkers(next, { name: step }, shown.current);
   const keep = (name: string) => {
     if (!editing) return;
     const from = editing.from;
@@ -121,8 +125,12 @@ export function RulerMarkers({
                 if (ev.type !== "pointerup") return;
                 if (to === null) return onSeek(own.beat);
                 if (Math.abs(to - own.beat) < 1e-6) return;
-                if (markerAt(list, to)) return useStore.getState().toast(`A marker is at bar ${barOf(timeline.meter, to)} already`);
-                write(list.map((x) => (x === own ? { ...x, beat: to! } : x)), `moving ${own.name}`);
+                // From the list drawn now, which may have changed during the drag (an agent's marker).
+                const now = shown.current;
+                const it = now.find((x) => x.name === own.name && Math.abs(x.beat - own.beat) < 1e-6);
+                if (!it) return useStore.getState().toast(`${own.name} changed while you dragged it: try again.`);
+                if (markerAt(now, to)) return useStore.getState().toast(`A marker is at bar ${barOf(timeline.meter, to)} already`);
+                write(now.map((x) => (x === it ? { ...x, beat: to! } : x)), `moving ${own.name}`);
               };
               const listeners = [["pointermove", move], ["pointerup", end], ["pointercancel", end], ["lostpointercapture", end]] as const;
               for (const [type, f] of listeners) el.addEventListener(type, f as EventListener);

@@ -127,14 +127,15 @@ export class Refused extends Error {
  * done). Refused, it throws `Refused` with the server's words. `via`: another route that writes it
  * and answers as `/api/graph/clips` does (a drag's lease, 8b.7).
  */
-export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }, edit?: Editing): Promise<Done> {
+export async function send(graph: GraphState, gesture: Gesture, step: Step, via?: { path: string; body: unknown }, edit?: Editing, from?: number): Promise<Done> {
   // On its way: as part of `edit` (a gesture's own, which its caller ends), else as one of its own.
   const ours = edit ?? editing();
   try {
     const res = await http(via?.path ?? "/api/graph/clips", {
       method: "POST",
       headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
-      body: JSON.stringify(via?.body ?? { session: graph.session, gesture }),
+      // `from`: the revision it goes from, which the server refuses it over a change since (AGENT-2).
+      body: JSON.stringify(via?.body ?? { session: graph.session, gesture, ...(from !== undefined ? { revision: from } : {}) }),
     });
     const json = await readJson(res);
     if (!res.ok) throw new Refused(json.error ?? `HTTP ${res.status}`, res.status === 409);

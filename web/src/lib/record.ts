@@ -302,7 +302,7 @@ export function ending() {
 
 interface TakeMsg extends Partial<Take> {
   /** `note`: what to say about an audio take (the disk was slow, the input went away). `step`: its undo step, by its id. */
-  written?: { revision: number; step?: number; moved?: boolean; undo_name?: StepName | null; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
+  written?: { revision: number; step?: number; moved?: string[]; mixed?: boolean; undo_name?: StepName | null; made: { module: string; lane: string; id: string }[]; module: string; lane: string; note?: string };
   empty?: boolean;
   /** The code doesn't compile: the take is written once it does. */
   waiting?: string;

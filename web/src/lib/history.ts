@@ -11,11 +11,11 @@
 // Here too, the window's own changes (AGENT-2): the steps its edits made, kept as its own as their
 // answers come (`owned`), so ⌘Z takes one back before the window shows it; and the one gate every
 // gesture goes through (`shown`, `goesFrom`), which waits until the window shows its own last change,
-// then goes from what it shows when every change since the gesture was drawn was the window's own
-// and moved no ids, from what it was drawn on when a change made elsewhere came in between (the
-// server refuses it if that touched its target), and not at all after a change of its own that
-// moved ids (`MOVED`). So the window's own change alone never refuses its gesture, nor moves it
-// onto another call.
+// then goes from the window's newest own revision in the run of its own changes right after the one
+// it was drawn at (its `base`, which it says to the server: refused only when a change after it
+// touched the target), and not at all after a change of its own since that moved ids in a file it
+// targets (`MOVED`). So the window's own change never refuses its gesture, nor moves it onto
+// another call.
 
 import { useStore } from "./store";
 import { request } from "./projects";
@@ -77,10 +77,15 @@ let answered: { session: number; revision: number; undo: StepName | null; redo: 
  * changes made (its edits, undos and redos), each with whether it moved ids (as its answer says,
  * `moved`), and the newest of those, which every gesture waits for the window to show.
  */
+/** A revision a change of the window's own made: the files whose ids it moved, and whether it was the window's alone (not `mixed`). */
+interface Made {
+  moved: readonly string[];
+  own: boolean;
+}
 interface Mine {
   session: number;
   steps: number[];
-  revisions: Map<number, boolean>;
+  revisions: Map<number, Made>;
   revision: number;
 }
 let mine: Mine = { session: 0, steps: [], revisions: new Map(), revision: 0 };
@@ -151,31 +156,46 @@ export const madeSince = (session: number, since: number) => (mine.session === s
 
 /**
  * A change of this window (an edit, an undo, a redo) made revision `revision` of `session`, as its
- * answer says at its top, and `moved` ids or not: a gesture waits until the window shows it. A change
- * of `layout.json` alone makes no revision (PLANE-3), and its answer names none.
+ * answer says at its top, moving the ids of the files `moved`: a gesture waits until the window
+ * shows it. `mixed`: the revision also took in a change made elsewhere (a file saved outside that
+ * rode along), so it isn't the window's own alone. A change of `layout.json` alone makes no revision
+ * (PLANE-3), and its answer names none.
  */
-export function changed(session: number, revision: number, moved: boolean) {
+export function changed(session: number, revision: number, moved: readonly string[], mixed = false) {
   const m = minein(session);
-  m.revisions.set(revision, moved);
+  m.revisions.set(revision, { moved, own: !mixed });
   m.revision = Math.max(m.revision, revision);
   wake();
 }
 
+/** What a gesture targets: files (`song.ts`) and folders (`data/kick/`); `ALL`: everything, so any change of the window's own since it was drawn holds it back. */
+export type Targets = readonly string[] | typeof ALL;
+export const ALL = null;
+
+/** Whether a change that moved ids in `moved` (a file, or a folder a track's data was in) moves an id `targets` names. */
+function touches(moved: string, targets: readonly string[]): boolean {
+  return targets.some((t) => t === moved || t.startsWith(`${moved}/`) || (t.endsWith("/") && moved.startsWith(t)));
+}
+
 /**
- * Who made the revisions of `session` after `from`, up to `to` (AGENT-2): every one this window's
- * own, none moving ids (`own`, and so when there are none); every one its own, one moving ids
- * (`moved`); or not every one its own (`elsewhere`).
+ * Where a gesture of `session` drawn at revision `drawn` goes from, the window showing `to`
+ * (AGENT-2): its `base`, the window's newest own revision in the run of its own changes right after
+ * `drawn` (none mixed), else `drawn`; and whether a change of the window's own since `drawn` moved
+ * an id the gesture `targets` (then it isn't sent).
  */
-export function since(session: number, from: number, to: number): "own" | "moved" | "elsewhere" {
-  if (to <= from) return "own";
-  if (mine.session !== session) return "elsewhere";
+export function baseOf(session: number, drawn: number, to: number, targets: Targets): { base: number; moved: boolean } {
+  let base = drawn;
+  let run = true;
   let moved = false;
-  for (let r = from + 1; r <= to; r++) {
+  if (mine.session !== session) return { base, moved };
+  for (let r = drawn + 1; r <= to; r++) {
     const m = mine.revisions.get(r);
-    if (m === undefined) return "elsewhere";
-    moved ||= m;
+    const own = !!m?.own;
+    if (m && (targets === ALL || m.moved.some((f) => touches(f, targets)))) moved = true;
+    if (run && own) base = r;
+    else run = false;
   }
-  return moved ? "moved" : "own";
+  return { base, moved };
 }
 
 /**
@@ -185,11 +205,11 @@ export function since(session: number, from: number, to: number): "own" | "moved
  * the step's name as the server says it (`undo_name`), Undo names it at once, so a ⌘Z pressed
  * before the state is read again takes back this edit, not the one before.
  */
-export function owned(session: number, answer: { revision?: number; step?: number; moved?: boolean; undo_name?: StepName | null }) {
+export function owned(session: number, answer: { revision?: number; step?: number; moved?: readonly string[]; mixed?: boolean; undo_name?: StepName | null }) {
   // An answer with no step changed nothing.
   if (answer.step === undefined) return;
   // Only an answer that says whether it moved ids names the revision the change made (lib/http).
-  if (answer.revision !== undefined && answer.moved !== undefined) changed(session, answer.revision, answer.moved);
+  if (answer.revision !== undefined && answer.moved !== undefined) changed(session, answer.revision, answer.moved, answer.mixed);
   const m = minein(session);
   if (!m.steps.includes(answer.step)) m.steps.push(answer.step);
   const { graph, set } = useStore.getState();
@@ -204,7 +224,7 @@ export function owned(session: number, answer: { revision?: number; step?: numbe
  * as `step`: the server names its undo step so, by its id, the window keeps it as its own (`owned`),
  * and Undo names it at once.
  */
-export function recorded(session: number, answer: { revision?: number; step?: number; moved?: boolean }, step: Step) {
+export function recorded(session: number, answer: { revision?: number; step?: number; moved?: readonly string[]; mixed?: boolean }, step: Step) {
   const { graph: drawn } = useStore.getState();
   const revision = answer.revision ?? (drawn?.session === session ? drawn.view.revision : 0);
   const undo: StepName = { name: step.name, structural: !!step.structural, given: true, source: "page", step: answer.step };
@@ -322,29 +342,23 @@ export async function through(session: number, own?: Editing): Promise<GraphStat
 }
 
 /**
- * How a gesture of this window drawn at revision `drawn` goes (AGENT-2), once the window shows its
- * own changes (`through`): from what the window shows then (`shown` true: every change since `drawn`
- * was the window's own and moved no ids, so what the gesture names is there as it was), or from what
- * it was drawn on (`shown` false: nothing changed since, or a change made elsewhere came in between,
- * and the server refuses the gesture if any change since touched its target, saying who made it).
- * Rejects with `Moved` when every change since was the window's own and one moved ids: the gesture
- * is not sent. Rejects with what to say when it gave up.
+ * How a gesture of this window drawn at revision `drawn`, targeting `targets`, goes (AGENT-2), once
+ * the window shows its own changes (`through`): from its `base` (`baseOf`), which it says to the
+ * server, refused only when a change after it touched the target. `shown`: the base is newer than
+ * the revision drawn, so the gesture is made from what the window shows (`graph`). Rejects with
+ * `Moved` when a change of the window's own since `drawn` moved an id it targets: it is not sent.
+ * Rejects with what to say when it gave up.
  */
-export async function goesFrom(session: number, drawn: number, own?: Editing): Promise<{ shown: boolean; graph: GraphState }> {
+export async function goesFrom(session: number, drawn: number, targets: Targets, own?: Editing): Promise<{ base: number; shown: boolean; graph: GraphState }> {
   const graph = await through(session, own);
-  switch (since(session, drawn, graph.view.revision)) {
-    case "own":
-      return { shown: graph.view.revision > drawn, graph };
-    case "moved":
-      throw new Moved();
-    default:
-      return { shown: false, graph };
-  }
+  const { base, moved } = baseOf(session, drawn, graph.view.revision, targets);
+  if (moved) throw new Moved();
+  return { base, shown: base > drawn, graph };
 }
 
 /**
  * What control `id` (a knob's or a setting's, as `drawn` names it) is called in `now`, after the
- * window's own changes that moved no ids (`goesFrom`'s `shown`): the same call (`file#ordinal`), the same
+ * window's own changes that moved no ids in its file: the same call (`file#ordinal`), the same
  * declared slot. A value written where the call played its default gives the control a new id
  * (`…/@brightness` becomes `…/1.brightness`); nothing else does. Any other id is the same.
  */
@@ -358,20 +372,25 @@ export function carried(id: string, now: GraphState, drawn?: GraphState | null):
   return (slot && there.find(({ node, c }) => node === call && c.slot === slot)?.c.id) || id;
 }
 
+/** The file an id of the view names (`tracks/keys.ts#2/1.size` → `tracks/keys.ts`): what a gesture on it targets. */
+export const fileOf = (id: string) => id.slice(0, Math.max(0, id.indexOf("#")) || id.length);
+
+/** The folder of a track's lanes (`data/kick/`): what a gesture on its clips targets. */
+export const lanesOf = (module: string) => `data/${module}/`;
+
 /**
  * `goesFrom`, as a call that names controls wants it: the revision to go from, and what each id it
  * names is called there (`carried`).
  */
-export async function gate(session: number, drawn: number, own?: Editing): Promise<{ revision: number; id: (id: string) => string }> {
+export async function gate(session: number, drawn: number, targets: Targets, own?: Editing): Promise<{ revision: number; id: (id: string) => string }> {
   const was = useStore.getState().graph;
-  const f = await goesFrom(session, drawn, own);
-  return f.shown ? { revision: f.graph.view.revision, id: (id) => carried(id, f.graph, was) } : { revision: drawn, id: (id) => id };
+  const f = await goesFrom(session, drawn, targets, own);
+  return f.shown ? { revision: f.base, id: (id) => carried(id, f.graph, was) } : { revision: f.base, id: (id) => id };
 }
 
-/** The revision a gesture drawn at `drawn` goes from (`goesFrom`): the one the window shows, or `drawn`. */
-export async function goes(session: number, drawn: number, own?: Editing): Promise<number> {
-  const f = await goesFrom(session, drawn, own);
-  return f.shown ? f.graph.view.revision : drawn;
+/** The revision a gesture drawn at `drawn` goes from (`goesFrom`): its base. */
+export async function goes(session: number, drawn: number, targets: Targets, own?: Editing): Promise<number> {
+  return (await goesFrom(session, drawn, targets, own)).base;
 }
 
 /** The step Undo (or Redo) would take back in `graph`. */

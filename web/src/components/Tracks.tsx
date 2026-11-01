@@ -303,7 +303,8 @@ function reorder(graph: GraphState, module: string, at: number, name: string) {
       const order = [...rest.slice(0, at), module, ...rest.slice(at)];
       mine.order = order;
       if (order.join() === base.join()) return;
-      await graphApi.layout(session, { order }, { name: `moving ${name}` });
+      // Made from `base`: the server refuses it, saying who, when the tracks moved since.
+      await graphApi.layout(session, { order, base }, { name: `moving ${name}` });
       mine.answered = Date.now();
     })
     .catch((error) => useStore.getState().toast(message(error)))
