@@ -20,7 +20,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use m2_ir::Module;
-use m2_script::component::Insert;
+use m2_script::component::{Insert, Spelled};
 use m2_script::sites::Site;
 use m2_session::{Checked, Revision, Session};
 use m2_song::tx::{Confined, Declared, Expect, ModuleChange, Op, Payload, Range, Tx, TxPath};
@@ -433,6 +433,8 @@ pub struct NewTrack {
     pub clips: Vec<serde_json::Value>,
     pub values: Vec<Insert>,
     pub to: Option<usize>,
+    /// Its channel's fader, in dB as written (a kit's bus's, KIT-4); none leaves it out (0 dB).
+    pub db: Option<Spelled>,
 }
 
 /// The lane an audio track plays its clips from.
@@ -561,9 +563,13 @@ pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arr
             Some(_) => return Err(EditError::Rejected("a new track goes to a new bus listed before it".into())),
             None => None,
         };
-        entries.push(match &to {
-            Some(b) => format!("{}: {{ in: {binding}.out, to: {} }}", prop_key(&key), quoted(b)),
-            None => format!("{}: {binding}.out", prop_key(&key)),
+        // Its fader, when given, as a channel's `db` (a kit's bus's, KIT-4), before where it goes.
+        let mut fields: Vec<String> =
+            t.db.iter().map(|v| format!("db: {}", crate::effect::insert_text(v, &rev.compiled.units).0)).collect();
+        fields.extend(to.as_ref().map(|b| format!("to: {}", quoted(b))));
+        entries.push(match fields.is_empty() {
+            true => format!("{}: {binding}.out", prop_key(&key)),
+            false => format!("{}: {{ in: {binding}.out, {} }}", prop_key(&key), fields.join(", ")),
         });
         routed.push((key.clone(), to));
         imports.push(import_edit(&song_text, &mixer.file, &file, &binding));

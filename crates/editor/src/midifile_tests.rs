@@ -122,9 +122,10 @@ fn a_drum_machine_lane_is_channel_10() {
 }
 
 // KIT-9: a kit's Drum tracks go out on channel 10, each note at a General MIDI note of its sound:
-// one of them as it is (the hats' closed, pedal and open; a tom's), a tom's other note to the
-// nearest tom note, any other to the sound's own (the Kick's C4 as 36). A Drum whose sound a lane
-// plays keeps its notes' pitches; so does a clip of it written alone.
+// one of them as it is (the hats' closed, pedal and open; a tom's), another sound's note to the
+// sound's own (the Kick's D2, the snare's, as 36), or for a tom to the nearest tom note; a note no
+// sound answers to as it is (C4). A Drum whose sound a lane plays keeps its notes' pitches; a clip
+// of it written alone goes out as the song does.
 #[test]
 fn a_kits_tracks_go_out_as_general_midi_drums() {
     let f = fixture("templates/empty");
@@ -135,26 +136,30 @@ fn a_kits_tracks_go_out_as_general_midi_drums() {
             pitches.iter().enumerate().map(|(i, p)| format!("{{\"pitch\": {p}, \"start\": {i}, \"length\": 0.25}}")).collect();
         format!("{{\"clips\": [{{\"id\": \"clip0000\", \"start\": 0, \"length\": 8, \"notes\": [{}]}}]}}", notes.join(", "))
     };
-    f.write("data/kick/hits.json", hits(&[60, 35]));
-    f.write("data/hats/hits.json", hits(&[42, 44, 46, 60]));
+    f.write("data/kick/hits.json", hits(&[38, 35, 60]));
+    f.write("data/hats/hits.json", hits(&[42, 44, 46, 36]));
     f.write("data/toms/hits.json", hits(&[45, 44, 60]));
     let s = f.open();
     let (_, parts) = written(&export_song(&s).unwrap());
     let keys = |name: &str| -> Vec<(u8, u8)> {
         parts.iter().find(|p| p.name.as_deref() == Some(name)).unwrap().notes.iter().map(|n| (n.channel, n.key)).collect()
     };
-    assert_eq!(keys("Kick"), [(9, 36), (9, 35)]);
+    assert_eq!(keys("Kick"), [(9, 36), (9, 35), (9, 60)]);
     assert_eq!(keys("Hats"), [(9, 42), (9, 44), (9, 46), (9, 42)]);
-    assert_eq!(keys("Toms"), [(9, 45), (9, 43), (9, 50)]);
+    assert_eq!(keys("Toms"), [(9, 45), (9, 43), (9, 60)]);
     let (clip, _) = export_clip(&s, "kick", "hits", "clip0000").unwrap();
-    assert_eq!(written(&clip).1[1].notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(), [(9, 36), (9, 35)], "a clip alone too");
+    assert_eq!(
+        written(&clip).1[1].notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(),
+        [(9, 36), (9, 35), (9, 60)],
+        "a clip alone too"
+    );
     // The Kick's sound from a lane of names: the code works it out, so its notes keep their pitches.
     f.write("tracks/kick.ts", f.read("tracks/kick.ts").replace("{ drum: \"kick\",", "{ drum: lane.control(\"sound\", \"choice\"),"));
     let s = f.open();
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     let (_, parts) = written(&export_song(&s).unwrap());
     let kick = parts.iter().find(|p| p.name.as_deref() == Some("Kick")).unwrap();
-    assert_eq!(kick.notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(), [(9, 60), (9, 35)]);
+    assert_eq!(kick.notes.iter().map(|n| (n.channel, n.key)).collect::<Vec<_>>(), [(9, 38), (9, 35), (9, 60)]);
 }
 
 #[test]
@@ -742,8 +747,9 @@ fn an_exported_song_imports_back_as_tracks() {
 // KIT-8: a General MIDI drum file comes in as one kit, however many tracks hold its drums: a Drums
 // bus and a Drum track for each sound its notes use, in the Drum's menu order, each with that
 // sound's notes at their own pitches and velocities (the hats' closed, pedal and open; the toms'),
-// each going to the bus; the notes no sound answers to on Percussion, which plays its tom. One
-// undo step takes it all back.
+// each going to the bus, named as the table words it (Toms, review K9); the notes no sound answers
+// to on Percussion, which plays its tom. The bus's fader is the master's 0 dB, as the drum machine's
+// was. One undo step takes it all back.
 #[test]
 fn a_general_midi_drum_file_comes_in_as_one_kit() {
     let f = fixture("templates/empty");
@@ -752,14 +758,14 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
     let mut kicks = played(9, 36, 0, 24);
     kicks.extend(played(9, 36, 96 * 2, 24));
     let mut rest = vec![];
-    for (i, key) in [42, 38, 46, 44, 41, 45, 49, 51, 62, 81].iter().enumerate() {
+    for (i, key) in [42, 38, 46, 44, 41, 45, 49, 53, 62, 81].iter().enumerate() {
         rest.extend(played(9, *key, 48 * i as u64, 12));
     }
     rest.sort_by_key(|e| e.0);
     let drums = file(1, vec![(Some("Kick"), kicks), (Some("Kit"), rest), (Some("Bass"), played(0, 40, 0, 96))]);
     let t = made(import_tracks(&mut s, &drums, "beat.mid", &at(None, 0.0), None).unwrap());
     let got: Vec<&str> = t.tracks.iter().map(|t| t.1.as_str()).collect();
-    assert_eq!(got, ["Drums", "Kick", "Snare", "Hats", "Tom", "Cymbal", "Percussion", "Bass"]);
+    assert_eq!(got, ["Drums", "Kick", "Snare", "Hats", "Toms", "Cymbal", "Percussion", "Bass"]);
     let rev = s.accepted();
     let bus = &t.tracks[0].0;
     assert!(rev.compiled.ir.modules.iter().any(|m| m.key == *bus && m.bus), "the Drums bus is a bus");
@@ -776,7 +782,7 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
     assert_eq!(notes(1), [(36.0, 0.0, v), (36.0, 2.0, v)], "both tracks' kicks on one Kick");
     assert_eq!(notes(3), [(42.0, 0.0, v), (46.0, 1.0, v), (44.0, 1.5, v)], "the hats keep closed, open and pedal");
     assert_eq!(notes(4), [(41.0, 2.0, v), (45.0, 2.5, v)], "the toms their pitches");
-    assert_eq!(notes(5), [(49.0, 3.0, v), (51.0, 3.5, v)]);
+    assert_eq!(notes(5), [(49.0, 3.0, v), (53.0, 3.5, v)], "the ride bell is the cymbal's");
     assert_eq!(notes(6), [(62.0, 4.0, v), (81.0, 4.5, v)], "none lost");
     let view = s.view();
     let sound = |k: usize| {
@@ -791,8 +797,52 @@ fn a_general_midi_drum_file_comes_in_as_one_kit() {
         let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
         assert_eq!(clips.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(0.0, 8.0)], "{}", t.tracks[k].1);
     }
+    assert!(f.read("song.ts").contains(&format!("{bus}: drumsTrack.out,")), "no fader written: {}", f.read("song.ts"));
     crate::undo(&mut s).unwrap();
     assert!(files(&f) == before, "one undo takes it all back");
+}
+
+// KIT-8, KIT-9 (review K2): a kit with Percussion written as a MIDI file comes back as the same kit:
+// Percussion's bongo and triangle keep their keys, out and in.
+#[test]
+fn a_percussion_track_round_trips() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let perc = file(1, vec![(Some("Perc"), [played(9, 36, 0, 24), played(9, 62, 48, 24), played(9, 81, 96, 24)].concat())]);
+    let t = made(import_tracks(&mut s, &perc, "perc.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Kick", "Percussion"]);
+    let (_, parts) = written(&export_song(&s).unwrap());
+    let keys: Vec<(u8, u8)> =
+        parts.iter().find(|p| p.name.as_deref() == Some("Percussion")).unwrap().notes.iter().map(|n| (n.channel, n.key)).collect();
+    assert_eq!(keys, [(9, 62), (9, 81)], "as they came in");
+    let g = fixture("templates/empty");
+    let mut back = g.open();
+    let again = smf::read(&export_song(&s).unwrap()).unwrap();
+    let t = made(import_tracks(&mut back, &again, "again.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Kick", "Percussion"], "the same kit");
+}
+
+// KIT-8 (review K1): a one-part drum file dropped onto a Drum's lane comes in as a kit after that
+// track, never into the lane whole, where every hit would play the lane's one drum. A part that
+// isn't drums goes into any notes lane whole, and drums go whole into the drum machine's lane,
+// which plays General MIDI.
+#[test]
+fn a_drum_part_dropped_on_a_drums_lane_is_a_kit() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let made_machine = s.add_track("@m2/drums:drum", Some("Machine"), None, None).unwrap();
+    f.write(&made_machine.edited.file, f.read(&made_machine.edited.file).replace("drums.drum(", "drums.kit("));
+    s.refresh();
+    let beat = file(1, vec![(Some("Loop"), [played(9, 36, 0, 24), played(9, 42, 48, 24), played(9, 38, 96, 24)].concat())]);
+    let riff = file(1, vec![(Some("Riff"), played(0, 45, 0, 48))]);
+    assert!(!into_lane(&s, &beat, "kick", "hits"), "drums onto a Drum's lane: a kit");
+    assert!(into_lane(&s, &beat, "machine", "hits"), "drums onto the drum machine's lane: into it");
+    assert!(into_lane(&s, &riff, "kick", "hits") && into_lane(&s, &riff, "bass", "notes"), "a part that isn't drums: into it");
+    assert!(!into_lane(&s, &groove(483_871), "bass", "notes"), "two parts: new tracks");
+    let before = f.read("data/kick/hits.json");
+    let e = import_into(&mut s, &beat, "loop.mid", "kick", "hits", 0.0).unwrap_err().to_string();
+    assert!(e.contains("loop.mid is drums, which come in as a kit: drop it below the tracks or on a track's name."), "{e}");
+    assert_eq!(f.read("data/kick/hits.json"), before, "nothing written");
 }
 
 // Q32, D10: refused in words, and nothing written: no notes, over 32 parts, a note past bar 9,999

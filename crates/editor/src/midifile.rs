@@ -565,6 +565,16 @@ fn labels(s: &Session) -> impl Fn(&str) -> String + use<> {
     }
 }
 
+/// Whether `file`, dropped onto lane `lane` of track `module`, goes into it whole (Q36, KIT-8): a
+/// file of one part, but drums never into a Drum's lane, which plays every note as its one sound:
+/// they come in as a kit after the track. A drum machine's lane plays General MIDI, so it takes them.
+pub fn into_lane(s: &Session, file: &Smf, module: &str, lane: &str) -> bool {
+    match bring(file, "", &|c| c.to_string()).map(|b| b.parts) {
+        Ok(parts) => matches!(parts.as_slice(), [p] if !(p.drums && player_of(s.accepted(), module, lane).as_deref() == Some(DRUM))),
+        Err(_) => false,
+    }
+}
+
 /// Bring a one-part MIDI file in onto notes lane `lane` of track `module`, at beat `at` (Q36, D11):
 /// one clip from `at` to the bar line after its last note, by the song's tempo and time signatures
 /// (its notes go by beats; no question). One `Clips` Tx, one undo step. Refused in words when the
@@ -592,6 +602,11 @@ pub fn import_into(
             brought.parts.len()
         )));
     };
+    if part.drums && player_of(s.accepted(), module, lane).as_deref() == Some(DRUM) {
+        return Err(EditError::Rejected(format!(
+            "{name} is drums, which come in as a kit: drop it below the tracks or on a track's name."
+        )));
+    }
     let length = clip_length(&s.accepted().project.arrangement, at, part.end());
     let clip = NoteClip { id: None, other_id: None, start: at, length, notes: part.notes.clone() };
     let lane = m2_song::LaneAddr {

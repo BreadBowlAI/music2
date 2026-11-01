@@ -10,8 +10,8 @@
 //! conversion: what it can't convert exactly (a value worked out by code, a name used some other
 //! way, a lane two knobs read in different units, hats whose lengths the Drum can't keep) is named
 //! with its file and line and the line to write, and then nothing is written at all. What changes
-//! though it is converted as well as it can be (the simple kick and hat, other sounds than One
-//! drum's) is named too, and written. It is written only when the song then builds, as one save of
+//! though it is converted as well as it can be (the simple kick and hat, other sounds than the
+//! Drum's) is named too, and written. It is written only when the song then builds, as one save of
 //! every file (`Session::save_all_built`). The musician's presets, outside the song, are never
 //! changed: those that name a sound that moved or was renamed are named.
 
@@ -441,8 +441,8 @@ const SINGLES: &[Drum] = &[
     Drum { old: "shaker", drum: "shaker", knobs: &[("decay", "decay", decay(0.06, 0.01, 2.0))], voices: Some(4) },
 ];
 
-/// The simple `kick` and `hat` of `std/instruments` and `@m2/synths` 1: other sounds than One
-/// drum's kick and hats (it is said), their tune and decay kept as pitch and length.
+/// The simple `kick` and `hat` of `std/instruments` and `@m2/synths` 1: other sounds than the
+/// Drum's kick and hats (it is said), their tune and decay kept as pitch and length.
 const SIMPLE: &[Drum] = &[
     Drum {
         old: "kick",

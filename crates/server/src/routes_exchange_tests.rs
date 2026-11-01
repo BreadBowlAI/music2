@@ -300,3 +300,35 @@ fn an_import_below_asks_then_writes() {
 fn urlencode(text: &str) -> String {
     text.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
+
+// KIT-8 (review K1): a one-part drum file dropped onto a Drum's lane comes in as a kit after that
+// track: a Drums bus and a Drum track for each sound, never every hit as the lane's one drum.
+#[test]
+fn a_drum_loop_dropped_on_a_drums_lane_comes_in_as_a_kit() {
+    let dir = project("drum-lane");
+    let song = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { master, mixer } from 'std/mix';\n\
+                const k = track('kick', { name: 'Kick' }, ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                export default song(() => master(mixer({ kick: k.out })));\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    use m2_editor::smf::{Event, Smf, SmfTrack};
+    let hit = |key, at: u64| [(at, Event::NoteOn { channel: 9, key, velocity: 100 }), (at + 24, Event::NoteOff { channel: 9, key })];
+    let events: Vec<(u64, Event)> = [hit(36, 0), hit(42, 48), hit(38, 96), hit(42, 144)].concat();
+    let end = events.last().unwrap().0;
+    let file = m2_editor::smf::write(&Smf { format: 1, ppq: 96, tracks: vec![SmfTrack { name: Some("Loop".into()), events, end }] });
+    std::fs::write(dir.join("loop.mid"), file).unwrap();
+    let to = json!({"kind": "lane", "module": "kick", "lane": "hits", "beat": 0});
+    let (status, done) =
+        post(&running.url, "/api/graph/midifile/import", &json!({"session": session, "path": dir.join("loop.mid"), "to": to}));
+    assert_eq!(status, 200, "{done:#}");
+    let labels: Vec<&str> = done["tracks"].as_array().unwrap().iter().filter_map(|t| t["label"].as_str()).collect();
+    assert_eq!(labels, ["Drums", "Kick 2", "Snare", "Hats"], "{done:#}");
+    let kick = std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap_or_default();
+    assert!(!kick.contains("F#2"), "the Kick's own lane takes no hats: {kick}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

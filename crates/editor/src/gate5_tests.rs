@@ -381,13 +381,6 @@ fn planned_call_forms_are_current() {
             ));
         }
     }
-    // A kit's Drums bus, its gain at -6 dB (KIT-5).
-    let gain = &s.catalog().components["std:gain"];
-    let (values, _) = crate::tracks::values_text(gain, &crate::drums::kit_bus().values, &s.accepted().compiled.units).unwrap();
-    forms.push(format!(
-        "    // a kit's Drums bus added\n    {},\n",
-        crate::bus::bus_call_text(crate::bus::BusKind::Group, "drums", "Drums", &values)
-    ));
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(
         "    // clap:m2.probe added as a track\n    {},\n",

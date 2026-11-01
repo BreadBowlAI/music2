@@ -32,21 +32,24 @@ pub struct GmDrum {
     pub sound: &'static str,
     pub notes: &'static [u8],
     pub own: u8,
+    /// What a kit's track of it is called: the presets' word (Toms).
+    pub name: &'static str,
 }
 
 /// The General MIDI table (KIT-6): which of the Drum's sounds answers to each drum note, in its
-/// menu's order. The drum machine plays each note at a drum of its sound's family (at 54 a
-/// tambourine, the shaker's; at 75 claves, the rim's), but 52 and 55, where it is silent.
+/// menu's order, and what a kit's track of each is called. The drum machine plays each note at a
+/// drum of its sound's family (at 54 a tambourine, the shaker's; at 75 claves, the rim's: the
+/// kernel's declared families), but 52, 53 and 55, where it is silent.
 pub const GM: [GmDrum; 9] = [
-    GmDrum { sound: "kick", notes: &[35, 36], own: 36 },
-    GmDrum { sound: "snare", notes: &[38, 40], own: 38 },
-    GmDrum { sound: "clap", notes: &[39], own: 39 },
-    GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42 },
-    GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45 },
-    GmDrum { sound: "rim", notes: &[37, 75], own: 37 },
-    GmDrum { sound: "cowbell", notes: &[56], own: 56 },
-    GmDrum { sound: "cymbal", notes: &[49, 51, 52, 55, 57, 59], own: 49 },
-    GmDrum { sound: "shaker", notes: &[54, 69, 70], own: 69 },
+    GmDrum { sound: "kick", notes: &[35, 36], own: 36, name: "Kick" },
+    GmDrum { sound: "snare", notes: &[38, 40], own: 38, name: "Snare" },
+    GmDrum { sound: "clap", notes: &[39], own: 39, name: "Clap" },
+    GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42, name: "Hats" },
+    GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45, name: "Toms" },
+    GmDrum { sound: "rim", notes: &[37, 75], own: 37, name: "Rim" },
+    GmDrum { sound: "cowbell", notes: &[56], own: 56, name: "Cowbell" },
+    GmDrum { sound: "cymbal", notes: &[49, 51, 52, 53, 55, 57, 59], own: 49, name: "Cymbal" },
+    GmDrum { sound: "shaker", notes: &[54, 69, 70], own: 69, name: "Shaker" },
 ];
 
 /// The Drum's sound that answers to General MIDI drum note `note`, if any (KIT-6).
@@ -89,13 +92,17 @@ pub fn split(notes: &[Note]) -> Split {
     Split { lanes, left: notes.iter().filter(|n| sound_of(key_of(n)).is_none()).cloned().collect() }
 }
 
+/// General MIDI's drums: its percussion notes, 35 to 81.
+const GENERAL_MIDI: std::ops::RangeInclusive<u8> = 35..=81;
+
 /// The General MIDI drum note a Drum playing `sound` writes for its note `key` (KIT-9): one of the
-/// sound's notes as it is; for a tom, the tom note nearest it (the lower at an equal distance); for
-/// any other, the sound's own.
+/// sound's notes as it is; a General MIDI drum no sound answers to as it is, already that drum (a
+/// Percussion track's bongos); another sound's note, or one past General MIDI's drums, as the
+/// sound's own, or for a tom the tom note nearest it (the lower at an equal distance).
 pub fn general_midi(sound: &str, key: u8) -> u8 {
     let notes = notes_of(sound);
     match () {
-        _ if notes.contains(&key) => key,
+        _ if notes.contains(&key) || (sound_of(key).is_none() && GENERAL_MIDI.contains(&key)) => key,
         _ if sound == "tom" => notes.iter().copied().min_by_key(|n| (n.abs_diff(key), *n)).unwrap_or(key),
         _ => own_note(sound).unwrap_or(key),
     }
@@ -135,7 +142,7 @@ pub fn kits(s: &Session) -> Vec<KitInfo> {
         .collect()
 }
 
-/// Add kit `kit` of instrument `component` (KIT-5): a Drums bus (a Group, RENDER-34, at −6 dB) and
+/// Add kit `kit` of instrument `component` (KIT-5): a Drums bus (a Group, RENDER-34, its fader at the kit's `db`) and
 /// the kit's tracks, each playing the instrument with the kit's values from an empty lane of its own and
 /// going to the bus, after track `after` (else last), the bus first. One Tx, one undo step.
 /// Refused in words when the lists offer no such instrument, or it names no such kit.
@@ -158,18 +165,18 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
         to: Some(0),
         ..NewTrack::default()
     });
-    tracks::add_tracks(s, &std::iter::once(kit_bus()).chain(made).collect::<Vec<_>>(), after, None)
+    tracks::add_tracks(s, &std::iter::once(kit_bus(k.db.clone())).chain(made).collect::<Vec<_>>(), after, None)
 }
 
-/// A kit's bus (KIT-5): a Group called Drums, its gain at −6 dB, so the kit's drums hitting together
-/// stay under full scale (KIT-4).
-pub(crate) fn kit_bus() -> NewTrack {
-    let db = Insert { slot: "db".into(), value: Spelled { value: -6.0, spelled: Some("db".into()), written: -6.0 } };
-    NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), values: vec![db], ..NewTrack::default() }
+/// A kit's bus (KIT-5): a Group called Drums, as Add bus writes one, its channel's fader at `db`
+/// when the kit gives one (KIT-4).
+pub(crate) fn kit_bus(db: Option<Spelled>) -> NewTrack {
+    NewTrack { play: Play::Bus(BusKind::Group), label: Some(BUS.into()), db, ..NewTrack::default() }
 }
 
-/// A kit of the Drum for `notes`, a drum machine's (KIT-8): a Drums bus, at place `bus` of the
-/// list it goes in, and a Drum track for each sound they use, by [`split`], named by its sound and
+/// A kit of the Drum for `notes`, a drum machine's (KIT-8): a Drums bus at 0 dB, as the drum
+/// machine's channel was, at place `bus` of the list it goes in, and a Drum track for each sound
+/// they use, by [`split`], named as the table words it and
 /// going to the bus, with one clip of that sound's notes (`clip` makes it); the notes no sound
 /// answers to on Percussion, which plays the tom, each at its own pitch.
 pub(crate) fn kit_of(
@@ -178,16 +185,16 @@ pub(crate) fn kit_of(
     clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
 ) -> Result<Vec<NewTrack>, EditError> {
     let Split { lanes, left } = split(notes);
-    let mut out = vec![kit_bus()];
-    let named = |sound: &str| sound[..1].to_uppercase() + &sound[1..];
+    let mut out = vec![kit_bus(None)];
+    let named = |sound: &'static str| GM.iter().find(|g| g.sound == sound).map_or(sound, |g| g.name);
     let lanes = lanes.into_iter().map(|(sound, mine)| (named(sound), sound, mine));
-    let left = (!left.is_empty()).then(|| ("Percussion".to_string(), "tom", left));
+    let left = (!left.is_empty()).then_some(("Percussion", "tom", left));
     for (label, sound, mine) in lanes.chain(left) {
         let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;
         let menu = Insert { slot: "drum".into(), value: Spelled { value: place, spelled: None, written: place } };
         out.push(NewTrack {
             play: Play::Instrument(DRUM.into()),
-            label: Some(label),
+            label: Some(label.to_string()),
             clips: vec![clip(mine)?],
             values: vec![menu],
             to: Some(bus),

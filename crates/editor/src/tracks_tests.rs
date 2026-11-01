@@ -126,7 +126,7 @@ fn adding_to_the_empty_template_fills_its_mixer() {
             "import { master, mixer } from \"std/mix\";",
             "import { master, mixer } from \"std/mix\";\nimport drumsTrack from \"./tracks/drums\";",
         )
-        .replace("      // drums: beat.out, // drums\n", "      // drums: beat.out, // drums\n      drums: drumsTrack.out,\n");
+        .replace("      // beat: beat.out, // drums\n", "      // beat: beat.out, // drums\n      drums: drumsTrack.out,\n");
     assert_eq!(f.read("song.ts"), want);
     assert!(f.read("tracks/drums.ts").contains("drums.drum(lane.notes(\"hits\"))"));
     assert_eq!(f.read("data/drums/hits.json"), m2_song::canonical(&LaneData::Notes(vec![])));

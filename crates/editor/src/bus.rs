@@ -17,14 +17,14 @@ use std::path::Path;
 
 use m2_script::sites::Arg;
 use m2_session::{Checked, Revision, Session};
-use m2_song::tx::{Confined, Declared, Expect, ModuleChange, Op, Payload, Range};
-use m2_song::{Key, ROOT};
+use m2_song::ROOT;
+use m2_song::tx::{Confined, Declared, Expect, Range};
 
 use crate::mix::{self, Channel, Mixer, Mixing};
 use crate::plan::{self, path, unmoved};
-use crate::sites::{Property, camel, free_binding, imported_names, properties};
+use crate::sites::{Property, imported_names, properties};
 use crate::tracks::{self, Made, prop_key, quoted};
-use crate::{EditError, Edited, keys, layout, ready};
+use crate::{EditError, Edited, ready};
 
 /// What a new bus does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,7 +74,7 @@ impl BusKind {
 }
 
 /// The `bus(…)` call a new bus's file makes, its function's call writing `values` after `input`
-/// when given (a kit's Group at −6 dB: `, { db: -6 }`, KIT-5), else what its kind writes: also
+/// when given, else what its kind writes (a Reverb's `, { mix: 1 }`): also
 /// checked as a call form (PKG-11, `planned_call_forms_are_current`).
 pub(crate) fn bus_call_text(kind: BusKind, key: &str, label: &str, values: &str) -> String {
     let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
@@ -112,65 +112,12 @@ pub(crate) fn bus_module(s: &Session, kind: BusKind) -> Option<String> {
 
 /// Add a bus of `kind`, shown as `label` (else the kind's name), placed after track `after` in the
 /// layout (else last): `tracks/<key>.ts`, its import in the song, the mixer's last channel
-/// (`verb: verb.out`, which std's mixer feeds what is sent to it) and its layout place. One Tx; the
-/// planner asserts that exactly that module is added, a bus, in a channel of its own.
+/// (`verb: verb.out`, which std's mixer feeds what is sent to it) and its layout place. One Tx, by
+/// the builder that adds tracks ([`tracks::add_tracks`], `Play::Bus`), whose planner asserts that
+/// exactly that module is added, a bus, in a channel of its own.
 pub fn add_bus(s: &mut Session, kind: BusKind, label: Option<&str>, after: Option<&str>) -> Result<Made, EditError> {
-    ready(s)?;
-    let (component, _, _) = kind.body();
-    let module =
-        bus_module(s, kind).ok_or_else(|| EditError::Rejected(format!("no package offers {component}: install the pack it comes from")))?;
-    // Its pack's [dependencies] line and lock, when the song doesn't have them (PACK-10).
-    let needs = crate::packs::needs(s, component)?;
-    let rev = s.accepted();
-    let mixer = tracks::the_mixer(rev)?;
-    let song_text = rev.snapshot.files[Path::new(&mixer.file)].clone();
-    let label = match label.map(str::trim).filter(|l| !l.is_empty()) {
-        Some(l) if l.chars().any(char::is_control) => return Err(EditError::Rejected("a name is one line of text".into())),
-        Some(l) => tracks::unique_label_among(rev, l, &[]),
-        None => tracks::unique_label_among(rev, kind.label(), &[]),
-    };
-    let taken = tracks::taken(rev);
-    let key = match keys::propose(&label, &taken) {
-        k if k.is_empty() => keys::propose("bus", &taken),
-        k => k,
-    };
-    drop(taken);
-    let file = tracks::track_file(rev, &key);
-    let binding = free_binding(&song_text, &camel(&key));
-    let mut edits = tracks::channel_edits(&song_text, &mixer, &format!("{}: {binding}.out", prop_key(&key)));
-    let (at, line) = tracks::import_edit(&song_text, &mixer.file, &file, &binding);
-    edits.push((at, at, line));
-    let edits = tracks::sorted(edits)?;
-    let (song_file, new_file) = (path(&mixer.file)?, path(&file)?);
-    let mut ops = vec![
-        plan::text_edit(&song_file, &song_text, &edits),
-        Op::Write { file: new_file.clone(), bytes: Payload::Text(bus_text(kind, &module, &key, &label, &Default::default()).into()) },
-    ];
-    let mut ranges = vec![
-        (song_file, Declared::Ranges(vec![Range::bytes(mixer.call.0, mixer.call.1), Range::bytes(at, at)])),
-        (new_file, Declared::Whole),
-    ];
-    ops.extend(needs.ops);
-    ranges.extend(needs.ranges);
-    let k = Key::new(&key).map_err(EditError::Rejected)?;
-    let expect = Expect::Confined(Confined { ranges: ranges.into_iter().collect(), lanes: vec![], modules: vec![ModuleChange::Added(k)] });
-    let layout = tracks::layout_write(s, |v| {
-        let mut colours = v.colours.clone();
-        colours.insert(key.clone(), layout::unused(colours.values().copied()));
-        (tracks::placed(&v.order, &key, after), colours, None)
-    });
-    let tx = tracks::with_layout(s, (String::new(), label.clone()), ops, expect, layout);
-    let said = |why: &str| EditError::Rejected(format!("adding {label} would change more than adding a bus ({why})"));
-    let done = plan::run_as(s, tx, said, |s, checked| {
-        unmoved(s, checked)?;
-        tracks::adds_one(checked, &key, &key)?;
-        match checked.candidate().compiled.ir.modules.iter().any(|m| m.key == key && m.bus) {
-            true => Ok(()),
-            false => Err(EditError::Rejected(format!("{label} wouldn't be a bus"))),
-        }
-    })?;
-    let edited = Edited { revision: done.number, file, before: String::new(), after: label.clone() };
-    Ok(Made { module: key, label, edited, new_channel: false })
+    let bus = tracks::NewTrack { play: tracks::Play::Bus(kind), label: label.map(str::to_string), ..Default::default() };
+    Ok(tracks::add_tracks(s, &[bus], after, None)?.remove(0))
 }
 
 /// A channel's routing, as the mixer's call writes it.
