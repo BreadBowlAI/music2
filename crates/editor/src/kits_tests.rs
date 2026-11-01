@@ -129,3 +129,156 @@ fn a_sound_the_code_works_out_is_null() {
     let s = f.open();
     assert_eq!(rows(&s), [row("kick", "hits", Some("kick")), row("hats", "hits", None)]);
 }
+
+// ---------------------------------------------------------------- steps (KIT-12, KIT-14)
+
+use crate::clips::{self, Gesture, Hit};
+use m2_song::{AbsNote, LaneAddr};
+
+fn hits(track: &str, at: &[f64], step: f64, to: Hit) -> Gesture {
+    Gesture::Hits { lane: LaneAddr::new(track, "hits").unwrap(), at: at.to_vec(), step, to }
+}
+
+fn go(s: &mut Session, g: Gesture) -> crate::clips::ClipsEdited {
+    clips::edit(s, &g).unwrap_or_else(|e| panic!("{g:?}: {e}"))
+}
+
+/// Track `track`'s hits as they play: each `(start, length, pitch, velocity)`.
+fn played(s: &Session, track: &str) -> Vec<(f64, f64, f64, f64)> {
+    let n: Vec<AbsNote> = s.accepted().compiled.data.notes(track, "hits");
+    n.iter().map(|n| (n.start, n.end - n.start, n.pitch, n.velocity)).collect()
+}
+
+/// Track `track`'s clips as they are written: each `(start, length, notes)`, the notes in the clip.
+fn written(s: &Session, track: &str) -> Vec<(f64, f64, Vec<(f64, f64, f64)>)> {
+    match s.accepted().compiled.data.lane(track, "hits").map(|d| (**d).clone()) {
+        Some(m2_song::LaneData::Notes(c)) => {
+            c.iter().map(|c| (c.start, c.length, c.notes.iter().map(|n| (n.start, n.length, n.pitch)).collect())).collect()
+        }
+        _ => vec![],
+    }
+}
+
+// KIT-12: a step turned on is a hit at its start, a step long, on the row's own lane, in the clip
+// that holds it, at the pitch the row's notes play (the Kick's C1, KIT-14) and velocity 0.8: one undo
+// step. Turned off, it goes: one undo step. A step that has a hit stays as it is when turned on.
+#[test]
+fn a_step_is_one_undo_step_on_its_lane_at_its_pitch_and_time() {
+    let f = fixture(BUSES);
+    let mut s = f.open();
+    let (kick, hats) = (f.read("data/kick/hits.json"), f.read("data/hats/hits.json"));
+    let done = go(&mut s, hits("kick", &[2.5], 0.25, Hit::On));
+    assert!(played(&s, "kick").contains(&(2.5, 0.25, 24.0, 0.8)), "{:?}", played(&s, "kick"));
+    assert_eq!(played(&s, "kick").len(), 33);
+    assert_eq!(written(&s, "kick").len(), 1, "in the clip that holds it");
+    assert_eq!(f.read("data/hats/hits.json"), hats, "no other lane");
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no note", "C1 at bar 1 beat 3.5"));
+    let with = f.read("data/kick/hits.json");
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("data/kick/hits.json"), kick, "one undo takes it back");
+    crate::redo(&mut s).unwrap();
+    assert_eq!(f.read("data/kick/hits.json"), with);
+    go(&mut s, hits("kick", &[2.5], 0.25, Hit::Off));
+    assert_eq!(f.read("data/kick/hits.json"), kick, "turned off, it goes");
+    crate::undo(&mut s).unwrap();
+    assert_eq!(f.read("data/kick/hits.json"), with, "one undo puts it back");
+    let done = go(&mut s, hits("kick", &[2.0], 0.25, Hit::On));
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no change", "no change"), "a step with a hit stays");
+}
+
+// KIT-14: on a row with no notes, a hit plays its sound's own note, in a new clip the length of its
+// bar: the snare's D2, the hats' closed hat, the tom's A2, and A2 for a sound the code works out.
+#[test]
+fn a_rows_first_hit_plays_its_sounds_own_note() {
+    let f = fixture(BUSES);
+    with_track(&f, "snare", &drum_file("snare", "Snare", "snare"), "snare: { in: snare.out, to: \"drums\" }");
+    with_track(&f, "tom", &drum_file("tom", "Tom", "tom"), "tom: { in: tom.out, to: \"drums\" }");
+    f.write("data/hats/hits.json", "{\"clips\": []}\n");
+    let mut s = f.open();
+    go(&mut s, hits("snare", &[4.5], 0.25, Hit::On));
+    assert_eq!(written(&s, "snare"), [(4.0, 4.0, vec![(0.5, 0.25, 38.0)])]);
+    go(&mut s, hits("hats", &[0.0], 0.25, Hit::On));
+    go(&mut s, hits("tom", &[0.0], 0.25, Hit::On));
+    assert_eq!((played(&s, "hats")[0].2, played(&s, "tom")[0].2), (42.0, 45.0));
+    f.write(
+        "tracks/snare.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
+         export default track(\"snare\", { name: \"Snare\" }, ({ lane }) => drums.drum(lane.notes(\"hits\"), { drum: lane.control(\"sound\", \"choice\", \"snare\") }));\n",
+    );
+    f.write("data/snare/hits.json", "{\"clips\": []}\n");
+    assert!(s.refresh());
+    go(&mut s, hits("snare", &[0.0], 0.25, Hit::On));
+    assert_eq!(played(&s, "snare")[0].2, 45.0, "A2 plays every sound as itself");
+}
+
+// KIT-14: a row writes the pitch most of its notes play, of a tie the lowest: a Hats row of two
+// open hats and a closed one writes an open one; level, the closed one.
+#[test]
+fn a_row_keeps_the_pitch_most_of_its_notes_play() {
+    let f = fixture(BUSES);
+    f.write(
+        "data/hats/hits.json",
+        "{\"clips\": [\n  {\"id\": \"hhhhhhhh\", \"start\": 0, \"length\": 4, \"notes\": [\n    \
+         {\"pitch\": 46, \"start\": 0, \"length\": 0.25},\n    {\"pitch\": 46, \"start\": 1, \"length\": 0.25},\n    \
+         {\"pitch\": 42, \"start\": 2, \"length\": 0.25}\n  ]}\n]}\n",
+    );
+    let mut s = f.open();
+    go(&mut s, hits("hats", &[3.0], 0.25, Hit::On));
+    assert!(played(&s, "hats").contains(&(3.0, 0.25, 46.0, 0.8)), "the most: {:?}", played(&s, "hats"));
+    go(&mut s, hits("hats", &[0.0, 1.0], 0.25, Hit::Off));
+    go(&mut s, hits("hats", &[0.5], 0.25, Hit::On));
+    assert!(played(&s, "hats").contains(&(0.5, 0.25, 42.0, 0.8)), "of a tie, the lowest: {:?}", played(&s, "hats"));
+}
+
+// KIT-12: a hit in no clip goes into a new clip that is its bar, cut short at the clips beside it;
+// a gesture's hits in one bar share it, and a drag across bars makes one a bar.
+#[test]
+fn a_hit_in_no_clip_gets_its_bar_cut_at_the_clips_beside_it() {
+    let f = fixture(BUSES);
+    f.write("data/kick/hits.json", "{\"clips\": [\n  {\"id\": \"kkkkkkkk\", \"start\": 6, \"length\": 2, \"notes\": []}\n]}\n");
+    let mut s = f.open();
+    go(&mut s, hits("kick", &[4.5], 0.25, Hit::On));
+    assert_eq!(written(&s, "kick"), [(4.0, 2.0, vec![(0.5, 0.25, 36.0)]), (6.0, 2.0, vec![])]);
+    let done = go(&mut s, hits("kick", &[9.0, 9.25, 12.0], 0.25, Hit::On));
+    assert_eq!(done.made.len(), 2, "two new clips: {:?}", done.made);
+    assert_eq!(written(&s, "kick")[2..], [(8.0, 4.0, vec![(1.0, 0.25, 36.0), (1.25, 0.25, 36.0)]), (12.0, 4.0, vec![(0.0, 0.25, 36.0)])]);
+}
+
+// KIT-11, KIT-12: off takes every note that starts in the step, off the grid or not, and a velocity
+// reaches each; a step stops at its bar's end, so the next bar's first hit is never in it.
+#[test]
+fn a_step_holds_every_note_that_starts_in_it() {
+    let f = fixture(BUSES);
+    f.write(
+        "data/kick/hits.json",
+        "{\"clips\": [\n  {\"id\": \"kkkkkkkk\", \"start\": 0, \"length\": 8, \"notes\": [\n    \
+         {\"pitch\": 36, \"start\": 1, \"length\": 0.25},\n    {\"pitch\": 36, \"start\": 1.1, \"length\": 0.5},\n    \
+         {\"pitch\": 36, \"start\": 1.3, \"length\": 0.25},\n    {\"pitch\": 36, \"start\": 3, \"length\": 0.25},\n    \
+         {\"pitch\": 36, \"start\": 4, \"length\": 0.25}\n  ]}\n]}\n",
+    );
+    let mut s = f.open();
+    go(&mut s, hits("kick", &[1.0, 3.0], 0.25, Hit::Velocity(0.5)));
+    let v: Vec<f64> = played(&s, "kick").iter().map(|n| n.3).collect();
+    assert_eq!(v, [0.5, 0.5, 0.8, 0.5, 0.8]);
+    go(&mut s, hits("kick", &[1.0], 0.25, Hit::Off));
+    assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [1.3, 3.0, 4.0], "both that start in it");
+    go(&mut s, hits("kick", &[3.0], 2.0, Hit::Off));
+    assert_eq!(played(&s, "kick").iter().map(|n| n.0).collect::<Vec<_>>(), [1.3, 4.0], "the step ends at the bar line");
+}
+
+// KIT-12: only a Drum track's lane has steps, and a step, a place and a velocity are numbers that
+// fit; each refusal says so in words.
+#[test]
+fn steps_are_refused_in_words() {
+    let f = fixture(BUSES);
+    let mut s = f.open();
+    let g = Gesture::Hits { lane: LaneAddr::new("keys", "chords").unwrap(), at: vec![0.0], step: 0.25, to: Hit::On };
+    let refused = |s: &mut Session, g: Gesture| clips::edit(s, &g).map(|_| ()).unwrap_err().to_string();
+    assert_eq!(refused(&mut s, g), "edit rejected: Keys's chords lane isn't a Drum's: the beat grid writes a Drum track's lane.");
+    assert_eq!(refused(&mut s, hits("kick", &[0.0], 0.0, Hit::On)), "edit rejected: A step lasts at least 1/64 of a beat.");
+    assert_eq!(refused(&mut s, hits("kick", &[-1.0], 0.25, Hit::On)), "edit rejected: A step can't start before the song starts.");
+    assert_eq!(
+        refused(&mut s, hits("kick", &[0.0], 0.25, Hit::Velocity(1.5))),
+        "edit rejected: A velocity is above 0 and at most 1, not 1.5."
+    );
+}

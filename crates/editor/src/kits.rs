@@ -92,6 +92,36 @@ pub(crate) fn drum(rev: &Revision, module: &str) -> Option<Row> {
     Some(Row { track: module.to_string(), lane, sound })
 }
 
+/// The note a hit of `sound` plays on a row with no notes (KIT-14): the first General MIDI note of
+/// that drum; for a sound the code works out, A2 (45), which plays every sound as itself.
+// The `kits` track's table of each sound's General MIDI notes takes this one's place.
+fn own_note(sound: Option<&str>) -> f64 {
+    match sound {
+        Some("kick") => 36.0,
+        Some("snare") => 38.0,
+        Some("clap") => 39.0,
+        Some("hats") => 42.0,
+        Some("rim") => 37.0,
+        Some("cowbell") => 56.0,
+        Some("cymbal") => 49.0,
+        Some("shaker") => 69.0,
+        _ => 45.0,
+    }
+}
+
+/// The pitch a new hit plays at on a row whose notes play `pitches` and whose Drum plays `sound`
+/// (KIT-14): the pitch most of them play (of a tie, the lowest), else the sound's own note.
+pub(crate) fn pitch(pitches: impl IntoIterator<Item = f64>, sound: Option<&str>) -> f64 {
+    let mut count: Vec<(f64, usize)> = vec![];
+    for p in pitches {
+        match count.iter_mut().find(|(q, _)| *q == p) {
+            Some(c) => c.1 += 1,
+            None => count.push((p, 1)),
+        }
+    }
+    count.into_iter().max_by(|a, b| a.1.cmp(&b.1).then(b.0.total_cmp(&a.0))).map_or_else(|| own_note(sound), |(p, _)| p)
+}
+
 /// Whether frame `at` of `m` is frame `frame` or opened inside it.
 fn within(m: &Module, at: Option<u32>, frame: u32) -> bool {
     let mut at = at;
