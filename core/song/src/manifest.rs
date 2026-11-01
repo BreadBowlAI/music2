@@ -207,7 +207,7 @@ impl Manifest {
 
 /// What a song made for an older music2 is told first, before the line to change by hand
 /// (AGENT-14): the one step that moves it, `m2 upgrade` or the app's Upgrade (FMT-25).
-pub const UPGRADE: &str = "Run `m2 upgrade <song>`, or press Upgrade: it moves the song to this music2 in one step. ";
+pub const UPGRADE: &str = "Press Upgrade it in the status, or run `m2 upgrade <song>`: it moves the song to this music2 in one step. ";
 
 /// `[project] format`, read before anything else and without the rest of the schema: a
 /// strict read would hide a newer format behind `manifest.invalid`, and a manifest whose
@@ -536,7 +536,7 @@ mod tests {
         // window's edge still shows it (review finding D3): by `m2 upgrade` first (AGENT-14).
         assert!(
             d[1].message.starts_with(
-                "Run `m2 upgrade <song>`, or press Upgrade: it moves the song to this music2 in one step. \
+                "Press Upgrade it in the status, or run `m2 upgrade <song>`: it moves the song to this music2 in one step. \
                  This app has std 0.3. To use it, change the std line in music2.toml to std = \"0.3\". The song may sound a little different. "
             ),
             "{}",
@@ -545,7 +545,7 @@ mod tests {
         // PACK-24: so is a song for an older major of @m2/core, and told its code may need changes.
         assert!(
             d[0].message.starts_with(
-                "Run `m2 upgrade <song>`, or press Upgrade: it moves the song to this music2 in one step. \
+                "Press Upgrade it in the status, or run `m2 upgrade <song>`: it moves the song to this music2 in one step. \
                  This app has @m2/core 2. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"2\". The song's code may \
                  need changes. music2.toml asks for @m2/core \"1\""
             ),

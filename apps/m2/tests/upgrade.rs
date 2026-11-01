@@ -72,7 +72,8 @@ fn each_old_song_builds_and_renders_once_upgraded() {
         assert!(!o.status.success(), "{name} doesn't build as it was made: {}", said(&o));
         let o = m2_in(&home, &["upgrade", dir], &[]);
         assert!(o.status.success(), "{name}: {}", said(&o));
-        assert!(said(&o).contains("upgraded to this music2: one undo step"), "{name}: {}", said(&o));
+        assert!(said(&o).contains("upgraded to this music2 (revision"), "{name}: {}", said(&o));
+        assert!(said(&o).contains("which music2 can undo once it opens the song"), "{name}: {}", said(&o));
         let o = m2_in(&home, &["check", dir], &[]);
         assert!(o.status.success(), "{name} builds: {}", said(&o));
         let wav = render(&home, &song);
@@ -82,11 +83,16 @@ fn each_old_song_builds_and_renders_once_upgraded() {
     }
 }
 
-// FMT-25: the sampler example made for std 0.4 is today's example once upgraded, file for file,
-// and renders today's bits; the sounds demo upgraded from std 0.5 and from 0.8 renders the same
-// bits: one table, whichever std a song was made for.
+/// The sounds demo, made for std 0.8, as the music2 it was made for rendered it (`m2 render`, built
+/// from f93d901a, std 0.8 and `@m2/drums` 1): the SHA-256 of its WAV.
+const SOUNDS_THEN: &str = "c38145830265b3980876d7d86b54193e84d3947e997d1fc088c6c5e4fcd59156";
+
+// FMT-25 (the review's G3, G4, G17): an upgrade keeps the song's sound. The sampler example made
+// for std 0.4 is today's example once upgraded, file for file, and renders today's bits. The
+// sounds demo, every single drum converted with its knobs, upgraded from std 0.5 and from 0.8,
+// renders the bits the music2 it was made for rendered.
 #[test]
-fn where_the_sounds_didnt_change_the_bits_are_todays() {
+fn an_upgrade_keeps_the_songs_sound() {
     let temp = Temp::new("upgrade-bits");
     let home = temp.0.join("home");
     let old = copy_old(&temp, "sampler-std-0.4", "sampler-old", Some("sampler"));
@@ -105,7 +111,10 @@ fn where_the_sounds_didnt_change_the_bits_are_todays() {
         let o = m2_in(&home, &["upgrade", song.to_str().unwrap()], &[]);
         assert!(o.status.success(), "{}", said(&o));
     }
-    assert!(render(&home, &five) == render(&home, &eight), "the same bits from std 0.5 and from 0.8");
+    for song in [&five, &eight] {
+        let then = m2_song::Sha::of(&render(&home, song)).hex();
+        assert_eq!(then, SOUNDS_THEN, "{}: the old music2's bits", song.display());
+    }
 }
 
 // FMT-25: `--check` says what it would change, and that the song then builds, and writes nothing;
@@ -132,6 +141,33 @@ fn check_writes_nothing_and_a_current_song_is_left_alone() {
     let o = m2_in(&home, &["upgrade", today.to_str().unwrap()], &[]);
     assert!(o.status.success() && said(&o).contains("made for this music2 already"), "{}", said(&o));
     assert_eq!(files(&today), before);
+    // A song made for a newer music2 can't be moved back: said, and nothing written.
+    let newer = temp.0.join("newer");
+    copy(&example("first-song"), &newer);
+    let manifest = std::fs::read_to_string(newer.join("music2.toml")).unwrap().replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"3\"");
+    std::fs::write(newer.join("music2.toml"), manifest).unwrap();
+    let before = files(&newer);
+    let o = m2_in(&home, &["upgrade", newer.to_str().unwrap()], &[]);
+    assert_eq!(o.status.code(), Some(1), "{}", said(&o));
+    assert!(said(&o).contains("this song was made for a newer music2"), "{}", said(&o));
+    assert_eq!(files(&newer), before);
+}
+
+// FMT-25 (G9): the musician's presets of sounds that moved are named, and never changed.
+#[test]
+fn presets_of_moved_sounds_are_named() {
+    let temp = Temp::new("upgrade-presets");
+    let home = temp.0.join("home");
+    let preset = home.join("Music/music2/Presets/_m2_drums/drum-snare/Tight.json");
+    std::fs::create_dir_all(preset.parent().unwrap()).unwrap();
+    let text = "{\n  \"m2preset\": 1,\n  \"name\": \"Tight\",\n  \"sound\": \"@m2/drums:drum-snare\",\n  \"values\": {\"tune\": 200}\n}\n";
+    std::fs::write(&preset, text).unwrap();
+    let song = copy_old(&temp, "sounds-std-0.8", "song", None);
+    let o = m2_in(&home, &["upgrade", song.to_str().unwrap()], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(said(&o).contains("your presets of sounds that moved, which the upgrade doesn't change"), "{}", said(&o));
+    assert!(said(&o).contains("Presets/_m2_drums/drum-snare/Tight.json: \"Tight\" is for the single snare"), "{}", said(&o));
+    assert_eq!(std::fs::read_to_string(&preset).unwrap(), text);
 }
 
 // FMT-25: a call it can't convert is left as it is and named by its file and line, with the line
@@ -174,7 +210,13 @@ fn with_the_app_open_it_is_one_undo_step_there() {
     let top = a.top();
     assert_eq!((&top["by"], &top["name"]), (&json!("Claude"), &json!("Upgrade")), "{top}");
     assert!(a.read("tracks/kick.ts").contains("drums.drum(lane.notes(\"hits\"))"));
+    let upgraded = files(&a.song);
     let o = a.m2(&["undo", a.dir(), "--as", "Claude"]);
     assert!(o.status.success(), "{}", said(&o));
     assert_eq!(files(&a.song), before, "every file as it was");
+    // The old files don't build, so the app plays the upgrade still; upgrading again works (G1).
+    assert_eq!(state()["upgrade"], json!(true), "made for an older music2 again");
+    let o = a.m2(&["upgrade", a.dir(), "--as", "Claude"]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert_eq!(files(&a.song), upgraded, "the same upgrade again");
 }

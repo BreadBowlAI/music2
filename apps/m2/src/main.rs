@@ -1125,16 +1125,20 @@ change that code first",
             // FMT-25, AGENT-14: in the open app when it has the song, so it is one undo step there.
             let dir = PathBuf::from(arg(1)?);
             let check = words::on(&args, "--check");
-            let up = match app::holder(&dir) {
-                Some(holder) if !check => app::reach(&dir, &holder, "")?.upgrade()?,
+            let in_app = app::holder(&dir).filter(|_| !check);
+            let up = match &in_app {
+                Some(holder) => app::reach(&dir, holder, "")?.upgrade()?,
                 // `--check` only reads: no lock (WRITE-18).
-                _ if check => {
+                None if check => {
                     let mut s = Session::open_read_only(&dir, packages()?).map_err(report)?;
-                    m2_editor::upgrade::upgrade(&mut s, true).map_err(|e| anyhow!("{e}"))?
+                    m2_editor::upgrade::upgrade(&mut s, true, m2_os::dirs::presets().as_deref()).map_err(|e| anyhow!("{e}"))?
                 }
-                _ => m2_editor::upgrade::upgrade(&mut locked(&dir, "")?, false).map_err(|e| anyhow!("{e}"))?,
+                None => {
+                    let mut s = locked(&dir, "")?;
+                    m2_editor::upgrade::upgrade(&mut s, false, m2_os::dirs::presets().as_deref()).map_err(|e| anyhow!("{e}"))?
+                }
             };
-            upgraded(&dir, &up, check)?;
+            upgraded(&dir, &up, check, in_app.is_some())?;
         }
         Some("fix") if app::holder(Path::new(&arg(1)?)).is_some() => {
             // The app knows which journals are still being written: its fix applies (the review's m1).
@@ -1504,11 +1508,26 @@ fn registry(args: &[String]) -> Result<()> {
 }
 
 /// What `m2 upgrade` did, as it says it (AGENT-14): each file it changes, with the lines before and
-/// after, what it left, and whether it was written; an error when nothing was written for a song
-/// that needs it.
-fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool) -> Result<()> {
+/// after, what it left (then nothing is written), what to check by hand, the musician's presets of
+/// sounds that moved (never changed), and whether it was written: an error when nothing was written
+/// for a song that needs it. `in_app`: the open app wrote it, as one undo step there.
+fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: bool) -> Result<()> {
+    let place = |l: &m2_editor::upgrade::Left| if l.line == 0 { l.file.clone() } else { format!("{}:{}", l.file, l.line) };
+    let list = |title: &str, items: &[&m2_editor::upgrade::Left]| {
+        if !items.is_empty() {
+            println!("{title}");
+            for l in items {
+                println!("  {}: {}", place(l), l.what);
+                if !l.write.is_empty() {
+                    println!("    write: {}", l.write);
+                }
+            }
+        }
+    };
+    let (presets, notes): (Vec<_>, Vec<_>) = up.notes.iter().partition(|n| n.file.starts_with("Presets/"));
     if up.current() {
         println!("{} is made for this music2 already: nothing to upgrade", dir.display());
+        list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
         return Ok(());
     }
     for c in &up.changes {
@@ -1517,32 +1536,34 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool) -> Resul
             println!("  {l}");
         }
     }
-    if !up.left.is_empty() {
-        println!("left as it is, to change by hand:");
-        for l in &up.left {
-            println!("  {}:{}: {}", l.file, l.line, l.what);
-            if !l.write.is_empty() {
-                println!("    write: {}", l.write);
-            }
-        }
-    }
+    list("left as it is, so nothing was written: change these by hand, then run m2 upgrade again:", &up.left.iter().collect::<Vec<_>>());
+    list("check these by hand: the upgrade can't keep them as they were:", &notes);
+    list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
     if !up.refused.is_empty() {
         println!("the song wouldn't build after it:");
         for r in &up.refused {
             println!("  {r}");
         }
     }
-    match (up.written, up.refused.is_empty()) {
-        (Some(revision), _) => println!("upgraded to this music2: one undo step (revision {revision})"),
-        (None, true) if check => println!("--check: nothing was written; the song builds after it"),
-        (None, true) if up.changes.is_empty() => bail!("nothing was written: change what is left by hand, then run m2 upgrade again"),
-        (None, true) => println!("nothing was written: the files were as it would write them"),
-        (None, false) => bail!(
-            "nothing was written{}: the song wouldn't build after it. Change what is left by hand, then run m2 upgrade again",
+    match (up.written, up.left.is_empty(), up.refused.is_empty()) {
+        (Some(_), ..) if in_app => println!("upgraded to this music2"),
+        (Some(revision), ..) => println!(
+            "upgraded to this music2 (revision {revision}): one step, which music2 can undo once it opens the song (m2 undo needs the app open)"
+        ),
+        (None, false, _) => bail!("nothing was written: {} to change by hand first (above)", count(up.left.len(), "place")),
+        (None, true, true) if check => println!("--check: nothing was written; the song builds after it"),
+        (None, true, true) => println!("nothing was written: the files were as it would write them"),
+        (None, true, false) => bail!(
+            "nothing was written{}: the song wouldn't build after it. Change what it says by hand, then run m2 upgrade again",
             if check { " (--check)" } else { "" }
         ),
     }
     Ok(())
+}
+
+/// `n` `what`s, in words: "1 place", "3 places".
+fn count(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", plural(n))
 }
 
 /// `s` when `n` isn't one.
