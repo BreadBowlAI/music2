@@ -444,6 +444,7 @@ check(lastGesture(n).map((g) => g.op).join() === "paste" && JSON.stringify(paste
 await until(async () => (await pickedIn("kick.hits")).join() === pasted.id);
 await key("Meta+x");
 check(await until(async () => starts(await shown("kick", "hits")) === "0"), "⌘X cuts the pasted clip");
+await caughtUp();
 await page.click('[data-module-tab="hats"]');
 await key("Meta+v");
 check(await until(async () => starts(await shown("hats", "hits")) === "0,40"), `with Hats selected, ⌘V pastes the Kick clip onto the Hats lane: ${starts(await shown("hats", "hits"))}`);
@@ -485,6 +486,7 @@ await key("ArrowLeft");
 await key("ArrowLeft");
 await key("ArrowLeft");
 check(await until(async () => (await shown("hats", "hits")).find((c) => c.id === H)?.start === 3), `three quick ← move it on from where each left it: ${(await shown("hats", "hits")).find((c) => c.id === H)?.start}`);
+await caughtUp();
 
 // ---------------------------------------------------------------- the lane menu
 await page.mouse.click(kickRow.x + 34.3 * PPB, kickRow.y + kickRow.height / 2, { button: "right" });

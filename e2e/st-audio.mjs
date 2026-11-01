@@ -287,13 +287,14 @@ const rows = async () => {
   await page.keyboard.press("Escape");
   return r;
 };
+// The menu's rows are the state the page shows: the fade's, once it shows it.
+await caughtUp();
 const listed = await rows();
 const at = (id) => listed.findIndex((r) => r[0] === id);
 check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("follow") === at("reverse") + 1 && at("unfade") === at("follow") + 1, `Volume…, Reverse, Follow tempo and Remove fades come after Split: ${listed.map((r) => r[0])}`);
 check(listed[at("reverse")]?.[1] === "false" && listed[at("unfade")]?.[2] === false, `Reverse unchecked, Remove fades on: ${JSON.stringify(listed.slice(at("volume"), at("unfade") + 1))}`);
 
 // Volume… −6: the label says it and the waveform halves.
-await caughtUp();
 const full = mean((await columns("p3")).map((c) => c.ink)) || 1;
 await (await menu(p3, "volume"))?.click();
 await page.waitForSelector("[data-testid=volume-popover] input", { timeout: 3000 }).catch(() => null);

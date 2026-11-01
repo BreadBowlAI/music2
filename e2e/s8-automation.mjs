@@ -189,6 +189,7 @@ check(
   `the value it played at the playhead (${playing.toFixed(3)} at beat ${at}, not the fallback ${v0}) is written in its place: ${w1.text}`,
 );
 check(await toasted("Removed the Decay × automation"), "a toast says so");
+await caughtUp();
 check((await state()).view.revision === rev + 1 && !(await page.$('[data-lane="kick.decay"]')), "one revision; the lane is gone from the timeline");
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === automated && read("data/kick/decay.json") === lanefile), "⌘Z brings the code and the lane file back");

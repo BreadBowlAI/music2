@@ -467,6 +467,9 @@ await settled(["kick"], []);
 const songTs = read("song.ts");
 write("song.ts", songTs.replace("export default", "export default )"));
 check(await until(async () => (await state()).view.draft_errors.length > 0, 10000), "the code is broken");
+// The question says what the page shows: once its status says the code doesn't compile (that is
+// no new revision, so caughtUp can't tell).
+await until(async () => !!(await page.$("[data-status~=compile]")));
 await key("Meta+Shift+e");
 await go();
 await page.waitForSelector("[data-testid=export-ask]", { timeout: 3000 });
