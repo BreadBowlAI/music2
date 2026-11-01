@@ -31,6 +31,8 @@ mod hook_tests;
 #[cfg(test)]
 mod kill_tests;
 #[cfg(test)]
+mod lands_tests;
+#[cfg(test)]
 mod muted_tests;
 #[cfg(test)]
 mod props;
@@ -786,7 +788,7 @@ impl Session {
     /// the expectation: that is how an agent learns the hash (WRITE-11), and how a planner probes
     /// a candidate.
     pub fn check(&mut self, tx: &Tx) -> Result<Checked, Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let mut p = self.prepare(tx, &currents)?;
         let seen = matches!(tx.expect, Expect::Seen(_));
         if !seen {
@@ -802,7 +804,7 @@ impl Session {
     /// commit is when `raw`. A judged one is kept for the commit of the same Tx that may follow, as
     /// [`Session::check`] keeps it.
     pub(crate) fn built(&mut self, tx: &Tx, raw: bool) -> Result<Arc<Revision>, Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let mut p = self.prepare(tx, &currents)?;
         let candidate = p.candidate.clone();
         if !raw {
@@ -829,7 +831,7 @@ impl Session {
             assert(self, &checked).map_err(Uncommitted::Asserted)?;
             return self.commit(tx).map_err(refused);
         }
-        let currents = self.read_all(&tx).map_err(refused)?;
+        let currents = self.read_all(&tx, false).map_err(refused)?;
         let mut p = self.prepare(&tx, &currents).map_err(refused)?;
         // The expectation is judged before the assertion, as `check` does, except on `Seen`.
         let seen = matches!(tx.expect, Expect::Seen(_));
@@ -926,7 +928,7 @@ impl Session {
         if raw || journal {
             return self.commit_raw(tx);
         }
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let key = self.key(tx, &currents);
         // What check built is reused when nothing moved since; the expectation is judged here
         // either way (a check on `Seen` never judged it).
@@ -943,8 +945,9 @@ impl Session {
     }
 
     /// Steps 2 to 4 and the disk checks of WRITE-3a: the Tx's shape, the draft rule, and every
-    /// target as it is on disk now.
-    fn read_all(&mut self, tx: &Tx) -> Result<BTreeMap<TxPath, Current>, Refusal> {
+    /// target as it is on disk now. `raw`: committed unjudged (`commit_raw`), so one that makes the
+    /// files the revision that plays goes ahead whatever the draft's errors (WRITE-21a).
+    fn read_all(&mut self, tx: &Tx, raw: bool) -> Result<BTreeMap<TxPath, Current>, Refusal> {
         tx.validate().map_err(rejected)?;
         let touched = tx.touched();
         // A Tx touching an interrupted commit's targets waits until it is finished or discarded,
@@ -977,7 +980,7 @@ impl Session {
             // The draft rule (C7): a Tx touching code needs the draft's code to compile; one
             // touching only data needs an accepted code revision to read its lanes against.
             let code = touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest));
-            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() {
+            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() && !(raw && self.lands_on_accepted(tx)) {
                 let mut d = built(self.draft_errors.clone());
                 if !code {
                     d.insert(0, Diagnostic::error("code.build", "the project's code has never compiled, so its lanes aren't known yet"));
@@ -1079,7 +1082,7 @@ impl Session {
     }
 
     /// Step 5: the bases, and each op applied to the current content.
-    fn plan(&self, tx: &Tx, currents: &BTreeMap<TxPath, Current>, decls: &m2_song::Decls) -> Result<Planned, Refusal> {
+    fn plan(&self, tx: &Tx, currents: &BTreeMap<TxPath, Current>, decls: &m2_song::Decls, raw: bool) -> Result<Planned, Refusal> {
         let mut conflicts: Vec<ConflictFile> = vec![];
         let mut planned = Planned {
             news: vec![],
@@ -1098,8 +1101,10 @@ impl Session {
         // interrupted commit itself left the code broken, everything waits, and Finish and
         // Discard must still apply.
         let recovery = matches!(tx.expect, Expect::Journal(_));
+        // One that makes the draft the revision that plays takes in what waits whole.
+        let lands = raw && !recovery && !self.waiting.is_empty() && self.lands_on_accepted(tx);
         for (p, b) in &tx.base {
-            if !recovery && self.waits(p) {
+            if !recovery && !lands && self.waits(p) {
                 conflicts.push(changed(p, &currents[p], Some("changed on disk together with code that doesn't compile yet".into())));
             }
             if p.is_text()
@@ -1441,7 +1446,7 @@ impl Session {
     /// Steps 5 to 9 and 11: the bases, the baseline, the candidate, the delta and the diagnostics.
     fn prepare(&mut self, tx: &Tx, currents: &BTreeMap<TxPath, Current>) -> Result<Prepared, Refusal> {
         let accepted = self.accepted.clone();
-        let planned = self.plan(tx, currents, &accepted.compiled.decls)?;
+        let planned = self.plan(tx, currents, &accepted.compiled.decls, false)?;
 
         // 6. The baseline: the accepted revision with each touched file as it is on disk.
         let differs: Vec<&TxPath> = currents
@@ -1815,9 +1820,9 @@ impl Session {
     /// result may not compile, P3), the undo of a save, and inverses of Tx committed on a seen
     /// delta.
     fn commit_raw(&mut self, tx: &Tx) -> Result<(Committed, Option<TxStep>), Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, true)?;
         let decls = self.accepted.compiled.decls.clone();
-        let planned = self.plan(tx, &currents, &decls)?;
+        let planned = self.plan(tx, &currents, &decls, true)?;
         let tidy = match &tx.expect {
             Expect::Journal(id) => vec![id.clone()],
             _ => vec![],
@@ -1907,6 +1912,32 @@ impl Session {
         tx
     }
 
+    /// Whether committing `tx` leaves the draft as the accepted revision has it: it writes back (or
+    /// removes) exactly the files where the draft differs from the revision that plays. Such a raw
+    /// Tx builds whatever the draft's errors, as it makes the draft that revision: the draft rule
+    /// and the waiting rule let it through (WRITE-21a: an upgrade redone after its undo, FMT-25). A
+    /// judged one keeps them: its baseline is the files on disk, which don't build.
+    pub(crate) fn lands_on_accepted(&self, tx: &Tx) -> bool {
+        let snap = &self.accepted.snapshot;
+        if !self.accepted.has_code() {
+            return false;
+        }
+        let mut writes = BTreeMap::new();
+        for op in &tx.ops {
+            let (file, bytes) = match op {
+                Op::Write { file, bytes: Payload::Text(t) } => (file, Some(t.as_bytes())),
+                Op::Remove { file } => (file, None),
+                _ => return false,
+            };
+            writes.insert(file.path(), bytes);
+        }
+        let lands = writes.iter().all(|(p, bytes)| match bytes {
+            Some(b) => !snap.not_utf8.contains_key(p) && snap.files.get(p).map(|t| t.as_bytes()) == Some(*b),
+            None => !snap.files.contains_key(p) && !snap.binaries.contains_key(p),
+        });
+        lands && changed_paths(&self.draft, snap).iter().all(|p| writes.contains_key(p))
+    }
+
     /// Whether undo step `step` would go ahead now, without compiling: writer access, the draft
     /// rule, no target waiting, and every base applies to the accepted revision (WRITE-21).
     pub(crate) fn can_tx(&self, step: &TxStep) -> bool {
@@ -1921,14 +1952,18 @@ impl Session {
             return Some(Blocked::ReadOnly);
         }
         let touched = tx.touched();
-        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() {
+        // A raw step whose undo or redo makes the files the revision that plays (WRITE-21a).
+        let lands = step.raw && self.lands_on_accepted(tx);
+        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() && !lands {
             return Some(Blocked::Draft);
         }
-        if touched.iter().any(|p| self.waits(p)) {
+        if touched.iter().any(|p| self.waits(p)) && !lands {
             return Some(Blocked::Waiting);
         }
         let changed = Some(Blocked::Changed);
-        let snap = &self.accepted.snapshot;
+        // What its bases are judged against: the revision that plays, or, for one that lands on
+        // it from a draft that waits, the draft (the files on disk).
+        let snap = if lands { &self.draft } else { &self.accepted.snapshot };
         for op in &tx.ops {
             match op {
                 Op::TextEdit { file, edits } => {

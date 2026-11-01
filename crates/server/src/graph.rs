@@ -2005,6 +2005,11 @@ impl Graph {
         self.inner.told.lock().hear(&self.inner.faults)
     }
 
+    /// Upgrade the open song (FMT-25, AGENT-14), or with `check` only say what it would change.
+    pub fn upgrade(&self, token: u64, check: bool) -> Result<Value> {
+        self.call(move |a| a.upgrade(token, check))
+    }
+
     /// Apply a fix a problem offers, as the problem carried it (`{code, title, likely, tx}`):
     /// committing its Tx (DIAG-1), which its bases guard. Undo takes it back.
     pub fn fix(&self, token: u64, fix: &Value) -> Result<Value> {

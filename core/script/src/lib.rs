@@ -353,7 +353,7 @@ impl State {
                 _ => None,
             })
             .collect();
-        let (_, names, _) = MOVED.iter().find(|(m, ..)| *m == "fx")?;
+        let (_, names, ..) = MOVED.iter().find(|(m, ..)| *m == "fx")?;
         let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
         for ns in &spaces {
             for name in *names {
@@ -617,20 +617,22 @@ impl State {
 const NOT_FOUND: &str = "file not found";
 
 /// What moved out of std into the packs music2 ships, in std 0.7 (PKG-17): a std module, whole or
-/// only the names listed, and the pack it is in now. The one table: an import of one says where.
-pub const MOVED: &[(&str, &[&str], &str)] = &[
-    ("instruments", &[], "@m2/synths"),
-    ("synth", &[], "@m2/synths"),
-    ("fm", &[], "@m2/synths"),
-    ("drums", &[], "@m2/drums"),
-    ("fx", &["bitcrush", "chorus", "delay", "drive", "phaser", "reverb", "tremolo", "widen"], "@m2/effects"),
+/// only the names listed, the pack it is in now, and the line a song writes for that pack today
+/// (the major of the version music2 bundles: `a_moved_imports_words_name_the_line_a_song_writes_today`
+/// holds it to that). The one table: an import of one says where.
+pub const MOVED: &[(&str, &[&str], &str, &str)] = &[
+    ("instruments", &[], "@m2/synths", "2"),
+    ("synth", &[], "@m2/synths", "2"),
+    ("fm", &[], "@m2/synths", "2"),
+    ("drums", &[], "@m2/drums", "2"),
+    ("fx", &["bitcrush", "chorus", "delay", "drive", "phaser", "reverb", "tremolo", "widen"], "@m2/effects", "1"),
 ];
 
 /// Why an import of `std/<sub>`, or of `name` from it, finds nothing, when what it names moved to
 /// a pack (PKG-17): the pack, what to import, and the line `[dependencies]` needs.
 fn moved_from_std(sub: &str, name: Option<&str>) -> Option<String> {
-    let (_, names, pack) =
-        MOVED.iter().find(|(m, names, _)| *m == sub && name.is_none_or(|n| names.contains(&n)) && name.is_some() != names.is_empty())?;
+    let (_, names, pack, line) =
+        MOVED.iter().find(|(m, names, ..)| *m == sub && name.is_none_or(|n| names.contains(&n)) && name.is_some() != names.is_empty())?;
     let what = match name {
         Some(n) => format!("`{n}` is no longer in std/{sub}: since std 0.7 it is in the pack {pack}"),
         None => format!("`std/{sub}` is no longer std's: since std 0.7 its sounds are in the pack {pack}"),
@@ -638,7 +640,7 @@ fn moved_from_std(sub: &str, name: Option<&str>) -> Option<String> {
     let it = if names.is_empty() { "them" } else { "it" };
     let mono = if sub == "synth" && name.is_none() { " (`mono` and `Voice` stay std's, in std/dsp)" } else { "" };
     Some(format!(
-        "{what}, which comes with music2. Import {it} from \"{pack}\"{mono}, and add \"{pack}\" = \"1\" under [dependencies] in music2.toml"
+        "{what}, which comes with music2. Import {it} from \"{pack}\"{mono}, and add \"{pack}\" = \"{line}\" under [dependencies] in music2.toml"
     ))
 }
 

@@ -1,7 +1,7 @@
 import clsx from "clsx";
-import { CircleAlert, CodeXml, Download, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
+import { CircleAlert, CircleArrowUp, CodeXml, Download, Gauge, HardDrive, Hourglass, Info, Lock, Pause, TriangleAlert, VolumeX, WifiOff } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
-import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly } from "../lib/graph";
+import { attention, graphApi, lockReason, type GraphState, type GraphStatus, type Problem, type ReadOnly, type Upgraded, type UpgradePlace } from "../lib/graph";
 import { cancelGet, getMissing, missingPacks, sizeWords, useGetting, type MissingPack } from "../lib/library";
 import { usePill } from "../lib/overlays";
 import { openSettings } from "../lib/settings";
@@ -9,10 +9,11 @@ import { placeOf, technical, Words } from "../lib/plain";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import Attention from "./Attention";
+import { undoAction } from "./GraphCanvas";
 import { Button, Details, keepFocus, Popover } from "./ui";
 
 type Tone = "danger" | "warn" | "neutral";
-interface State { id: "offline" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "meters" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
+interface State { id: "offline" | "upgrade" | "upgraded" | "compile" | "problems" | "no-output" | "dropout" | "disk" | "meters" | "load" | "read-only" | "paused" | "loading"; tone: Tone; label: string; Icon: typeof Lock }
 
 // Hover darkens every tone, as it does a ghost button: the soft fill mixed toward its strong colour.
 const TONE: Record<Tone, string> = {
@@ -41,9 +42,13 @@ interface Dropouts {
  * 10 s and a heavy load (8b.8) come after the song's problems. What the engine is busy with
  * (RENDER-1, RENDER-25) comes last: it is no problem, so any problem shows over it.
  */
-function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean, dropouts: Dropouts): State[] {
+function states(graph: GraphState, status: GraphStatus | undefined, connected: boolean, dropouts: Dropouts, upgraded: boolean): State[] {
   const out: State[] = [];
   if (!connected) out.push({ id: "offline", tone: "danger", label: "Reconnecting…", Icon: WifiOff });
+  // Made for an older music2 (AGENT-14): the one step that moves it comes before why it doesn't compile.
+  if (graph.upgrade) out.push({ id: "upgrade", tone: graph.has_code === false ? "danger" : "warn", label: "Made for an older music2", Icon: CircleArrowUp });
+  // Upgraded, with what to check by hand: until the musician says Done.
+  if (upgraded) out.push({ id: "upgraded", tone: "neutral", label: "Check the upgrade", Icon: Info });
   // Danger when nothing plays at all (WRITE-20); otherwise the last version that compiled plays on.
   if (graph.view.draft_errors.length > 0)
     out.push({ id: "compile", tone: graph.has_code === false ? "danger" : "warn", label: "Code doesn't compile", Icon: graph.has_code === false ? CircleAlert : TriangleAlert });
@@ -101,7 +106,10 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
   // The mutes pill beside it takes room the song's name keeps clear (taste.md §3.3, Q23).
   const pill = usePill();
   const dropouts = useDropouts(status);
-  const all = states(graph, status, connected, dropouts);
+  // What the last Upgrade it left to check by hand, for this song (AGENT-14).
+  const [after, setAfter] = useState<{ session: number; notes: UpgradePlace[] } | null>(null);
+  const upgraded = !!after && after.session === graph.session && after.notes.length > 0;
+  const all = states(graph, status, connected, dropouts, upgraded);
   if (!all.length) return null;
   const [main, ...rest] = all;
   const readOnly = all.some((s) => s.id === "read-only");
@@ -135,6 +143,23 @@ export default function Status({ graph, status, onShowCode }: { graph: GraphStat
                   <Item state={s} title="Lost the connection to music2">
                     Reconnecting… Editing is off until it is back.
                   </Item>
+                )}
+                {s.id === "upgrade" && (
+                  <Upgrade
+                    graph={graph}
+                    state={s}
+                    onDone={(up) => (up.notes.length ? setAfter({ session: graph.session, notes: up.notes }) : setAnchor(null))}
+                  />
+                )}
+                {s.id === "upgraded" && after && (
+                  <UpgradedItem
+                    state={s}
+                    notes={after.notes}
+                    onDone={() => {
+                      setAfter(null);
+                      setAnchor(null);
+                    }}
+                  />
                 )}
                 {s.id === "compile" && (
                   <Compile
@@ -242,6 +267,114 @@ function Item({ state, title, children, action, icon = true }: { state: State; t
   );
 }
 
+/** "3 files" or "music2.toml": what an upgrade changed, in a few words. */
+function changedWords(up: Upgraded) {
+  const files = up.changes.map((c) => c.file);
+  return files.length === 1 ? files[0] : `${files.length} files`;
+}
+
+/** Where a place an upgrade names is: "tracks/kick.ts, line 6", or the file alone. */
+const placeWords = (l: UpgradePlace) => (l.line ? `${l.file}, line ${l.line}` : l.file);
+
+/** The places an upgrade names, each with what is there and what to write. */
+function Places({ places, testid }: { places: UpgradePlace[]; testid: string }) {
+  return (
+    <>
+      {places.map((l, i) => (
+        <li key={i} className="text-fg" data-testid={testid}>
+          <span className="text-fg-muted">{placeWords(l)}:</span> {l.what}
+          {l.write && <span className="block font-mono text-xs text-fg-muted">{l.write}</span>}
+        </li>
+      ))}
+    </>
+  );
+}
+
+/**
+ * A song made for an older music2 (AGENT-14): Upgrade it moves it to this one in one step, one undo
+ * step, shown as it lands. What it can't convert exactly it names, by file and line with the line to
+ * write, and then writes nothing; what to check by hand after it wrote shows next (`onDone`).
+ */
+function Upgrade({ graph, state, onDone }: { graph: GraphState; state: State; onDone: (up: Upgraded) => void }) {
+  const toast = useStore((s) => s.toast);
+  const [running, setRunning] = useState(false);
+  const [left, setLeft] = useState<Upgraded | null>(null);
+  const run = async () => {
+    setRunning(true);
+    try {
+      const { upgraded: up, step } = await graphApi.upgrade(graph.session);
+      if (up.written !== null) {
+        toast(`Upgraded to this music2: changed ${changedWords(up)}`, undoAction(graph.session, step));
+        onDone(up);
+      } else if (up.changes.length === 0 && up.left.length === 0) {
+        toast("Nothing to upgrade: the song is made for this music2 already.");
+        setLeft(null);
+      } else setLeft(up);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : String(e));
+    } finally {
+      setRunning(false);
+    }
+  };
+  return (
+    <div data-testid="upgrade">
+      <Item
+        state={state}
+        title="This song was made for an older music2"
+        action={
+          <Button variant="secondary" size="sm" onClick={run} disabled={running} data-testid="upgrade-run" className="shrink-0">
+            Upgrade it
+          </Button>
+        }
+      >
+        Upgrade it rewrites the song for this music2, in one step: the versions it asks for, where its sounds come from, and the knobs that were
+        renamed. Undo takes it all back.
+      </Item>
+      {left && (
+        <ul data-testid="upgrade-left" className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
+          {left.left.length > 0 ? (
+            <>
+              <li className="text-fg">Nothing was changed. It can't rewrite these exactly: change them by hand, then Upgrade it again.</li>
+              <Places places={left.left} testid="upgrade-place" />
+            </>
+          ) : (
+            <>
+              <li className="text-fg">Nothing was changed: the song still wouldn't play after it.</li>
+              {left.refused.slice(0, 3).map((r, i) => (
+                <li key={i} className="text-fg-muted">
+                  {r}
+                </li>
+              ))}
+            </>
+          )}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** What an upgrade that was written leaves to check by hand: a sound it couldn't keep as it was, and the musician's presets of sounds that moved, never changed. */
+function UpgradedItem({ state, notes, onDone }: { state: State; notes: UpgradePlace[]; onDone: () => void }) {
+  return (
+    <div data-testid="upgraded">
+      <Item
+        state={state}
+        title="Upgraded: check these by hand"
+        action={
+          <Button variant="secondary" size="sm" onClick={onDone} data-testid="upgraded-done" className="shrink-0">
+            Done
+          </Button>
+        }
+      >
+        The song plays in this music2 now. These may sound a little different, or are yours to change.
+      </Item>
+      <ul className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">
+        <Places places={notes} testid="upgraded-note" />
+      </ul>
+    </div>
+  );
+}
+
 /** Why the files on disk don't compile, where (project-relative), and a way to the code. */
 function Compile({ graph, state, onShow }: { graph: GraphState; state: State; onShow: (p: Problem) => void }) {
   // The diagnostics name files relative to the project; the raw errors are the fallback.
@@ -250,6 +383,9 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
     : graph.view.draft_errors.map((message): Problem => ({ file: null, line: null, col: null, message, code: "code.build", severity: "error" }));
   // The codes of those not in plain words: each in plain words has its own Details.
   const codes = [...new Set(problems.filter((p) => !p.plain).map((p) => p.code).filter((c) => c !== "code.build"))];
+  // What Upgrade it, above, says already: each message that leads with the upgrade, once (AGENT-14).
+  const older = graph.upgrade ? problems.filter((p) => p.message.includes("m2 upgrade")).length : 0;
+  const shown = older ? problems.filter((p) => !p.message.includes("m2 upgrade")) : problems;
   return (
     <div data-testid="compile-banner">
       <Item
@@ -277,7 +413,12 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
           : "Playing the last version that did; editing waits until it compiles."}
       </Item>
       <ul className="px-2 pb-2 pl-8 space-y-1">
-        {problems.slice(0, 3).map((p, i) =>
+        {older > 0 && (
+          <li className="text-sm text-fg-muted" data-testid="compile-older">
+            {older === 1 ? "One says" : `${older} say`} it was made for an older music2: Upgrade it, above, moves it.
+          </li>
+        )}
+        {shown.slice(0, 3).map((p, i) =>
           // In plain words (the studio plan's D2): what went wrong, where in your code, and the
           // fix; the problem's own words, its code and the place inside a package under Details.
           p.plain ? (
@@ -305,7 +446,7 @@ function Compile({ graph, state, onShow }: { graph: GraphState; state: State; on
             </li>
           ),
         )}
-        {problems.length > 3 && <li className="text-xs text-fg-muted">and {problems.length - 3} more, in the code view</li>}
+        {shown.length > 3 && <li className="text-xs text-fg-muted">and {shown.length - 3} more, in the code view</li>}
         {problems.some((p) => p.code === "pkg.missing") && <MissingPacks />}
         {codes.length > 0 && (
           <li>

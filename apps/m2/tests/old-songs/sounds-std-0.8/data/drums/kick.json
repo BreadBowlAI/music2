@@ -1,0 +1,38 @@
+{"clips": [
+  {"id": "c6w2nvgj", "start": 16, "length": 32, "notes": [
+    {"pitch": "C2", "start": 0, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 1.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 2, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 3.75, "length": 0.25, "velocity": 0.7},
+    {"pitch": "C2", "start": 4, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 5.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 6, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 8, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 9.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 10, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 11.75, "length": 0.25, "velocity": 0.7},
+    {"pitch": "C2", "start": 12, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 13.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 14, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 16, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 17.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 18, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 19.75, "length": 0.25, "velocity": 0.7},
+    {"pitch": "C2", "start": 20, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 21.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 22, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 24, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 25.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 26, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 27.75, "length": 0.25, "velocity": 0.7},
+    {"pitch": "C2", "start": 28, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 29.5, "length": 0.25, "velocity": 0.8},
+    {"pitch": "C2", "start": 30, "length": 0.25, "velocity": 0.9}
+  ]},
+  {"id": "fxjve1xw", "start": 48, "length": 16, "notes": [
+    {"pitch": "C2", "start": 0, "length": 0.25, "velocity": 0.95},
+    {"pitch": "C2", "start": 4, "length": 0.25, "velocity": 0.9},
+    {"pitch": "C2", "start": 5.5, "length": 0.25, "velocity": 0.7},
+    {"pitch": "C2", "start": 12, "length": 0.25, "velocity": 0.9}
+  ]}
+]}

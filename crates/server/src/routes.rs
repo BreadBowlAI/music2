@@ -113,6 +113,9 @@ crate::api::routes! {
     POST "/api/graph/fix" => graph_fix up to crate::TX_BODY; writes, agents,
         "Apply a fix a problem offers, as the state's problems list it, whole",
         r#"{"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}"#;
+    POST "/api/graph/upgrade" => graph_upgrade; writes, agents,
+        "Move a song made for an older music2 to this one in one step, as m2 upgrade does: one undo step, written only if the song then builds (check: only say what it would change)",
+        r#"{"session": 7, "check": false}"#;
     POST "/api/graph/label" => graph_label; writes, agents,
         "Rename a track's label (its key stays)",
         r#"{"session": 7, "module": "keys", "label": "Piano"}"#;
@@ -684,6 +687,29 @@ async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
     let result = blocking(move || crate::caller::as_caller(caller, || state.graph.fix(r.session, &r.fix))).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct UpgradeReq {
+    session: u64,
+    /// Only say what it would change (`m2 upgrade --check`).
+    #[serde(default)]
+    check: bool,
+    /// An agent's name and words for its step (AGENT-10): only with the tools key.
+    #[serde(default, rename = "as")]
+    by: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+}
+
+/// Upgrade the open song (FMT-25, AGENT-14): what it changes and left as `upgraded`, and the undo
+/// step it made, the musician's (Upgrade it) or an agent's (`m2 upgrade`).
+async fn graph_upgrade(State(s): S, Json(r): Json<UpgradeReq>) -> ApiResult {
+    let state = s.clone();
+    let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
+    let result = blocking(move || crate::caller::as_caller(caller, || state.graph.upgrade(r.session, r.check))).await;
     s.graph_changed();
     Ok(Json(result?))
 }
