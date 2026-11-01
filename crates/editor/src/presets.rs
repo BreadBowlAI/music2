@@ -307,9 +307,9 @@ enum Slotted {
     Absent,
 }
 
-/// What a control is called in words: its label, else its name.
+/// What a control is called in words: its label, else its name (CARD-34's one rule).
 fn label(d: &ControlDesc) -> String {
-    d.label.clone().unwrap_or_else(|| d.name.clone())
+    crate::kind::named(d.label.as_deref(), &d.name).label
 }
 
 /// Each declared control of `sound` that holds a number (a dictionary's, a choice and a switch are

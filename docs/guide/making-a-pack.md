@@ -51,7 +51,12 @@ std = "0.4"                    # the std you made it with, or any newer one
 
 Every key is checked: one music2 doesn't know is an error, so a typo never goes unseen.
 
-`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"2"` is any 2.x. Write the major alone, `"2"`, as music2's own packs do: `"2.3"` would shut out the music2 versions between 2.0 and 2.3.
+`std` is the std you made the pack with: a newer music2's std, which only adds, still runs it. `@m2/core` keeps its major version: `"2"` is any 2.x, and `"2.1"` any 2.x from 2.1. Ask for the version your pack's code needs:
+
+| Your code uses | Ask for | Why |
+|---|---|---|
+| nothing added since 2.0 | `"2"` | a later minor, `"2.3"`, would shut out the music2 versions between 2.0 and 2.3 |
+| a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` and `@m2/wavetable` do | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
 
 ### music2's promise to your pack
 
@@ -60,8 +65,8 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | You see | It means |
 |---|---|
 | Your pack, made for `@m2/core` 2, in a newer music2 that has 2.5 | It runs as it did. |
-| `@a/x, which this song uses, can't be used: it is made for @m2/core 1, and this app has @m2/core 2.0.0 …` (`m2 pack check`: `@a/x 1.3.0 is made for …`) | The pack was made before the promise. Get a version made for 2, or ask its author for one. |
-| `… is made for @m2/core 3, newer than this app's 2.0.0` | Update music2. |
+| `@a/x, which this song uses, can't be used: it is made for @m2/core 1, and this app has @m2/core 2.1.0 …` (`m2 pack check`: `@a/x 1.3.0 is made for …`) | The pack was made before the promise. Get a version made for 2, or ask its author for one. |
+| `… is made for @m2/core 3, newer than this app's 2.1.0` | Update music2. |
 
 Songs get no such promise before music2 1.0: a new music2 may ask a song to change (it says how). Packs get this one, because other people's songs play them.
 
@@ -169,6 +174,17 @@ export const wobble = component(
 ```
 
 A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu and a switch a switch, the views are pictures whose corners move their knobs, and the groups are titles over their rows (see [The window](window.md)).
+
+**Labels.** A card names each value by its name in the code, as words: `cutoff` is Cutoff. Where a name doesn't read as words (`subOctave`, `tableA`), give it a label, a control's or a setting's alike:
+
+| Declared | The card, its undo step and `m2 graph` say |
+|---|---|
+| `subOctave: setting.int(-1).label("sub octave")` | Sub octave; "Polysynth sub octave" |
+| `tableA: setting.asset("saw.wav").label("table A")` | Table A; "Wavetable table A" |
+| `width: control.frac(0.5).label("pulse width")` | Pulse width |
+| `voices: setting.int(8)` (no label) | Voices |
+
+A song still writes the name: `subOctave: -2`. A label is one line of 1 to 24 characters, with no space at either end. A setting's label needs `@m2/core` 2.1.
 
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 

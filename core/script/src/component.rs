@@ -116,6 +116,10 @@ pub struct SettingDesc {
     /// Left out, it is `undefined`: no call needs it, though it has no default (`.optional()`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// What a card names it by, as a control's label (CARD-34). Written only when given, so every
+    /// other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

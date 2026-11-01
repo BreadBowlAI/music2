@@ -1,7 +1,8 @@
 //! The kinds a descriptor declares (`@m2/core` 1.8.0, CARD-10 to CARD-17): a choice and a switch
-//! among its controls, lanes of names, views and groups. TypeScript refuses each mistake as the
-//! code is typed (`sdk/check/kinds.ts`); the build refuses it again, in words, since types can be
-//! bypassed: each refusal here is written past the types, with `as any`.
+//! among its controls, lanes of names, views and groups; and a setting's label (2.1.0, CARD-34).
+//! TypeScript refuses each mistake as the code is typed (`sdk/check/kinds.ts`); the build refuses it
+//! again, in words, since types can be bypassed: each refusal here is written past the types, with
+//! `as any`.
 
 use std::time::Duration;
 
@@ -256,7 +257,7 @@ fn a_lane_of_names_is_refused_in_words() {
 /// The descriptor `d` declares, built in a song that calls it: `component(d, …)` with `controls`.
 fn declared(controls: &str, settings: &str, editor: &str) -> Result<Build, Vec<Diagnostic>> {
     let lib = format!(
-        "import {{ component, control, kernel, port, setting, view }} from \"@m2/core\";\n\
+        "import {{ component, control, each, kernel, port, setting, view }} from \"@m2/core\";\n\
          export const c = component({{ id: \"c\", controls: {{ {controls} }}, settings: {{ {settings} }}, editor: {editor} as any }}, (p: any) => kernel(\"test:c\", {{}}));\n"
     );
     build_of(&[
@@ -449,4 +450,69 @@ fn a_lane_of_names_declared_twice_agrees_on_its_fallback() {
         d.message
     );
     assert!(!d.message.contains("control<choice>"), "{}", d.message);
+}
+
+// CARD-34: a setting has a label, as a control has, by the one `.label()` they share: carried in
+// the descriptor only when written, so every other setting keeps its bytes, and kept whichever
+// comes first, `.label()` or `.optional()`. (A dictionary entry's: `a_label_names_a_value_on_its_card`.)
+#[test]
+fn a_settings_label_is_carried_only_when_written() {
+    let b = declared(
+        "level: control.db(0).label(\"loudness\")",
+        "tableA: setting.choice([\"saw\", \"sine\"], \"saw\").label(\"table A\"), voices: setting.int(8), \
+         file: setting.asset().optional().label(\"file\"), seed: setting.number(1).label(\"seed B\").optional()",
+        "{}",
+    )
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let d = b.components.iter().find(|d| d.id == "c").unwrap();
+    let labels: Vec<(&str, Option<&str>, bool)> = d.settings.iter().map(|s| (s.name.as_str(), s.label.as_deref(), s.optional)).collect();
+    assert_eq!(
+        labels,
+        [("tableA", Some("table A"), false), ("voices", None, false), ("file", Some("file"), true), ("seed", Some("seed B"), true)]
+    );
+    assert_eq!(d.control("level").and_then(|c| c.label.as_deref()), Some("loudness"), "a control's, by the same .label()");
+    let json = serde_json::to_string(&d.settings[1]).unwrap();
+    assert!(!json.contains("label"), "a setting with no label keeps its bytes: {json}");
+}
+
+// CARD-34: a setting's label is one line of 1 to 24 characters, with no space at either end; the
+// build refuses any other in words, even past the types (`as any`).
+#[test]
+fn a_settings_label_is_one_short_line() {
+    for (label, says) in [
+        ("3 as any", "the setting \"n\": its label must be one line of 1 to 24 characters, with no space at either end, not 3"),
+        ("\"\"", "the setting \"n\": its label must be one line of 1 to 24 characters, with no space at either end, not \"\""),
+        ("\"two\\nlines\"", "its label must be one line of 1 to 24 characters, with no space at either end, not \"two\\nlines\""),
+        ("\"a label that is far too long\"", "its label must be one line of 1 to 24 characters"),
+        ("\" table A\"", "its label must be one line of 1 to 24 characters, with no space at either end, not \" table A\""),
+    ] {
+        declaration_refused("", &format!("n: setting.int(1).label({label})"), "{}", says);
+    }
+    declaration_refused(
+        "parts: each({ in: port.audio(), mode: setting.bool(false).label(\"\") })",
+        "",
+        "{}",
+        "the entry setting of \"parts\" \"mode\": its label must be one line of 1 to 24 characters",
+    );
+    // 24 characters, any of them, is a label.
+    declared("", "n: setting.int(1).label(\"twenty-four characters!!\")", "{}").unwrap_or_else(|e| panic!("{e:?}"));
+}
+
+// CARD-34 (review L7): the SDK itself writes a setting's `label` only when it is given. Its JSON for a
+// setting with none has no `label` key at all, not a null that serde would read back as none.
+#[test]
+fn the_sdk_writes_a_settings_label_only_when_given() {
+    let lib = "import { component, kernel, setting } from \"@m2/core\";\n\
+               export const c = component({ id: \"c\", settings: { tableA: setting.int(1).label(\"table A\"), voices: setting.int(8) } }, (p: any) => kernel(\"test:c\", {}));\n";
+    let song = "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(() => c());\n";
+    let code: BTreeMap<String, String> =
+        [("lib/c.ts", lib), ("song.ts", song)].iter().map(|(p, t)| (p.to_string(), t.to_string())).collect();
+    let mut o = Options::new(code, "song.ts");
+    o.time_limit = Duration::from_secs(2);
+    let [_, _, components, _] = on_own_thread(|| run_sdk(&o).map(|run| run.json)).unwrap_or_else(|e| panic!("{e:?}"));
+    let all: serde_json::Value = serde_json::from_str(&components).unwrap();
+    let c = all.as_array().unwrap().iter().find(|d| d["id"] == "c").expect("c's descriptor");
+    let settings = c["settings"].as_array().unwrap();
+    assert_eq!(settings[0]["label"], "table A", "{c}");
+    assert!(!settings[1].as_object().unwrap().contains_key("label"), "a setting with no label has no label key: {}", settings[1]);
 }

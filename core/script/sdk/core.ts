@@ -872,6 +872,27 @@ const specOf = <T>(d: object): T => specs.get(d) as T;
 
 declare const PHANTOM: unique symbol;
 
+/**
+ * What a control and a setting share: a label, the words a card, an undo step and `m2 graph` name
+ * it by, where its name alone wouldn't read as words (`subOctave`). One line of 1 to 24
+ * characters; its name is the default (CARD-34).
+ */
+abstract class Labelled {
+  /** Display text for its knob or its row; its name is the default. */
+  label(text: string): this {
+    const copy: this = Object.create(Object.getPrototypeOf(this));
+    specs.set(copy, { ...specOf<object>(this), label: text });
+    return copy;
+  }
+}
+
+/** What is wrong with `label` as a value's (CARD-34), if anything. */
+function labelProblem(label: unknown): string | undefined {
+  const chars = typeof label === "string" ? [...label].length : 0;
+  if (typeof label === "string" && chars >= 1 && chars <= 24 && label.trim() === label && !/[\u0000-\u001f\u007f-\u009f]/.test(label)) return undefined;
+  return `its label must be one line of 1 to 24 characters, with no space at either end, not ${shown(label)}`;
+}
+
 /** What a control declaration holds. Its numbers are in its spelling (`control.ms(45)`: 45). */
 type ControlSpec = {
   /** A number in `unit`, a choice of `options`, or a switch (CARD-10, CARD-11). */
@@ -902,10 +923,11 @@ type ControlSpec = {
  * `K` what it is, for types only: a number's unit, a `ChoiceKind` or the `SwitchKind`, with
  * `undefined` when it is optional.
  */
-export class ControlDecl<R extends boolean = boolean, K = unknown> {
+export class ControlDecl<R extends boolean = boolean, K = unknown> extends Labelled {
   declare readonly [PHANTOM]?: [R, K];
   /** @internal */
   constructor(spec: ControlSpec) {
+    super();
     specs.set(this, spec);
   }
   private with<Q extends boolean = R, J = K>(more: Partial<ControlSpec>): ControlDecl<Q, J> {
@@ -935,10 +957,6 @@ export class ControlDecl<R extends boolean = boolean, K = unknown> {
   /** Left out, it makes no node at all: its presence changes the graph (PKG-5). */
   optional(): ControlDecl<false, K | undefined> {
     return this.with<false, K | undefined>({ optional: true });
-  }
-  /** Display text for its knob; the name is the default. */
-  label(text: string): ControlDecl<R, K> {
-    return this.with({ label: text });
   }
 }
 
@@ -1055,13 +1073,19 @@ type SettingSpec = {
   default?: number | boolean | string | Readonly<Record<number, string>> | readonly Region[];
   /** Left out, it is `undefined`: no call needs it, and it has no default. */
   optional?: boolean;
+  /** What a card names it by (CARD-34); its name when left out. */
+  label?: string;
 };
 
-/** A build-time value: changing one rebuilds the graph. Never a knob or a cell. `R` is whether a call must give it. */
-export class SettingDecl<T = unknown, R extends boolean = boolean> {
+/**
+ * A build-time value: changing one rebuilds the graph. Never a knob or a cell. `R` is whether a
+ * call must give it. `.label("sub octave")` names its row, as a control's names its knob (CARD-34).
+ */
+export class SettingDecl<T = unknown, R extends boolean = boolean> extends Labelled {
   declare readonly [PHANTOM]?: [T, R];
   /** @internal */
   constructor(spec: SettingSpec) {
+    super();
     specs.set(this, spec);
   }
   /** Left out, it is `undefined`, with no default: `setting.asset().optional()`, a sampler with no file yet. */
@@ -1076,7 +1100,7 @@ export class SettingDecl<T = unknown, R extends boolean = boolean> {
  * to such files (`{ 36: "kick.wav", 38: "snare.wav" }`; empty unless given): what a kernel reads.
  * `setting.regions()` is a list of regions, a recording each with the notes, velocities and turn it
  * plays on ([`Region`], PKG-15; empty unless given). `setting.key()` is a string that follows the key rule (ID-1), such as the channel a mixer channel
- * goes to (`to: "drums"`).
+ * goes to (`to: "drums"`). Any of them takes a label, as a control does: `setting.int(-1).label("sub octave")` (CARD-34).
  */
 export const setting = {
   asset: ((d?: string) => new SettingDecl({ kind: "asset", default: d })) as { (): SettingDecl<string, true>; (d: string): SettingDecl<string, false> },
@@ -1645,6 +1669,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const s = specOf<SettingSpec>(d as object);
     const wrong = s.default === undefined ? undefined : settingProblem(s, s.default);
     if (wrong) fail(`${what} "${name}": its default ${wrong.replace(/^: /, "")}`);
+    const badLabel = s.label === undefined ? undefined : labelProblem(s.label);
+    if (badLabel) fail(`${what} "${name}": ${badLabel}`);
     if (s.kind === "choice" && (!s.options?.length || s.options.some((o) => typeof o !== "string"))) fail(`${what} "${name}": a choice needs a list of strings`);
     return { name, spec: s };
   };
@@ -1808,8 +1834,15 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
 
   const cid = home.package === null ? desc.id : `${home.package}:${desc.id}`;
   const portJson = (s: PortSpec) => ({ kind: s.kind, unit: s.unit ?? null, sidechain: s.sidechain, many: s.many });
-  // `optional` written only when true, so every other descriptor keeps its bytes.
-  const setJson = (s: Set_) => ({ name: s.name, kind: s.spec.kind, default: s.spec.default ?? null, options: s.spec.options ?? null, ...(s.spec.optional ? { optional: true } : {}) });
+  // `optional` written only when true, and `label` only when given, so every other descriptor keeps its bytes.
+  const setJson = (s: Set_) => ({
+    name: s.name,
+    kind: s.spec.kind,
+    default: s.spec.default ?? null,
+    options: s.spec.options ?? null,
+    ...(s.spec.optional ? { optional: true } : {}),
+    ...(s.spec.label !== undefined ? { label: s.spec.label } : {}),
+  });
   const ctlJson = (c: Ctl): unknown => ({
     name: c.name,
     unit: unitOfSpec(c.spec) ?? null,

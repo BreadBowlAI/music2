@@ -137,7 +137,7 @@ A choice and a switch aren't numbers. A choice is written by one of its names (`
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |
 | `plugin("clap:<id>", inputs)` | a CLAP plugin; `key` in its inputs names its saved settings (see [CLAP plugins](plugins.md)) |
-| `component({ id, inputs, controls, settings, output, positional, editor }, body)` | declares a component: the signals it reads, its controls (knobs, each with a unit, a default and a range; or a choice, `control.choice(["saw", "square"], "saw")`, or a switch, `control.bool(false)`), its settings, and how the editor offers it, with its views and groups ([Making a pack](making-a-pack.md#choices-switches-views-and-groups)). Every std function is one (see `std/src`); the older `component({ controls }, fn)`, which only marks which arguments are knobs, still works |
+| `component({ id, inputs, controls, settings, output, positional, editor }, body)` | declares a component: the signals it reads, its controls (knobs, each with a unit, a default and a range; or a choice, `control.choice(["saw", "square"], "saw")`, or a switch, `control.bool(false)`), its settings, and how the editor offers it, with its views and groups, and a label for any value whose name doesn't read as words, `setting.int(-1).label("sub octave")` ([Making a pack](making-a-pack.md#choices-switches-views-and-groups)). Every std function is one (see `std/src`); the older `component({ controls }, fn)`, which only marks which arguments are knobs, still works |
 
 ## Your own components
 
