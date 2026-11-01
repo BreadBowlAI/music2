@@ -5,6 +5,7 @@
 - Code you typed and didn't save is kept too: after a crash, the code editor offers it back.
 - Changes made by agents and other programs show as they land, each one undo step. V plays before and after.
 - You win every clash: an agent waits while you hold what it would change.
+- To keep versions of a song (how it was yesterday, or before a big change), use git: see the end of this page.
 
 - There's no Save for the song: every change is written to the files at once. ⌘S only saves the code editor's text.
 - A note edit is heard at once, while it's being written to disk. If the disk refuses it (it's full, say, or another program replaced the file at that moment), the edit is taken back and a message says why; if the disk is slow to answer, a message says the edit isn't saved yet, and another says when it is. The same goes for an edit an agent sends while the song plays: the app says when it was taken back.
@@ -21,3 +22,25 @@
 - One program writes a song at a time. While the app has a song open, `m2` commands that write it hand their edit to the app, which makes it one undo step, the agent's; ones that only read it, render it or bounce a track work as they always did. A song that's open for writing elsewhere (another music2 window, say) opens read-only: the status pill says **Read only**, and its popover says where it is open, with **Retry** to take it over once it's free. You can play it and see its changes; nothing offers to edit it meanwhile.
 - The lock and the edits being written live in the song's `.music2/` folder, which git ignores. If the app or the Mac stops in the middle of writing an edit, the status pill says so when the song opens next, with **Finish it** and **Discard it**: either leaves every file as it was before the edit or after it, never half.
 - Problems that don't stop the song, such as data no lane reads after a key was renamed in code, a data file that doesn't read, or a missing sample or plugin, are counted by the status pill in the top bar ("2 problems"); click it for each one, with its fixes (and its code, under Details). So is a part that breaks while the song plays: a sound, a plugin, an audio file that can't be read, a stretch that failed, or the sound input. That part goes silent alone, the rest plays on, a message says so once, and it stays listed, with its track, until it plays again (Transport → Stop All Sound starts a stopped sound again). A sound from a pack whose code takes too long is stopped the same way: one step of it ran more than a tenth of a second, because its code never finishes, or the computer was far too busy. The message names it, its track and whose code it runs: "Growl on Bass, from @alice/growl, took too long and was stopped." It stays silent until the song is built again (open it again, or add or take out a sound: moving a knob isn't enough), and Stop All Sound leaves it so. An export or a preview with it stops after 5 seconds and says the same. std's own sounds have no such limit. A fix runs only when you click it, and Undo takes it back. When a track's key was renamed in code, **Move all to …** moves its whole data folder to the new key at once.
+
+## Keep versions of your song with git
+
+**In short:** undo goes back 500 changes. To keep a version for longer, save it with git. git is a free program that keeps every version of a folder you ask it to.
+
+A song is a folder of text files, so git keeps it well. Every new song already has a `.gitignore` file, which tells git to leave out music2's own working files (`.music2/`).
+
+| You want to | Type this in Terminal, in the song's folder |
+|---|---|
+| Start keeping versions (once per song) | `git init` |
+| Save this version, with a note | `git add -A` then `git commit -m "chorus done"` |
+| See the versions you saved | `git log --oneline` |
+| See what changed since the last save | `git diff` |
+| Go back to the last saved version | `git restore .` |
+| Try an idea without losing what you have | `git switch -c idea` (and `git switch -` to go back) |
+
+- You can do all of this while the song is open: music2 shows what git writes as it lands.
+- What git writes is not an undo step in music2, because git can take it back itself.
+- Audio files you recorded or brought in are kept too. Big ones make the folder big; that's fine on your own computer.
+- Apps such as GitHub Desktop do the same with buttons, if you'd rather not type.
+- An agent can do it for you: ask it to "save a version with git".
+

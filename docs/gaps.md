@@ -280,7 +280,6 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 30 | **Crash safety**: simple project snapshots or backups. Unsaved code-editor text survives a crash since `trust` ([WRITE-27](architecture.md#unsaved-code)). | Edits are on disk at once, a cut-off edit and unsaved code are offered back, but there is no way back to how the song was an hour or a day ago, apart from undo and git. | No | medium |
 | 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids, the audition toggle and the metronome are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
 | 12 | **A picture of each song in the recent list** (taste.md SS-2). | A small picture of each arrangement helps find the right song. | Yes (the Song Library) | small |
 | 28 | **Open a song by dropping its folder** on the window or the Dock. | Finding a song in the Finder is how many people open it. | Yes | small |
