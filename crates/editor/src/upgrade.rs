@@ -63,6 +63,11 @@ pub struct Upgraded {
     /// What to check by hand, written all the same: a sound it converts as well as it can, and the
     /// musician's presets (`Presets/…`) that name a sound that moved, which stay as they are.
     pub notes: Vec<Left>,
+    /// What to do when you choose, which the upgrade doesn't: each track that plays the drum
+    /// machine, with Make it a kit and its command where it can make a kit of it, else what to do by
+    /// hand first (KIT-24).
+    #[serde(default)]
+    pub choose: Vec<Left>,
     /// The revision it made, as one undo step; None with `--check`, with nothing to change, with
     /// something left, or when the song wouldn't build after it.
     pub written: Option<u64>,
@@ -128,6 +133,7 @@ pub fn upgrade(s: &mut Session, check: bool, presets: Option<&Path>) -> Result<U
     };
     // All or nothing: while anything is left, nothing is written.
     if plan.files.is_empty() || !out.left.is_empty() {
+        out.choose = chosen(s, plan.choose);
         return Ok(out);
     }
     let files: Vec<(PathBuf, Base, String)> = plan
@@ -143,7 +149,24 @@ pub fn upgrade(s: &mut Session, check: bool, presets: Option<&Path>) -> Result<U
         }
         Err(r) => return Err(crate::refused(s, r)),
     }
+    out.choose = chosen(s, plan.choose);
     Ok(out)
+}
+
+/// The drum machine tracks named, each with what to do: Make it a kit where it can make a kit of
+/// it, else its refusal, what to do by hand first (KIT-24); as they are while the song doesn't build
+/// here (an old song, with `--check`).
+fn chosen(s: &Session, choose: Vec<(Left, Option<String>)>) -> Vec<Left> {
+    let builds = s.draft_errors.is_empty() && s.accepted().has_code();
+    choose
+        .into_iter()
+        .map(|(mut l, track)| {
+            if builds && let Some(why) = track.and_then(|t| crate::machine::refusal(s.accepted(), &t)) {
+                l.write = why;
+            }
+            l
+        })
+        .collect()
 }
 
 /// The files the upgrade would change, by their paths: what the app checks against what the
@@ -164,6 +187,8 @@ struct Plan {
     files: Vec<Planned>,
     left: Vec<Left>,
     notes: Vec<Left>,
+    /// Each drum machine track named, by its key when it is a track's.
+    choose: Vec<(Left, Option<String>)>,
 }
 
 /// The modules whose names still mean what they meant before wave 3 renamed them: std's that
@@ -200,12 +225,13 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     let app = m2_session::app(&s.packages);
     newer(&manifest, &app)?;
     let old = old_modules(&manifest, &app);
-    let (mut left, mut notes, mut code_files, mut packs) = (vec![], vec![], vec![], BTreeSet::new());
+    let (mut left, mut notes, mut choose, mut code_files, mut packs) = (vec![], vec![], vec![], vec![], BTreeSet::new());
     let mut lanes: BTreeMap<String, (Knob, Left)> = BTreeMap::new();
     for mut f in code(files, &old) {
         left.extend(f.unparsed.take());
         left.append(&mut f.left);
         notes.append(&mut f.notes);
+        choose.append(&mut f.choose);
         packs.extend(f.packs.iter().cloned());
         for (lane, knob, at) in f.lanes.drain(..) {
             match lanes.get(&lane) {
@@ -271,7 +297,7 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
     if let Some(dir) = presets {
         notes.extend(preset_notes(dir, s.catalog()));
     }
-    Ok(Plan { files: out, left, notes })
+    Ok(Plan { files: out, left, notes, choose })
 }
 
 /// Refused, saying so, for a song made for a newer music2 than this: it can't be moved back.
@@ -602,6 +628,8 @@ struct Code<'t> {
     /// typo in it wasn't made for an older one (`needed`).
     unparsed: Option<Left>,
     notes: Vec<Left>,
+    /// Each drum machine it plays, named, by the track's key when it is a track's (KIT-24).
+    choose: Vec<(Left, Option<String>)>,
     /// The packs its rewritten code plays.
     packs: BTreeSet<PackName>,
     /// Each lane file a converted knob reads, how, and where it is read.
@@ -651,6 +679,7 @@ impl<'t> Code<'t> {
             left: vec![],
             unparsed,
             notes: vec![],
+            choose: vec![],
             packs: BTreeSet::new(),
             lanes: vec![],
             drums,
@@ -1109,7 +1138,7 @@ impl<'t> Code<'t> {
             }
             None => "put it on a track of its own, then Make it a kit in that track's menu".to_string(),
         };
-        self.notes.push(Left {
+        let left = Left {
             file: self.file.clone(),
             line: self.line_at(site.start),
             what: format!(
@@ -1118,7 +1147,8 @@ impl<'t> Code<'t> {
                 crate::machine::KEEPS
             ),
             write,
-        });
+        };
+        self.choose.push((left, track));
     }
 
     /// The name track `key`'s `track(…)` call in this file gives it, if it says one.

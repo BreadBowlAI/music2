@@ -137,11 +137,11 @@ fn the_single_drums_are_one_drum_with_their_knobs_converted() {
     assert!(f.read("music2.toml").ends_with("\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/synths\" = \"2\"\n"));
     assert!(s.draft_errors.is_empty() && s.accepted().has_code(), "it builds: {:?}", s.draft_errors);
     // The simple kick and hat were other sounds than One drum's: said, by file and line (G3). The
-    // drum machine is named too, never converted (KIT-24).
+    // drum machine is named apart, to do when you choose, never converted (KIT-24).
     let said: Vec<(&str, u32)> = up.notes.iter().map(|n| (n.file.as_str(), n.line)).collect();
-    assert_eq!(said, [("tracks/perc.ts", 13), ("tracks/simple.ts", 5), ("tracks/simple.ts", 5)], "{:?}", up.notes);
-    assert!(up.notes[0].what.contains("drum machine"), "{:?}", up.notes);
-    assert!(up.notes[1..].iter().all(|n| n.what.contains("another sound")), "{:?}", up.notes);
+    assert_eq!(said, [("tracks/simple.ts", 5), ("tracks/simple.ts", 5)], "{:?}", up.notes);
+    assert!(up.notes.iter().all(|n| n.what.contains("another sound")), "{:?}", up.notes);
+    assert_eq!(up.choose.iter().map(|n| (n.file.as_str(), n.line)).collect::<Vec<_>>(), [("tracks/perc.ts", 13)]);
 }
 
 // FMT-25: a drum knob a lane drives keeps its lane: the lane's unit and every point are converted
@@ -691,33 +691,48 @@ fn a_song_broken_otherwise_needs_no_upgrade() {
     assert!(!needed(&s), "a typo isn't an older music2");
 }
 
-// FMT-25, KIT-24: a track that plays the drum machine is named, with Make it a kit and its command,
-// and nothing is written for it: in an old song the rest is upgraded all the same, and a song made
-// for this music2 is made for it already, the track named.
+// FMT-25, KIT-24 (the review's U5, U9): a track that plays the drum machine is named under what to do
+// when you choose, apart from what to check by hand, with Make it a kit and its command where it
+// can make a kit of it, else with what to do by hand first; and nothing is written for it. In an
+// old song the rest is upgraded all the same, and a song made for this music2 names them the same.
 #[test]
 fn a_drum_machine_track_is_named_and_never_made_a_kit() {
     let f = Fixture::new();
     f.write("music2.toml", manifest("\"@m2/core\" = \"1\"\nstd = \"0.8\"\n\"@m2/drums\" = \"1\"\n"));
-    f.write("song.ts", song_of(&["beat", "perc"]));
+    f.write("song.ts", song_of(&["beat", "mixed"]));
     let beat = "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\n\
                 export default track(\"beat\", { name: \"Beat\" }, ({ lane }) => drums.kit(lane.notes(\"hits\"), { hatLevel: 2 }));\n";
     f.write("tracks/beat.ts", beat);
-    f.write("tracks/perc.ts", "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"perc\", ({ lane }) => drums.snare(lane.notes(\"n\")));\n");
+    f.write("data/beat/hits.json", notes_of(&["C2", "F#2"]));
+    f.write(
+        "tracks/mixed.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { sum } from \"std/math\";\n\n\
+         export default track(\"mixed\", { name: \"Mixed\" }, ({ lane }) => sum(drums.kit(lane.notes(\"hits\")), drums.snare(lane.notes(\"n\"))));\n",
+    );
     let (up, _) = upgraded(&f);
     assert_eq!(f.read("tracks/beat.ts"), beat, "the drum machine stays as it is");
-    assert!(f.read("tracks/perc.ts").contains("drums.drum(lane.notes(\"n\"), { drum: \"snare\", voices: 4 })"));
-    let named: Vec<&Left> = up.notes.iter().filter(|n| n.what.contains("drum machine")).collect();
-    assert_eq!(named.len(), 1, "{:?}", up.notes);
-    assert_eq!((named[0].file.as_str(), named[0].line), ("tracks/beat.ts", 4));
-    assert!(named[0].what.contains("Make it a kit") && named[0].what.contains(crate::machine::KEEPS), "{:?}", named[0]);
-    assert_eq!(named[0].write, "Make it a kit (the Beat track's menu), or run m2 make-kit <song> beat");
+    assert!(f.read("tracks/mixed.ts").contains("drums.drum(lane.notes(\"n\"), { drum: \"snare\", voices: 4 })"));
+    assert!(up.notes.iter().all(|n| !n.what.contains("drum machine")), "none to check by hand: {:?}", up.notes);
+    let said: Vec<(&str, u32, &str)> = up.choose.iter().map(|n| (n.file.as_str(), n.line, n.write.as_str())).collect();
+    assert_eq!(
+        said,
+        [
+            ("tracks/beat.ts", 4, "Make it a kit (the Beat track's menu), or run m2 make-kit <song> beat"),
+            (
+                "tracks/mixed.ts",
+                5,
+                "Mixed plays the drum machine and another instrument: put the drum machine on a track of its own first."
+            ),
+        ]
+    );
+    assert!(up.choose.iter().all(|n| n.what.contains("Make it a kit") && n.what.contains(crate::machine::KEEPS)), "{:?}", up.choose);
 
-    // Made for this music2: nothing to upgrade, the track named all the same, nothing written.
+    // Made for this music2: nothing to upgrade, the tracks named all the same, nothing written.
     let before = bytes(&f);
     let mut s = f.open();
     assert!(!needed(&s));
-    let up = upgrade(&mut s, false, None).unwrap();
-    assert!(up.current() && up.written.is_none(), "{:?} {:?}", up.changes, up.left);
-    assert_eq!(up.notes.iter().filter(|n| n.what.contains("drum machine")).count(), 1, "{:?}", up.notes);
+    let again = upgrade(&mut s, false, None).unwrap();
+    assert!(again.current() && again.written.is_none(), "{:?} {:?}", again.changes, again.left);
+    assert_eq!(again.choose, up.choose);
     assert_eq!(bytes(&f), before);
 }

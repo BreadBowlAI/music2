@@ -398,3 +398,38 @@ fn a_pair_that_no_longer_cuts_each_other_off_is_said() {
     );
     assert!(pairs(&[(36.0, 0.0, 0.9), (38.0, 1.0, 0.8), (57.0, 2.0, 0.6)]).is_empty(), "one of each pair: nothing to say");
 }
+
+// KIT-24 (the review's U5): only a track Make it a kit can make a kit of is offered it; another is
+// named with what to do by hand first, its refusal's words.
+#[test]
+fn only_a_track_it_can_make_a_kit_of_is_offered() {
+    let f = Fixture::new();
+    machine_song(&f, "", BEAT);
+    f.write(
+        "tracks/mixed.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { sum } from \"std/math\";\n\n\
+         export default track(\"mixed\", { name: \"Mixed\" }, ({ lane }) => sum(drums.kit(lane.notes(\"hits\")), drums.drum(lane.notes(\"kick\"))));\n",
+    );
+    f.write("tracks/empty.ts", "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"empty\", { name: \"Empty\" }, ({ lane }) => drums.kit(lane.notes(\"hits\")));\n");
+    f.write(
+        "song.ts",
+        f.read("song.ts")
+            .replace(
+                "import verb from \"./tracks/verb\";",
+                "import verb from \"./tracks/verb\";\nimport mixed from \"./tracks/mixed\";\nimport empty from \"./tracks/empty\";",
+            )
+            .replace("      verb: verb.out,", "      verb: verb.out,\n      mixed: mixed.out,\n      empty: empty.out,"),
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert_eq!(drum_machines(s.accepted()), ["beat"]);
+    assert_eq!(refusal(s.accepted(), "beat"), None);
+    assert_eq!(
+        refusal(s.accepted(), "mixed").as_deref(),
+        Some("Mixed plays the drum machine and another instrument: put the drum machine on a track of its own first.")
+    );
+    assert_eq!(
+        refusal(s.accepted(), "empty").as_deref(),
+        Some("Empty's drum machine plays no notes: delete it, or add a kit with + Track ▸ Drum kit.")
+    );
+}

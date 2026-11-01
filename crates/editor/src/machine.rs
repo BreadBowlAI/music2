@@ -141,16 +141,27 @@ pub fn make_kit(s: &mut Session, module: &str) -> Result<MadeKit, EditError> {
     Ok(MadeKit { bus: module.to_string(), tracks, said: plan.said })
 }
 
-/// The tracks that play the drum machine, by key, in the song's order: each one's menu and card
-/// offer Make it a kit (KIT-24).
+/// The tracks that play the drum machine and that Make it a kit can make a kit of, by key, in the
+/// song's order: each one's menu and card offer it (KIT-24).
 pub fn drum_machines(rev: &Revision) -> Vec<String> {
     rev.compiled
         .ir
         .modules
         .iter()
         .filter(|m| m.track && !m.bus && m.frames.iter().any(|f| f.component.as_deref() == Some(MACHINE)))
+        .filter(|m| plan(rev, &m.key).is_ok())
         .map(|m| m.key.clone())
         .collect()
+}
+
+/// Why Make it a kit can't make a kit of track `module` now, in its words: what to do by hand first
+/// (KIT-24); None when it can.
+pub fn refusal(rev: &Revision, module: &str) -> Option<String> {
+    match plan(rev, module) {
+        Ok(_) => None,
+        Err(EditError::Rejected(why)) => Some(why),
+        Err(e) => Some(e.to_string()),
+    }
 }
 
 /// Everything Make it a kit writes, and what it says.

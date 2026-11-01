@@ -1587,7 +1587,7 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: 
     let (presets, notes): (Vec<_>, Vec<_>) = up.notes.iter().partition(|n| n.file.starts_with("Presets/"));
     if up.current() {
         println!("{} is made for this music2 already: nothing to upgrade", dir.display());
-        list("to do when you choose (the upgrade doesn't):", &notes);
+        list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
         list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
         return Ok(());
     }
@@ -1599,6 +1599,7 @@ fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: 
     }
     list("left as it is, so nothing was written: change these by hand, then run m2 upgrade again:", &up.left.iter().collect::<Vec<_>>());
     list("check these by hand: the upgrade can't keep them as they were:", &notes);
+    list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
     list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
     if !up.refused.is_empty() {
         println!("the song wouldn't build after it:");

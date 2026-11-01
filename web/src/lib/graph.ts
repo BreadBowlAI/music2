@@ -899,6 +899,8 @@ export interface Upgraded {
   left: UpgradePlace[];
   /** What to check by hand though it was written, and the musician's presets of sounds that moved (`Presets/…`), never changed. */
   notes: UpgradePlace[];
+  /** What to do when you choose, which the upgrade doesn't: each drum machine track, with Make it a kit or what to do by hand first (KIT-24). */
+  choose?: UpgradePlace[];
   written: number | null;
   refused: string[];
 }
