@@ -604,7 +604,7 @@ fn music2s_own_sounds_show_their_groups_and_views() {
 fn music2s_own_values_read_as_words() {
     let f = Fixture::new();
     // Every bundled pack (PACK-15), the song needing each so the catalog holds them all.
-    f.write("music2.toml", &format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
     f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nexport default song(() => mixer({}));\n");
     let s = f.open();
     let catalog = s.catalog();
