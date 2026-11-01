@@ -149,8 +149,11 @@ fn played(s: &Session, track: &str) -> Vec<(f64, f64, f64, f64)> {
     n.iter().map(|n| (n.start, n.end - n.start, n.pitch, n.velocity)).collect()
 }
 
-/// Track `track`'s clips as they are written: each `(start, length, notes)`, the notes in the clip.
-fn written(s: &Session, track: &str) -> Vec<(f64, f64, Vec<(f64, f64, f64)>)> {
+/// A clip as written: its start, its length and each note's `(start, length, pitch)` in it.
+type Written = (f64, f64, Vec<(f64, f64, f64)>);
+
+/// Track `track`'s clips as they are written.
+fn written(s: &Session, track: &str) -> Vec<Written> {
     match s.accepted().compiled.data.lane(track, "hits").map(|d| (**d).clone()) {
         Some(m2_song::LaneData::Notes(c)) => {
             c.iter().map(|c| (c.start, c.length, c.notes.iter().map(|n| (n.start, n.length, n.pitch)).collect())).collect()

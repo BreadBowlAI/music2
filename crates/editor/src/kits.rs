@@ -74,7 +74,7 @@ pub fn add_drum(s: &mut Session, bus: &str, sound: &str) -> Result<Made, EditErr
         .components
         .get(DRUM)
         .and_then(|d| d.control("drum"))
-        .map(|c| kind::of_unit(c.unit.clone()).1.into_iter().map(|o| o.label).collect())
+        .map(|c| kind::of_unit(c.unit).1.into_iter().map(|o| o.label).collect())
         .unwrap_or_default();
     if !sounds.iter().any(|x| x == sound) {
         return Err(EditError::Rejected(format!("A Drum plays {}, not {sound:?}.", kind::one_of(&sounds))));

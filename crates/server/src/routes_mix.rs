@@ -162,7 +162,7 @@ struct DrumReq {
     sound: String,
 }
 
-/// + Drum in the beat grid (KIT-15): `{session, bus, sound}`, one Tx and one undo step. A write.
+/// The beat grid's + Drum (KIT-15): `{session, bus, sound}`, one Tx and one undo step. A write.
 /// Answers the edit and the new track's `{module, label}`.
 async fn kit_drum(State(s): S, Json(r): Json<DrumReq>) -> ApiResult {
     let state = s.clone();
