@@ -1,6 +1,6 @@
 //! Presets (FMT-22, gaps #26): a sound's settings under a name, one JSON file each. Yours are in
-//! the Presets folder (`m2_os::dirs::presets()`), one folder per sound; std's ship in
-//! `std/presets/<component>/`. A preset's identity is its `sound` and its `name`, never its folder
+//! the Presets folder (`m2_os::dirs::presets()`), one folder per sound; a package's own ship in
+//! its `presets/<component>/`, as music2's own sounds' do in `@m2/synths` and `@m2/effects`. A preset's identity is its `sound` and its `name`, never its folder
 //! (P1): a file whose `sound` isn't the call's is left out of its list.
 //!
 //! Saving writes a file outside the song: no Tx. Loading is one `Values` Tx, as a knob's edit is
@@ -25,13 +25,13 @@ use m2_script::component::ControlDesc;
 use m2_script::sites::{Arg, Site};
 use m2_session::Session;
 use m2_session::text::Edits;
-use m2_song::tx::{Anchor, Confined, Declared, Expect, Range, Spot};
+use m2_song::tx::{Confined, Declared, Expect, Range};
 use m2_song::{Key, Sidecar};
 use serde_json::Value;
 
 use crate::controls::{self, Control, Edit, options_of, walk};
 use crate::effect::calls_of;
-use crate::lens::{self, Insertion};
+use crate::lens;
 use crate::plan::{self, path};
 use crate::{EditError, Edited, ready};
 
@@ -42,7 +42,7 @@ pub const FORMAT: u64 = 1;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Preset {
     pub name: String,
-    /// What it is for: a ComponentId (`std:synth-pluck`) or a plugin's id (`clap:…`).
+    /// What it is for: a ComponentId (`@m2/synths:synth-pluck`) or a plugin's id (`clap:…`).
     pub sound: String,
     /// Numbers by name: a std control's slot, in base units; a plugin parameter by its CLAP id.
     pub values: BTreeMap<String, f64>,
@@ -133,8 +133,9 @@ fn folder_name(part: &str) -> String {
     }
 }
 
-/// Where your presets for `sound` go inside the Presets folder: `std/synth-pluck` for
-/// `std:synth-pluck`, `clap/org.surge-synth-team.surge-xt` for a plugin. A project's own
+/// Where your presets for `sound` go inside the Presets folder: `_m2_synths/synth-pluck` for
+/// `@m2/synths:synth-pluck`, `std/sampler` for `std:sampler`, `clap/org.surge-synth-team.surge-xt`
+/// for a plugin. A project's own
 /// component, which has no package, goes in `project`.
 pub fn folder(sound: &str) -> PathBuf {
     let (package, name) = m2_song::pack::split_id(sound).unwrap_or(("project", sound));
@@ -142,7 +143,7 @@ pub fn folder(sound: &str) -> PathBuf {
 }
 
 /// Where a package's own presets for `sound` are, in that package's folder `dir`:
-/// `presets/synth-pluck` for `std:synth-pluck` in std's, `presets/felt-piano` for
+/// `presets/synth-pluck` for `@m2/synths:synth-pluck` in that pack's, `presets/felt-piano` for
 /// `@alice/felt-piano:felt-piano` in that pack's (PACK-11). None for a project's own component or
 /// a plugin, which no package makes.
 pub fn factory(dir: &Path, sound: &str) -> Option<PathBuf> {
@@ -260,7 +261,10 @@ fn call_at(s: &Session, at: u64, node: &str) -> Result<Site, EditError> {
         let to = Edits::between(was, is).carry(old.start as usize..old.end as usize)?.start as u32;
         accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start)).cloned()
     };
-    carried().ok_or(EditError::Stale { current: accepted.number })
+    let file = node.rsplit_once('#').map_or("", |(file, _)| file);
+    // Changed since only by the window that asks, moving no ids: the same call now (AGENT-2).
+    let own = || s.only_own_since(at, file).then(|| find(&accepted.compiled.sites)).flatten();
+    carried().or_else(own).ok_or_else(|| EditError::stale(s, at, file))
 }
 
 /// The sound call `node` (named at revision `at`) is: a component's instance.
@@ -306,20 +310,21 @@ enum Slotted {
     Absent,
 }
 
-/// What a control is called in words: its label, else its name.
+/// What a control is called in words: its label, else its name (CARD-34's one rule).
 fn label(d: &ControlDesc) -> String {
-    d.label.clone().unwrap_or_else(|| d.name.clone())
+    crate::kind::named(d.label.as_deref(), &d.name).label
 }
 
-/// Each declared control of `sound` that holds a number (a dictionary's are left out), with how it
-/// is written in the call.
+/// Each declared control of `sound` that holds a number (a dictionary's, a choice and a switch are
+/// left out: a preset holds numbers, and a place isn't one, CARD-10), with how it is written in the
+/// call.
 fn slots(s: &Session, sound: &Sound) -> Vec<(ControlDesc, Slotted)> {
     let all = controls::controls(s);
     let rev = s.accepted();
     let text = rev.snapshot.files.get(Path::new(&sound.site.file)).map_or("", |t| &t[..]);
     let desc = &sound.desc;
     let mut out = vec![];
-    for d in desc.controls.iter().filter(|d| d.each.is_none()) {
+    for d in desc.controls.iter().filter(|d| d.each.is_none() && d.unit.is_none_or(m2_ir::Unit::is_number)) {
         let found =
             all.iter().find(|c| c.calls.contains(&sound.site.id) && c.declared.iter().any(|x| x.component == desc.id && x.slot == d.name));
         let slotted = match found {
@@ -403,10 +408,8 @@ pub fn load(s: &mut Session, at: u64, node: &str, preset: &Preset) -> Result<Loa
     }
     let site = sound.site.clone();
     let mut kept = vec![];
-    let mut anchors = vec![];
-    // Per file: its literals' rewrites; and the insertions, all in the call's file.
-    let mut rewrites: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
-    let mut inserts: Vec<(Insertion, String)> = vec![];
+    // Each value it writes, as a knob's set writes it: one `Values` Tx over them all.
+    let mut parts = vec![];
     for (d, slotted) in slots(s, &sound) {
         let Some(&value) = preset.values.get(&d.name) else { continue };
         let c = match slotted {
@@ -421,48 +424,24 @@ pub fn load(s: &mut Session, at: u64, node: &str, preset: &Preset) -> Result<Loa
             }
             Slotted::Absent => continue,
         };
-        match &c.edit {
-            Edit::Literal { lens, .. } => {
-                let edit = lens.propose(value)?;
-                if edit.value == c.value || edit.text == c.literal {
-                    continue;
-                }
-                let file = path(&c.file)?;
-                anchors.push((Anchor::Written { file, range: Range::bytes(lens.start, lens.end) }, edit.value));
-                rewrites.entry(c.file.clone()).or_default().push((lens.start, lens.end, edit.text));
-            }
-            Edit::Insert(insertion) => {
-                let edit = lens::propose(value, 1.0)?;
-                if edit.value == c.value {
-                    continue;
-                }
-                let spot = Spot { file: path(&site.file)?, range: Range::bytes(site.start, site.end) };
-                anchors.push((Anchor::Slot { site: spot, slot: d.name.clone() }, edit.value));
-                inserts.push((insertion.clone(), insertion.number(&edit.text)));
-            }
-        }
+        let text = match &c.edit {
+            Edit::Literal { lens, .. } => lens.propose(value)?,
+            Edit::Insert(_) => lens::propose(value, 1.0)?,
+        };
+        let written = match &c.edit {
+            Edit::Insert(insertion) => insertion.number(&text.text),
+            Edit::Literal { .. } => text.text,
+        };
+        parts.extend(crate::value::part(s, &c, text.value, written)?);
     }
     let said = format!("{} preset {}", sound.label, preset.name);
-    if anchors.is_empty() {
+    if parts.is_empty() {
         let edited = Edited { revision: s.accepted().number, file: site.file.clone(), before: said.clone(), after: said };
         return Ok(Loaded { edited, kept });
     }
-    let joined =
-        lens::together(&inserts).ok_or_else(|| EditError::Rejected("these settings can't be written into the call at once".into()))?;
-    rewrites.entry(site.file.clone()).or_default().extend(joined);
-    let mut ops = vec![];
-    for (file, mut edits) in rewrites {
-        edits.sort_by_key(|e| (e.0, e.1));
-        if edits.windows(2).any(|w| w[1].0 < w[0].1) {
-            return Err(EditError::Rejected("two settings are written in the same place".into()));
-        }
-        let old = &s.accepted().snapshot.files[Path::new(&file)];
-        ops.push(plan::text_edit(&path(&file)?, old, &edits));
-    }
     let label = (format!("{} settings", sound.label), said);
-    let tx = plan::planned(s, label.clone(), ops, Expect::Values(anchors));
     let refused = |why: &str| EditError::Rejected(format!("loading the preset would change more than {}'s settings ({why})", sound.label));
-    let done = plan::run_as(s, tx, refused, |_, _| Ok(()))?;
+    let done = crate::value::commit(s, parts, label.clone(), refused)?;
     Ok(Loaded { edited: Edited { revision: done.number, file: site.file, before: label.0, after: label.1 }, kept })
 }
 

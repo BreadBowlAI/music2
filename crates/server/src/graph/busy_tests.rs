@@ -55,7 +55,7 @@ pub(in crate::graph) fn notes_tx(f: &super::super::tests::Fixture, id: &str) -> 
 fn serving() -> (super::super::tests::Fixture, crate::Running, u64) {
     let fixture = first_song_files();
     let options = crate::ServeOptions { port: 0, web_dir: fixture.0.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
     (fixture, running, session)
 }
@@ -585,7 +585,7 @@ fn a_change_taken_back_leaves_no_notice() {
     let state = probe::state("fine", 1.0);
     std::fs::write(fixture.0.join("data/p/lead.state"), &state).unwrap();
     let (p, mut driver) = m2_play::Player::driven(48_000);
-    let graph = std::sync::Arc::new(Graph::with_player(p));
+    let graph = std::sync::Arc::new(Graph::with_player(p).stored());
     graph.open(&fixture.0).unwrap();
     graph.transport("play").unwrap();
     for _ in 0..4 {

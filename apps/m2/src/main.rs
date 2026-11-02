@@ -16,15 +16,17 @@ mod call;
 mod commands;
 mod docs;
 mod edits;
+mod get;
 mod listen;
 mod search;
 mod see;
 mod text;
+mod words;
 
 fn main() -> ExitCode {
-    // Answered before anything starts: the usage, the guide (AGENT-12), and a command m2 doesn't
-    // know, which is refused with 2.
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    // Answered before anything starts: the usage, the guide (AGENT-12), a command m2 doesn't
+    // know, which is refused with 2, and a word the command doesn't take (AGENT-13).
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None => return usage(),
         Some(word) if HELP.contains(&word) => return usage(),
@@ -32,16 +34,24 @@ fn main() -> ExitCode {
             println!("m2 {}", env!("CARGO_PKG_VERSION"));
             return ExitCode::SUCCESS;
         }
-        Some("docs") => return docs::docs(&args),
         // m2 run again as the plugin host for a song it plays (`m2_plugins::run_main` serves it).
         Some(word) if word == m2_plugins::HOST_FLAG => {}
-        // Put first, these aren't a command: app::take_who says where they go.
-        Some(word) if ["--as", "--why"].contains(&word) => {}
-        Some(word) if commands::find(word).is_none() => {
+        // --as or --why put first isn't a command m2 doesn't know: app::take_who says where they go.
+        Some(word) if commands::find(word).is_none() && !["--as", "--why"].contains(&word) => {
             eprintln!("error: m2 has no command `{word}`: m2 alone lists them, and m2 docs commands says what each does");
             return ExitCode::from(2);
         }
-        _ => {}
+        // The guide needs nothing started (AGENT-12).
+        Some("docs") => {
+            return match command_words(args) {
+                Ok(words) => docs::docs(&words),
+                Err(code) => code,
+            };
+        }
+        Some(_) => match command_words(args) {
+            Ok(words) => args = words,
+            Err(code) => return code,
+        },
     }
     // Tests: `M2_PROBE` set, songs may play the probe plugin (`clap:m2.probe`), in the host process
     // as any plugin, so a test can make a plugin fail or its host crash while `m2 render` plays it.
@@ -54,9 +64,9 @@ fn main() -> ExitCode {
     m2_os::dirs::keep_cache();
     // HOST-2: the command runs on a worker while the main thread serves plugins as their main
     // thread, with its run loop; plugins it created are destroyed there before it exits.
-    m2_plugins::run_main(|| {
+    m2_plugins::run_main(move || {
         m2_server::resources::keep_hashes();
-        let ran = run();
+        let ran = run(args);
         // What the command hashed since the project was read (an installed pack's files, checked
         // as the song resolves them: PACK-6) is a stat for the next one (FMT-16).
         m2_song::HashCache::global().save();
@@ -81,6 +91,32 @@ fn main() -> ExitCode {
     })
 }
 
+/// The words after `m2`, for the command they name: `--as` and `--why` taken off the end (AGENT-10),
+/// then the rest read against the command's usage (AGENT-13). The words to run it with; or the
+/// exit status to end with: 0 when they ask for its usage (printed), 2 for a word it doesn't
+/// take, 1 for `--as` or `--why` out of place (each said).
+fn command_words(mut args: Vec<String>) -> Result<Vec<String>, ExitCode> {
+    if let Err(e) = app::take_who(&mut args) {
+        eprintln!("error: {e:#}");
+        return Err(ExitCode::FAILURE);
+    }
+    if args.first().and_then(|w| commands::find(w)).is_none() {
+        eprintln!("error: name a command first: m2 <command> … --as <name> --why \"<words>\"");
+        return Err(ExitCode::FAILURE);
+    }
+    match words::read(&args) {
+        words::Read::Run(words) => Ok(words),
+        words::Read::Help(c) => {
+            print!("{}", commands::entry(c));
+            Err(ExitCode::SUCCESS)
+        }
+        words::Read::Refused(why) => {
+            eprintln!("error: {why}");
+            Err(ExitCode::from(2))
+        }
+    }
+}
+
 /// The words that ask for the usage, as `m2` alone does. Not commands: the table hasn't got them.
 const HELP: &[&str] = &["help", "--help", "-h"];
 
@@ -98,8 +134,14 @@ fn usage_of(word: &str) -> String {
     commands::find(word).map_or_else(String::new, |c| c.usage.replace('\n', "\n  "))
 }
 
+/// The value of flag `name`, in words `words::read` handed on (AGENT-13).
 fn flag(args: &[String], name: &str) -> Option<String> {
-    args.iter().position(|a| a == name).and_then(|i| args.get(i + 1).cloned())
+    words::value(args, name)
+}
+
+/// Whether flag `name` was given, in words `words::read` handed on (AGENT-13).
+fn on(args: &[String], name: &str) -> bool {
+    words::on(args, name)
 }
 
 /// How many threads `m2 render` and `m2 bounce` use on the project in `dir` (8a): `--threads`, else
@@ -120,7 +162,7 @@ fn threads(args: &[String], dir: &Path, range: bool) -> Result<render::Threads> 
 /// the plugins at another rate would sound different, and the converter for exporting at
 /// another rate isn't built, so `--sr` is refused rather than honoured.
 fn render_rate(args: &[String], project: &Project) -> Result<u32> {
-    if args.iter().any(|a| a == "--sr") {
+    if on(args, "--sr") {
         bail!("--sr is gone: a song renders at its own sample_rate ({} Hz, in music2.toml)", project.sample_rate());
     }
     Ok(project.sample_rate())
@@ -146,11 +188,21 @@ fn number(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
+/// This computer's store of packs (PACK-6), under `$HOME` (PLAT-7), with the packs music2 ships
+/// installed in it (PACK-16): the first time `m2` opens it in a run, quietly unless one can't be.
+/// None without a home folder.
+fn packs_store() -> Option<m2_song::pack::Store> {
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    let dir = m2_os::dirs::packs()?;
+    INSTALLED.call_once(|| m2_server::resources::install_packs(&dir, true));
+    Some(m2_song::pack::Store::at(dir))
+}
+
 fn packages() -> Result<PackageSet> {
     let mut p = PackageSet::default();
-    // This computer's packs (PACK-6), under `$HOME` (PLAT-7).
-    if let Some(store) = m2_os::dirs::packs() {
-        p = p.with_store(store);
+    // This computer's packs (PACK-6), under `$HOME` (PLAT-7), music2's own among them.
+    if let Some(store) = packs_store() {
+        p = p.with_store(store.dir);
     }
     // Found the way the app finds it, so both load the same std.
     p.load(&m2_server::resources::std_dir()).context("loading the std package")?;
@@ -220,10 +272,15 @@ fn locked(dir: &Path, also: &str) -> Result<Session> {
         s.forward_to(Box::new(to));
         return Ok(s);
     }
-    let s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
+    let mut s = Session::open_as(dir, packages()?, "m2").map_err(report)?;
     if let Some(r) = s.access().refusal() {
         bail!("{}{also}", r.message);
     }
+    // With the app closed, its step goes in the song's one history, which the app reads back when
+    // it opens the song: an agent's, by the name it gives (WRITE-23, AGENT-10).
+    let who = app::who();
+    let caller = m2_server::caller::Caller::agent(who.by.as_deref(), who.why.as_deref());
+    s.act_as(caller.source(), caller.why());
     Ok(s)
 }
 
@@ -316,11 +373,9 @@ fn report(diags: Vec<Diagnostic>) -> anyhow::Error {
     anyhow!("{} problem{} found", diags.len(), if diags.len() == 1 { "" } else { "s" })
 }
 
-fn run() -> Result<()> {
-    let mut args: Vec<String> = std::env::args().skip(1).collect();
-    // Who writes, and why: for the step it makes in the open app (AGENT-10).
-    app::take_who(&mut args)?;
-    let args = args;
+/// Run the command `args` names, its words as [`words::read`] hands them on: its place words in
+/// order, then its flags.
+fn run(args: Vec<String>) -> Result<()> {
     let cmd = args.first().map_or("", String::as_str);
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of(cmd)));
     match args.first().map(String::as_str) {
@@ -328,7 +383,7 @@ fn run() -> Result<()> {
             use m2_server::project::{self, Source};
             let dir = arg(1)?;
             if dir.starts_with('-') {
-                bail!("name the new song's folder first: m2 new <folder> [--template ID | --example ID]");
+                bail!("a new song's folder can't start with `-`, which reads as a flag or a number: name it another way");
             }
             let (source, what, ids) = match flag(&args, "--example") {
                 Some(id) => (Source::Example(id), "example", project::examples()),
@@ -347,7 +402,7 @@ fn run() -> Result<()> {
         Some("check" | "build") => {
             let mut pk = packages()?;
             let (project, c) = compile(Path::new(&arg(1)?), &mut pk)?;
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&c.ir)?);
                 return Ok(());
             }
@@ -361,7 +416,7 @@ fn run() -> Result<()> {
             let out = PathBuf::from(arg(2)?);
             let sr = render_rate(&args, &project)?;
             let from = match (flag(&args, "--from"), flag(&args, "--from-bar")) {
-                (Some(_), Some(_)) => bail!("say where to start once: --from (seconds) or --from-bar (a bar, from 1)"),
+                (Some(_), Some(_)) => unreachable!("its usage takes one of them at most"),
                 (None, Some(bar)) => {
                     let bar: u64 = bar.parse().ok().filter(|&b| b >= 1).with_context(|| format!("--from-bar {bar}: bars count from 1"))?;
                     c.data.tempo().seconds_at(bar_start(&project.arrangement, bar - 1))
@@ -415,7 +470,15 @@ fn run() -> Result<()> {
             }
         }
         Some("kernels") => {
-            let pk = packages()?;
+            let mut pk = packages()?;
+            // The kernels of the packs music2 comes with too (PACK-21), from the store, as any pack.
+            if let Some(store) = packs_store() {
+                for dir in m2_song::pack::bundled(&m2_server::resources::packs_dir()) {
+                    let Ok(m) = m2_song::pack::PkgManifest::at(&dir) else { continue };
+                    let at = store.version_dir(&m.package.name, &m.package.version);
+                    pk.load_pack(&at, m.package.name.as_str()).with_context(|| format!("loading {}", m.package.name))?;
+                }
+            }
             let mut sigs: Vec<_> = pk.kernel_sigs().collect();
             sigs.sort_by(|a, b| a.id.cmp(&b.id));
             for s in sigs {
@@ -427,7 +490,7 @@ fn run() -> Result<()> {
                         })
                         .collect::<Vec<_>>()
                 };
-                if args.iter().any(|a| a == "--json") {
+                if on(&args, "--json") {
                     println!(
                         "{}",
                         serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)})
@@ -597,11 +660,23 @@ fn run() -> Result<()> {
         Some("graph") => {
             let s = reader(Path::new(&arg(1)?))?;
             let v = s.view();
-            if args.iter().any(|a| a == "--json") {
+            if on(&args, "--json") {
                 println!("{}", serde_json::to_string_pretty(&v)?);
                 return Ok(());
             }
             println!("revision {}", v.revision);
+            // Each drum kit (KIT-1): its name and bus, then each row's track, lane and sound.
+            let label = |key: &str| v.modules.iter().find(|m| m.key == key).map_or(key.to_string(), |m| m.label.clone());
+            for k in &v.drum_kits {
+                let rows: Vec<String> = k
+                    .rows
+                    .iter()
+                    .map(|r| {
+                        format!("{} ({}/{}, {})", label(&r.track), r.track, r.lane, r.sound.as_deref().unwrap_or("its sound set by code"))
+                    })
+                    .collect();
+                println!("kit {} ({}): {}", k.label, k.bus, rows.join(" · "));
+            }
             for m in &v.modules {
                 let shown = if m.label == m.key { m.key.clone() } else { format!("{} ({})", m.label, m.key) };
                 println!("\n{shown}{}", if m.track { " (track)" } else { "" });
@@ -620,16 +695,111 @@ fn run() -> Result<()> {
                         n.kind,
                         if to.is_empty() { String::new() } else { format!("  → {}", to.join(", ")) }
                     );
-                    for k in &n.knobs {
+                    // Each row as the card shows it: a knob, a value the code works out, a setting.
+                    let knob_line = |k: &m2_editor::Knob| -> Result<String> {
                         let shared = if k.uses > 1 { format!("  shared ×{}", k.uses) } else { String::new() };
                         // A range only where one is declared (PKG-8); the code's text, or the default it plays.
                         let range =
                             k.range.map_or("—".to_string(), |[lo, hi]| format!("[{lo} … {hi}]{}", if k.log { " log" } else { "" }));
                         let written = if k.written { format!("`{}`", k.literal) } else { "(default)".to_string() };
-                        println!("      {:14} {:>9} {:9} {range}  {written}{shared}", k.label, k.value, k.unit.unwrap_or("number"));
+                        // A choice or a switch is a menu or a switch on its card (CARD-20, CARD-6): its options too.
+                        let options = match k.options.as_slice() {
+                            [] => String::new(),
+                            all => {
+                                let kind = serde_json::to_value(k.kind)?.as_str().unwrap_or_default().to_string();
+                                let now = all.iter().find(|o| o.value == k.value).map_or(String::new(), |o| format!(" ({})", o.label));
+                                format!("  {kind}: {}{now}", all.iter().map(|o| o.label.as_str()).collect::<Vec<_>>().join(" | "))
+                            }
+                        };
+                        let value = match &k.value {
+                            serde_json::Value::String(s) => s.clone(),
+                            v => v.to_string(),
+                        };
+                        Ok(format!(
+                            "      {:14} {:>9} {:9} {range}  {written}{shared}{options}",
+                            k.label,
+                            value,
+                            k.unit.unwrap_or("number")
+                        ))
+                    };
+                    let readonly_line =
+                        |r: &m2_editor::ReadOnly| format!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
+                    // Its settings (CARD-1): what each is, what it plays, and its id for `m2 set`.
+                    let setting_line = |x: &m2_editor::settings::Setting| -> Result<String> {
+                        // What the card says: an option by its name (Master, for a channel's `to` left
+                        // out), the words for regions or a keymap, or the code that works it out.
+                        let option = x.options.iter().find(|o| o.value == x.value).map(|o| o.label.clone());
+                        let value = match (option, &x.expression, &x.said) {
+                            (Some(o), ..) => o,
+                            (_, _, Some(said)) => said.clone(),
+                            (_, Some(e), _) if x.value.is_null() && e.starts_with('`') => e.clone(),
+                            (_, Some(e), _) if x.value.is_null() => format!("`{e}`"),
+                            _ => x.value.to_string(),
+                        };
+                        let kind = serde_json::to_value(x.kind)?.as_str().unwrap_or_default().to_string();
+                        let how = match (&x.readonly, x.written) {
+                            (Some(why), _) => format!("  (edit in code: {why})"),
+                            (None, false) => "  (default)".to_string(),
+                            (None, true) => String::new(),
+                        };
+                        Ok(format!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id))
+                    };
+                    // A view (CARD-26): its name and what it draws.
+                    let view_line = |v: &m2_editor::views::CardView| {
+                        let what =
+                            serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
+                        format!("      {:14} {what} view", v.name)
+                    };
+                    if n.groups.is_empty() {
+                        for k in &n.knobs {
+                            println!("{}", knob_line(k)?);
+                        }
+                        for r in &n.readonly {
+                            println!("{}", readonly_line(r));
+                        }
+                        for x in &n.settings {
+                            println!("{}", setting_line(x)?);
+                        }
+                        for v in &n.views {
+                            println!("{}", view_line(v));
+                        }
+                        continue;
                     }
-                    for r in &n.readonly {
-                        println!("      {:14} `{}`  (edit in code: {})", r.label, r.expression, r.reason);
+                    // Its groups as headings over their rows (CARD-25).
+                    for g in &n.groups {
+                        println!("    {}", g.name);
+                        for row in &g.rows {
+                            let line = match row {
+                                m2_editor::views::Row::Input(id) => {
+                                    let Some(p) = n.inputs.iter().find(|p| &p.id == id) else { continue };
+                                    match (&p.knob, p.readonly, &p.inlet, &p.lane) {
+                                        (Some(k), ..) => match n.knobs.iter().find(|x| &x.id == k) {
+                                            Some(k) => knob_line(k)?,
+                                            None => continue,
+                                        },
+                                        (_, Some(i), ..) => match n.readonly.get(i) {
+                                            Some(r) => readonly_line(r),
+                                            None => continue,
+                                        },
+                                        (_, _, Some(c), _) => {
+                                            let from = n.inlets.iter().find(|x| &x.id == c).map_or("", |x| x.name.as_str());
+                                            format!("      {:14} ← {from}", p.label)
+                                        }
+                                        (_, _, _, Some(l)) => format!("      {:14} follows the {} lane", p.label, l.lane),
+                                        _ => format!("      {}", p.label),
+                                    }
+                                }
+                                m2_editor::views::Row::Setting(id) => match n.settings.iter().find(|x| &x.id == id) {
+                                    Some(x) => setting_line(x)?,
+                                    None => continue,
+                                },
+                                m2_editor::views::Row::View(name) => match n.views.iter().find(|v| &v.name == name) {
+                                    Some(v) => view_line(v),
+                                    None => continue,
+                                },
+                            };
+                            println!("{line}");
+                        }
                     }
                 }
             }
@@ -648,11 +818,29 @@ fn run() -> Result<()> {
         Some("set") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let id = arg(2)?;
-            let value: f64 = arg(3)?.parse().context("value")?;
-            let expect: Option<f64> = flag(&args, "--expect").map(|v| v.parse()).transpose().context("--expect")?;
             let t = Instant::now();
             let at = s.accepted().number;
-            let c = s.set(at, &id, value, expect).map_err(|e| anyhow!("{e}"))?;
+            // A setting (CARD-4): the word read as its kind takes it: one of its options by its value
+            // or its name (`2`, `square`, `Master`, `On`), a number, true or false, or a word.
+            if let Some(x) = m2_editor::settings::find(&s, at, &id) {
+                let read = |w: String| m2_editor::kind::word(x.kind, &x.options, &w);
+                let expect = flag(&args, "--expect").map(read);
+                let e = m2_editor::settings::set(&mut s, at, &id, &read(arg(3)?), expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
+                let ms = t.elapsed().as_secs_f64() * 1000.0;
+                match e.revision == at {
+                    true => println!("{id}: it is that already; nothing to write"),
+                    false => println!("{}: `{}` → `{}` (revision {}, verified in {ms:.0} ms)", e.file, e.before, e.after, e.revision),
+                }
+                return Ok(());
+            }
+            // A knob: read the same way, by its options as its card offers them (a choice's names, a
+            // switch's On, a plugin's steps), as its card writes it (CARD-21).
+            let view = s.view();
+            let knob = view.modules.iter().flat_map(|m| &m.nodes).flat_map(|n| &n.knobs).find(|k| k.id == id);
+            let Some(knob) = knob else { bail!("no control or setting `{id}` in that revision: `m2 graph {} --json` lists them", arg(1)?) };
+            let read = |w: String| m2_editor::kind::word(knob.kind, &knob.options, &w);
+            let (value, expect) = (read(arg(3)?), flag(&args, "--expect").map(read));
+            let c = s.write(at, &id, &value, expect.as_ref()).map_err(|e| anyhow!("{e}"))?;
             println!(
                 "{}: `{}` → `{}` (revision {}, verified in {:.0} ms)",
                 c.file,
@@ -686,7 +874,7 @@ fn run() -> Result<()> {
         Some("add-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let wanted = arg(2)?;
-            // By ComponentId (`std:synth-pluck`) or by its export (`synth.pluck`, `std/synth.synth.pluck`).
+            // By ComponentId (`@m2/synths:synth-pluck`) or by its export (`synth.pluck`, `@m2/synths.synth.pluck`).
             let list = s.instruments();
             let inst = list
                 .iter()
@@ -702,22 +890,58 @@ fn run() -> Result<()> {
                 made.label, inst.label, made.module, made.edited.file, made.edited.revision
             );
         }
+        Some("add-kit") => {
+            // KIT-5: what + Track ▸ Drum kit does, a kit by its name.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let wanted = arg(2)?;
+            let kits = m2_editor::drums::presets(&s);
+            let names: Vec<String> = kits.iter().map(|k| k.name.clone()).collect();
+            let kit = match kits.iter().filter(|k| k.name == wanted).collect::<Vec<_>>().as_slice() {
+                [k] => (*k).clone(),
+                [] => bail!("no kit `{wanted}`: the kits are {}", m2_editor::listed(&names)),
+                many => {
+                    let whose: Vec<String> = many.iter().map(|k| format!("{} ({})", k.instrument, k.component)).collect();
+                    bail!(
+                        "{} instruments name a kit `{wanted}`: {}. Add it in the app, or with POST /api/graph/track/kit",
+                        many.len(),
+                        whose.join(", ")
+                    )
+                }
+            };
+            let after = flag(&args, "--after");
+            let made = m2_editor::drums::add_kit(&mut s, &kit.component, &kit.name, after.as_deref()).map_err(|e| anyhow!("{e}"))?;
+            let tracks: Vec<String> = made[1..].iter().map(|m| m.label.clone()).collect();
+            println!(
+                "added {}: {} (ID {}), and {} going to it (revision {})",
+                kit.name,
+                made[0].label,
+                made[0].module,
+                m2_editor::listed(&tracks),
+                made[0].edited.revision
+            );
+        }
+        Some("make-kit") => {
+            // KIT-22, KIT-24: what a drum machine track's Make it a kit does.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let made = m2_editor::machine::make_kit(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
+            let rev = s.accepted();
+            let label = rev.compiled.ir.modules.iter().find(|m| m.key == made.bus).map_or(made.bus.clone(), |m| m.label().to_string());
+            let tracks: Vec<String> = made.tracks.iter().map(|m| m.label.clone()).collect();
+            println!(
+                "made {label} a kit: its bus {label} (ID {}), and {} going to it (revision {})",
+                made.bus,
+                m2_editor::listed(&tracks),
+                made.tracks[0].edited.revision
+            );
+            println!("{}", m2_editor::machine::KEEPS);
+            for said in &made.said {
+                println!("{said}");
+            }
+        }
         Some("import") => {
             // Studio lane A's A4: what the app's File ▸ Import Audio… does, from the terminal.
             let dir = PathBuf::from(arg(1)?);
-            let mut files = vec![];
-            let mut i = 2;
-            while i < args.len() {
-                if args[i].starts_with("--") {
-                    i += 2;
-                    continue;
-                }
-                files.push(PathBuf::from(&args[i]));
-                i += 1;
-            }
-            if files.is_empty() {
-                bail!("m2 import names the WAV files to bring in: {}", usage_of("import"));
-            }
+            let files: Vec<PathBuf> = words::places(&args)[1..].iter().map(PathBuf::from).collect();
             // While the app has the song open, the app's own import brings the files in, so they
             // come into the song only inside the change that lands (AGENT-1, AGENT-3).
             if let Some(holder) = app::holder(&dir) {
@@ -763,8 +987,7 @@ fn run() -> Result<()> {
             m2_editor::library::samples::still_plain(&sample).map_err(|e| anyhow!("{id} can't be added: {e}."))?;
             let staged =
                 m2_editor::import::stage(&dir, m2_editor::import::Source::Path(sample.file.clone()), &mut |_| {}).map_err(words)?;
-            let file = staged.name().map_err(words)?;
-            let noted = m2_editor::library::samples::write_note(&dir, file.asset.as_str(), &m2_editor::library::samples::note(&sample))?;
+            let (file, noted) = staged.name_noted(Some(&sample.from)).map_err(words)?;
             let song_bpm = s.accepted().compiled.data.tempo().bpm_at(target.beat());
             let follows = m2_editor::library::samples::follows(&sample);
             let placed = m2_editor::import::place_with(&mut s, std::slice::from_ref(&file), &target, &[follows]).map_err(words)?;
@@ -790,7 +1013,7 @@ fn run() -> Result<()> {
         Some("delete-track") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let track = arg(2)?;
-            let cascade = args.iter().any(|a| a == "--cascade");
+            let cascade = on(&args, "--cascade");
             let shown = |d: &m2_editor::Dependent| format!("  {} in {} ({}, line {})", d.component, d.label, d.file, d.line);
             match s.delete_track(&track, cascade).map_err(|e| anyhow!("{e}"))? {
                 m2_editor::Deleted::Done { edited, excised } => {
@@ -831,7 +1054,7 @@ change that code first",
                 "order" => s.reorder(&args[3..]),
                 "colour" | "color" => s.recolour(&arg(3)?, &arg(4)?),
                 "reset" => m2_editor::layout::reset(&mut s),
-                other => bail!("m2 layout <project> order <IDs…> | colour <ID> <colour> | reset, not `{other}`"),
+                _ => unreachable!("its usage takes only these"),
             }
             .map_err(|e| anyhow!("{e}"))?;
             println!("layout.json: {} → {} (no revision: the layout isn't part of the song)", e.before, e.after);
@@ -913,7 +1136,7 @@ change that code first",
             let at = s.accepted().number;
             let e = match command {
                 "add-effect" => {
-                    // By its ComponentId (`std:delay`), or by where it is exported (`std/fx.delay`).
+                    // By its ComponentId (`@m2/effects:delay`), or by where it is exported (`@m2/effects.delay`).
                     let effect = arg(3)?;
                     let by_export = || {
                         let (module, name) = effect.rsplit_once('.')?;
@@ -922,8 +1145,9 @@ change that code first",
                     let component = if effect.contains(':') {
                         effect.clone()
                     } else {
-                        by_export()
-                            .context("name the effect by its id (std:delay) or its export (std/fx.delay); `m2 effects` lists them")?
+                        by_export().context(
+                            "name the effect by its id (@m2/effects:delay) or its export (@m2/effects.delay); `m2 effects` lists them",
+                        )?
                     };
                     s.add_effect(at, &arg(2)?, &component)
                 }
@@ -956,6 +1180,25 @@ change that code first",
                 e.revision,
                 t.elapsed().as_secs_f64() * 1000.0
             );
+        }
+        Some("upgrade") => {
+            // FMT-25, AGENT-14: in the open app when it has the song, so it is one undo step there.
+            let dir = PathBuf::from(arg(1)?);
+            let check = words::on(&args, "--check");
+            let in_app = app::holder(&dir).filter(|_| !check);
+            let up = match &in_app {
+                Some(holder) => app::reach(&dir, holder, "")?.upgrade()?,
+                // `--check` only reads: no lock (WRITE-18).
+                None if check => {
+                    let mut s = Session::open_read_only(&dir, packages()?).map_err(report)?;
+                    m2_editor::upgrade::upgrade(&mut s, true, m2_os::dirs::presets().as_deref()).map_err(|e| anyhow!("{e}"))?
+                }
+                None => {
+                    let mut s = locked(&dir, "")?;
+                    m2_editor::upgrade::upgrade(&mut s, false, m2_os::dirs::presets().as_deref()).map_err(|e| anyhow!("{e}"))?
+                }
+            };
+            upgraded(&dir, &up, check, in_app.is_some())?;
         }
         Some("fix") if app::holder(Path::new(&arg(1)?)).is_some() => {
             // The app knows which journals are still being written: its fix applies (the review's m1).
@@ -999,6 +1242,7 @@ change that code first",
             attention(&dir, s.problems());
         }
         Some("pack") => pack(&args)?,
+        Some("registry") => registry(&args)?,
         Some("plugins") => match args.get(1) {
             None => {
                 let (found, errors) = m2_plugins::scan();
@@ -1034,7 +1278,7 @@ change that code first",
             }
         },
         Some("plugin-state") => {
-            if args.iter().any(|a| a == "--force") {
+            if on(&args, "--force") {
                 bail!("--force is gone: saving a plugin's state replaces what is there as one edit, which undo puts back (WRITE-1)");
             }
             let dir = PathBuf::from(arg(1)?);
@@ -1065,7 +1309,8 @@ change that code first",
         Some("edit") => text::edit(&args)?,
         Some("write") => text::write(&args)?,
         Some("undo") => {
-            // Undo lives in the open app (AGENT-4): history is in its memory.
+            // Undo lives in the open app (AGENT-4): the one writer of the song's history, kept with
+            // the song (WRITE-23); with it closed, there is nothing to take back from here.
             let dir = PathBuf::from(arg(1)?);
             let Some(holder) = app::holder(&dir) else {
                 bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");
@@ -1082,7 +1327,6 @@ change that code first",
         Some("search") => search::search(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
-        None => bail!("name a command first: m2 <command> … --as <name> --why \"<words>\""),
         _ => bail!("m2 has no command `{cmd}`"),
     }
     Ok(())
@@ -1090,14 +1334,14 @@ change that code first",
 
 /// Where `m2 import` puts its files in the song `s`: on `--track`'s audio lane, else on new tracks
 /// below, from `--at` (the start when it is left out).
-/// `m2 pack …` (PACK-6, PACK-8, PACK-12): make, check, build and install packs; list and remove
-/// what is installed; lock a song's.
+/// `m2 pack …` (PACK-6, PACK-8, PACK-12, REG-17): make, check, build and install packs; get them
+/// from the library; list and remove what is installed; lock a song's.
 fn pack(args: &[String]) -> Result<()> {
     use m2_editor::packs;
-    use m2_song::pack::{PackName, Store};
+    use m2_song::pack::PackName;
     let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("pack")));
     let std = m2_server::resources::std_dir();
-    let store = || Store::here().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
+    let store = || packs_store().ok_or_else(|| anyhow!("can't find your home folder ($HOME isn't set), where your packs are"));
     let failed = |problems: Vec<String>| {
         for p in &problems {
             eprintln!("problem: {p}");
@@ -1159,7 +1403,7 @@ fn pack(args: &[String]) -> Result<()> {
         }
         "install" => {
             let dir = PathBuf::from(arg(2)?);
-            match packs::install(&dir, &store()?, &std).map_err(failed)? {
+            match packs::install_from_folder(&dir, &store()?, &std).map_err(failed)? {
                 packs::Install::Installed { name, version, dir, hash } => {
                     println!("installed {name} {version} in {} ({hash})", dir.display())
                 }
@@ -1169,6 +1413,7 @@ fn pack(args: &[String]) -> Result<()> {
                 }
             }
         }
+        "get" => get::pack_get(args.get(2).map(String::as_str))?,
         "list" => {
             let all = packs::installed(&store()?);
             if all.is_empty() {
@@ -1193,7 +1438,7 @@ fn pack(args: &[String]) -> Result<()> {
             let only = args.get(3).map(|n| PackName::new(n).map_err(|e| anyhow!(e))).transpose()?;
             let moving = match (command, &only) {
                 ("lock", None) => m2_song::pack::Move::Needed,
-                ("lock", Some(_)) => bail!("{}", usage_of("pack")),
+                ("lock", Some(_)) => unreachable!("its usage takes one word"),
                 (_, None) => m2_song::pack::Move::All,
                 (_, Some(name)) => m2_song::pack::Move::Only(name),
             };
@@ -1203,9 +1448,189 @@ fn pack(args: &[String]) -> Result<()> {
                 None => println!("{} says that already", m2_song::path::LOCK),
             }
         }
-        _ => bail!("{}", usage_of("pack")),
+        _ => unreachable!("its usage takes only these"),
     }
     Ok(())
+}
+
+/// `m2 registry …` (REG-2, REG-5 to REG-9): the registry's robot, run by the registry repo's CI,
+/// and `add` for a pack's author. Each problem is printed in words; any is exit 1.
+fn registry(args: &[String]) -> Result<()> {
+    use m2_editor::registry::{self as robot, Bucket};
+    let arg = |i: usize| args.get(i).cloned().ok_or_else(|| anyhow!("missing argument: {}", usage_of("registry")));
+    let path_flag = |name: &str| flag(args, name).map(PathBuf::from).ok_or_else(|| anyhow!("give {name}: {}", usage_of("registry")));
+    let from = || flag(args, "--from").map(|u| Bucket::parse(&u).map_err(|e| anyhow!("--from: {e}"))).transpose();
+    let failed = |problems: Vec<String>| {
+        for p in &problems {
+            eprintln!("problem: {p}");
+        }
+        anyhow!("{} problem{} to fix first", problems.len(), if problems.len() == 1 { "" } else { "s" })
+    };
+    let std = m2_server::resources::std_dir();
+    // Not `Some("…")` arms: those are m2's own commands, which the one table lists (AGENT-12).
+    match args.get(1).map_or("", String::as_str) {
+        "check" => {
+            let dir = PathBuf::from(arg(2)?);
+            let base = flag(args, "--base").map(PathBuf::from);
+            let author = flag(args, "--author");
+            let r = robot::check(&robot::Check { registry: &dir, base: base.as_deref(), author: author.as_deref() }).map_err(failed)?;
+            let versions: usize = r.packs.iter().map(|p| p.versions.len()).sum();
+            println!("{} is good: {} pack{}, {versions} version{}", dir.display(), r.packs.len(), plural(r.packs.len()), plural(versions));
+        }
+        "add" => {
+            let (dir, pack) = (PathBuf::from(arg(2)?), PathBuf::from(arg(3)?));
+            let source = flag(args, "--source").ok_or_else(|| anyhow!("say where its .tar.gz is: {}", usage_of("registry")))?;
+            match robot::add(&robot::Add { registry: &dir, pack: &pack, source: &source, std: &std }).map_err(failed)? {
+                robot::Added::Listed { name, version, hash, file, new } => println!(
+                    "listed {name} {version} ({hash}) in {}{}: open a pull request with it to the registry",
+                    file.display(),
+                    if new { ", a new file" } else { "" }
+                ),
+                robot::Added::Already { name, version } => println!("{name} {version} is listed already, with these very files"),
+            }
+        }
+        "pending" => {
+            let dir = PathBuf::from(arg(2)?);
+            let r = m2_song::registry::Registry::read(&dir).map_err(failed)?;
+            // The hash's hex first: the folder the CI unpacks that version's source into (REG-9).
+            for (name, v) in robot::pending(&r, &path_flag("--out")?, from()?.as_ref()) {
+                println!("{} {name} {} {}", v.hash.hex(), v.version, v.source);
+            }
+        }
+        "build" => {
+            let dir = PathBuf::from(arg(2)?);
+            let (sources, out) = (path_flag("--sources")?, path_flag("--out")?);
+            let made = flag(args, "--made").unwrap_or_else(|| {
+                let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+                m2_song::registry::utc(secs)
+            });
+            let from = from()?;
+            let work = m2_os::dirs::cache().unwrap_or_else(std::env::temp_dir).join(format!("registry-build-{}", std::process::id()));
+            let to_delete = flag(args, "--to-delete").map(PathBuf::from);
+            let b = robot::Build {
+                registry: &dir,
+                sources: &sources,
+                out: &out,
+                from: from.as_ref(),
+                made: &made,
+                std: &std,
+                work: &work,
+                to_delete: to_delete.as_deref(),
+                limit: robot::LONGEST,
+            };
+            let built = robot::build(&b).map_err(failed)?;
+            for f in &built.built {
+                let previews = f.items.iter().filter(|i| i.preview.is_some()).count();
+                println!(
+                    "built {} {}: {} item{} ({previews} with a preview), {} file{}, {:.1} MB",
+                    f.name,
+                    f.version,
+                    f.items.len(),
+                    plural(f.items.len()),
+                    f.files,
+                    plural(f.files as usize),
+                    f.size as f64 / 1e6
+                );
+                for i in f.items.iter().filter_map(|i| i.no_preview.as_ref().map(|why| (&i.id, why))) {
+                    println!("  {}: {}", i.0, i.1);
+                }
+            }
+            let items: usize = built.catalog.packs.iter().map(|p| p.items.len()).sum();
+            println!(
+                "catalog {} ({} bytes, made {}): {} pack{}, {items} item{}",
+                built.pointer.catalog,
+                built.pointer.size,
+                built.pointer.made,
+                built.catalog.packs.len(),
+                plural(built.catalog.packs.len()),
+                plural(items)
+            );
+            if to_delete.is_none() && !built.to_delete.is_empty() {
+                println!("{} blobs of removed versions to delete (--to-delete <file> lists them)", built.to_delete.len());
+            }
+            for u in &built.unknown {
+                eprintln!("warning: {u} is taken down, but its facts aren't there, so its blobs aren't known: delete them by hand");
+            }
+            // Each failed alone: the rest are built and in the catalog (REG-5).
+            for f in &built.failed {
+                for p in &f.problems {
+                    eprintln!("problem: {p}");
+                }
+            }
+            if let n @ 1.. = built.failed.len() {
+                let (s, it) = if n == 1 { ("", "it stays") } else { ("s", "each stays") };
+                bail!("{n} version{s} not built: {it} pending, and the rest are in the catalog");
+            }
+        }
+        _ => unreachable!("its usage takes only these"),
+    }
+    Ok(())
+}
+
+/// What `m2 upgrade` did, as it says it (AGENT-14): each file it changes, with the lines before and
+/// after, what it left (then nothing is written), what to check by hand, the musician's presets of
+/// sounds that moved (never changed), and whether it was written: an error when nothing was written
+/// for a song that needs it. `in_app`: the open app wrote it, as one undo step there.
+fn upgraded(dir: &Path, up: &m2_editor::upgrade::Upgraded, check: bool, in_app: bool) -> Result<()> {
+    let place = |l: &m2_editor::upgrade::Left| if l.line == 0 { l.file.clone() } else { format!("{}:{}", l.file, l.line) };
+    let list = |title: &str, items: &[&m2_editor::upgrade::Left]| {
+        if !items.is_empty() {
+            println!("{title}");
+            for l in items {
+                println!("  {}: {}", place(l), l.what);
+                if !l.write.is_empty() {
+                    println!("    write: {}", l.write);
+                }
+            }
+        }
+    };
+    let (presets, notes): (Vec<_>, Vec<_>) = up.notes.iter().partition(|n| n.file.starts_with("Presets/"));
+    if up.current() {
+        println!("{} is made for this music2 already: nothing to upgrade", dir.display());
+        list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
+        list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
+        return Ok(());
+    }
+    for c in &up.changes {
+        println!("{}", c.file);
+        for l in &c.lines {
+            println!("  {l}");
+        }
+    }
+    list("left as it is, so nothing was written: change these by hand, then run m2 upgrade again:", &up.left.iter().collect::<Vec<_>>());
+    list("check these by hand: the upgrade can't keep them as they were:", &notes);
+    list("to do when you choose (the upgrade doesn't):", &up.choose.iter().collect::<Vec<_>>());
+    list("your presets of sounds that moved, which the upgrade doesn't change (they're yours, outside the song):", &presets);
+    if !up.refused.is_empty() {
+        println!("the song wouldn't build after it:");
+        for r in &up.refused {
+            println!("  {r}");
+        }
+    }
+    match (up.written, up.left.is_empty(), up.refused.is_empty()) {
+        (Some(_), ..) if in_app => println!("upgraded to this music2"),
+        (Some(revision), ..) => println!(
+            "upgraded to this music2 (revision {revision}): one step, which music2 can undo once it opens the song (m2 undo needs the app open)"
+        ),
+        (None, false, _) => bail!("nothing was written: {} to change by hand first (above)", count(up.left.len(), "place")),
+        (None, true, true) if check => println!("--check: nothing was written; the song builds after it"),
+        (None, true, true) => println!("nothing was written: the files were as it would write them"),
+        (None, true, false) => bail!(
+            "nothing was written{}: the song wouldn't build after it. Change what it says by hand, then run m2 upgrade again",
+            if check { " (--check)" } else { "" }
+        ),
+    }
+    Ok(())
+}
+
+/// `n` `what`s, in words: "1 place", "3 places".
+fn count(n: usize, what: &str) -> String {
+    format!("{n} {what}{}", plural(n))
+}
+
+/// `s` when `n` isn't one.
+fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
 }
 
 fn import_target(s: &Session, args: &[String]) -> Result<m2_editor::import::Target> {
@@ -1399,7 +1824,7 @@ fn tx(args: &[String]) -> Result<()> {
         let hash = m2_song::Sha::parse_prefixed(&h).with_context(|| format!("--seen {h}: a hash is `sha256:` and 64 hex digits"))?;
         tx.expect = m2_song::Expect::Seen(hash);
     }
-    let check = args.iter().any(|a| a == "--check");
+    let check = on(args, "--check");
     // Whatever the code says: the session refuses what needs it to compile, in JSON, and a
     // recovery fix's Tx needs it not (P3).
     let mut s = match check {

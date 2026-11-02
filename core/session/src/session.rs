@@ -20,12 +20,35 @@ use m2_script::Catalog;
 use m2_script::sites::Site;
 use m2_song::{Project, Sha, Snapshot, TempoMap, Version};
 
+use crate::history::{Bound, Move, Moving};
 use crate::lock::{Access, ReadOnly};
 use crate::texts::Texts;
 use crate::tx::journal::Journal;
 use crate::tx::stage::{self, Disk};
 use crate::tx::{Prepared, Refusal, TxStep};
 use crate::{Compiled, Seen};
+
+/// Who made a revision ([`Session::changed_by`], AGENT-2): its number, the paths it changed, its
+/// sender and the window it came from, and what it moved (ids, as files, and beats).
+#[derive(Clone, Debug)]
+pub struct Authored {
+    pub number: u64,
+    pub paths: BTreeSet<String>,
+    pub by: Source,
+    pub window: Option<String>,
+    pub moved: BTreeSet<String>,
+    pub beats: bool,
+}
+
+impl Authored {
+    /// A change saved outside the app, taken in.
+    pub(crate) fn outside(number: u64, paths: BTreeSet<String>) -> Authored {
+        Authored { number, paths, by: Source::Outside, window: None, moved: BTreeSet::new(), beats: false }
+    }
+}
+
+/// How many revisions the session remembers the authors of ([`Session::changed_by`]).
+pub const AUTHORED: usize = 2000;
 
 /// One accepted state of the project (WRITE-13): the pair `(code_rev, data_rev)`, each the
 /// number of the revision whose files of that kind this one has, and `number`, the session's
@@ -136,6 +159,9 @@ pub struct StepName {
     pub structural: bool,
     pub file: String,
     pub files: Vec<String>,
+    /// The files whose ids its change moved, and whether it moved beats (AGENT-2).
+    pub moved: Vec<String>,
+    pub beats: bool,
 }
 
 /// Why an undo or a redo didn't go ahead.
@@ -164,13 +190,6 @@ impl std::fmt::Display for StepError {
 
 /// How many past revisions an edit can be planned against.
 const PAST: usize = 64;
-
-/// How many changes undo goes back through; the oldest are forgotten first.
-const HISTORY: usize = 500;
-
-/// How many bytes of text and data undo keeps alive at most (WRITE-21); the oldest steps are
-/// forgotten first, though never the newest.
-pub(crate) const RETAINED: usize = 64 << 20;
 
 pub struct Session {
     pub packages: PackageSet,
@@ -250,8 +269,29 @@ pub struct Session {
     /// Who the steps recorded now are by, and what they are called (AGENT-2, AGENT-10).
     pub(crate) by: Source,
     pub(crate) why: Option<String>,
+    /// Who made each revision accepted lately, and the paths it changed, newest last: what a
+    /// gesture refused for a change since names (AGENT-2). An undo or a redo is its sender's.
+    pub(crate) authored: std::collections::VecDeque<Authored>,
+    /// The window the request served now came from (AGENT-2): what it changes is that window's.
+    pub(crate) window: Option<String>,
+    /// Who the revision being accepted is by: set by a commit, an undo, a redo and a save; else
+    /// (a batch taken in) it is outside.
+    pub(crate) accepting: Option<Source>,
+    /// The last commit's baseline took in a change made elsewhere (`TxStep::mixed`).
+    pub(crate) took_in: bool,
     /// The last commit, undo or redo: what [`Session::retract`] takes back (AGENT-3).
     pub(crate) last_change: Option<Change>,
+    /// How much undo keeps (WRITE-26).
+    pub(crate) bound: crate::history::Bound,
+    /// Why undo and redo go back no further than their oldest steps, as this session found them
+    /// when it read the history back (WRITE-24).
+    pub(crate) ends: (Option<crate::history::End>, Option<crate::history::End>),
+    /// The step an undo, a redo or a take-back moves while its change is written (WRITE-25).
+    pub(crate) moving: Option<crate::history::Moving>,
+    /// A name given since the history was last written: written with the next change, or at close.
+    pub(crate) unwritten: bool,
+    /// The history's records in `.music2/undo/` (WRITE-23).
+    pub(crate) records: crate::history::Records,
 }
 
 /// The last change this session made, as [`Session::retract`] takes it back.
@@ -269,7 +309,7 @@ pub(crate) enum Change {
 /// A project that can't be read from its snapshot: the manifest's or the arrangement's errors.
 /// What the lists offer from what `packages` shows (PACK-11): the catalog, and the packs it was
 /// made from.
-fn lists(packages: &PackageSet) -> (Arc<Catalog>, Arc<Vec<crate::Offered>>) {
+pub(crate) fn lists(packages: &PackageSet) -> (Arc<Catalog>, Arc<Vec<crate::Offered>>) {
     let offered = crate::offered(packages);
     (Arc::new(crate::catalog_of(packages, &offered)), Arc::new(offered))
 }
@@ -431,8 +471,21 @@ impl Session {
             landed: None,
             by: Source::Page,
             why: None,
+            authored: std::collections::VecDeque::new(),
+            window: None,
+            accepting: None,
+            took_in: false,
             last_change: None,
+            bound: crate::history::bound(),
+            ends: (None, None),
+            moving: None,
+            unwritten: false,
+            records: Default::default(),
         };
+        // The way back, as the last writer left it (WRITE-23).
+        if s.access.writer() {
+            s.read_history();
+        }
         s.problems = s.gather_problems();
         Ok(s)
     }
@@ -563,6 +616,7 @@ impl Session {
                 self.kept = scan.keep;
                 self.pending.extend(scan.awaiting);
                 self.access = Access::Writer(lock);
+                self.read_history();
                 self.problems = self.gather_problems();
                 true
             }
@@ -581,7 +635,9 @@ impl Session {
             match crate::lock::acquire(&self.dir, &self.program, std::time::Duration::ZERO) {
                 Ok(lock) => {
                     self.access = Access::Writer(lock);
-                    // What another writer left meanwhile is read as at any lock.
+                    // What another writer left meanwhile is read as at any lock; the history's
+                    // records went with the folder, and are written again (WRITE-23).
+                    self.records.forget();
                     self.rescan();
                 }
                 Err(why) => {
@@ -599,7 +655,14 @@ impl Session {
     /// (the app opening it again) can take it.
     pub fn unlock(&mut self) {
         if self.access.writer() {
-            let keep = self.interrupted.iter().flat_map(|j| j.blobs()).chain(self.kept.iter().copied()).collect();
+            // A name given since the last write goes with the history (WRITE-23).
+            if self.unwritten {
+                self.keep_history();
+            }
+            // Nothing is taken back from now on (AGENT-3): the before-images kept are those undo,
+            // which outlives the session (WRITE-26), and the journals still name.
+            self.last_change = None;
+            let keep = self.blobs_in_use();
             stage::close(&mut *self.disk, &self.dir, &mut self.pending, &keep);
             self.access = Access::ReadOnly(ReadOnly::Asked);
         }
@@ -641,6 +704,16 @@ impl Session {
             self.packages.show(&compiled.view);
             (self.catalog, self.offered) = lists(&self.packages);
         }
+        // Who made it, for a refusal to name (AGENT-2).
+        let paths: BTreeSet<String> = changed.iter().map(|p| m2_song::path::slashed(p)).collect();
+        let author = match self.accepting.take() {
+            Some(by) => Authored { number, paths, by, window: self.window.clone(), moved: BTreeSet::new(), beats: false },
+            None => Authored::outside(number, paths),
+        };
+        self.authored.push_back(author);
+        while self.authored.len() > AUTHORED {
+            self.authored.pop_front();
+        }
         let new = Arc::new(Revision { number, code_rev, data_rev, snapshot, project, compiled });
         let old = std::mem::replace(&mut self.accepted, new);
         let (old_number, old_snapshot, sites) = match Arc::try_unwrap(old) {
@@ -673,27 +746,63 @@ impl Session {
 
     /// A new change's undo step: remembered, ending any redo. It is named by the revision it made
     /// (the accepted one now), and gets the next id (AGENT-2). Its id.
+    /// Its history was written ahead of the change that made it (WRITE-25), or is written after it
+    /// by the caller (an outside step's).
     pub(crate) fn record_tx(&mut self, mut step: TxStep) -> u64 {
         step.made = self.accepted.number;
+        self.stamp(&mut step);
         self.steps += 1;
-        step.id = self.steps;
-        // Not the watcher's: whoever the app says the request is by (AGENT-10), named by its words.
+        step.images = crate::history::images(&self.dir, &step).unwrap_or_default();
+        let cleared = std::mem::take(&mut self.redo);
+        let pushed = self.push_history(step);
+        self.ends.1 = None;
+        self.last_change = Some(Change::Commit { cleared, pushed });
+        self.steps
+    }
+
+    /// The id the next step gets, and who it is by: whoever the app says the request is by
+    /// (AGENT-10), named by its words, when it isn't the watcher's.
+    pub(crate) fn stamp(&self, step: &mut TxStep) {
+        step.id = self.steps + 1;
         if step.source == Source::Page {
             step.source = self.by.clone();
             if step.name.is_none() {
                 step.name = self.why.clone().map(|w| (w, false));
             }
         }
-        let pushed = self.push_history(step);
-        let cleared = std::mem::take(&mut self.redo);
-        self.last_change = Some(Change::Commit { cleared, pushed });
-        self.steps
     }
 
     /// Who the steps recorded from now on are by, and what they are called when `why` is given
     /// (AGENT-2, AGENT-10): the app says so for each request, by the key it came with.
     pub fn act_as(&mut self, by: Source, why: Option<String>) {
         (self.by, self.why) = (by, why);
+        self.took_in = false;
+    }
+
+    /// Who the requests served now are by, why, and from which window: to serve another's work
+    /// (a value let go while the code didn't build) and come back.
+    pub fn acting(&self) -> (Source, Option<String>, Option<String>) {
+        (self.by.clone(), self.why.clone(), self.window.clone())
+    }
+
+    /// A save or a raw commit just accepted revision `number`, writing `wrote` itself (AGENT-2): its
+    /// own record keeps those paths and what its step moved (`moved`, `beats`); any other path it
+    /// took in from the draft (an outside change that waited for the code to build) is outside the
+    /// app's, and the revision is mixed.
+    pub(crate) fn authored_as(&mut self, number: u64, wrote: &BTreeSet<String>, moved: &BTreeSet<String>, beats: bool) {
+        let Some(a) = self.authored.back_mut().filter(|a| a.number == number && a.by != Source::Outside) else { return };
+        let others: BTreeSet<String> = a.paths.difference(wrote).cloned().collect();
+        a.paths.retain(|p| wrote.contains(p));
+        (a.moved, a.beats) = (moved.clone(), beats);
+        if !others.is_empty() {
+            self.authored.push_back(Authored::outside(number, others));
+            self.took_in = true;
+        }
+    }
+
+    /// The window the requests served from now come from (AGENT-2), or none (an agent, the app).
+    pub fn act_in(&mut self, window: Option<String>) {
+        self.window = window;
     }
 
     /// Take back the last commit, undo or redo this session made, and leave undo and redo as they
@@ -704,7 +813,7 @@ impl Session {
         let done = match self.last_change.take() {
             None => return Err(StepError::Nothing("nothing to take back")),
             Some(Change::Commit { cleared, mut pushed }) => {
-                let done = self.step(false)?;
+                let done = self.step_as(Move::Retract)?;
                 // The step its undo pushed goes, the redo the commit ended comes back, and so do the
                 // oldest steps it pushed out of a full history.
                 self.redo.pop();
@@ -718,6 +827,7 @@ impl Session {
             Some(Change::Redo) => self.step(false)?,
         };
         self.last_change = None;
+        self.keep_history();
         Ok(done)
     }
 
@@ -743,6 +853,80 @@ impl Session {
         self.steps
     }
 
+    /// [`Session::name_step`] by the step's id (AGENT-2): a change of `layout.json` alone makes no
+    /// revision to name it by.
+    pub fn name_step_id(&mut self, id: u64, name: &str, structural: bool) -> bool {
+        match self.history.iter_mut().chain(self.redo.iter_mut()).find(|t| t.id == id) {
+            Some(t) => {
+                t.name = Some((name.to_string(), structural));
+                self.unwritten = true;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Who made the newest change after revision `since` that touched a path `touched` says
+    /// (AGENT-2: what a gesture refused because its target changed says), an undo or a redo by
+    /// its sender; the window the request comes from's own changes left out. None when none did,
+    /// as far as the session remembers (its last [`AUTHORED`] revisions).
+    pub fn changed_by_any(&self, since: u64, touched: impl Fn(&str) -> bool) -> Option<Source> {
+        self.others_since(since).find(|a| a.paths.iter().any(|p| touched(p))).map(|a| a.by.clone())
+    }
+
+    /// The revisions after `since` not made by the window the request comes from, newest first.
+    fn others_since(&self, since: u64) -> impl Iterator<Item = &Authored> {
+        let mine = self.window.clone();
+        self.authored.iter().rev().take_while(move |a| a.number > since).filter(move |a| mine.is_none() || a.window != mine)
+    }
+
+    /// The paths changed after revision `since` by anyone but the window that asks (AGENT-2).
+    pub fn others_paths_since(&self, since: u64) -> BTreeSet<String> {
+        self.others_since(since).flat_map(|a| a.paths.iter().cloned()).collect()
+    }
+
+    /// Who made the newest change after revision `since`, the window's own left out, that moved
+    /// beats (AGENT-2): a gesture named by beats then names other music.
+    pub fn beats_moved_since(&self, since: u64) -> Option<Source> {
+        self.others_since(since).find(|a| a.beats).map(|a| a.by.clone())
+    }
+
+    /// Whether every change after revision `since` that touched `file` was the window's own and
+    /// moved no ids in it (AGENT-2): an id it named then names the same thing now. False when the
+    /// request names no window, or the session doesn't remember.
+    pub fn only_own_since(&self, since: u64, file: &str) -> bool {
+        let Some(mine) = self.window.as_deref() else { return false };
+        self.remembers_since(since)
+            && self
+                .authored
+                .iter()
+                .filter(|a| a.number > since && a.paths.contains(file))
+                .all(|a| a.window.as_deref() == Some(mine) && !a.moved.contains(file))
+    }
+
+    /// [`Session::changed_by_any`] of one file, or of a `data/<module>/` folder's files.
+    pub fn changed_by(&self, since: u64, file: &str) -> Option<Source> {
+        let folder = format!("{}/", file.trim_end_matches('/'));
+        self.changed_by_any(since, |p| p == file || p.starts_with(&folder))
+    }
+
+    /// Who made the newest undo step that touched `file`: for a change that makes no revision (a
+    /// list of `layout.json`), what its refusal names (AGENT-2).
+    pub fn stepped_by(&self, file: &str) -> Option<Source> {
+        self.history.iter().rev().find(|t| t.inverse.touched().iter().any(|p| p.to_string() == file)).map(|t| t.source.clone())
+    }
+
+    /// Whether the session remembers who made every revision after `since`: else a change since
+    /// can't be ruled out.
+    pub fn remembers_since(&self, since: u64) -> bool {
+        since >= self.accepted.number || self.authored.front().is_some_and(|a| a.number <= since + 1)
+    }
+
+    /// Whether the last commit's baseline took in a change made elsewhere (`TxStep::mixed`).
+    pub fn took_in(&self) -> bool {
+        self.took_in
+    }
+
     /// Name the undo step of the change that made revision `made` (gaps #29): "Hats pan", and
     /// whether it adds or removes a part. Any depth of undo or redo. False when no step has it:
     /// it is gone, or nothing changed. The name follows the step through undo and redo.
@@ -750,6 +934,8 @@ impl Session {
         match self.history.iter_mut().chain(self.redo.iter_mut()).rev().find(|t| t.made == made) {
             Some(t) => {
                 t.name = Some((name.to_string(), structural));
+                // A name guards nothing: it goes with the next write (WRITE-23).
+                self.unwritten = true;
                 true
             }
             None => false,
@@ -766,21 +952,44 @@ impl Session {
             structural: t.name.as_ref().is_some_and(|n| n.1),
             file: t.file.clone(),
             files: t.inverse.touched().iter().map(|p| p.to_string()).collect(),
+            moved: t.moved.iter().cloned().collect(),
+            beats: t.beats,
         };
         (self.history.last().map(named), self.redo.last().map(named))
     }
 
-    /// Push `step` on undo's history, forgetting the oldest steps past what it keeps: those, oldest
-    /// first.
+    /// Push `step` on undo's history, forgetting the oldest steps past what it keeps (WRITE-26):
+    /// those, oldest first.
     fn push_history(&mut self, step: TxStep) -> Vec<TxStep> {
         self.history.push(step);
-        let mut kept: usize = self.history.iter().map(TxStep::retained).sum();
-        let mut out = 0;
-        while self.history.len() - out > HISTORY || (kept > RETAINED && self.history.len() - out > 1) {
-            kept -= self.history[out].retained();
-            out += 1;
+        self.bound_stacks()
+    }
+
+    /// Keep both stacks within the bound (WRITE-26): their steps, the text and data their inverses
+    /// hold, and the before-images they name, each image once. Past it, undo's oldest steps go
+    /// first, then redo's farthest, never either's top. Those undo lost, oldest first.
+    pub(crate) fn bound_stacks(&mut self) -> Vec<TxStep> {
+        let Bound { steps, text, images } = self.bound;
+        let over = |h: &[TxStep], r: &[TxStep]| {
+            let kept: usize = h.iter().chain(r).map(TxStep::retained).sum();
+            let held: BTreeMap<Sha, u64> = h.iter().chain(r).flat_map(|t| t.images.iter().copied()).collect();
+            h.len() + r.len() > steps || kept > text || held.values().sum::<u64>() > images
+        };
+        let mut out = vec![];
+        while over(&self.history, &self.redo) {
+            if self.history.len() > 1 {
+                out.push(self.history.remove(0));
+            } else if self.redo.len() > 1 {
+                self.redo.remove(0);
+            } else {
+                break;
+            }
         }
-        self.history.drain(..out).collect()
+        if !out.is_empty() {
+            // Undo now ends at the bound, before whatever ended it.
+            self.ends.0 = None;
+        }
+        out
     }
 
     /// Undo the newest change made in this session: commit its stored inverse (WRITE-21), which
@@ -810,6 +1019,11 @@ impl Session {
         }
         let code = tx.touched().iter().any(|p| matches!(p.class(), m2_song::Class::Code | m2_song::Class::Manifest));
         if code && !self.draft_errors.is_empty() {
+            // A raw step whose undo makes the files the revision that plays: that revision is its
+            // Before (WRITE-21a).
+            if raw && self.lands_on_accepted(&tx) {
+                return Ok(self.accepted.clone());
+            }
             return Err(StepError::DraftInvalid(self.draft_errors.clone()));
         }
         self.built(&tx, raw).map_err(StepError::Refused)
@@ -844,11 +1058,20 @@ impl Session {
         }
         self.history.pop();
         self.last_change = None;
+        self.keep_history();
         true
     }
 
     /// Commit the inverse on top of one stack; its own inverse goes on the other.
     fn step(&mut self, redo: bool) -> Result<Stepped, StepError> {
+        self.step_as(if redo { Move::Redo } else { Move::Undo })
+    }
+
+    /// [`Session::step`], as `of` moves the stacks: the history is written ahead of its files as
+    /// that move (WRITE-25). A take-back moves them as an undo does here; [`Session::retract`] then
+    /// puts them as they were.
+    fn step_as(&mut self, of: Move) -> Result<Stepped, StepError> {
+        let redo = of == Move::Redo;
         // Undo lives in the app that holds the lock: `m2 undo` asks it there (AGENT-1, AGENT-4).
         if self.forward.is_some() {
             return Err(StepError::ReadOnly(
@@ -863,18 +1086,21 @@ impl Session {
         let code = tx.touched().iter().any(|p| matches!(p.class(), m2_song::Class::Code | m2_song::Class::Manifest));
         let refused = if let Some(r) = self.writable() {
             Some(StepError::ReadOnly(r.message))
-        } else if code && !self.draft_errors.is_empty() {
+        } else if code && !self.draft_errors.is_empty() && !(step.raw && self.lands_on_accepted(&tx)) {
             Some(StepError::DraftInvalid(self.draft_errors.clone()))
         } else {
             None
         };
+        let (raw, id) = (step.raw, step.id);
+        self.moving = Some(Moving { of, from: Some(step) });
         let result = match refused {
             Some(e) => Err(e),
-            None => self.commit_tx(&tx, step.raw).map_err(StepError::Refused),
+            None => self.commit_tx(&tx, raw).map_err(StepError::Refused),
         };
+        let step = self.moving.take().and_then(|m| m.from).expect("the step moved");
         match result {
             Ok((done, inverse)) => {
-                if self.refused == step.id {
+                if self.refused == id {
                     self.refused = 0;
                 }
                 if let Some(mut inverse) = inverse {
@@ -882,7 +1108,17 @@ impl Session {
                     // name (AGENT-2).
                     (inverse.made, inverse.name) = (done.number, step.name.clone());
                     (inverse.id, inverse.source) = (step.id, step.source.clone());
+                    // And it moves what the change moved, whichever way it goes.
+                    (inverse.moved, inverse.beats) = (step.moved.clone(), step.beats);
+                    if let Some(a) = self.authored.back_mut().filter(|a| a.number == done.number) {
+                        (a.moved, a.beats) = (step.moved.iter().cloned().collect(), step.beats);
+                    }
+                    inverse.images = crate::history::images(&self.dir, &inverse).unwrap_or_default();
                     if redo { &mut self.history } else { &mut self.redo }.push(inverse);
+                    self.bound_stacks();
+                } else {
+                    // Nothing to write, so nothing was written ahead: the step went, said now.
+                    self.keep_history();
                 }
                 self.last_change = Some(if redo { Change::Redo } else { Change::Undo });
                 let (before, after) = tx.label.clone();
@@ -893,6 +1129,10 @@ impl Session {
                     self.refused = step.id;
                 }
                 if redo { &mut self.redo } else { &mut self.history }.push(step);
+                // Written ahead, it never landed: the history as it is again.
+                if matches!(e, StepError::Refused(_)) {
+                    self.keep_history();
+                }
                 Err(e)
             }
         }

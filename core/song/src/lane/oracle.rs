@@ -203,6 +203,7 @@ pub fn read(text: &str, kind: &LaneKind) -> Result<LaneData, LaneError> {
         });
     }
     match kind {
+        LaneKind::Choice { .. } | LaneKind::Switch => unreachable!("the old reader predates lanes of names (CARD-15)"),
         LaneKind::Notes | LaneKind::Audio if unit.is_some() => {
             Err(invalid(format!("unknown field `unit`: only automation lanes have a unit, and this is {}", noun(kind))))
         }
@@ -251,6 +252,7 @@ pub fn canonical(data: &LaneData) -> String {
         LaneData::Notes(c) => (None, c.iter().map(Old::line).collect()),
         LaneData::Control { unit, clips } => (unit.as_ref(), clips.iter().map(Old::line).collect()),
         LaneData::Audio(c) => (None, c.iter().map(Old::line).collect()),
+        LaneData::Steps { .. } => unreachable!("the old writer predates lanes of names (CARD-15)"),
     };
     let unit = unit.map_or_else(String::new, |u| format!("\"unit\": {}, ", string(u)));
     if lines.is_empty() {
@@ -270,6 +272,7 @@ pub fn sort(mut data: LaneData) -> LaneData {
         }
         LaneData::Control { clips, .. } => *clips = sorted(std::mem::take(clips), |c| (c.start, c.id.as_deref())),
         LaneData::Audio(c) => *c = sorted(std::mem::take(c), |c| (c.start, c.id.as_deref())),
+        LaneData::Steps { .. } => unreachable!("the old sort predates lanes of names (CARD-15)"),
     }
     data
 }
@@ -280,5 +283,6 @@ pub fn clip_lines(d: &LaneData) -> Vec<(Option<&str>, String)> {
         LaneData::Notes(c) => c.iter().map(|c| (c.id.as_deref(), Old::line(c))).collect(),
         LaneData::Control { clips, .. } => clips.iter().map(|c| (c.id.as_deref(), Old::line(c))).collect(),
         LaneData::Audio(c) => c.iter().map(|c| (c.id.as_deref(), Old::line(c))).collect(),
+        LaneData::Steps { .. } => unreachable!("the old writer predates lanes of names (CARD-15)"),
     }
 }

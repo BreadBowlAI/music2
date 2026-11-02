@@ -12,6 +12,10 @@
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
+//              library as export, and a registry: a bucket the m2 cli's robot builds from the three
+//                      packs in fixtures/library, served over http on this computer while the run lasts
+//                      (M2_REGISTRY names it); a path prefix written in <root>/library/drip is
+//                      answered half, then held until that file is gone
 //   --repo <dir>   the checkout examples/first-song is copied from (the <root>/proj of every kind),
 //                  passed on as E2E_REPO to the suites that copy an example themselves (live3b:
 //                  examples/with-plugins; fx-fixes: examples/first-song). Default: the repo this
@@ -71,8 +75,9 @@
 // `expect` here (and the README's table) must follow. Exit status: 0 when every run was ok, 1 when
 // any failed, 3 when none failed but some were PART, 2 for a usage error.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
+import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -110,17 +115,19 @@ export const SUITES = [
   ["notes", "proj", { expect: 69, s: 11 }],
   ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
   ["nx-piano", "fix", { expect: 41, s: 6 }],
-  ["nx-midi", "fix", { expect: 24, s: 3 }],
+  ["nx-midi", "fix", { expect: 25, s: 3 }],
   ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["io-record", "fix", { expect: 38, s: 7 }],
+  ["rec-takes", "fix", { expect: 41, s: 12 }],
   ["pl-notes", "fix", { expect: 102, s: 16 }],
+  ["nt-notes", "fix", { expect: 63, s: 10 }],
   ["pl-lanes", "fix", { expect: 28, s: 4 }],
-  ["ports", "proj", { expect: 46, s: 5 }],
+  ["ports", "proj", { expect: 49, s: 14 }],
   ["s8-meters", "fix", { expect: 24, s: 17, tier: "nightly", why: "speed: 20 to 40 meter messages a second", sleeps: "the meters' 33 ms tick is a sleep" }],
   ["dsp", "proj", { expect: 33, s: 3 }],
   ["start", "proj", { expect: 24, s: 3 }],
   ["start", "empty", { expect: 14, s: 2 }],
-  ["st-guide", "none", { expect: 38, s: 7 }],
+  ["st-guide", "none", { expect: 39, s: 7 }],
   ["fixes-graph", "fix", { expect: 42, s: 8 }],
   ["fixes-notes", "fix", { expect: 37, s: 6 }],
   ["attention", "attn", { expect: 60, s: 6, tier: "nightly", why: "flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded" }],
@@ -128,6 +135,7 @@ export const SUITES = [
   ["newsong", "none", { expect: 71, s: 10, tier: "nightly", why: "flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21)" }],
   ["pl-projects", "none", { expect: 66, s: 10 }],
   ["nx-settings", "none", { expect: 42, s: 12 }],
+  ["tr-trust", "none", { expect: 25, s: 15 }],
   ["nx-nodevice", "none", { expect: 11, s: 2 }],
   ["sound-stops", "none", { expect: 13, s: 8 }],
   ["ex-faults", "none", { expect: 10, s: 6 }],
@@ -142,6 +150,7 @@ export const SUITES = [
   ["st-audio", "fix", { expect: 94, s: 8, tier: "nightly", why: "flake: the revision moved after an MP3 was refused (HANDOFF.md)" }],
   ["pl-zoom", "fix", { expect: 62, s: 20 }],
   ["pl-arrange", "fix", { expect: 60, s: 8 }],
+  ["sections", "fix", { expect: 32, s: 7 }],
   ["nx-nits", "fix", { expect: 27, s: 6 }],
   ["s4-attn", "fix", { expect: 13, s: 2 }],
   ["s4-problems", "fix", { expect: 18, s: 2 }],
@@ -149,7 +158,7 @@ export const SUITES = [
   ["live3a", "fix", { expect: 49, s: 15, tier: "nightly", why: "speed: a ruler click and a seek land within 1 s" }],
   ["live3b", "proj", { clap: true, expect: 60, s: 37, tier: "nightly", why: "speed: previews answer within 150 ms during a compile; flake: its release writes another db() (HANDOFF.md; twice at half CPU, 2026-10-21)" }],
   ["ph-window", "none", { clap: true, expect: 9, s: 3 }],
-  ["s5-knobs", "fix", { expect: 120, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
+  ["s5-knobs", "fix", { expect: 147, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
   ["s6-builders", "fix", { expect: 56, s: 5 }],
   ["s6-write", "fix", { expect: 36, s: 7 }],
   ["s6-fixes", "fix", { expect: 19, s: 4 }],
@@ -163,19 +172,34 @@ export const SUITES = [
   ["s8-songbar", "fix", { expect: 84, s: 13 }],
   ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
+  ["taps", "fix", { expect: 23, s: 20 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 38, s: 8 }],
+  ["kits", "fix", { expect: 18, s: 6 }],
+  ["beat-grid", "fix", { expect: 62, s: 9 }],
+  ["make-kit", "fix", { expect: 24, s: 8 }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
   ["ab-sampler", "export", { expect: 23, s: 4 }],
+  ["cards", "fix", { expect: 36, s: 6 }],
+  ["card-views", "fix", { expect: 61, s: 12 }],
+  ["dressed", "fix", { expect: 38, s: 10 }],
+  ["upgrade", "fix", { expect: 26, s: 5 }],
+  ["mixing", "fix", { expect: 25, s: 5 }],
+  ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
-  ["br-plugins", "fix", { probe: true, expect: 19, s: 2 }],
+  ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
+  ["library", "library", { expect: 38, s: 9 }],
+  ["own-edits", "fix", { expect: 43, s: 6 }],
+  ["own-gate", "fix", { expect: 30, s: 12 }],
+  ["own-base", "fix", { expect: 36, s: 20 }],
+  ["own-window", "fix", { expect: 15, s: 15 }],
 ];
-const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export"];
+const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
@@ -333,9 +357,22 @@ if (runs.some(([, , o]) => o?.clap) && !clapPath) {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// Removes a run's scratch folder: its folders made writable first, since a pack installed in its
+// HOME's store is read-only (PACK-6).
+function removeTree(dir) {
+  const writable = (d) => {
+    try {
+      fs.chmodSync(d, 0o755);
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) if (e.isDirectory()) writable(path.join(d, e.name));
+    } catch {}
+  };
+  writable(dir);
+  fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // Builds the scratch folder for one run, as the suites expect it.
 function prepare(dir, kind) {
-  fs.rmSync(dir, { recursive: true, force: true });
+  removeTree(dir);
   const home = path.join(dir, "testhome");
   fs.mkdirSync(path.join(home, ".music2"), { recursive: true });
   const proj = path.join(dir, "proj");
@@ -352,6 +389,7 @@ function prepare(dir, kind) {
   } else if (kind === "empty" || kind === "none") {
     open = "-";
   }
+  if (kind === "library") library(dir, home);
   const args = {
     proj: [dir],
     cables: [dir],
@@ -360,14 +398,91 @@ function prepare(dir, kind) {
     empty: [dir, "empty"],
     none: [dir, home],
     export: [dir, home, proj, cli],
+    library: [dir, home, proj, cli],
   }[kind];
   return { home, open, args };
+}
+
+// A 16-bit mono WAV of a tenth of a second of a tone at 48 kHz, as a pack's sample.
+function tone(file) {
+  const n = 4800;
+  const b = Buffer.alloc(44 + n * 2);
+  b.write("RIFF", 0);
+  b.writeUInt32LE(36 + n * 2, 4);
+  b.write("WAVEfmt ", 8);
+  b.writeUInt32LE(16, 16);
+  b.writeUInt16LE(1, 20);
+  b.writeUInt16LE(1, 22);
+  b.writeUInt32LE(48000, 24);
+  b.writeUInt32LE(96000, 28);
+  b.writeUInt16LE(2, 32);
+  b.writeUInt16LE(16, 34);
+  b.write("data", 36);
+  b.writeUInt32LE(n * 2, 40);
+  for (let i = 0; i < n; i++) b.writeInt16LE(Math.round(Math.sin(i / 10) * 8000 * (1 - i / n)), 44 + i * 2);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, b);
+}
+
+// The library kind's registry: fixtures/library's two packs listed with `m2 registry add`,
+// unpacked as the registry's CI unpacks them, and built into <dir>/library/bucket by `m2 registry
+// build`, as the registry's CI builds one.
+function library(dir, home) {
+  const at = path.join(dir, "library");
+  fs.cpSync(path.join(E2E, "fixtures/library"), at, { recursive: true });
+  fs.mkdirSync(path.join(at, "registry/packs"), { recursive: true });
+  tone(path.join(at, "drums/samples/kicks/Boom.wav"));
+  const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "none" };
+  delete env.M2_REGISTRY;
+  const m2 = (...a) => execFileSync(cli, a, { cwd: at, env, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
+  for (const [pack, owner] of [["drums", "alice"], ["keys", "bob"], ["pad", "carol"]]) {
+    const said = m2("registry", "add", "registry", pack, "--source", `https://github.com/${owner}/${pack}/releases/download/v1/${pack}.tar.gz`);
+    const hex = /sha256:([0-9a-f]{64})/.exec(said)?.[1];
+    if (!hex) throw new Error(`m2 registry add ${pack} said: ${said}`);
+    fs.cpSync(path.join(at, pack), path.join(at, "sources", hex, pack), { recursive: true });
+  }
+  m2("registry", "build", "registry", "--sources", "sources", "--out", "bucket", "--made", "2026-10-30T12:00:00Z");
+}
+
+// The library kind's bucket, served over http on this computer while the run lasts: a GET of a path
+// is its file's bytes, else 404. While <root>/library/drip names a prefix of a path asked for, the
+// answer sends half its bytes, then waits until that file is gone (a slow download, to see a Get's
+// progress and cancel it). Its address, and how to stop it.
+async function serveBucket(dir) {
+  const bucket = path.join(dir, "library/bucket");
+  const drip = path.join(dir, "library/drip");
+  const server = http.createServer(async (req, res) => {
+    const rel = decodeURIComponent(new URL(req.url, "http://x").pathname).replace(/^\/+/, "");
+    let body;
+    try {
+      if (rel.split("/").includes("..")) throw new Error("no");
+      body = fs.readFileSync(path.join(bucket, rel));
+    } catch {
+      res.writeHead(404, { "content-length": 0 });
+      return res.end();
+    }
+    res.writeHead(200, { "content-length": body.length });
+    const held = fs.existsSync(drip) && rel.startsWith(fs.readFileSync(drip, "utf8").trim());
+    if (!held) return res.end(body);
+    res.write(body.subarray(0, body.length >> 1));
+    while (fs.existsSync(drip) && !res.destroyed) await sleep(50);
+    res.end(body.subarray(body.length >> 1));
+  });
+  await new Promise((r) => server.listen(0, "127.0.0.1", r));
+  const stop = () =>
+    new Promise((r) => {
+      server.close(r);
+      server.closeAllConnections();
+    });
+  return { url: `http://127.0.0.1:${server.address().port}`, stop };
 }
 
 function envFor(home, clap, probe) {
   const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", M2_AUDIO_INPUT: "inject", M2_AUDIO_INPUTS: "Test mic,USB mic", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   delete env.M2_PROBE;
+  // No suite reads a registry unless its kind serves one (the library kind's).
+  delete env.M2_REGISTRY;
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   // The probe plugin, which a debug server installs (br-plugins).
   if (probe) env.M2_PROBE = "1";
@@ -380,81 +495,88 @@ async function runOne(suite, kind, o = {}, stream) {
   const logFile = path.join(root, `${name}.log`);
   const { home, open, args } = prepare(dir, kind);
   const env = envFor(home, o.clap, o.probe);
-  const session = path.join(home, ".music2/session.json");
-  const log = fs.openSync(logFile, "w");
-  // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
-  // another run's file by then.
-  let closed = false;
-  const say = (s) => {
-    if (closed) fs.appendFileSync(logFile, s);
-    else fs.writeSync(log, s);
-    if (stream) process.stdout.write(s);
-  };
+  const bucket = kind === "library" ? await serveBucket(dir) : null;
+  if (bucket) env.M2_REGISTRY = bucket.url;
+  // However the run ends, the bucket's server stops with it.
+  try {
+    const session = path.join(home, ".music2/session.json");
+    const log = fs.openSync(logFile, "w");
+    // Once the log is closed, a late line goes to it by name: its old descriptor may belong to
+    // another run's file by then.
+    let closed = false;
+    const say = (s) => {
+      if (closed) fs.appendFileSync(logFile, s);
+      else fs.writeSync(log, s);
+      if (stream) process.stdout.write(s);
+    };
 
-  const serverLog = fs.openSync(path.join(dir, "headless.log"), "w");
-  const server = spawn(headless, [open, session, `e2e${Date.now()}`], { env, stdio: ["ignore", serverLog, serverLog] });
-  let serverExit = null;
-  server.on("exit", (code, sig) => (serverExit = sig ?? code));
-  // It couldn't be started: say so in its run, not as a crash of every run.
-  server.on("error", (e) => (serverExit ??= e.code ?? String(e)));
-  const t0 = Date.now();
-  while (!fs.existsSync(session) && serverExit === null && Date.now() - t0 < 30000) await sleep(100);
-  await sleep(300);
-  let code;
-  if (!fs.existsSync(session)) {
-    say(`FAIL  the headless server didn't start (exit ${serverExit}); see ${path.join(dir, "headless.log")}\n`);
-    code = 1;
-  } else {
-    code = await new Promise((resolve) => {
-      const child = spawn(process.execPath, [path.join(E2E, `${suite}.mjs`), ...args], { cwd: E2E, env, stdio: ["ignore", "pipe", "pipe"] });
-      child.stdout.on("data", (d) => say(d.toString()));
-      child.stderr.on("data", (d) => say(d.toString()));
-      // Its output can still be on the way when it exits: wait for the end of both (at most 2 s,
-      // in case something it started holds them open), so every line it printed is counted.
-      const ends = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once("end", r).once("error", r))));
-      // On a timeout, SIGTERM first: puppeteer closes its browser on it (a SIGKILL would leave
-      // chrome-headless-shell running, since puppeteer starts it in its own process group).
-      let hard;
-      const timer = setTimeout(() => {
-        say(`FAIL  timed out after ${timeout / 1000}s\n`);
-        child.kill("SIGTERM");
-        hard = setTimeout(() => child.kill("SIGKILL"), 5000);
-      }, timeout);
-      child.on("exit", (c, sig) => {
-        clearTimeout(timer);
-        clearTimeout(hard);
-        Promise.race([ends, sleep(2000)]).then(() => resolve(sig ? 1 : c));
+    const serverLog = fs.openSync(path.join(dir, "headless.log"), "w");
+    const server = spawn(headless, [open, session, `e2e${Date.now()}`], { env, stdio: ["ignore", serverLog, serverLog] });
+    let serverExit = null;
+    server.on("exit", (code, sig) => (serverExit = sig ?? code));
+    // It couldn't be started: say so in its run, not as a crash of every run.
+    server.on("error", (e) => (serverExit ??= e.code ?? String(e)));
+    const t0 = Date.now();
+    while (!fs.existsSync(session) && serverExit === null && Date.now() - t0 < 30000) await sleep(100);
+    await sleep(300);
+    let code;
+    if (!fs.existsSync(session)) {
+      say(`FAIL  the headless server didn't start (exit ${serverExit}); see ${path.join(dir, "headless.log")}\n`);
+      code = 1;
+    } else {
+      code = await new Promise((resolve) => {
+        const child = spawn(process.execPath, [path.join(E2E, `${suite}.mjs`), ...args], { cwd: E2E, env, stdio: ["ignore", "pipe", "pipe"] });
+        child.stdout.on("data", (d) => say(d.toString()));
+        child.stderr.on("data", (d) => say(d.toString()));
+        // Its output can still be on the way when it exits: wait for the end of both (at most 2 s,
+        // in case something it started holds them open), so every line it printed is counted.
+        const ends = Promise.all([child.stdout, child.stderr].map((s) => new Promise((r) => s.once("end", r).once("error", r))));
+        // On a timeout, SIGTERM first: puppeteer closes its browser on it (a SIGKILL would leave
+        // chrome-headless-shell running, since puppeteer starts it in its own process group).
+        let hard;
+        const timer = setTimeout(() => {
+          say(`FAIL  timed out after ${timeout / 1000}s\n`);
+          child.kill("SIGTERM");
+          hard = setTimeout(() => child.kill("SIGKILL"), 5000);
+        }, timeout);
+        child.on("exit", (c, sig) => {
+          clearTimeout(timer);
+          clearTimeout(hard);
+          Promise.race([ends, sleep(2000)]).then(() => resolve(sig ? 1 : c));
+        });
+        // node couldn't be started: that run fails, and the others go on.
+        child.on("error", (e) => {
+          clearTimeout(timer);
+          clearTimeout(hard);
+          say(`FAIL  the suite didn't start: ${e.message}\n`);
+          resolve(1);
+        });
       });
-      // node couldn't be started: that run fails, and the others go on.
-      child.on("error", (e) => {
-        clearTimeout(timer);
-        clearTimeout(hard);
-        say(`FAIL  the suite didn't start: ${e.message}\n`);
-        resolve(1);
-      });
-    });
+    }
+    if (serverExit === null) {
+      server.kill("SIGTERM");
+      for (let i = 0; i < 30 && serverExit === null; i++) await sleep(100);
+      if (serverExit === null) server.kill("SIGKILL");
+    }
+    fs.closeSync(serverLog);
+    closed = true;
+    fs.closeSync(log);
+    const text = fs.readFileSync(logFile, "utf8");
+    const pass = (text.match(/^PASS/gm) ?? []).length;
+    const fail = (text.match(/^FAIL/gm) ?? []).length;
+    const skips = text.match(/^SKIP.*$/gm) ?? [];
+    const { expect } = o;
+    // Why a run that failed nothing still isn't ok.
+    const why = [];
+    if (expect !== undefined && pass < expect) why.push(`${pass} of its ${expect} checks passed, ${expect - pass} didn't run`);
+    if (expect !== undefined && pass > expect) why.push(`${pass} checks passed where ${expect} are expected: update its count in run.mjs and the README`);
+    why.push(...skips.map((s) => s.replace(/^SKIP\s+/, "skipped ")));
+    const status = code !== 0 || fail > 0 ? "FAIL" : why.length ? "PART" : "ok";
+    if (!opts.keep && status === "ok") removeTree(dir);
+    return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
+  } finally {
+    await bucket?.stop();
   }
-  if (serverExit === null) {
-    server.kill("SIGTERM");
-    for (let i = 0; i < 30 && serverExit === null; i++) await sleep(100);
-    if (serverExit === null) server.kill("SIGKILL");
-  }
-  fs.closeSync(serverLog);
-  closed = true;
-  fs.closeSync(log);
-  const text = fs.readFileSync(logFile, "utf8");
-  const pass = (text.match(/^PASS/gm) ?? []).length;
-  const fail = (text.match(/^FAIL/gm) ?? []).length;
-  const skips = text.match(/^SKIP.*$/gm) ?? [];
-  const { expect } = o;
-  // Why a run that failed nothing still isn't ok.
-  const why = [];
-  if (expect !== undefined && pass < expect) why.push(`${pass} of its ${expect} checks passed, ${expect - pass} didn't run`);
-  if (expect !== undefined && pass > expect) why.push(`${pass} checks passed where ${expect} are expected: update its count in run.mjs and the README`);
-  why.push(...skips.map((s) => s.replace(/^SKIP\s+/, "skipped ")));
-  const status = code !== 0 || fail > 0 ? "FAIL" : why.length ? "PART" : "ok";
-  if (!opts.keep && status === "ok") fs.rmSync(dir, { recursive: true, force: true });
-  return { name, code, pass, fail, skip: skips.length, expect, why, status, logFile };
 }
 
 // One run, never a crash of all of them: anything runOne throws is that run's FAIL, in its log.

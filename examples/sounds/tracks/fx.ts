@@ -1,7 +1,6 @@
 import { hz, secs, track } from "@m2/core";
-import { fm } from "std/fm";
+import { fm, synth } from "@m2/synths";
 import { sum } from "std/math";
-import { synth } from "std/synth";
 
 // A riser from the raw synth engine (noise and a saw into a singing filter that the `cutoff`
 // lane sweeps open), and a metallic FM hit at each drop.

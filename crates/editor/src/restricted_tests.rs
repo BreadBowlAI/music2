@@ -26,7 +26,7 @@ impl ProjectFixture {
     }
 
     fn open(&self) -> Session {
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         Session::open(&self.0, packages).unwrap()
     }
@@ -222,7 +222,10 @@ fn audition_refuses_stale_controls_invalid_drafts_and_nonfinite_values() {
     // A save that touches the control's own call makes the old drag stale.
     std::fs::write(fixture.0.join("song.ts"), format!("// Saved elsewhere.\n{}", original.replace("hz(800)", "hz(801)"))).unwrap();
     assert!(session.refresh());
-    assert_eq!(session.preview(control.revision, &control.id, 950.0), Err(EditError::Stale { current: 3 }));
+    assert_eq!(
+        session.preview(control.revision, &control.id, 950.0),
+        Err(EditError::Stale { current: 3, by: Some(m2_session::Source::Outside) })
+    );
     let current = session.controls().into_iter().next().unwrap();
     std::fs::write(fixture.0.join("song.ts"), "(").unwrap();
     assert!(session.refresh());
@@ -263,7 +266,7 @@ fn graph_values_cannot_escape_into_javascript_arithmetic() {
         let fixture = ProjectFixture::new(&song(&format!(
             "const base = hz(800);\nexport default song(() => add(osc.sine(base), osc.saw({escape})));"
         )));
-        let mut packages = PackageSet::default();
+        let mut packages = PackageSet::default().with_store(m2_song::pack::test_store());
         packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         // WRITE-20: the project opens, with no accepted code and the build's errors.
         let session = Session::open(&fixture.0, packages).unwrap();

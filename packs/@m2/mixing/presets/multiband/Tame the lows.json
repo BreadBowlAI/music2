@@ -1,0 +1,12 @@
+{
+  "m2preset": 1,
+  "name": "Tame the lows",
+  "sound": "@m2/mixing:multiband",
+  "values": {
+    "highRatio": 1,
+    "lowMid": 150,
+    "lowRatio": 4,
+    "lowThreshold": -30,
+    "midRatio": 1
+  }
+}

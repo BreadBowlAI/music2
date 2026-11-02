@@ -5,7 +5,7 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild; from 8b, overlay cell writes, live notes, and the meters' taps and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! rebuild; from 8b, overlay cell writes, live notes, and the taps (meters and rings, TAP-3) and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use common::*;
 use m2_ir::Origin;
 use m2_play::{DeviceError, DeviceErrorKind, Driver, Gone, Player, alloc};
-use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, Renderer, Retired};
+use m2_runtime::{BLOCK, CellTarget, Continues, LaneSwap, LiveEv, NotesData, RINGS, Renderer, Retired, TapAt};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -65,9 +65,9 @@ fn nodes(fx: bool) -> (Value, &'static str) {
             {"id": "o", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "hz"}},
             {"id": "e", "op": "kernel", "kernel": "std:adsr", "inputs": {"gate": "g"}},
             {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "e"}},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a"}},
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a"}},
             {"id": "wet", "op": "const", "value": 0.25, "origin": {"site": 12, "arg": ["0"]}},
-            {"id": "r", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d", "mix": "wet"}}]}}),
+            {"id": "r", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "d", "mix": "wet"}}]}}),
         json!({"id": "c", "op": "lane", "lane": "level"}),
         json!({"id": "t", "op": "time", "of": "beats"}),
         json!({"id": "l", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}}),
@@ -75,15 +75,18 @@ fn nodes(fx: bool) -> (Value, &'static str) {
         json!({"id": "vc", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "v", "by": if fx { "half" } else { "c" }}}),
         json!({"id": "vl", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "vc", "by": "l"}}),
         json!({"id": "a", "op": "lane", "lane": "clips"}),
-        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "a"}}),
+        // A second audio lane, which nothing plays but a live input (MON-8).
+        json!({"id": "a2", "op": "lane", "lane": "heard"}),
+        json!({"id": "aa", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "a2"}}),
+        json!({"id": "x", "op": "kernel", "kernel": "std:add", "inputs": {"a": "vl", "b": "aa"}}),
         json!({"id": "fb", "op": "feedback", "kind": "audio<1>", "input": "sum"}),
         json!({"id": "k", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}}),
         json!({"id": "h", "op": "const", "value": 0.3, "origin": {"site": 11, "arg": ["0"]}}),
         json!({"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "x", "b": "k"}}),
-        json!({"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "sum"}}),
+        json!({"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "sum"}}),
     ];
     let last = if fx {
-        n.push(json!({"id": "fx", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "d"}}));
+        n.push(json!({"id": "fx", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "d"}}));
         "fx"
     } else {
         "d"
@@ -103,7 +106,7 @@ fn build(fx: bool, bpm: f64) -> Song {
         ns.extend((0..300).map(|k| json!({"pitch": k % 120, "start": 12, "length": 1})));
     }
     let files = [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/arrangement.json", json!({"tempo": [{"beat": 0, "bpm": bpm}]}).to_string()),
         // Equal keys: the first note twice.
@@ -128,7 +131,7 @@ fn build(fx: bool, bpm: f64) -> Song {
     let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "nodes": n, "exports": {"out": out}, "frames": [{"site": 1, "component": "test:level"}], "lanes": [
             {"key": "notes", "kind": "events<note>"}, {"key": "level", "kind": "control<gain>", "default": 0},
-            {"key": "clips", "kind": "audio<1>"}]}]}))
+            {"key": "clips", "kind": "audio<1>"}, {"key": "heard", "kind": "audio<1>"}]}]}))
     .unwrap();
     let packages = std_packages();
     let flat = m2_ir::check(&ir, &packages).unwrap_or_else(|e| panic!("{e:?}"));
@@ -463,21 +466,27 @@ fn live_notes_never_allocate() {
     }
 }
 
-// RENDER-30a: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz, stereo,
-// converted to the song's 48 kHz, in buffers of odd sizes; and the output's callback, as it hands
-// the silent input what was injected and the engine hears it on the audio lane (MON-8), across a
-// stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
+// RENDER-30a, MON-13: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz
+// with four channels, converted to the song's 48 kHz, in buffers of odd sizes, into a ring for each
+// pair; and the output's callback, as it hands the silent input what was injected and the engine
+// hears channels 3–4 on one audio lane and channel 1 alone on another, at once (MON-8, review Q11),
+// across a stop, the idle engine kept awake, a loop's wraps, and hearing stopped and started again.
 #[test]
 fn the_input_callback_never_allocates() {
     let song = build(false, 120.0);
     let r = song.renderer();
     let (generation, info) = (r.generation(), r.info());
     let slot = info.lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
+    let other = info.lanes.iter().position(|l| l.lane.lane == "heard").unwrap() as u32;
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();
-    player.open_input(&m2_play::InputChoice::default()).unwrap();
-    let (mut device, engine_ring, take_ring) = player.driven_input(44_100, 2);
-    let wave: Vec<f32> = (0..2 * 4096).map(|i| (i as f32 * 0.01).sin() * 0.25).collect();
+    player.name_inputs(&["Desk:4"]);
+    let silent = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    let (mut device, rings) = player.driven_input(44_100, 4);
+    let driven = m2_play::Listen { rings: rings.clone(), channels: 4, ..silent.clone() };
+    // Channels 1 and 2 silent, 3 and 4 a wave: what is heard is 3–4's.
+    let wave: Vec<f32> = (0..4 * 4096).map(|i| if i % 4 >= 2 { ((i / 4) as f32 * 0.01).sin() * 0.25 } else { 0.0 }).collect();
+    let three: Vec<f32> = (0..4096).map(|i| (i as f32 * 0.01).sin() * 0.25).collect();
     let mut data = vec![0.0f32; 2 * 4096];
     let (mut allocs, mut heard) = (0, 0.0f32);
     let mut fill = |d: &mut m2_play::Driver, frames: usize| {
@@ -487,8 +496,8 @@ fn the_input_callback_never_allocates() {
             if n == 0 {
                 break;
             }
-            player.inject_input(&wave[..n]).unwrap();
-            allocs += trapped(|| device.fill(&wave[..2 * n], std::time::Duration::from_micros(700)));
+            player.inject_channels(&[vec![0.0; n], vec![0.0; n], three[..n].to_vec(), three[..n].to_vec()]).unwrap();
+            allocs += trapped(|| device.fill(&wave[..4 * n], std::time::Duration::from_micros(700)));
             allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
             heard = heard.max(peak(&data[..2 * n].chunks(2).map(|f| [f[0], f[1]]).collect::<Vec<_>>()));
             done += n;
@@ -496,26 +505,34 @@ fn the_input_callback_never_allocates() {
         drop(d.drain_retired());
     };
     fill(&mut d, 4096);
-    player.hear(generation, slot, true).unwrap();
+    let three_four = m2_play::Channels::Pair(2);
+    player.hear(generation, slot, Some((&silent, three_four))).unwrap();
+    player.hear(generation, other, Some((&silent, m2_play::Channels::One(0)))).unwrap();
     player.play();
     player.set_loop(Some((0.0, 1.0))).unwrap();
     fill(&mut d, 60_000);
     player.stop();
     fill(&mut d, 48_000);
     assert!(!player.idle(), "never idle while it hears");
-    player.hear(generation, slot, false).unwrap();
+    player.hear(generation, slot, None).unwrap();
     fill(&mut d, 4096);
-    player.hear(generation, slot, true).unwrap();
+    player.hear(generation, slot, Some((&driven, three_four))).unwrap();
     fill(&mut d, 4096);
     assert_eq!(allocs, 0, "an input's callback or the engine's hearing allocated or freed");
-    assert!(heard > 0.1, "the input was heard: {heard}");
-    assert!(engine_ring.head() > 100_000 && take_ring.head() == engine_ring.head(), "the device's input reached both rings");
+    assert!(heard > 0.1, "channels 3–4 were heard: {heard}");
+    assert_eq!(rings.len(), 2, "a ring for each pair");
+    assert!(rings[1].head() > 100_000 && rings[0].head() == rings[1].head(), "the device's input reached every pair's ring");
+    let mut last = [[9.0f32; 2]; 64];
+    rings[0].read(rings[0].head() - 64, &mut last);
+    assert!(last.iter().all(|f| *f == [0.0; 2]), "channels 1–2 are their own: silence");
     assert!(player.input_frames() > 100_000, "the silent input handed over what was injected");
     assert!(!player.crashed());
 }
 
-// RENDER-28, 8b.8: a live plan's taps and the callback's timer allocate and free nothing, while
-// another thread reads and resets them as the server's meters do.
+// RENDER-28, TAP-3, 8b.8: a live plan's taps and the callback's timer allocate and free nothing,
+// while another thread reads and resets the meters, as the server's meters do, turns them off and
+// on, and points the rings at the output and at every node with sound, one after another, reading
+// their frames.
 #[test]
 fn taps_and_the_load_never_allocate() {
     let song = project(
@@ -529,8 +546,15 @@ fn taps_and_the_load_never_allocate() {
     );
     let owner = m2_plugins::Owner::discard();
     let mut cache = m2_runtime::audio::Cache::default();
-    let r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, m2_runtime::Basis::Fresh).unwrap();
+    let mut r = Renderer::prepare(&song.flat, &song.data, &song.packages, SR, &mut cache, &owner, m2_runtime::Basis::Fresh).unwrap();
+    let site = |k: &str| TapAt::Site(song.flat.overlays.iter().position(|o| o.module == k).unwrap());
+    let sound: Vec<TapAt> = (0..song.flat.nodes.len())
+        .filter(|&i| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_))))
+        .map(TapAt::Node)
+        .collect();
+    r.tap(&[vec![site("kick")], vec![site("bass")], sound.clone()]).unwrap();
     let taps = r.info().taps.clone().expect("a live plan has taps");
+    taps.watch(true);
     let (player, mut d) = Player::driven(SR);
     player.open(r).unwrap();
     player.play();
@@ -538,20 +562,30 @@ fn taps_and_the_load_never_allocate() {
     let reader = {
         let (player, reading) = (player.clone(), reading.clone());
         std::thread::spawn(move || {
-            let (mut seen, mut longest) = (vec![0.0f32; 3], 0.0f32);
+            let (mut seen, mut longest, mut framed) = (vec![0.0f32; 3], 0.0f32, 0);
+            let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
+            let mut frames = vec![];
             // Once more after the last fill: what it left is read too.
-            loop {
+            for turn in 0.. {
                 let last = !reading.load(Ordering::Relaxed);
+                taps.watch(turn % 7 != 3);
+                for ring in 0..RINGS {
+                    if taps.frames(ring, 0, 1024, &mut frames).is_some() {
+                        framed += frames.len();
+                    }
+                    taps.point(ring, (turn % 5 != ring).then(|| points[(turn + ring) % points.len()])).unwrap();
+                }
                 let p = taps.take();
-                for (s, x) in seen.iter_mut().zip([p.out[0], p.track("kick").unwrap()[0], p.track("bass").unwrap()[0]]) {
+                for (s, x) in seen.iter_mut().zip([p.out[0], p.meters[0][0], p.meters[1][0]]) {
                     *s = s.max(x);
                 }
                 longest = longest.max(player.load().longest);
                 if last {
-                    return (seen, longest);
+                    break;
                 }
                 std::thread::yield_now();
             }
+            (seen, longest, framed)
         })
     };
     let mut data = vec![0.0f32; 2 * 4096];
@@ -560,9 +594,10 @@ fn taps_and_the_load_never_allocate() {
         allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
     }
     reading.store(false, Ordering::Relaxed);
-    let (seen, longest) = reader.join().unwrap();
+    let (seen, longest, framed) = reader.join().unwrap();
     assert_eq!(allocs, 0, "the callback allocated or freed");
     assert!(seen.iter().all(|&x| x > 0.1), "the output, the kick and the bass were read: {seen:?}");
+    assert!(framed > 0, "the rings' frames were read");
     assert!(longest > 0.0);
 }
 
@@ -577,7 +612,7 @@ fn probes_on(gain: f64, host: Option<Arc<dyn m2_plugins::PluginHost>>) -> Song {
     let dir = temp("trap-plugins");
     let ns: Vec<Value> = (0..64).map(|k| json!({"pitch": 48 + (k % 7) * 3, "start": k as f64 * 0.25, "length": 1.5})).collect();
     for (name, text) in [
-        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n".to_string()),
+        ("music2.toml", "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n".to_string()),
         ("song.ts", String::new()),
         ("data/song/notes.json", json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": ns}]}).to_string()),
     ] {

@@ -16,7 +16,8 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -34,13 +35,8 @@ fn the_cli_and_the_apps_export_write_the_same_file() {
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
 
     let cli = temp.0.join("cli.wav");
-    let out = Command::new(env!("CARGO_BIN_EXE_m2"))
-        .env("HOME", std::env::temp_dir().join("m2-tests-no-app"))
-        .arg("render")
-        .arg(&song)
-        .arg(&cli)
-        .output()
-        .unwrap();
+    let out =
+        Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", m2_song::pack::test_home()).arg("render").arg(&song).arg(&cli).output().unwrap();
     assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
 
     let running = m2_server::start(m2_server::ServeOptions {
@@ -51,6 +47,7 @@ fn the_cli_and_the_apps_export_write_the_same_file() {
     })
     .unwrap();
     let state = running.state;
+    state.graph.keep_store(&m2_song::pack::test_store());
     state.graph.open(&song).unwrap();
     let mut events = state.events.subscribe();
     let app = temp.0.join("app.wav");

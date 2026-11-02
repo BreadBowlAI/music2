@@ -13,6 +13,7 @@
 
 - [What you can do](what-you-can-do.md)
 - [The window](window.md)
+- [Sections: copy a chorus](sections.md)
 - [Audio, recording and MIDI files](audio.md)
 - [New songs, the songs folder and export](songs.md)
 - [Saving and undo](saving.md)
@@ -22,6 +23,7 @@
 - [Sounds and effects](sounds.md)
 - [CLAP plugins](plugins.md)
 - [Packs](packs.md)
+- [Getting packs from the library](library.md)
 - [Making a pack](making-a-pack.md)
 - [How a song is written](code.md)
 - [Credits](credits.md)

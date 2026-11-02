@@ -56,9 +56,10 @@ export default song(() => kernel("std:sine", { freq: parsed.hz }));
     o.packages.push(("std".into(), std_dir()));
     o.dependencies.push("std".into());
     build(&o).unwrap_or_else(|e| panic!("{e:?}"));
-    let catalog = describe(&[("std".into(), std_dir())]);
-    let delay = &catalog.components["std:delay"];
-    let mix = delay.controls.iter().find(|c| c.name == "mix").expect("std:delay's mix");
+    let effects = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/effects");
+    let catalog = describe(&[("std".into(), std_dir()), ("@m2/effects".into(), effects)]);
+    let delay = &catalog.components["@m2/effects:delay"];
+    let mix = delay.controls.iter().find(|c| c.name == "mix").expect("@m2/effects:delay's mix");
     assert_eq!(mix.default.as_ref().map(|d| d.value), Some(0.3), "{mix:?}");
     assert_eq!(mix.range, Some((0.0, 1.0)));
 }

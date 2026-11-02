@@ -40,7 +40,7 @@ use cpal::traits::{DeviceTrait, StreamTrait};
 pub use cpal::{Error as DeviceError, ErrorKind as DeviceErrorKind};
 use crossbeam_channel::{Receiver, Sender, TrySendError, bounded};
 pub use engines::{BETWEEN, Between, EngineThreads, Handover, LiveThreads, live_count};
-pub use inputs::{Input, InputChoice, InputDriver, Listen, NO_INPUT, NO_MICROPHONE, inputs};
+pub use inputs::{Channels, Input, InputChoice, InputDriver, Listen, NO_INPUT, NO_MICROPHONE, inputs};
 use m2_runtime::engine::{APPLIED, Msg as EngineMsg};
 pub use m2_runtime::engine::{Applied, CallbackStamp, Engine, Envelope, Heard, Retired};
 use m2_runtime::{CellTarget, Cmd, LaneSwap, LiveEv, Renderer, Runner, Transport, fpenv};

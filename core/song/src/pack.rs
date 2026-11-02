@@ -7,6 +7,8 @@
 //! PkgManifest   m2pkg.toml, read strictly (PACK-2)
 //! Listing       m2pack.json: every file of an installed version, its size and hash (PACK-6)
 //! Store         ~/Music/music2/Packs/<name>/<version>/ (PACK-6)
+//! Store::install  a pack's folder copied in as a version, read-only (PACK-6, PACK-16)
+//! install_bundled the packs music2 ships, installed into the store when it starts (PACK-15 to PACK-17)
 //! Lock          music2.lock: the exact version and hash of each pack a song uses (PACK-8)
 //! resolve       the packs a song builds with, and what keeps one from it (PACK-9)
 //! relock        the lock `m2 pack lock` and `m2 pack update` write (PACK-8)
@@ -28,6 +30,19 @@ pub const STD: &str = "std";
 pub const PKG_MANIFEST: &str = "m2pkg.toml";
 /// An installed version's listing, at its root.
 pub const LISTING: &str = "m2pack.json";
+
+/// The folder at a package's top that holds its kernels' source (PACK-20, ABI-10): no part of a pack.
+pub const KERNELS_SRC: &str = "kernels-src";
+
+/// Why nothing of a pack is read from [`KERNELS_SRC`]: it is never installed.
+pub const NOT_IN_KERNELS_SRC: &str =
+    "kernels-src/ is no part of the pack (the source of its kernels, never installed): put the built wasm in kernels/";
+
+/// Whether `rel`, a `/`-separated path inside a package's folder, is in its [`KERNELS_SRC`]: what no
+/// reader of a pack's files reads (PACK-20).
+pub fn in_kernels_src(rel: &str) -> bool {
+    rel.split('/').find(|p| !p.is_empty() && *p != ".") == Some(KERNELS_SRC)
+}
 
 /// A package's name (PACK-1): `std`, or `@owner/name`, each part 1 to 39 characters of `a-z`,
 /// `0-9` and `-`, neither starting nor ending with `-`. Never `@m2/core`, the SDK, and never a `:`.
@@ -196,6 +211,15 @@ impl PkgManifest {
         if let Some(other) = m.dependencies.keys().find(|d| !matches!(d.as_str(), SDK | STD)) {
             return Err(format!("package `{name}`: [dependencies] names `{other}`, but a pack may need only \"{SDK}\" and std"));
         }
+        // The module is one of the pack's files: inside it, and never in its kernels' source (PACK-20).
+        if let Some(w) = &m.package.wasm {
+            if Path::new(w).is_absolute() || w.split(['/', '\\']).any(|p| p == "..") {
+                return Err(format!("package `{name}`: `wasm = \"{w}\"` leaves the pack: name a file in it, such as kernels/<name>.wasm"));
+            }
+            if in_kernels_src(w) {
+                return Err(format!("package `{name}`: `{w}`: {NOT_IN_KERNELS_SRC}"));
+            }
+        }
         let RawInfo { name, license, description, authors, repository, tags, wasm, .. } = m.package;
         let package = PkgInfo { name, version, license, description, authors, repository, tags, wasm };
         Ok(PkgManifest { package, dependencies: m.dependencies, kernel: m.kernel })
@@ -240,17 +264,30 @@ impl App {
 
 /// Whether the SDK and std this app has (`None`: none at all) meet a package's `[dependencies]`
 /// (PACK-2): the SDK by the caret rule, std as a lower bound. What it needs that isn't met, in
-/// words: `needs std "0.9" or later, but this app has 0.4.0`. The one rule; [`App`] asks it.
+/// words: `needs std "0.9" or later, but this app has 0.4.0`. A pack made for another major of the
+/// SDK is told so, and what to get (PACK-22): `is made for @m2/core 1, and this app has @m2/core
+/// 2.0.0, …`. The one rule; [`App`] asks it.
 pub fn meets(dependencies: &BTreeMap<String, Requirement>, sdk: Option<Version>, std: Option<Version>) -> Result<(), String> {
     for (dep, req) in dependencies {
         let (have, met, at_least) = match dep.as_str() {
             SDK => (sdk, sdk.is_some_and(|v| req.matches(v)), ""),
             _ => (std, std.is_some_and(|v| req.at_least(v)), " or later"),
         };
-        if !met {
-            let have = have.map_or("none".to_string(), |v| v.to_string());
-            return Err(format!("needs {dep} \"{req}\"{at_least}, but this app has {have}"));
+        if met {
+            continue;
         }
+        let made_for = req.least().0;
+        return Err(match have {
+            Some(v) if dep == SDK && made_for < v.0 => format!(
+                "is made for {dep} {made_for}, and this app has {dep} {v}, whose changes may break it. Get a version of it made for \
+                 {dep} {major} (its m2pkg.toml says \"{dep}\" = \"{major}\")",
+                major = v.0
+            ),
+            Some(v) if dep == SDK && made_for > v.0 => {
+                format!("is made for {dep} {made_for}, newer than this app's {v}. Update music2 to use it")
+            }
+            _ => format!("needs {dep} \"{req}\"{at_least}, but this app has {}", have.map_or("none".to_string(), |v| v.to_string())),
+        });
     }
     Ok(())
 }
@@ -317,8 +354,12 @@ impl Listing {
 }
 
 /// Every file under `dir`, by its path there, `/`-separated, sorted bytewise; dot files and
-/// folders left out. A symbolic link, to a file or a folder, is an error naming it: a pack holds
-/// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it.
+/// folders left out, and the kernels' source at its top, [`KERNELS_SRC`], which is no part of a
+/// pack (PACK-20): its listing, its install and its check all read it here. A symbolic link, to a
+/// file or a folder, is an error naming it: a pack holds
+/// none, and nothing of a pack is ever read through one (PACK-6), so the tools never leave it. So
+/// is anything else that isn't a folder or a plain file (a pipe, a device), found before any file
+/// is opened: reading one could wait for ever.
 pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
     let mut out = vec![];
     let mut stack = vec![(String::new(), dir.to_path_buf())];
@@ -326,7 +367,7 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
         for e in std::fs::read_dir(&d)? {
             let e = e?;
             let name = e.file_name().to_string_lossy().into_owned();
-            if name.starts_with('.') {
+            if name.starts_with('.') || (rel.is_empty() && name == KERNELS_SRC) {
                 continue;
             }
             let r = if rel.is_empty() { name } else { format!("{rel}/{name}") };
@@ -334,9 +375,14 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
             if kind.is_symlink() {
                 return Err(std::io::Error::other(format!("{r} is a symbolic link: a pack holds none, so copy the file in instead")));
             }
-            match kind.is_dir() {
-                true => stack.push((r, e.path())),
-                false => out.push((r, e.path())),
+            if kind.is_dir() {
+                stack.push((r, e.path()));
+            } else if kind.is_file() {
+                out.push((r, e.path()));
+            } else {
+                return Err(std::io::Error::other(format!(
+                    "{r} isn't a plain file (a pipe or a device): a pack holds only files and folders"
+                )));
             }
         }
     }
@@ -348,6 +394,9 @@ pub fn pack_files(dir: &Path) -> std::io::Result<Vec<(String, PathBuf)>> {
 /// lists it, with no case folding and no part a symbolic link (PACK-5, FMT-6a): what every disk
 /// finds the same, and never anything outside the package.
 pub fn package_file(dir: &Path, path: &str) -> Result<PathBuf, String> {
+    if in_kernels_src(path) {
+        return Err(NOT_IN_KERNELS_SRC.into());
+    }
     let mut at = dir.to_path_buf();
     for part in path.split('/') {
         let listed = std::fs::read_dir(&at).map_err(|_| "there is no such file".to_string())?;
@@ -404,7 +453,7 @@ impl Store {
 
     /// The versions of `name` being installed again (PACK-6), oldest first, each with the copy put
     /// aside: a repair by `m2 pack install` moved the changed copy out of the way,
-    /// `.<version>.<pid>.old` beside it, and the new one may not be in place yet. One an install
+    /// `.<version>.<pid>-<n>.old` beside it, and the new one may not be in place yet. One an install
     /// that stopped left is removed by the next install of that version.
     pub fn aside(&self, name: &PackName) -> Vec<(Version, PathBuf)> {
         let mut out: Vec<(Version, PathBuf)> = std::fs::read_dir(self.dir.join(name.folder()))
@@ -414,7 +463,7 @@ impl Store {
             .filter_map(|e| {
                 let file = e.file_name().to_string_lossy().into_owned();
                 let (v, pid) = file.strip_prefix('.')?.strip_suffix(".old")?.rsplit_once('.')?;
-                let pid = !pid.is_empty() && pid.bytes().all(|b| b.is_ascii_digit());
+                let pid = pid.split('-').all(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
                 Some((Version::parse(v).filter(|_| pid)?, e.path()))
             })
             .collect();
@@ -608,16 +657,14 @@ fn no_store(name: &PackName, req: &Requirement) -> Diagnostic {
     .file(MANIFEST)
 }
 
-/// What says how to put back version `v` of `name` whose installed copy was changed (`why`).
-fn changed(name: &PackName, v: &Version, why: &str) -> Diagnostic {
-    Diagnostic::error(
-        "pkg.changed",
-        format!(
-            "The installed {name} {v} was changed after it was installed: {why}. Install it again from its folder with `m2 pack \
-             install <folder>`, which puts it back as it was"
-        ),
-    )
-    .file(LOCK)
+/// What says how to put back version `v` of `name` whose installed copy was changed (`why`): for
+/// one of music2's own (`own`, PACK-19), starting music2 again, which puts it back (PACK-16).
+fn changed(name: &PackName, v: &Version, why: &str, own: bool) -> Diagnostic {
+    let fix = match own {
+        true => format!("{name} comes with music2: start music2 again, and it puts it back as it was"),
+        false => "Install it again from its folder with `m2 pack install <folder>`, which puts it back as it was".into(),
+    };
+    Diagnostic::error("pkg.changed", format!("The installed {name} {v} was changed after it was installed: {why}. {fix}")).file(LOCK)
 }
 
 /// What a build says while `m2 pack install` puts version `v` of `name` back (PACK-6): its changed
@@ -637,7 +684,7 @@ fn reinstalling(name: &PackName, v: &Version) -> Diagnostic {
 fn whole(store: &Store, name: &PackName, v: Version) -> Result<Resolved, Diagnostic> {
     let hash = store.check(name, &v).map_err(|why| match store.reinstalling(name, &v) {
         true => reinstalling(name, &v),
-        false => changed(name, &v, &why),
+        false => changed(name, &v, &why, store.hash(name, &v).is_ok_and(|h| own(name, &v, &h))),
     })?;
     Ok(Resolved { name: name.clone(), version: v, dir: store.version_dir(name, &v), hash: Some(hash), path: false })
 }
@@ -664,10 +711,15 @@ fn runnable(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Res
 fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Result<Resolved, Diagnostic> {
     let unsatisfied = |words: String| Diagnostic::error("pkg.unsatisfied", words).file(MANIFEST);
     let v = runnable(store, name, req, app).map_err(|why| {
-        unsatisfied(format!(
-            "{MANIFEST} asks for {name} \"{req}\", but the versions installed that it admits need a newer music2: {why}. Update \
-             music2, or install a version made for this one with `m2 pack install <folder>`"
-        ))
+        unsatisfied(match move_on(name, req) {
+            Some(first) => {
+                format!("{first}. {MANIFEST} asks for {name} \"{req}\", and the versions installed that it admits can't run here: {why}")
+            }
+            None => format!(
+                "{MANIFEST} asks for {name} \"{req}\", but the versions installed that it admits need a newer music2: {why}. Update \
+                 music2, or install a version made for this one with `m2 pack install <folder>`"
+            ),
+        })
     })?;
     // A newer admitted version being installed again is never passed over for an older one.
     if let Some((w, _)) = store.aside(name).into_iter().rev().find(|(w, _)| req.matches(*w) && v.is_none_or(|v| *w > v)) {
@@ -679,9 +731,10 @@ fn highest(store: &Store, name: &PackName, req: &Requirement, app: &App) -> Resu
             true => "none is installed".to_string(),
             false => format!("installed: {}", installed.iter().map(Version::to_string).collect::<Vec<_>>().join(", ")),
         };
-        return Err(unsatisfied(format!(
-            "{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"
-        )));
+        return Err(unsatisfied(match move_on(name, req) {
+            Some(first) => format!("{first}. {MANIFEST} asks for {name} \"{req}\", but {have}"),
+            None => format!("{MANIFEST} asks for {name} \"{req}\", but {have}. Install it from its folder with `m2 pack install <folder>`"),
+        }));
     };
     whole(store, name, v)
 }
@@ -721,31 +774,46 @@ fn resolve_one(
             Some(v) => format!(", or run `m2 pack lock <song>` to use {v}, which is installed (the song may sound different)"),
             None => String::new(),
         };
+        // One of music2's own comes back when music2 starts, if this music2 comes with it (PACK-16);
+        // one it no longer comes with is moved on, first (review Y5).
+        if let Some(first) = move_on(name, req) {
+            return Err(
+                Diagnostic::error("pkg.missing", format!("{first}. This song uses {name} {}, which isn't installed", l.version)).file(LOCK)
+            );
+        }
+        let fix = match comes_with(name) == Some(l.version) && own(name, &l.version, &l.hash) {
+            true => "It comes with music2: start music2 again to put back the packs it comes with",
+            false => "Install it from its folder with `m2 pack install <folder>`",
+        };
         return Err(Diagnostic::error(
             "pkg.missing",
-            format!(
-                "This song uses {name} {}, which isn't installed. Install it from its folder with `m2 pack install <folder>`{instead}",
-                l.version
-            ),
+            format!("This song uses {name} {}, which isn't installed. {fix}{instead}", l.version),
         )
         .file(LOCK));
     }
     let r = whole(store, name, l.version)?;
     if r.hash != Some(l.hash) {
-        return Err(not_locked(name, &l.version));
+        return Err(not_locked(name, &l.version, own(name, &l.version, &l.hash)));
     }
     Ok(r)
 }
 
-/// What to say when the installed `v` of `name` isn't the copy the lock names.
-fn not_locked(name: &PackName, v: &Version) -> Diagnostic {
+/// What to say when the installed `v` of `name` isn't the copy the lock names: when the lock's is
+/// music2's own (`own`, PACK-19), how to put music2's back.
+fn not_locked(name: &PackName, v: &Version, own: bool) -> Diagnostic {
+    let back = match own {
+        true => format!(
+            "The installed {name} {v} isn't the one music2 comes with, which this song was made with. To use music2's: `m2 pack \
+             remove {name} {v}`, then start music2 again"
+        ),
+        false => format!(
+            "The installed {name} {v} isn't the one this song was made with: its files differ from those {LOCK} names. To keep the \
+             song's sound, put the one it was made with back: `m2 pack remove {name} {v}`, then `m2 pack install <its folder>`"
+        ),
+    };
     Diagnostic::error(
         "pkg.changed",
-        format!(
-            "The installed {name} {v} isn't the one this song was made with: its files differ from those {LOCK} names. To keep the \
-             song's sound, put the one it was made with back: `m2 pack remove {name} {v}`, then `m2 pack install <its folder>`. To \
-             use the installed one, run `m2 pack update <song> {name}` (the song may sound different)"
-        ),
+        format!("{back}. To use the installed one, run `m2 pack update <song> {name}` (the song may sound different)"),
     )
     .file(LOCK)
 }
@@ -798,7 +866,7 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
         let resolved = match kept {
             Some(l) => whole(store, &name, l.version).and_then(|r| match r.hash == Some(l.hash) {
                 true => Ok(r),
-                false => Err(not_locked(&name, &l.version)),
+                false => Err(not_locked(&name, &l.version, own(&name, &l.version, &l.hash))),
             }),
             None => highest(store, &name, req, app),
         };
@@ -812,6 +880,13 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
         false => Err(problems),
     }
 }
+
+mod bundled;
+mod install;
+pub use bundled::{bundled, comes_with, install_bundled, move_on, own, recorded};
+#[cfg(any(test, feature = "testing"))]
+pub use bundled::{source_packs, test_home, test_packs, test_store};
+pub use install::{Install, read_only_inside, remove_tree, set_read_only};
 
 #[cfg(test)]
 mod tests;

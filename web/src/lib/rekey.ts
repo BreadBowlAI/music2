@@ -14,11 +14,12 @@ import { getLocal, setLocal } from "./local";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
+import { http } from "./http";
 
 const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;
@@ -76,7 +77,7 @@ export async function changeId(module: string, id: string): Promise<string | nul
     const r = await post<{ revision: number; step?: number; before: string; after: string }>("/track/rekey", { session: graph.session, module, key: id });
     // The window follows the track once the graph has its new ID (below): not before, or the
     // timeline, not knowing it yet, would pick another track.
-    recorded(graph.session, r, { name: `changing ${name}'s ID`, structural: true }, ours);
+    recorded(graph.session, r, { name: `changing ${name}'s ID`, structural: true });
     toast(`${name}'s ID is ${id} now`, undoAction(graph.session, r.step));
     return null;
   } catch (error) {

@@ -58,6 +58,7 @@ fn clip(rng: &mut Rng, kind: &LaneKind) -> String {
         kind.clone()
     };
     match shape {
+        LaneKind::Choice { .. } | LaneKind::Switch => unreachable!("the oracle predates lanes of names (CARD-15)"),
         LaneKind::Notes => {
             let notes: Vec<String> = (0..rng.below(5)).map(|_| note(rng)).collect();
             f.push(("notes", format!("[{}]", notes.join(", "))));
@@ -232,6 +233,7 @@ fn canonical_bytes_are_unchanged() {
             }
             LaneData::Control { clips, .. } => shuffle(&mut rng, clips),
             LaneData::Audio(c) => shuffle(&mut rng, c),
+            LaneData::Steps { .. } => unreachable!("the oracle predates lanes of names (CARD-15)"),
         }
         assert_eq!(canonical(&data), oracle::canonical(&data), "case {case}\n{text}");
         let mut sorted = data.clone();

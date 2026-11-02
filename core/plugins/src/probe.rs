@@ -69,9 +69,15 @@ use crate::{Handle, InProcess, Library};
 pub const ID: &str = "m2.probe";
 /// The probe, refusing any state that starts with `fail`.
 pub const FAILS_STATE: &str = "m2.probe.fails-state";
-/// Its parameters' CLAP ids: addressed `gain_1` and `level_2` in code.
+/// Its parameters' CLAP ids: addressed `gain_1`, `level_2`, `mode_3` and `bright_4` in code.
 pub const GAIN: u32 = 1;
 pub const LEVEL: u32 = 2;
+/// A stepped parameter, 0 to 2, whose steps it names [`MODES`] (CARD-6). It changes no sound.
+pub const MODE: u32 = 3;
+/// What it calls each step of [`MODE`].
+pub const MODES: [&str; 3] = ["Soft", "Warm", "Hard"];
+/// A stepped parameter, 0 or 1, named Off and On: a switch (CARD-6). It changes no sound.
+pub const BRIGHT: u32 = 4;
 
 const BUNDLE: &str = "<built-in m2 probe>";
 const MAGIC: &[u8] = b"m2probe\0";
@@ -510,6 +516,8 @@ struct Probe {
     rate: f64,
     gain: f64,
     level: f64,
+    mode: f64,
+    bright: f64,
     voices: [Voice; VOICES],
     /// The steady time after the last block processed.
     done_to: i64,
@@ -599,6 +607,8 @@ impl Probe {
                 match p.param_id {
                     GAIN => self.gain = p.value,
                     LEVEL => self.level = p.value,
+                    MODE => self.mode = p.value,
+                    BRIGHT => self.bright = p.value,
                     _ => {}
                 }
             }
@@ -647,6 +657,8 @@ unsafe extern "C" fn create(_: *const clap_plugin_factory, host: *const clap_hos
         rate: 48_000.0,
         gain: 1.0,
         level: 0.1,
+        mode: 0.0,
+        bright: 0.0,
         voices: [Voice::default(); VOICES],
         done_to: i64::MIN,
         calls: 0,
@@ -1058,19 +1070,21 @@ unsafe extern "C" fn note_get(_: *const clap_plugin, i: u32, is_input: bool, inf
 }
 
 unsafe extern "C" fn param_count(_: *const clap_plugin) -> u32 {
-    2
+    4
 }
 
 unsafe extern "C" fn param_info(_: *const clap_plugin, i: u32, info: *mut clap_param_info) -> bool {
-    let (id, n, max, default) = match i {
-        0 => (GAIN, "Gain", 2.0, 1.0),
-        1 => (LEVEL, "Level", 1.0, 0.1),
+    let (id, n, max, default, stepped) = match i {
+        0 => (GAIN, "Gain", 2.0, 1.0, 0),
+        1 => (LEVEL, "Level", 1.0, 0.1, 0),
+        2 => (MODE, "Mode", (MODES.len() - 1) as f64, 0.0, CLAP_PARAM_IS_STEPPED),
+        3 => (BRIGHT, "Bright", 1.0, 0.0, CLAP_PARAM_IS_STEPPED),
         _ => return false,
     };
     unsafe {
         *info = clap_param_info {
             id,
-            flags: CLAP_PARAM_IS_AUTOMATABLE,
+            flags: CLAP_PARAM_IS_AUTOMATABLE | stepped,
             cookie: std::ptr::null_mut(),
             name: name(n),
             module: name(""),
@@ -1087,6 +1101,8 @@ unsafe extern "C" fn param_value(p: *const clap_plugin, id: clap_id, out: *mut f
     let v = match id {
         GAIN => me.gain,
         LEVEL => me.level,
+        MODE => me.mode,
+        BRIGHT => me.bright,
         _ => return false,
     };
     unsafe { *out = v };
@@ -1094,10 +1110,14 @@ unsafe extern "C" fn param_value(p: *const clap_plugin, id: clap_id, out: *mut f
 }
 
 unsafe extern "C" fn value_to_text(_: *const clap_plugin, id: clap_id, v: f64, out: *mut c_char, cap: u32) -> bool {
-    if !matches!(id, GAIN | LEVEL) || cap == 0 {
+    if !matches!(id, GAIN | LEVEL | MODE | BRIGHT) || cap == 0 {
         return false;
     }
-    let text = format!("{v:.2}");
+    let text = match id {
+        MODE => MODES[(v.round().max(0.0) as usize).min(MODES.len() - 1)].to_string(),
+        BRIGHT => if v >= 0.5 { "On" } else { "Off" }.to_string(),
+        _ => format!("{v:.2}"),
+    };
     let n = text.len().min(cap as usize - 1);
     unsafe {
         std::ptr::copy_nonoverlapping(text.as_ptr() as *const c_char, out, n);
@@ -1412,6 +1432,8 @@ impl Probe {
             match s.id {
                 GAIN => self.gain = s.value,
                 LEVEL => self.level = s.value,
+                MODE => self.mode = s.value,
+                BRIGHT => self.bright = s.value,
                 _ => {}
             }
             if s.what == Act::Gesture && call == s.to {

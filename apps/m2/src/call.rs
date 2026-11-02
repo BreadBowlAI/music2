@@ -17,7 +17,7 @@ use crate::app;
 /// its path, whether it writes, its words and an example body; or the table as JSON.
 pub fn routes(args: &[String]) -> Result<()> {
     let all = api::all();
-    if args.iter().skip(1).any(|a| a == "--json") {
+    if crate::words::on(args, "--json") {
         let table: Vec<Value> = all.iter().map(|r| r.json()).collect();
         return say(&format!("{}\n", serde_json::to_string_pretty(&table)?).into_bytes());
     }
@@ -83,21 +83,12 @@ pub fn page() -> String {
 /// the song open, as an agent (`--as`, `--why`). It prints the app's answer: JSON, or the bytes
 /// it sent (a waveform's peaks). A status of 400 or more exits 1, busy 3.
 pub fn call(args: &[String]) -> Result<()> {
-    const USE: &str = "m2 call <song> <path> [<json> | -] [--method GET|POST|PUT]";
-    let (mut method, mut given) = (None, vec![]);
-    let mut words = args.iter().skip(1);
-    while let Some(a) = words.next() {
-        match a.as_str() {
-            "--method" => {
-                method = Some(words.next().with_context(|| format!("--method needs GET, POST or PUT: {USE}"))?.to_ascii_uppercase())
-            }
-            _ => given.push(a.as_str()),
-        }
-    }
-    let [dir, path, body @ ..] = given.as_slice() else { bail!("{USE}") };
-    if body.len() > 1 {
-        bail!("one body, as JSON, in one argument: {USE}");
-    }
+    // Its usage took them (AGENT-13): the song, the path, a body or none, and --method.
+    let method = crate::words::value(args, "--method").map(|m| m.to_ascii_uppercase());
+    let given = crate::words::places(args);
+    let [dir, path, body @ ..] = &given.iter().map(String::as_str).collect::<Vec<_>>()[..] else {
+        unreachable!("its usage takes two words at least")
+    };
     let (path, query) = path.split_once('?').map_or((*path, None), |(p, q)| (p, Some(q)));
     let route = route(path, method.as_deref())?;
     // The musician's: refused before anything is sent, as the app would refuse it (AGENT-11).

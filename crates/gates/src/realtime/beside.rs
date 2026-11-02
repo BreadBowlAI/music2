@@ -99,6 +99,7 @@ pub fn start(dir: &Path, work: &Path, plugins: Option<&Path>) -> Result<Agents> 
     let options =
         m2_server::ServeOptions { port: 0, web_dir: work.join("g13-no-web"), token: key.clone(), page_token: format!("{key}-page") };
     let app = m2_server::start(options).context("G13's app")?;
+    crate::server::with_store(&app.state.graph);
     app.state.graph.open(dir).context("G13's app opening the song")?;
     // The url and the key are plain ASCII: written as they are.
     let published = format!(r#"{{"url": "{}", "token": "{key}", "pid": {}}}"#, app.url, std::process::id());

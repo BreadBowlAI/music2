@@ -52,7 +52,7 @@ export interface Settings {
   /** The change just made stopped playback. */
   stopped: boolean;
   /** Record's options (lane B): count in first, snap the take to Notes' grid. */
-  record?: { count_in: boolean; quantize: boolean };
+  record?: { count_in: boolean; quantize: boolean; punch?: boolean; overdub?: boolean };
   /** The MIDI keyboards turned off, by name (lane B): they neither play nor record; and those plugged in. */
   midi?: { off: string[]; devices?: string[] };
   /** The sound input a take records (an input's id and its name; null: the output's own device), and Hear yourself (io). */
@@ -78,7 +78,7 @@ export interface Input {
 export interface SettingsChange {
   output?: { device: string | null; name?: string | null; frames: number | null };
   songs?: string | null;
-  record?: { count_in: boolean; quantize: boolean };
+  record?: { count_in: boolean; quantize: boolean; punch?: boolean; overdub?: boolean };
   midi?: { off: string[] };
   input?: { device: string | null; name?: string | null; monitor: boolean };
 }

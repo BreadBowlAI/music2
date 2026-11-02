@@ -1,0 +1,10 @@
+{
+  "m2preset": 1,
+  "name": "Bright voice",
+  "sound": "@m2/mixing:deesser",
+  "values": {
+    "amount": 8,
+    "freq": 7500,
+    "threshold": -32
+  }
+}

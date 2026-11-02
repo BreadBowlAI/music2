@@ -13,3 +13,4 @@
 # nextest can't find. The browser suites of the same kind are tagged `sleeps` in e2e/run.mjs.
 
 m2-server graph::tests::previews_never_wait_for_a_compile  each update's stamp within 50 ms, from a silent player clocked by 10 ms sleeps (crates/server/src/graph/tests.rs)
+m2-server graph::tests::a_lane_written_in_two_halves_never_plays_empty  its halves are written a 60 ms sleep apart and must land inside the 150 ms quiet window (core/session/src/watch.rs QUIET); on GitHub's Mac (nightly run 41038467963) the first half settled alone, on both tries (crates/server/src/graph/tests.rs)

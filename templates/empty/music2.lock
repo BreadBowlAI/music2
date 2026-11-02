@@ -1,0 +1,6 @@
+# The exact version of each pack this song uses, made by music2 (PACK-8). Don't edit it by hand.
+
+[[pack]]
+name = "@m2/drums"
+version = "2.1.0"
+hash = "sha256:c4c4613ba06a176560460243dac1a32746ec9d07d3f5e8ccbbaf9bc9e20663bb"

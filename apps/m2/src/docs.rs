@@ -34,10 +34,7 @@ pub fn docs(args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         },
-        _ => {
-            eprintln!("error: one page at a time: m2 docs [<page> | all]");
-            return ExitCode::from(2);
-        }
+        _ => unreachable!("its usage takes one page at most (AGENT-13)"),
     };
     say(&out)
 }

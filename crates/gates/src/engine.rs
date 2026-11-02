@@ -106,7 +106,9 @@ impl Live {
             (Some(old), Some(info), Some(cont)) => Basis::Keep(Keep { old: &old.flat, old_data: &old.data, info, cont, restarts }),
             _ => Basis::Fresh,
         };
-        let mut r = Renderer::prepare(&song.flat, &song.data, packages, song.rate, cache, owner, basis)?;
+        // The kernels the song was built with: its own view of the packages, as the server plays a
+        // revision's (PACK-9), so a pack an edit added plays though the set shows another song.
+        let mut r = Renderer::prepare(&song.flat, &song.data, &packages.viewing(&song.code.0.view), song.rate, cache, owner, basis)?;
         // The cache keeps what this build used, as the server's does: what the plan it replaces
         // played alone goes with it.
         cache.prune();

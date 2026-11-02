@@ -118,14 +118,94 @@ fn a_pack_that_needs_another_std_is_broken() {
     let root = scratch("needs");
     copy(&fixtures(), &root);
     let manifest = root.join("tiny/m2pkg.toml");
-    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.9\"");
+    let text = std::fs::read_to_string(&manifest).unwrap().replace("std = \"0.4\"", "std = \"0.10\"");
     std::fs::write(&manifest, text).unwrap();
     let mut pk = packages(&root.join("no-store"));
     let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
     assert_eq!(codes(&e), ["pkg.broken"]);
-    assert!(e[0].message.contains("std \"0.9\""), "{}", e[0].message);
+    assert!(e[0].message.contains("std \"0.10\""), "{}", e[0].message);
     assert!(pk.get("@test/tiny").is_none(), "a pack that can't be used isn't kept");
     std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-22: a pack made for another major of @m2/core is refused, in words naming the major it was
+// made for, this app's, and what to get: a version made for this app's major. One made for a newer
+// major is told to wait for a newer music2.
+#[test]
+fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
+    let Version(major, _, _) = Version::parse(m2_script::SDK_VERSION).unwrap();
+    assert_eq!(major, 2, "the pack contract is @m2/core 2 (PACK-22)");
+    for (asks, said) in [
+        (
+            "1",
+            "is made for @m2/core 1, and this app has @m2/core 2.2.0, whose changes may break it. Get a version of it made for \
+             @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
+        ),
+        ("3", "is made for @m2/core 3, newer than this app's 2.2.0. Update music2 to use it"),
+    ] {
+        let root = scratch(&format!("core-{asks}"));
+        copy(&fixtures(), &root);
+        let manifest = root.join("tiny/m2pkg.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        assert!(text.contains("\"@m2/core\" = \"2\""), "the test pack asks for @m2/core 2 (PACK-23)");
+        std::fs::write(&manifest, text.replace("\"@m2/core\" = \"2\"", &format!("\"@m2/core\" = \"{asks}\""))).unwrap();
+        let mut pk = packages(&root.join("no-store"));
+        let e = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).err().unwrap();
+        assert_eq!(codes(&e), ["pkg.broken"]);
+        assert!(e[0].message.starts_with("@test/tiny") && e[0].message.contains(said), "{asks}: {}", e[0].message);
+        std::fs::remove_dir_all(&root).ok();
+    }
+}
+
+// PACK-22: an addition to @m2/core is a minor that every 2.x pack still builds with. A pack made for
+// 2.0, the frozen contract, builds, its descriptors as they were; one made for 2.1 may label a
+// setting (CARD-34), and the label reaches its descriptor; one made for 2.2 may name kits on a drum
+// (KIT-3), which reach its descriptor, every other byte of it as it was but its category. A descriptor that names none has
+// no `kits` at all, so a 2.1 pack's keeps its bytes.
+#[test]
+fn a_pack_made_for_an_older_minor_of_core_still_builds() {
+    let mut first: Option<String> = None;
+    for asks in ["2", "2.0", "2.1", "2.2"] {
+        let root = scratch(&format!("core-minor-{asks}"));
+        copy(&fixtures(), &root);
+        let manifest = root.join("tiny/m2pkg.toml");
+        let text = std::fs::read_to_string(&manifest).unwrap();
+        std::fs::write(&manifest, text.replace("\"@m2/core\" = \"2\"", &format!("\"@m2/core\" = \"{asks}\""))).unwrap();
+        let index = root.join("tiny/src/index.ts");
+        let code = std::fs::read_to_string(&index).unwrap();
+        let code = match asks {
+            "2.1" => code.replace("import { component, control,", "import { component, control, setting,").replace(
+                "controls: { brightness: control.hz(1800).range(200, 20000) },",
+                "controls: { brightness: control.hz(1800).range(200, 20000) },\n    settings: { voices: setting.int(12).label(\"notes at once\") },",
+            ),
+            // A drum, to name kits (KIT-3): its fader in dB, a value as a call takes it.
+            "2.2" => code.replace(
+                "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
+                "editor: { category: \"Drums\", description: \"A soft pluck, built from std's blocks\", kits: { Pair: { db: -3, tracks: [{ name: \"Dark\", brightness: 400 }, { name: \"Bright\" }] } } },",
+            ),
+            _ => code,
+        };
+        std::fs::write(&index, code).unwrap();
+        let mut pk = packages(&root.join("no-store"));
+        let c = compile(&Project::open(&root.join("song-path")).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{asks}: {d:?}"));
+        assert_eq!(c.packs.len(), 1, "{asks}");
+        let keys = &c.components["@test/tiny:tiny-keys"];
+        let labels: Vec<Option<&str>> = keys.settings.iter().map(|s| s.label.as_deref()).collect();
+        assert_eq!(labels, if asks == "2.1" { vec![Some("notes at once")] } else { vec![] }, "{asks}");
+        let kits: Vec<(&str, usize)> = keys.editor.kits.iter().map(|k| (k.name.as_str(), k.tracks.len())).collect();
+        assert_eq!(kits, if asks == "2.2" { vec![("Pair", 2)] } else { vec![] }, "{asks}");
+        let mut without = keys.as_ref().clone();
+        without.editor.kits.clear();
+        if asks == "2.2" {
+            without.editor.category = Some("Keys".into());
+        }
+        let bytes = serde_json::to_string(&without).unwrap();
+        assert!(!serde_json::to_string(keys.as_ref()).unwrap().contains("kits") || asks == "2.2", "{asks}: no kits, no kits key");
+        if asks != "2.1" {
+            assert_eq!(&bytes, first.get_or_insert_with(|| bytes.clone()), "{asks}: every byte but its kits as made for 2");
+        }
+        std::fs::remove_dir_all(&root).ok();
+    }
 }
 
 // PACK-2: a pack's std is a lower bound: one made for an older std builds with the app's.
@@ -161,7 +241,7 @@ fn install_tiny_with_kernel(store: &Path, version: &str, tag: &str) -> (m2_song:
     wasm.extend(tag.as_bytes());
     std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+    let tone = "\nimport { hz } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
                 id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
                 inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
                 (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
@@ -494,4 +574,298 @@ fn sampler_controls_are_stds() {
     assert_eq!(setting("voices").default, Some(serde_json::json!(m2_song::instrument::VOICES as i64)));
     assert_eq!(setting("mode").default, Some(serde_json::json!(m2_song::instrument::MODE)));
     assert_eq!(setting("mode").options, Some(m2_song::instrument::MODES.iter().map(|m| m.to_string()).collect()));
+    assert_eq!(setting("turns").default, Some(serde_json::json!(m2_song::instrument::TURN)));
+    assert_eq!(setting("turns").options, Some(m2_song::instrument::TURNS.iter().map(|m| m.to_string()).collect()));
+}
+
+// PACK-11, REG-15: a pack installed while a song is open (a Get) is offered once the session is
+// told the store changed, at once, with no edit of the song.
+#[test]
+fn the_lists_offer_a_pack_installed_once_the_store_changed() {
+    let root = scratch("store-changed");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-path");
+    let manifest = std::fs::read_to_string(song.join("music2.toml")).unwrap();
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), plain).unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
+    let _ = std::fs::remove_dir_all(song.join("tracks"));
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    let offered = |s: &crate::Session| s.offered().iter().any(|(n, ..)| n == "@test/tiny");
+    assert!(!offered(&s));
+    install_tiny(&store);
+    assert!(!offered(&s), "the lists are made as the song opens, and when its packs change");
+    let taken = s.store_changed();
+    assert!(offered(&s), "told the store changed, they offer it");
+    assert!(s.catalog().components.contains_key("@test/tiny:tiny-keys"));
+    assert!(taken.accepted.is_none(), "a song that built isn't built again");
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-9, REG-17: a song whose lock names a version that isn't installed waits (pkg.missing);
+// once it is installed and the session told, the song is built again and plays.
+#[test]
+fn a_song_missing_a_locked_pack_builds_once_it_is_installed() {
+    let root = scratch("missing-locked");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(!s.accepted().has_code());
+    assert_eq!(codes(&s.draft_errors), ["pkg.missing"]);
+    install_tiny(&store);
+    let taken = s.store_changed();
+    assert!(taken.accepted.is_some() && s.accepted().has_code(), "{:?}", s.draft_errors);
+    assert!(s.draft_errors.is_empty());
+    assert_eq!(s.accepted().compiled.packs.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["@test/tiny"]);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// AGENT-2, REG-17: an outside write that waited for a pack (pkg.missing), built once a Get
+// installs it, keeps its one undo step, source outside, as when its own batch built.
+#[test]
+fn an_outside_edit_that_waited_for_a_pack_keeps_its_undo_step() {
+    let root = scratch("rv-outside");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let rd = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
+    let (manifest, lock, code) = (rd("music2.toml"), rd("music2.lock"), rd("song.ts"));
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), &plain).unwrap();
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
+    std::fs::rename(song.join("tracks"), root.join("tracks-aside")).unwrap();
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.accepted().has_code());
+    // An agent writes the pack in: its dependency, its lock, and code that plays it.
+    std::fs::write(song.join("music2.toml"), &manifest).unwrap();
+    std::fs::write(song.join("music2.lock"), &lock).unwrap();
+    std::fs::write(song.join("song.ts"), &code).unwrap();
+    std::fs::rename(root.join("tracks-aside"), song.join("tracks")).unwrap();
+    let paths: std::collections::BTreeSet<PathBuf> =
+        ["music2.toml", "music2.lock", "song.ts", "tracks/keys.ts", "tracks/pluck.ts"].iter().map(PathBuf::from).collect();
+    let (_, out) = s.take_in_batch(m2_song::Snapshot::read(&song).unwrap(), &paths, false);
+    assert_eq!(codes(&s.draft_errors), ["pkg.missing"], "{out:?}");
+    // Then a Get installs the pack, and the session is told.
+    install_tiny(&store);
+    let taken = s.store_changed();
+    assert!(taken.accepted.is_some(), "{:?}", s.draft_errors);
+    let top = s.step_names().0;
+    assert!(
+        top.as_ref().is_some_and(|n| n.source == crate::Source::Outside),
+        "the agent's edit, built once the pack came, has no undo step: {:?}",
+        top.map(|n| (n.id, n.source, n.files))
+    );
+    // One undo takes the agent's whole edit back.
+    s.undo().unwrap();
+    assert_eq!(std::fs::read_to_string(song.join("music2.toml")).unwrap(), plain);
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// AGENT-2: the same outside write, with the pack installed first: built by its own batch, one
+// undo step, source outside.
+#[test]
+fn an_outside_edit_with_its_pack_there_is_one_undo_step() {
+    let root = scratch("rv-control");
+    copy(&fixtures(), &root);
+    let store = root.join("Packs");
+    let song = root.join("song-store");
+    let rd = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
+    let (manifest, lock, code) = (rd("music2.toml"), rd("music2.lock"), rd("song.ts"));
+    let plain: String = manifest.lines().filter(|l| !l.contains("@test/tiny")).map(|l| format!("{l}\n")).collect();
+    std::fs::write(song.join("music2.toml"), &plain).unwrap();
+    std::fs::remove_file(song.join("music2.lock")).unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nexport default song(() => osc.sine(hz(800)));\n",
+    )
+    .unwrap();
+    std::fs::rename(song.join("tracks"), root.join("tracks-aside")).unwrap();
+    install_tiny(&store);
+    let mut s = crate::Session::open(&song, packages(&store)).unwrap_or_else(|d| panic!("{d:?}"));
+    assert!(s.accepted().has_code());
+    // An agent writes the pack in: its dependency, its lock, and code that plays it.
+    std::fs::write(song.join("music2.toml"), &manifest).unwrap();
+    std::fs::write(song.join("music2.lock"), &lock).unwrap();
+    std::fs::write(song.join("song.ts"), &code).unwrap();
+    std::fs::rename(root.join("tracks-aside"), song.join("tracks")).unwrap();
+    let paths: std::collections::BTreeSet<PathBuf> =
+        ["music2.toml", "music2.lock", "song.ts", "tracks/keys.ts", "tracks/pluck.ts"].iter().map(PathBuf::from).collect();
+    let (_, out) = s.take_in_batch(m2_song::Snapshot::read(&song).unwrap(), &paths, false);
+    assert!(matches!(out, crate::take::Outside::Step(_)), "{out:?} {:?}", s.draft_errors);
+    let top = s.step_names().0;
+    assert!(
+        top.as_ref().is_some_and(|n| n.source == crate::Source::Outside),
+        "the agent's edit, built once the pack came, has no undo step: {:?}",
+        top.map(|n| (n.id, n.source, n.files))
+    );
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// CARD-10, CARD-11, CARD-12: a choice a song writes by its name reaches a pack's kernel as the
+// option's place, and a switch as 1 or 0: heard end to end, through `@test/kinds`, whose kernels
+// play what they read (`tests/fixtures/packs/kinds`).
+#[test]
+fn a_choice_in_a_pack_plays_its_place() {
+    let root = scratch("kinds");
+    copy(&fixtures().join("kinds"), &root.join("kinds"));
+    let song = root.join("song");
+    std::fs::create_dir_all(&song).unwrap();
+    let manifest = "[project]\nname = \"Kinds\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n";
+    std::fs::write(song.join("music2.toml"), format!("{manifest}\"@test/kinds\" = {{ path = \"../kinds\" }}\n")).unwrap();
+    let mut pk = packages(&root.join("no-store"));
+    for (call, heard) in [
+        ("shape({ shape: \"sine\" })", 2.0),
+        ("shape({ shape: \"square\" })", 1.0),
+        ("shape()", 0.0),
+        ("sub({ on: true })", 1.0),
+        ("sub()", 0.0),
+    ] {
+        let code = format!(
+            "import {{ song }} from \"@m2/core\";\nimport {{ shape, sub }} from \"@test/kinds\";\nexport default song(() => {call});\n"
+        );
+        std::fs::write(song.join("song.ts"), code).unwrap();
+        let c = compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|d| panic!("{call}: {d:?}"));
+        let out = Renderer::new(&c.flat, &c.data, &pk, 48_000).unwrap().render(0.05).unwrap();
+        assert!(out.iter().all(|f| f[0] == heard as f32), "{call}: {:?}", &out[..2]);
+    }
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// PACK-20: the build and the store name a pack's kernels' source the same, in the same words: the
+// script crate keeps its own copy, as it doesn't depend on m2-song.
+#[test]
+fn kernels_src_is_one_name_to_the_build_and_the_store() {
+    assert_eq!(m2_script::KERNELS_SRC, m2_song::pack::KERNELS_SRC);
+    assert_eq!(m2_script::NOT_IN_KERNELS_SRC, m2_song::pack::NOT_IN_KERNELS_SRC);
+}
+
+/// A store with the packs this tree bundles installed, at `root/store`, and std.
+fn bundled_store(root: &Path) -> PackageSet {
+    let store = root.join("store");
+    for (dir, done) in m2_song::pack::install_bundled(&m2_song::pack::source_packs(), &Store::at(store.clone())) {
+        done.unwrap_or_else(|e| panic!("{}: {e}", dir.display()));
+    }
+    packages(&store)
+}
+
+/// A song at `dir` asking for `deps`, whose code is `code`, with `lock` as its music2.lock if any.
+fn a_song(dir: &Path, deps: &str, code: &str, lock: Option<&str>) {
+    std::fs::create_dir_all(dir).unwrap();
+    let std = Version::parse(&crate::gate_tests::std_packages().get("std").unwrap().version).unwrap();
+    let manifest = format!(
+        "[project]\nname = \"old\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"{}\"\nstd = \"{}.{}\"\n{deps}",
+        m2_song::Requirement::admitting(Version::parse(m2_script::SDK_VERSION).unwrap()),
+        std.0,
+        std.1
+    );
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(dir.join("song.ts"), code).unwrap();
+    match lock {
+        Some(l) => std::fs::write(dir.join("music2.lock"), l).unwrap(),
+        None => drop(std::fs::remove_file(dir.join("music2.lock"))),
+    }
+}
+
+const LEAD: &str = "import { song, track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nconst t = track(\"t\", ({ lane }) => synth.lead(lane.notes(\"n\")));\nexport default song(() => t.out);\n";
+
+// Review Y5 (FMT-3a, PACK-24): a song made before wave 3 asks for `"@m2/synths" = "1"`, which this
+// music2 no longer comes with. Locked to 1.0.0, or not locked, it is told first the one thing to
+// do: the line to write for the version music2 comes with now, and to lock again; never that 1.0.0
+// comes with music2, nor to install it from a folder. Following that, it builds.
+#[test]
+fn a_song_made_before_wave_3_is_told_the_line_to_write() {
+    let root = scratch("before-wave-3");
+    let mut pk = bundled_store(&root);
+    let now = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join("@m2/synths")).unwrap().package.version;
+    let first = format!(
+        "{}music2 now comes with @m2/synths {now}: change its line in music2.toml to \"@m2/synths\" = \"{}\", then run `m2 pack lock \
+         <song>`. The song's code may need changes",
+        m2_song::UPGRADE,
+        now.0
+    );
+    let song = root.join("song");
+    let old_lock = "[[pack]]\nname = \"@m2/synths\"\nversion = \"1.0.0\"\nhash = \"sha256:0000000000000000000000000000000000000000000000000000000000000000\"\n";
+    for lock in [Some(old_lock), None] {
+        a_song(&song, "\"@m2/synths\" = \"1\"\n", LEAD, lock);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        assert!(e.len() == 1 && e[0].message.starts_with(&first), "locked: {}: {e:?}", lock.is_some());
+        assert!(!e[0].message.contains("It comes with music2") && !e[0].message.contains("m2 pack install"), "{}", e[0].message);
+    }
+    // A store that still holds a 1.0.0 (made for @m2/core 1, which this app can't run): the same.
+    let dir = Store::at(root.join("store")).version_dir(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0));
+    copy(&m2_song::pack::source_packs().join("@m2/synths"), &dir);
+    let toml = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
+    // Made for @m2/core 1, whatever minor of 2 the bundled one asks for (PACK-23).
+    let toml = toml.replace(&format!("version = \"{now}\""), "version = \"1.0.0\"");
+    let toml: String =
+        toml.lines().map(|l| if l.starts_with("\"@m2/core\" = ") { "\"@m2/core\" = \"1\"" } else { l }).map(|l| format!("{l}\n")).collect();
+    assert!(toml.contains("\"@m2/core\" = \"1\""), "{toml}");
+    std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
+    let listing = Listing::of(&dir).unwrap();
+    std::fs::write(dir.join(LISTING), listing.text()).unwrap();
+    let mut pk = packages(&root.join("store"));
+    let kept = format!("[[pack]]\nname = \"@m2/synths\"\nversion = \"1.0.0\"\nhash = \"{}\"\n", listing.hash().prefixed());
+    for lock in [Some(kept.as_str()), None] {
+        a_song(&song, "\"@m2/synths\" = \"1\"\n", LEAD, lock);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        assert!(e.len() == 1 && e[0].message.starts_with(&first), "1.0.0 installed, locked: {}: {e:?}", lock.is_some());
+        assert!(!e[0].message.contains("newer music2"), "{}", e[0].message);
+    }
+    a_song(&song, &format!("\"@m2/synths\" = \"{}\"\n", now.0), LEAD, None);
+    compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("the line it named builds: {e:?}"));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// Review Y4 (PACK-21): a song's own code that calls a kernel that left std is told the component
+// to play and the line to write; writing them, it builds.
+#[test]
+fn following_a_moved_kernels_words_builds() {
+    let root = scratch("moved-kernel");
+    let mut pk = bundled_store(&root);
+    let song = root.join("song");
+    let old = "import { kernel, song, track } from \"@m2/core\";\nconst t = track(\"t\", ({ lane }) => kernel(\"std:synth\", { gate: lane.mask(\"g\") }));\nexport default song(() => t.out);\n";
+    a_song(&song, "", old, None);
+    let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+    let said = &e[0].message;
+    let line = said.split("add ").nth(1).and_then(|r| r.split(" under").next()).unwrap_or_else(|| panic!("{said}"));
+    assert!(said.starts_with("Play `synth.custom` from \"@m2/synths\" instead") && line.ends_with("= \"2\""), "{said}");
+    let new = "import { song, track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nconst t = track(\"t\", ({ lane }) => synth.custom(lane.notes(\"n\")));\nexport default song(() => t.out);\n";
+    a_song(&song, &format!("{line}\n"), new, None);
+    compile(&Project::open(&song).unwrap(), &mut pk).unwrap_or_else(|e| panic!("following {said:?}: {e:?}"));
+    std::fs::remove_dir_all(&root).ok();
+}
+
+// The upgrade review's G7 (PKG-17): an import from a std module that moved into a pack names the
+// line `[dependencies]` needs for the version music2 comes with now, never an older major.
+#[test]
+fn a_moved_imports_words_name_the_line_a_song_writes_today() {
+    let root = scratch("moved-import");
+    let mut pk = bundled_store(&root);
+    let song = root.join("song");
+    for (import, plays, pack) in [
+        ("import { pad } from \"std/instruments\"", "pad", "@m2/synths"),
+        ("import { drums } from \"std/drums\"", "drums.kit", "@m2/drums"),
+    ] {
+        let code = format!(
+            "import {{ song, track }} from \"@m2/core\";\n{import};\nconst t = track(\"t\", ({{ lane }}) => {plays}(lane.notes(\"n\")));\n\
+             export default song(() => t.out);\n"
+        );
+        a_song(&song, "", &code, None);
+        let e = compile(&Project::open(&song).unwrap(), &mut pk).err().unwrap();
+        let now = m2_song::pack::comes_with(&PackName::new(pack).unwrap()).unwrap();
+        let line = format!("\"{pack}\" = \"{}\"", m2_song::Requirement::admitting(now));
+        assert!(e.iter().any(|d| d.message.contains(&line)), "{import}: {e:?}");
+    }
+    std::fs::remove_dir_all(&root).ok();
 }

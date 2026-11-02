@@ -1,0 +1,13 @@
+{
+  "m2preset": 1,
+  "name": "Gentle glue",
+  "sound": "@m2/mixing:multiband",
+  "values": {
+    "highRatio": 1.5,
+    "highThreshold": -24,
+    "lowRatio": 1.5,
+    "lowThreshold": -24,
+    "midRatio": 1.5,
+    "midThreshold": -24
+  }
+}

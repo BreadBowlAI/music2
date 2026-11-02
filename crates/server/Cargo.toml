@@ -26,6 +26,8 @@ toml.workspace = true
 tungstenite.workspace = true
 
 [dev-dependencies]
+# A store of the packs this tree bundles (`pack::test_store`).
+m2-song = { workspace = true, features = ["testing"] }
 hound.workspace = true
 # Tests fail, slow down and race the session's disk calls (`Session::open_with_disk`).
 m2-session = { workspace = true, features = ["faults"] }

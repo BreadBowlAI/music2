@@ -13,7 +13,7 @@ use super::Refusal;
 use crate::{Session, StepError};
 
 pub(crate) fn std_packages() -> PackageSet {
-    let mut p = PackageSet::default();
+    let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
     p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     p
 }
@@ -299,7 +299,7 @@ fn values_refuses_more_than_its_values() {
 }
 
 /// A project of one sound, for wraps.
-pub(crate) const SAW: &str = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+pub(crate) const SAW: &str = "import { hz, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
                    export default song(() => osc.saw(hz(110)));\n";
 
 /// Wrapping `osc.saw(hz(110))` in `delay(`…`)` with two insertions, confined to the call.
@@ -327,7 +327,7 @@ fn an_added_effect_is_confined() {
     assert!(d.read("song.ts").contains("delay(osc.saw(hz(110)), { time: 0.25 })"));
     let delta = &done.delta;
     assert!(delta.removed.is_empty(), "the wrapped call keeps its names: {:?}", delta.removed);
-    assert!(!delta.added.is_empty() && delta.added.iter().any(|n| n.op["kernel"] == json!("std:delay")), "{:?}", delta.added);
+    assert!(!delta.added.is_empty() && delta.added.iter().any(|n| n.op["kernel"] == json!("@m2/effects:delay")), "{:?}", delta.added);
     assert!(!delta.rewired.is_empty());
     assert!(delta.values.is_empty() && delta.modules.is_empty());
     s.undo().unwrap();
@@ -719,17 +719,17 @@ fn a_data_tx_of_several_files_undoes_as_one_step() {
 // path doesn't.
 #[test]
 fn claiming_unclaimed_data_is_a_notice() {
-    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
-               const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
+    let src = "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+               const k = track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
     let d = Dir::with(&[("song.ts", src), ("data/snare/hits.json", "{\"clips\": []}\n")]);
     let mut s = d.open();
     assert_eq!(s.problems()[0].code, "data.unclaimed");
     let added = src
         .replace(
             "export default song(() => k.out);",
-            "const sn = track(\"snare\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => sum(k.out, sn.out));",
+            "const sn = track(\"snare\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => sum(k.out, sn.out));",
         )
-        .replace("import { kick }", "import { sum } from \"std/math\";\nimport { kick }");
+        .replace("import { drums }", "import { sum } from \"std/math\";\nimport { drums }");
     let tx = based(&d, vec![Op::Write { file: p("song.ts"), bytes: Payload::Text(added.into()) }], Expect::Seen(Sha::of(b"x")));
     let checked = s.check(&tx).unwrap();
     let claimed: Vec<_> = checked.diagnostics.iter().filter(|d| d.code == "data.claimed").map(|d| d.src.clone()).collect();
@@ -810,8 +810,8 @@ fn outside_data_is_taken_in_while_the_code_is_broken() {
     assert_ne!(a.compiled.data.notes("kick", "hits"), notes, "the lane plays its new notes");
 
     // A track key renamed back by hand claims the folder it left: said for the outside write.
-    let src = "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
-               const k = track(\"kicks\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
+    let src = "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+               const k = track(\"kicks\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n";
     let d = Dir::with(&[("song.ts", src), ("data/kick/hits.json", "{\"clips\": []}\n")]);
     let mut s = d.open();
     d.write("song.ts", &src.replace("\"kicks\"", "\"kick\""));

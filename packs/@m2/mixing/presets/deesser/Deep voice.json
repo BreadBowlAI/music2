@@ -1,0 +1,10 @@
+{
+  "m2preset": 1,
+  "name": "Deep voice",
+  "sound": "@m2/mixing:deesser",
+  "values": {
+    "amount": 6,
+    "freq": 5000,
+    "threshold": -30
+  }
+}

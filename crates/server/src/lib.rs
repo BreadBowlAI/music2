@@ -13,6 +13,7 @@ pub mod library;
 mod peaks;
 pub mod project;
 pub mod recent;
+pub mod registry;
 pub mod resources;
 mod routes;
 mod routes_8b;
@@ -88,9 +89,10 @@ pub struct AppState {
     /// didn't open. The next page to connect gets them: an agent's socket (`m2 watch`) hears them
     /// live but never takes one (AGENT-6).
     unheard: Arc<Mutex<Unheard>>,
-    /// The latest meters message (8b.8), for every window: only the latest is kept, so a window
-    /// that falls behind skips to it (empty until the first).
-    pub meters: watch::Sender<String>,
+    /// The latest meters (8b.8), for every socket that listens for them (a window's always does,
+    /// an agent's when it asks, TAP-4): only the latest is kept, so one that falls behind skips to
+    /// it (empty until the first). Each window's own scopes ride with them (TAP-8).
+    pub meters: watch::Sender<Arc<Meters>>,
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
@@ -113,6 +115,8 @@ pub struct AppState {
     /// ([`AppState::keep_library`]): the app and the headless server do; tests give scratch ones,
     /// so none reads your Presets folder or writes your cache.
     library: OnceLock<library::Folders>,
+    /// The registry's catalog as this server has it, and the Get running (REG-12, REG-15).
+    pub(crate) registry: Arc<registry::Registry>,
 }
 
 impl AppState {
@@ -128,7 +132,7 @@ impl AppState {
             graph,
             exports: Default::default(),
             unheard: Arc::default(),
-            meters: watch::channel(String::new()).0,
+            meters: watch::channel(Arc::default()).0,
             recent: OnceLock::new(),
             settings: OnceLock::new(),
             midi: OnceLock::new(),
@@ -137,6 +141,7 @@ impl AppState {
             previews: Default::default(),
             sample_index: Arc::default(),
             library: OnceLock::new(),
+            registry: Arc::default(),
         }
     }
 
@@ -154,10 +159,20 @@ impl AppState {
     }
 
     /// Read your presets and keep previews and samples' measures in `folders` from now on (LIB-1,
-    /// LIB-3, LIB-5), and start indexing the samples a search will want first. Once.
+    /// LIB-3, LIB-5), install the packs music2 ships into its store of packs (PACK-16) and build
+    /// songs with that store, and start indexing the samples a search will want first and fetching
+    /// the registry's catalog (REG-12). Once.
     pub fn keep_library(&self, folders: library::Folders) {
+        if let Some(store) = &folders.packs {
+            resources::install_packs(store, false);
+            self.graph.keep_store(store);
+        }
+        if let Some(presets) = &folders.presets {
+            self.graph.keep_presets(presets);
+        }
         if self.library.set(folders).is_ok() {
             self.warm_samples();
+            self.catalog();
         }
     }
 
@@ -421,12 +436,21 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
         .expect("spawn the server's notices");
 }
 
+/// The meters as the sockets get them (TAP-4, TAP-8): what every listener gets, and each window's
+/// own scopes, by its client id; both as the JSON text sent.
+#[derive(Debug, Default)]
+pub struct Meters {
+    pub all: String,
+    pub scopes: Vec<(String, String)>,
+}
+
 /// How often the meters are read and sent: about 30 times a second.
 const METERS_EVERY: Duration = Duration::from_millis(33);
 
 /// `music2-meters`: every 33 ms, the meters of what plays go to every window (8b.8,
-/// [`graph::Graph::meters`]), on their own channel, never through the session. The load is read
-/// even with no window, so the status's `load` stays current. Ends once the state is dropped.
+/// [`graph::Graph::meters`]), on their own channel, never through the session. The taps run only
+/// while a window or an agent's socket listens (TAP-4). The load is read even with none, so the
+/// status's `load` stays current. Ends once the state is dropped.
 fn spawn_meters(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     std::thread::Builder::new()
@@ -435,10 +459,10 @@ fn spawn_meters(state: &Arc<AppState>) {
             loop {
                 std::thread::sleep(METERS_EVERY);
                 let Some(state) = weak.upgrade() else { return };
-                if let Some(m) = state.graph.meters()
-                    && state.meters.receiver_count() > 0
-                {
-                    state.meters.send_replace(m.to_string());
+                state.graph.watch_meters(state.meters.receiver_count() > 0);
+                if let Some(m) = state.graph.meters() {
+                    let scopes = m.scopes.into_iter().map(|(c, v)| (c, v.to_string())).collect();
+                    state.meters.send_replace(Arc::new(Meters { all: m.all.to_string(), scopes }));
                 }
             }
         })
@@ -531,7 +555,7 @@ mod tests {
         std::fs::create_dir_all(&song).unwrap();
         std::fs::write(
             song.join("music2.toml"),
-            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
         )
         .unwrap();
         std::fs::write(
@@ -581,7 +605,57 @@ mod tests {
     }
 
     fn state() -> AppState {
-        AppState::new(String::new(), graph::Graph::default())
+        AppState::new(String::new(), graph::Graph::default().stored())
+    }
+
+    // PACK-15, PACK-16: the server's start installs the packs music2 ships into the store it is
+    // given, from where they ship; a song from a template builds from that store; and a second
+    // start finds them there and writes nothing.
+    #[test]
+    fn the_servers_start_installs_the_packs_music2_ships_and_a_second_writes_nothing() {
+        let home = std::env::temp_dir().join(format!("m2-server-bundled-{}", std::process::id()));
+        let _ = m2_song::pack::remove_tree(&home);
+        let store = home.join("Packs");
+        let start = || {
+            let s = AppState::new(String::new(), graph::Graph::silent());
+            s.keep_library(library::Folders { packs: Some(store.clone()), ..library::Folders::default() });
+            s
+        };
+        let s = start();
+        let installed: Vec<String> = m2_song::pack::Store::at(store.clone()).list().iter().map(|(n, v)| format!("{n} {}", v[0])).collect();
+        // Each bundled pack at the version its folder holds.
+        let bundled: Vec<String> = m2_song::pack::bundled(&resources::packs_dir())
+            .iter()
+            .map(|d| m2_song::pack::PkgManifest::at(d).unwrap().package)
+            .map(|p| format!("{} {}", p.name, p.version))
+            .collect();
+        assert_eq!(installed, bundled);
+        assert_eq!(installed.len(), 5);
+        // A new song from the starter template, locked to them (PACK-18), builds from this store
+        // alone: no registry, no network.
+        let song = project::create(&home, "Song", &resources::templates_dir().join("starter")).unwrap();
+        assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
+        s.graph.open(&song).unwrap();
+        let state = s.graph.state().unwrap();
+        assert_eq!(state["diagnostics"], json!([]), "{state}");
+        let touched = |dir: &Path| -> Vec<std::time::SystemTime> {
+            let mut out = vec![];
+            let mut stack = vec![dir.to_path_buf()];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap().flatten() {
+                    out.push(e.metadata().unwrap().modified().unwrap());
+                    if e.file_type().unwrap().is_dir() {
+                        stack.push(e.path());
+                    }
+                }
+            }
+            out
+        };
+        let before = touched(&store);
+        std::thread::sleep(Duration::from_millis(20));
+        drop(start());
+        assert_eq!(touched(&store), before, "a second start writes nothing");
+        m2_song::pack::remove_tree(&home).unwrap();
     }
 
     /// The desktop app reports a bad project folder before its window connects.
@@ -629,13 +703,13 @@ mod tests {
     fn a_graph_event_carries_the_revision_and_its_problems() {
         let dir = std::env::temp_dir().join(format!("m2-server-news-{}", std::process::id()));
         std::fs::create_dir_all(dir.join("data/kick")).unwrap();
-        let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
-                    const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+        let song = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                    const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => k.out);\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
         std::fs::write(dir.join("music2.toml"), manifest).unwrap();
         std::fs::write(dir.join("song.ts"), song).unwrap();
         std::fs::write(dir.join("data/kick/old.json"), r#"{"clips": []}"#).unwrap();
-        let s = AppState::new(String::new(), graph::Graph::silent());
+        let s = AppState::new(String::new(), graph::Graph::silent().stored());
         let (_, mut events, _page) = s.subscribe(true);
         s.graph_changed();
         // With no song open, it says so (AGENT-6).

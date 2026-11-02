@@ -14,6 +14,7 @@
 //! gesture (P10, WRITE-9): `crates/editor` plans each one as a Tx and asserts what it means.
 
 pub mod forward;
+pub mod history;
 pub mod lock;
 pub mod reference;
 pub mod session;
@@ -33,6 +34,7 @@ use m2_script::{Descriptor, UnitCtor};
 use m2_song::{DataSet, Manifest, Project, Version};
 use serde::Serialize;
 
+pub use history::{Bound, End};
 pub use session::{Past, Revision, Session, Source, StepError, StepName, Stepped, journal_problems};
 pub use tx::{BeforeWrite, Checked, Committed, ConflictFile, Patch, Refusal, Uncommitted, Writing};
 pub use unclaimed::{Seen, SeenLane};
@@ -215,7 +217,14 @@ pub fn build_code(project: &Project, packages: &mut PackageSet) -> Result<Arc<Co
     let app = app(packages);
     for r in &packs {
         let Some(p) = view.get(r.name.as_str()) else { continue };
-        app.meets(&p.needs).map_err(|why| broken(r.name.as_str(), format!("it {why}")))?;
+        app.meets(&p.needs).map_err(|why| {
+            // One of music2's own that it no longer comes with is moved on first (review Y5).
+            let asked = project.manifest.dependencies.get(r.name.as_str()).and_then(|d| d.requirement());
+            match asked.and_then(|req| m2_song::pack::move_on(&r.name, req)) {
+                Some(first) => broken(&format!("{first}. {}", r.name), format!("it {why}")),
+                None => broken(r.name.as_str(), format!("it {why}")),
+            }
+        })?;
     }
     let code = project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect();
     let mut opts = m2_script::Options::new(code, &project.manifest.project.entry);
@@ -386,6 +395,8 @@ mod bus_tests;
 #[cfg(test)]
 mod gate_tests;
 #[cfg(test)]
+mod history_tests;
+#[cfg(test)]
 mod pack_tests;
 
 #[cfg(test)]
@@ -395,13 +406,12 @@ mod tests {
     use super::*;
 
     fn std_packages() -> PackageSet {
-        let mut p = PackageSet::default();
+        let mut p = PackageSet::default().with_store(m2_song::pack::test_store());
         p.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
         p
     }
 
-    pub(crate) const MANIFEST: &str =
-        "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -419,9 +429,9 @@ mod tests {
     }
 
     const SONG: &str = r#"import { song } from "@m2/core";
-import { kick } from "std/instruments";
+import { drums } from "@m2/drums";
 import { track } from "@m2/core";
-const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
+const k = track("kick", ({ lane }) => drums.drum(lane.notes("hits")));
 export default song(() => k.out);
 "#;
 
@@ -475,8 +485,9 @@ export default song(() => v.out);
         MANIFEST.lines().map(|l| if l.starts_with("std = ") { format!("std = \"{req}\"\n") } else { format!("{l}\n") }).collect()
     }
 
-    // FMT-3: an unmet dependency is refused before any code runs. A song asking for an older std
-    // is told how to move to the one bundled (L7); one asking for a newer std is not.
+    // FMT-3, PACK-24: an unmet dependency is refused before any code runs. A song asking for an
+    // older std is told how to move to the one bundled (L7), and so is one asking for an older major
+    // of @m2/core; one asking for a newer std or @m2/core is not.
     #[test]
     fn unmet_dependencies_block() {
         let dir = project(&[("song.ts", SONG)]);
@@ -490,18 +501,33 @@ export default song(() => v.out);
         // std is 0.x, so a song asks for it by its first two numbers.
         let Version(major, minor, _) = Version::parse(&std_packages().get("std").unwrap().version).unwrap();
         let hint = format!(
-            "This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song"
+            "{}This app has std {major}.{minor}. To use it, change the std line in music2.toml to std = \"{major}.{minor}\". The song",
+            m2_song::UPGRADE
         );
         assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
-        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"1\"", "\"@m2/core\" = \"2\"")).unwrap();
+        // A newer @m2/core than this app's: no way to move but a newer music2.
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"3\"")).unwrap();
         let e = compile_dir(&dir).err().unwrap();
         assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
+        assert!(!e[0].message.contains("This app has"), "{}", e[0].message);
+        // PACK-24: an older major is told first how to move, and that the code may need changes.
+        std::fs::write(dir.join("music2.toml"), MANIFEST.replace("\"@m2/core\" = \"2\"", "\"@m2/core\" = \"1\"")).unwrap();
+        let e = compile_dir(&dir).err().unwrap();
+        assert_eq!(e.iter().map(|d| d.code).collect::<Vec<_>>(), ["sdk.unsatisfied"]);
+        let Version(major, _, _) = Version::parse(m2_script::SDK_VERSION).unwrap();
+        let hint = format!(
+            "{}This app has @m2/core {major}. To use it, change the @m2/core line in music2.toml to \"@m2/core\" = \"{major}\". The song's \
+             code may need changes. music2.toml asks for @m2/core \"1\"",
+            m2_song::UPGRADE
+        );
+        assert!(e[0].message.starts_with(&hint), "{}", e[0].message);
         std::fs::remove_dir_all(dir).ok();
     }
 
-    // FMT-3, PACK-2: every project the repo ships asks for what this build has: the SDK and the
-    // bundled std; and every pack it ships needs no more than that. So a std bump that leaves a
-    // manifest behind fails here, with no grep needed.
+    // FMT-3, PACK-2, PACK-23: every project the repo ships asks for what this build has: the SDK and
+    // the bundled std; and every pack it ships needs no more than that, asking for the SDK's major and
+    // the minor its code uses. So a std bump that leaves a manifest behind fails here, with no grep
+    // needed.
     #[test]
     fn every_shipped_manifest_is_met() {
         let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -509,7 +535,27 @@ export default song(() => v.out);
         let mut unmet = vec![];
         let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
         let mut packs = 0;
-        for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"] {
+        // PACK-23: and each pack that runs code asks for this app's major of @m2/core, and the minor
+        // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), or `"2.2"` once an
+        // instrument names kits (KIT-3), what its descriptors show; a pack of recordings alone may
+        // ask for none.
+        let major = sdk.map(|v| v.0.to_string());
+        let uses = |name: &str, dir: &Path| -> String {
+            let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
+            let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
+            let entries = |d: &m2_script::Descriptor| {
+                d.controls.iter().filter_map(|c| c.each.as_deref()).flat_map(|e| e.settings.clone()).collect::<Vec<_>>()
+            };
+            let labelled = mine.clone().any(|(_, d)| d.settings.iter().chain(entries(d).iter()).any(|x| x.label.is_some()));
+            let kits = mine.clone().any(|(_, d)| !d.editor.kits.is_empty());
+            match (major.as_deref(), kits, labelled) {
+                (Some(m), true, _) => format!("{m}.2"),
+                (Some(m), false, true) => format!("{m}.1"),
+                (Some(m), false, false) => m.to_string(),
+                (None, ..) => "?".into(),
+            }
+        };
+        for root in ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures", "packs"] {
             let mut found = 0;
             let mut stack = vec![repo.join(root)];
             while let Some(d) = stack.pop() {
@@ -519,6 +565,14 @@ export default song(() => v.out);
                     let name = pack.strip_prefix(&repo).unwrap().display().to_string();
                     let m = m2_song::pack::PkgManifest::at(&d).unwrap_or_else(|e| panic!("{name}: {e}"));
                     unmet.extend(m2_song::pack::meets(&m.dependencies, sdk, std).err().map(|why| format!("{name}: {why}")));
+                    let core = m.dependencies.get("@m2/core").map(|r| r.to_string());
+                    let wants = d.join("src").exists().then(|| uses(&m.package.name.to_string(), &d));
+                    if core.is_some() && core != wants || core.is_none() && wants.is_some() {
+                        unmet.push(format!(
+                            "{name}: asks for @m2/core {core:?}, not \"{}\", the major and the minor its code uses (PACK-23)",
+                            wants.as_deref().unwrap_or("?")
+                        ));
+                    }
                 }
                 let file = d.join("music2.toml");
                 if file.exists() {
@@ -535,11 +589,98 @@ export default song(() => v.out);
                 }
             }
             // Finding none fails: a test built in a folder that has since moved would pass having
-            // checked nothing.
-            assert!(found > 0, "no music2.toml under {}", repo.join(root).display());
+            // checked nothing. The bundled packs (PACK-15) are packs, not songs.
+            assert!(found > 0 || root == "packs", "no music2.toml under {}", repo.join(root).display());
         }
         assert!(packs > 0, "no m2pkg.toml under the fixtures: the packs' check checked nothing");
         assert!(unmet.is_empty(), "shipped projects and packs this build can't build:\n{}", unmet.join("\n"));
+    }
+
+    // PACK-18: every song the repo ships that imports a pack music2 ships (PACK-15) lists it in
+    // [dependencies] and locks it at the bundled version and hash; and no song locks another
+    // version of one. A bundled pack whose files changed under its version fails here, as in
+    // `every_bundled_pack_is_the_version_its_record_names`: it moves to a new version (PACK-17), then
+    // the songs move to it.
+    #[test]
+    fn every_shipped_song_locks_the_bundled_packs_it_plays() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let store = m2_song::pack::Store::at(m2_song::pack::test_store());
+        let bundled: Vec<(m2_song::pack::PackName, Version, m2_song::Sha)> = m2_song::pack::bundled(&m2_song::pack::source_packs())
+            .iter()
+            .map(|dir| {
+                let m = m2_song::pack::PkgManifest::at(dir).unwrap();
+                let hash = store.hash(&m.package.name, &m.package.version).unwrap();
+                (m.package.name, m.package.version, hash)
+            })
+            .collect();
+        assert_eq!(bundled.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
+        let (mut songs, mut wrong) = (0, vec![]);
+        let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
+        while let Some(d) = stack.pop() {
+            if !d.join("music2.toml").is_file() {
+                stack.extend(std::fs::read_dir(&d).into_iter().flatten().flatten().filter(|e| e.path().is_dir()).map(|e| e.path()));
+                continue;
+            }
+            songs += 1;
+            let name = d.strip_prefix(&repo).unwrap().display().to_string();
+            let project = Project::open(&d).unwrap_or_else(|e| panic!("{name}: {e:?}"));
+            let code: String = project.code.values().map(|t| t.to_string()).collect();
+            for (pack, version, hash) in &bundled {
+                let plays = code.contains(&format!("from \"{pack}\"")) || code.contains(&format!("from \"{pack}/"));
+                let listed = project.manifest.dependencies.contains_key(pack.as_str());
+                let locked = project.lock.get(pack).map(|l| (l.version, l.hash));
+                match (plays, listed, locked) {
+                    (false, false, None) => {}
+                    (true, true, Some((v, h))) if v == *version && h == *hash => {}
+                    (true, false, _) => wrong.push(format!("{name}: plays {pack} but music2.toml doesn't list it")),
+                    (_, _, Some((v, h))) if v == *version && h != *hash => wrong.push(format!(
+                        "{name}: locks {pack} {v} ({h}), but music2 ships {v} with other files ({hash}). A version's files never change \
+                         (PACK-17): move {pack} to {} in packs/{pack}/m2pkg.toml, record it in packs/versions.toml, and relock the \
+                         songs (`m2 pack update {pack}` in each)",
+                        Version(v.0, v.1, v.2 + 1)
+                    )),
+                    (_, _, Some((v, _))) if v != *version => wrong
+                        .push(format!("{name}: locks {pack} {v}, but music2 ships {version}: move it with `m2 pack update {pack}` in it")),
+                    _ => wrong.push(format!("{name}: {pack} is listed but not locked, or locked but not played")),
+                }
+            }
+        }
+        assert!(songs > 10, "found {songs} songs");
+        assert!(wrong.is_empty(), "songs the repo ships that don't lock the packs music2 ships (PACK-18):\n{}", wrong.join("\n"));
+    }
+
+    // PACK-17 (review S6): the packs whose hashes a lock or packs/versions.toml pins keep their
+    // bytes on every checkout: .gitattributes leaves their files as committed (`-text`, never a
+    // CRLF on Windows), and none holds a CR, which a checkout that turned LF into CRLF would.
+    #[test]
+    fn pinned_packs_keep_their_bytes_on_every_checkout() {
+        let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let attributes = std::fs::read_to_string(repo.join(".gitattributes")).unwrap_or_default();
+        let (mut files, mut wrong) = (0, vec![]);
+        for root in ["packs", "core/session/tests/fixtures/packs", "e2e/fixtures/library"] {
+            if !attributes.lines().any(|l| l.split_whitespace().collect::<Vec<_>>() == [&format!("{root}/**"), "-text"]) {
+                wrong.push(format!(".gitattributes doesn't say `{root}/** -text`"));
+            }
+            let mut stack = vec![repo.join(root)];
+            while let Some(d) = stack.pop() {
+                for e in std::fs::read_dir(&d).unwrap_or_else(|e| panic!("{}: {e}", d.display())).flatten() {
+                    let path = e.path();
+                    if e.file_type().unwrap().is_dir() {
+                        stack.push(path);
+                    } else if path.extension().is_some_and(|x| ["ts", "toml", "json", "md", "txt", "sfz"].contains(&x.to_str().unwrap())) {
+                        files += 1;
+                        if std::fs::read(&path).unwrap().contains(&b'\r') {
+                            wrong.push(format!(
+                                "{} holds a CR: its hash isn't the one its locks name",
+                                path.strip_prefix(&repo).unwrap().display()
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        assert!(files > 20, "found {files} files");
+        assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     }
 
     // DIAG-1: data no lane reads is a Warning among the revision's problems.
@@ -557,9 +698,9 @@ export default song(() => v.out);
     #[test]
     fn a_missing_plugin_is_a_problem_not_a_failure() {
         let src = r#"import { plugin, song, track } from "@m2/core";
-import { kick } from "std/instruments";
+import { drums } from "@m2/drums";
 import { sum } from "std/math";
-const k = track("kick", ({ lane }) => kick(lane.notes("hits")));
+const k = track("kick", ({ lane }) => drums.drum(lane.notes("hits")));
 const s = track("synth", { name: "Synth" }, ({ lane }) =>
   plugin("clap:org.example.not-installed", { notes: lane.notes("notes"), cutoff_7: 0.5 }));
 export default song(() => sum(k.out, s.out));
@@ -582,7 +723,7 @@ import bass from "./tracks/bass";
 export default song(() => bass.out);
 "#;
         let bass = r#"import { db, track } from "@m2/core";
-import { bass } from "std/instruments";
+import { bass } from "@m2/synths";
 import { lowpass } from "std/filter";
 
 export default track("bass", ({ lane }) => {
@@ -607,7 +748,7 @@ export const dark = component(
 );
 "#;
         let bass = r#"import { track } from "@m2/core";
-import { bass } from "std/instruments";
+import { bass } from "@m2/synths";
 import { dark } from "../lib/dark";
 
 export default track("bass", ({ lane }) => dark(bass(lane.notes("notes"))));

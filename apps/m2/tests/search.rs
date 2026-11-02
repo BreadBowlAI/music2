@@ -56,28 +56,36 @@ fn out(o: &Output) -> String {
 #[test]
 fn with_the_app_closed_m2_searches_std_and_your_presets() {
     let home = Home::new("closed");
-    let yours = home.0.join("Music/music2/Presets/std/synth-pad");
+    let yours = home.0.join("Music/music2/Presets/_m2_synths/synth-pad");
     std::fs::create_dir_all(&yours).unwrap();
     std::fs::write(
         yours.join("Night.json"),
-        "{\n  \"m2preset\": 1,\n  \"name\": \"Night\",\n  \"sound\": \"std:synth-pad\",\n  \"values\": {}\n}\n",
+        "{\n  \"m2preset\": 1,\n  \"name\": \"Night\",\n  \"sound\": \"@m2/synths:synth-pad\",\n  \"values\": {}\n}\n",
     )
     .unwrap();
 
     let o = m2_in(&home.0, &["search", "reverb"]);
     assert!(o.status.success(), "{o:?}");
     let first = out(&o).lines().next().unwrap_or_default().to_string();
-    assert!(first.starts_with("Reverb ") && first.contains("effect") && first.ends_with("std:reverb"), "the best first: {first:?}");
+    assert!(first.starts_with("Reverb ") && first.contains("effect") && first.ends_with("@m2/effects:reverb"), "the best first: {first:?}");
 
     let o = m2_in(&home.0, &["search", "night", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{o:?}"));
-    assert_eq!(items[0]["id"], "sound:yours/std:synth-pad/Night", "your presets are sounds: {items}");
+    assert_eq!(items[0]["id"], "sound:yours/@m2/synths:synth-pad/Night", "your presets are sounds: {items}");
     assert_eq!(items[0]["package"], "yours");
 
     let o = m2_in(&home.0, &["search", "pluck", "--kind", "sound", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap();
     let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["sound:std/std:synth-pluck/Glass", "sound:std/std:synth-pluck/Soft"], "--kind sound: only sounds");
+    assert_eq!(
+        ids,
+        [
+            "sound:std/@m2/wavetable:wavetable/Short pluck",
+            "sound:std/@m2/synths:synth-pluck/Glass",
+            "sound:std/@m2/synths:synth-pluck/Soft"
+        ],
+        "--kind sound: only sounds"
+    );
 
     let o = m2_in(&home.0, &["search", "zzzq"]);
     assert!(o.status.success() && out(&o).is_empty(), "{o:?}");
@@ -177,15 +185,19 @@ fn with_the_app_closed_m2_searches_samples() {
     let home = Home::new("samples");
     let mine = home.0.join("My Samples");
     tone(&mine.join("Kicks/Deep Kick.wav"), 0.2);
-    std::fs::write(mine.join("Kicks/old.flac"), b"fLaC").unwrap();
+    let flac = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    std::fs::copy(flac, mine.join("Kicks/Old Kick.flac")).unwrap();
+    std::fs::write(mine.join("Kicks/old.mp3"), b"ID3 not read").unwrap();
     std::fs::create_dir_all(home.0.join(".music2")).unwrap();
     std::fs::write(home.0.join(".music2/settings.json"), serde_json::json!({"samples": [mine]}).to_string()).unwrap();
     let o = m2_in(&home.0, &["search", "kick", "--kind", "sample", "--json"]);
     let items: serde_json::Value = serde_json::from_slice(&o.stdout).unwrap_or_else(|_| panic!("{o:?}"));
     let ids: Vec<&str> = items.as_array().unwrap().iter().map(|i| i["id"].as_str().unwrap()).collect();
     let deep = format!("sample:folder:{}", mine.join("Kicks/Deep Kick.wav").display());
-    assert_eq!(ids, ["sample:std:samples/kit/kick.wav", deep.as_str()], "std's first, then yours");
-    assert!(String::from_utf8_lossy(&o.stderr).contains("1 audio files that aren't WAV were skipped: WAV only for now"), "{o:?}");
+    let old = format!("sample:folder:{}", mine.join("Kicks/Old Kick.flac").display());
+    assert_eq!(ids, ["sample:std:samples/kit/kick.wav", deep.as_str(), old.as_str()], "std's first, then yours, a FLAC too");
+    let said = String::from_utf8_lossy(&o.stderr);
+    assert!(said.contains("1 audio files that aren't WAV or FLAC were skipped: WAV and FLAC only for now"), "{o:?}");
     assert!(home.0.join(".cache/music2/samples").is_dir() || home.0.join("Library/Caches/music2/samples").is_dir(), "measures kept");
 }
 
@@ -216,7 +228,7 @@ fn m2_adds_a_sample_with_the_app_closed() {
 fn loops_pack(dir: &Path, version: &str) {
     std::fs::create_dir_all(dir).unwrap();
     let toml = format!(
-        "[package]\nname = \"@alice/loops\"\nversion = \"{version}\"\nlicense = \"CC-BY-4.0\"\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n"
+        "[package]\nname = \"@alice/loops\"\nversion = \"{version}\"\nlicense = \"CC-BY-4.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n"
     );
     std::fs::write(dir.join("m2pkg.toml"), toml).unwrap();
     std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\n").unwrap();

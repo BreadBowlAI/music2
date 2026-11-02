@@ -46,7 +46,7 @@ function wav(dir, name, seconds, f, rate = 48000) {
   fs.writeFileSync(`${dir}/${name}`, b);
 }
 
-const { page, errors, key, api, show, toasts, box, drag } = await open(1440, 900);
+const { page, errors, key, api, show, toasts, box, drag, caughtUp } = await open(1440, 900);
 const peaksAsked = [];
 page.on("request", (r) => r.url().includes("/api/graph/audio/peaks") && peaksAsked.push(decodeURIComponent(r.url().replace(/^.*asset=/, ""))));
 
@@ -205,9 +205,10 @@ check(fs.existsSync(`${PROJ}/assets/hit.wav`), "the files stay in assets/");
 
 // Not a WAV: refused in words, nothing added. The undo's revision first: its files land before it.
 await until(async () => (await api("")).body.view.revision > imported);
+await caughtUp();
 const revision = (await api("")).body.view.revision;
 await importVia("Meta+Shift+KeyI", [`${files}/song.mp3`]);
-check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV file. music2 reads WAV files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
+check(await until(async () => (await toasts()).some((t) => t.includes("song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files. Save it as a WAV first: most audio apps can (Export, then WAV)."))), `an MP3 says Q1's words: ${await toasts()}`);
 check(laneClips().length === before && (await api("")).body.view.revision === revision && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and adds nothing");
 
 // A PC page: Ctrl+Shift+I.
@@ -283,6 +284,8 @@ const rows = async () => {
   await page.keyboard.press("Escape");
   return r;
 };
+// The menu's rows are the state the page shows: the fade's, once it shows it.
+await caughtUp();
 const listed = await rows();
 const at = (id) => listed.findIndex((r) => r[0] === id);
 check(at("volume") === at("split") + 1 && at("reverse") === at("volume") + 1 && at("follow") === at("reverse") + 1 && at("unfade") === at("follow") + 1, `Volume…, Reverse, Follow tempo and Remove fades come after Split: ${listed.map((r) => r[0])}`);
@@ -361,7 +364,7 @@ await page.click("[data-testid=add-track]");
 await page.waitForSelector("[data-testid=instrument-list] input");
 await page.keyboard.type("audio");
 const row = await page.$$eval("[data-testid=instrument-list] [role=group]", (gs) => gs.map((g) => [g.getAttribute("aria-label"), [...g.querySelectorAll("[role=option]")].map((o) => o.textContent)]));
-check(JSON.stringify(row) === JSON.stringify([["Audio", ["Audio trackPlays recordings and loops: drop a WAV file on it"]]]), `typing "audio" finds the Audio group: ${JSON.stringify(row)}`);
+check(JSON.stringify(row) === JSON.stringify([["Audio", ["Audio trackPlays recordings and loops: drop a WAV or FLAC file on it"]]]), `typing "audio" finds the Audio group: ${JSON.stringify(row)}`);
 const foot = await page.$eval("[data-testid=instrument-code]", (e) => e.textContent);
 check(foot === 'tracks/audio.ts · lane.audio("clips")', `its foot says the code: ${foot}`);
 await linted("[data-testid=instrument-list]", "+ Track's list with Audio");
@@ -439,7 +442,7 @@ check(!(await page.$("[data-testid=drop-hint]")), "the hint is gone after the dr
 // Not a WAV: says what music2 opens, writes nothing.
 const rev = (await api("")).body.view.revision;
 const mp3 = await dropFiles(xAt(9), await yBelow(), [{ name: "song.mp3", path: `${files}/song.mp3`, type: "audio/mpeg" }]);
-check(mp3.hint === "music2 opens WAV and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
+check(mp3.hint === "music2 opens WAV, FLAC and MIDI files" && mp3.outline === null, `an MP3's hint: ${JSON.stringify(mp3)}`);
 await sleep(400);
 check((await api("")).body.view.revision === rev && !fs.existsSync(`${PROJ}/assets/song.mp3`), "and nothing is written");
 // A MIDI file is MIDI's to take (st-midi): new tracks, and one that isn't a MIDI file says so.
@@ -449,7 +452,7 @@ check(await until(async () => (await toasts()).includes("Nothing was added to th
 // An instrument dragged from the browser is no file: no hint.
 const instrument = await page.evaluate(async (x, y) => {
   const dt = new DataTransfer();
-  dt.setData("application/x-m2-instrument", "std:synth-pluck");
+  dt.setData("application/x-m2-instrument", "@m2/synths:synth-pluck");
   const at = document.elementFromPoint(x, y);
   at.dispatchEvent(new DragEvent("dragenter", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));
   at.dispatchEvent(new DragEvent("dragover", { dataTransfer: dt, clientX: x, clientY: y, bubbles: true, cancelable: true }));

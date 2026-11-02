@@ -1,7 +1,9 @@
 //! std on component descriptors (step 5): every export is a descriptor component, the effects
 //! `m2pkg.toml` used to list are its descriptors' editor metadata, every default is the one
 //! songs heard before, and the calls songs write keep working. The instruments added since
-//! (std/synth, std/fm, std/drums) build bare, and every knob of theirs reaches the sound.
+//! (the polysynth, FM and the drums) build bare, and every knob of theirs reaches the sound.
+//! Since std 0.6 std's sounds are the packs music2 ships (PKG-17, PACK-15): these hold for them
+//! too, with their ids and labels kept under the packs' names.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -14,10 +16,21 @@ fn std_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")
 }
 
+/// The packs music2 ships (PACK-15), each from its folder in the repo.
+const PACKS: [&str; 3] = ["@m2/drums", "@m2/effects", "@m2/synths"];
+
+/// std and the packs music2 ships.
+fn packages() -> Vec<(String, PathBuf)> {
+    let packs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs");
+    std::iter::once(("std".to_string(), std_dir())).chain(PACKS.map(|p| (p.to_string(), packs.join(p)))).collect()
+}
+
 fn build(song: &str) -> Build {
     let mut o = Options::new([("song.ts".to_string(), song.to_string())].into(), "song.ts");
-    o.packages.push(("std".into(), std_dir()));
-    o.dependencies.push("std".into());
+    for (name, dir) in packages() {
+        o.dependencies.push(name.clone());
+        o.packages.push((name, dir));
+    }
     build_full(&o).unwrap_or_else(|e| panic!("{e:?}\n{song}"))
 }
 
@@ -43,7 +56,7 @@ fn component_of<'a>(m: &'a Module, n: &Node) -> &'a str {
 }
 
 /// Each std export songs had at step 5, as `(ComponentId, module, name)`: 46 components.
-const EXPORTS: [(&str, &str, &str); 46] = [
+const EXPORTS: [(&str, &str, &str); 44] = [
     ("std:add", "std/math", "add"),
     ("std:scale", "std/math", "scale"),
     ("std:blend", "std/math", "blend"),
@@ -72,59 +85,50 @@ const EXPORTS: [(&str, &str, &str); 46] = [
     ("std:bandpass", "std/filter", "bandpass"),
     ("std:notch", "std/filter", "notch"),
     ("std:duck", "std/fx", "duck"),
-    ("std:delay", "std/fx", "delay"),
-    ("std:drive", "std/fx", "drive"),
+    ("@m2/effects:delay", "@m2/effects", "delay"),
+    ("@m2/effects:drive", "@m2/effects", "drive"),
     ("std:limit", "std/fx", "limit"),
-    ("std:reverb", "std/fx", "reverb"),
-    ("std:chorus", "std/fx", "chorus"),
-    ("std:phaser", "std/fx", "phaser"),
-    ("std:tremolo", "std/fx", "tremolo"),
+    ("@m2/effects:reverb", "@m2/effects", "reverb"),
+    ("@m2/effects:chorus", "@m2/effects", "chorus"),
+    ("@m2/effects:phaser", "@m2/effects", "phaser"),
+    ("@m2/effects:tremolo", "@m2/effects", "tremolo"),
     ("std:compress", "std/fx", "compress"),
     ("std:eq3", "std/fx", "eq3"),
-    ("std:bitcrush", "std/fx", "bitcrush"),
-    ("std:widen", "std/fx", "widen"),
-    ("std:bass", "std/instruments", "bass"),
-    ("std:kick", "std/instruments", "kick"),
-    ("std:hat", "std/instruments", "hat"),
-    ("std:pluck", "std/instruments", "pluck"),
-    ("std:pad", "std/instruments", "pad"),
+    ("@m2/effects:bitcrush", "@m2/effects", "bitcrush"),
+    ("@m2/effects:widen", "@m2/effects", "widen"),
+    ("@m2/synths:bass", "@m2/synths", "bass"),
+    ("@m2/synths:pluck", "@m2/synths", "pluck"),
+    ("@m2/synths:pad", "@m2/synths", "pad"),
     ("std:mixer", "std/mix", "mixer"),
     ("std:master", "std/mix", "master"),
 ];
 
 /// The instruments added since step 5, as `(ComponentId, module, name)`: one engine each for
 /// the synth, FM and drums, and the instruments voiced on them.
-const INSTRUMENTS: [(&str, &str, &str); 23] = [
-    ("std:synth-custom", "std/synth", "synth.custom"),
-    ("std:synth-supersaw", "std/synth", "synth.supersaw"),
-    ("std:synth-lead", "std/synth", "synth.lead"),
-    ("std:synth-pad", "std/synth", "synth.pad"),
-    ("std:synth-pluck", "std/synth", "synth.pluck"),
-    ("std:synth-sub", "std/synth", "synth.sub"),
-    ("std:synth-bass", "std/synth", "synth.bass"),
-    ("std:synth-strings", "std/synth", "synth.strings"),
-    ("std:fm-custom", "std/fm", "fm.custom"),
-    ("std:fm-keys", "std/fm", "fm.keys"),
-    ("std:fm-bell", "std/fm", "fm.bell"),
-    ("std:fm-metal", "std/fm", "fm.metal"),
-    ("std:drum-kit", "std/drums", "drums.kit"),
-    ("std:drum-kick", "std/drums", "drums.kick"),
-    ("std:drum-snare", "std/drums", "drums.snare"),
-    ("std:drum-clap", "std/drums", "drums.clap"),
-    ("std:drum-hats", "std/drums", "drums.hats"),
-    ("std:drum-tom", "std/drums", "drums.tom"),
-    ("std:drum-rim", "std/drums", "drums.rim"),
-    ("std:drum-cowbell", "std/drums", "drums.cowbell"),
-    ("std:drum-cymbal", "std/drums", "drums.cymbal"),
-    ("std:drum-shaker", "std/drums", "drums.shaker"),
+const INSTRUMENTS: [(&str, &str, &str); 15] = [
+    ("@m2/synths:synth-custom", "@m2/synths", "synth.custom"),
+    ("@m2/synths:synth-supersaw", "@m2/synths", "synth.supersaw"),
+    ("@m2/synths:synth-lead", "@m2/synths", "synth.lead"),
+    ("@m2/synths:synth-pad", "@m2/synths", "synth.pad"),
+    ("@m2/synths:synth-pluck", "@m2/synths", "synth.pluck"),
+    ("@m2/synths:synth-sub", "@m2/synths", "synth.sub"),
+    ("@m2/synths:synth-bass", "@m2/synths", "synth.bass"),
+    ("@m2/synths:synth-strings", "@m2/synths", "synth.strings"),
+    ("@m2/synths:fm-custom", "@m2/synths", "fm.custom"),
+    ("@m2/synths:fm-keys", "@m2/synths", "fm.keys"),
+    ("@m2/synths:fm-bell", "@m2/synths", "fm.bell"),
+    ("@m2/synths:fm-metal", "@m2/synths", "fm.metal"),
+    ("@m2/drums:drum-kit", "@m2/drums", "drums.kit"),
+    ("@m2/drums:drum", "@m2/drums", "drums.drum"),
     ("std:sampler", "std/sampler", "sampler"),
 ];
 
-// PKG-1, PKG-2, PKG-9: std declares every component with a descriptor, each export is in the
-// catalog under its ComponentId, and the manifest describes no TypeScript.
+// PKG-1, PKG-2, PKG-9, PKG-17: std and the packs music2 ships declare every component with a
+// descriptor, each export is in the catalog under its ComponentId (std's sounds under the packs'
+// names, their ids kept), and the manifest describes no TypeScript.
 #[test]
 fn std_is_declared_with_descriptors() {
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
     let ids: BTreeSet<&str> = EXPORTS.iter().chain(&INSTRUMENTS).map(|e| e.0).collect();
     assert_eq!(catalog.components.keys().map(String::as_str).collect::<BTreeSet<_>>(), ids);
@@ -132,19 +136,18 @@ fn std_is_declared_with_descriptors() {
         let exports = &catalog.exports[id];
         assert!(exports.iter().any(|e| e.module == module && e.name == name), "{id} is exported as {module}.{name}: {exports:?}");
         let d = &catalog.components[id];
-        assert_eq!(
-            (d.module.as_str(), d.file.starts_with("std/src/")),
-            (exports[0].module.as_str(), true),
-            "{id} is defined where it is first exported"
-        );
+        let package = id.split_once(':').unwrap().0;
+        assert!(d.file.starts_with(&format!("{package}/src/")), "{id} is defined in its package: {}", d.file);
+        // std's is first exported where it is defined; a pack's, from the pack's own name (PACK-3).
+        let first = if package == "std" { d.module.as_str() } else { package };
+        assert_eq!(exports[0].module, first, "{id} is first exported from {first}");
         assert!(!d.label.is_empty() && d.output.is_some(), "{id} has a label and declares its output");
     }
     // `std/control` re-exports the math it builds on: the same components, not new ones.
     for name in ["blend", "range", "xrange"] {
         assert!(catalog.exports[&format!("std:{name}")].iter().any(|e| e.module == "std/control" && e.name == name));
     }
-    for entry in std::fs::read_dir(std_dir().join("src")).unwrap() {
-        let path = entry.unwrap().path();
+    for path in packages().iter().flat_map(|(_, dir)| std::fs::read_dir(dir.join("src")).unwrap()).map(|e| e.unwrap().path()) {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(!text.contains("component({ controls"), "{} declares a component the old way (PKG-1)", path.display());
     }
@@ -153,14 +156,15 @@ fn std_is_declared_with_descriptors() {
 }
 
 // Polish A4: the drum kit names the notes it plays, for the piano roll's rows: the General MIDI
-// notes the `std:drum` kernel maps (std/kernels-src/src/drums/tests.rs, KIT); the hats name their
-// pedal and open notes. No other std instrument names its notes.
+// notes the `@m2/drums:drum` kernel maps (m2_dsp::gm; packs/@m2/drums/kernels-src/src/drum/tests.rs,
+// KIT). No other instrument names its notes: One drum's names would have to follow its menu
+// (gaps.md, review Y14).
 #[test]
 fn the_drum_kit_names_its_notes() {
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let names = |id: &str| -> Vec<(u8, &str)> { catalog.components[id].editor.notes.iter().map(|(k, v)| (*k, v.as_str())).collect() };
     assert_eq!(
-        names("std:drum-kit"),
+        names("@m2/drums:drum-kit"),
         [
             (36, "Kick"),
             (37, "Rim"),
@@ -184,9 +188,8 @@ fn the_drum_kit_names_its_notes() {
             (75, "Claves"),
         ]
     );
-    assert_eq!(names("std:drum-hats"), [(42, "Closed hat"), (44, "Pedal hat"), (46, "Open hat")]);
     for (id, _, _) in INSTRUMENTS {
-        if id != "std:drum-kit" && id != "std:drum-hats" {
+        if id != "@m2/drums:drum-kit" {
             assert!(catalog.components[id].editor.notes.is_empty(), "{id} names no notes");
         }
     }
@@ -197,7 +200,7 @@ fn the_drum_kit_names_its_notes() {
 // `<slot>.<key>.<control>`, and a value in the declared unit gets the declared range and log.
 #[test]
 fn every_std_control_is_found_by_its_slot() {
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let mut found = 0;
     for d in catalog.components.values() {
         for c in &d.controls {
@@ -213,9 +216,9 @@ fn every_std_control_is_found_by_its_slot() {
         assert_eq!(d.control("nothing"), None);
     }
     assert!(found > 46, "std declares {found} controls");
-    let kick = &catalog.components["std:kick"];
-    assert_eq!(kick.controls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["tune", "decay"]);
-    assert_eq!(kick.range_for("decay", Some(Unit::Seconds)), Some(((0.01, 2.0), true)), "the second control's range");
+    let bass = &catalog.components["@m2/synths:bass"];
+    assert_eq!(bass.controls.iter().map(|c| c.name.as_str()).collect::<Vec<_>>(), ["cutoff", "drive"]);
+    assert_eq!(bass.range_for("drive", Some(Unit::Db)), Some(((0.0, 36.0), false)), "the second control's range");
 }
 
 /// The effects `m2pkg.toml` listed before step 5, as `[[effect]]` entries: module, name,
@@ -226,14 +229,14 @@ const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 17] = [
     ("std/filter", "bandpass", "Filter", "Keeps only a band around the cutoff, like a telephone", "1000"),
     ("std/filter", "notch", "Filter", "Cuts a narrow band out around the cutoff", "1000"),
     ("std/fx", "limit", "Dynamics", "Stops peaks from clipping", "-1"),
-    ("std/fx", "drive", "Distortion", "Warm saturation, from gentle grit to crunch", "6"),
-    ("std/fx", "delay", "Delay & Reverb", "Echoes that repeat and fade away", "{ time: 0.25, feedback: 0.3, mix: 0.3 }"),
+    ("@m2/effects", "drive", "Distortion", "Warm saturation, from gentle grit to crunch", "6"),
+    ("@m2/effects", "delay", "Delay & Reverb", "Echoes that repeat and fade away", "{ time: 0.25, feedback: 0.3, mix: 0.3 }"),
     ("std/dsp", "gain", "Utility", "Volume: louder or quieter, in dB", "0"),
     ("std/dsp", "pan", "Utility", "Places a mono sound left or right", "0"),
-    ("std/fx", "reverb", "Delay & Reverb", "Space: the sound of a room or a hall around it", "{ size: 0.6, damping: 0.5, mix: 0.25 }"),
-    ("std/fx", "chorus", "Modulation", "Thicker and wider, with a gentle shimmer", "{ rate: 0.8, depth: 0.5, mix: 0.5 }"),
-    ("std/fx", "phaser", "Modulation", "A swirling, sweeping whoosh", "{ rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 }"),
-    ("std/fx", "tremolo", "Modulation", "Pulses the volume up and down", "{ rate: 5, depth: 0.5 }"),
+    ("@m2/effects", "reverb", "Delay & Reverb", "Space: the sound of a room or a hall around it", "{ size: 0.6, damping: 0.5, mix: 0.25 }"),
+    ("@m2/effects", "chorus", "Modulation", "Thicker and wider, with a gentle shimmer", "{ rate: 0.8, depth: 0.5, mix: 0.5 }"),
+    ("@m2/effects", "phaser", "Modulation", "A swirling, sweeping whoosh", "{ rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 }"),
+    ("@m2/effects", "tremolo", "Modulation", "Pulses the volume up and down", "{ rate: 5, depth: 0.5 }"),
     (
         "std/fx",
         "compress",
@@ -242,8 +245,8 @@ const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 17] = [
         "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 }",
     ),
     ("std/fx", "eq3", "EQ", "Bass, middle and treble, each up or down in dB", "{ low: 0, mid: 0, high: 0 }"),
-    ("std/fx", "bitcrush", "Distortion", "Lo-fi digital crunch, like an old sampler", "{ bits: 8, rate: 12000, mix: 1 }"),
-    ("std/fx", "widen", "Utility", "Makes the stereo image wider, or narrower toward mono", "{ width: 1.5 }"),
+    ("@m2/effects", "bitcrush", "Distortion", "Lo-fi digital crunch, like an old sampler", "{ bits: 8, rate: 12000, mix: 1 }"),
+    ("@m2/effects", "widen", "Utility", "Makes the stereo image wider, or narrower toward mono", "{ width: 1.5 }"),
 ];
 
 /// What an effect's `insert` writes after the audio, as the effect planner writes it (D11):
@@ -268,7 +271,7 @@ fn insert_text(d: &Descriptor) -> String {
 // from that text, and from no options at all.
 #[test]
 fn std_effects_are_the_manifests_old_effects() {
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let now: BTreeSet<(String, String, String, String, String)> = catalog
         .effects()
         .map(|d| {
@@ -290,12 +293,22 @@ fn std_effects_are_the_manifests_old_effects() {
 }
 
 /// Port defaults declared in `m2pkg.toml`, by `(kernel id, port)`: `"freq: control<hz> = 440"`.
+/// std's, and those of the packs' own kernels (PACK-21: `@m2/effects:bitcrush`).
 fn port_defaults() -> BTreeMap<(String, String), f64> {
-    let manifest = std::fs::read_to_string(std_dir().join("m2pkg.toml")).unwrap();
+    let mut out = BTreeMap::new();
+    for (package, dir) in packages() {
+        out.extend(port_defaults_of(&package, &dir));
+    }
+    out
+}
+
+/// Port defaults declared in the `m2pkg.toml` of package `package`, in `dir`.
+fn port_defaults_of(package: &str, dir: &Path) -> BTreeMap<(String, String), f64> {
+    let manifest = std::fs::read_to_string(dir.join("m2pkg.toml")).unwrap();
     let (mut kernel, mut inputs, mut out) = (String::new(), false, BTreeMap::new());
     for line in manifest.lines().map(str::trim) {
         if let Some(name) = line.strip_prefix("name = \"").and_then(|s| s.strip_suffix('"')) {
-            kernel = format!("std:{name}");
+            kernel = format!("{package}:{name}");
         }
         if line.starts_with("inputs = [") {
             inputs = true;
@@ -326,8 +339,10 @@ import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
-import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
-import { bass, hat, kick, pad, pluck } from "std/instruments";
+import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { compress, duck, eq3, limit } from "std/fx";
+import { bass, pad, pluck } from "@m2/synths";
+import { drums } from "@m2/drums";
 import { master, mixer } from "std/mix";
 export default song(({ lane, time }) => {
   const x = kernel("std:saw", { freq: 110 });
@@ -339,7 +354,7 @@ export default song(({ lane, time }) => {
     svf.lowpass(x), svf.bandpass(x), svf.highpass(x), vca(x), gain(x), pan(x),
     lowpass(x), highpass(x), bandpass(x), notch(x),
     duck(x, l), delay(x), drive(x), limit(x), reverb(x), chorus(x), phaser(x), tremolo(x), compress(x), eq3(x), bitcrush(x), widen(x),
-    bass(notes), kick(notes), hat(notes), pluck(notes), pad(notes),
+    bass(notes), pluck(notes), pad(notes),
   ];
   return master(mixer({ a: x, b: all[0] }));
 });
@@ -349,13 +364,10 @@ export default song(({ lane, time }) => {
     let ns = nodes(m);
     // Defaults that were `??` fallbacks in instrument bodies, with their old expressions.
     let fallbacks: BTreeMap<(&str, &str), f64> = [
-        (("std:bass", "cutoff"), 600.0),
-        (("std:bass", "drive"), 4.0),
-        (("std:kick", "tune"), 48.0),
-        (("std:kick", "decay"), 0.32),
-        (("std:hat", "decay"), 45.0 * 0.001),
-        (("std:pluck", "brightness"), 5000.0),
-        (("std:pad", "cutoff"), 1800.0),
+        (("@m2/synths:bass", "cutoff"), 600.0),
+        (("@m2/synths:bass", "drive"), 4.0),
+        (("@m2/synths:pluck", "brightness"), 5000.0),
+        (("@m2/synths:pad", "cutoff"), 1800.0),
         (("std:master", "ceiling"), -1.0),
     ]
     .into();
@@ -391,7 +403,7 @@ export default song(({ lane, time }) => {
         checked.insert(format!("{component}.{slot}"));
     }
     // Every control that has a default was left out above, so each was compared.
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let today: BTreeSet<&str> = EXPORTS.iter().map(|e| e.0).collect();
     for d in catalog.components.values().filter(|d| d.id != "std:mixer" && today.contains(d.id.as_str())) {
         for c in d.controls.iter().filter(|c| c.default.is_some() && !c.optional) {
@@ -410,7 +422,7 @@ export default song(({ lane, time }) => {
             _ => None,
         })
         .collect();
-    assert_eq!(voices, [("std:bass", 4), ("std:hat", 4), ("std:kick", 2), ("std:pad", 12), ("std:pluck", 12)].into());
+    assert_eq!(voices, [("@m2/synths:bass", 4), ("@m2/synths:pad", 12), ("@m2/synths:pluck", 12)].into());
     let input = |kernel: &str, port: &str| -> Vec<(f64, bool)> {
         ns.iter()
             .filter_map(|n| match &n.op {
@@ -425,7 +437,7 @@ export default song(({ lane, time }) => {
             .collect()
     };
     // Settings are no cells: constants with no origin, which the checker folds as before (D3).
-    assert_eq!(input("std:noise", "seed"), [(1.0, false), (7.0, false)], "noise() and hat's noise(7)");
+    assert_eq!(input("std:noise", "seed"), [(1.0, false)], "noise()");
     assert_eq!(input("std:lfo", "shape"), [(0.0, false)]);
 }
 
@@ -466,14 +478,14 @@ const SMOOTH: [&str; 39] = [
     "std:bandpass.q",
     "std:notch.cutoff",
     "std:notch.q",
-    "std:delay.time",
-    "std:delay.feedback",
-    "std:delay.mix",
-    "std:drive.amount",
-    "std:bass.cutoff",
-    "std:bass.drive",
-    "std:pluck.brightness",
-    "std:pad.cutoff",
+    "@m2/effects:delay.time",
+    "@m2/effects:delay.feedback",
+    "@m2/effects:delay.mix",
+    "@m2/effects:drive.amount",
+    "@m2/synths:bass.cutoff",
+    "@m2/synths:bass.drive",
+    "@m2/synths:pluck.brightness",
+    "@m2/synths:pad.cutoff",
     "std:mixer.channels.pan",
 ];
 
@@ -481,7 +493,7 @@ const SMOOTH: [&str; 39] = [
 // step jumps the output are smooth, and the constants made for them say so.
 #[test]
 fn std_smooth_controls_are_the_per_sample_ones() {
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let mut smooth = BTreeSet::new();
     for d in catalog.components.values() {
         for c in &d.controls {
@@ -497,7 +509,8 @@ fn std_smooth_controls_are_the_per_sample_ones() {
     assert!(smooth == want, "smooth but not listed: {:?}\nlisted but not smooth: {:?}", smooth.difference(&want), want.difference(&smooth));
     let b = build(
         r#"import { kernel, song } from "@m2/core";
-import { delay, limit } from "std/fx";
+import { delay } from "@m2/effects";
+import { limit } from "std/fx";
 export default song(() => limit(delay(kernel("std:saw", { freq: 110 }), { mix: 0.5 })));
 "#,
     );
@@ -532,7 +545,8 @@ fn std_calls_keep_their_forms() {
     let song = r#"import { kernel, semis, song } from "@m2/core";
 import { follow, osc } from "std/dsp";
 import { lowpass } from "std/filter";
-import { delay as echo, duck } from "std/fx";
+import { delay as echo } from "@m2/effects";
+import { duck } from "std/fx";
 import { mixer } from "std/mix";
 export default song(() => {
   const x = kernel("std:saw", { freq: 110 });
@@ -563,8 +577,8 @@ export default song(() => {
     assert_eq!(lp(3), [("cutoff".into(), 1000.0, hz, true, vec![]), ("q".into(), 0.8, scalar, false, path(&["2"]))]);
     // Connected: no constant for `q`.
     assert_eq!(lp(4), [("cutoff".into(), 500.0, hz, false, path(&["1"]))]);
-    // `echo` is `delay` (PKG-9): its frame names std:delay, and its other controls are inherited.
-    let delay = &s[&frame("std:delay", 0)];
+    // `echo` is `delay` (PKG-9): its frame names @m2/effects:delay, and its other controls are inherited.
+    let delay = &s[&frame("@m2/effects:delay", 0)];
     assert_eq!(delay.iter().map(|c| (c.0.as_str(), c.3)).collect::<Vec<_>>(), [("time", false), ("feedback", true), ("mix", true)]);
     // A pitch stays a pitch: the oscillator converts it, and its knob is in semitones (D4).
     assert_eq!(s[&frame("std:saw", 0)], [("freq".into(), 60.0, Some(Unit::Semitones), false, path(&["0"]))]);
@@ -594,21 +608,7 @@ export default song(() => {
 /// The engines' own knobs and each drum's: left out, each is its kernel port's default, so an
 /// engine and its kernel agree on what a bare note sounds like. The other instruments are
 /// voiced: their defaults are their patches'.
-const ENGINES: [&str; 13] = [
-    "std:synth-custom",
-    "std:fm-custom",
-    "std:drum-kit",
-    "std:drum-kick",
-    "std:drum-snare",
-    "std:drum-clap",
-    "std:drum-hats",
-    "std:drum-tom",
-    "std:drum-rim",
-    "std:drum-cowbell",
-    "std:drum-cymbal",
-    "std:drum-shaker",
-    "std:sampler",
-];
+const ENGINES: [&str; 5] = ["@m2/synths:synth-custom", "@m2/synths:fm-custom", "@m2/drums:drum-kit", "@m2/drums:drum", "std:sampler"];
 
 // PKG-3, PKG-4: every instrument builds bare, and every knob a call leaves out reaches a kernel,
 // or a glide reaches the poly that plays one note at a time: none is left over (except the
@@ -619,8 +619,8 @@ const ENGINES: [&str; 13] = [
 fn std_instruments_reach_their_kernels() {
     let calls: Vec<String> = INSTRUMENTS.iter().map(|(_, _, name)| format!("{name}(notes)")).collect();
     let song = format!(
-        "import {{ song }} from \"@m2/core\";\nimport {{ drums }} from \"std/drums\";\nimport {{ osc }} from \"std/dsp\";\n\
-         import {{ fm }} from \"std/fm\";\nimport {{ mixer }} from \"std/mix\";\nimport {{ mono, synth }} from \"std/synth\";\n\
+        "import {{ song }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\nimport {{ osc }} from \"std/dsp\";\n\
+         import {{ fm }} from \"@m2/synths\";\nimport {{ mixer }} from \"std/mix\";\nimport {{ synth }} from \"@m2/synths\";\nimport {{ mono }} from \"std/dsp\";\n\
          import {{ sampler }} from \"std/sampler\";\n\
          export default song(({{ lane }}) => {{\n  const notes = lane.notes(\"notes\");\n\
          const all = [{}, mono(notes, (n) => osc.saw(n.pitch))];\n  return mixer({{ a: all[0] }});\n}});\n",
@@ -650,7 +650,7 @@ fn std_instruments_reach_their_kernels() {
         }
         checked.insert(format!("{component}.{slot}"));
         let ports = readers.get(n.id.as_str()).cloned().unwrap_or_default();
-        if (component, slot) == ("std:synth-custom", "glide") {
+        if (component, slot) == ("@m2/synths:synth-custom", "glide") {
             assert!(ports.is_empty() && !glides.contains(n.id.as_str()), "with a voice per note there is nothing to glide: {ports:?}");
             continue;
         }
@@ -666,7 +666,7 @@ fn std_instruments_reach_their_kernels() {
             }
         }
     }
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     for (id, _, _) in INSTRUMENTS {
         for c in &catalog.components[id].controls {
             assert!(checked.contains(&format!("{id}.{}", c.name)), "{id}.{} was not checked", c.name);
@@ -686,8 +686,8 @@ fn std_instruments_reach_their_kernels() {
 #[test]
 fn std_one_note_sounds_are_one_poly() {
     let b = build(
-        "import { song } from \"@m2/core\";\nimport { fm } from \"std/fm\";\nimport { mixer } from \"std/mix\";\n\
-         import { synth } from \"std/synth\";\n\
+        "import { song } from \"@m2/core\";\nimport { fm } from \"@m2/synths\";\nimport { mixer } from \"std/mix\";\n\
+         import { synth } from \"@m2/synths\";\n\
          export default song(({ lane }) => mixer({ a: synth.lead(lane.notes(\"a\")), b: fm.keys(lane.notes(\"b\"), { voices: 1 }), \
          c: synth.pad(lane.notes(\"c\")) }));\n",
     );
@@ -711,12 +711,20 @@ fn std_one_note_sounds_are_one_poly() {
     let legato = m2_ir::Alloc { mode: m2_ir::Mode::Legato, retrigger: false, steal: m2_ir::Steal::Oldest };
     assert_eq!(polys.len(), 3, "one poly each");
     let (_, voices, alloc, glide) = polys[0];
-    assert_eq!((polys[0].0, voices, alloc), ("std:synth", 1, legato), "the lead");
+    assert_eq!((polys[0].0, voices, alloc), ("@m2/synths:synth", 1, legato), "the lead");
     let glide = glide.expect("the lead's glide");
     assert!(matches!(glide.op, Op::Const { value, .. } if (value - 0.06).abs() < 1e-12), "{glide:?}");
     assert_eq!(glide.origin.as_ref().and_then(|o| o.slot()), Some("glide"), "the lead's glide knob");
-    assert_eq!((polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()), ("std:fm", 1, legato, true), "FM keys, one voice: no glide");
-    assert_eq!((polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()), ("std:synth", 16, m2_ir::Alloc::default(), true), "the pad");
+    assert_eq!(
+        (polys[1].0, polys[1].1, polys[1].2, polys[1].3.is_none()),
+        ("@m2/synths:fm", 1, legato, true),
+        "FM keys, one voice: no glide"
+    );
+    assert_eq!(
+        (polys[2].0, polys[2].1, polys[2].2, polys[2].3.is_none()),
+        ("@m2/synths:synth", 16, m2_ir::Alloc::default(), true),
+        "the pad"
+    );
 }
 
 // PKG-3, PKG-4, PKG-16: a Sampler that plays regions sends every knob to std:regions, each left out
@@ -755,7 +763,7 @@ fn the_samplers_regions_reach_their_kernel_at_its_defaults() {
         }
         slots.insert(slot.to_string());
     }
-    let catalog = describe(&[("std".into(), std_dir())]);
+    let catalog = describe(&packages());
     let knobs: BTreeSet<String> = catalog.components["std:sampler"].controls.iter().map(|c| c.name.clone()).collect();
     assert_eq!(slots, knobs, "every knob was checked");
     let count = ns.iter().find_map(|n| match &n.op {

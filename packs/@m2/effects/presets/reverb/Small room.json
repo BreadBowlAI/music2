@@ -1,0 +1,10 @@
+{
+  "m2preset": 1,
+  "name": "Small room",
+  "sound": "@m2/effects:reverb",
+  "values": {
+    "damping": 0.6,
+    "mix": 0.2,
+    "size": 0.3
+  }
+}

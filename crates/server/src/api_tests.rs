@@ -17,13 +17,14 @@ use crate::{Running, ServeOptions, start_with};
 const PAGE: &str = "t0k";
 const TOOLS: &str = "t00ls";
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\n\
-                    const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\nexport default song(() => k.out);\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                    const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\nexport default song(() => k.out);\n";
 
 /// What AGENT-11 names as the musician's: each is in the table, and not for agents.
-const THE_MUSICIANS: [(&str, &str); 45] = [
+const THE_MUSICIANS: [(&str, &str); 46] = [
     ("POST", "/api/graph/transport"),
+    ("POST", "/api/graph/arm"),
     ("POST", "/api/graph/seek"),
     ("POST", "/api/graph/loop"),
     ("POST", "/api/graph/panic"),
@@ -71,8 +72,9 @@ const THE_MUSICIANS: [(&str, &str); 45] = [
 ];
 
 /// Every song change the page makes, which stays open to agents (AGENT-11), and is a write.
-const SONG_CHANGES: [(&str, &str); 40] = [
+const SONG_CHANGES: [(&str, &str); 44] = [
     ("POST", "/api/tx/commit"),
+    ("POST", "/api/graph/take"),
     ("POST", "/api/graph/set"),
     ("POST", "/api/graph/connect"),
     ("POST", "/api/graph/disconnect"),
@@ -89,6 +91,7 @@ const SONG_CHANGES: [(&str, &str); 40] = [
     ("POST", "/api/graph/automate"),
     ("POST", "/api/graph/automate/remove"),
     ("POST", "/api/graph/track/add"),
+    ("POST", "/api/graph/track/kit"),
     ("POST", "/api/graph/track/duplicate"),
     ("POST", "/api/graph/track/delete"),
     ("POST", "/api/graph/track/mute"),
@@ -98,11 +101,13 @@ const SONG_CHANGES: [(&str, &str); 40] = [
     ("POST", "/api/graph/mix/bus"),
     ("POST", "/api/graph/mix/send"),
     ("POST", "/api/graph/mix/route"),
+    ("POST", "/api/graph/kit/drum"),
     ("POST", "/api/graph/layout"),
     ("POST", "/api/graph/tempo"),
     ("POST", "/api/graph/meter"),
     ("POST", "/api/graph/title"),
     ("POST", "/api/graph/clips"),
+    ("POST", "/api/graph/sections"),
     ("POST", "/api/graph/song-key"),
     ("POST", "/api/graph/markers"),
     ("POST", "/api/graph/audio/import"),
@@ -128,7 +133,7 @@ fn song(name: &str) -> PathBuf {
 /// A server with `song` open, and its session.
 fn serve(song: &Path) -> (Running, u64) {
     let options = ServeOptions { port: 0, web_dir: song.join("no-web"), token: TOOLS.into(), page_token: PAGE.into() };
-    let running = start_with(options, Graph::silent()).unwrap();
+    let running = start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(song).unwrap()["session"].as_u64().unwrap();
     (running, session)
 }
@@ -404,7 +409,7 @@ fn each_route_takes_bodies_up_to_its_limit() {
 
 /// A server of `routes`, as the app serves them (`routes::served`), with no song open: its url.
 fn serving_routes(routes: axum::Router<std::sync::Arc<crate::AppState>>) -> String {
-    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent());
+    let mut state = crate::AppState::new(TOOLS.into(), Graph::silent().stored());
     state.page_token = PAGE.into();
     let app = crate::routes::served(std::sync::Arc::new(state), routes, Path::new("no-web"));
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -477,4 +482,212 @@ fn the_refusals_read_as_the_contract_quotes_them() {
     let contract = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/architecture.md")).unwrap();
     let quoted = contract.lines().find(|l| l.contains("`Route::refusal`")).unwrap_or_default();
     assert!(quoted.contains(&format!("\"{play}\"")), "AGENT-11's Today quotes {play:?}:\n{quoted}");
+}
+
+/// Every `.ts` and `.tsx` file of the page (`web/src`), with what it holds, by its path there.
+fn page_sources() -> BTreeMap<String, String> {
+    let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src");
+    let mut all = BTreeMap::new();
+    let mut stack = vec![src.clone()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                stack.push(p);
+            } else if p.extension().is_some_and(|x| x == "ts" || x == "tsx") {
+                let name = p.strip_prefix(&src).unwrap().to_string_lossy().replace('\\', "/");
+                all.insert(name, std::fs::read_to_string(&p).unwrap());
+            }
+        }
+    }
+    all
+}
+
+/// `text`, a TypeScript file, with its comments and the insides of its strings blanked (each
+/// character a space, each line kept): what is left is code. A template string's `${…}` is code.
+fn code_of(text: &str) -> String {
+    #[derive(Clone, Copy, PartialEq)]
+    enum In {
+        Code,
+        Line,
+        Block,
+        Quote(char),
+        Template,
+    }
+    let mut out = String::with_capacity(text.len());
+    // The states to go back to: a `${` in a template is code until its `}`, at its brace depth.
+    let mut stack: Vec<(In, usize)> = vec![];
+    let (mut at, mut depth) = (In::Code, 0usize);
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
+    while i < chars.len() {
+        let (c, next) = (chars[i], chars.get(i + 1).copied());
+        match at {
+            In::Code => match (c, next) {
+                ('/', Some('/')) => {
+                    at = In::Line;
+                    out.push_str("  ");
+                    i += 1;
+                }
+                ('/', Some('*')) => {
+                    at = In::Block;
+                    out.push_str("  ");
+                    i += 1;
+                }
+                ('"' | '\'', _) => {
+                    at = In::Quote(c);
+                    out.push(c);
+                }
+                ('`', _) => {
+                    at = In::Template;
+                    out.push(c);
+                }
+                ('{', _) => {
+                    depth += 1;
+                    out.push(c);
+                }
+                ('}', _) if depth == 0 && !stack.is_empty() => {
+                    (at, depth) = stack.pop().unwrap();
+                    out.push(c);
+                }
+                ('}', _) => {
+                    depth = depth.saturating_sub(1);
+                    out.push(c);
+                }
+                _ => out.push(c),
+            },
+            In::Line => {
+                if c == '\n' {
+                    at = In::Code;
+                }
+                out.push(blank(c));
+            }
+            In::Block => {
+                if c == '*' && next == Some('/') {
+                    at = In::Code;
+                    out.push_str("  ");
+                    i += 1;
+                } else {
+                    out.push(blank(c));
+                }
+            }
+            In::Quote(q) => {
+                if c == '\\' {
+                    out.push(' ');
+                    if let Some(n) = next {
+                        out.push(blank(n));
+                    }
+                    i += 1;
+                } else if c == q || c == '\n' {
+                    at = In::Code;
+                    out.push(c);
+                } else {
+                    out.push(blank(c));
+                }
+            }
+            In::Template => {
+                if c == '\\' {
+                    out.push(' ');
+                    if let Some(n) = next {
+                        out.push(blank(n));
+                    }
+                    i += 1;
+                } else if c == '`' {
+                    at = In::Code;
+                    out.push(c);
+                } else if c == '$' && next == Some('{') {
+                    stack.push((In::Template, depth));
+                    (at, depth) = (In::Code, 0);
+                    out.push_str("${");
+                    i += 1;
+                } else {
+                    out.push(blank(c));
+                }
+            }
+        }
+        i += 1;
+    }
+    out
+}
+
+/// The words of a line of code: names, as JavaScript spells them.
+fn words(code: &str) -> impl Iterator<Item = &str> {
+    code.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty())
+}
+
+// The reading of the page's code above: a `//` in a string hides nothing, a `fetch` in a comment or a
+// string is no request, a template's `${}` is code.
+#[test]
+fn the_page_scan_reads_past_comments_and_strings() {
+    let found = |text: &str| code_of(text).lines().any(|l| words(l).any(|w| w == "fetch"));
+    assert!(found("const u = \"http://x\"; fetch(u);"), "a URL's `//` hides nothing");
+    assert!(found("const u = 'a//b', v = await fetch(u);"));
+    assert!(found("const s = `${await fetch(\"/api\")}`;"), "a template's `${{}}` is code");
+    assert!(found("/* a */ fetch(x) /* b */"));
+    assert!(!found("// fetch(x)"), "a comment is no request");
+    assert!(!found("const s = \"fetch(x)\";"), "nor a string");
+    assert!(!found("/* fetch(x)\n fetch(y) */"));
+    assert!(!found("const s = `fetch(x) ${a}`;"));
+    assert!(!found("prefetch(x); x.fetched = 1;"), "nor another word");
+    assert_eq!(code_of("a\n\"b\nc"), "a\n\" \nc", "lines are kept");
+}
+
+// AGENT-2: the window keeps the step of every change it makes as its own as soon as the change's
+// answer comes, whatever the route. The page sends every request through one function, `http`
+// (web/src/lib/http.ts), which keeps the step of each answer that names one: so a route the page
+// starts to call can't be forgotten. Only the answers that name the step they took back (an undo, a
+// redo, a skip) are left out. This lists the routes that write that the page calls, and checks that
+// none of its requests goes another way.
+#[test]
+fn the_page_keeps_the_step_of_every_route_it_calls() {
+    let page = page_sources();
+    assert!(page.len() > 50, "the page's sources: {} files", page.len());
+    let way = "lib/http.ts";
+    let http = page.get(way).expect("web/src/lib/http.ts: the page's one way to the server");
+    // No request goes another way: the name `fetch` nowhere in the code but in http.ts (read past
+    // comments and strings, so a `//` in a string hides nothing), no XHR, no beacon.
+    let mut other = vec![];
+    for (name, text) in &page {
+        let code = code_of(text);
+        for (n, (line, shown)) in code.lines().zip(text.lines()).enumerate() {
+            if (words(line).any(|w| w == "fetch") && name != way)
+                || words(line).any(|w| ["XMLHttpRequest", "sendBeacon", "EventSource"].contains(&w))
+            {
+                other.push(format!("web/src/{name}:{}: {}", n + 1, shown.trim()));
+            }
+        }
+    }
+    assert!(other.is_empty(), "requests that don't go through http (web/src/{way}):\n{}", other.join("\n"));
+
+    // The routes whose answers are kept by no window: exactly those that name the step they took
+    // back, each a write.
+    let line = http.lines().find(|l| l.contains("const TAKES_BACK")).expect("http.ts names the routes that take a step back: TAKES_BACK");
+    let named: BTreeSet<&str> = line.split('"').skip(1).step_by(2).collect();
+    assert_eq!(named, BTreeSet::from(["/api/graph/undo", "/api/graph/redo", "/api/graph/undo/skip"]), "{line}");
+    for path in &named {
+        assert!(api::find("POST", path).is_some_and(|r| r.writes), "{path} is a write of the table");
+    }
+
+    // The routes that write which the page calls: each by its whole path, or, in graph.ts, as its
+    // `/api/graph` call ("/set").
+    let all: String = page.values().map(String::as_str).collect();
+    let graph = page.get("lib/graph.ts").unwrap();
+    let calls = |r: &Route| {
+        let whole = [format!("\"{}\"", r.path), format!("`{}`", r.path), format!("\"{}?", r.path), format!("`{}?", r.path)];
+        let short = r.path.strip_prefix("/api/graph").filter(|p| !p.is_empty()).map(|p| format!("(\"{p}\""));
+        whole.iter().any(|w| all.contains(w.as_str())) || short.is_some_and(|s| graph.contains(&s))
+    };
+    let written: Vec<String> =
+        api::all().into_iter().filter(|r| r.writes && calls(r)).map(|r| format!("{} {}", r.method, r.path)).collect();
+    for known in [
+        "POST /api/graph/midifile/import",
+        "POST /api/graph/audio/import",
+        "POST /api/graph/sample",
+        "POST /api/library/sample",
+        "POST /api/graph/clips",
+    ] {
+        assert!(written.iter().any(|w| w == known), "the page calls {known}: the list found {written:?}");
+    }
+    println!("the routes that write which the page calls, each answer's step kept by http:\n{}", written.join("\n"));
 }

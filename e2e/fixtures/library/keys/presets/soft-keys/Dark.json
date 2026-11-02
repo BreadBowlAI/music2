@@ -1,0 +1,8 @@
+{
+  "m2preset": 1,
+  "name": "Dark",
+  "sound": "@bob/keys:soft-keys",
+  "values": {
+    "brightness": 600
+  }
+}

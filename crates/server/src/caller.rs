@@ -122,11 +122,23 @@ fn the_apps(name: &str) -> bool {
 tokio::task_local! {
     /// The caller of the request this task serves.
     static ASKING: Caller;
+    /// The page's window it came from (`x-m2-window`), if the page said (AGENT-2).
+    static WINDOW: Option<String>;
 }
 
 thread_local! {
     /// The caller of the work this thread does now: a route's blocking work, or a test's.
     static ON_THREAD: RefCell<Option<Caller>> = const { RefCell::new(None) };
+    /// The window of the work this thread does now, as [`window`] says it.
+    static WINDOW_ON_THREAD: RefCell<Option<String>> = const { RefCell::new(None) };
+}
+
+/// The page's window the request served now came from (AGENT-2): none for an agent, or the app.
+pub fn window() -> Option<String> {
+    if let Some(w) = WINDOW_ON_THREAD.with(|w| w.borrow().clone()) {
+        return Some(w);
+    }
+    WINDOW.try_with(Option::clone).ok().flatten()
 }
 
 /// Who asks for what is served now: the request's caller on its task, or on the thread its
@@ -156,13 +168,24 @@ pub fn as_caller<T>(caller: Caller, f: impl FnOnce() -> T) -> T {
 
 /// Run `f` off the async threads, as the request's caller.
 pub async fn blocking<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> Result<T, tokio::task::JoinError> {
-    let caller = now();
-    tokio::task::spawn_blocking(move || as_caller(caller, f)).await
+    let (caller, window) = (now(), window());
+    tokio::task::spawn_blocking(move || {
+        let was = WINDOW_ON_THREAD.with(|w| w.replace(window));
+        let out = as_caller(caller, f);
+        WINDOW_ON_THREAD.with(|w| *w.borrow_mut() = was);
+        out
+    })
+    .await
 }
 
 /// Serve `fut` as `caller`: what `auth` does with each request.
 pub async fn serving<F: Future>(caller: Caller, fut: F) -> F::Output {
-    ASKING.scope(caller, fut).await
+    serving_in(caller, None, fut).await
+}
+
+/// [`serving`], from the page's window `window` (AGENT-2).
+pub async fn serving_in<F: Future>(caller: Caller, window: Option<String>, fut: F) -> F::Output {
+    ASKING.scope(caller, WINDOW.scope(window, fut)).await
 }
 
 #[cfg(test)]

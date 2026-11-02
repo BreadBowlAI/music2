@@ -19,12 +19,13 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
 fn m2(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", std::env::temp_dir().join("m2-tests-no-app")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", m2_song::pack::test_home()).args(args).output().unwrap()
 }
 
 /// Every file of the project but `.music2/`, with its bytes.
@@ -75,7 +76,7 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         // The gesture commands refuse before they plan anything.
         vec!["connect", dir, "keys.out", &id],
         vec!["disconnect", dir, &id],
-        vec!["add-effect", dir, &id, "std:delay"],
+        vec!["add-effect", dir, &id, "@m2/effects:delay"],
         vec!["remove-effect", dir, &id],
         vec!["relink", dir, "data/chops/old.json", "data/keys/old.json"],
         vec!["delete-data", dir, "data/chops/old.json"],
@@ -87,7 +88,7 @@ fn a_write_while_another_process_holds_the_lock_fails_and_changes_nothing() {
         vec!["automate", dir, &id],
         vec!["label", dir, "keys", "Lead Keys"],
         // The track builders and the layout write too (8b.1).
-        vec!["add-track", dir, "std:synth-pluck"],
+        vec!["add-track", dir, "@m2/synths:synth-pluck"],
         vec!["duplicate-track", dir, "kick"],
         vec!["delete-track", dir, "keys"],
         vec!["layout", dir, "order", "chops", "kick", "keys"],

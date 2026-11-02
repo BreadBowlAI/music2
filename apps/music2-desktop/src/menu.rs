@@ -76,6 +76,10 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("split", "Split at Playhead", Some("CmdOrCtrl+E")),
     ("join", "Join Clips", Some("CmdOrCtrl+J")),
     ("quantize", "Quantize", None),
+    // The bars selected on the ruler (ARR-9), as Live's Insert Silence and Delete Time: empty bars
+    // where they start, or the bars taken out; everything after moves.
+    ("insert_bars", "Insert Bars", Some("CmdOrCtrl+I")),
+    ("delete_bars", "Delete Bars", Some("CmdOrCtrl+Shift+Backspace")),
     // The instrument list at + Track; the selected track goes, asking first when others read it.
     ("new_track", "New Track…", Some("CmdOrCtrl+T")),
     // In a field, the field's own: to the line's start on a Mac, the word before elsewhere.
@@ -88,9 +92,10 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     ("solo", "Solo", SOLO_KEY),
     // In the track's code: one undo step.
     ("mute_in_song", "Mute in Song", None),
-    // ⌥1 to ⌥4, X, A, E: the page's keys.
+    // ⌥1 to ⌥5, X, A, E: the page's keys. Beat (⌥5) shows while a drum kit's track is selected.
     ("view_device", "Device", None),
     ("view_notes", "Notes", None),
+    ("view_beat", "Beat", None),
     ("view_mix", "Mix", None),
     ("view_code", "Code", None),
     ("lanes", "Show Automation", None),
@@ -229,7 +234,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("rename_song"),
     ];
     // What is selected: the roll's notes, the timeline's clips, the track.
-    let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize")];
+    let selected = [Item("duplicate"), Item("split"), Item("join"), Item("quantize"), Item("insert_bars"), Item("delete_bars")];
     let track = vec![
         Item("new_track"),
         Item("delete_track"),
@@ -249,6 +254,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Line,
         Item("view_device"),
         Item("view_notes"),
+        Item("view_beat"),
         Item("view_mix"),
         Item("view_code"),
         Line,

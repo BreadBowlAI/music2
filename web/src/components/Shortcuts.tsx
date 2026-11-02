@@ -27,10 +27,13 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     keys: [
       ["Undo / redo", `${chord("Z")} / ${chord("Z", { shift: true })}`],
       ["Hear before / after an agent's or an outside change", "V"],
-      ["Cut / copy / paste clips", `${chord("X")} / ${chord("C")} / ${chord("V")}`],
+      ["Cut / copy / paste clips or notes", `${chord("X")} / ${chord("C")} / ${chord("V")}`],
       ["Delete the selected clips or notes", keyName("Backspace")],
       ["Select more clips / one in or out", `${mod.shift}-click / ${mod.cmd}-click`],
       ["Select the clips in some bars", "drag on empty lanes"],
+      ["Select bars of every track", "drag along the ruler's top"],
+      ["Insert bars where the selected ones start", chord("I")],
+      ["Delete the selected bars", chord("Backspace", { shift: true })],
       ["Copy a clip", `${mod.alt}-drag`],
       ["Duplicate the selection", chord("D")],
       ["Split clips at the playhead", chord("E")],
@@ -43,8 +46,10 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Paint notes in Draw mode, one per grid step", `${mod.alt}-drag`],
       ["Move notes by the grid / by a bar", `← → / ${shifted("←")} ${shifted("→")}`],
       ["Transpose a semitone / an octave", `↑ ↓ / ${shifted("↑")} ${shifted("↓")}`],
+      ["Place a note off the grid", `hold ${mod.cmd} while dragging`],
+      ["A chord stamp's next inversion", "I"],
       ["Quantize the notes in Notes", "Q"],
-      ["Note tools: swing, legato…", "right-click a note"],
+      ["Note tools: swing, grooves, legato…", "right-click a note"],
     ],
   },
   {
@@ -72,6 +77,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     name: "View",
     keys: [
       ["Device / Notes / Mix / Code", [1, 2, 3, 4].map((n) => opt(String(n))).join(" / ")],
+      ["Beat, with a drum kit's track selected", opt("5")],
       // The grid of the timeline or of Notes: whichever was last pointed at.
       ["Narrower / wider grid", `${chord("1")} / ${chord("2")}`],
       ["Triplet grid", chord("3")],
@@ -85,7 +91,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Zoom in / out", `${chord("=")} / ${chord("−")}`],
       ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
       ["Zoom to the selected clips or the song; again: back", "Z"],
-      ["Taller / shorter tracks", `${chord("↓")} / ${chord("↑")}`],
+      ["Taller / shorter tracks, or rows in Notes", `${chord("↓")} / ${chord("↑")}`],
       ["Keyboard piano on / off", chord("K")],
     ],
   },
@@ -103,11 +109,12 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
     ],
   },
   {
-    // While it is on (lib/piano.ts): the selected track plays.
+    // While it is on (lib/piano.ts): the selected track plays, or the armed notes track.
     name: "Keyboard piano",
     keys: [
       ["Play notes", "A to ' and W to P"],
       ["Octave down / up", "Z / X"],
+      ["Softer / louder", "− / ="],
     ],
   },
 ];

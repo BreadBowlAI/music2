@@ -1,8 +1,9 @@
-// The roll's note tools (D1): transpose, quantize, legato, humanize and swing. Each is pure: it
+// The roll's note tools (D1): transpose, quantize, legato and humanize. Each is pure: it
 // takes the clip's notes and the indices it acts on, and gives the notes after, or null when
 // nothing would change. The roll writes the result as one lane write, so one undo step.
 //
-// What a tool acts on (the plan's Q25): the selected notes; with none selected, every note.
+// What a tool acts on (the plan's Q25): the selected notes; with none selected, every note. Swing
+// and the other grooves are the server's (NOTE-7): the roll sends them as one clip gesture.
 
 import { snapTo } from "./grid";
 import type { Meter, Note } from "./graph";
@@ -88,32 +89,8 @@ export function humanize(
   });
 }
 
-/** Swing's three amounts (Q26): where the second note of each pair goes, as a share of the pair. */
-export const SWINGS = { light: 0.55, medium: 0.6, heavy: 0.66 } as const;
-export type Swing = keyof typeof SWINGS;
-
-/** What swing pairs: eighths when the roll's grid is 1/8 or wider, else sixteenths (Q26). */
-export const swingUnit = (gridStep: number) => (gridStep >= 0.5 - 1e-9 ? 0.5 : 0.25);
-
 /**
- * Swing: the second note of each pair of eighths (or sixteenths, `unit` beats each) goes later,
- * to `amount` of the pair, for a bouncy feel. It sets those notes to their swung place, so doing
- * it twice changes nothing, and Light after Heavy puts them back to Light's place. A note is the
- * second of its pair when it starts near the pair's middle: from a quarter of a step before it to
- * just past where Heavy puts it. Notes elsewhere stay. A moved note keeps its end, so it never
- * runs into the next one. Pairs follow the song's beats; `start` is where the clip starts.
+ * What swing pairs: eighths when the roll's grid is 1/8 or wider, else sixteenths (Q26). Swing is a
+ * groove (NOTE-7): the server applies it, with the other grooves, as the `groove` clip gesture.
  */
-export function swing(notes: readonly Note[], picked: readonly number[], amount: number, unit: number, start: number): Note[] | null {
-  const pair = 2 * unit;
-  return change(notes, targets(notes, picked), (n) => {
-    const at = start + n.start;
-    const from = Math.floor(at / pair + 1e-9) * pair;
-    const into = (at - from) / unit;
-    // Straight is 1 step into the pair; Heavy (66%) puts it at 1.32.
-    if (into < 0.75 - 1e-9 || into > 1.35 + 1e-9) return n;
-    const to = clean(from + pair * amount - start);
-    if (to === n.start) return n;
-    const end = n.start + n.length;
-    return { ...n, start: to, length: clean(Math.max(end - to, MIN_LEN)) };
-  });
-}
+export const swingUnit = (gridStep: number) => (gridStep >= 0.5 - 1e-9 ? 0.5 : 0.25);

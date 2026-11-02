@@ -245,7 +245,7 @@ pub fn arena(lab: &mut Lab, o: &Opts) -> Result<Outcome> {
     let restarts = std::collections::HashSet::new();
     for k in 0..10 {
         if k % 2 == 0 {
-            session.add_effect(session.accepted().number, &call, "std:delay").map_err(|e| anyhow!("{e}"))?;
+            session.add_effect(session.accepted().number, &call, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
         } else {
             m2_editor::undo(&mut session).map_err(|e| anyhow!("{e}"))?;
         }

@@ -29,7 +29,7 @@ crate::api::routes! {
         "Add an audio track",
         r#"{"session": 7, "label": "Vox", "after": "keys"}"#;
     POST "/api/graph/sample" => sample up to UPLOAD; writes, agents,
-        "Give a Sampler a WAV file on this computer",
+        "Give a recording on a card (a Sampler's file, or `setting` of the call) a WAV file on this computer",
         r#"{"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}"#;
 }
 
@@ -153,6 +153,9 @@ struct SampleJson {
     session: u64,
     at: u64,
     call: String,
+    /// The recording it becomes, by its setting's name (CARD-5): a Sampler's `sample` when left out.
+    #[serde(default)]
+    setting: Option<String>,
     /// The WAV's path on this computer.
     file: String,
 }
@@ -162,31 +165,33 @@ struct SampleQuery {
     session: Option<u64>,
     at: Option<u64>,
     call: Option<String>,
+    setting: Option<String>,
     /// The file's own name: its bytes are the body.
     name: Option<String>,
 }
 
-/// A WAV dropped on a sampler's card (track ab): JSON `{session, at, call, file}` (the app: a file
-/// on this computer, copied by the server), or the file's bytes as the body with
-/// `?session=&at=&call=&name=` (a browser's upload). The file comes into `assets/` (create-only),
-/// then one Tx writes `sample: "<name>"` into sampler call `call`. A write. Answers the edit with
+/// A WAV dropped on a recording (CARD-5; track ab's Sampler): JSON `{session, at, call, setting?,
+/// file}` (the app: a file on this computer, copied by the server), or the file's bytes as the body
+/// with `?session=&at=&call=&setting=&name=` (a browser's upload). The file comes into `assets/`
+/// (create-only), then one Tx writes `<setting>: "<name>"` into call `call` (a Sampler's `sample`
+/// when `setting` is left out). A write. Answers the edit with
 /// `name` (the undo step's, "setting Sampler to kick.wav") and `asset`.
 async fn sample(State(s): S, Query(q): Query<SampleQuery>, headers: HeaderMap, body: Bytes) -> Result<Json<Value>, ApiError> {
     let json = headers.get(header::CONTENT_TYPE).and_then(|v| v.to_str().ok()).is_some_and(|t| t.starts_with("application/json"));
-    let (session, at, call, source) = match json {
+    let (session, at, call, setting, source) = match json {
         true => {
             let r: SampleJson = serde_json::from_slice(&body).map_err(anyhow::Error::from)?;
-            (r.session, r.at, r.call, Source::Path(r.file.into()))
+            (r.session, r.at, r.call, r.setting, Source::Path(r.file.into()))
         }
         false => {
             let missing = |what: &str| anyhow::anyhow!("an upload to a sampler names its {what}");
             let (session, at) = (q.session.ok_or_else(|| missing("session"))?, q.at.ok_or_else(|| missing("revision"))?);
             let (call, name) = (q.call.ok_or_else(|| missing("call"))?, q.name.ok_or_else(|| missing("file"))?);
-            (session, at, call, Source::Bytes { name, bytes: Vec::from(body) })
+            (session, at, call, q.setting, Source::Bytes { name, bytes: Vec::from(body) })
         }
     };
     let state = s.clone();
-    let result = blocking(move || state.graph.set_sample(session, at, call, source)).await;
+    let result = blocking(move || state.graph.set_sample(session, at, call, setting, source)).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -7,5 +7,5 @@ authors = ["music2"]
 tags = ["test"]
 
 [dependencies]
-"@m2/core" = "1"
+"@m2/core" = "2"
 std = "0.4"

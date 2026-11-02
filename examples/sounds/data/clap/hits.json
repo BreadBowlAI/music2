@@ -1,0 +1,10 @@
+{"clips": [
+  {"id": "dkszha39", "start": 16, "length": 32, "notes": [
+    {"pitch": "D#2", "start": 3, "length": 0.25, "velocity": 0.7},
+    {"pitch": "D#2", "start": 7, "length": 0.25, "velocity": 0.7},
+    {"pitch": "D#2", "start": 11, "length": 0.25, "velocity": 0.7},
+    {"pitch": "D#2", "start": 19, "length": 0.25, "velocity": 0.7},
+    {"pitch": "D#2", "start": 23, "length": 0.25, "velocity": 0.7},
+    {"pitch": "D#2", "start": 27, "length": 0.25, "velocity": 0.7}
+  ]}
+]}

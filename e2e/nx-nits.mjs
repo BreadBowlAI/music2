@@ -97,9 +97,13 @@ await until(async () => (await state()).timeline.end < 156);
 
 // ---------------------------------------------------------------- c: a drum lane (Q30)
 
-const added = await post("/track/add", { session, component: "std:drum-kit" });
-check(added.status === 200, `a Drum kit track is added (${added.status})`);
-await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
+// The drum machine names its rows; no list offers it now (KIT-2), so it is written in code, over a
+// Drum + Track adds.
+const added = await post("/track/add", { session, component: "@m2/drums:drum", key: "drum-kit", label: "Drum machine" });
+check(added.status === 200, `a drum machine track is added (${added.status})`);
+await until(() => fs.existsSync(`${PROJ}/tracks/drum-kit.ts`));
+write("tracks/drum-kit.ts", read("tracks/drum-kit.ts").replace("drums.drum(", "drums.kit("));
+await until(async () => Object.keys((await state()).timeline.tracks.find((t) => t.module === "drum-kit")?.lanes?.[0]?.names ?? {}).length > 0);
 const s1 = await state();
 const beat = [36, 42, 38, 42].map((pitch, i) => ({ pitch, start: i, length: 0.5, velocity: 0.8 }));
 await post("/lane", { session: s1.session, revision: s1.view.revision, module: "drum-kit", lane: "hits", clips: [{ id: "kitbeat1", start: 0, length: 4, notes: beat }] });
@@ -116,6 +120,9 @@ check(!rows.some((r) => r.startsWith("octave_")), `and has no octave rows: ${row
 await linted("[data-testid=note-menu]", "a drum lane's note menu");
 await page.keyboard.press("Escape");
 await until(async () => !(await page.$("[data-testid=note-menu]")));
+// A kit's roll folds to the drums its clip uses (NOTE-8): Fold off shows every row, 60 and 61 too.
+await page.click("[data-testid=fold-rows]");
+await until(async () => !!(await page.$('[data-testid=roll-keys] [data-key="61"]')));
 const fills = await page.evaluate(() => {
   document.querySelector('[data-testid=roll-keys] [data-key="61"]').scrollIntoView({ block: "center" });
   const at = (p) => {

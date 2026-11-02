@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! music2.toml                  [project] name, entry, format = 1, sample_rate = 48000
-//!                              [dependencies] "@m2/core" = "1", std = "0.5"
+//!                              [dependencies] "@m2/core" = "2", std = "0.9"
 //! song.ts  tracks/*.ts  lib/   code
 //! data/arrangement.json        the tempo and the meter
 //! data/<module>/<lane>.json    one lane's clips
@@ -27,6 +27,7 @@ pub mod lane;
 pub mod manifest;
 pub mod pack;
 pub mod path;
+pub mod registry;
 pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,12 +38,12 @@ use std::sync::Arc;
 pub use arrangement::{Arrangement, Meter, Tempo, TempoMap};
 pub use data::{AssetDecl, DataSet, Decls, Sidecar, StateDecl, Unused};
 pub use diag::{Diagnostic, Fix, Severity};
-pub use hash::{HashCache, Sha};
+pub use hash::{HashCache, Hashing, Sha};
 pub use key::{ClipId, Key, LaneAddr, ROOT};
 pub use lane::{
-    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, canonical, parse_pitch,
+    AbsNote, AudioClip, ControlClip, ControlLane, Holds, LaneData, LaneError, LaneKind, Note, NoteClip, StepsOf, canonical, parse_pitch,
 };
-pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, Version};
+pub use manifest::{Dependency, FORMAT, Manifest, Requirement, SDK, UPGRADE, Version};
 pub use pack::{Lock, PackName};
 pub use path::{AssetName, Class, DataPath, dir_hash};
 pub use tx::{Anchor, Base, Confined, Declared, DeltaHash, Expect, ModuleChange, Op as TxOp, Payload, Pos, Range, Spot, Tx, TxPath};

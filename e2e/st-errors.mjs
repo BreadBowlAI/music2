@@ -8,7 +8,7 @@ import { PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 
-const { browser, page, errors, state, view, status } = await open(1440, 900);
+const { browser, page, errors, state, caughtUp, view, status } = await open(1440, 900);
 const bannerItems = () => page.$$eval("[data-testid=compile-banner] li", (els) => els.map((e) => e.innerText.replace(/\s+/g, " ").trim()));
 const clean = async (sel, what) => {
   const bad = [...new Set([...(await page.evaluate(lint, sel)), ...(await page.evaluate(tips, sel))])];
@@ -82,10 +82,10 @@ await status();
 await page.waitForSelector("[data-testid=compile-banner] li[data-plain]");
 const [pluk] = await bannerItems();
 check(
-  pluk?.startsWith("`pluk` isn't known in tracks/keys.ts.".replace(/`/g, "")) && pluk.includes('Did you mean pluck? Import it: import { pluck } from "std/instruments".'),
+  pluk?.startsWith("`pluk` isn't known in tracks/keys.ts.".replace(/`/g, "")) && pluk.includes('Did you mean pluck? Import it: import { pluck } from "@m2/synths".'),
   `it says the name isn't known, and proposes pluck and its import: ${pluk}`,
 );
-check((await page.$$eval("[data-testid=compile-banner] li[data-plain] code[data-code]", (els) => els.map((e) => e.textContent))).includes('import { pluck } from "std/instruments"'), "the import is set as code, to copy");
+check((await page.$$eval("[data-testid=compile-banner] li[data-plain] code[data-code]", (els) => els.map((e) => e.textContent))).includes('import { pluck } from "@m2/synths"'), "the import is set as code, to copy");
 await closePopover();
 write("tracks/keys.ts", keys0);
 check(await settled(), "put back, it compiles");
@@ -131,9 +131,11 @@ const hats0 = read("tracks/hats.ts");
 write("data/hats/loop.json", JSON.stringify({ clips: [{ id: "a", start: 0, length: 4, asset: "loop.wav" }] }));
 write(
   "tracks/hats.ts",
-  hats0.replace('import { hat } from "std/instruments";', 'import { hat } from "std/instruments";\nimport { sum } from "std/math";').replace('hat(lane.notes("hits"))', 'sum(hat(lane.notes("hits")), lane.audio("loop"))'),
+  hats0.replace('import { drums } from "@m2/drums";', 'import { drums } from "@m2/drums";\nimport { sum } from "std/math";').replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'sum($&, lane.audio("loop"))'),
 );
 check(await until(async () => (await state()).problems?.some((p) => p.code === "asset.missing"), 10000), "a clip whose sound file isn't in assets/");
+// The pill opens only once the page shows the revision that has the problem.
+await caughtUp();
 await status();
 await page.waitForSelector('[data-testid=attention] [data-problem="asset.missing"]');
 const asset = await page.$eval('[data-testid=attention] [data-problem="asset.missing"]', (e) => ({

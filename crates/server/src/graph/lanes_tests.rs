@@ -14,7 +14,7 @@ use super::super::tests::{Fixture, eventually, revs};
 use super::*;
 
 /// A bass track playing its `notes` lane.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
                     const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
 
 /// Clip `a`: a long C2 from beat 0 to 12, and an E2 at beat 4. Clip `b`, from beat 16: a G2 at 16.
@@ -48,7 +48,7 @@ impl Drag {
         fixture.put("song.ts", song);
         fixture.put("data/bass/notes.json", notes);
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let token = graph.state().unwrap()["session"].as_u64().unwrap();
         graph.transport("play").unwrap();
@@ -468,11 +468,14 @@ fn an_automation_drag_is_heard_before_it_is_written() {
     assert!((level(&mut d) - 0.5).abs() < 1e-3);
     let before = d.revision();
     let g1 = ClipRef { lane: LaneAddr::new("bass", "g").unwrap(), id: Some("g1".into()), at: None, sha: None };
-    let lease = d.begin(Gesture::Points { clip: g1.clone(), points: vec![(0.0, 0.25)] }).lease.unwrap();
+    let lease = d.begin(Gesture::Points { clip: g1.clone(), points: vec![(0.0, m2_editor::clips::Point::Number(0.25))] }).lease.unwrap();
     d.fill(4);
     assert!((level(&mut d) - 0.25).abs() < 1e-3, "heard");
     assert_eq!(d.revision(), before);
-    assert!(matches!(d.graph.lane_commit(lease, Gesture::Points { clip: g1, points: vec![(0.0, 0.25)] }).unwrap(), Answer::Done(_)));
+    assert!(matches!(
+        d.graph.lane_commit(lease, Gesture::Points { clip: g1, points: vec![(0.0, m2_editor::clips::Point::Number(0.25))] }).unwrap(),
+        Answer::Done(_)
+    ));
     d.fill(4);
     assert!((level(&mut d) - 0.25).abs() < 1e-3, "kept");
     assert_eq!(d.revision(), before + 1);

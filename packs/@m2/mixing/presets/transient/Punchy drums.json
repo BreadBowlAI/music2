@@ -1,0 +1,9 @@
+{
+  "m2preset": 1,
+  "name": "Punchy drums",
+  "sound": "@m2/mixing:transient",
+  "values": {
+    "attack": 9,
+    "sustain": -3
+  }
+}

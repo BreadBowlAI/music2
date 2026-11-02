@@ -72,8 +72,8 @@ pub enum Msg {
         beats: u32,
         frames_per_beat: f64,
     },
-    /// Hear a live input on audio lane `slot` of the renderer with this generation while a take
-    /// records (MON-8), or with None stop hearing it. In order behind activations, as `Live` is.
+    /// Hear a live input on audio lane `slot` of the renderer with this generation (MON-8), or with
+    /// None stop that lane hearing. In order behind activations, as `Live` is.
     Hear {
         generation: u64,
         slot: u32,
@@ -562,8 +562,7 @@ impl Engine {
             }
             Msg::Hear { generation, slot, input } => {
                 let back = match &mut self.current {
-                    // None stops hearing whatever plan plays.
-                    Some(r) if r.generation() == generation || input.is_none() => r.hear(slot as usize, input),
+                    Some(r) if r.generation() == generation => r.hear(slot as usize, input),
                     _ => Err(input),
                 };
                 let (gone, refused) = match back {

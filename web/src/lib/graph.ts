@@ -1,7 +1,9 @@
 // The graph view of the open song project: types, API, layout.
 
-import { editing, recorded, type Editing, type Step, type StepName } from "./history";
+import { ALL, editing, fileOf, gate, goesFrom, lanesOf, recorded, type Editing, type Step, type StepName, type Targets } from "./history";
+import type { DockView } from "./shell";
 import { token } from "./native";
+import { http, windowId } from "./http";
 
 /** A declared control a constant is (PKG-3): its instance's frame, its slot, and whether the call leaves it out. */
 export interface Slot { frame: number; slot: string; inherited?: boolean; smooth?: boolean }
@@ -11,11 +13,47 @@ export interface Origin { site: number; arg?: string[]; scale?: number; control?
 /** Where a value lives (HOME-1): the code, a lane, a plugin's state, `layout.json`, `data/arrangement.json` (the tempo and time signature), or this machine's `.music2/`. */
 export type Home = "code" | "lane" | "state" | "layout" | "arrangement" | "local";
 
-export interface Knob {
+/**
+ * What a value is (CARD-2), never how it is drawn: the card picks a knob or a number box, a menu,
+ * a switch, a waveform, a menu of the song's tracks, or a sentence.
+ */
+export type ValueKind = "number" | "choice" | "switch" | "recording" | "regions" | "keymap" | "track";
+
+/** One option of a choice or a switch: the value written in the code, and what the menu says. */
+export interface Choice { value: string | number | boolean; label: string }
+
+/**
+ * A setting of a call (CARD-1): a value that decides what is built, so a change rebuilds the sound.
+ * `value` is what the call plays (null where the code works it out); `readonly` says why the card
+ * can't change it, when it can't; `said` is what regions or a keymap play, in words.
+ */
+export interface Setting {
+  id: string;
+  slot: string;
+  label: string;
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
+  kind: ValueKind;
+  /** A whole number: a fraction is refused. */
+  whole?: boolean;
+  options?: Choice[];
+  value: unknown;
+  written: boolean;
+  home: Home;
+  readonly?: string;
+  expression?: string;
+  said?: string;
+  file: string;
+  line: number;
+}
+
+/** What every knob says, whatever it is. */
+interface KnobCommon {
   id: string;
   label: string;
-  value: number;
-  /** The number written in the code; empty while the control plays its default. */
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
+  /** The text written in the code (`0.3`, `"square"`); empty while the control plays its default. */
   literal: string;
   unit: string | null;
   /** The range its control declares, for its unit: a hint, never a clamp (PKG-8). Null when none is declared, so the page picks a span. */
@@ -23,7 +61,6 @@ export interface Knob {
   log: boolean;
   /** Written in the code; false while the call leaves it out and it plays its declared default (its first edit writes it in). */
   written: boolean;
-  default: number | null;
   /** The declared control (`cutoff`, `channels.hats.db`) and its component (`std:lowpass`), when it is exactly one. */
   slot: string | null;
   component: string | null;
@@ -36,6 +73,33 @@ export interface Knob {
   automate_refused?: string;
 }
 
+/** A knob of a number: dragged, typed, stepped (the server always says `number`; a knob made here may leave it out). */
+export interface NumberKnob extends KnobCommon {
+  kind?: "number";
+  value: number;
+  default: number | null;
+  options?: undefined;
+}
+
+/**
+ * A knob that is a menu or a switch (CARD-20, CARD-6): a choice control's names, a switch's false and
+ * true, or a plugin's stepped parameter's numbers. Its `value` and `default` are what its code
+ * writes, so the option it plays is the one whose value is its value. Picked with one click, never
+ * dragged.
+ */
+export interface PickKnob extends KnobCommon {
+  kind: "choice" | "switch";
+  value: Choice["value"];
+  default: Choice["value"] | null;
+  options: Choice[];
+}
+
+/** A control as the card shows it (CARD-20): a number's knob, or a menu or a switch. */
+export type Knob = NumberKnob | PickKnob;
+
+/** Whether a knob is a menu or a switch (CARD-20). */
+export const picks = (k: Knob): k is PickKnob => k.kind === "choice" || k.kind === "switch";
+
 export interface ViewNode {
   id: string;
   label: string;
@@ -44,14 +108,14 @@ export interface ViewNode {
   file: string | null;
   line: number | null;
   knobs: Knob[];
-  readonly: { label: string; expression: string; reason: string; file: string | null; line: number | null; home: Home }[];
+  readonly: { label: string; entry?: string; expression: string; reason: string; file: string | null; line: number | null; home: Home }[];
   /** The `const` this node's signal is bound to, if a cable can start here. */
   outlet: string | null;
   /** Inputs connected by a cable: `label ← name`. */
-  inlets: { id: string; label: string; name: string; from: string }[];
+  inlets: { id: string; label: string; entry?: string; name: string; from: string }[];
   /** Whether its result is audio, which an effect can go after. */
   audio: boolean;
-  /** The component it is a call of (`std:delay`), whatever name the code calls it by (PKG-9). */
+  /** The component it is a call of (`@m2/effects:delay`), whatever name the code calls it by (PKG-9). */
   component: string | null;
   /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
@@ -65,7 +129,33 @@ export interface ViewNode {
   voices?: string;
   /** A hosted plugin's call: its node in the graph, the key of the state's `plugins` (HOST-7). */
   plugin?: string;
+  /** Its component's settings, in its descriptor's order (CARD-1). */
+  settings?: Setting[];
+  /** Its card's groups, when its sound declares some (CARD-25): each a title over its rows, More last. */
+  groups?: CardGroup[];
+  /** Its card's views, resolved for the call (CARD-26). */
+  views?: CardView[];
 }
+
+/** A row of a card (CARD-25): an input of its call (`InputPort.id`), a setting (its id), or a view (its name). */
+export type CardRow = { input: string } | { setting: string } | { view: string };
+
+/** A group of a card (CARD-25): its title, and its rows in the order the sound names them. */
+export interface CardGroup { name: string; rows: CardRow[] }
+
+/** A value a view draws and moves (CARD-26): its control's slot, its knob when the card can move it, else what plays (a lane's fallback, in `unit`) and why not. */
+export interface ViewPart { slot: string; knob?: string; value?: number; unit?: string; why?: string }
+
+/** A region std's Sampler plays, as a key map draws it: its notes and velocities, each lowest and highest. */
+export interface KeyRegion { file: string; root: number; keys: [number, number]; velocity: [number, number]; round_robin: [number, number]; release?: boolean }
+
+/** A view of a card (CARD-26): a picture over values with homes; it holds none of its own. */
+export type CardView = { name: string } & (
+  | { kind: "envelope"; attack: ViewPart; decay: ViewPart; sustain: ViewPart; release: ViewPart }
+  | { kind: "filter"; cutoff: ViewPart; q: ViewPart }
+  | { kind: "keys"; setting: string; regions: KeyRegion[]; lane?: LaneRef; why?: string }
+  | { kind: "scope" }
+);
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
 export interface PluginBox {
@@ -78,7 +168,20 @@ export interface PluginBox {
 export type PortKind = "audio" | "control" | "notes";
 
 /** An input: set by a knob, connected by a cable, a value only code can change, or a signal from another node. */
-export interface InputPort { id: string; label: string; kind: PortKind; knob?: string; inlet?: string; readonly?: number }
+export interface InputPort {
+  id: string;
+  label: string;
+  /** A dictionary entry's key, which `label` starts with (CARD-34). */
+  entry?: string;
+  kind: PortKind;
+  knob?: string;
+  inlet?: string;
+  readonly?: number;
+  /** The automation lane that drives it (8b.5). */
+  lane?: LaneRef;
+  /** The declared control of the call it is, whatever drives it (CARD-25); none for a connection (notes, audio). */
+  slot?: string;
+}
 
 /** An output; `outlet` is where a cable can start (the result has a `const` name). */
 export interface OutputPort { id: string; label: string; kind: PortKind; outlet: boolean }
@@ -87,7 +190,7 @@ export interface OutputPort { id: string; label: string; kind: PortKind; outlet:
 export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean }
 
 /**
- * An effect the packages offer: a component (`std:delay`) imported as `name` from `module`. `insert` is
+ * An effect the packages offer: a component (`@m2/effects:delay`) imported as `name` from `module`. `insert` is
  * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
  * the browser groups by (PKG-7).
  */
@@ -107,6 +210,12 @@ export function fromPack(item: { pack?: PackFrom }): string {
  */
 export interface Instrument { component: string; label: string; name: string; module: string; description: string; category: string; lane: string; pack?: PackFrom }
 
+/**
+ * A kit an instrument names (KIT-3): a preset + Track's Drum kit makes a kit from, a Drums bus and
+ * these tracks, each playing `component`. Not a kit of the song: that is a `DrumKit`.
+ */
+export interface KitPreset { name: string; component: string; instrument: string; tracks: string[]; pack?: PackFrom }
+
 /** What reads a track a delete would take out: the track it is in, the call, and where. */
 export interface Dependent { module: string; label: string; component: string; file: string; line: number; removable: boolean }
 
@@ -117,7 +226,28 @@ export interface Dependent { module: string; label: string; component: string; f
  */
 export interface ModuleView { key: string; label: string; track: boolean; nodes: ViewNode[]; edges: [string, string][]; port_edges: PortEdge[] }
 
-export interface GraphView { revision: number; modules: ModuleView[]; draft_errors: string[] }
+export interface GraphView {
+  revision: number;
+  modules: ModuleView[];
+  /** The song's drum kits (KIT-1): each bus and the Drum tracks that go to it. Absent from older servers. */
+  drum_kits?: DrumKit[];
+  draft_errors: string[];
+}
+
+/** A drum kit (KIT-1): a bus, by its key, named by its label, and its Drum tracks in the timeline's order. */
+export interface DrumKit { bus: string; label: string; rows: DrumRow[] }
+/** A Drum track of a kit: its key, the notes lane its Drum plays, and the sound it plays (null when the code works it out). */
+export interface DrumRow { track: string; lane: string; sound: string | null }
+
+/** The kit `module` is the bus of, or a row of; null when it is in none (KIT-10). */
+export const kitOf = (graph: GraphState, module: string | null) =>
+  (module && graph.view.drum_kits?.find((k) => k.bus === module || k.rows.some((r) => r.track === module))) || null;
+
+/**
+ * The view the dock shows for `module`: the window's view, but Notes in Beat's place while `module`
+ * is in no drum kit (KIT-10). The window's choice stays Beat, so selecting a kit's track shows it again.
+ */
+export const dockView = (graph: GraphState, view: DockView, module: string | null): DockView => (view === "beat" && !kitOf(graph, module) ? "notes" : view);
 
 /** What to show for a lane or a module: its label, which defaults to its key. */
 export const labelOf = (x: { key: string; label?: string | null }) => x.label || x.key;
@@ -127,20 +257,36 @@ const sentence = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 export const laneTitle = (lane: { key: string; label?: string | null }) => (lane.label && lane.label !== lane.key ? lane.label : sentence(lane.key.replace(/-/g, " ")));
 /** What a mixer channel's control is called (taste.md's words: `channels.hats.db` is "Hats volume"); its input is the channel itself. */
 const CHANNEL: Record<string, string> = { db: "volume", pan: "pan", in: "" };
+/** A value's name as the server says it (CARD-34): its label, and a dictionary entry's key apart, which the label starts with. */
+export interface Named { label: string; entry?: string | null }
 /**
  * A control's or an input's name on screen, by the one rule lane headers use too (taste.md §3.4):
  * the key in sentence case (`feedback` → Feedback); a level (`db`: the master's, a gain's) is
- * Volume, never "Db", which reads as a note. A mixer channel's (`hats.db`) names its track, by
- * `track` when it is one: Hats volume. Never the slot path.
+ * Volume, never "Db", which reads as a note. A dictionary entry's (`hats.db`, its `entry` `hats`)
+ * names its track, by `track` when it is one: Hats volume. Never the slot path, and never an entry
+ * read out of a label's own dots ("Approx. time", CARD-34).
  */
-export function controlLabel(label: string, track?: (key: string) => string | undefined) {
-  const dot = label.indexOf(".");
-  if (dot < 0) return sentence(label === "db" ? "volume" : label);
-  const ch = label.slice(0, dot), rest = label.slice(dot + 1);
-  const who = track?.(ch) ?? sentence(ch);
+export function controlLabel(x: Named, track?: (key: string) => string | undefined) {
+  if (!x.entry) return sentence(x.label === "db" ? "volume" : x.label);
+  const rest = x.label.slice(x.entry.length + 1);
+  const who = track?.(x.entry) ?? sentence(x.entry);
   const word = CHANNEL[rest] ?? rest;
   return word ? `${who} ${word}` : who;
 }
+/**
+ * A value's name as it reads inside a sentence, as an undo step says it after its card's
+ * ("Wavetable table A", "Lead shape"): its first letter small, and the rest as its label writes it,
+ * unless it starts with a word in capitals ("LFO rate"). CARD-34.
+ */
+export const inSentence = (name: string) => (/^\p{Lu}\p{Lu}/u.test(name) ? name : name.charAt(0).toLowerCase() + name.slice(1));
+/**
+ * What an undo step that changes knob `k`, shown as `shown`, is called (CARD-34): a dictionary
+ * entry's by its own name ("Hats volume"); a value a sound declares after the card's name, as a
+ * sentence says it ("Wavetable table A"); anything else (a plugin's parameter, a kernel's port) in
+ * the lowercase words its code address is ("Surge XT filter_cutoff_42"), which music2 didn't write.
+ */
+export const knobStep = (owner: string, k: Named & { slot: string | null }, shown: string) =>
+  k.entry ? shown : `${owner} ${k.slot ? inSentence(shown) : shown.toLowerCase()}`;
 /** What to show for a module: its label, and "Song" for the root module unless it has one. */
 export const moduleName = (m: { key: string; label?: string | null }) => (m.key === "song" && (!m.label || m.label === "song") ? "Song" : labelOf(m));
 /** The key, to show beside a name that doesn't already say it (`Lead Vox` · `lead-vox`, not `Bass` · `bass`); "" otherwise. */
@@ -155,6 +301,8 @@ export interface NoteClip { id?: string; start: number; length: number; notes: N
 /** `pitch` in semitones (60 is middle C); `velocity` 0..1. */
 export interface Note { pitch: number; start: number; length: number; velocity: number }
 export interface ControlClip { id?: string; start: number; length: number; points: [number, number][] }
+/** A clip of a lane of names (CARD-23): each point's name, or true or false, held until the next; the first from the clip's start. */
+export interface StepClip { id?: string; start: number; length: number; points: [number, string | boolean][]; sha?: string }
 /** `asset` is a path under `assets/`; `hash` pins its bytes (FMT-15). */
 export interface AudioClip {
   id?: string;
@@ -186,7 +334,29 @@ export type TimelineLane =
       max: number;
       clips: ControlClip[];
     }
-  | { key: string; label: string; kind: "audio"; channels: number; clips: AudioClip[] };
+  | {
+      key: string;
+      label: string;
+      /** A lane of names (CARD-23): a choice's or a switch's, drawn as steps with each name on it. */
+      kind: "steps";
+      /** What it may hold, as its knob's menu or switch offers it: names, or false and true. */
+      options: { value: string | boolean; label: string }[];
+      /** Its fallback, as written: a name, or true or false. */
+      default: string | boolean;
+      clips: StepClip[];
+    }
+  | {
+      key: string;
+      label: string;
+      kind: "audio";
+      channels: number;
+      clips: AudioClip[];
+      /** Each file that is a take over a loop: where each take starts in it, in seconds (MON-11). */
+      takes?: Record<string, number[]>;
+    };
+
+/** Whether a lane is automation: numbers, or a lane of names (CARD-23). Its track shows it under its own lanes, and it can be hidden or removed. */
+export const automation = (l: TimelineLane): l is Extract<TimelineLane, { kind: "control" | "steps" }> => l.kind === "control" || l.kind === "steps";
 
 /** A module that is a track or declares lanes, by its key (as `ModuleView.key`), with its label. */
 export interface TimelineTrack {
@@ -459,10 +629,25 @@ export interface GraphState extends GraphStatus {
   can_redo: boolean;
   /** Undo can't take the newest step back (a file it puts back changed since): it can be skipped (AGENT-2). */
   undo_stuck?: boolean;
+  /**
+   * Why Undo, and Redo, go back no further than their oldest steps, when something cut them off as
+   * the song opened (WRITE-24): a change made outside music2 while it was closed, or an undo history
+   * that couldn't be read. Null when nothing did.
+   */
+  undo_end?: "outside" | "unread" | null;
+  redo_end?: "outside" | "unread" | null;
+  /** The code files with text left unsaved when the song last closed, which the code editor offers back (WRITE-27). */
+  drafts?: string[];
   /** Effects the packages offer to put after audio. */
   effects: Effect[];
   /** Instruments a new track can play, drums first. Absent from older servers. */
   instruments?: Instrument[];
+  /** The kit presets the instruments name, which + Track's Drum kit makes a kit from (KIT-5). */
+  kit_presets?: KitPreset[];
+  /** The tracks that play the drum machine, by key: each one's menu and card offer Make it a kit (KIT-24). */
+  drum_machines?: string[];
+  /** What Make it a kit keeps, in its words, wherever it is offered (KIT-22). */
+  make_kit_keeps?: string;
   /** The track colours' names, in their default order. */
   palette?: string[];
   /** Why the files on disk don't compile, if they don't: the draft's problems, placed in their files. */
@@ -481,6 +666,11 @@ export interface GraphState extends GraphStatus {
    */
   has_code?: boolean;
   /**
+   * The song asks for (or locks) an older @m2/core, std or one of music2's own packs than this app
+   * has (AGENT-14): the status offers Upgrade it. Absent from older servers.
+   */
+  upgrade?: boolean;
+  /**
    * Why this app can't write the project (WRITE-17): another program holds its lock, or its folder
    * can't be locked. Null when it can.
    */
@@ -492,6 +682,11 @@ export interface GraphState extends GraphStatus {
   leases?: GraphLease[];
   /** Each hosted plugin by its node (`ViewNode.plugin`): its window, and what is latched. */
   plugins?: Record<string, PluginBox>;
+  /**
+   * The song's integrated loudness, in LUFS, as the last export measured it (TAP-7): null when the
+   * song changed since, or none was made. Absent from older servers.
+   */
+  loudness?: { lufs: number } | null;
 }
 
 /** Why the open project is read-only here, with WRITE-18's message. */
@@ -604,7 +799,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
  * This window, one per page load. Its knob drags carry it, and so does its event socket: when the
  * window closes or reloads, the server ends the drags it left open (WRITE-22's leases, C6).
  */
-export const clientId: string = typeof crypto !== "undefined" && "randomUUID" in crypto ? crypto.randomUUID() : `c${Date.now()}${Math.random()}`;
+export const clientId: string = windowId;
 
 /**
  * An answer that said OK but whose body never arrived whole: the window reloading while it waited,
@@ -632,7 +827,7 @@ async function call<T = any>(path: string, body?: unknown): Promise<T> {
 
 /** POST `body`, answering the status with the JSON: for a route whose 409 says something to ask. */
 async function answer<T>(path: string, body: unknown): Promise<{ status: number; json: T & { error?: string } }> {
-  const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const json = await readJson(res);
   if (!res.ok && res.status !== 409) throw new Error(json.error ?? `HTTP ${res.status}`);
   return { status: res.status, json };
@@ -640,7 +835,7 @@ async function answer<T>(path: string, body: unknown): Promise<{ status: number;
 
 /** GET, or POST `body` as JSON; an error answer throws with the server's reason. */
 async function request<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await http(url, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...auth },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -667,40 +862,87 @@ export const editorHooks: {
   quantize?: () => boolean;
   /** View ▸ Zoom In / Zoom Out (`dir` 1 or -1): the roll's own zoom while it has the keyboard (X3). */
   zoom?: (dir: 1 | -1) => boolean;
+  /** View ▸ Taller (1) and Shorter (-1) Tracks, ⌘↓ and ⌘↑: the roll's rows while it has the keyboard (NOTE-9). */
+  rows?: (dir: 1 | -1) => boolean;
+  /** Whether ⌘C, ⌘X and ⌘V are the roll's notes now: it has the keyboard (NOTE-5). */
+  takesClipboard?: () => boolean;
+  clipboard?: (op: "copy" | "cut" | "paste") => void;
   undo?: (redo: boolean) => boolean;
   /** A menu command whose chord the code editor binds (⌘D): its own action while it has the keyboard. */
   chord?: (id: string) => boolean;
   unsaved?: () => number;
 } = {};
 
-/** An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history). */
-function edit<T extends { revision: number; before: string; after: string; pending?: boolean }>(
+/**
+ * An edit's call: once it commits a revision, that revision is Undo's, named `step` (lib/history).
+ * `p` is the call, or what makes it from the edit's own on its way (a `gated` call waits at the gate).
+ */
+function edit<T extends { revision?: number; before: string; after: string; pending?: boolean }>(
   session: number,
   step: Step | ((r: T) => Step),
-  p: Promise<T>,
+  p: Promise<T> | ((ours: Editing) => Promise<T>),
   within?: Editing,
 ) {
   // On its way: as part of `within` (a lane write in its queue, which ends it), else as one of its own.
   const ours = within ?? editing();
   // A value held while the code doesn't compile (`pending`) commits nothing yet; nor does an edit that changes nothing.
-  return p
+  return (typeof p === "function" ? p(ours) : p)
     .then((r) => {
-      if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step, ours);
+      if (!r.pending && r.before !== r.after) recorded(session, r, typeof step === "function" ? step(r) : step);
       return r;
     })
     .finally(() => within || ours.end());
 }
 
+/**
+ * What an upgrade did (FMT-25): each file it changed, with its lines before and after; what it left
+ * to change by hand (then nothing was written) and what to check; the revision it made, or null when
+ * nothing was written, and then why (`refused`: what doesn't build after it).
+ */
+export interface Upgraded {
+  changes: { file: string; lines: string[] }[];
+  /** What it can't convert exactly: while any is left, nothing is written. */
+  left: UpgradePlace[];
+  /** What to check by hand though it was written, and the musician's presets of sounds that moved (`Presets/…`), never changed. */
+  notes: UpgradePlace[];
+  /** What to do when you choose, which the upgrade doesn't: each drum machine track, with Make it a kit or what to do by hand first (KIT-24). */
+  choose?: UpgradePlace[];
+  written: number | null;
+  refused: string[];
+}
+
+/** A place an upgrade names: its file and line (0: the whole file), what is there, and what to write. */
+export interface UpgradePlace {
+  file: string;
+  line: number;
+  what: string;
+  write: string;
+}
+
 /** An edit's answer. `step`: the undo step it made, by its id (AGENT-2); an undo's or a redo's: the step it took back. */
-type Edit = { file: string; before: string; after: string; revision: number; step?: number };
+type Edit = { file: string; before: string; after: string; revision?: number; step?: number; moved?: string[]; mixed?: boolean };
 /**
  * An undo's or a redo's answer: the edit, the tops after it; or, refused, the newest step (`newest`),
  * or the step undo can't take back, which can be skipped (`stuck`).
  */
 type Stepped = Edit & { undo_name?: StepName | null; redo_name?: StepName | null; newest?: StepName | null; stuck?: StepName };
 
+/**
+ * A gesture's call from the revision it was drawn at: it goes through the gate (`goesFrom`, lib/history),
+ * so once the window shows its own last edit, from the revision it shows then when every change since
+ * was the window's own and moved no ids, else from the one it was drawn at; after a change of its own
+ * that moved ids it isn't sent (`Moved`). `send` sends it from that revision, each id it names as
+ * `id` calls it there.
+ */
+const gated =
+  <T>(session: number, revision: number, targets: Targets, send: (revision: number, id: (id: string) => string) => Promise<T>) =>
+  (ours: Editing) =>
+    gate(session, revision, targets, ours).then((g) => send(g.revision, g.id));
+
 export const graphApi = {
   get: () => call<GraphState>(""),
+  /** Ask for the song's loudness (TAP-6), again within 10 s to keep it, or stop. */
+  loudness: (session: number, on: boolean) => call("/loudness", { session, client: clientId, on }),
   /** Open or close a plugin's own window (HOST-7); a plugin without one, or no screen, says why. */
   pluginWindow: (session: number, node: string, open: boolean) => call<{ window: string }>("/plugin/window", { session, node, open }),
   /** Re-enable: the lane or cable drives a latched parameter again (every one without `id`, MON-6). */
@@ -716,19 +958,51 @@ export const graphApi = {
   cancel: (session: number, id: string, gesture: string) => call("/preview/cancel", { session, id, gesture, client: clientId }),
   /** Release: one value edit. While the code doesn't compile it is `pending`, and saved once it does. */
   // Each edit below names its undo step (`step`): what the Undo button's tooltip and an undo's toast say.
-  set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number, step: Step) =>
+  // `within`: the gesture's own edit on its way, from its release (which its caller ends).
+  set: (session: number, revision: number, id: string, gesture: string, value: number, expect: number, step: Step, within?: Editing) =>
     edit(
       session,
       step,
       call<Edit & { pending?: boolean; errors?: unknown[] }>("/set", { session, revision, id, gesture, value, expect, client: clientId }),
+      within,
     ),
+  /**
+   * Release of a drag that moved several knobs (a view's corner, CARD-22): each one's value, the first
+   * named by `id`, the rest in `with`; every lease of `gesture` is committed by it, as one undo step.
+   */
+  setWith: (session: number, revision: number, gesture: string, values: [string, number][], step: Step, within?: Editing) =>
+    edit(
+      session,
+      step,
+      call<Edit & { pending?: boolean }>("/set", {
+        session,
+        revision,
+        id: values[0][0],
+        gesture,
+        value: values[0][1],
+        with: values.slice(1).map(([id, value]) => ({ id, value })),
+        client: clientId,
+      }),
+      within,
+    ),
+  /** Ask for the scope of box `node` of `module` (TAP-8), again within 10 s to keep it, or stop: its frames come on this window's socket. */
+  scope: (session: number, module: string, node: string, on: boolean) =>
+    call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
+  /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
+  setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
+    edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),
   connect: (session: number, revision: number, from: string, to: string, step: Step) =>
-    edit(session, step, call<Edit>("/connect", { session, revision, from, to })),
-  disconnect: (session: number, revision: number, id: string, step: Step) => edit(session, step, call<Edit>("/disconnect", { session, revision, id })),
+    edit(session, step, gated(session, revision, [fileOf(from), fileOf(to)], (at, as) => call<Edit>("/connect", { session, revision: at, from, to: as(to) }))),
+  disconnect: (session: number, revision: number, id: string, step: Step) =>
+    edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/disconnect", { session, revision: at, id: as(id) }))),
   addEffect: (session: number, revision: number, node: string, effect: Effect) =>
-    edit(session, { name: `adding ${effect.label}`, structural: true }, call<Edit>("/effect/add", { session, revision, call: node, component: effect.component })),
+    edit(
+      session,
+      { name: `adding ${effect.label}`, structural: true },
+      gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
+    ),
   removeEffect: (session: number, revision: number, node: string, step: Step) =>
-    edit(session, step, call<Edit>("/effect/remove", { session, revision, call: node })),
+    edit(session, step, gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */
   lane: (session: number, revision: number, module: string, lane: string, clips: NoteClip[], step: Step, within?: Editing) =>
     edit(session, step, call<Edit>("/lane", { session, revision, module, lane, clips }), within),
@@ -739,15 +1013,16 @@ export const graphApi = {
    * it was, so the song sounds the same and the timeline shows a lane to draw on. One undoable edit.
    */
   automate: (session: number, revision: number, id: string) =>
-    edit(
+    edit<Edit & { lane: { module: string; lane: string }; name: string }>(
       session,
       (r) => ({ name: `automating ${r.name}`, structural: true }),
-      call<Edit & { lane: { module: string; lane: string }; name: string }>("/automate", { session, revision, id }),
+      gated(session, revision, [fileOf(id)], (at, as) => call("/automate", { session, revision: at, id: as(id) })),
     ),
   /** Apply a problem's fix, offered at `revision`, exactly as it came: its Tx, one undoable edit. */
   fix: (session: number, revision: number, fix: Fix) =>
     // Named by its own title, quoted: "Undid “Move all to Kick (kicks)”".
-    edit(session, { name: `“${fix.title}”`, structural: true }, call<Edit>("/fix", { session, revision, fix })),
+    // Its Tx is the one offered at `revision`: it waits at the gate, and goes from there.
+    edit(session, { name: `“${fix.title}”`, structural: true }, gated(session, revision, ALL, () => call<Edit>("/fix", { session, revision, fix }))),
   /**
    * Add a track playing `instrument` (WRITE-10): its file, its import and mixer channel, its lane and
    * its place below `after` in the layout. One undoable edit; the answer names the new track.
@@ -757,6 +1032,35 @@ export const graphApi = {
       session,
       (r) => ({ name: `adding ${r.label}`, structural: true }),
       call<Edit & { module: string; label: string }>("/track/add", { session, component: instrument.component, label: opts.label, after: opts.after ?? undefined }),
+    ),
+  /**
+   * Add kit `kit` (KIT-5): a Drums bus and the kit's tracks, each going to it, below `after` in the
+   * layout. One undoable edit; the answer names the bus and its tracks.
+   */
+  addKit: (session: number, kit: KitPreset, after: string | null) =>
+    edit(
+      session,
+      { name: `adding the ${kit.name}`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[] }>("/track/kit", {
+        session,
+        component: kit.component,
+        kit: kit.name,
+        after: after ?? undefined,
+      }),
+    ),
+  /**
+   * Make it a kit (KIT-22): drum machine track `track`, called `name`, becomes a kit's bus, with a
+   * Drum track for each sound its notes use going to it. One undoable edit; the answer names the
+   * bus and its tracks, and says what it keeps (`keeps`) and what went (`said`).
+   */
+  makeKit: (session: number, track: string, name: string) =>
+    edit(
+      session,
+      { name: `Make ${name} a kit`, structural: true },
+      call<Edit & { module: string; label: string; tracks: { module: string; label: string }[]; keeps: string; said: string[] }>("/track/make-kit", {
+        session,
+        track,
+      }),
     ),
   /**
    * A mixer channel's first pan (design-8b §5.3): optional control `control` (`pan`) of channel
@@ -773,6 +1077,9 @@ export const graphApi = {
     edit(session, step, call<Edit>("/mix/send", { session, channel, bus, action, pre })),
   /** Send channel `channel` to bus channel `to` instead of the master, or (null) back to the master. One undoable edit. */
   mixRoute: (session: number, channel: string, to: string | null, step: Step) => edit(session, step, call<Edit>("/mix/route", { session, channel, to })),
+  /** + Drum (KIT-15): a Drum track playing `sound` added to the kit of bus `bus`, named by it. One undoable edit. */
+  kitDrum: (session: number, bus: string, sound: string) =>
+    edit(session, (r) => ({ name: `adding ${r.label}`, structural: true }), call<Edit & { module: string; label: string }>("/kit/drum", { session, bus, sound })),
   /** Duplicate a track: its code, clips (with new ids) and channel, below it in its colour. */
   duplicateTrack: (session: number, module: string, name: string) =>
     edit(
@@ -797,10 +1104,11 @@ export const graphApi = {
   },
   /** A layout write (no revision, PLANE-3): every track in a new order, one track's colour, or the defaults. */
   // Always a step of its own, though a move says "Kick" before and after: what Undo takes back next.
-  layout: (session: number, change: { order?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
+  /** `base`: the order a new `order` was made from, which the server refuses it over a move since (AGENT-2). */
+  layout: (session: number, change: { order?: string[]; base?: string[]; colour?: { module: string; colour: string }; reset?: boolean }, step: Step) => {
     const ours = editing();
     return call<Edit>("/layout", { session, ...change })
-      .then((r) => (recorded(session, r, step, ours), r))
+      .then((r) => (recorded(session, r, step), r))
       .finally(() => ours.end());
   },
   /**
@@ -810,6 +1118,11 @@ export const graphApi = {
   undo: (session: number, step?: number) => answer<Stepped>("/undo", { session, step }),
   /** Try the project's lock again (the read-only banner's Retry). Answers with the state. */
   retryLock: (session: number) => call<GraphState>("/lock/retry", { session }),
+  /**
+   * Move a song made for an older music2 to this one in one step (FMT-25, AGENT-14): one undo
+   * step, named Upgrade, written only if the song then builds. What it did is `upgraded`.
+   */
+  upgrade: (session: number) => call<{ upgraded: Upgraded; step?: number }>("/upgrade", { session }),
   redo: (session: number, step?: number) => answer<Stepped>("/redo", { session, step }),
   /**
    * Skip the newest step, `step`, which undo can't take back: it leaves the history and nothing is
@@ -868,8 +1181,8 @@ export function tilde(path: string, home: string | null) {
 
 // ---------------------------------------------------------------- lane writes
 
-/** Lane writes of the open project, one at a time, and the newest revision one made. */
-let lanes = { session: 0, revision: 0, pending: 0, queue: Promise.resolve() as Promise<unknown> };
+/** Lane writes of the open project, one at a time: each an edit on its way (lib/history), which the gate waits for. */
+let lanes = { session: 0, queue: Promise.resolve() as Promise<unknown> };
 
 /**
  * Rewrite `module`'s notes lane `lane` (keys) with every clip it is to have: one write, one undo
@@ -880,73 +1193,62 @@ let lanes = { session: 0, revision: 0, pending: 0, queue: Promise.resolve() as P
  * The app builds the write, so it chooses the ids (FMT-11): a clip keeps the id it has, and one
  * without a valid id gets a new one here, so what comes back is exactly what was sent (`clips`).
  */
-export function writeLane(graph: GraphState, module: string, lane: string, clips: NoteClip[], base: number, step: Step) {
-  if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
-  const taken = clips.map((c) => c.id);
-  const sent = clips.map((c) => {
-    if (c.id && CLIP_ID.test(c.id)) return c;
-    const id = newClipId(taken);
-    taken.push(id);
-    return { ...c, id };
-  });
+export function writeLane(
+  graph: GraphState,
+  module: string,
+  lane: string,
+  clips: NoteClip[],
+  base: number,
+  step: Step,
+  again?: (now: GraphState) => NoteClip[] | null,
+) {
+  if (lanes.session !== graph.session) lanes = { session: graph.session, queue: Promise.resolve() };
+  /** `clips`, each with an id: a clip keeps the one it has, one without gets a new one. */
+  const named = (clips: NoteClip[]) => {
+    const taken = clips.map((c) => c.id);
+    return clips.map((c) => {
+      if (c.id && CLIP_ID.test(c.id)) return c;
+      const id = newClipId(taken);
+      taken.push(id);
+      return { ...c, id };
+    });
+  };
   const q = lanes;
-  q.pending++;
   // On its way from now, while it waits in the queue too (Undo waits for it).
   const ours = editing();
   const write = q.queue
-    .then(() => graphApi.lane(graph.session, base, module, lane, sent, step, ours))
-    .then((r) => {
-      q.revision = Math.max(q.revision, r.revision);
-      wrote.set(`${module}.${lane}`, { session: graph.session, revision: r.revision, clips: shapeOf(sent) });
+    .then(async () => {
+      // Through the gate (lib/history): once the window shows its own edits before this one. Made
+      // from an older state than it shows then, and only the window's own edits since that moved
+      // no ids (an undo, a clip trimmed a moment before), it is made `again` from the lane as shown,
+      // when it can be; after a change made elsewhere, from `base`, which the server refuses if the
+      // lane changed since; after one of its own that moved ids, not at all.
+      const f = await goesFrom(graph.session, base, [lanesOf(module)], ours, true);
+      // Made again from the lane as the window shows it, whenever it shows a newer one: the server
+      // refuses it if another changed the lane after the base.
+      const remade = again && f.graph.view.revision > base ? again(f.graph) : null;
+      const sent = named(remade ?? clips);
+      // From its base: the server refuses it if the lane changed after it.
+      const r = await graphApi.lane(graph.session, remade ? f.base : base, module, lane, sent, step, ours);
       return { ...r, clips: sent };
     })
-    .finally(() => (q.pending--, ours.end()));
+    .finally(() => ours.end());
   q.queue = write.catch(() => {});
   return write;
-}
-
-/**
- * The lanes the roll wrote last, by `module.lane`: the clips it wrote, as `shapeOf` says them, and
- * the revision the write made.
- */
-const wrote = new Map<string, { session: number; revision: number; clips: string }>();
-
-/** Notes clips as what they hold: their ids, places and notes, in the order the file keeps them. */
-function shapeOf(clips: NoteClip[]): string {
-  const notes = (c: NoteClip) =>
-    c.notes.map((n) => [n.pitch, n.start, n.length, n.velocity]).sort((a, b) => a[1] - b[1] || a[0] - b[0]);
-  return JSON.stringify(clips.map((c) => [c.id ?? null, c.start, c.length, notes(c)]).sort((a, b) => (a[1] as number) - (b[1] as number) || String(a[0]).localeCompare(String(b[0]))));
-}
-
-/**
- * Whether notes lane `module.lane`, holding `clips` in `graph`, is as the roll's last write of it
- * made it, a write that made a revision after `since`: what changed there since `since` was this
- * window's own writing, nothing another writer did after it.
- */
-export function wroteHere(graph: GraphState, module: string, lane: string, clips: NoteClip[], since: number): boolean {
-  const w = wrote.get(`${module}.${lane}`);
-  return !!w && w.session === graph.session && w.revision > since && w.revision <= graph.view.revision && w.clips === shapeOf(clips);
 }
 
 /**
  * Run `f` (a write of a notes lane by another route: a drag's lease, 8b.7) after the lane writes on
  * their way, in their queue, counted as one of them: it never races a roll write still on its way.
  */
-export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Promise<T & { revision: number }>): Promise<T & { revision: number }> {
-  if (lanes.session !== graph.session) lanes = { session: graph.session, revision: 0, pending: 0, queue: Promise.resolve() };
+export function afterLaneWrites<T>(graph: GraphState, f: (within: Editing) => Promise<T>): Promise<T> {
+  if (lanes.session !== graph.session) lanes = { session: graph.session, queue: Promise.resolve() };
   const q = lanes;
-  q.pending++;
   const ours = editing();
-  const write = q.queue
-    .then(() => f(ours))
-    .then((r) => ((q.revision = Math.max(q.revision, r.revision)), r))
-    .finally(() => (q.pending--, ours.end()));
+  const write = q.queue.then(() => f(ours)).finally(() => ours.end());
   q.queue = write.catch(() => {});
   return write;
 }
-
-/** Whether a lane write is on its way, or made a revision `graph` doesn't show yet. */
-export const laneWriting = (graph: GraphState) => lanes.session === graph.session && (lanes.pending > 0 || graph.view.revision < lanes.revision);
 
 // ---------------------------------------------------------------- knob values
 
@@ -982,28 +1284,28 @@ function unitSpan(unit: string | null, v: number): [number, number, boolean] {
  * its value if that lies outside, never clamping it (PKG-8). It depends on the knob's value in the
  * code, not on one being dragged, so a knob turned to an end of it turns back.
  */
-export function span(k: Knob): { lo: number; hi: number; log: boolean } {
+export function span(k: NumberKnob): { lo: number; hi: number; log: boolean } {
   const [lo, hi, log] = k.range ? [k.range[0], k.range[1], k.log] : unitSpan(k.unit, k.value);
   const low = Math.min(lo, k.value);
   return { lo: low, hi: Math.max(hi, k.value), log: log && low > 0 };
 }
 
 /** Knob position 0..1 ↔ value, linear or logarithmic. */
-export function toUnit(k: Knob, v: number) {
+export function toUnit(k: NumberKnob, v: number) {
   const { lo, hi, log } = span(k);
   if (hi <= lo) return 0.5;
   if (log) return Math.log(v / lo) / Math.log(hi / lo);
   return (v - lo) / (hi - lo);
 }
 
-export function fromUnit(k: Knob, u: number) {
+export function fromUnit(k: NumberKnob, u: number) {
   const { lo, hi, log } = span(k);
   const value = log ? lo * Math.pow(hi / lo, u) : lo + (hi - lo) * u;
   // Three significant figures: what gets written into the code.
   return Number(value.toPrecision(3));
 }
 
-export function display(k: Knob, v: number) {
+export function display(k: NumberKnob, v: number) {
   return formatValue(k.unit, v, k.label);
 }
 
@@ -1057,7 +1359,7 @@ const NOTE: Record<string, number> = { c: 0, d: 2, e: 4, f: 5, g: 7, a: 9, b: 11
  * the unit the knob shows ("3" on a knob reading 2.5 kHz is 3 kHz). Held to the knob's span and
  * written to three significant figures, as a drag writes it; null if it doesn't read as a value.
  */
-export function parseValue(k: Knob, text: string): number | null {
+export function parseValue(k: NumberKnob, text: string): number | null {
   const t = text.trim().toLowerCase().replace(/\u2212/g, "-").replace(/\s+/g, "");
   let v: number | null = null;
   const pitch = /^([a-g])([#b]?)(-?\d)$/.exec(t);
@@ -1104,7 +1406,7 @@ export function parseValue(k: Knob, text: string): number | null {
  * One step of a knob from `v` (taste.md §5.2), `n` of them (negative is down): a 1% ratio on a
  * logarithmic span (Hz), 0.1 dB, a semitone, or else 1% of the span. Held to the span.
  */
-export function stepValue(k: Knob, v: number, n: number) {
+export function stepValue(k: NumberKnob, v: number, n: number) {
   const { lo, hi, log } = span(k);
   const next = log ? v * 1.01 ** n : k.unit === "db" ? v + 0.1 * n : k.unit === "semitones" ? v + n : v + (hi - lo) * 0.01 * n;
   return Number(Math.min(hi, Math.max(lo, next)).toPrecision(3));

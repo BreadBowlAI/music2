@@ -8,14 +8,19 @@ use super::*;
 
 mod audition;
 mod cell;
+mod decode;
+mod events;
 mod fpenv;
+mod kinds;
 mod latency;
+mod limits;
 mod live;
 mod overlay;
 mod parts;
 mod poly;
 mod stream;
 mod taps;
+mod wavetable;
 
 const SR: u32 = 48_000;
 
@@ -114,13 +119,27 @@ fn std_packages() -> PackageSet {
     p
 }
 
+/// std and every pack music2 ships with kernels of its own (PACK-21), installed as the app installs
+/// them (the tests' store): every kernel music2 ships, run as the app runs it, with no time checks
+/// (ABI-11). The tests of every kernel play them.
+fn own_packages() -> PackageSet {
+    let mut p = std_packages();
+    for (name, dir) in m2_song::pack::test_packs() {
+        if m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm.is_some() {
+            let pack = p.load_pack(&dir, &name).unwrap_or_else(|e| panic!("{}: {e:#}", dir.display()));
+            assert!(!pack.checked, "{name} runs as music2's own");
+        }
+    }
+    p
+}
+
 fn song(nodes: Value, out: &str, lanes: Value) -> Ir {
     serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "lanes": lanes, "nodes": nodes, "exports": {"out": out}}]}))
     .unwrap()
 }
 
-const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\n";
+const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\n";
 
 /// A project folder with the given data files, in a fresh temp dir, and the data `ir` reads
 /// from it.
@@ -156,7 +175,7 @@ fn data(ir: &Ir, dir: &Path) -> DataSet {
 }
 
 fn render(ir: &Ir, tl: &DataSet, seconds: f64) -> Vec<[f32; 2]> {
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
     Renderer::new(&flat, tl, &pk, SR).unwrap().render(seconds).unwrap()
 }
@@ -298,10 +317,67 @@ fn feedback_delays_one_block() {
     assert!(peak(&out) < 2.5 && peak(&out) > 1.0);
 }
 
+/// The initial value of `module`'s first global, wasm-ld's stack pointer, which starts at the top
+/// of the stack: the stack's size, in bytes.
+fn stack_size(module: &[u8]) -> u32 {
+    fn leb(b: &[u8], at: &mut usize) -> u64 {
+        let (mut v, mut shift) = (0u64, 0);
+        loop {
+            let x = b[*at];
+            *at += 1;
+            v |= u64::from(x & 0x7f) << shift;
+            shift += 7;
+            if x < 0x80 {
+                return v;
+            }
+        }
+    }
+    let mut at = 8;
+    while at < module.len() {
+        let id = module[at];
+        at += 1;
+        let len = leb(module, &mut at) as usize;
+        if id == 6 {
+            let mut g = at;
+            assert!(leb(module, &mut g) > 0, "a global");
+            // i32, mutable, then `i32.const <value>` (a signed LEB, positive here).
+            assert_eq!(module[g..g + 3], [0x7f, 0x01, 0x41], "the stack pointer is the first global");
+            g += 3;
+            return leb(module, &mut g) as u32;
+        }
+        at += len;
+    }
+    panic!("no global section")
+}
+
+// ABI-10, RENDER-32: every module music2 ships is built with the kernels' own stack, the size their
+// `.cargo/config.toml` sets (64 KiB): each sandbox touches all of its memory once at its seal, so a
+// build that left the flag out (wasm-ld's 1 MiB) costs every sandbox a megabyte, and no render
+// would show it.
+#[test]
+fn every_module_music2_ships_has_the_kernels_stack() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let config = std::fs::read_to_string(root.join("std/kernels-src/.cargo/config.toml")).unwrap();
+    let flag = config.split("-zstack-size=").nth(1).expect("the config sets the stack's size");
+    let want: u32 = flag[..flag.find(|c: char| !c.is_ascii_digit()).unwrap()].parse().unwrap();
+    assert_eq!(want, 65_536, "the kernels' stack is 64 KiB (RENDER-32)");
+    let mut modules = vec![root.join("std/kernels/std.wasm")];
+    for dir in m2_song::pack::bundled(&root.join("packs")) {
+        if let Some(w) = m2_song::pack::PkgManifest::at(&dir).unwrap().package.wasm {
+            modules.push(dir.join(w));
+        }
+    }
+    assert!(modules.len() >= 2, "std's and @m2/effects' at least: {modules:?}");
+    for m in modules {
+        assert_eq!(stack_size(&std::fs::read(&m).unwrap()), want, "{}: its stack", m.display());
+    }
+}
+
 #[test]
 fn std_manifest_matches_its_kernels() {
-    // Instantiating every kernel checks its port counts against the manifest.
-    let pk = std_packages();
+    // Instantiating every kernel checks its port counts against the manifest: std's, and those of
+    // music2's own packs (PACK-21).
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -320,15 +396,15 @@ fn std_manifest_matches_its_kernels() {
     }
 }
 
-// RENDER-32: every std kernel fits under the 256 MiB a sandbox may take at its birth, at the highest
-// rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
+// RENDER-32: every std kernel, and every kernel of music2's own packs (PACK-21), fits under the 256
+// MiB a sandbox may take at its birth, at the highest rate a project may have (384 kHz) and in stereo. Std's kernels take their memory as they are born
 // (delay lines and reverbs sized by the rate), and never after, so born, one block played and reset
 // is the most an instance ever holds. A kernel added later is checked too. Prints the one that holds
 // the most.
 #[test]
 fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     const RATE: f64 = 384_000.0;
-    let pk = std_packages();
+    let pk = own_packages();
     let mut held: Vec<(usize, String)> = vec![];
     for sig in pk.kernel_sigs() {
         let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
@@ -358,7 +434,7 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
 
 /// Kernel `id` for node `n`, with no settings, in a sandbox of its own.
 fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64) -> Result<KernelInst> {
-    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate }, 0)
+    KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate, notes: &[] }, 0, pk.limits.of(false))
 }
 
 /// A std kernel `id` as a node of its own, its inputs at their defaults, stereo.
@@ -370,13 +446,13 @@ fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
     plain_kernel(pk, &node, id, 2, &inputs, rate).unwrap_or_else(|e| panic!("{id}: {e:#}"))
 }
 
-// ABI v1 (rules 1 and 2), RENDER-28: every std kernel resets in its sealed sandbox, taking no
-// memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
+// ABI v1 (rules 1 and 2), RENDER-28: every std kernel, and every kernel of music2's own packs
+// (PACK-21), resets in its sealed sandbox, taking no memory, back to where it was born: born and sealed, it plays a block, resets, and plays the same
 // block again, bit for bit, its memory as big as at its seal. A kernel whose state holds a `Vec` and
 // built it again at a reset would ask for memory there, and trap.
 #[test]
 fn every_std_kernel_resets_in_a_sealed_sandbox() {
-    let pk = std_packages();
+    let pk = own_packages();
     let mut ids: Vec<String> = pk.kernel_sigs().map(|s| s.id.clone()).collect();
     ids.sort();
     assert!(ids.len() >= 20, "{ids:?}");
@@ -414,13 +490,13 @@ fn play_state(sb: &mut sandbox::Sandbox, s: &sandbox::State, blocks: usize, x: i
 }
 
 // ABI v1 (report §2.3), in wasm: every call names its state, so one sandbox holds many. Two delays
-// born in one sandbox of std.wasm, fed different sounds in turns, each play exactly what one plays in
-// a sandbox of its own: neither hears the other's echoes. (std/kernels-src's test of the same name
-// runs the kit natively.)
+// born in one sandbox of `@m2/effects`' module, fed different sounds in turns, each play exactly what
+// one plays in a sandbox of its own: neither hears the other's echoes. (The pack's kernels' test of
+// the same name runs the kit natively.)
 #[test]
 fn two_states_in_one_instance_play_independently() {
-    let pk = std_packages();
-    let (module, prefix, _) = pk.module_for("std:delay").unwrap();
+    let pk = own_packages();
+    let (module, prefix, _) = pk.module_for("@m2/effects:delay").unwrap();
     let born = |sb: &mut sandbox::Sandbox| {
         sb.state(
             prefix,
@@ -433,6 +509,7 @@ fn two_states_in_one_instance_play_independently() {
                 values: &[],
                 assets: &[],
                 offline: None,
+                notes: &[],
             },
         )
         .unwrap()
@@ -440,12 +517,12 @@ fn two_states_in_one_instance_play_independently() {
     let sound = |seed: usize| move |t: usize| ((t * (7 + seed)) as f32 * 0.01).sin() * if seed == 0 { 0.8 } else { 0.3 };
     let controls = [0.01, 0.5, 0.5];
     let alone = |seed: usize| {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let s = born(&mut sb);
         sb.seal().unwrap();
         play_state(&mut sb, &s, 20, sound(seed), controls)
     };
-    let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+    let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
     let (a, b) = (born(&mut sb), born(&mut sb));
     sb.seal().unwrap();
     let (mut heard_a, mut heard_b) = (vec![], vec![]);
@@ -460,6 +537,25 @@ fn two_states_in_one_instance_play_independently() {
 }
 
 // Regression tests for bugs reported in review (2026-10-11).
+
+// RENDER-3: a graph with no output (the empty revision of a song whose code never compiled) is
+// refused in words, never rendered: a render that indexed its output panicked.
+#[test]
+fn a_graph_with_no_output_is_refused_in_words() {
+    let flat = m2_ir::Flat {
+        nodes: vec![],
+        order: vec![],
+        out: m2_ir::PortRef { node: 0, port: 0 },
+        out_kind: m2_ir::Kind::Audio(2),
+        sidechain: vec![],
+        overlays: vec![],
+        muted: vec![],
+        routes: vec![],
+    };
+    let pk = std_packages();
+    let err = Renderer::new(&flat, &DataSet::empty(), &pk, SR).map(drop).unwrap_err().to_string();
+    assert!(err.contains("nothing to render"), "{err}");
+}
 
 #[test]
 fn output_does_not_depend_on_the_callers_buffer_size() {
@@ -533,7 +629,7 @@ fn tricky() -> (Ir, DataSet, PathBuf) {
                 {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
                 {"id": "h", "op": "const", "value": 0.3},
                 {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
-            {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}},
+            {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}},
         ]),
         "d",
         json!([{"key": "notes", "kind": "events<note>"}]),
@@ -553,7 +649,7 @@ fn tricky() -> (Ir, DataSet, PathBuf) {
 #[test]
 fn every_buffer_size_gives_the_same_samples() {
     let (ir, tl, dir) = tricky();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let total = 24_000;
     let mut reference = vec![[0.0; 2]; total];
@@ -574,7 +670,7 @@ fn every_buffer_size_gives_the_same_samples() {
 #[test]
 fn seeking_gives_the_same_samples_as_a_full_render() {
     let (ir, tl, dir) = tricky();
-    let pk = std_packages();
+    let pk = own_packages();
     let flat = check(&ir, &pk).unwrap();
     let mut r = Renderer::new(&flat, &tl, &pk, SR).unwrap();
     let full = r.render(1.0).unwrap();
@@ -600,7 +696,7 @@ fn echoes_inside_a_voice_outlive_its_note() {
                 {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
                 {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t", "mix": "m"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t", "mix": "m"}},
                 {"id": "m", "op": "const", "value": 0.5}]}},
         ]),
         "v",
@@ -642,7 +738,7 @@ fn package(wat: &str) -> PathBuf {
 }
 
 /// A package folder holding one hand-written kernel module, `@test/t:k`, its ports as `ports` declares.
-fn package_with(wat: &str, ports: &str) -> PathBuf {
+pub(crate) fn package_with(wat: &str, ports: &str) -> PathBuf {
     static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
     let dir =
         std::env::temp_dir().join(format!("m2-pkg-test-{}-{}", std::process::id(), N.fetch_add(1, std::sync::atomic::Ordering::SeqCst)));
@@ -931,7 +1027,7 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
         &synth,
         &[("data/song/notes.json", json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": 60, "start": 0, "length": 0.2}]}]}))],
     );
-    let pk = std_packages();
+    let pk = own_packages();
     let mut r = Renderer::new(&check(&synth, &pk).unwrap(), &tl, &pk, SR).unwrap();
     r.render(0.05).unwrap();
     assert_eq!(r.active_voices(), 1);
@@ -949,7 +1045,7 @@ fn voices_end_when_their_envelope_closes_but_not_while_echoes_remain() {
                 {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
                 {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t"}},
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t"}},
                 {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"}]}},
         ]),
         "v",
@@ -1375,6 +1471,93 @@ fn song_code_cannot_call_an_offline_kernel() {
     assert!(m2_ir::Kernels::kernel(&pk, "std:stretch").is_none() && pk.kernel_sigs().all(|s| s.id != "std:stretch"));
 }
 
+// PACK-21: a kernel that left std for a pack music2 ships is no longer std's, and whatever calls it
+// by its old id is told, at the call, in `pkg.missing`'s words, what to do first, in the words the
+// user wrote (the review's X8): another pack's sound waits for its author; the song's own code
+// plays the pack's effect instead, with the line a song writes for that pack today (review Y4).
+// Each then names the new id. (An older version of the pack the kernel went to asks for an older
+// @m2/core, so it never gets this far: PACK-22.)
+#[test]
+fn a_kernel_that_left_std_says_where_it_went() {
+    let pk = std_packages();
+    assert!(m2_ir::Kernels::kernel(&pk, "std:bitcrush").is_none(), "std has no bitcrusher");
+    // The call, made inside `component` (a ComponentId), or in the song's own code.
+    let said = |component: Option<&str>| {
+        let frames = match component {
+            Some(c) => json!([{"site": 1, "component": c}]),
+            None => json!([]),
+        };
+        let node = json!({"id": "c", "op": "kernel", "kernel": "std:bitcrush", "src": "song.ts:4:3", "frame": component.map(|_| 0)});
+        let mut ir = song(json!([node]), "c", json!([]));
+        ir.modules[0].frames = serde_json::from_value(frames).unwrap();
+        let e = check(&ir, &pk).expect_err("refused");
+        assert_eq!(e.iter().map(|d| (d.code, d.src.as_deref())).collect::<Vec<_>>(), [("pkg.missing", Some("song.ts:4:3"))], "{e:?}");
+        e[0].message.clone()
+    };
+    assert_eq!(
+        said(Some("@alice/crunchy:crunch")),
+        "`crunch`, from @alice/crunchy, calls a kernel std 0.8 no longer has, so it can't play: its author must move it to \
+         `@m2/effects:bitcrush`. Until then, play `bitcrush` from \"@m2/effects\" in its place. (`std:bitcrush` is now \
+         `@m2/effects:bitcrush`.)"
+    );
+    assert_eq!(
+        said(None),
+        "Play `bitcrush` from \"@m2/effects\" instead: import it from \"@m2/effects\", and add \"@m2/effects\" = \"1\" under \
+         [dependencies] in music2.toml. This song's code calls a kernel std 0.8 no longer has; it sounds the same. \
+         (`std:bitcrush` is now `@m2/effects:bitcrush`.)"
+    );
+    // Any other unknown kernel is unknown, as before.
+    let ir = song(json!([{"id": "c", "op": "kernel", "kernel": "std:crush"}]), "c", json!([]));
+    let e = check(&ir, &pk).expect_err("refused");
+    assert_eq!((e[0].code, e[0].message.as_str()), ("code.check", "unknown kernel `std:crush`"));
+}
+
+// PACK-21, PKG-17: the engines that left std in wave 3 (std 0.9) are their packs' own: the
+// polysynth's and the FM synth's voices @m2/synths', the drum voice @m2/drums', and delay, reverb,
+// phaser, tremolo and widen @m2/effects'. std keeps none of them, each pack's module has its own, and a call
+// of the old id is told where it went.
+#[test]
+fn the_engines_left_std_for_their_packs() {
+    let moved = [
+        ("std:synth", "@m2/synths:synth", "synth.custom"),
+        ("std:fm", "@m2/synths:fm", "fm.custom"),
+        ("std:drum", "@m2/drums:drum", "drums.kit"),
+        ("std:delay", "@m2/effects:delay", "delay"),
+        ("std:reverb", "@m2/effects:reverb", "reverb"),
+        ("std:phaser", "@m2/effects:phaser", "phaser"),
+        ("std:tremolo", "@m2/effects:tremolo", "tremolo"),
+        ("std:widen", "@m2/effects:widen", "widen"),
+    ];
+    let (std, own) = (std_packages(), own_packages());
+    for (from, to, component) in moved {
+        assert!(m2_ir::Kernels::kernel(&std, from).is_none(), "std has no {from}");
+        assert!(m2_ir::Kernels::kernel(&own, to).is_some(), "{to} is in its pack's module");
+        let ir = song(json!([{"id": "c", "op": "kernel", "kernel": from, "src": "song.ts:4:3"}]), "c", json!([]));
+        let e = check(&ir, &std).expect_err("refused");
+        assert_eq!((e[0].code, e[0].src.as_deref()), ("pkg.missing", Some("song.ts:4:3")), "{e:?}");
+        let pack = to.split_once(':').unwrap().0;
+        let m = &e[0].message;
+        assert!(
+            m.starts_with(&format!("Play `{component}` from \"{pack}\" instead"))
+                && m.contains("std 0.9 no longer has")
+                && m.ends_with(&format!("(`{from}` is now `{to}`.)")),
+            "{from}: {m}"
+        );
+    }
+}
+
+// PACK-21 (review Y4): the line a moved kernel's message tells a song to write for its pack is the
+// one that admits the version music2 bundles: its major alone (`"@m2/synths" = "2"`), never a
+// version an older @m2/core made, which this app can't run.
+#[test]
+fn moved_kernels_name_the_line_a_song_writes_today() {
+    for m in m2_ir::MOVED_KERNELS {
+        let pack = m.to.split_once(':').unwrap().0;
+        let bundled = m2_song::pack::PkgManifest::at(&m2_song::pack::source_packs().join(pack)).unwrap().package.version;
+        assert_eq!(m.line, m2_song::Requirement::admitting(bundled).to_string(), "{}: music2 bundles {pack} {bundled}", m.from);
+    }
+}
+
 // Information only (PLAT-1): how fast `std:stretch` makes a warped clip's render here. A minute of
 // stereo 44.1 kHz audio laid out over 75 s and up 3 semitones, in a 48 kHz song, into its file.
 #[test]
@@ -1564,7 +1747,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
     }
     // Each read, in turn: the count `asset_read` returned, and the floats' bits.
     let reads = |held: sandbox::Held, channel: u32| -> Vec<(u32, Vec<u32>)> {
-        let mut sb = sandbox::Sandbox::new(&pk.engine, module).unwrap();
+        let mut sb = sandbox::Sandbox::new(module, pk.limits.of(false)).unwrap();
         let values = [channel as f64];
         let assets = [Some(held)];
         let spec = sandbox::Spec {
@@ -1576,6 +1759,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             values: &values,
             assets: &assets,
             offline: None,
+            notes: &[],
         };
         let s = sb.state(prefix, &spec).unwrap();
         sb.seal().unwrap();
@@ -1591,7 +1775,7 @@ fn an_asset_read_from_disk_is_the_decoded_asset() {
             .collect()
     };
     for path in &files {
-        let whole = sandbox::Held::Whole(Arc::new(audio::load_wav(path).unwrap()));
+        let whole = sandbox::Held::Whole(Arc::new(crate::decode::load(path).unwrap()));
         let disk = sandbox::Held::Disk(Arc::new(crate::stream::Wav::open(path).unwrap()));
         assert_eq!(whole.shape(), disk.shape(), "{}: the settings entry", path.display());
         for channel in 0..3 {
@@ -1725,7 +1909,7 @@ fn a_new_asset_never_replaces_one() {
     assert_eq!(std::fs::read(&path).unwrap(), b"mine");
     let new = dir.join("take 2.wav");
     audio::write_new_wav(&new, &[vec![0.5; 4]], SR).unwrap();
-    assert_eq!(audio::load_wav(&new).unwrap().channels, vec![vec![0.5; 4]]);
+    assert_eq!(crate::decode::load(&new).unwrap().channels, vec![vec![0.5; 4]]);
     std::fs::remove_dir_all(dir).ok();
 }
 
@@ -1788,7 +1972,7 @@ mod goldens {
 
     /// `frames` of `ir` playing `data`, asked for in buffers of `sizes` in turn.
     pub(super) fn hash(ir: &Ir, data: &DataSet, frames: usize, sizes: &[usize]) -> String {
-        let pk = std_packages();
+        let pk = own_packages();
         let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
         let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
         let mut out = vec![[0.0f32; 2]; frames];
@@ -1849,7 +2033,7 @@ mod goldens {
                     {"id": "q", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "fb", "by": "h"}},
                     {"id": "h", "op": "const", "value": 0.3},
                     {"id": "mix", "op": "kernel", "kernel": "std:add", "inputs": {"a": "a", "b": "q"}}]}},
-                {"id": "dl", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]),
+                {"id": "dl", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]),
             "dl",
             serde_json::from_str(NOTES).unwrap(),
         );

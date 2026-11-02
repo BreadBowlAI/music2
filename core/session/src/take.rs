@@ -16,7 +16,7 @@
 //! A path that waits stays waiting until a batch makes the draft build, and a Tx touching one is
 //! a conflict: so a lane moved together with a broken code change never plays empty.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -111,6 +111,17 @@ pub struct Saved {
     pub recorded: bool,
 }
 
+/// How a save goes in ([`Session::save_files`]).
+#[derive(Clone, Copy)]
+struct Saving<'a> {
+    /// Only when the song takes every file in as written; otherwise refused, and nothing written.
+    built: bool,
+    /// Decided only: nothing is written either way.
+    check: bool,
+    /// Its undo step's name (an upgrade's); None: named from its change, or by an agent's words.
+    name: Option<&'a str>,
+}
+
 /// What taking in a draft decides ([`Session::settling`]): built, before anything changes.
 enum Settle {
     /// No revision: the draft is the accepted one (`clear`: nothing waits any more), or what
@@ -166,6 +177,26 @@ impl Session {
         let batch = changed_paths(&self.draft, &snapshot);
         let settled = self.settling(&snapshot, &batch);
         self.take_in_settled(snapshot, settled)
+    }
+
+    /// The store changed: a pack was installed (a Get, REG-15). The lists are made again, so they
+    /// offer it (PACK-11); and a draft that waits (a song whose lock names a version that wasn't
+    /// installed, `pkg.missing`) is built again, so it plays once it builds (REG-17). What outside
+    /// writers changed that waited for it is then one undo step, as when its own batch builds
+    /// (AGENT-2).
+    pub fn store_changed(&mut self) -> TakenIn {
+        (self.catalog, self.offered) = crate::session::lists(&self.packages);
+        self.problems = self.gather_problems();
+        if self.draft_errors.is_empty() {
+            return TakenIn::default();
+        }
+        let (draft, batch) = (self.draft.clone(), self.waiting.clone());
+        let settled = self.settling(&draft, &batch);
+        let taken = self.take_in_settled(draft, settled);
+        if taken.accepted.is_some() && self.access.writer() {
+            self.outside_step(false);
+        }
+        taken
     }
 
     /// [`Session::take_in`] of `snapshot`, whose batch `settled` decided already.
@@ -225,6 +256,13 @@ impl Session {
         if taken.accepted.is_none() {
             return (taken, Outside::Nothing);
         }
+        let outside = self.outside_step(git);
+        (taken, outside)
+    }
+
+    /// A revision was just accepted: what outside writers changed that went into it, one undo step
+    /// (AGENT-2), as [`Session::take_in_batch`] says. `git`: the watcher saw git's `index.lock`.
+    fn outside_step(&mut self, git: bool) -> Outside {
         // What went into the revision: every outside path that doesn't wait now.
         let waiting = &self.waiting;
         let (left, went): (BTreeSet<PathBuf>, BTreeSet<PathBuf>) =
@@ -234,19 +272,20 @@ impl Session {
         let is = &self.accepted.snapshot;
         let changed = changed_paths(&was, &pick(is, &went));
         if git && !changed.is_empty() && crate::watch::git_has(&self.dir, &changed) {
-            return (taken, Outside::Git(changed.len()));
+            return Outside::Git(changed.len());
         }
         let others = changed.len().saturating_sub(1);
         let mut ops = vec![];
         let mut bases = vec![];
+        let mut before = BTreeMap::new();
         for p in &changed {
             let name = m2_song::path::slashed(p);
             let cant = |why| Outside::Cant { file: name.clone(), why, others };
             // Its bytes before are gone, or were never read: nothing can put them back (D5).
             if binary(&was, p) || was.unreadable.contains_key(p) || is.unreadable.contains_key(p) {
-                return (taken, cant(Cant::Bytes));
+                return cant(Cant::Bytes);
             }
-            let Ok(file) = TxPath::new(&name) else { return (taken, cant(Cant::Bytes)) };
+            let Ok(file) = TxPath::new(&name) else { return cant(Cant::Bytes) };
             let op = match text_of(&was, p) {
                 Some(old) => Op::Write { file: file.clone(), bytes: Payload::Text(old.clone()) },
                 // A file made under `assets/` stays: an asset no lane names plays nothing.
@@ -257,18 +296,20 @@ impl Session {
             let left = match (is.files.get(p), is.binaries.get(p)) {
                 (Some(t), _) => Base::Sha(is.not_utf8.get(p).copied().unwrap_or_else(|| Sha::of(t.as_bytes()))),
                 (None, Some(Stored::Hash(sha))) => Base::Sha(*sha),
-                (None, Some(_)) => return (taken, cant(Cant::Bytes)),
+                (None, Some(_)) => return cant(Cant::Bytes),
                 (None, None) => Base::Absent,
             };
             // Refused as a commit would refuse it, it could never be undone (WRITE-3a).
             if let Some(why) = self.unwritable(&file, &left) {
-                return (taken, cant(why));
+                return cant(why);
             }
+            // What its undo puts back: the text the app knew, or nothing (WRITE-23).
+            before.insert(file.clone(), text_of(&was, p).map(|t| Sha::of(t.as_bytes())));
             bases.push((file, left));
             ops.push(op);
         }
         if ops.is_empty() {
-            return (taken, Outside::Nothing);
+            return Outside::Nothing;
         }
         let file = bases[0].0.to_string();
         let shown = match (&ops[..], text_of(&was, Path::new(&file)), text_of(is, Path::new(&file))) {
@@ -280,13 +321,16 @@ impl Session {
         inverse.base.extend(bases);
         // Raw, as a save's step is: taken in like an outside write when undone (WRITE-21).
         let mut step = TxStep::new(inverse, true, false, file.clone());
+        step.before = before;
         // More than undo keeps would push every other step out of it.
-        if step.retained() > crate::session::RETAINED {
-            return (taken, Outside::Cant { file, why: Cant::TooBig, others });
+        if step.retained() > self.bound.text {
+            return Outside::Cant { file, why: Cant::TooBig, others };
         }
         step.source = crate::session::Source::Outside;
         let id = self.record_tx(step);
-        (taken, Outside::Step(id))
+        // Its files were written by others before it: its history is written after it (WRITE-25).
+        self.keep_history();
+        Outside::Step(id)
     }
 
     /// Why undo couldn't write `p` back over `base`, the way a commit would refuse it: a name that
@@ -395,69 +439,156 @@ impl Session {
         Ok(Saved { taken, recorded: true })
     }
 
+    /// Save several files as one, each compared and swapped on its base and written whole through
+    /// one stage, only when the song takes them all in as written (FMT-25's `m2 upgrade`): one undo
+    /// step, named `name` unless the caller gave its own words, whose undo puts every file back as
+    /// it was, byte for byte. Decided before anything is written: what the song wouldn't take is
+    /// refused with why (its build's errors), and nothing is written. `check`: decided only, so
+    /// nothing is written either way. Never forwarded: the app runs the upgrade itself.
+    pub fn save_all_built(&mut self, files: &[(PathBuf, Base, String)], name: &str, check: bool) -> Result<Saved, Refusal> {
+        if self.forward.is_some() {
+            let why = "the app has the song open: these files are saved there".to_string();
+            return Err(Refusal::Rejected { diagnostics: vec![Diagnostic::error("tx.invalid", why)], unexpected: None });
+        }
+        self.save_files(files, Saving { built: true, check, name: Some(name) })
+    }
+
     fn save_as(&mut self, file: &Path, base: Base, text: &str, built: bool) -> Result<Saved, Refusal> {
-        if let Some(r) = self.writable() {
+        self.save_files(&[(file.to_path_buf(), base, text.to_string())], Saving { built, check: false, name: None })
+    }
+
+    /// The one save (WRITE-2): each file compared and swapped on its base, written whole through
+    /// one stage, then taken in with the draft (never a fresh read of the folder, R12). What it
+    /// makes is settled first, so a save that must go in as written (`built`) is refused before
+    /// anything is written. It lands as written when the song builds with every file as written,
+    /// or when the files are the revision that plays (an upgrade done again after its undo,
+    /// FMT-25): then it is one undo step, in the history ahead of its files (WRITE-25), whose undo
+    /// writes the old bytes back while each file is as the save left it (WRITE-21).
+    fn save_files(&mut self, files: &[(PathBuf, Base, String)], how: Saving) -> Result<Saved, Refusal> {
+        let rejected =
+            |code: &'static str, why: String| Refusal::Rejected { diagnostics: vec![Diagnostic::error(code, why)], unexpected: None };
+        if !how.check
+            && let Some(r) = self.writable()
+        {
             return Err(Refusal::Rejected { diagnostics: vec![r], unexpected: None });
         }
-        let p = TxPath::new(&m2_song::path::slashed(file))
-            .map_err(|e| Refusal::Rejected { diagnostics: vec![Diagnostic::error("tx.path", e)], unexpected: None })?;
-        if !p.is_text() {
-            let why = format!("{p} isn't a text file, so the code editor doesn't save it");
-            return Err(Refusal::Rejected { diagnostics: vec![Diagnostic::error("tx.invalid", why)], unexpected: None });
+        let mut draft = self.draft.clone();
+        let (mut targets, mut undo, mut before, mut conflicts, mut written) = (vec![], vec![], BTreeMap::new(), vec![], vec![]);
+        let mut shown = None;
+        for (file, base, text) in files {
+            let p = TxPath::new(&m2_song::path::slashed(file)).map_err(|e| rejected("tx.path", e))?;
+            if !p.is_text() {
+                let editor = if how.name.is_none() { ", so the code editor doesn't save it" } else { "" };
+                return Err(rejected("tx.invalid", format!("{p} isn't a text file{editor}")));
+            }
+            if let Base::WithText { sha, text } = base
+                && Sha::of(text.as_bytes()) != *sha
+            {
+                return Err(rejected("tx.invalid", format!("the base text given for {p} isn't the one its hash says")));
+            }
+            let cur = self.read_current(&p)?;
+            if base.sha() != cur.sha {
+                conflicts.push(crate::tx::ConflictFile { file: p.to_string(), current: cur.sha, clip: None, why: None });
+                continue;
+            }
+            if cur.bytes.as_deref() == Some(text.as_bytes()) {
+                continue;
+            }
+            crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));
+            let after = Sha::of(text.as_bytes());
+            let was = cur.bytes.clone().map(|bytes| Before { sha: cur.sha.expect("bytes have a hash"), bytes });
+            targets.push(Target::Write { path: p.to_string(), before: was, bytes: Arc::from(text.as_bytes()), after });
+            // Its undo: the old bytes written back while the file is as this left it.
+            undo.push(match &cur.bytes {
+                Some(old) => Op::Write { file: p.clone(), bytes: Payload::Text(String::from_utf8_lossy(old).into()) },
+                None => Op::Remove { file: p.clone() },
+            });
+            shown.get_or_insert_with(|| summarize(cur.text.as_deref().unwrap_or(""), text));
+            before.insert(p.clone(), cur.sha);
+            written.push((file.clone(), p, after));
         }
-        if let Base::WithText { sha, text } = &base
-            && Sha::of(text.as_bytes()) != *sha
-        {
-            let why = format!("the base text given for {p} isn't the one its hash says");
-            return Err(Refusal::Rejected { diagnostics: vec![Diagnostic::error("tx.invalid", why)], unexpected: None });
+        if !conflicts.is_empty() {
+            return Err(Refusal::Conflict { files: conflicts });
         }
-        let cur = self.read_current(&p)?;
-        if base.sha() != cur.sha {
-            let files = vec![crate::tx::ConflictFile { file: p.to_string(), current: cur.sha, clip: None, why: None }];
-            return Err(Refusal::Conflict { files });
-        }
-        if cur.bytes.as_deref() == Some(text.as_bytes()) {
+        if written.is_empty() {
             return Ok(Saved { taken: TakenIn::default(), recorded: false });
         }
-        let after = Sha::of(text.as_bytes());
-        // Taken in with the draft as it was settled, this file replaced: decided first, so a save
-        // that must go in as written (`built`) is refused before anything is written.
-        let mut draft = self.draft.clone();
-        crate::tx::put_file(&mut draft, file, Some(text.as_bytes()));
         let settled = (draft != self.draft).then(|| {
             let batch = changed_paths(&self.draft, &draft);
             self.settling(&draft, &batch)
         });
-        if built {
-            let why = match &settled {
-                Some(Settle::Accept { built, .. }) if built.0.files.get(file).map(|t| &**t) == Some(text) => None,
-                Some(Settle::Wait { errors, .. }) => Some(errors.iter().cloned().map(crate::problem).collect()),
-                _ => Some(vec![Diagnostic::error("tx.waiting", format!("{p} waits for the song's code to build first"))]),
+        let as_written = |s: &Snapshot| files.iter().all(|(f, _, t)| s.files.get(f).map(|x| &**x) == Some(t.as_str()));
+        let lands = match &settled {
+            Some(Settle::Accept { built, .. }) => as_written(&built.0),
+            // The files are the revision that plays, so it builds as it is: a save that must go in
+            // as written is a step of its own (an upgrade done again after its undo). The code
+            // editor's, which only takes back what the draft had, is none (as ever).
+            Some(Settle::Same { clear: true }) if how.built => self.accepted.has_code() && as_written(&self.accepted.snapshot),
+            _ => false,
+        };
+        if how.built && !lands {
+            let diagnostics = match &settled {
+                Some(Settle::Wait { errors, .. }) => errors.iter().cloned().map(crate::problem).collect(),
+                _ if how.name.is_none() => {
+                    vec![Diagnostic::error("tx.waiting", format!("{} waits for the song's code to build first", written[0].1))]
+                }
+                _ => vec![Diagnostic::error("tx.waiting", "the song doesn't take these files in as written".to_string())],
             };
-            if let Some(diagnostics) = why {
-                return Err(Refusal::Rejected { diagnostics, unexpected: None });
-            }
+            return Err(Refusal::Rejected { diagnostics, unexpected: None });
         }
-        let before = cur.bytes.clone().map(|bytes| Before { sha: cur.sha.expect("bytes have a hash"), bytes });
-        let target = Target::Write { path: p.to_string(), before, bytes: Arc::from(text.as_bytes()), after };
-        let tx = Tx::new("save", (p.to_string(), p.to_string()), vec![], Expect::Identical);
-        self.stage(&tx, &[target], vec![], None)?;
-        // Whatever outside writers did to it before, the file is the musician's now (AGENT-2).
-        self.outside_was.paths.remove(file);
+        if how.check {
+            return Ok(Saved { taken: TakenIn::default(), recorded: false });
+        }
+        let first = written[0].1.to_string();
+        let shown = match (how.name, &written[..]) {
+            (Some(n), _) => (n.to_string(), n.to_string()),
+            (None, [_]) => shown.expect("a file's change").clone(),
+            (None, many) => (format!("{} files", many.len()), format!("{} files", many.len())),
+        };
+        let tx = Tx::new("save", (first.clone(), first.clone()), vec![], Expect::Identical);
+        let mut inverse = Tx::new("undo-save", (shown.1, shown.0), undo, Expect::Identical);
+        inverse.base.extend(written.iter().map(|(_, p, after)| (p.clone(), Base::Sha(*after))));
+        let mut step = TxStep::new(inverse, true, false, first);
+        step.before = before;
+        // Named by the words an agent gave, else by what it is (AGENT-2).
+        if let Some(n) = how.name {
+            step.name = Some((self.why.clone().unwrap_or_else(|| n.to_string()), false));
+        }
+        if lands {
+            self.history_ahead(&mut step, &draft);
+        }
+        if let Err(e) = self.stage(&tx, &targets, vec![], None) {
+            if lands {
+                self.keep_history();
+            }
+            return Err(e);
+        }
+        for (file, ..) in &written {
+            // Whatever outside writers did to them before, the files are this save's now (AGENT-2).
+            self.outside_was.paths.remove(file);
+        }
+        // The revision it makes is by who saved it (AGENT-2).
+        self.accepting = Some(self.by.clone());
         let taken = match settled {
             Some(settled) => self.take_in_settled(draft, settled),
             None => TakenIn::default(),
         };
-        let recorded = taken.accepted.is_some() && self.accepted.snapshot.files.get(file).map(|t| &**t) == Some(text);
+        self.accepting = None;
+        // Its own: the files it wrote, moving its code files' ids; what else came in with it
+        // (an outside change that waited for the code) is outside the app's.
+        if let Some(accepted) = &taken.accepted {
+            let wrote: BTreeSet<String> = written.iter().map(|(_, p, _)| p.to_string()).collect();
+            let beats = wrote.iter().any(|p| p == "data/arrangement.json");
+            self.authored_as(accepted.number, &wrote, &step.moved, beats);
+        }
+        // Taken into the revision that plays as written: one step, whatever the draft's errors (a
+        // lane file saved while the code is broken lands by WRITE-14's data path).
+        let recorded = lands && as_written(&self.accepted.snapshot);
         if recorded {
-            let undo = match &cur.bytes {
-                Some(old) => Op::Write { file: p.clone(), bytes: Payload::Text(String::from_utf8_lossy(old).into()) },
-                None => Op::Remove { file: p.clone() },
-            };
-            let shown = summarize(cur.text.as_deref().unwrap_or(""), text);
-            let mut inverse = Tx::new("undo-save", (shown.1, shown.0), vec![undo], Expect::Identical);
-            inverse.base.insert(p.clone(), Base::Sha(after));
-            self.record_tx(TxStep::new(inverse, true, false, p.to_string()));
+            self.record_tx(step);
+        }
+        if recorded != lands {
+            self.keep_history();
         }
         Ok(Saved { taken, recorded })
     }

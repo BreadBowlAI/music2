@@ -13,7 +13,8 @@
 //!   keepalive every 2 s while a key is held). The last two let go of all its notes at once.
 //! - **A MIDI keyboard** is a source too (`midi:<name>`, `graph/midi.rs`). It sends no keepalive:
 //!   a key held down says nothing, so the watchdog never lets it go (Q6). It moves its lane's pitch
-//!   wheel and mod wheel too ([`Graph::wheel`]); when it lets go, they go back to rest there.
+//!   wheel, mod wheel and sustain pedal too ([`Graph::wheel`]); when it lets go, they go back to
+//!   rest there.
 
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
@@ -50,6 +51,11 @@ pub struct Audition {
     /// keyboard's always do.
     #[serde(default)]
     pub record: bool,
+    /// Its Offs come while a keyboard's pedal is down: the lane hears them (its voices hold the
+    /// sound, RENDER-38), and a take keeps their notes until the pedal lifts (RENDER-36). Never a
+    /// window's.
+    #[serde(skip)]
+    pub pedalled: bool,
 }
 
 /// A key struck: the window's handle for it, its pitch (0 to 127, fractions tune it) and its
@@ -158,7 +164,13 @@ impl Graph {
         };
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let ControlPlane { open, audition, record, .. } = &mut *cp;
+        // The keyboard piano plays a kit by sound, as a MIDI keyboard does (KIT-25): a key on a kit's
+        // bus or Drum track goes to the Drum track that answers to it. A MIDI keyboard's come so.
+        let pads = match &lane {
+            Some((m, _)) if a.record && !super::midi::is_keyboard(client) => super::midi::Pads::of(&cp, m),
+            _ => None,
+        };
+        let ControlPlane { open, audition, record, midi, .. } = &mut *cp;
         let open = open.as_ref().context("no project is open")?;
         let plays = playing(open.engine.plays.as_ref(), device.as_ref());
         // What a take records: a keyboard's notes, and a window's marked so (lane B).
@@ -173,26 +185,41 @@ impl Graph {
                 && let Some(slot) = slot_of(p, &m, &l)
             {
                 d.player.live(p.generation, slot, LiveEv::Off { source: id, handle: *h })?;
-                record.off(d, (id, *h));
+                if !a.pedalled {
+                    record.off(d, (id, *h));
+                }
             }
         }
         let Some((m, l)) = lane.filter(|_| !a.on.is_empty()) else { return Ok(None) };
-        let Some((p, d, slot)) = plays.and_then(|(p, d)| Some((p, d, slot_of(p, &m, &l)?))) else {
-            return Ok(Some(json!({"t": "audition", "module": m, "lane": l, "silent": "Nothing plays this lane"})));
-        };
+        // Each strike's lane: the one named, or on a kit the Drum track's that answers to it; a note
+        // none answers to plays nothing, said once.
+        let mut said = None;
+        let mut strikes: Vec<((String, String), &Strike)> = vec![];
         for s in &a.on {
+            let key = s.pitch.round() as u8;
+            match pads.as_ref().map(|p| (p, p.answers(key))) {
+                None => strikes.push(((m.clone(), l.clone()), s)),
+                Some((_, Some(to))) => strikes.push((to, s)),
+                Some((p, None)) => said = said.or(midi.unanswered(p, key)),
+            }
+        }
+        for ((m, l), s) in strikes {
+            let Some((p, d, slot)) = plays.and_then(|(p, d)| Some((p, d, slot_of(p, &m, &l)?))) else {
+                return Ok(Some(json!({"t": "audition", "module": m, "lane": l, "silent": "Nothing plays this lane"})));
+            };
             let ev = LiveEv::On { source: id, handle: s.h, pitch: s.pitch as f32, velocity: s.velocity as f32 };
             d.player.live(p.generation, slot, ev)?;
-            source.held.insert(s.h, (m.clone(), l.clone()));
             if records {
                 record.on(d, (&m, &l), (id, s.h), s.pitch, s.velocity);
             }
+            source.held.insert(s.h, (m, l));
         }
-        Ok(None)
+        Ok(said.map(|w| json!({"t": "audition", "said": w})))
     }
 
     /// Move a wheel of lane `(module, lane)` of the open song, from the keyboard `client` (RENDER-14's
-    /// `Midi`, D8): pitch bend, the mod wheel or reset all controllers, as `bytes`. The wheels it
+    /// `Midi`, D8, RENDER-35): pitch bend, the mod wheel, the sustain pedal or reset all controllers,
+    /// as `bytes`. The wheels it
     /// moved on another lane go back to rest there first. A lane nothing plays takes nothing. Never
     /// waits for the session.
     pub(super) fn wheel(&self, client: &str, lane: Option<(String, String)>, bytes: [u8; 3]) {
@@ -225,6 +252,29 @@ impl Graph {
             return;
         }
         rest(open.engine.token, playing(open.engine.plays.as_ref(), device.as_ref()), source);
+    }
+
+    /// The notes of a take that `client` let go under its pedal, `handles`, end where they are heard
+    /// now: the pedal lifted, or the key was struck again (RENDER-36). The lane heard them let go
+    /// already.
+    pub(super) fn take_lets_go(&self, client: &str, handles: &[u32]) {
+        if handles.is_empty() {
+            return;
+        }
+        let device = self.inner.current_device();
+        let Some(d) = device.as_ref() else { return };
+        let mut cp = self.inner.control.lock();
+        let ControlPlane { audition, record, .. } = &mut *cp;
+        let id = audition.source(client).id;
+        for h in handles {
+            record.off(d, (id, *h));
+        }
+    }
+
+    /// The lanes the notes `client` holds sound on, by handle: what a test reads.
+    #[cfg(test)]
+    pub(super) fn held_lanes(&self, client: &str) -> Vec<(String, String)> {
+        self.inner.control.lock().audition.by_client.get(client).map(|s| s.held.values().cloned().collect()).unwrap_or_default()
     }
 
     /// The window `client` closed: every note it holds is let go.

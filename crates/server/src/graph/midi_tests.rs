@@ -13,9 +13,9 @@ use super::*;
 use m2_editor::render::Length;
 
 /// Two kick tracks: `kick` plays its `hits`, `snare` its own `hits`.
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
-                    const k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
-                    const s = track('snare', ({ lane }) => kick(lane.notes('hits')));\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                    const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                    const s = track('snare', ({ lane }) => drums.drum(lane.notes('hits')));\n\
                     export default song(() => sum(k.out, s.out));\n";
 
 /// The song open, a keyboard named "Keys" plugged in, playing `kick.hits`.
@@ -72,8 +72,8 @@ fn velocity_is_the_keys() {
     assert_eq!(read(&[0x90, 60, 32]), Said::On { h: 60, pitch: 60.0, velocity: 32.0 / 127.0 });
     assert_eq!(read(&[0x9F, 0, 1]), Said::On { h: 15 * 128, pitch: 0.0, velocity: 1.0 / 127.0 });
     assert_eq!(read(&[0x83, 60, 0]), Said::Off { h: 3 * 128 + 60 });
-    assert_eq!(read(&[0xB0, 64, 63]), Said::Pedal(false));
-    assert_eq!(read(&[0xB2, 64, 64]), Said::Pedal(true));
+    assert_eq!(read(&[0xB0, 64, 63]), Said::Pedal([0xB0, 64, 63]));
+    assert_eq!(read(&[0xB2, 64, 0xC0]), Said::Pedal([0xB2, 64, 64]));
     assert_eq!(read(&[0xB0, 123, 0]), Said::AllOff);
     assert_eq!(read(&[0xB0, 120, 0]), Said::AllOff);
     for ignored in [&[0xB0, 7, 64][..], &[0xE0, 64], &[0xD0, 30], &[0xC0, 5], &[0xF8], &[0x90, 60], &[]] {
@@ -93,25 +93,77 @@ fn channels_dont_share_a_key() {
     eventually("and channel 2's its own", || live(&graph) == 0);
 }
 
+// RENDER-35, RENDER-37: a keyboard's sustain pedal reaches the lane it plays, as its wheels do, on
+// any channel; its keys' Offs reach the lane when they are let go, pedal or not (the voices hold
+// the sound, RENDER-38; a plugin holds its own). Let up, the lane's pedal is at rest again.
 #[test]
-fn the_sustain_pedal_holds_offs_until_it_lifts() {
+fn a_keyboards_pedal_reaches_its_lane() {
     let (_f, graph) = played();
     send(&graph, &[0x90, 36, 100]);
     eventually("the key sounds", || live(&graph) == 1);
-    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0xB3, 64, 127]);
+    eventually("the pedal reaches the kick's lane", || wheels(&graph) == 1);
     send(&graph, &[0x80, 36, 0]);
-    stays(&graph, 1, "the pedal holds it after its key is up");
-    // Struck again under the pedal: one note, not two, and the pedal's lift doesn't end the new one
-    // while its key is down.
-    send(&graph, &[0x90, 36, 80]);
-    stays(&graph, 1, "struck again: one note");
-    send(&graph, &[0x90, 38, 80]);
-    send(&graph, &[0x80, 38, 0]);
-    eventually("two notes under the pedal", || live(&graph) == 2);
+    eventually("the key's Off reaches the lane at once", || live(&graph) == 0);
     send(&graph, &[0xB0, 64, 0]);
-    eventually("the pedal's lift ends the one let go", || live(&graph) == 1);
-    send(&graph, &[0x80, 36, 0]);
-    eventually("the held key ends with its Off", || live(&graph) == 0);
+    eventually("let up", || wheels(&graph) == 0);
+    graph.midi_target(None).unwrap();
+    send(&graph, &[0xB0, 64, 127]);
+    stays_still(&graph, "no target: no lane takes it");
+}
+
+/// A saw on `keys` from std's toolbox, which sounds while its key is held and fades over 0.3 s once
+/// let go.
+const PAD: &str = "import { poly, secs, song, track } from '@m2/core';\nimport { adsr, osc, vca } from 'std/dsp';\n\
+                   const k = track('keys', ({ lane }) => poly(lane.notes('notes'), (n) => \
+                   vca(osc.saw(n.pitch), adsr(n.gate, { attack: secs(0.01), sustain: 0.5, release: secs(0.3) }))));\n\
+                   export default song(() => k.out);\n";
+
+// RENDER-38, live with keys from a keyboard: a note let go while the pedal is down rings on, as long
+// as the pedal stays down, and fades once it lifts, as one let go without the pedal does at once. A
+// key still down when the pedal lifts sounds on until it is let go.
+#[test]
+fn a_note_let_go_under_the_pedal_rings_on() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", PAD);
+    let (p, mut d) = m2_play::Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    // The loudest sample of the last of `blocks` callbacks of 10 ms.
+    let mut level = |blocks: usize| {
+        let (mut buf, mut most) = ([0.0f32; 2 * 480], 0.0f32);
+        for _ in 0..blocks {
+            d.fill(&mut buf, 2);
+            drop(d.drain_retired());
+            most = buf.iter().fold(0.0f32, |m, x| m.max(x.abs()));
+        }
+        most
+    };
+    level(4);
+    assert_eq!(graph.midi(Event::Plugged("Keys")).as_deref(), Some("Keys is connected. It plays the selected track."));
+    graph.midi_target(Some(("keys".into(), "notes".into()))).unwrap();
+    // Without the pedal: let go, it fades within two seconds.
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05, "the key sounds");
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) < 1e-4, "let go, it fades");
+    // With it: let go, it sounds on for two seconds, then fades once the pedal lifts.
+    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05);
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) > 0.05, "the pedal holds its sound");
+    assert_eq!(live(&graph), 0, "its key is up");
+    send(&graph, &[0xB0, 64, 0]);
+    assert!(level(200) < 1e-4, "the pedal up lets it fade");
+    // A key still down at the lift.
+    send(&graph, &[0xB0, 64, 127]);
+    send(&graph, &[0x90, 60, 100]);
+    assert!(level(20) > 0.05);
+    send(&graph, &[0xB0, 64, 0]);
+    assert!(level(200) > 0.05, "its key is down: it sounds on past the lift");
+    send(&graph, &[0x80, 60, 0]);
+    assert!(level(200) < 1e-4, "let go, it fades");
 }
 
 #[test]
@@ -222,13 +274,16 @@ fn midi_never_waits_for_a_compile() {
     fixture.put("tracks/b.ts", &slow(0));
     fixture.put(
         "song.ts",
-        "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
-         import { b } from './tracks/b';\nconst k = track('kick', ({ lane }) => kick(lane.notes('hits')));\n\
+        "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+         import { b } from './tracks/b';\nconst k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
          export default song(() => sum(k.out, b.out));\n",
     );
     let graph = std::sync::Arc::new(fixture.open());
     graph.midi(Event::Plugged("Keys"));
     graph.midi_target(Some(("kick".into(), "hits".into()))).unwrap();
+    // The compile is a request that starts after the save. The actor is still busy with the one
+    // before for a moment after answering it, and that request isn't the compile.
+    let saved = graph.now_ns();
     let saver = {
         let (g, dir) = (graph.clone(), fixture.0.clone());
         std::thread::spawn(move || {
@@ -236,7 +291,7 @@ fn midi_never_waits_for_a_compile() {
             g.poll()
         })
     };
-    eventually("the session compiles", || graph.busy().is_some());
+    eventually("the session compiles", || graph.busy().is_some_and(|since| since >= saved));
     let busy_from = graph.busy().unwrap();
     let t = Instant::now();
     send(&graph, &[0x90, 36, 100]);
@@ -252,7 +307,7 @@ fn midi_never_waits_for_a_compile() {
         eprintln!("void: the compile took only {compile_ms:.0} ms");
         return;
     }
-    eprintln!("midi: sent in {sent_ms:.2} ms, heard {:.0} ms before a {compile_ms:.0} ms compile ended", (end - heard) as f64 / 1e6);
+    eprintln!("midi: sent in {sent_ms:.2} ms, heard {:.0} ms into a {compile_ms:.0} ms compile", (heard - start) as f64 / 1e6);
     assert!(sent_ms < 20.0, "sending took {sent_ms:.1} ms");
     assert!(heard < end, "heard only after the compile ended");
 }
@@ -335,4 +390,75 @@ fn a_keyboard_let_go_centres_its_bend() {
     bend("on again");
     assert_eq!(graph.midi(Event::Unplugged("Keys")).as_deref(), Some("Keys was unplugged. Its notes stopped."));
     eventually("unplugged", || wheels(&graph) == 0);
+}
+
+/// A kit: a Drums bus, and a Kick, a Snare and two Hats tracks going to it.
+const KIT: &str = "import { bus, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { gain } from 'std/dsp';\n\
+                   import { master, mixer } from 'std/mix';\n\
+                   const d = bus('drums', { name: 'Drums' }, ({ input }) => gain(input));\n\
+                   const k = track('kick', ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                   const s = track('snare', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'snare' }));\n\
+                   const h = track('hats', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   const h2 = track('hats2', ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   export default song(() => master(mixer({ drums: d.out, kick: { in: k.out, to: 'drums' }, snare: { in: s.out, to: 'drums' }, \
+                   hats: { in: h.out, to: 'drums' }, hats2: { in: h2.out, to: 'drums' } })));\n";
+
+// KIT-25: with a kit's Drum track (or its bus) what keys play, a key goes to the kit's Drum track
+// whose sound answers to its note, at its own pitch, the first of two with one sound; the state
+// names the kit. A note no Drum answers to plays nothing, and is said once.
+#[test]
+fn a_key_plays_the_kits_drum_that_answers_to_it() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", KIT);
+    let graph = fixture.open();
+    graph.midi(Event::Plugged("Keys"));
+    for target in ["kick", "drums"] {
+        graph.midi_target(Some((target.into(), "hits".into()))).unwrap();
+        assert_eq!(graph.midi_state()["target"]["kit"], json!("drums"), "{target}");
+        for (key, lane) in [(38, "snare"), (42, "hats"), (46, "hats"), (36, "kick")] {
+            send(&graph, &[0x90, key, 100]);
+            eventually("the key sounds", || live(&graph) == 1);
+            assert_eq!(graph.held_lanes("midi:Keys"), [(lane.to_string(), "hits".to_string())], "{target}: {key}");
+            send(&graph, &[0x80, key, 0]);
+            eventually("let go", || live(&graph) == 0);
+        }
+    }
+    let said = graph.midi(Event::Bytes("Keys", &[0x90, 60, 100]));
+    assert_eq!(said.as_deref(), Some("No drum of the Drums kit answers to C4 (60). + Drum in Beat adds one."));
+    stays(&graph, 0, "it plays nothing");
+    assert_eq!(graph.midi(Event::Bytes("Keys", &[0x90, 60, 100])), None, "said once");
+}
+
+// KIT-25: the keyboard piano plays a kit by sound too: its key on a kit's Drum track goes to the
+// Drum track that answers to it, the first of two with one sound; a note none answers to plays
+// nothing, said once. A window's own note click plays the lane it names.
+#[test]
+fn the_keyboard_piano_plays_a_kit_by_sound() {
+    use super::super::audition::{Audition, Strike};
+    let fixture = Fixture::new();
+    fixture.put("song.ts", KIT);
+    let graph = fixture.open();
+    let piano = |h: u32, key: f64| Audition {
+        module: Some("kick".into()),
+        lane: Some("hits".into()),
+        on: vec![Strike { h, pitch: key, velocity: 0.8 }],
+        record: true,
+        ..Audition::default()
+    };
+    let off = |h: u32| Audition { off: vec![h], ..Audition::default() };
+    for (h, key, lane) in [(1, 38.0, "snare"), (2, 42.0, "hats"), (3, 46.0, "hats"), (4, 36.0, "kick")] {
+        assert_eq!(graph.audition("w1", piano(h, key)).unwrap(), None);
+        eventually("the key sounds", || live(&graph) == 1);
+        assert_eq!(graph.held_lanes("w1"), [(lane.to_string(), "hits".to_string())], "{key}");
+        graph.audition("w1", off(h)).unwrap();
+        eventually("let go", || live(&graph) == 0);
+    }
+    let said = graph.audition("w1", piano(5, 60.0)).unwrap();
+    assert_eq!(said, Some(json!({"t": "audition", "said": "No drum of the Drums kit answers to C4 (60). + Drum in Beat adds one."})));
+    stays(&graph, 0, "it plays nothing");
+    assert_eq!(graph.audition("w1", piano(6, 60.0)).unwrap(), None, "said once");
+    // A note clicked in the roll of the Kick's lane plays the Kick.
+    graph.audition("w1", Audition { record: false, ..piano(7, 38.0) }).unwrap();
+    eventually("the click sounds", || live(&graph) == 1);
+    assert_eq!(graph.held_lanes("w1"), [("kick".to_string(), "hits".to_string())]);
 }

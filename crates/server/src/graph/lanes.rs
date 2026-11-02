@@ -148,19 +148,24 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
             clips.iter().for_each(|c| add(&c.lane));
             to.iter().for_each(&mut add);
         }
-        Gesture::Resize { clip, .. } | Gesture::Notes { clip, .. } | Gesture::Points { clip, .. } | Gesture::Audio { clip, .. } => {
-            add(&clip.lane)
-        }
+        Gesture::Resize { clip, .. }
+        | Gesture::Notes { clip, .. }
+        | Gesture::Points { clip, .. }
+        | Gesture::Audio { clip, .. }
+        | Gesture::Stamp { clip, .. } => add(&clip.lane),
         Gesture::Split { clips, .. }
         | Gesture::Join { clips }
         | Gesture::Duplicate { clips, .. }
         | Gesture::Delete { clips }
+        | Gesture::Groove { clips, .. }
         | Gesture::Quantize { clips, .. } => clips.iter().for_each(|c| add(&c.lane)),
-        Gesture::Paste { clips, to, .. } => {
+        Gesture::Paste { clips, to, into, .. } => {
             clips.iter().for_each(|c| add(&c.from));
             to.iter().for_each(&mut add);
+            into.iter().for_each(|c| add(&c.lane));
         }
-        Gesture::Set { lane, .. } => add(lane),
+        Gesture::Hits { lane, .. } | Gesture::Set { lane, .. } => add(lane),
+        Gesture::Record { takes } => takes.iter().for_each(|t| add(&t.lane)),
     }
     out
 }
@@ -196,6 +201,8 @@ fn swap_of(plays: &PlaysView, rev: &Revision, lane: &LaneAddr, data: &LaneData) 
             LaneSwap::Notes(Arc::new(notes))
         }
         LaneData::Control { clips, .. } => LaneSwap::Control(Arc::new(m2_song::lane::ControlLane::new(clips.clone()))),
+        // Names become places here, off the audio thread (CARD-15).
+        LaneData::Steps { of, clips } => LaneSwap::Control(Arc::new(m2_song::lane::ControlLane::steps(clips, of))),
         LaneData::Audio(_) => return None,
     };
     Some((slot as u32, swap))

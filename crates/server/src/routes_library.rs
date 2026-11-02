@@ -6,12 +6,24 @@
 //!   that beat (LIB-1). `indexing` counts the indexes of samples running (LIB-5): ask again when
 //!   it is 0 to see what they found.
 //! - `GET /api/library/preview?id=<id>`: the item's preview, a WAV; a sample's own file, streamed,
-//!   only for one the library lists, as it was indexed, and up to 64 MB (LIB-6); 404 with
+//!   only for one the library lists, as it was indexed, and up to 64 MB (LIB-6), a FLAC's as the
+//!   WAV of it (FMT-24); 404 with
 //!   `{error}` in words when it has none (a plugin).
 //! - `GET /api/library/folders`, `POST /api/library/folders {add | remove}`: your sample folders
 //!   (LIB-5), each with how many samples it has so far and whether it is being indexed.
 //! - `POST /api/library/sample {session, id, to}` or `{session, id, at, call}`: add a sample to the
 //!   open song, a clip at `to` or a Sampler's file (LIB-7).
+//! - The search also answers From the library (REG-13): `library`, the registry's items of packs
+//!   this computer hasn't got, and `registry`: `{fetching, made, error}`, or null with none set.
+//!   A library item's preview is its blob (REG-14).
+//! - `POST /api/library/get {id}` (a library item; a sample with `session` and `to`) or `{pack,
+//!   version}` (a song's missing locked version): Get it (REG-15 to REG-17), one at a time,
+//!   answering once it is done; `{"t": "get", id, label, done, total}` events say how far it is,
+//!   and `{"t": "get", id, end: true}` that it ended. `POST /api/library/get/cancel` stops it.
+//! - `GET /api/library/missing`: the open song's locked versions that aren't installed, each with
+//!   whether the library has it (`can`) or why not (REG-17). `POST /api/library/store-changed`:
+//!   packs were installed outside the app (`m2 pack get`); the open song is told.
+//! - From the library answers at most `LIBRARY_ROWS` rows, and `library_more`, how many more.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -35,8 +47,8 @@ crate::api::routes! {
         "Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key; fits (a beat) keeps the loops that fit the song there",
         r#"{"q": "warm pad"}"#;
     GET "/api/library/preview" => preview; reads, agents,
-        "An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file",
-        r#"{"id": "std:synth-pluck"}"#;
+        "An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it)",
+        r#"{"id": "@m2/synths:synth-pluck"}"#;
     GET "/api/library/folders" => folders_get; reads, agents,
         "Your sample folders, each with how many samples it has and whether it is being indexed",
         r#"{}"#;
@@ -44,8 +56,20 @@ crate::api::routes! {
         "Add a folder of samples to the library, or remove one",
         r#"{"add": "/Users/you/Samples"}"#;
     POST "/api/library/sample" => add_sample; writes, agents,
-        "Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`",
+        "Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or the recording of call `call` (a Sampler's file, or its `setting`)",
         r#"{"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}"#;
+    POST "/api/library/get" => get_item; writes, agents,
+        "Get a pack or a sample from the library (the registry): a pack's whole version installed, checked, or one sample added to the song with its note; or a version the open song locks and is missing. Answers once it is done; `get` events say how far",
+        r#"{"id": "library:@alice/felt-piano:felt-piano"}"#;
+    POST "/api/library/get/cancel" => cancel_get; reads, agents,
+        "Stop the Get running: nothing of it is kept",
+        r#"{}"#;
+    POST "/api/library/store-changed" => store_changed; reads, agents,
+        "Tell the app packs were installed or removed outside it (m2 pack get does): the open song's lists are made again, and a song that waited for a pack builds",
+        r#"{}"#;
+    GET "/api/library/missing" => missing; reads, agents,
+        "The packs the open song's music2.lock names that aren't installed, each with whether the library has that very version to get",
+        r#"{}"#;
 }
 
 #[derive(Deserialize)]
@@ -65,9 +89,17 @@ async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>
             query.fits = Some(s.graph.fits(beat)?.ok_or_else(|| anyhow::anyhow!("Fits my song needs a song open."))?);
         }
         let found: Vec<Value> = items.search(&query).into_iter().map(serde_json::to_value).collect::<Result<_, _>>()?;
+        // From the library: what is typed searches the catalog kept here, and is never sent (REG-13).
+        let offers = s.offers();
+        let found_there = m2_editor::get::find(&offers, &query);
+        let more = found_there.len().saturating_sub(crate::registry::LIBRARY_ROWS);
+        let library: Vec<Value> = found_there.into_iter().take(crate::registry::LIBRARY_ROWS).map(|o| o.json()).collect();
         let indexing = s.sample_index.indexing();
         let not_wav: usize = s.sample_folders_shown().iter().map(|f| f.not_wav).sum();
-        Ok::<_, anyhow::Error>(json!({ "items": found, "folders": {"indexing": indexing, "not_wav": not_wav} }))
+        Ok::<_, anyhow::Error>(json!({
+            "items": found, "library": library, "library_more": more, "registry": s.registry_said(),
+            "folders": {"indexing": indexing, "not_wav": not_wav},
+        }))
     })
     .await?;
     Ok(Json(found))
@@ -86,11 +118,25 @@ enum Previewed {
 
 async fn preview(State(s): S, Query(q): Query<PreviewQuery>, headers: axum::http::HeaderMap) -> Response {
     let made = crate::caller::blocking(move || {
+        // A library item's: its blob, fetched by its hash and kept (REG-14); a FLAC's as its WAV.
+        if q.id.starts_with(m2_editor::get::PREFIX) {
+            let file = s.library_preview(&q.id)?;
+            let sample = m2_editor::library::Sample { file: file.clone(), ..Default::default() };
+            let stamp = samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("The preview can't be played: {e}."))?;
+            if let Some(wav) = samples::flac_preview(&sample, stamp).map_err(|e| anyhow::anyhow!("The preview can't be played: {e}."))? {
+                return Ok(Previewed::Wav(wav));
+            }
+            return Ok(Previewed::File(file, stamp));
+        }
         // A sample's preview is its file, only for one the library lists (LIB-6).
         if q.id.starts_with("sample:") {
             let item = s.listed_sample(&q.id)?;
             let sample = item.sample.expect("a sample");
             let stamp = samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be played: {e}.", item.label))?;
+            // A FLAC's is the WAV of it, made now (FMT-24).
+            if let Some(wav) = samples::flac_preview(&sample, stamp).map_err(|e| anyhow::anyhow!("{} can't be played: {e}.", item.label))? {
+                return Ok(Previewed::Wav(wav));
+            }
             if stamp.size > samples::PREVIEW_BYTES {
                 anyhow::bail!(
                     "{} is {} MB, too long to preview here (up to {} MB): add it to the song to hear it.",
@@ -223,11 +269,14 @@ struct SampleReq {
     /// or `{kind: "below", beat}`.
     #[serde(default)]
     to: Option<Target>,
-    /// Or the Sampler call it becomes the file of, in revision `at`.
+    /// Or the call it becomes the recording of, in revision `at`: a Sampler's file, or its recording
+    /// `setting` (CARD-5).
     #[serde(default)]
     at: Option<u64>,
     #[serde(default)]
     call: Option<String>,
+    #[serde(default)]
+    setting: Option<String>,
 }
 
 /// Add sample `id` from the library to the open song (LIB-7): a clip at `to`, one undo step,
@@ -242,13 +291,58 @@ async fn add_sample(State(s): S, Json(r): Json<SampleReq>) -> Result<Json<Value>
         samples::still_plain(&sample).map_err(|e| anyhow::anyhow!("{} can't be added: {e}.", item.label))?;
         match (r.to, r.at, r.call) {
             (Some(to), None, None) => state.graph.add_sample(r.session, sample, to),
-            (None, Some(at), Some(call)) => state.graph.sample_to_sampler(r.session, at, call, sample),
+            (None, Some(at), Some(call)) => state.graph.sample_to_sampler(r.session, at, call, r.setting, sample),
             _ => anyhow::bail!("A sample goes to a place (`to`) or to a Sampler (`at` and `call`)."),
         }
     })
     .await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+/// Get a library item, or a version the open song locks and is missing (REG-15 to REG-17),
+/// answering once it is done. A write: a pack installed, or a sample added to the song.
+async fn get_item(State(s): S, Json(r): Json<crate::registry::GetReq>) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    let result = crate::routes::blocking(move || state.get_from_library(r)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Stop the Get running (REG-15): `{cancelled}`, whether it stops; once it is being installed it
+/// can't be, said in `why`.
+async fn cancel_get(State(s): S) -> Json<Value> {
+    Json(match s.cancel_get() {
+        crate::registry::Cancelled::Taken => json!({ "cancelled": true }),
+        crate::registry::Cancelled::Refused => json!({ "cancelled": false, "why": "It is being installed now: it can't be stopped." }),
+        crate::registry::Cancelled::Nothing => json!({ "cancelled": false }),
+    })
+}
+
+/// The store changed outside the app (REG-17): the open song is told, as after a Get.
+async fn store_changed(State(s): S) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    crate::routes::blocking(move || state.store_changed()).await?;
+    s.graph_changed();
+    Ok(Json(json!({})))
+}
+
+/// The open song's locked versions that aren't installed (REG-17): each with whether the library
+/// has it (`can`, and the bytes a Get fetches) or why not.
+async fn missing(State(s): S) -> Result<Json<Value>, ApiError> {
+    let missing = crate::routes::blocking(move || s.missing_packs()).await?;
+    let shown: Vec<Value> = missing
+        .iter()
+        .map(|m| match &m.got {
+            Ok(v) => {
+                json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": true, "size": v.size})
+            }
+            Err(why) => {
+                json!({"pack": m.name.as_str(), "version": m.version.to_string(), "hash": m.hash.prefixed(), "can": false, "why": why})
+            }
+        })
+        .collect();
+    Ok(Json(json!({ "missing": shown })))
 }
 
 #[cfg(test)]

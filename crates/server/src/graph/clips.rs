@@ -26,6 +26,16 @@ impl Graph {
         self.clips_as(token, gesture, None)
     }
 
+    /// [`Graph::clips`] for a gesture that goes from revision `since` (AGENT-2): a clip it names, or
+    /// the Beat grid's lane, changed after it is refused, saying who changed it.
+    pub fn clips_since(&self, token: u64, gesture: Gesture, since: Option<u64>) -> Result<Answer> {
+        match self.clips_why_since(token, gesture, None, since) {
+            (Ok(v), _) => Ok(Answer::Done(v)),
+            (Err(e), Some(Refused::Changed)) => Ok(Answer::Changed(format!("{e:#}"))),
+            (Err(e), _) => Err(e),
+        }
+    }
+
     /// [`Graph::clips`] as the Tx with id `tx_id` when given: a lane lease's commit, whose new
     /// clips have the ids its previews played (WRITE-22a, Q21).
     pub(super) fn clips_as(&self, token: u64, gesture: Gesture, tx_id: Option<String>) -> Result<Answer> {
@@ -39,11 +49,22 @@ impl Graph {
     /// [`Graph::clips_as`]'s Tx, and why the editor refused it when it did: a take says each kind
     /// in its own words (the review's R1).
     pub(super) fn clips_why(&self, token: u64, gesture: Gesture, tx_id: Option<String>) -> (Result<Value>, Option<Refused>) {
+        self.clips_why_since(token, gesture, tx_id, None)
+    }
+
+    /// [`Graph::clips_why`] from revision `since`, when the gesture says one.
+    pub(super) fn clips_why_since(
+        &self,
+        token: u64,
+        gesture: Gesture,
+        tx_id: Option<String>,
+        since: Option<u64>,
+    ) -> (Result<Value>, Option<Refused>) {
         let why = Arc::new(Mutex::new(None));
         let saw = why.clone();
         let tx_id = tx_id.unwrap_or_else(m2_song::tx::random_id);
         let done = self.call(move |a| {
-            a.edit_and(token, |s| match m2_editor::clips::edit_as(s, &gesture, &tx_id) {
+            a.edit_and(token, |s| match m2_editor::clips::edit_since(s, &gesture, &tx_id, since) {
                 Ok(done) => {
                     let made: Vec<Value> =
                         done.made.iter().map(|(l, id)| json!({"module": l.module.as_str(), "lane": l.lane.as_str(), "id": id})).collect();

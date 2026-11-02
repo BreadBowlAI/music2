@@ -9,6 +9,7 @@
 import { create } from "zustand";
 import { readJson, type Effect, type Instrument } from "./graph";
 import { token } from "./native";
+import { http } from "./http";
 
 /** An installed plugin, as `GET /api/plugins` lists it: an instrument, an effect, or both. */
 export interface Plugin {
@@ -40,7 +41,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 async function fetchList(again: boolean) {
   usePluginList.setState({ state: "looking", error: null });
   try {
-    const res = await fetch(again ? "/api/plugins/scan" : "/api/plugins", { method: again ? "POST" : "GET", headers: auth });
+    const res = await http(again ? "/api/plugins/scan" : "/api/plugins", { method: again ? "POST" : "GET", headers: auth });
     const data = await readJson(res);
     if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
     usePluginList.setState({ state: "listed", plugins: data.plugins ?? [], folder: data.folder ?? null });

@@ -46,7 +46,7 @@ fn a_deleted_track_forgets_its_mute_and_a_new_one_starts_heard() {
     assert_eq!(status, 200);
     assert_eq!(graph.state().unwrap()["overlays"]["solo"], json!([]), "a solo goes too");
 
-    let added = graph.add_track(token, "std:synth-pluck", None, None, None).unwrap();
+    let added = graph.add_track(token, "@m2/synths:synth-pluck", None, None, None).unwrap();
     assert_eq!(added["module"], json!("synth-pluck"));
     let o = &graph.state().unwrap()["overlays"];
     assert_eq!((&o["mute"], &o["heard"]["synth-pluck"]), (&json!([]), &json!("heard")), "the new track isn't muted by the old entry");

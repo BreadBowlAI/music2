@@ -336,6 +336,8 @@ pub struct Meter {
     bands: Option<Box<Bands>>,
     stereo: Option<Box<Sums>>,
     picture: Option<Box<Columns>>,
+    /// The 10 ms steps it keeps, the latest: all of them unless it is [`Meter::recent`].
+    keep: Option<usize>,
 }
 
 /// The octave bands' filters, each side's, and their sums of squares.
@@ -423,7 +425,35 @@ impl Meter {
             bands,
             stereo,
             picture,
+            keep: None,
         }
+    }
+
+    /// A meter of loudness and true peak that keeps only its last 3 s of loudness, for a signal
+    /// that never ends: the live master's (TAP-6). It reads [`Meter::short_term`] and
+    /// [`Meter::take_true_peak`] as `m2 listen` reads a range, by the same filters.
+    pub fn recent(rate: u32) -> Meter {
+        Meter { keep: Some(STEPS_PER_WINDOW), ..Meter::new(rate, Wants::default()) }
+    }
+
+    /// The loudness of the last 3 s it read, in LUFS: BS.1770's short-term loudness, as
+    /// [`Measures::lufs_short_max`] reads each window. None under 3 s read, or under the gate.
+    pub fn short_term(&self) -> Option<f64> {
+        let n = self.steps.len();
+        (n >= STEPS_PER_WINDOW)
+            .then(|| self.steps[n - STEPS_PER_WINDOW..].iter().sum::<f64>() / STEPS_PER_WINDOW as f64)
+            .and_then(db)
+            .map(|d| K_OFFSET + d)
+            .filter(|&l| l > ABSOLUTE_GATE)
+    }
+
+    /// The true peak of what it read since this was last called, in dBTP (None for silence); it
+    /// measures anew from here.
+    pub fn take_true_peak(&mut self) -> Option<f64> {
+        let top = self.peaks[0].max.max(self.peaks[1].max).max(self.peak);
+        self.peaks.iter_mut().for_each(|p| p.max = 0.0);
+        self.peak = 0.0;
+        db(top * top)
     }
 
     /// The next frames of the range: `left` and `right`, as long as each other.
@@ -462,6 +492,12 @@ impl Meter {
             if self.filled == self.step {
                 self.steps.push(self.sum / self.step as f64);
                 (self.sum, self.filled) = (0.0, 0);
+                // A recent meter forgets what is older than it keeps, now and then.
+                if let Some(keep) = self.keep
+                    && self.steps.len() >= 2 * keep
+                {
+                    self.steps.drain(..self.steps.len() - keep);
+                }
             }
             self.squares += l * l + r * r;
             self.clipped += (l.abs() > 1.0) as u64 + (r.abs() > 1.0) as u64;

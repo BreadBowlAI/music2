@@ -69,7 +69,8 @@ impl Replay {
     /// HEAD's `renderer()`: a new renderer for `song`, replayed from 0 to `at`, in live mode.
     fn build(&self, song: &Song, at: u64) -> Result<(Box<Renderer>, Duration)> {
         let t = Instant::now();
-        let mut r = Renderer::new(&song.flat, &song.data, &self.packages, song.rate)?;
+        // The kernels the song was built with: its own view of the packages (PACK-9).
+        let mut r = Renderer::new(&song.flat, &song.data, &self.packages.viewing(&song.code.0.view), song.rate)?;
         r.set_strict(false);
         r.seek(at)?;
         Ok((Box::new(r), t.elapsed()))

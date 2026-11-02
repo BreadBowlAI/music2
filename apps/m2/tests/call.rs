@@ -10,7 +10,7 @@ use app::{App, Temp, m2_in, said};
 use serde_json::{Value, json};
 
 /// The keys track of first-song, through a delay: an effect to turn off.
-const KEYS: &str = "import { track } from \"@m2/core\";\nimport { pluck } from \"std/instruments\";\nimport { delay } from \"std/fx\";\n\n\
+const KEYS: &str = "import { track } from \"@m2/core\";\nimport { pluck } from \"@m2/synths\";\nimport { delay } from \"@m2/effects\";\n\n\
                     export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => delay(pluck(lane.notes(\"chords\")), { mix: 0.2 }));\n";
 
 /// What `m2` printed on its standard output, as JSON.
@@ -54,7 +54,10 @@ fn m2_routes_lists_every_route() {
 // `m2` prints the app's answer.
 #[test]
 fn m2_call_reaches_an_action_with_no_command() {
-    let a = App::open("first-song", |song| std::fs::write(song.join("tracks/keys.ts"), KEYS).unwrap());
+    let a = App::open("first-song", |song| {
+        std::fs::write(song.join("tracks/keys.ts"), KEYS).unwrap();
+        app::listing(song, "@m2/effects");
+    });
     let state = a.running.state.graph.state().unwrap();
     let revision = state["view"]["revision"].as_u64().unwrap();
     let delay = state["view"]["modules"]
@@ -62,7 +65,7 @@ fn m2_call_reaches_an_action_with_no_command() {
         .unwrap()
         .iter()
         .flat_map(|m| m["nodes"].as_array().cloned().unwrap_or_default())
-        .find(|n| n["component"] == "std:delay")
+        .find(|n| n["component"] == "@m2/effects:delay")
         .unwrap();
     let body = json!({"revision": revision, "node": delay["id"], "on": true}).to_string();
     let o = a.m2(&["call", a.dir(), "/api/graph/effect/bypass", &body, "--as", "Claude"]);

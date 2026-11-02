@@ -119,7 +119,7 @@ impl Disk for Faulty {
 /// written once (so the next write replaces it): the token and the revision.
 fn kick(fixture: &Fixture, disk: Option<Faulty>) -> (Graph, u64, u64) {
     fixture.write(KICK);
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     if let Some(disk) = disk {
         graph.inspect(move |a| a.disk = Some(Box::new(move || Box::new(disk.clone()))));
     }
@@ -439,7 +439,7 @@ fn a_drag_goes_on_through_a_previewed_lane_write() {
     assert_eq!((leases.len(), leases[0].generation), (1, Some(first)), "the drag goes on, aimed at the same renderer");
     graph.preview(token, revision, &id, "drag", 0.6).unwrap();
     graph.set(token, revision, &id, "drag", 0.6, Some(0.3)).unwrap();
-    assert!(fixture.read("song.ts").contains("secs(0.6)") && synced(&graph));
+    assert!(fixture.read("song.ts").contains("decay: 0.6 }") && synced(&graph));
     assert_eq!(accepted_pitches(&graph), [24.0, 26.0]);
 }
 

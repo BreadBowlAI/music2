@@ -16,7 +16,8 @@ import { useStore } from "./store";
 /** The keyboards plugged in, by name, and the lane they play. */
 export interface MidiState {
   devices: string[];
-  target: { module: string; lane: string } | null;
+  /** What keys play; `kit`, a kit's bus, when they play a drum kit by sound (KIT-25). */
+  target: { module: string; lane: string; kit?: string } | null;
   /** Keyboards turned off in Settings (studio lane B): they neither play nor record. */
   off?: string[];
 }

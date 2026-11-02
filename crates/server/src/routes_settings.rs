@@ -166,7 +166,9 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
                 (Some(_), Some(i)) => Some(i.name),
                 (Some(_), None) => input.name,
             };
-            k.change(|kept| kept.input = input)?;
+            k.change(|kept| kept.input = input.clone())?;
+            // Armed audio tracks hear the input chosen now, when you hear yourself (MON-9).
+            state.graph.set_input(input.choice(), input.monitor);
         }
         Ok(shown(&state, stopped))
     })
@@ -182,15 +184,20 @@ async fn settings_set(State(s): S, Json(r): Json<SettingsReq>) -> ApiResult {
 #[derive(Deserialize)]
 struct StepReq {
     session: u64,
-    revision: u64,
+    #[serde(default)]
+    revision: Option<u64>,
+    /// The step's id, which wins over `revision`: a change of `layout.json` alone made none.
+    #[serde(default)]
+    step: Option<u64>,
     name: String,
     #[serde(default)]
     structural: bool,
 }
 
-/// `POST /api/graph/step {session, revision, name, structural}`: name the undo step of the edit this
-/// window made as `revision` ("Hats pan"; gaps #29). Answers `{named, revision, undo_name, redo_name}`.
+/// `POST /api/graph/step {session, revision, step, name, structural}`: name the undo step of the
+/// edit this window made as `revision`, or by its id, `step` ("Hats pan"; gaps #29). Answers
+/// `{named, revision, undo_name, redo_name}`.
 async fn graph_step(State(s): S, Json(r): Json<StepReq>) -> ApiResult {
     let state = s.clone();
-    Ok(Json(blocking(move || state.graph.name_step(r.session, r.revision, r.name, r.structural)).await?))
+    Ok(Json(blocking(move || state.graph.name_step_by(r.session, r.revision, r.step, r.name, r.structural)).await?))
 }

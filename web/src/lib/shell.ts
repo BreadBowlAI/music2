@@ -10,8 +10,11 @@ import { create } from "zustand";
 import { DOCK_H, DOCK_MIN, WIDE, dockMax } from "./layout";
 import type { ClipRef } from "./graph";
 
-/** The dock's views, in the order of the switcher and of ⌥1 to ⌥4. */
-export const VIEWS = ["device", "notes", "mix", "code"] as const;
+/**
+ * The dock's views, in the order of ⌥1 to ⌥5. Beat, the beat grid (KIT-10), is ⌥5, and the switcher
+ * shows it beside Notes, only while a drum kit's track is selected.
+ */
+export const VIEWS = ["device", "notes", "mix", "code", "beat"] as const;
 export type DockView = (typeof VIEWS)[number];
 
 const VIEW_KEY = "m2.dock.view";
@@ -59,6 +62,11 @@ interface Shell {
   renaming: { module: string; at: "header" | "strip" } | null;
   /** The roll's Draw mode (B): a click adds a note and a drag paints; else a click selects (D4). */
   draw: boolean;
+  /**
+   * The chord the roll stamps (NOTE-4): a kind of the server's table ("triad", "seventh"…) and its
+   * inversion; null for single notes. The window's, as Draw mode is.
+   */
+  chord: { kind: string; inversion: number } | null;
   /** A place the Code view opens at, once it can: a file and a line (a Mix strip's Edit in code). */
   codeAt: { file: string; line: number } | null;
 
@@ -104,6 +112,7 @@ export const useShell = create<Shell>((set, get) => ({
   sheet: false,
   renaming: null,
   draw: false,
+  chord: null,
   codeAt: null,
 
   setView: (view) => {
@@ -195,6 +204,9 @@ export const canvas: {
   split?: () => void;
   join?: () => void;
   quantize?: () => void;
+  /** Edit ▸ Insert Bars (⌘I) and Delete Bars (⇧⌘⌫): on the selected bars (ARR-9). */
+  insertBars?: () => void;
+  deleteBars?: () => void;
   /** Whether ⌘C, ⌘X and ⌘V are the timeline's now (clips are selected), not the page's. */
   takesClipboard?: () => boolean;
   clipboard?: (op: "copy" | "cut" | "paste") => void;

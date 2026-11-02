@@ -12,11 +12,11 @@ From source, `cargo build --locked --release -p m2` builds `m2` as `target/relea
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads, with the commands that fix it.
 
-One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
+One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, each write an undo step of the song's history, yours by `--as`, which the app reads back when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
 std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit status 2. `m2 docs` prints the guide, built into this `m2`.
+`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. `m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`), has a space in it, or is `-` alone: standard input, where the usage says `| -`. A flag's value is the next word, unless that is a flag; a `<text>` is the next word whatever it is. Flags can go anywhere after the command, but `--as` and `--why` go last. `m2 docs` prints the guide, built into this `m2`.
 
 ## m2 new
 
@@ -45,10 +45,10 @@ Render to a 24-bit WAV, as the app's Export Audio does: to the last clip's end a
 ## m2 listen
 
 ```
-m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]
+m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]
 ```
 
-Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked and never written, before and after; `--png` draws the bands over time. Its own process, at background priority, one at a time; it writes nothing into the song. It works with the app open or closed. [Listening](listening.md) says what each number means.
+Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx (from a file, or standard input) checked and never written, before and after; `--png` draws the bands over time. Its own process, at background priority, one at a time; it writes nothing into the song. It works with the app open or closed. [Listening](listening.md) says what each number means.
 
 ## m2 kernels
 
@@ -56,7 +56,7 @@ Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, t
 m2 kernels [--json]
 ```
 
-List every kernel and its typed ports.
+List every kernel and its typed ports: std's, and those of the packs music2 comes with.
 
 ## m2 bounce
 
@@ -72,7 +72,7 @@ Render a track, named by its key (or the whole song), to a new `assets/<asset-na
 m2 graph <project> [--json]
 ```
 
-The graph the canvas shows: calls, their knobs, connections.
+The graph the canvas shows: calls, their knobs and settings, connections. A card whose sound puts its values in groups prints each group as a heading over its rows, with More last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.
 
 ## m2 controls
 
@@ -88,7 +88,7 @@ Every number written in the project that the graph can edit, with its id, and ev
 m2 set <project> <control> <value> [--expect V]
 ```
 
-Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now.
+Change one, verified by the compiler (values in the control's units); `--expect` refuses unless it is V now. A knob that is a menu or a switch takes a word: one of its options' names (`square`), or true or false (On, Off). A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.
 
 ## m2 automate
 
@@ -112,15 +112,31 @@ Show a track, named by its key, as `<name>`: its `track()` call's name, verified
 m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]
 ```
 
-Add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
+Add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in `layout.json`, verified. It is what + Track does. `--name "Lead Vox"` names it, `--key` gives its key, `--after kick` puts it below that track.
+
+## m2 add-kit
+
+```
+m2 add-kit <project> <kit> [--after ID]
+```
+
+Add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes back, verified. It is what + Track ▸ Drum kit does. `m2 add-kit . "808 kit" --after keys` puts the kit below that track. The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.
+
+## m2 make-kit
+
+```
+m2 make-kit <project> <track>
+```
+
+Make a track that plays the drum machine a drum kit: the track becomes the kit's bus, keeping its name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, its knobs and levels carried; one edit that undo takes back, verified. It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's noise comes out a little different. Notes the drum machine played nothing for go, and it names them. `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.
 
 ## m2 import
 
 ```
-m2 import <project> <file.wav>… [--track ID] [--at BAR]
+m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]
 ```
 
-Bring WAV files into `assets/` (a copy, or the same bytes already there; a taken name numbered) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
+Bring WAV or FLAC files into `assets/` (a copy, or the same bytes already there; a taken name numbered; a FLAC as the WAV of its samples, with a note of what it was made from) and place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or without `--track` each on a new audio track named after it, at the end; one edit that undo takes back. With the song open in the app, the app brings them in, as one undo step, and nothing is copied while the musician holds the song (a take, V's Compare): it waits, as every write does.
 
 ## m2 add-sample
 
@@ -150,7 +166,7 @@ Take a track out: its file, its imports, its channel, its data and its layout; `
 
 ```
 m2 layout <project> order <IDs…>
-m2 layout <project> colour <ID> <colour>
+m2 layout <project> colour|color <ID> <colour>
 m2 layout <project> reset
 ```
 
@@ -210,7 +226,7 @@ Write the input's declared default in place of the name, verified.
 m2 effects <project>
 ```
 
-The effects packages offer, by id (`std:delay`), and the calls they can go after.
+The effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after.
 
 ## m2 add-effect
 
@@ -218,7 +234,7 @@ The effects packages offer, by id (`std:delay`), and the calls they can go after
 m2 add-effect <project> <call> <effect>
 ```
 
-Wrap a call's audio in an effect, named by its component id (`std:delay`) or its export (`std/fx.delay`), verified.
+Wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified.
 
 ## m2 remove-effect
 
@@ -252,6 +268,14 @@ m2 fix <project> <path> <fix>
 
 Apply a fix a problem offers (`assign-clip-ids`, `repin-asset`, …). `finish-tx` and `discard-tx` finish or put back an edit that was cut off (its path is `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them.
 
+## m2 upgrade
+
+```
+m2 upgrade <project> [--check]
+```
+
+Move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its lock, its imports of what moved into the packs, the single drums as the Drum with their knobs converted, and renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then builds; `--check` says what it would change, and writes nothing. It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it again. What it converts as well as it can (the simple kick and hat, other sounds than the Drum's) it names to check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).
+
 ## m2 tx
 
 ```
@@ -276,13 +300,26 @@ m2 pack import-sfz <file.sfz> <folder> --name @owner/name [--label L] [--categor
 m2 pack check <folder>
 m2 pack build <folder>
 m2 pack install <folder>
+m2 pack get <@owner/name>[@<version>]
+m2 pack get [<project>]
 m2 pack list
 m2 pack remove @owner/name <version>
 m2 pack lock <project>
 m2 pack update <project> [@owner/name]
 ```
 
-Make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must move; `update` moves the song to the newest installed version each line allows (or that pack's only). Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never changed: installing one that is there with other files is refused, and installing it again when its copy was changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and [Making a pack](making-a-pack.md).
+Make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `get` gets one from the library (the registry), the latest version unless one is named, or every pack a song's `music2.lock` names that isn't installed; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must move; `update` moves the song to the newest installed version each line allows (or that pack's only). Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never changed: installing one that is there with other files is refused, and installing it again when its copy was changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run `m2 pack lock`; both lock and update work while the song doesn't build. `get` reads the registry `M2_REGISTRY` names, else `registry` in `~/.music2/settings.json`; each file is checked by its hash, and a pack is installed whole or not at all. See [Packs](packs.md), [Getting packs from the library](library.md) and [Making a pack](making-a-pack.md).
+
+## m2 registry
+
+```
+m2 registry check <registry> [--base <registry>] [--author <github-login>]
+m2 registry add <registry> <pack-folder> --source <url>
+m2 registry pending <registry> --out <bucket> [--from <bucket>]
+m2 registry build <registry> --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]
+```
+
+The pack registry's robot, and listing your pack in it. `check` reads every pack file strictly and says what a change broke: a listed version changed or a take-down taken back (`--base`: the registry before), a file changed by someone not its scope's (`--author`); `add` checks your pack, writes its `m2pack.json` and lists its version in `packs/@owner/name.toml`; `pending` prints the versions the bucket hasn't got yet, each with its hash and where to get it; `build` refuses to change anything the bucket publishes, then builds each pending version on its own from `<sources>/<its hash>/`, writing its files, previews and facts into `--out` by hash, then the catalog. A version that fails is left out and stays pending (exit 1). The registry is a folder: one file a pack, `packs/@owner/name.toml`, `tags.txt`, the words a pack's tags may use, and `removed.toml`, the versions taken down, which only music2's people list. `--from` is the bucket as it is: what it has isn't built again, and what it publishes never changes: `https://…` (the bucket's own address, never a cache), a folder or `file:///…`. `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so one registry and one time always make the same bytes. `--to-delete` writes the bucket paths of taken-down versions' files that no other version uses, one a line. See [Making a pack](making-a-pack.md#listing-it-in-the-registry).
 
 ## m2 plugin-state
 
@@ -304,17 +341,30 @@ Mute tracks, named by their keys, in the song (every render and export), or unmu
 
 ```
 m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]
-m2 clips <project> move <clip>… --by B [--to <track>/<lane>] [--copy] [--beats]
+m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]
 m2 clips <project> resize <clip> --start <place> --length B [--beats]
 m2 clips <project> split <clip>… --at <place> [--beats]
-m2 clips <project> join <clip>…
-m2 clips <project> duplicate <clip>… [--grid B]
-m2 clips <project> quantize <clip>… --grid B [--ends]
-m2 clips <project> delete <clip>…
+m2 clips <project> join <clip>… [--beats]
+m2 clips <project> duplicate <clip>… [--grid B] [--beats]
+m2 clips <project> quantize <clip>… --grid B [--ends] [--beats]
+m2 clips <project> delete <clip>… [--beats]
 m2 clips <project> json <gesture.json | ->
 ```
 
-One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, `points`, `audio` and `set`.
+One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a Drum's lane: `{"op": "hits", "module": "kick", "lane": "hits", "at": [0, 1], "step": 0.25, "to": "on"}`, `to` being `on`, `off` or `{"velocity": 0.5}`). `m2 call <song> /api/theory` lists the chords and grooves.
+
+## m2 sections
+
+```
+m2 sections <project> duplicate <bars> [--to <bar>]
+m2 sections <project> move <bars> --to <bar>
+m2 sections <project> delete <bars>
+m2 sections <project> insert-bars <bars>
+m2 sections <project> delete-bars <bars>
+m2 sections <project> json <gesture.json | ->
+```
+
+One gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too. A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, as `POST /api/graph/sections` does. See [Sections](sections.md).
 
 ## m2 unautomate
 
@@ -367,7 +417,7 @@ Follow the open app: each change, undo, toast, focus, pointer and transport chan
 ## m2 point
 
 ```
-m2 point <project> <target> <words>
+m2 point <project> <target> [<words>]
 m2 point <project> --clear
 ```
 
@@ -392,10 +442,10 @@ Send one route's request to the open app, as an agent (by `--as`): song changes 
 ## m2 search
 
 ```
-m2 search <words…> [--kind <kind>] [--json]
+m2 search [<words…>] [--kind <kind>] [--json]
 ```
 
-Find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where it is from, and its id, which adding it names. With the app open it asks the app, whose list has the open song's own instruments and the plugins it has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and your sample folders itself. Every word must match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.
+Find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where it is from, and its id, which adding it names. With the app open it asks the app, whose list has the open song's own instruments and the plugins it has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and your sample folders itself. Every word must match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track takes), and a sound's `preset`. After what you have come the library's items of packs you haven't got (when a registry is set), each marked `library`, its id `library:<id>`, with `library`: its pack, version, licence and the bytes `m2 pack get` fetches; the search runs on this computer and sends nothing. [Finding sounds](finding-sounds.md) says more.
 
 ## m2 docs
 
@@ -416,7 +466,7 @@ m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' @m2/effects:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav

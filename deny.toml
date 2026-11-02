@@ -3,7 +3,7 @@
 # request) checks bans, licences and sources, which give the same answer every day:
 #
 #   cargo deny --locked --config deny.toml check bans licenses sources
-#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources
+#   cargo deny --locked --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered -A license-exception-not-encountered bans licenses sources
 #
 # Its advisories step (ci/pr.sh advisories: every night, and on a pull request that changes a
 # Cargo.lock or this file) checks RustSec's advisories, whose database changes from day to day:
@@ -47,6 +47,14 @@ allow = [
   "MPL-2.0",
 ]
 confidence-threshold = 0.9
+
+# One crate, one licence: Mozilla's list of trusted certificates, as data (CDLA-Permissive-2.0).
+# rustls-platform-verifier, which downloads check certificates with (NET-1), needs it only when
+# built for wasm32, which music2's host code never is: on macOS and Linux the OS's own certificates
+# are used. It is never compiled into music2, so it is never in what we ship.
+[[licenses.exceptions]]
+crate = "webpki-root-certs"
+allow = ["CDLA-Permissive-2.0"]
 
 [bans]
 # 40 crates come in two versions today (Tauri's tree): information, not a failure.

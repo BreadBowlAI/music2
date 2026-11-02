@@ -43,8 +43,9 @@ use sha2::{Digest, Sha256};
 pub const SDK: &str = include_str!("../sdk/core.ts");
 
 /// The version of `@m2/core` that [`SDK`] is. A project's `[dependencies] "@m2/core"`
-/// requirement is checked against it (FMT-2, FMT-3).
-pub const SDK_VERSION: &str = "1.7.0";
+/// requirement is checked against it (FMT-2, FMT-3). From 2.0.0 it is the pack contract: a change
+/// that breaks a pack's code is a new major (PACK-22).
+pub const SDK_VERSION: &str = "2.2.0";
 
 const CORE: &str = "@m2/core";
 
@@ -148,6 +149,13 @@ pub struct DataReader {
 
 /// Where a pack's instruments written as data are, and the module that exports them (PACK-13).
 const DATA: &str = "instruments";
+
+/// A package's kernels' source, at its top: no part of the pack, never installed, so no import
+/// reaches it (PACK-20). `m2_song::pack::KERNELS_SRC`, and its words, `NOT_IN_KERNELS_SRC` (this crate
+/// doesn't depend on m2-song; a test in m2-session holds them equal).
+pub const KERNELS_SRC: &str = "kernels-src";
+pub const NOT_IN_KERNELS_SRC: &str =
+    "kernels-src/ is no part of the pack (the source of its kernels, never installed): put the built wasm in kernels/";
 
 pub struct Options {
     /// The project's code: every Code file of the snapshot, by its path in the project,
@@ -313,7 +321,54 @@ impl State {
         let longer: Vec<&&String> = files.iter().filter(|f| f.starts_with(cut)).collect();
         let module = files.iter().find(|f| f.as_str() == cut).or((longer.len() == 1).then(|| longer[0]))?;
         let at = files.iter().find_map(|file| self.import_at(file, name, module));
+        // One of std/fx's effects that moved to a pack (PKG-17) says which.
+        if let Some(why) =
+            self.display(module).strip_prefix("std/src/").and_then(|m| m.strip_suffix(".ts")).and_then(|m| moved_from_std(m, Some(name)))
+        {
+            return Some(Diagnostic::error("pkg.missing", why).at(at));
+        }
         Some(Diagnostic::error("code.build", format!("{head} in module '{}'{tail}", self.display(module))).at(at))
+    }
+
+    /// One of std/fx's effects that moved to a pack (PKG-17), called through a namespace import
+    /// (`import * as fx from "std/fx"`, then `fx.reverb(…)`), where a "not a function" was thrown at
+    /// `at` (a frame: its file's key, line and column): the words a named import gets, at the name.
+    fn moved_through_namespace(&self, at: &str) -> Option<Diagnostic> {
+        let file = at.rsplitn(3, ':').nth(2)?;
+        let source = &self.files.get(file)?.original;
+        let line: usize = self.remap(at).rsplit(':').nth(1)?.parse().ok()?;
+        let text = source.lines().nth(line.checked_sub(1)?)?;
+        let allocator = Allocator::default();
+        let program = Parser::new(&allocator, source, SourceType::ts()).parse().program;
+        let spaces: Vec<String> = program
+            .body
+            .iter()
+            .filter_map(|s| match s {
+                Statement::ImportDeclaration(d) if d.source.value == "std/fx" => d.specifiers.as_ref(),
+                _ => None,
+            })
+            .flatten()
+            .filter_map(|s| match s {
+                ImportDeclarationSpecifier::ImportNamespaceSpecifier(s) => Some(s.local.name.to_string()),
+                _ => None,
+            })
+            .collect();
+        let (_, names, ..) = MOVED.iter().find(|(m, ..)| *m == "fx")?;
+        let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+        for ns in &spaces {
+            for name in *names {
+                let call = format!("{ns}.{name}");
+                for (i, _) in text.match_indices(&call) {
+                    let alone = !text[..i].ends_with(ident) && !text[i + call.len()..].starts_with(ident);
+                    if alone {
+                        let col = text[..i + ns.len() + 1].chars().count() + 1;
+                        let why = moved_from_std("fx", Some(name))?;
+                        return Some(Diagnostic::error("pkg.missing", why).at(Some(format!("{}:{line}:{col}", self.display(file)))));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// `file:line:col` of the first import or re-export in `file` that takes `name` from `module`
@@ -442,7 +497,17 @@ impl State {
                         found => found,
                     }
                 }
-                Some((_, dir)) => self.package_file(dir, &normalize(&dir.join("src").join(sub))),
+                Some((_, dir)) => match self.package_file(dir, &normalize(&dir.join("src").join(sub))) {
+                    // A std module that moved to a pack (PKG-17) says which.
+                    Err((_, m))
+                        if m == NOT_FOUND
+                            && pkg == "std"
+                            && let Some(why) = moved_from_std(sub, None) =>
+                    {
+                        return Err(fail("pkg.missing", why));
+                    }
+                    found => found,
+                },
                 None => {
                     let have: Vec<&str> = self.packages.iter().map(|(n, _)| n.as_str()).collect();
                     let code = if in_project { "pkg.unsatisfied" } else { "code.build" };
@@ -507,6 +572,10 @@ impl State {
             if real.strip_prefix(dir).is_ok_and(|rel| rel.components().any(|c| c.as_os_str().to_string_lossy().starts_with('.'))) {
                 return Err(("import.outside-code", "it is a hidden file, and no part of its package".into()));
             }
+            // Nor is its kernels' source, which is never installed (PACK-20).
+            if real.strip_prefix(dir).is_ok_and(|rel| rel.components().next().is_some_and(|c| c.as_os_str() == KERNELS_SRC)) {
+                return Err(("import.outside-code", NOT_IN_KERNELS_SRC.into()));
+            }
             return Ok(self.display(&c.to_string_lossy()));
         }
         match listed.first() {
@@ -546,6 +615,34 @@ impl State {
 
 /// What a package file not there is called: a build error like any other.
 const NOT_FOUND: &str = "file not found";
+
+/// What moved out of std into the packs music2 ships, in std 0.7 (PKG-17): a std module, whole or
+/// only the names listed, the pack it is in now, and the line a song writes for that pack today
+/// (the major of the version music2 bundles: `a_moved_imports_words_name_the_line_a_song_writes_today`
+/// holds it to that). The one table: an import of one says where.
+pub const MOVED: &[(&str, &[&str], &str, &str)] = &[
+    ("instruments", &[], "@m2/synths", "2"),
+    ("synth", &[], "@m2/synths", "2"),
+    ("fm", &[], "@m2/synths", "2"),
+    ("drums", &[], "@m2/drums", "2"),
+    ("fx", &["bitcrush", "chorus", "delay", "drive", "phaser", "reverb", "tremolo", "widen"], "@m2/effects", "1"),
+];
+
+/// Why an import of `std/<sub>`, or of `name` from it, finds nothing, when what it names moved to
+/// a pack (PKG-17): the pack, what to import, and the line `[dependencies]` needs.
+fn moved_from_std(sub: &str, name: Option<&str>) -> Option<String> {
+    let (_, names, pack, line) =
+        MOVED.iter().find(|(m, names, ..)| *m == sub && name.is_none_or(|n| names.contains(&n)) && name.is_some() != names.is_empty())?;
+    let what = match name {
+        Some(n) => format!("`{n}` is no longer in std/{sub}: since std 0.7 it is in the pack {pack}"),
+        None => format!("`std/{sub}` is no longer std's: since std 0.7 its sounds are in the pack {pack}"),
+    };
+    let it = if names.is_empty() { "them" } else { "it" };
+    let mono = if sub == "synth" && name.is_none() { " (`mono` and `Voice` stay std's, in std/dsp)" } else { "" };
+    Some(format!(
+        "{what}, which comes with music2. Import {it} from \"{pack}\"{mono}, and add \"{pack}\" = \"{line}\" under [dependencies] in music2.toml"
+    ))
+}
 
 /// The module `name` (`<package>/instruments`): `export { <binding> } from "./instruments/<file>";`
 /// for each of `files`, its binding asked of `binding` before any code is made (PACK-13). A file
@@ -916,6 +1013,30 @@ pub fn build_full(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
 /// [`build_full`], on this thread.
 fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
     let err = |m: String| vec![Diagnostic::error("code.build", m)];
+    let SdkRun { json: [json, outputs, components, units], state } = run_sdk(opts)?;
+    let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
+    let components: Vec<Descriptor> =
+        serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
+    let units: Vec<UnitCtor> = serde_json::from_str(&units).map_err(|e| err(format!("the SDK produced an invalid unit table: {e}")))?;
+    let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
+    let st = state.borrow();
+    for m in &mut ir.modules {
+        m.src = m.src.as_deref().map(|s| st.remap(s));
+        remap_nodes(&st, &mut m.nodes);
+    }
+    Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone(), components, units })
+}
+
+/// What one run of the SDK hands back: the JSON it wrote (the IR, the outputs, the descriptors and
+/// the unit table), and what the host recorded while it ran.
+struct SdkRun {
+    json: [String; 4],
+    state: Rc<RefCell<State>>,
+}
+
+/// The SDK's run of `opts`, on this thread.
+fn run_sdk(opts: &Options) -> Result<SdkRun, Vec<Diagnostic>> {
+    let err = |m: String| vec![Diagnostic::error("code.build", m)];
     if !opts.code.contains_key(&opts.entry) {
         return Err(err(format!("the entry `{}` is not a code file of the project", opts.entry)));
     }
@@ -941,18 +1062,7 @@ fn build_here(opts: &Options) -> Result<Build, Vec<Diagnostic>> {
         };
         run().catch(&ctx).map_err(|e| vec![caught(&mut state.borrow_mut(), e, limit.passed())])
     });
-    let [json, outputs, components, units] = result?;
-    let outputs: Vec<Output> = serde_json::from_str(&outputs).map_err(|e| err(format!("the SDK produced invalid outputs: {e}")))?;
-    let components: Vec<Descriptor> =
-        serde_json::from_str(&components).map_err(|e| err(format!("the SDK produced invalid descriptors: {e}")))?;
-    let units: Vec<UnitCtor> = serde_json::from_str(&units).map_err(|e| err(format!("the SDK produced an invalid unit table: {e}")))?;
-    let mut ir: Ir = serde_json::from_str(&json).map_err(|e| err(format!("the SDK produced invalid IR: {e}")))?;
-    let st = state.borrow();
-    for m in &mut ir.modules {
-        m.src = m.src.as_deref().map(|s| st.remap(s));
-        remap_nodes(&st, &mut m.nodes);
-    }
-    Ok(Build { ir, sites: st.sites.clone(), outputs, package_files: st.package_files.clone(), components, units })
+    Ok(SdkRun { json: result?, state })
 }
 
 /// How long a run may work before it is stopped as an endless loop: CPU time of the thread it runs
@@ -1259,7 +1369,11 @@ fn merge(runs: Vec<(String, Result<Described, Diagnostic>)>) -> Catalog {
         }
         let d = at.remove(0);
         let mut e = exports.remove(&id).unwrap_or_default();
-        e.sort_by(|a, b| (a.module != d.module, a).cmp(&(b.module != d.module, b)));
+        // First where code imports it from: its package's own name when that exports it (a pack's
+        // `src/index.ts`, PACK-3: `import { synth } from "@m2/synths"`), else where it is defined.
+        let root = id.split_once(':').map(|(package, _)| package);
+        let rank = |x: &component::Export| (Some(x.module.as_str()) != root, x.module != d.module);
+        e.sort_by(|a, b| (rank(a), a).cmp(&(rank(b), b)));
         e.dedup();
         catalog.exports.insert(id.clone(), e);
         catalog.components.insert(id, std::sync::Arc::new(d));
@@ -1306,6 +1420,11 @@ fn caught(st: &mut State, e: CaughtError, timed_out: bool) -> Diagnostic {
             let stack = ex.stack().unwrap_or_default();
             let frame = stack.lines().filter_map(frame_at).find(|at| at.starts_with(PROJECT));
             let other = || stack.lines().filter_map(frame_at).find(|at| ![CORE, "<main>", PRELUDE_FILE].iter().any(|f| at.starts_with(f)));
+            if message == "not a function"
+                && let Some(d) = frame.as_deref().and_then(|at| st.moved_through_namespace(at))
+            {
+                return d;
+            }
             let src = frame.or_else(other).map(|at| st.remap(&at));
             let src = st.region_at(&stack, &message).or(src);
             let mut d = Diagnostic::error(code, message).at(src);
@@ -1330,6 +1449,10 @@ fn frame_at(line: &str) -> Option<String> {
 mod bus_tests;
 #[cfg(test)]
 mod kernel_settings_tests;
+#[cfg(test)]
+mod kinds_tests;
+#[cfg(test)]
+mod kits_tests;
 #[cfg(test)]
 mod mute_tests;
 #[cfg(test)]

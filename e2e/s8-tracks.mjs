@@ -66,13 +66,13 @@ await add.click();
 const list = await page.waitForSelector("[data-testid=instrument-list]", { timeout: 2000 }).catch(() => null);
 const groups = await page.$$eval("[data-testid=instrument-list] [role=group]", (els) => els.map((e) => e.getAttribute("aria-label")));
 const options = await page.$$eval("[data-testid=instrument-list] [role=option]", (els) => els.map((e) => e.dataset.instrument));
-// std's ready-made sounds (T3): the drum kit, each drum and FM metal; the instruments; the two with every knob.
-// The last group is Audio: an audio track (studio lane A's Q8).
-check(!!list && same(groups, ["Drums", "Instruments", "Sampler", "Sound design", "Audio"]) && same(options, ["std:drum-kit", "std:drum-kick", "std:drum-snare", "std:drum-clap", "std:drum-hats", "std:drum-tom", "std:drum-rim", "std:drum-cowbell", "std:drum-cymbal", "std:drum-shaker", "std:fm-metal", "std:fm-keys", "std:fm-bell", "std:synth-supersaw", "std:synth-lead", "std:synth-pad", "std:synth-pluck", "std:synth-sub", "std:synth-bass", "std:synth-strings", "std:sampler", "std:fm-custom", "std:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
-check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument)) === "std:drum-kit", "in a new window, on its first row");
+// music2's ready-made sounds (T3): Drum and FM metal; the kits, a group of their own (KIT-5); the instruments;
+// the two with every knob. The last group is Audio: an audio track (studio lane A's Q8).
+check(!!list && same(groups, ["Drums", "Drum kit (several tracks)", "Instruments", "Sampler", "Sound design", "Audio"]) && same(options, ["@m2/drums:drum", "@m2/synths:fm-metal", "kit:@m2/drums:drum/808 kit", "kit:@m2/drums:drum/909 kit", "kit:@m2/drums:drum/Basic kit", "@m2/synths:fm-keys", "@m2/synths:fm-bell", "@m2/synths:synth-supersaw", "@m2/synths:synth-lead", "@m2/synths:synth-pad", "@m2/synths:synth-pluck", "@m2/synths:synth-sub", "@m2/synths:synth-bass", "@m2/synths:synth-strings", "@m2/wavetable:wavetable", "std:sampler", "@m2/synths:fm-custom", "@m2/synths:synth-custom", "audio:track"]), `it opens the instrument list, drums first: ${options}`);
+check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument)) === "@m2/drums:drum", "in a new window, on its first row");
 await page.keyboard.type("plu");
 await sleep(150);
-check(same(await page.$$eval("[data-testid=instrument-list] [role=option]", (els) => els.map((e) => e.dataset.instrument)), ["std:synth-pluck"]), "typing filters it by name");
+check(same(await page.$$eval("[data-testid=instrument-list] [role=option]", (els) => els.map((e) => e.dataset.instrument)), ["@m2/synths:synth-pluck"]), "typing filters it by name");
 check((await page.$eval("[data-testid=instrument-list] [data-code]", (e) => e.textContent)) === 'tracks/synth-pluck.ts · synth.pluck(lane.notes("notes"))', "its foot shows the code it writes");
 await page.screenshot({ path: `${process.argv[2]}/s8-list.png` });
 const rev0 = await revision();
@@ -80,7 +80,7 @@ await page.keyboard.press("Enter");
 check(await until(() => exists("tracks/synth-pluck.ts")), "Enter adds it");
 check(
   read("tracks/synth-pluck.ts") ===
-    'import { track } from "@m2/core";\nimport { synth } from "std/synth";\n\nexport default track("synth-pluck", { name: "Synth pluck" }, ({ lane }) => synth.pluck(lane.notes("notes")));\n',
+    'import { track } from "@m2/core";\nimport { synth } from "@m2/synths";\n\nexport default track("synth-pluck", { name: "Synth pluck" }, ({ lane }) => synth.pluck(lane.notes("notes")));\n',
   "tracks/synth-pluck.ts, exactly",
 );
 const song1 = orig["song.ts"]
@@ -120,7 +120,7 @@ check(read("song.ts") === song1 && exists("data/synth-pluck/notes.json") && !exi
 // A second ⌘T, Enter: the instrument added last, again, below the selected track.
 await key("Meta+t");
 await page.waitForSelector("[data-testid=instrument-list]", { timeout: 2000 }).catch(() => {});
-check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument).catch(() => null)) === "std:synth-pluck", "⌘T opens the list on the instrument added last");
+check((await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument).catch(() => null)) === "@m2/synths:synth-pluck", "⌘T opens the list on the instrument added last");
 await page.keyboard.press("Enter");
 check(await until(() => exists("tracks/synth-pluck-2.ts")), "Enter adds another Synth pluck, keyed synth-pluck-2");
 check(await until(async () => same(await shown(), ["kick", "hats", "synth-pluck", "synth-pluck-2", "bass", "keys"])), "below Lead Vox");
@@ -246,8 +246,8 @@ check(opened.status === 200 && opened.body.read_only?.why === "held", "opened ag
 await page.waitForSelector("[data-testid=read-only-banner]", { timeout: 6000 }).catch(() => {});
 check(!!(await page.$("[data-testid=read-only-banner]")) && (await page.$eval("[data-testid=add-track]", (b) => b.disabled)), "the pill says so, and + Track is off");
 const songRo = read("song.ts");
-const refused = await post("/track/add", { session: opened.body.session, component: "std:drum-hats" });
-check(refused.status === 423 && read("song.ts") === songRo && !exists("tracks/hats-2.ts"), `an add is refused, 423, and nothing is written: ${refused.body.error?.slice(0, 60)}`);
+const refused = await post("/track/add", { session: opened.body.session, component: "@m2/drums:drum" });
+check(refused.status === 423 && read("song.ts") === songRo && !exists("tracks/drum.ts"), `an add is refused, 423, and nothing is written: ${refused.body.error?.slice(0, 60)}`);
 holder.stdin.end();
 await new Promise((r) => holder.once("exit", r));
 
@@ -263,16 +263,16 @@ check(!!first && (await page.$eval("[data-testid=no-tracks]", (e) => e.innerText
 await page.screenshot({ path: `${process.argv[2]}/s8-empty.png` });
 await first?.click();
 await page.waitForSelector("[data-testid=instrument-list]");
-await page.keyboard.type("kick");
+await page.keyboard.type("drum");
 await page.keyboard.press("Enter");
 const dir = empty.body.dir;
-check(await until(() => fs.existsSync(`${dir}/tracks/kick-drum.ts`)), "Add a track adds a Kick drum");
+check(await until(() => fs.existsSync(`${dir}/tracks/drum.ts`)), "Add a track adds a Drum");
 const emptySong = fs.readFileSync(`${dir}/song.ts`, "utf8");
-check(emptySong.includes("import kickDrum from \"./tracks/kick-drum\";") && emptySong.includes("      \"kick-drum\": kickDrum.out,\n"), "into its mixer");
-await page.waitForSelector('[data-lane="kick-drum.hits"]', { timeout: 4000 }).catch(() => {});
-const lane = await box('[data-lane="kick-drum.hits"] > div:last-child');
+check(emptySong.includes("import drum from \"./tracks/drum\";") && emptySong.includes("      drum: drum.out,\n"), "into its mixer");
+await page.waitForSelector('[data-lane="drum.hits"]', { timeout: 4000 }).catch(() => {});
+const lane = await box('[data-lane="drum.hits"] > div:last-child');
 await page.mouse.click(lane.x + 30, lane.y + lane.height / 2, { count: 2 });
-check(await until(async () => (await state()).timeline.tracks.find((t) => t.module === "kick-drum")?.lanes[0].clips.length === 1), "and its lane takes a clip");
+check(await until(async () => (await state()).timeline.tracks.find((t) => t.module === "drum")?.lanes[0].clips.length === 1), "and its lane takes a clip");
 await post("/transport", { action: "play" });
 check(await until(async () => (await api("/status")).body.playing), "and the song plays");
 await post("/transport", { action: "stop" });

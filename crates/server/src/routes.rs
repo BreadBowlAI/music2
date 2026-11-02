@@ -69,8 +69,8 @@ crate::api::routes! {
         "End a knob drag without saving, so the code's value plays again",
         r#"{"session": 7, "id": "tracks/keys.ts#1/@brightness", "gesture": "drag-1"}"#;
     POST "/api/graph/set" => graph_set; writes, agents,
-        "Write a knob's value into the code, as one undo step (for an agent, never a drag's commit)",
-        r#"{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}"#;
+        "Write a knob's value (a number, a choice's name, true or false), or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step; more knobs in `with` are written with it as the same step (for an agent, never a drag's commit)",
+        r#"{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}"#;
     GET "/api/graph/leases" => graph_leases; reads, agents,
         "The drags in progress: knobs, clips and the tempo",
         r#"{}"#;
@@ -97,7 +97,7 @@ crate::api::routes! {
         r#"{"session": 7, "revision": 42, "id": "song.ts#5/0"}"#;
     POST "/api/graph/effect/add" => graph_add_effect; writes, agents,
         "Put an effect after a call's sound, by its component id as the state's effects list it",
-        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}"#;
+        r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}"#;
     POST "/api/graph/effect/remove" => graph_remove_effect; writes, agents,
         "Take an effect out, keeping what it was applied to",
         r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1"}"#;
@@ -113,6 +113,9 @@ crate::api::routes! {
     POST "/api/graph/fix" => graph_fix up to crate::TX_BODY; writes, agents,
         "Apply a fix a problem offers, as the state's problems list it, whole",
         r#"{"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}"#;
+    POST "/api/graph/upgrade" => graph_upgrade; writes, agents,
+        "Move a song made for an older music2 to this one in one step, as m2 upgrade does: one undo step, written only if the song then builds (check: only say what it would change)",
+        r#"{"session": 7, "check": false}"#;
     POST "/api/graph/label" => graph_label; writes, agents,
         "Rename a track's label (its key stays)",
         r#"{"session": 7, "module": "keys", "label": "Piano"}"#;
@@ -121,7 +124,13 @@ crate::api::routes! {
         r#"{"session": 7, "revision": 42, "id": "tracks/keys.ts#1/@brightness"}"#;
     POST "/api/graph/track/add" => track_add; writes, agents,
         "Add a track playing an instrument, by its component id as the state's instruments list it",
-        r#"{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}"#;
+        r#"{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}"#;
+    POST "/api/graph/track/kit" => track_kit; writes, agents,
+        "Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kit_presets list it",
+        r#"{"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}"#;
+    POST "/api/graph/track/make-kit" => track_make_kit; writes, agents,
+        "Make a track that plays the drum machine a kit: the track its bus, a Drum track for each sound its notes use going to it (the state's drum_machines lists them)",
+        r#"{"session": 7, "track": "beat"}"#;
     POST "/api/graph/track/duplicate" => track_duplicate; writes, agents,
         "Copy a track: its code, its clips with new ids, its plugin states and its channel",
         r#"{"session": 7, "module": "keys"}"#;
@@ -185,6 +194,12 @@ crate::api::routes! {
     POST "/api/graph/unsaved" => graph_unsaved; reads, musician,
         "Say which files have changes not yet saved in the code editor",
         r#"{"session": 7, "files": ["tracks/keys.ts"]}"#;
+    POST "/api/graph/draft" => graph_draft up to crate::TX_BODY; reads, musician,
+        "Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out)",
+        r#"{"session": 7, "client": "the window's id", "file": "tracks/keys.ts", "base": "the text it had", "text": "the text typed so far"}"#;
+    POST "/api/graph/draft/left" => graph_draft_left; reads, musician,
+        "Say that unsaved code the song opened with was restored or discarded, so it isn't offered again",
+        r#"{"session": 7, "id": "5d41402abc4b2a76-9e107d9d372bb682"}"#;
     POST "/api/graph/export" => graph_export; reads, musician,
         "Export the song's audio, which may pause playback (agents render with m2 render)",
         r#"{"path": "/Users/you/Music/Night drive.wav"}"#;
@@ -226,6 +241,11 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     let header = req.headers().get("x-m2-token").and_then(|v| v.to_str().ok());
     let query: Vec<&str> = req.uri().query().map_or(vec![], |q| q.split('&').filter_map(|kv| kv.strip_prefix("token=")).collect());
     let carries = |key: &str| header.is_some_and(|h| same_key(h, key)) || query.iter().any(|q| same_key(q, key));
+    // The page's window (AGENT-2): what its changes are judged by, against others'.
+    let window = carries(&s.page_token)
+        .then(|| req.headers().get("x-m2-window").and_then(|v| v.to_str().ok()).map(|w| w.chars().take(64).collect::<String>()))
+        .flatten()
+        .filter(|w| !w.is_empty());
     let caller = if carries(&s.page_token) {
         crate::caller::Caller::Page
     } else if carries(&s.token) {
@@ -234,7 +254,7 @@ async fn auth(State(s): S, req: axum::extract::Request, next: axum::middleware::
     } else {
         return (StatusCode::UNAUTHORIZED, Json(json!({"error": "unauthorized"}))).into_response();
     };
-    crate::caller::serving(caller, next.run(req)).await
+    crate::caller::serving_in(caller, window, next.run(req)).await
 }
 
 /// Whether `given` is the key `key` (AGENT-10), compared in constant time: every byte is looked at
@@ -256,6 +276,10 @@ struct WsQuery {
     /// the window's gestures end (C6). Only a page's socket names a window.
     #[serde(default)]
     client: Option<String>,
+    /// An agent's socket listens for meters only when it asks (`meters=1`, `m2 watch --meters`);
+    /// a window's always does (TAP-4).
+    #[serde(default)]
+    meters: Option<String>,
 }
 
 async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) -> Response {
@@ -263,8 +287,9 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     // its query says: its closing ends nothing the musician holds (AGENT-3).
     let page = !crate::caller::now().is_agent();
     let client = q.client.filter(|_| page);
+    let meters = page || q.meters.is_some_and(|m| m == "1" || m == "true");
     upgrade.on_upgrade(move |socket| async move {
-        ws_loop(s.clone(), socket, client.clone(), page).await;
+        ws_loop(s.clone(), socket, client.clone(), page, meters).await;
         if !page {
             return;
         }
@@ -281,14 +306,15 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
     })
 }
 
-/// Forward every event (toasts, `graph`) and the latest meters to one client until it goes away,
-/// and take what a page's socket sends: audition, whose answers go to this socket only, and the
-/// MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
+/// Forward every event (toasts, `graph`) and, when it listens for them (`listens`), the latest
+/// meters to one client until it goes away, with its window's own scopes after them (TAP-4,
+/// TAP-8); and take what a page's socket sends: audition, whose answers go to this socket only, and
+/// the MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
 /// are the musician's (AGENT-11). A socket that falls behind is told how many events it missed
 /// (AGENT-6): `{"t": "lagged", "missed": n}`, then hears on from the oldest still kept.
-async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool) {
+async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool, listens: bool) {
     let (unheard, mut events, _page) = state.subscribe(page);
-    let mut meters = state.meters.subscribe();
+    let mut meters = listens.then(|| state.meters.subscribe());
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
@@ -296,9 +322,16 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
     }
     loop {
         tokio::select! {
-            Ok(()) = meters.changed() => {
-                let text = meters.borrow_and_update().clone();
-                if socket.send(Message::Text(text.into())).await.is_err() {
+            Ok(()) = async { meters.as_mut().expect("listens").changed().await }, if meters.is_some() => {
+                let Some(m) = meters.as_mut() else { continue };
+                let sent = m.borrow_and_update().clone();
+                if socket.send(Message::Text(sent.all.clone().into())).await.is_err() {
+                    break;
+                }
+                let mine = client.as_ref().and_then(|c| sent.scopes.iter().find(|(w, _)| w == c));
+                if let Some((_, text)) = mine
+                    && socket.send(Message::Text(text.clone().into())).await.is_err()
+                {
                     break;
                 }
             }
@@ -430,16 +463,35 @@ struct SetReq {
     revision: u64,
     id: String,
     gesture: String,
-    value: f64,
+    /// A knob's value (a number, a choice's name, a switch's true or false), or a setting's: a
+    /// number, a string or a boolean (CARD-4, CARD-21).
+    value: Value,
     #[serde(default)]
-    expect: Option<f64>,
+    expect: Option<Value>,
+    /// More knobs' values the same gesture moved, written with it as one undo step (CARD-22).
+    #[serde(default)]
+    with: Vec<WithValue>,
 }
 
-/// Commit a value: the gesture's lease when it has one, else a plain value edit. While the draft
-/// doesn't compile a gesture's commit is pending: `{"pending": true, "errors": …}` (C5).
+#[derive(Deserialize)]
+struct WithValue {
+    id: String,
+    value: Value,
+}
+
+/// Commit a value: the gesture's lease when it has one, else a plain value edit; a setting's value
+/// is one Tx on its call (CARD-4). While the draft doesn't compile a gesture's commit is pending:
+/// `{"pending": true, "errors": …}` (C5).
 async fn graph_set(State(s): S, Json(r): Json<SetReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.set(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await;
+    let result = match r.with.is_empty() {
+        true => blocking(move || state.graph.set_any(r.session, r.revision, &r.id, &r.gesture, r.value, r.expect)).await,
+        false if r.expect.is_some() => Err(err("a gesture of several values takes no `expect`")),
+        false => {
+            let values = std::iter::once((r.id, r.value)).chain(r.with.into_iter().map(|w| (w.id, w.value))).collect();
+            blocking(move || state.graph.set_all(r.session, r.revision, &r.gesture, values)).await
+        }
+    };
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -555,7 +607,7 @@ struct EffectReq {
     session: u64,
     revision: u64,
     call: String,
-    /// The effect's ComponentId (`std:delay`), as the graph state's `effects` list it; or an
+    /// The effect's ComponentId (`@m2/effects:delay`), as the graph state's `effects` list it; or an
     /// installed plugin's id, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     #[serde(default)]
     component: String,
@@ -651,6 +703,29 @@ async fn graph_fix(State(s): S, Json(r): Json<FixReq>) -> ApiResult {
 }
 
 #[derive(Deserialize)]
+struct UpgradeReq {
+    session: u64,
+    /// Only say what it would change (`m2 upgrade --check`).
+    #[serde(default)]
+    check: bool,
+    /// An agent's name and words for its step (AGENT-10): only with the tools key.
+    #[serde(default, rename = "as")]
+    by: Option<String>,
+    #[serde(default)]
+    why: Option<String>,
+}
+
+/// Upgrade the open song (FMT-25, AGENT-14): what it changes and left as `upgraded`, and the undo
+/// step it made, the musician's (Upgrade it) or an agent's (`m2 upgrade`).
+async fn graph_upgrade(State(s): S, Json(r): Json<UpgradeReq>) -> ApiResult {
+    let state = s.clone();
+    let caller = crate::caller::now().saying(r.by.as_deref(), r.why.as_deref());
+    let result = blocking(move || crate::caller::as_caller(caller, || state.graph.upgrade(r.session, r.check))).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
 struct LabelReq {
     session: u64,
     /// The track by its key; the label is display text only (ID-10).
@@ -686,7 +761,7 @@ async fn graph_automate(State(s): S, Json(r): Json<AutomateReq>) -> ApiResult {
 struct TrackAddReq {
     /// The open project. A `revision` sent with it is ignored: the builder plans on the accepted one.
     session: u64,
-    /// The instrument, by ComponentId (`std:synth-pluck`), as the graph state's `instruments` list it;
+    /// The instrument, by ComponentId (`@m2/synths:synth-pluck`), as the graph state's `instruments` list it;
     /// or an installed instrument plugin, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     component: String,
     #[serde(default)]
@@ -702,6 +777,44 @@ struct TrackAddReq {
 async fn track_add(State(s): S, Json(r): Json<TrackAddReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.add_track(r.session, &r.component, r.label, r.key, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct KitReq {
+    session: u64,
+    /// The instrument that names it, by ComponentId (`@m2/drums:drum`), as the state's `kits` say.
+    component: String,
+    /// The kit, by its name (`808 kit`).
+    kit: String,
+    /// The track it goes below in the layout (the selected one); else last.
+    #[serde(default)]
+    after: Option<String>,
+}
+
+/// Add a drum kit (+ Track ▸ Drum kit, KIT-5): a Drums bus and the kit's tracks, each going to it,
+/// one undo step. Answers the bus (`module`, `label`), its `tracks` and the new Mix view, `mix`.
+async fn track_kit(State(s): S, Json(r): Json<KitReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.add_kit(r.session, &r.component, &r.kit, r.after)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct MakeKitReq {
+    session: u64,
+    /// The track that plays the drum machine, by its key.
+    track: String,
+}
+
+/// Make a drum machine track a kit (KIT-22, KIT-24): the track its bus, a Drum track for each
+/// sound going to it, one undo step. Answers the bus (`module`, `label`), its `tracks`, what it
+/// keeps (`keeps`), what went (`said`) and the new Mix view, `mix`.
+async fn track_make_kit(State(s): S, Json(r): Json<MakeKitReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.make_kit(r.session, &r.track)).await;
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -771,13 +884,16 @@ struct LayoutReq {
     /// Write the defaults over a `layout.json` that doesn't read.
     #[serde(default)]
     reset: bool,
+    /// The order a new `order` was made from (AGENT-2): refused when the tracks moved since.
+    #[serde(default)]
+    base: Option<Vec<String>>,
 }
 
 /// Reorder or recolour tracks: a write of `layout.json` only, with no revision (PLANE-3).
 async fn graph_layout(State(s): S, Json(r): Json<LayoutReq>) -> ApiResult {
     let state = s.clone();
     let colour = r.colour.map(|c| (c.module, c.colour));
-    let result = blocking(move || state.graph.layout(r.session, r.order, colour, r.reset)).await;
+    let result = blocking(move || state.graph.layout_from(r.session, r.order, colour, r.reset, r.base)).await;
     s.graph_changed();
     Ok(Json(result?))
 }
@@ -1093,7 +1209,14 @@ async fn graph_export(State(s): S, Json(r): Json<ExportReq>) -> ApiResult {
 
 async fn graph_files(State(s): S) -> ApiResult {
     let state = s.clone();
-    Ok(Json(blocking(move || state.graph.files()).await?))
+    let mut files = blocking(move || state.graph.files()).await?;
+    // The text left unsaved is the musician's: an agent reads the song's files, not it (WRITE-27).
+    if crate::caller::now().is_agent()
+        && let Some(o) = files.as_object_mut()
+    {
+        o.remove("left");
+    }
+    Ok(Json(files))
 }
 
 async fn graph_types(State(s): S) -> ApiResult {
@@ -1122,6 +1245,39 @@ struct FileReq {
 struct UnsavedReq {
     session: u64,
     files: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct DraftReq {
+    session: u64,
+    /// The window whose draft it is: each window keeps its own.
+    #[serde(default)]
+    client: String,
+    file: String,
+    /// The file's text the editor was in step with.
+    base: String,
+    /// Null: there is nothing unsaved now.
+    text: Option<String>,
+}
+
+/// The code editor keeps a file's unsaved text in `.music2/drafts/` (WRITE-27), never in the song.
+async fn graph_draft(State(s): S, Json(r): Json<DraftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.set_draft(r.session, &r.client, &r.file, &r.base, r.text.as_deref())).await?;
+    Ok(Json(json!({})))
+}
+
+#[derive(Deserialize)]
+struct DraftLeftReq {
+    session: u64,
+    id: String,
+}
+
+/// A draft the song opened with was restored or discarded (WRITE-27).
+async fn graph_draft_left(State(s): S, Json(r): Json<DraftLeftReq>) -> ApiResult {
+    let state = s.clone();
+    blocking(move || state.graph.answer_draft(r.session, &r.id)).await?;
+    Ok(Json(json!({})))
 }
 
 /// The code editor says which files have edits not yet saved, so the app asks before
@@ -1159,3 +1315,7 @@ async fn graph_put_file(State(s): S, Json(r): Json<FileReq>) -> Response {
         Err(e) => err(e.to_string()).into_response(),
     }
 }
+
+#[cfg(test)]
+#[path = "routes_views_tests.rs"]
+mod views_tests;

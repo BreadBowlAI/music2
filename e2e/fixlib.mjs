@@ -5,6 +5,7 @@ import fs from "node:fs";
 export const [ROOT, HOME, PROJ] = process.argv.slice(2);
 export const sess = JSON.parse(fs.readFileSync(`${HOME}/.music2/session.json`, "utf8"));
 import { exe, pc as pcAgent, real } from "./chrome.mjs";
+import { following } from "./caughtup.mjs";
 
 export const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 export const until = async (f, ms = 8000) => {
@@ -28,12 +29,48 @@ export const check = (ok, what) => {
  * The app at `width`×`height`. The side browser starts hidden: these suites are about the timeline
  * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
  * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
+ *
+ * `late` (ms; by default `E2E_LATE_READS`, else none): the page's own reads of the song's state
+ * (`GET /api/graph`) are held back that long, as on a page that hears of each change late. The
+ * suite's own reads (`api`, `state`) never wait.
  */
-export async function open(width = 1440, height = 900, { browser: side = false, pc = false } = {}) {
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
   const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
   await page.setViewport({ width, height });
+  // The page's requests, intercepted only while some are held back: its own reads (`late`), or
+  // those a suite's `hold` names.
+  const holders = new Set();
+  let intercepting = false;
+  const intercept = async (on) => {
+    if (on !== intercepting) await page.setRequestInterception((intercepting = on));
+  };
+  page.on("request", async (r) => {
+    if (!intercepting || r.isInterceptResolutionHandled()) return;
+    const read = r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"];
+    const held = [...holders].map((h) => h(r)).find(Boolean);
+    if (held && typeof held === "object") {
+      await held.until;
+      return void (held.answer ? r.respond(held.answer) : r.continue()).catch(() => {});
+    }
+    const ms = Math.max(read ? late : 0, held || 0);
+    if (ms > 0) setTimeout(() => r.continue().catch(() => {}), ms);
+    else r.continue().catch(() => {});
+  });
+  if (late > 0) await intercept(true);
+  /**
+   * Hold back each request of the page's that `f` names, until `off()`: `f` answers how many ms, or
+   * `{ until, answer }` (until that promise settles, then answered with `answer` if given), or 0.
+   */
+  const hold = async (f) => {
+    holders.add(f);
+    await intercept(true);
+    return async () => {
+      holders.delete(f);
+      if (!holders.size && !(late > 0)) await intercept(false);
+    };
+  };
   const errors = [];
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
@@ -42,6 +79,8 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   const posts = [];
   const unwritten = /\/api\/(graph\/step|focus|point)$/;
   page.on("request", (r) => r.method() !== "GET" && !unwritten.test(r.url()) && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
+  // Followed from the start, for `caughtUp` (caughtup.mjs).
+  const caughtUp = following(page, () => state(), check);
   await page.evaluateOnNewDocument((token, side, platform) => {
     window.__M2__ = { native: false, token, platform };
     try {
@@ -53,7 +92,8 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   const api = (path, opts = {}) =>
     page.evaluate(
       async (token, path, opts) => {
-        const r = await fetch(`/api/graph${path}`, { ...opts, headers: { "x-m2-token": token, "content-type": "application/json" } });
+        // `x-e2e`: the suite's own read, never held back (`late`).
+        const r = await fetch(`/api/graph${path}`, { ...opts, headers: { "x-m2-token": token, "content-type": "application/json", "x-e2e": "1" } });
         return { status: r.status, body: await r.json().catch(() => ({})) };
       },
       sess.page_token,
@@ -87,7 +127,7 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
     await page.mouse.move(to.x, to.y, { steps });
     await page.mouse.up();
   };
-  return { browser, page, errors, posts, api, state, toasts, show, view, key, box, drag, status };
+  return { browser, page, errors, posts, api, state, caughtUp, hold, toasts, show, view, key, box, drag, status };
 }
 
 export function done(errors) {

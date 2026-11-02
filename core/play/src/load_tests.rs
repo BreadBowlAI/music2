@@ -10,7 +10,7 @@ fn song(nodes: serde_json::Value, out: &str) -> Renderer {
     let ir: m2_ir::Ir = serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"},
         "modules": [{"key": "song", "nodes": nodes, "exports": {"out": out}}]}))
     .unwrap();
-    let mut packages = m2_runtime::PackageSet::default();
+    let mut packages = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
     packages.load(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     let flat = m2_ir::check(&ir, &packages).unwrap();
     Renderer::new(&flat, &m2_song::DataSet::empty(), &packages, 48_000).unwrap()

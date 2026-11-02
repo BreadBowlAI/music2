@@ -257,7 +257,7 @@ impl Graph {
 impl Graph {
     /// One whose players start with `start`, and which finds the default output with `ready`.
     pub(crate) fn starting(start: Start, ready: Ready) -> Graph {
-        Graph::with_outputs(None, Outputs::with(start, ready))
+        Graph::with_outputs(None, Outputs::with(start, ready)).stored()
     }
 
     /// The last start that failed: make it look `secs` seconds older than it is.

@@ -184,7 +184,7 @@ check(ons(inSheet).length === 0, "with a dialog open (the ⌥K sheet), D plays n
 const view = sheet.find(([n]) => n === "View")?.[1] ?? [];
 const group = sheet.at(-1);
 check(
-  view.includes("Keyboard piano on / off: ⌘K") && group?.[0] === "Keyboard piano" && group[1].join(" | ") === "Play notes: A to ' and W to P | Octave down / up: Z / X",
+  view.includes("Keyboard piano on / off: ⌘K") && group?.[0] === "Keyboard piano" && group[1].join(" | ") === "Play notes: A to ' and W to P | Octave down / up: Z / X | Softer / louder: − / =",
   `the ⌥K sheet lists it in View and in a last group of its own (${JSON.stringify(group)})`,
 );
 await page.keyboard.press("Escape");

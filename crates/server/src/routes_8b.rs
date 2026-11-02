@@ -27,8 +27,14 @@ crate::api::routes! {
         "Mute tracks in the song, written in their code, or unmute them",
         r#"{"session": 7, "modules": ["keys"], "muted": true}"#;
     POST "/api/graph/clips" => graph_clips; writes, agents,
-        "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set",
+        "A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove or hits (the beat grid's steps)",
         r#"{"session": 7, "gesture": {"op": "move", "clips": [{"module": "keys", "lane": "chords", "id": "k3f9q2zt"}], "by": 4}}"#;
+    POST "/api/graph/sections" => graph_sections; writes, agents,
+        "A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars",
+        r#"{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}"#;
+    POST "/api/graph/sections/copy" => graph_sections_copy; reads, agents,
+        "Copy whole bars of every track: each lane's kind and the clips that overlap them, for a section paste",
+        r#"{"session": 7, "start": 32, "end": 64}"#;
     POST "/api/graph/automate/remove" => automate_remove; writes, agents,
         "Take a knob's automation out: the lane's value at the beat (else its fallback) goes back into the code",
         r#"{"session": 7, "module": "bass", "lane": "cutoff", "beat": 16}"#;
@@ -44,6 +50,12 @@ crate::api::routes! {
     POST "/api/graph/plugin/latch" => plugin_latch; reads, musician,
         "Let a lane or a cable drive a plugin's parameter again",
         r#"{"session": 7, "node": "synth"}"#;
+    POST "/api/graph/scope" => graph_scope; reads, agents,
+        "Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}"#;
+    POST "/api/graph/loudness" => graph_loudness; reads, agents,
+        "Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "on": true}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -119,9 +131,50 @@ async fn track_mute(State(s): S, Json(r): Json<MuteReq>) -> ApiResult {
 }
 
 #[derive(Deserialize)]
+struct SectionsReq {
+    session: u64,
+    gesture: m2_editor::sections::Gesture,
+    /// The revision the gesture goes from (AGENT-2): refused when the arrangement or a lane changed
+    /// since. None: from what the song is.
+    #[serde(default)]
+    revision: Option<u64>,
+}
+
+/// A section gesture (ARR-9): `{session, gesture: {op, …}}`, beats on bar lines, one Tx and one
+/// undo step. A write. Answers as `POST /api/graph/clips` does: `{file, before, after, revision,
+/// made}`; 409 `{error, changed: true}` when a file it writes changed since (WRITE-12).
+async fn graph_sections(State(s): S, Json(r): Json<SectionsReq>) -> Result<Response, ApiError> {
+    let state = s.clone();
+    let result = blocking(move || state.graph.sections_since(r.session, r.gesture, r.revision)).await;
+    s.graph_changed();
+    Ok(match result? {
+        Answer::Done(v) => Json(v).into_response(),
+        Answer::Changed(why) => (StatusCode::CONFLICT, Json(json!({"error": why, "changed": true}))).into_response(),
+    })
+}
+
+#[derive(Deserialize)]
+struct SectionCopyReq {
+    session: u64,
+    start: f64,
+    end: f64,
+}
+
+/// A copy of whole bars (ARR-5): `{session, start, end}`, beats on bar lines. Not a write: a copy
+/// is only read, so it works read-only too. Answers `{section}`, which a `paste` gesture takes.
+async fn graph_sections_copy(State(s): S, Json(r): Json<SectionCopyReq>) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || state.graph.section_copy(r.session, r.start, r.end)).await?))
+}
+
+#[derive(Deserialize)]
 struct ClipsReq {
     session: u64,
     gesture: m2_editor::clips::Gesture,
+    /// The revision the gesture goes from (AGENT-2): a clip it names, or the Beat grid's lane,
+    /// changed since is refused. None: from what the song is.
+    #[serde(default)]
+    revision: Option<u64>,
 }
 
 /// A clip gesture (8b.5): `{session, gesture: {op, …}}`, one Tx and one undo step. A write.
@@ -129,7 +182,7 @@ struct ClipsReq {
 /// true}` when a clip it names by its `sha` changed since the window drew it (WRITE-12).
 async fn graph_clips(State(s): S, Json(r): Json<ClipsReq>) -> Result<Response, ApiError> {
     let state = s.clone();
-    let result = blocking(move || state.graph.clips(r.session, r.gesture)).await;
+    let result = blocking(move || state.graph.clips_since(r.session, r.gesture, r.revision)).await;
     s.graph_changed();
     Ok(match result? {
         Answer::Done(v) => Json(v).into_response(),
@@ -183,6 +236,51 @@ struct AuditionReq {
 async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
     let answer = blocking(move || s.graph.audition(&r.client, r.audition)).await?;
     Ok(Json(answer.unwrap_or_else(|| json!({}))))
+}
+
+#[derive(Deserialize)]
+struct ScopeReq {
+    session: u64,
+    /// The window, or the agent, asking: the scope lasts while one asks.
+    client: String,
+    /// The box, by its module's key and its id in the graph view.
+    module: String,
+    node: String,
+    on: bool,
+}
+
+/// Start, keep or stop a scope (TAP-8): `{session, client, module, node, on}`. While a client
+/// asks (again within 10 s), its window's socket gets the box's last frames with the meters. Not a
+/// write: it works read-only. Answers `{scope: {module, node, channels, frames}}`, or `{}` for a
+/// stop; what isn't a sound at the top of its track is refused in words.
+async fn graph_scope(State(s): S, Json(r): Json<ScopeReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.scope(r.session, &client, &r.module, &r.node, r.on)).await?))
+}
+
+/// The client an ask is filed under: an agent's own name after `agent:`, so an agent never stops
+/// or keeps a window's ask by naming its client (AGENT-11).
+fn own(client: &str) -> String {
+    match crate::caller::now().is_agent() {
+        true => format!("agent:{client}"),
+        false => client.to_string(),
+    }
+}
+
+#[derive(Deserialize)]
+struct LoudnessReq {
+    session: u64,
+    /// The window, or the agent, asking: the loudness is measured while one asks.
+    client: String,
+    on: bool,
+}
+
+/// Start, keep or stop the song's loudness (TAP-6): `{session, client, on}`, as the Mix view asks
+/// while it shows. While a client asks (again within 10 s), the meters carry it. Not a write.
+/// Answers `{loudness: {short, true_peak}}` as last measured, or `{}` for a stop.
+async fn graph_loudness(State(s): S, Json(r): Json<LoudnessReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.loudness(r.session, &client, r.on)).await?))
 }
 
 #[derive(Deserialize)]

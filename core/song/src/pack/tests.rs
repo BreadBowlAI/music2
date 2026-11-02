@@ -29,7 +29,7 @@ fn installed(store: &Store, name: &str, version: &str) -> Sha {
     listing.hash()
 }
 
-const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+const SONG: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
 
 fn song_with(deps: &str) -> Manifest {
     Manifest::read(&format!("{SONG}{deps}")).unwrap()
@@ -77,7 +77,8 @@ fn pack_names() {
 #[test]
 fn ids_split_at_the_first_colon() {
     assert_eq!(split_id("@alice/felt-piano:felt-piano"), Some(("@alice/felt-piano", "felt-piano")));
-    assert_eq!(split_id("std:synth-pluck"), Some(("std", "synth-pluck")));
+    assert_eq!(split_id("std:svf-lowpass"), Some(("std", "svf-lowpass")));
+    assert_eq!(split_id("@m2/synths:synth-pluck"), Some(("@m2/synths", "synth-pluck")));
     assert_eq!(split_id("clap:org.example:odd"), Some(("clap", "org.example:odd")));
     assert_eq!(split_id("delay"), None, "a project's own component has no package");
 }
@@ -111,17 +112,17 @@ fn asset_refs_name_the_song_or_a_package() {
 fn a_package_manifest_is_read_strictly() {
     let good = "[package]\nname = \"@alice/felt-piano\"\nversion = \"1.2.0\"\nlicense = \"CC-BY-4.0\"\ndescription = \"soft\"\n\
                 authors = [\"Alice\"]\nrepository = \"https://github.com/alice/felt-piano\"\ntags = [\"keys\"]\n\n\
-                [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.4\"\n";
+                [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.4\"\n";
     let m = PkgManifest::read(good).unwrap();
     assert_eq!((m.package.name.as_str(), m.package.version), ("@alice/felt-piano", Version(1, 2, 0)));
     assert_eq!((m.package.authors.len(), m.package.tags.len(), m.package.license.as_deref()), (1, 1, Some("CC-BY-4.0")));
-    assert!(m.needs(Version(1, 6, 0), Version(0, 4, 1)).is_ok());
+    assert!(m.needs(Version(2, 6, 0), Version(0, 4, 1)).is_ok());
     // std is a lower bound (PACK-2): a std that grew since meets it, an older one doesn't.
-    assert!(m.needs(Version(1, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
-    assert!(m.needs(Version(1, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 5, 0)).is_ok(), "std 0.5 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(1, 0, 0)).is_ok(), "std 1.0 meets 0.4");
+    assert!(m.needs(Version(2, 6, 0), Version(0, 3, 9)).unwrap_err().contains("std"), "std 0.3.9 doesn't meet 0.4");
     // The SDK keeps the caret rule.
-    assert!(m.needs(Version(2, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
+    assert!(m.needs(Version(3, 0, 0), Version(0, 4, 0)).unwrap_err().contains("@m2/core"));
     for bad in [
         good.replace("tags =", "colour = \"red\"\ntags ="),
         good.replace("[dependencies]", "[other]\nx = 1\n[dependencies]"),
@@ -192,6 +193,41 @@ fn a_listing_names_every_file_with_its_size_and_hash() {
     assert_eq!(again, l, "the listing never lists itself");
     assert_eq!(Listing::read(&l.text()).unwrap(), l);
     assert_eq!(l.hash(), Sha::of(l.text().as_bytes()));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+// PACK-20: a pack's kernels' source, `kernels-src/` at its top, is no part of it: not listed, so
+// not in its hash, and never installed; a build left in it changes nothing. A folder of that name
+// deeper in the pack is the pack's like any other.
+#[test]
+fn a_packs_kernel_source_is_no_part_of_it() {
+    let dir = scratch("kernels-src");
+    pack_at(&dir, "@alice/x", "1.0.0");
+    let bare = Listing::of(&dir).unwrap();
+    for (file, text) in
+        [("kernels-src/Cargo.toml", "[package]\n"), ("kernels-src/src/lib.rs", "//! x\n"), ("kernels-src/target/x.wasm", "x")]
+    {
+        std::fs::create_dir_all(dir.join(file).parent().unwrap()).unwrap();
+        std::fs::write(dir.join(file), text).unwrap();
+    }
+    assert_eq!(Listing::of(&dir).unwrap(), bare, "its source changes neither its listing nor its hash");
+    std::fs::create_dir_all(dir.join("src/kernels-src")).unwrap();
+    std::fs::write(dir.join("src/kernels-src/a.ts"), "export const a = 1;\n").unwrap();
+    let paths: Vec<String> = Listing::of(&dir).unwrap().files.into_iter().map(|f| f.path).collect();
+    assert_eq!(paths, ["m2pkg.toml", "src/index.ts", "src/kernels-src/a.ts"], "only the top's is the source");
+    // Nothing of the pack is read from it (review X4): no file a song names, no module.
+    assert_eq!(package_file(&dir, "kernels-src/src/lib.rs").unwrap_err(), NOT_IN_KERNELS_SRC);
+    assert!(package_file(&dir, "src/kernels-src/a.ts").is_ok());
+    let with = |wasm: &str| PkgManifest::read(&format!("[package]\nname = \"@alice/x\"\nversion = \"1.0.0\"\nwasm = \"{wasm}\"\n"));
+    assert!(with("kernels/x.wasm").is_ok());
+    assert!(with("./kernels-src/x.wasm").unwrap_err().ends_with(NOT_IN_KERNELS_SRC));
+    assert!(with("../x.wasm").unwrap_err().contains("leaves the pack"));
+    let store = Store::at(scratch("kernels-src-store"));
+    store.install(&dir).unwrap();
+    let at = store.version_dir(&PackName::new("@alice/x").unwrap(), &Version(1, 0, 0));
+    assert!(!at.join("kernels-src").exists(), "never installed");
+    store.check(&PackName::new("@alice/x").unwrap(), &Version(1, 0, 0)).unwrap();
+    remove_tree(&store.dir).unwrap();
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -483,4 +519,248 @@ fn a_build_during_a_repair_says_it_is_being_installed() {
     let r = resolve(&song, &m, &Lock::default(), Some(&store), &App::default());
     assert!(being(&r) && r.packs.is_empty(), "1.2.0 isn't taken instead: {:?} {:?}", r.problems, r.packs);
     std::fs::remove_dir_all(&root).unwrap();
+}
+
+// PACK-6: anything in a pack that isn't a folder or a plain file (a pipe, a device) is refused,
+// named, before any file is opened: reading a pipe would wait for ever (review G8).
+#[test]
+fn a_pipe_in_a_pack_is_refused_before_anything_is_read() {
+    let d = scratch("pipe");
+    pack_at(&d, "@alice/drums", "1.0.0");
+    std::fs::create_dir_all(d.join("samples")).unwrap();
+    let made = std::process::Command::new("mkfifo").arg(d.join("samples/hang.wav")).status().unwrap();
+    assert!(made.success(), "mkfifo");
+    let e = Listing::of(&d).unwrap_err().to_string();
+    assert!(e.contains("samples/hang.wav isn't a plain file (a pipe or a device)"), "{e}");
+    assert!(pack_files(&d).is_err());
+}
+
+// PACK-6: a repair whose new copy can't go in (a scanner holding a file just written, on Windows)
+// puts the copy before back, read-only, and leaves nothing aside.
+#[test]
+fn a_repair_that_cant_put_the_new_copy_in_puts_the_old_one_back() {
+    let f = scratch("swap");
+    let pack = f.join("Packs/@a/x");
+    let (target, temp, old) = (pack.join("1.0.0"), pack.join(".1.0.0.1.tmp"), pack.join(".1.0.0.1.old"));
+    for (dir, text) in [(&target, "before"), (&temp, "new")] {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("m2pack.json"), text).unwrap();
+    }
+    read_only_inside(&target).unwrap();
+    set_read_only(&target, true).unwrap();
+    let mut rename = |a: &Path, b: &Path| match a == temp {
+        true => Err(std::io::Error::other("held by another program")),
+        false => std::fs::rename(a, b),
+    };
+    assert!(install::swap(&temp, &target, &old, &mut rename).is_err());
+    assert_eq!(std::fs::read_to_string(target.join("m2pack.json")).unwrap(), "before", "the version is as it was");
+    assert!(!old.exists(), "nothing is left aside");
+    assert!(std::fs::metadata(&target).unwrap().permissions().readonly(), "read-only again");
+    remove_tree(&f).unwrap();
+}
+
+/// Every file and folder under `dir` with when it was last changed: what a write would move.
+fn stamps(dir: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        out.push((d.clone(), std::fs::metadata(&d).unwrap().modified().unwrap()));
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            match e.file_type().unwrap().is_dir() {
+                true => stack.push(e.path()),
+                false => out.push((e.path(), e.metadata().unwrap().modified().unwrap())),
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-15, PACK-16: the packs music2 ships install into an empty store, each as the version its
+// m2pkg.toml names, read-only; installing them again, as every start does, writes nothing.
+#[test]
+fn installing_the_bundled_packs_twice_writes_nothing() {
+    let d = scratch("bundled");
+    let store = Store::at(d.join("Packs"));
+    let first = install_bundled(&source_packs(), &store);
+    let names: Vec<String> = first
+        .iter()
+        .map(|(_, done)| match done {
+            Ok(Install::Installed { name, version, .. }) => format!("{name} {version}"),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    let bundled: Vec<String> =
+        bundled(&source_packs()).iter().map(|d| PkgManifest::at(d).unwrap().package).map(|p| format!("{} {}", p.name, p.version)).collect();
+    assert_eq!(names, bundled);
+    assert_eq!(names.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
+    for (dir, _) in &first {
+        let m = PkgManifest::at(dir).unwrap();
+        let hash = store.check(&m.package.name, &m.package.version).unwrap();
+        assert_eq!(hash, Listing::of(dir).unwrap().hash(), "{}: the store holds the bundled files", dir.display());
+        assert!(!dir.join(LISTING).exists(), "nothing is written where it ships");
+        assert!(std::fs::metadata(store.version_dir(&m.package.name, &m.package.version)).unwrap().permissions().readonly());
+    }
+    let before = stamps(&store.dir);
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    for (dir, done) in install_bundled(&source_packs(), &store) {
+        assert!(matches!(done, Ok(Install::Already { .. })), "{}: {done:?}", dir.display());
+    }
+    assert_eq!(stamps(&store.dir), before, "a second start writes nothing");
+    remove_tree(&d).unwrap();
+}
+
+// PACK-17: a version of an `@m2/` pack the store holds with other files is someone else's: the
+// bundled one is refused, in words, and the others install all the same.
+#[test]
+fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on() {
+    let d = scratch("clash");
+    let store = Store::at(d.join("Packs"));
+    let v = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let theirs = installed(&store, "@m2/synths", &v.to_string());
+    let done = install_bundled(&source_packs(), &store);
+    let said: Vec<(String, Result<String, String>)> = done
+        .into_iter()
+        .map(|(dir, r)| {
+            (dir.file_name().unwrap().to_string_lossy().into_owned(), r.map(|i| format!("{i:?}").split(' ').next().unwrap().to_string()))
+        })
+        .collect();
+    assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
+    assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
+    assert_eq!(said[2], ("mixing".into(), Ok("Installed".into())));
+    let Err(why) = &said[3].1 else { panic!("{said:?}") };
+    assert!(why.starts_with(&format!("@m2/synths {v} is installed already with other files")), "{why}");
+    assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &v).unwrap(), theirs, "theirs is left as it was");
+    remove_tree(&d).unwrap();
+}
+
+// PACK-17: every pack the source tree bundles is a version packs/versions.toml records, with the
+// hash it records. A pack whose files changed under its version fails here, saying to move it on;
+// a new version is told the line to add.
+#[test]
+fn every_bundled_pack_is_the_version_its_record_names() {
+    let mut wrong = vec![];
+    let packs = bundled(&source_packs());
+    assert_eq!(packs.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
+    for dir in &packs {
+        let m = PkgManifest::at(dir).unwrap();
+        let (name, v) = (&m.package.name, m.package.version);
+        let hash = Listing::of(dir).unwrap().hash();
+        let next = Version(v.0, v.1, v.2 + 1);
+        match recorded().iter().find(|(n, rv, _)| n == name && *rv == v) {
+            Some((.., h)) if *h == hash => assert!(own(name, &v, &hash)),
+            Some((.., h)) => wrong.push(format!(
+                "{name} changed under {v}: packs/versions.toml records {h}, its files are now {hash}. A version's files never \
+                 change (PACK-17): move {name} to {next} in packs/{name}/m2pkg.toml, record {next}, and relock the songs \
+                 (`m2 pack update {name}` in each)"
+            )),
+            None => wrong.push(format!("packs/versions.toml doesn't record {name} {v}: add the line \"{name} {v}\" = \"{hash}\"")),
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert!(!own(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0), &Sha::of(b"another")), "the name alone isn't music2's");
+}
+
+// PACK-6 (review S3): a version's folder with no listing in it is no installed version: an install
+// puts the version in its place, and a remove takes it out. Install and remove agree.
+#[test]
+fn a_version_folder_with_no_listing_is_replaced_by_an_install() {
+    let d = scratch("unlisted");
+    let store = Store::at(d.join("Packs"));
+    let name = PackName::new("@alice/keys").unwrap();
+    let left = store.version_dir(&name, &Version(1, 0, 0));
+    std::fs::create_dir_all(left.join("src")).unwrap();
+    std::fs::write(left.join("src/half.ts"), "export const half = 1;\n").unwrap();
+    set_read_only(&left, true).unwrap();
+    let src = d.join("src-pack");
+    pack_at(&src, "@alice/keys", "1.0.0");
+    assert!(matches!(store.install(&src), Ok(Install::Installed { .. })), "an empty or unlisted folder is no version");
+    assert_eq!(store.check(&name, &Version(1, 0, 0)).unwrap(), Listing::of(&src).unwrap().hash());
+    assert!(!left.join("src/half.ts").exists(), "what was there went");
+    // Remove takes out an unlisted folder too.
+    let other = store.version_dir(&name, &Version(2, 0, 0));
+    std::fs::create_dir_all(&other).unwrap();
+    store.remove(&name, &Version(2, 0, 0)).unwrap();
+    assert!(!other.exists());
+    assert!(store.remove(&name, &Version(3, 0, 0)).is_err(), "a version with no folder isn't installed");
+    remove_tree(&d).unwrap();
+}
+
+// PACK-6 (review S10): two threads of one process installing one version at once each see it
+// installed: their copies in progress never share a name.
+#[test]
+fn two_threads_installing_one_version_both_see_it_installed() {
+    let d = scratch("threads");
+    let src = d.join("src-pack");
+    pack_at(&src, "@alice/keys", "1.0.0");
+    // Enough files that each copy takes a while.
+    for i in 0..300 {
+        std::fs::write(src.join(format!("src/f{i}.ts")), format!("export const f{i} = {i};\n")).unwrap();
+    }
+    for round in 0..8 {
+        let store = Store::at(d.join(format!("Packs-{round}")));
+        let done: Vec<Result<Install, String>> = std::thread::scope(|s| {
+            let a = s.spawn(|| store.install(&src));
+            let b = s.spawn(|| store.install(&src));
+            vec![a.join().unwrap(), b.join().unwrap()]
+        });
+        for r in &done {
+            assert!(matches!(r, Ok(Install::Installed { .. } | Install::Already { .. })), "round {round}: {done:?}");
+        }
+        let left: Vec<_> = std::fs::read_dir(store.dir.join("@alice/keys")).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(left, ["1.0.0"], "round {round}: nothing left beside it");
+    }
+    remove_tree(&d).unwrap();
+}
+
+// PACK-19 (review S7): a song locked to one of music2's own packs is told what puts music2's back,
+// never to install from a folder it hasn't got: another copy under that version, a changed copy,
+// and none at all.
+#[test]
+fn a_song_locked_to_music2s_own_pack_is_told_how_to_get_it_back() {
+    let root = scratch("own");
+    let store = Store::at(root.join("Packs"));
+    let song = root.join("song");
+    std::fs::create_dir_all(&song).unwrap();
+    let bundled = PkgManifest::at(&source_packs().join("@m2/synths")).unwrap().package.version;
+    let (name, v, hash) = recorded().iter().find(|(n, v, _)| n.as_str() == "@m2/synths" && *v == bundled).cloned().expect("recorded");
+    let m = song_with(&format!("\"{name}\" = \"{v}\"\n"));
+    let lock = Lock::default().with(name.clone(), v, hash);
+    let said = |store: &Store| {
+        let r = resolve(&song, &m, &lock, Some(store), &App::default());
+        assert_eq!(r.problems.len(), 1, "{:?}", r.problems);
+        (r.problems[0].code, r.problems[0].message.clone())
+    };
+    let (code, missing) = said(&store);
+    assert_eq!(code, "pkg.missing");
+    assert!(missing.contains("It comes with music2: start music2 again") && !missing.contains("m2 pack install"), "{missing}");
+    // Another copy under its version, installed from a folder.
+    installed(&store, name.as_str(), &v.to_string());
+    let (code, other) = said(&store);
+    assert_eq!(code, "pkg.changed");
+    assert!(other.contains("isn't the one music2 comes with"), "{other}");
+    assert!(
+        other.contains(&format!("`m2 pack remove {name} {v}`, then start music2 again")) && !other.contains("m2 pack install"),
+        "{other}"
+    );
+    // music2's own copy, changed after it was installed.
+    remove_tree(&store.version_dir(&name, &v)).unwrap();
+    store.install(&source_packs().join(name.as_str())).unwrap();
+    let file = store.version_dir(&name, &v).join("README.md");
+    let mut perm = std::fs::metadata(&file).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perm.set_readonly(false);
+    std::fs::set_permissions(&file, perm).unwrap();
+    std::fs::write(&file, "changed\n").unwrap();
+    let (code, changed) = said(&store);
+    assert_eq!(code, "pkg.changed");
+    assert!(changed.contains("comes with music2: start music2 again, and it puts it back"), "{changed}");
+    // Someone else's pack says what it said.
+    let theirs = PackName::new("@alice/keys").unwrap();
+    let h = installed(&store, "@alice/keys", "1.0.0");
+    let m = song_with("\"@alice/keys\" = \"1.0.0\"\n");
+    let lock = Lock::default().with(theirs, Version(1, 0, 0), Sha::of(h.to_string().as_bytes()));
+    let r = resolve(&song, &m, &lock, Some(&store), &App::default());
+    assert!(r.problems[0].message.contains("m2 pack install <its folder>"), "{:?}", r.problems);
+    remove_tree(&root).unwrap();
 }

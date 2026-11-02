@@ -17,7 +17,7 @@ import SaveAsDialog, { openSaveAs } from "./components/SaveAsDialog";
 import SettingsDialog from "./components/SettingsDialog";
 import { exportSong, onExportEvent } from "./lib/exporting";
 import { openSettings } from "./lib/settings";
-import { CutOff, editorHooks, graphApi } from "./lib/graph";
+import { automation, CutOff, editorHooks, graphApi, kitOf } from "./lib/graph";
 import { isMac, native, nativeAction, onMenu } from "./lib/native";
 import { followGridView } from "./lib/grid";
 import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
@@ -61,7 +61,7 @@ function key(e: KeyboardEvent): string | null {
   if (e.metaKey || e.ctrlKey) return null;
   if (e.altKey) {
     // By the key's place: ⌥1 types ¡ on a Mac.
-    const n = /^Digit([1-4])$/.exec(e.code);
+    const n = /^Digit([1-5])$/.exec(e.code);
     if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
     // ⌥← and ⌥→: Transport ▸ Previous and Next Marker.
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) return e.key === "ArrowLeft" ? "prev_marker" : "next_marker";
@@ -92,7 +92,7 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   const n = /^Digit([1-4])$/.exec(e.code);
   if (n && !e.shiftKey && !e.altKey) return { id: GRID_IDS[Number(n[1]) - 1] };
   // Cut, copy and paste are the clips' while the timeline takes them; else the page's own, for text.
-  if ((k === "c" || k === "x" || k === "v") && !e.shiftKey && !e.altKey && !editing() && !field(e.target) && canvas.takesClipboard?.()) {
+  if ((k === "c" || k === "x" || k === "v") && !e.shiftKey && !e.altKey && !editing() && !field(e.target) && (editorHooks.takesClipboard?.() || canvas.takesClipboard?.())) {
     return { id: ({ c: "copy", x: "cut", v: "paste" } as const)[k] };
   }
   if (k === "s" && !e.shiftKey) return { id: "save", always: true };
@@ -111,6 +111,10 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   // Stop all sound works from a text field too; in the code editor, ⌘. is its quick fix.
   if (e.key === "." && !e.shiftKey) return { id: "panic", always: true };
   if (e.key === "Backspace" && !e.shiftKey) return { id: "delete_track" };
+  // Edit ▸ Insert Bars (⌘I) and Delete Bars (⇧⌘⌫): the selected bars' (ARR-9), as Live's Insert
+  // Silence and Delete Time.
+  if (k === "i" && !e.shiftKey && !e.altKey) return { id: "insert_bars" };
+  if (e.key === "Backspace" && e.shiftKey && !e.altKey) return { id: "delete_bars" };
   if (e.code === "KeyB" && e.altKey) return { id: "browser" };
   // View ▸ Zoom In and Zoom Out (⌘= and ⌘−, and ⇧⌘= that types +), Taller and Shorter Tracks
   // (⌘↓ and ⌘↑); Transport ▸ Follow Playhead (⇧⌘F).
@@ -319,6 +323,8 @@ export function appCommand(id: string) {
   if (!graph) return;
   if (id.startsWith("view_")) {
     const view = VIEWS.find((v) => `view_${v}` === id);
+    // Beat is a drum kit's (KIT-10): with no kit's track selected there is nothing to show, so say why.
+    if (view === "beat" && !kitOf(graph, shell.module)) return void st.toast("Beat shows a drum kit: select a Drum track or its bus.");
     return void (view && shell.setView(view));
   }
   switch (id) {
@@ -334,8 +340,8 @@ export function appCommand(id: string) {
       return void undoTop(graph, id);
     case "duplicate": {
       // Focus decides (taste.md §5.3): in the code editor, its own ⌘D; else the roll's selected
-      // notes; else the timeline's selected clips; else the selected track, when no clip of it is
-      // selected (design-8b §2.6).
+      // notes; else the timeline's selected bars or clips (one selection at a time, ARR-9); else the
+      // selected track, when no clip of it is selected (design-8b §2.6).
       if (editorHooks.chord?.("duplicate")) return;
       if (editorHooks.duplicate?.()) return;
       if (editing()) return;
@@ -385,7 +391,7 @@ export function appCommand(id: string) {
       return;
     case "lanes": {
       // The selected track's automation, or every track's with none selected.
-      const all = graph.timeline.tracks.filter((t) => t.lanes.some((l) => l.kind === "control")).map((t) => t.module);
+      const all = graph.timeline.tracks.filter((t) => t.lanes.some(automation)).map((t) => t.module);
       if (shell.selected && !all.includes(shell.selected)) return;
       return shell.toggleLanes(shell.selected, all);
     }
@@ -433,7 +439,14 @@ export function appCommand(id: string) {
     case "copy":
     case "cut":
     case "paste":
+      // The roll's notes while it has the keyboard (NOTE-5); else the timeline's clips.
+      if (editorHooks.takesClipboard?.()) return editorHooks.clipboard?.(id);
       return canvas.clipboard?.(id);
+    case "insert_bars":
+    case "delete_bars":
+      // The selected bars' (ARR-9); in the code editor or a field, nothing of the timeline's.
+      if (editorHooks.chord?.(id) || editing()) return;
+      return id === "insert_bars" ? canvas.insertBars?.() : canvas.deleteBars?.();
     case "zoom_in":
     case "zoom_out": {
       // Focus decides (taste.md §5.3): the roll's own zoom while it has the keyboard, else the timeline's.
@@ -456,6 +469,8 @@ export function appCommand(id: string) {
         return el.setSelectionRange(at, at);
       }
       if (editing()) return;
+      // The roll's rows while it has the keyboard (NOTE-9); else the timeline's tracks.
+      if (editorHooks.rows?.(id === "taller" ? 1 : -1)) return;
       return canvas.height?.(id === "taller" ? 1 : -1);
     }
     case "add_marker":

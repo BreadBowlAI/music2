@@ -1,5 +1,6 @@
 import clsx from "clsx";
 import {
+  ChevronRight,
   ArrowLeft,
   AppWindow,
   ArrowRight,
@@ -8,7 +9,6 @@ import {
   ChevronDown,
   Clock,
   Ellipsis,
-  FileAudio,
   Hash,
   LogIn,
   LogOut,
@@ -31,29 +31,35 @@ import {
   findLane,
   fromUnit,
   graphApi,
+  knobStep,
   laneTitle,
   lockReason,
   moduleName,
   parseValue,
+  picks,
   span,
   stepValue,
   toUnit,
+  type CardGroup,
+  type CardView,
   type Effect,
   type GraphLease,
   type GraphState,
   type InputPort,
-  type Knob as KnobInfo,
+  type NumberKnob as KnobInfo,
+  type PickKnob,
   type MixView,
   type ModuleView,
   type OutputPort,
   type PortEdge,
   type PortKind,
+  type Setting,
   type ViewNode,
 } from "../lib/graph";
 import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
-import { useGlows } from "../lib/notice";
+import { useGlows, useNotice } from "../lib/notice";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { Dots } from "./draw";
@@ -63,6 +69,10 @@ import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
+import { makeKit } from "./Tracks";
+import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
+import { VIEW_H, ViewRow } from "./CardViews";
+import { useFolded } from "../lib/folded";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 const Locked = createContext<string | null>(null);
@@ -86,7 +96,7 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
   if (mixers.length !== 1) return null;
   const node = mixers[0];
   const channels = new Set(mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size;
-  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
+  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], settings: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
   // Each signal drawn once into the card, whichever channels it feeds.
   const seen = new Set<string>();
   const port_edges = m.port_edges.flatMap((e) => {
@@ -105,7 +115,8 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   // The Song's mixer is one compact card; its levels and pans are the Mix view's (MX-6).
   const compacted = useMemo(() => (found ? compactMixer(found, graph.mix) : null), [found, graph.mix]);
   const shown = compacted?.module ?? found;
-  const laid = useMemo(() => shown && layout(shown), [shown]);
+  const folded = useFolded((s) => s.ids);
+  const laid = useMemo(() => shown && layout(shown, folded), [shown, folded]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -118,7 +129,14 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
-    const measure = () => setRoom((r) => (r && r.w === el.clientWidth && r.h === el.clientHeight ? r : { w: el.clientWidth, h: el.clientHeight }));
+    // The panel's whole box, less a scrollbar each way: never the room the scrollbars showing now
+    // leave. Those come and go with the zoom, so a fit to them flickers: a scrollbar shows, the fit
+    // shrinks the graph, the scrollbar goes, the fit grows it, every frame (DV-5).
+    const measure = () => {
+      const bar = scrollbarRoom();
+      const w = el.offsetWidth - bar, h = el.offsetHeight - bar;
+      setRoom((r) => (r && r.w === w && r.h === h ? r : { w, h }));
+    };
     measure();
     const watch = new ResizeObserver(measure);
     watch.observe(el);
@@ -203,9 +221,23 @@ const CHROME_W = 64;
 const CHROME_H = 64;
 
 /**
+ * How much room a scrollbar takes from what it scrolls: none where scrollbars float over it (a Mac
+ * with a trackpad), else its width (a mouse, or "Show scroll bars: Always").
+ */
+function scrollbarRoom() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;overflow:scroll;width:40px;height:40px";
+  document.body.append(probe);
+  const room = probe.offsetWidth - probe.clientWidth;
+  probe.remove();
+  return room;
+}
+
+/**
  * The zoom Fit picks (taste.md §3.5, DV-5): a sound that fits the panel's height at full size (a
  * chain, one row of cards) opens at 100% and scrolls sideways, the way signal reads; one that
- * doesn't is shrunk to fit, down to 75%, and scrolls past that.
+ * doesn't is shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room
+ * each way, so what fits never needs one.
  */
 function fitZoom(laid: { width: number; height: number }, room: { w: number; h: number }) {
   const tall = (room.h - CHROME_H) / laid.height;
@@ -280,8 +312,8 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** A Sampler's file row, under its knobs: where a WAV is dropped. */
-const SAMPLE_H = 36;
+/** The settings a card shows (CARD-7), under its knobs, in its descriptor's order. */
+const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
 /** An instrument's line under its name: how it plays its notes. */
 const VOICES_H = 24;
 
@@ -292,12 +324,67 @@ const VOICES_H = 24;
 const compact = (n: ViewNode) =>
   n.kind !== "call" && n.inputs.length + n.outputs.length === 1 && n.inputs.every((i) => !i.knob && !i.inlet && i.readonly == null);
 
+/** A group's title row (CARD-25). */
+const GROUP_H = 24;
+
+/**
+ * A card's rows, in the order drawn. With no groups: its inputs, a row for each output beyond them,
+ * its settings and its views. With groups (CARD-25): its connections (inputs no group names: notes,
+ * audio), then each group's title over its rows; a folded card shows its first group, and a row
+ * saying how many more there are, which unfolds it.
+ */
+type Item =
+  | { t: "input"; port: InputPort }
+  | { t: "group"; name: string; first: boolean }
+  | { t: "setting"; x: Setting }
+  | { t: "view"; v: CardView }
+  | { t: "fill"; id: string }
+  | { t: "fold"; hidden: number; hides: string[] };
+
+function items(n: ViewNode, folded: boolean): Item[] {
+  const settings = settingsOf(n);
+  const views = n.views ?? [];
+  if (!n.groups?.length) {
+    return [
+      ...n.inputs.map((port): Item => ({ t: "input", port })),
+      ...n.outputs.slice(n.inputs.length).map((o): Item => ({ t: "fill", id: o.id })),
+      ...settings.map((x): Item => ({ t: "setting", x })),
+      ...views.map((v): Item => ({ t: "view", v })),
+    ];
+  }
+  const grouped = new Set(n.groups.flatMap((g) => g.rows.flatMap((r) => ("input" in r ? [r.input] : []))));
+  const out: Item[] = n.inputs.filter((p) => !grouped.has(p.id)).map((port) => ({ t: "input", port }));
+  const rowsOf = (g: CardGroup): Item[] =>
+    g.rows.flatMap((r): Item[] => {
+      if ("input" in r) return n.inputs.filter((p) => p.id === r.input).map((port) => ({ t: "input", port }));
+      if ("setting" in r) return settings.filter((x) => x.id === r.setting).map((x) => ({ t: "setting", x }));
+      return views.filter((v) => v.name === r.view).map((v) => ({ t: "view", v }));
+    });
+  n.groups.forEach((g, i) => {
+    if (folded && i > 0) return;
+    out.push({ t: "group", name: g.name, first: i === 0 }, ...rowsOf(g));
+  });
+  if (folded && n.groups.length > 1) {
+    const rest = n.groups.slice(1).flatMap(rowsOf);
+    const hides = rest.flatMap((x) => (x.t === "input" && x.port.knob ? [x.port.knob] : []));
+    out.push({ t: "fold", hidden: rest.length, hides });
+  }
+  const rows = out.filter((x) => x.t === "input").length;
+  out.push(...n.outputs.slice(rows).map((o): Item => ({ t: "fill", id: o.id })));
+  return out;
+}
+
+/** How tall a row of a card is. */
+const itemHeight = (x: Item) =>
+  x.t === "input" ? inputHeight(x.port) : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
+
 /**
  * A node's height and where its ports are, from its top. Each input is a row; output `i` sits on
- * the right of row `i`, so a chain of first inputs and outputs draws as a straight line. Outputs
- * beyond the inputs get rows of their own.
+ * the right of the `i`th input's row, so a chain of first inputs and outputs draws as a straight
+ * line. Outputs beyond the inputs get rows of their own. An input a folded card hides has its port
+ * on the row that says how many more there are.
  */
-function geometry(n: ViewNode) {
+function geometry(n: ViewNode, folded = false) {
   const ins = new Map<string, number>();
   const outs = new Map<string, number>();
   if (compact(n)) {
@@ -308,20 +395,24 @@ function geometry(n: ViewNode) {
   const rows: number[] = [];
   // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
   let y = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + PAD;
-  for (const i of n.inputs) {
-    const h = inputHeight(i);
-    ins.set(i.id, y + h / 2);
-    rows.push(y + h / 2);
+  const all = items(n, folded);
+  for (const x of all) {
+    const h = itemHeight(x);
+    if (x.t === "input") {
+      ins.set(x.port.id, y + h / 2);
+      rows.push(y + h / 2);
+    } else if (x.t === "fill") outs.set(x.id, y + h / 2);
+    else if (x.t === "fold") for (const p of n.inputs) if (!ins.has(p.id)) ins.set(p.id, y + h / 2);
     y += h;
   }
   n.outputs.forEach((o, j) => {
-    if (j < rows.length) return outs.set(o.id, rows[j]);
-    outs.set(o.id, y + ROW_H / 2);
-    y += ROW_H;
+    if (j < rows.length) outs.set(o.id, rows[j]);
   });
-  const w = n.inputs.length && n.outputs.length ? NODE_W : SLIM_W;
-  return { w, h: (n.outputs.length + n.inputs.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0)) + (n.sampler ? SAMPLE_H : 0), ins, outs };
+  const roomy = n.inputs.length || all.some((x) => x.t === "setting" || x.t === "view");
+  const w = roomy && n.outputs.length ? NODE_W : (n.views?.length ? NODE_W : SLIM_W);
+  return { w, h: all.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
 }
+
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
 
@@ -358,8 +449,8 @@ function loops(m: ModuleView, edges: PortEdge[]): Set<PortEdge> {
  * used yet) moves level with what feeds it, into the nearest free space in its column. Edges that
  * go back round a loop are left out of that, and drawn round below everything.
  */
-function layout(m: ModuleView): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
-  const geo = new Map(m.nodes.map((n) => [n.id, geometry(n)]));
+function layout(m: ModuleView, folded: Set<string> = new Set()): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
+  const geo = new Map(m.nodes.map((n) => [n.id, geometry(n, folded.has(n.id))]));
   const known = (id: string) => geo.has(id);
   const all = m.port_edges.filter((e) => known(e.from) && known(e.to));
   const back = loops(m, all);
@@ -652,6 +743,7 @@ const ModuleSection = memo(function ModuleSection({
             {[...placed.values()].map((p) => (
               <NodeCard
                 key={keys.node(p.node.id)}
+                module={module.key}
                 nodeKey={keys.node(p.node.id)}
                 knobKey={keys.knob}
                 node={p.node}
@@ -734,6 +826,7 @@ function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; fill
 }
 
 function NodeCard({
+  module,
   nodeKey,
   knobKey,
   node,
@@ -746,6 +839,8 @@ function NodeCard({
   onCable,
   style,
 }: {
+  /** Its module's key: where its scope reads and its keys play (CARD-28, CARD-29). */
+  module: string;
   /** Its React key, and its knobs' (see `held`). */
   nodeKey: string;
   knobKey: (id: string) => string;
@@ -775,7 +870,7 @@ function NodeCard({
   }, [call]);
   const why = useContext(Locked);
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
-  const edited = (p: Promise<{ revision: number; step?: number }>, words: string) =>
+  const edited = (p: Promise<{ revision?: number; step?: number }>, words: string) =>
     p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);
@@ -790,11 +885,22 @@ function NodeCard({
     node.kind === "import"
       ? importTitle(node.label)
       : node.kind === "lane" || node.kind === "export"
-        ? controlLabel(node.label)
+        ? controlLabel({ label: node.label })
         : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
   // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
+  // Its settings (CARD-7); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
+  const settings = mixing ? [] : settingsOf(node);
+  // Its rows as drawn: in its groups, with its first alone when folded (CARD-25).
+  const folded = useFolded((s) => s.ids.has(node.id));
+  const rows = mixing ? [] : items(node, folded);
+  const drawnInputs = rows.flatMap((x) => (x.t === "input" ? [x.port] : []));
+  const recordings = settings.filter((x) => x.kind === "recording" && !x.readonly);
+  const tracks = useContext(Tracks);
+  // The drum machine's card offers Make it a kit (KIT-24), on a track that plays it.
+  const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
   const sound =
     node.kind === "call" &&
     !mixing &&
@@ -806,8 +912,9 @@ function NodeCard({
       data-node={node.label}
       data-node-id={node.id}
       data-bypassed={off || undefined}
-      data-sampler-call={node.sampler ? node.id : undefined}
-      data-sampler-title={node.sampler ? titled : undefined}
+      data-recording-call={recordings.length === 1 ? node.id : undefined}
+      data-recording-setting={recordings.length === 1 ? recordings[0].slot : undefined}
+      data-recording-title={recordings.length === 1 ? titled : undefined}
       title={where ?? undefined}
     >
       <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
@@ -825,6 +932,19 @@ function NodeCard({
             {off ? `${titled} · Off` : titled}
           </div>
         </div>
+        {(node.groups?.length ?? 0) > 1 && (
+          <button
+            className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+            data-fold={node.id}
+            title={folded ? `Show all of ${titled}'s groups` : `Fold ${titled} to its first group, ${node.groups![0].name}`}
+            aria-label={folded ? `Unfold ${titled}` : `Fold ${titled}`}
+            aria-expanded={!folded}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => useFolded.getState().flip(node.id)}
+          >
+            <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} className={clsx("transition-transform duration-140 ease-out", !folded && "rotate-90")} />
+          </button>
+        )}
         {sound && (
           <button
             className={clsx(
@@ -842,6 +962,18 @@ function NodeCard({
             }}
           >
             Presets
+          </button>
+        )}
+        {machine && (
+          <button
+            className="shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
+            data-make-kit={module}
+            title={why ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
+            disabled={!editable}
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => void makeKit(module)}
+          >
+            Make it a kit
           </button>
         )}
         {node.effect && node.menu && (
@@ -946,28 +1078,38 @@ function NodeCard({
           </div>
         </div>
       )}
-      {!small && !mixing && (node.outputs.length > 0 || node.inputs.length > 0) && (
+      {!small && !mixing && rows.length > 0 && (
         <div data-node-body className={clsx("py-1.5", off && "opacity-50")}>
-          {node.inputs.map((i) => (
-            <InputRow
-              key={i.knob ? `knob:${knobKey(i.knob)}` : i.id}
-              nodeKey={nodeKey}
-              knobKey={knobKey}
-              node={node}
-              owner={titled}
-              input={i}
-              filled={wired.has(`${node.id}<${i.id}`)}
-              session={session}
-              revision={revision}
-              editable={editable}
-            />
-          ))}
-          {node.outputs.slice(node.inputs.length).map((o) => (
-            <div key={o.id} className="h-7" />
-          ))}
+          {rows.map((x) =>
+            x.t === "input" ? (
+              <InputRow
+                key={x.port.knob ? `knob:${knobKey(x.port.knob)}` : x.port.id}
+                nodeKey={nodeKey}
+                knobKey={knobKey}
+                node={node}
+                owner={titled}
+                input={x.port}
+                filled={wired.has(`${node.id}<${x.port.id}`)}
+                session={session}
+                revision={revision}
+                editable={editable}
+              />
+            ) : x.t === "fill" ? (
+              <div key={`fill:${x.id}`} className="h-7" />
+            ) : x.t === "setting" ? (
+              <SettingRow key={x.x.id} x={x.x} owner={titled} card={titled} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} />
+            ) : x.t === "view" ? (
+              <ViewRow key={`view:${x.v.name}`} view={x.v} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={titled} />
+            ) : x.t === "group" ? (
+              <div key={`group:${x.name}`} data-group={x.name} className={clsx("h-6 px-4 flex items-end pb-1 text-xs font-semibold text-fg-muted", !x.first && "border-t border-line")}>
+                {x.name}
+              </div>
+            ) : (
+              <FoldRow key="fold" node={node} hides={x.hides} hidden={x.hidden} titled={titled} />
+            ),
+          )}
         </div>
       )}
-      {node.sampler && <SampleRow files={node.sampler.files} regions={node.sampler.regions} />}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
@@ -975,7 +1117,7 @@ function NodeCard({
           output={o}
           y={ports.get(o.id) ?? 0}
           // Only a signal's row (or an output's own) has room for its label beside it; the mixer card's has its link.
-          labelled={!small && !mixing && (j >= node.inputs.length || (!node.inputs[j].knob && !node.inputs[j].inlet && node.inputs[j].readonly == null))}
+          labelled={!small && !mixing && (j >= drawnInputs.length || (!drawnInputs[j].knob && !drawnInputs[j].inlet && drawnInputs[j].readonly == null))}
           filled={wired.has(`${node.id}>${o.id}`)}
           editable={editable}
           onCable={onCable}
@@ -1050,35 +1192,6 @@ function PluginRow({ node, title, session }: { node: string; title: string; sess
           </button>
         </>
       )}
-    </div>
-  );
-}
-
-/**
- * A Sampler's file (track ab), under its knobs: "Drop a WAV here" until it has one. The whole card
- * takes a dropped WAV (`data-sampler-call`), which it then plays.
- */
-function SampleRow({ files, regions }: { files: string[]; regions?: string }) {
-  const said = regions ?? (files.length === 0 ? "Drop a WAV here" : files.length === 1 ? files[0] : `${files.length} files: ${files.join(", ")}`);
-  return (
-    <div
-      data-testid="sampler-file"
-      className={clsx(
-        "mx-2 mb-2 h-7 shrink-0 px-2 flex items-center gap-1.5 rounded-sm text-xs min-w-0",
-        files.length ? "bg-chrome text-fg" : "border border-dashed border-line-strong text-fg-muted",
-      )}
-      title={
-        regions !== undefined
-          ? `Plays ${regions}, each recording on its own notes and velocities. They are set in its code.`
-          : files.length > 1
-            ? `Plays ${files.join(", ")}, each on its own range of notes. They are set in its code.`
-            : files.length
-              ? `Plays ${files[0]}. Drop another WAV on this card to play it instead.`
-              : "Drop a WAV file from your computer on this card to play it"
-      }
-    >
-      <FileAudio size={12} className="shrink-0" />
-      <span className="truncate">{said}</span>
     </div>
   );
 }
@@ -1225,8 +1338,10 @@ function InputRow({
   // code compiles); nor may one that renumbers it (see `held`).
   if (knob) {
     const key = knobKey(knob.id);
+    // A menu or a switch (CARD-20, CARD-6): one click, one edit; never dragged.
+    if (picks(knob)) return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />;
     return (
-      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input.label, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
+      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
     );
   }
 
@@ -1238,7 +1353,7 @@ function InputRow({
     return (
       <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
         <Dot id={input.id} kind={input.kind} filled />
-        <span className="text-fg-muted truncate">{controlLabel(inlet.label, tracks)}</span>
+        <span className="text-fg-muted truncate">{controlLabel(inlet, tracks)}</span>
         {/* Its home is a cable (HOME-1): what drives it, in place of a knob. */}
         <span className="text-fg-muted truncate" title={`Driven by ${inlet.name}.`}>← {inlet.name}</span>
         <button
@@ -1264,7 +1379,7 @@ function InputRow({
       >
         <Dot id={input.id} kind={input.kind} filled={false} />
         <div className="flex items-center justify-between gap-2 text-xs">
-          <span className="text-fg-muted truncate">{controlLabel(source.label, tracks)}</span>
+          <span className="text-fg-muted truncate">{controlLabel(source, tracks)}</span>
           <span className="shrink-0 text-fg-faint">edit in code</span>
         </div>
         <div data-code className="font-mono text-xs text-fg truncate">{source.expression}</div>
@@ -1278,7 +1393,7 @@ function InputRow({
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
   // takes the automation out (KN-2).
   const driven = input.lane;
-  const label = controlLabel(input.label, tracks);
+  const label = controlLabel(input, tracks);
   const lane = driven && useStore.getState().graph ? findLane(useStore.getState().graph!.timeline, driven.module, driven.lane) : undefined;
   const laneName = lane ? laneTitle(lane) : label;
   return (
@@ -1401,7 +1516,6 @@ function KnobControl({
   revision: number;
   editable: boolean;
 }) {
-  const toast = useStore((s) => s.toast);
   const why = useContext(Locked);
   // Its drag and lease (Knob.tsx). A save that renumbers it mid-drag doesn't remount it (see `held`).
   const g = useKnobGesture({
@@ -1410,7 +1524,7 @@ function KnobControl({
     knob,
     editable,
     // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
-    name: knob.label.includes(".") ? label : `${owner} ${label.toLowerCase()}`,
+    name: knobStep(owner, knob, label),
     label,
     hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
   });
@@ -1429,16 +1543,9 @@ function KnobControl({
   /** A move of the knob to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
   const change = (u: number) => g.change(fromUnit(g.descriptor, u));
 
-  /** Its value becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
   const automate = () => {
     setMenu(null);
-    graphApi
-      .automate(session, revision, knob.id)
-      .then((r) => {
-        toast(`Automating ${r.name} in a new lane`, undoAction(session, r.step));
-        laneMade(r.lane.module, r.lane.lane);
-      })
-      .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+    automateKnob(session, revision, knob.id);
   };
 
   /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
@@ -1466,16 +1573,17 @@ function KnobControl({
 
   const descriptor = g.descriptor;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   // Drawn from the middle when its span is centred on zero (a pan, a bipolar amount).
   const range = span(descriptor);
   const bipolar = range.lo < 0 && range.hi > 0 && Math.abs(range.lo + range.hi) <= 1e-9 * range.hi;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
+  const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
@@ -1496,6 +1604,7 @@ function KnobControl({
       data-default={!knob.written || undefined}
       aria-disabled={disabled}
       title={title}
+      data-kind="number"
       {...grip.handlers}
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
       onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
@@ -1587,7 +1696,7 @@ function KnobControl({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={why}
           onAutomate={automate}
           onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
@@ -1595,5 +1704,134 @@ function KnobControl({
         />
       )}
     </div>
+  );
+}
+
+/** A knob's value becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
+function automateKnob(session: number, revision: number, id: string) {
+  const toast = useStore.getState().toast;
+  graphApi
+    .automate(session, revision, id)
+    .then((r) => {
+      toast(`Automating ${r.name} in a new lane`, undoAction(session, r.step));
+      laneMade(r.lane.module, r.lane.lane);
+    })
+    .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+}
+
+/**
+ * A knob that is a menu or a switch (CARD-20): a choice control's names, a switch's off and on, or a
+ * plugin's stepped parameter (CARD-6). A pick writes its option's value, a name, true or false, or a
+ * plugin's step number, into the code: one click, one edit, one undo step, never a drag. It stays a
+ * knob to the rest of the app: its id for the focus and the pointer, its glow, cable drops, and its
+ * menu's Automate.
+ */
+function PickControl({
+  knob,
+  port,
+  label,
+  owner,
+  session,
+  revision,
+  editable,
+}: {
+  knob: PickKnob;
+  port: string;
+  label: string;
+  owner: string;
+  session: number;
+  revision: number;
+  editable: boolean;
+}) {
+  const toast = useStore((s) => s.toast);
+  const why = useContext(Locked);
+  const glows = useGlows("knobs", knob.id);
+  const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
+  const off = editable ? null : `${why ?? "It can't be edited right now"}.`;
+  const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
+  const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, picking one writes it in";
+  const how = `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`;
+  const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+  /**
+   * A pick: its option's value written into the code, one undo step named "Wobble shape". Picked
+   * while the window doesn't show its own last edit yet, it goes once it does (the gate).
+   */
+  const pick = (v: number | string | boolean) =>
+    void graphApi.setValue(session, revision, knob.id, v, { name: knobStep(owner, knob, label) }).catch((error) => toast(words(error)));
+  return (
+    <div
+      onContextMenu={(e) => {
+        e.preventDefault();
+        const r = e.currentTarget.getBoundingClientRect();
+        setMenu({ x: r.left, y: r.bottom + 4, above: r.top - 4 });
+      }}
+      data-knob={knob.label}
+      data-knob-id={editable ? knob.id : undefined}
+      data-glow={glows || undefined}
+      data-value={JSON.stringify(knob.value)}
+      data-shared={knob.uses > 1 || undefined}
+      data-default={!knob.written || undefined}
+      data-kind={knob.kind}
+      aria-disabled={!!off}
+      title={title}
+      className={clsx(
+        "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
+        "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
+      )}
+    >
+      <Dot
+        id={port}
+        kind="control"
+        filled={false}
+        className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
+      />
+      <div className="flex-1 min-w-0">
+        <div className="text-xs text-fg-muted truncate">{label}</div>
+        {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
+      </div>
+      {knob.kind === "switch" ? (
+        <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
+      ) : (
+        <MenuValue value={knob} label={label} off={off} title={title} onPick={pick} />
+      )}
+      <HomeMarker home={knob.home} label={label} />
+      {menu && (
+        <KnobMenu
+          knob={knob}
+          label={label}
+          value={knob.value}
+          at={menu}
+          editable={editable}
+          locked={why}
+          onAutomate={() => {
+            setMenu(null);
+            automateKnob(session, revision, knob.id);
+          }}
+          onClose={() => setMenu(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A folded card's last row (CARD-25): how many more rows it has, a click unfolding it. It stands for
+ * the knobs it hides: an agent's pointer at one shows here (`data-hides`), and so does its glow.
+ */
+function FoldRow({ node, hides, hidden, titled }: { node: ViewNode; hides: string[]; hidden: number; titled: string }) {
+  const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
+  return (
+    <button
+      data-unfold
+      data-hides={hides.join(" ") || undefined}
+      data-glow={glows || undefined}
+      className="h-7 w-full px-4 flex items-center gap-1 text-xs text-fg-muted hover:text-fg cursor-pointer"
+      title={`Show ${titled}'s other groups`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => useFolded.getState().flip(node.id)}
+    >
+      <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} />
+      {hidden} more
+    </button>
   );
 }

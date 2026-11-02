@@ -137,7 +137,7 @@ impl Rig {
 
     fn of(fixture: Fixture) -> Rig {
         let (p, driver) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         graph.open(&fixture.0).unwrap();
         let mut rig = Rig { fixture, graph, driver };
         // The engine takes what was loaded at its first callback.

@@ -1,5 +1,5 @@
-// The grid and snap of each view that has one: the timeline's (`song`) and the roll's (`notes`),
-// drawn by one control (`GridChip`). Each is kept with the song's view settings (`local.grid`, in
+// The grid and snap of each view that has one: the timeline's (`song`), the roll's (`notes`) and the
+// beat grid's steps (`beat`, KIT-11), drawn by one control (`GridChip`). Each is kept with the song's view settings (`local.grid`, in
 // its `.music2/view.json`: polish Q16), so they are as you left them when the song opens again,
 // also after quitting the app. A new song starts with the defaults.
 
@@ -9,7 +9,7 @@ import { setLocal, useLocalStore } from "./local";
 import type { GridOp } from "./shell";
 
 /** The views with a grid. */
-export type GridView = "song" | "notes";
+export type GridView = "song" | "notes" | "beat";
 
 /**
  * A grid's choice (design-8b §7.3): a step in beats (a beat is a quarter note), the bar, or Auto:
@@ -17,10 +17,11 @@ export type GridView = "song" | "notes";
  */
 export type GridPick = number | "bar" | "auto";
 
-/** Each view's choices, coarse to fine after Auto; the roll's run 1/4 to 1/64 (taste.md §3.5). */
+/** Each view's choices, coarse to fine after Auto; the roll's and the beat grid's run 1/4 to 1/64 (taste.md §3.5). */
 export const PICKS: Record<GridView, GridPick[]> = {
   song: ["auto", "bar", 2, 1, 0.5, 0.25, 0.125, 0.0625],
   notes: [1, 0.5, 0.25, 0.125, 0.0625],
+  beat: [1, 0.5, 0.25, 0.125, 0.0625],
 };
 
 /** The closest grid lines Auto picks, in px. */
@@ -92,8 +93,8 @@ export function snapSong(meter: readonly Meter[], b: number, ppb: number, free =
 /** Whether a pointer event skips the snap: ⌘ held on a Mac, Ctrl elsewhere (either works on both). */
 export const skipsSnap = (e: { metaKey: boolean; ctrlKey: boolean }) => e.metaKey || e.ctrlKey;
 
-/** Each view's grid until one is chosen: the timeline's Auto, the roll's sixteenths. */
-const START: Record<GridView, GridPick> = { song: "auto", notes: 0.25 };
+/** Each view's grid until one is chosen: the timeline's Auto, the roll's and the beat grid's sixteenths. */
+const START: Record<GridView, GridPick> = { song: "auto", notes: 0.25, beat: 0.25 };
 
 /** Each view's grid as the song's view settings keep it: `{song: {pick, triplet, on}, notes: {…}}`. */
 type Kept = Partial<Record<GridView, { pick?: unknown; triplet?: unknown; on?: unknown }>>;
@@ -118,11 +119,12 @@ interface Grids extends Record<GridView, Grid> {
 export const useGrid = create<Grids>((set, get) => ({
   song: read("song", undefined),
   notes: read("notes", undefined),
+  beat: read("beat", undefined),
   last: "song",
   set: (view, g) => {
     set({ [view]: grid(g.pick, g.triplet, g.on) } as Pick<Grids, GridView>);
     const keep = ({ pick, triplet, on }: Grid) => ({ pick, triplet, on });
-    setLocal("grid", { song: keep(get().song), notes: keep(get().notes) });
+    setLocal("grid", { song: keep(get().song), notes: keep(get().notes), beat: keep(get().beat) });
   },
 }));
 
@@ -130,7 +132,7 @@ export const useGrid = create<Grids>((set, get) => ({
 useLocalStore.subscribe((s, before) => {
   if (s.values.grid === before.values.grid) return;
   const kept = s.values.grid as Kept | undefined;
-  useGrid.setState({ song: read("song", kept), notes: read("notes", kept) });
+  useGrid.setState({ song: read("song", kept), notes: read("notes", kept), beat: read("beat", kept) });
 });
 
 /**
@@ -154,12 +156,12 @@ export const GRID_VIEW = "data-grid-view";
 
 /**
  * The view ⌘1 to ⌘4 act on: the one last pointed at or focused, while it is still on screen. Once
- * Notes has gone (the dock hidden, or another view in it), the timeline's grid is the only one
- * shown, so it is the timeline's.
+ * Notes or Beat has gone (the dock hidden, or another view in it), the timeline's grid is the only
+ * one shown, so it is the timeline's.
  */
 export function gridTarget(): GridView {
   const { last } = useGrid.getState();
-  return last === "notes" && !document.querySelector(`[${GRID_VIEW}="notes"]`) ? "song" : last;
+  return last !== "song" && !document.querySelector(`[${GRID_VIEW}="${last}"]`) ? "song" : last;
 }
 
 /**
@@ -170,7 +172,7 @@ export function followGridView() {
   const seen = (e: Event) => {
     const at = e.target instanceof Element ? e.target.closest(`[${GRID_VIEW}]`) : null;
     const view = at?.getAttribute(GRID_VIEW);
-    if ((view === "song" || view === "notes") && useGrid.getState().last !== view) useGrid.setState({ last: view });
+    if ((view === "song" || view === "notes" || view === "beat") && useGrid.getState().last !== view) useGrid.setState({ last: view });
   };
   window.addEventListener("pointerdown", seen, true);
   window.addEventListener("focusin", seen, true);

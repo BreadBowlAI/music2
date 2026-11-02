@@ -372,3 +372,40 @@ fn a_sample_that_isnt_a_number_is_counted_and_read_as_zero() {
     }
     assert_eq!(want.non_finite, 0);
 }
+
+// TAP-6: a recent meter reads the last 3 s as a listen reads each window: EBU Tech 3341's case 9
+// at every 3 s it ends on, the same as `lufs_short_max` of that window, nothing under 3 s; and it
+// keeps its steps few however long it reads. Its true peak is what it read since the last take.
+#[test]
+fn a_recent_meter_reads_the_last_3_seconds() {
+    let parts: Vec<Part> = (0..40).flat_map(|_| [(Some(-20.0), 1.34), (Some(-30.0), 1.66)]).collect();
+    let x = tones(&parts);
+    let mut m = Meter::recent(SR);
+    let mut read = 0;
+    for piece in x.chunks(1600) {
+        m.push(piece, piece);
+        read += piece.len();
+        if read < 3 * SR as usize {
+            assert_eq!(m.short_term(), None, "under 3 s, at {read}");
+        } else if read % (3 * SR as usize) < 1600 {
+            near(m.short_term(), -23.0, 0.1, &format!("case 9's window ending at {read}"));
+        }
+    }
+    assert!(m.steps.len() < 2 * STEPS_PER_WINDOW, "{} steps kept of 2 minutes'", m.steps.len());
+    let window = &x[x.len() - 3 * SR as usize..];
+    let whole = both(window).lufs_short_max.unwrap();
+    assert!((m.short_term().unwrap() - whole).abs() < 1e-3, "the listen's short-term of the same 3 s: {whole}");
+    let tp = m.take_true_peak().unwrap();
+    assert!((tp + 20.0).abs() < 0.1, "the true peak of a −20 dBFS sine: {tp}");
+    // The filter reads the 8 samples before each point, so a point just after the take may still
+    // be the loud tone's: the next take is the quiet one's alone.
+    let quiet = sine(1000.0, -40.0, 1.0, 0.0);
+    m.push(&quiet[..24_000], &quiet[..24_000]);
+    m.take_true_peak();
+    m.push(&quiet[24_000..], &quiet[24_000..]);
+    near(m.take_true_peak(), -40.0, 0.1, "only what it read since");
+    m.push(&[0.0; 4800], &[0.0; 4800]);
+    m.take_true_peak();
+    m.push(&[0.0; 4800], &[0.0; 4800]);
+    assert_eq!(m.take_true_peak(), None, "silence");
+}

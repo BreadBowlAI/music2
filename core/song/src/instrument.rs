@@ -43,6 +43,8 @@ pub struct DataInstrument {
     pub controls: Vec<(&'static str, f64)>,
     pub mode: Option<String>,
     pub voices: Option<f64>,
+    /// The Sampler's `turns`: "lane" or "key" (PKG-16 §3).
+    pub turns: Option<String>,
     pub regions: Vec<Region>,
 }
 
@@ -74,6 +76,9 @@ pub const CONTROLS: &[(&str, &str, f64, (f64, f64))] = &[
 pub const MODES: &[&str] = &["oneshot", "gate"];
 pub const MODE: &str = "oneshot";
 pub const VOICES: f64 = 8.0;
+/// The Sampler's `turns` choices and default (PKG-16 §3): the lane's count, or each key's.
+pub const TURNS: &[&str] = &["lane", "key"];
+pub const TURN: &str = "lane";
 /// The most voices a call may have (`poly`'s, `core/script/sdk/core.ts`).
 pub const MAX_VOICES: f64 = 128.0;
 
@@ -145,6 +150,7 @@ const TOP: &[(&str, Kind)] = &[
     ("velocity", Kind::Number),
     ("mode", Kind::Text),
     ("voices", Kind::Number),
+    ("turns", Kind::Text),
 ];
 
 /// PKG-15's fields, in its order.
@@ -221,6 +227,7 @@ impl DataInstrument {
             controls: vec![],
             mode: None,
             voices: None,
+            turns: None,
             regions: vec![],
         };
         let mut seen_regions = None;
@@ -252,6 +259,10 @@ impl DataInstrument {
                     return wrong(format!("`mode = {s:?}` must be \"oneshot\" or \"gate\""));
                 }
                 ("mode", Field::Text(s)) => out.mode = Some(s),
+                ("turns", Field::Text(s)) if !TURNS.contains(&s.as_str()) => {
+                    return wrong(format!("`turns = {s:?}` must be \"lane\" or \"key\""));
+                }
+                ("turns", Field::Text(s)) => out.turns = Some(s),
                 ("tags", Field::Texts(t)) => out.tags = t,
                 ("voices", Field::Number(n)) if n.fract() != 0.0 || !(1.0..=MAX_VOICES).contains(&n) => {
                     return wrong(format!("`voices` must be a whole number from 1 to {}, not {written}", number(MAX_VOICES)));
@@ -335,16 +346,18 @@ impl DataInstrument {
             .collect();
         let mode = self.mode.as_deref().unwrap_or(MODE);
         let voices = self.voices.unwrap_or(VOICES);
+        let turns = self.turns.as_deref().unwrap_or(TURN);
         let modes: Vec<String> = MODES.iter().map(|m| q(m)).collect();
+        let turn_choices: Vec<String> = TURNS.iter().map(|m| q(m)).collect();
         let pass: Vec<String> = CONTROLS
             .iter()
             .map(|c| format!("{0}: __m2_p.{0}", c.0))
-            .chain(["mode: __m2_p.mode".into(), "voices: __m2_p.voices".into()])
+            .chain(["mode: __m2_p.mode".into(), "voices: __m2_p.voices".into(), "turns: __m2_p.turns".into()])
             .collect();
         format!(
             "export const {} = __m2_component({{ id: {}, label: {}, signature: __m2_signature<(notes: __m2_Events) => __m2_Audio>(), \
-             inputs: {{ notes: __m2_port.notes() }}, controls: {{ {} }}, settings: {{ mode: __m2_setting.choice([{}], {}), voices: __m2_setting.int({}) }}, \
-             output: __m2_port.audio(), editor: {{ category: {}, description: {} }} }}, \
+             inputs: {{ notes: __m2_port.notes() }}, controls: {{ {} }}, settings: {{ mode: __m2_setting.choice([{}], {}), voices: __m2_setting.int({}), \
+             turns: __m2_setting.choice([{}], {}) }}, output: __m2_port.audio(), editor: {{ category: {}, description: {} }} }}, \
              (__m2_notes: __m2_Events, __m2_p: __m2_Params): __m2_Audio => __m2_sampler(__m2_notes, {{ regions: {regions}, {} }}));",
             id.binding(),
             q(id.as_str()),
@@ -353,6 +366,8 @@ impl DataInstrument {
             modes.join(", "),
             q(mode),
             number(voices),
+            turn_choices.join(", "),
+            q(turns),
             q(&self.category),
             q(&self.description),
             pass.join(", "),

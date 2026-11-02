@@ -3,6 +3,7 @@
 
 import { readJson, type GraphState } from "./graph";
 import { token } from "./native";
+import { http } from "./http";
 
 /** A song of the recent list, read from its folder when listed. */
 export interface RecentSong {
@@ -19,7 +20,7 @@ export interface RecentSong {
 
 /** GET, or POST `body` as JSON; an error answer throws with the server's reason. */
 export async function request<T>(url: string, body?: unknown): Promise<T> {
-  const res = await fetch(url, {
+  const res = await http(url, {
     method: body === undefined ? "GET" : "POST",
     headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) },
     body: body === undefined ? undefined : JSON.stringify(body),

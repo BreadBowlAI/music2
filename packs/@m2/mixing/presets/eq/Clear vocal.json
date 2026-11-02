@@ -1,0 +1,14 @@
+{
+  "m2preset": 1,
+  "name": "Clear vocal",
+  "sound": "@m2/mixing:eq",
+  "values": {
+    "freq2": 150,
+    "freq5": 3000,
+    "freq7": 10000,
+    "gain2": -3,
+    "gain5": 3,
+    "gain7": 2,
+    "q5": 1
+  }
+}

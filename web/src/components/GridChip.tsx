@@ -5,32 +5,41 @@ import { autoName, PICKS, pickName, useGrid, type Grid, type GridView } from "..
 import { chord, mod } from "../lib/native";
 import { Button, keepFocus, MenuRow, Popover } from "./ui";
 
-/** Each view's words and test ids: the roll's are the ones it had. */
-const VIEWS: Record<GridView, { grid: string; snap: string; about: string; on: string; off: string }> = {
+/**
+ * Each view's words and test ids: the roll's are the ones it had. The beat grid has no snap: its
+ * hits are always on its steps (KIT-11).
+ */
+const VIEWS: Record<GridView, { grid: string; about: string; snap?: { id: string; on: string; off: string } }> = {
   notes: {
     grid: "grid",
-    snap: "snap",
     about: "The grid: snapped notes land on it, and new notes are a step long",
-    on: "Snap to the grid: on. Notes you add or drag land on it",
-    off: "Snap to the grid: off. Notes go where you put them",
+    snap: {
+      id: "snap",
+      on: "Snap to the grid: on. Notes you add or drag land on it",
+      off: "Snap to the grid: off. Notes go where you put them",
+    },
   },
   song: {
     grid: "song-grid",
-    snap: "song-snap",
     about: "The grid: clips you drag land on it",
-    on: `Snap to the grid: on. Clips you drag land on it; hold ${mod.cmd} while you drag to place one freely`,
-    off: "Snap to the grid: off. Clips go where you put them",
+    snap: {
+      id: "song-snap",
+      on: `Snap to the grid: on. Clips you drag land on it; hold ${mod.cmd} while you drag to place one freely`,
+      off: "Snap to the grid: off. Clips go where you put them",
+    },
   },
+  beat: { grid: "beat-grid", about: "The steps: each column of the beat grid is one, and a new hit is a step long" },
 };
 
 /**
  * A view's grid (taste.md §3.5, design-8b §7.3): `Auto ▾` or `1/16 ▾`, a menu of its choices with
- * the current one checked and Triplets, and the snap toggle (the magnet). Neither takes focus from
+ * the current one checked and Triplets, and the snap toggle (the magnet) where the view has one. Neither takes focus from
  * a click, so the keys stay the view's. `ppb`: the view's zoom, which says what Auto is now.
  */
 export default function GridChip({ view, ppb }: { view: GridView; ppb?: number }) {
   const grid = useGrid((s) => s[view]);
   const words = VIEWS[view];
+  const snap = words.snap;
   const set = (g: Partial<Grid>) => useGrid.getState().set(view, { ...grid, ...g });
   const auto = grid.pick === "auto" && ppb ? ` Auto is ${autoName(grid, ppb)} at this zoom.` : "";
   return (
@@ -42,19 +51,21 @@ export default function GridChip({ view, ppb }: { view: GridView; ppb?: number }
         title={`${words.about}.${auto}\nNarrower ${chord("1")} · wider ${chord("2")} · triplets ${chord("3")}`}
         onPick={(g) => set(g)}
       />
-      <Button
-        size="sm"
-        data-testid={words.snap}
-        active={grid.on}
-        aria-pressed={grid.on}
-        onMouseDown={keepFocus}
-        onClick={() => set({ on: !grid.on })}
-        title={`${grid.on ? words.on : words.off} (${chord("4")})`}
-        aria-label="Snap to the grid"
-        className="w-ctl-sm !px-0"
-      >
-        <Magnet size={16} />
-      </Button>
+      {snap && (
+        <Button
+          size="sm"
+          data-testid={snap.id}
+          active={grid.on}
+          aria-pressed={grid.on}
+          onMouseDown={keepFocus}
+          onClick={() => set({ on: !grid.on })}
+          title={`${grid.on ? snap.on : snap.off} (${chord("4")})`}
+          aria-label="Snap to the grid"
+          className="w-ctl-sm !px-0"
+        >
+          <Magnet size={16} />
+        </Button>
+      )}
     </div>
   );
 }

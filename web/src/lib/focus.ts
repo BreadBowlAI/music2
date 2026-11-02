@@ -10,9 +10,11 @@
 
 import { create } from "zustand";
 import { useClipSelection } from "./clips";
+import { dockView } from "./graph";
 import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** A clip as an agent names it: its track's key, its lane's key and its id. */
 export interface ClipAt {
@@ -53,18 +55,19 @@ function record() {
   const shell = useShell.getState();
   const sel = useClipSelection.getState();
   const l = useLooked.getState();
+  const view = dockView(graph, shell.view, shell.module);
   return {
     session: graph.session,
     revision: graph.view.revision,
-    view: shell.view,
+    view,
     track: shell.selected,
     clips: sel.picked.map((c) => ({ track: c.module, lane: c.lane, id: c.id })),
     range: sel.range,
     // What a view shows only while it shows.
-    notes: shell.view === "notes" ? l.notes : null,
+    notes: view === "notes" ? l.notes : null,
     knob: l.knob,
     seen: l.seen ? [beat(l.seen[0]), beat(l.seen[1])] : null,
-    code: shell.view === "code" ? l.code : null,
+    code: view === "code" ? l.code : null,
   };
 }
 
@@ -82,7 +85,7 @@ export function postFocus(again = false) {
   last = body;
   // Not a write: it works in a read-only window too. A refusal (the song changed meanwhile) is
   // followed by the next change's post.
-  void fetch("/api/focus", { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) }, body }).catch(() => {});
+  void http("/api/focus", { method: "POST", headers: { "content-type": "application/json", ...(token ? { "x-m2-token": token } : {}) }, body }).catch(() => {});
 }
 
 /** Post the record 200 ms after the last change to it. */

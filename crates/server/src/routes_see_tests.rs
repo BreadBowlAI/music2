@@ -21,7 +21,7 @@ fn serving_example(name: &str) -> (std::path::PathBuf, crate::Running, u64) {
     let dir = std::env::temp_dir().join(format!("m2-see-{}-{}", std::process::id(), rand_part()));
     copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples").join(name), &dir);
     let options = crate::ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     (dir, running, session)
 }

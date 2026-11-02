@@ -19,7 +19,7 @@ type Row = { instrument: Instrument } | { effect: Effect };
 /** A row's key in the list: its kind and component (a plugin may be both an instrument and an effect). */
 const rowKey = (r: Row) => ("instrument" in r ? `instrument:${r.instrument.component}` : `effect:${r.effect.component}`);
 
-/** What a dragged browser row carries: the effect's component (`std:reverb`). */
+/** What a dragged browser row carries: the effect's component (`@m2/effects:reverb`). */
 export const EFFECT_DRAG = "application/x-m2-effect";
 
 const FOLDED_KEY = "m2.browser.folded";

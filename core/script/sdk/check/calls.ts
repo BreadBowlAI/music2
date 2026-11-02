@@ -28,7 +28,7 @@ export const delay = component(
     controls: { time: control.ms(250).range(1, 2000).log().smooth(), feedback: control.frac(0.3), mix: control.frac(0.3) },
     output: port.audio(),
   },
-  (x: Audio, { time, feedback, mix }: Params) => kernel("std:delay", { in: x, time, feedback, mix }),
+  (x: Audio, { time, feedback, mix }: Params) => kernel("@m2/effects:delay", { in: x, time, feedback, mix }),
 );
 
 export const square = component(

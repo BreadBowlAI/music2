@@ -1,5 +1,5 @@
 import { track } from "@m2/core";
-import { chorus } from "std/fx";
-import { fm } from "std/fm";
+import { chorus } from "@m2/effects";
+import { fm } from "@m2/synths";
 
 export default track("keys", { name: "Keys" }, ({ lane }) => chorus(fm.keys(lane.notes("chords")), { rate: 0.5, depth: 0.4, mix: 0.35 }));

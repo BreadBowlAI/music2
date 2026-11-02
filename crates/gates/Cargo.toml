@@ -17,7 +17,8 @@ range = ["engine"]
 
 [dependencies]
 m2-ir.workspace = true
-m2-song.workspace = true
+# The gates build the repo's songs from a store of the packs this tree bundles (`pack::test_store`).
+m2-song = { workspace = true, features = ["testing"] }
 m2-runtime.workspace = true
 m2-plugins.workspace = true
 m2-session.workspace = true

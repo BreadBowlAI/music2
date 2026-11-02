@@ -13,7 +13,9 @@ import { useShell } from "./shell";
 import { useStore } from "./store";
 import { trackMade } from "./events";
 import { undoAction } from "../components/GraphCanvas";
-import { dropOnSampler, samplerHint } from "./sampler";
+import { dropOnRecording, recordingHint, type RecordingTarget } from "./recording";
+import { http } from "./http";
+import { editing, fileOf, goes } from "./history";
 
 /** A file to bring in: its path on this computer (the app), or the file itself (a browser). */
 export type Incoming = { name: string; path: string } | { name: string; file: File };
@@ -21,8 +23,8 @@ export type Incoming = { name: string; path: string } | { name: string; file: Fi
 /** Where files go: onto an audio lane, onto a new audio track after a track, or at the end (Q6). */
 export type Target = { kind: "lane"; module: string; lane: string; beat: number } | { kind: "track"; module: string; beat: number } | { kind: "below"; beat: number };
 
-/** The files music2 reads (Q1): taken as WAV by their header on the server, offered by name here. */
-export const WAV = [".wav", ".wave"];
+/** The files music2 reads (Q1, FMT-24): WAV and FLAC, told by their first bytes on the server, offered by name here. A FLAC comes in as the WAV of it. */
+export const WAV = [".wav", ".wave", ".flac"];
 export const isWav = (name: string) => WAV.some((x) => name.toLowerCase().endsWith(x));
 
 /** What the server answers. */
@@ -55,7 +57,7 @@ async function post(graph: GraphState, files: Incoming[], to: Target): Promise<I
   const paths = files.flatMap((f) => ("path" in f ? [f.path] : []));
   let res: Response;
   if (paths.length === files.length) {
-    res = await fetch("/api/graph/audio/import", {
+    res = await http("/api/graph/audio/import", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, paths, to }),
@@ -65,7 +67,7 @@ async function post(graph: GraphState, files: Incoming[], to: Target): Promise<I
     if (blobs.reduce((n, b) => n + b.size, 0) > UPLOAD) throw new Error(tooBig(files));
     const list = files.map((f, i) => ({ name: f.name, size: blobs[i].size }));
     const q = `session=${graph.session}&files=${encodeURIComponent(JSON.stringify(list))}&to=${encodeURIComponent(JSON.stringify(to))}`;
-    res = await fetch(`/api/graph/audio/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: new Blob(blobs) });
+    res = await http(`/api/graph/audio/import?${q}`, { method: "POST", headers: { "content-type": "application/octet-stream", ...auth }, body: new Blob(blobs) });
   }
   if (res.status === 413) throw new Error(tooBig(files));
   const json = await readJson(res);
@@ -83,8 +85,10 @@ export async function bringIn(files: Incoming[], to: Target) {
   if (!graph || files.length === 0) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
+  // On its way until it is answered: an Undo pressed meanwhile waits for it (AGENT-2).
+  const ours = editing();
   try {
-    const done = await post(graph, files, to);
+    const done = await post(graph, files, to).finally(() => ours.end());
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
     const refs = done.made.map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
@@ -119,7 +123,7 @@ export function menuTarget(graph: GraphState): Target {
 // ---------------------------------------------------------------- samples from the library (LIB-7)
 
 /** What the server answers when it adds a sample. */
-interface SampleAdded {
+export interface SampleAdded {
   step?: number;
   name: string;
   asset: string;
@@ -135,19 +139,40 @@ interface SampleAdded {
  * came from, then a clip at `to` (a loop at another tempo with Follow tempo on), or the file of the
  * Sampler `to` names. One undo step, with Undo in its toast.
  */
-export async function addSample(item: LibraryItem, to: Target | { kind: "sampler"; call: string; title: string }) {
+export async function addSample(item: LibraryItem, to: Target | RecordingTarget) {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
-  const body = to.kind === "sampler" ? { session: graph.session, id: item.id, at: graph.view.revision, call: to.call } : { session: graph.session, id: item.id, to };
+  // On its way until it is answered (Undo waits for it); onto a card, through the gate (lib/history).
+  const ours = editing();
   try {
-    const res = await fetch("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+    const body =
+      to.kind === "recording"
+        ? { session: graph.session, id: item.id, at: await goes(graph.session, graph.view.revision, [fileOf(to.call)], ours), call: to.call, setting: to.setting }
+        : { session: graph.session, id: item.id, to };
+    const res = await http("/api/library/sample", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) }).finally(() => ours.end());
     const done = (await readJson(res)) as SampleAdded & { error?: string };
     if (!res.ok) throw new Error(done.error ?? `HTTP ${res.status}`);
+    if (to.kind === "recording") {
+      useStore.getState().set({ graph: await graphApi.get() });
+      return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
+    }
+    await sampleAdded(item, graph.session, done);
+  } catch (error) {
+    toast(`Nothing was added to the song: ${words(error)}`);
+  }
+}
+
+/**
+ * A sample was added to the song at a place (LIB-7, REG-16): the song read again, its clip
+ * selected on its track, and a toast that says where, with Undo.
+ */
+export async function sampleAdded(item: LibraryItem, session: number, done: SampleAdded) {
+  const toast = useStore.getState().toast;
+  {
     const fresh = await graphApi.get();
     useStore.getState().set({ graph: fresh });
-    if (to.kind === "sampler") return void toast(`${to.title} plays ${done.asset}`, undoAction(graph.session, done.step));
     const refs = (done.made ?? []).map((m) => ({ module: m.module, lane: m.lane, id: m.id }));
     if (refs[0]) useShell.getState().select(refs[0].module);
     useClipSelection.getState().only(refs);
@@ -160,9 +185,7 @@ export async function addSample(item: LibraryItem, to: Target | { kind: "sampler
       : bpm(done.follows) === bpm(done.song_bpm ?? 0)
         ? ". Follow tempo is on, so it keeps time if the song's tempo changes"
         : `. Follow tempo is on: its ${bpm(done.follows)} bpm plays at the song's ${bpm(done.song_bpm ?? 0)}`;
-    toast(`Added ${item.label}${onto}${follows}`, undoAction(graph.session, done.step));
-  } catch (error) {
-    toast(`Nothing was added to the song: ${words(error)}`);
+    toast(`Added ${item.label}${onto}${follows}`, undoAction(session, done.step));
   }
 }
 
@@ -171,7 +194,7 @@ export const sampleTarget = (graph: GraphState) => menuTarget(graph);
 
 onSample({
   hint(item, t) {
-    if (t.kind === "sampler") return `${t.title} plays ${item.label}`;
+    if (t.kind === "recording") return `${t.title} plays ${item.label}`;
     const graph = useStore.getState().graph;
     const to = audioTarget(t);
     if (!graph || !to) return null;
@@ -183,13 +206,13 @@ onSample({
     return `New audio track · ${bar}`;
   },
   where(t) {
-    if (t.kind === "sampler") return t;
+    if (t.kind === "recording") return t;
     const to = audioTarget(t);
     if (!to) return { kind: "none" };
     return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
   },
   drop(item, t) {
-    if (t.kind === "sampler") return void addSample(item, t);
+    if (t.kind === "recording") return void addSample(item, t);
     const to = audioTarget(t);
     if (to) void addSample(item, to);
   },
@@ -199,7 +222,7 @@ onSample({
 async function pick(): Promise<Incoming[]> {
   if (native) {
     try {
-      const arg = JSON.stringify({ title: "Import Audio", filters: [{ name: "WAV files", extensions: ["wav", "wave"] }], multiple: true });
+      const arg = JSON.stringify({ title: "Import Audio", filters: [{ name: "WAV and FLAC files", extensions: ["wav", "wave", "flac"] }], multiple: true });
       const answer = await nativeAction("open_file", arg);
       if (answer === null) return [];
       const paths = JSON.parse(answer) as string[] | null;
@@ -212,7 +235,7 @@ async function pick(): Promise<Incoming[]> {
     const input = document.createElement("input");
     input.type = "file";
     input.multiple = true;
-    input.accept = ".wav,.wave,audio/wav,audio/x-wav";
+    input.accept = ".wav,.wave,.flac,audio/wav,audio/x-wav,audio/flac,audio/x-flac";
     input.style.display = "none";
     input.addEventListener("change", () => {
       resolve([...(input.files ?? [])].map((file) => ({ name: file.name, file })));
@@ -227,7 +250,7 @@ async function pick(): Promise<Incoming[]> {
   });
 }
 
-/** File ▸ Import Audio… (⇧⌘I): pick WAV files, then bring them in where Q7 says. */
+/** File ▸ Import Audio… (⇧⌘I): pick WAV or FLAC files, then bring them in where Q7 says. */
 export async function importAudio() {
   const { graph, connected, toast } = useStore.getState();
   if (!graph) return;
@@ -245,7 +268,7 @@ export const AUDIO_TRACK: Instrument = {
   label: "Audio track",
   name: "",
   module: "",
-  description: "Plays recordings and loops: drop a WAV file on it",
+  description: "Plays recordings and loops: drop a WAV or FLAC file on it",
   category: "Audio",
   lane: "clips",
 };
@@ -259,12 +282,13 @@ export async function addAudioTrack(after: string | null) {
   if (!graph) return;
   const why = lockReason(graph, connected);
   if (why) return void toast(`${why}.`);
+  const ours = editing();
   try {
-    const res = await fetch("/api/graph/audio/track", {
+    const res = await http("/api/graph/audio/track", {
       method: "POST",
       headers: { "content-type": "application/json", ...auth },
       body: JSON.stringify({ session: graph.session, ...(after ? { after } : {}) }),
-    });
+    }).finally(() => ours.end());
     const json = await readJson(res);
     if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
     const fresh = await graphApi.get();
@@ -279,8 +303,8 @@ export async function addAudioTrack(after: string | null) {
 
 // ---------------------------------------------------------------- drops (Q6)
 
-/** The WAV types a browser says while it drags a file (no names until the drop). */
-const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "audio/vnd.wave"];
+/** The WAV and FLAC types a browser says while it drags a file (no names until the drop). */
+const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "audio/vnd.wave", "audio/flac", "audio/x-flac"];
 
 /**
  * Where dropped audio goes (Q6): onto the audio lane under the pointer, or a track's audio lane;
@@ -288,7 +312,7 @@ const WAV_TYPES = ["audio/wav", "audio/x-wav", "audio/wave", "audio/x-wave", "au
  */
 function audioTarget(t: DropTarget): Target | null {
   const graph = useStore.getState().graph;
-  if (!graph || t.kind === "none" || t.kind === "sampler") return null;
+  if (!graph || t.kind === "none" || t.kind === "recording") return null;
   if (t.kind === "below") return { kind: "below", beat: t.beat };
   const track = graph.timeline.tracks.find((x) => x.module === t.module);
   if (!track) return null;
@@ -300,7 +324,7 @@ function audioTarget(t: DropTarget): Target | null {
 
 onFiles(WAV, WAV_TYPES, {
   hint(files, t) {
-    if (t.kind === "sampler") return samplerHint(files, t);
+    if (t.kind === "recording") return recordingHint(files, t);
     const graph = useStore.getState().graph;
     const to = audioTarget(t);
     if (!graph || !to) return null;
@@ -312,13 +336,13 @@ onFiles(WAV, WAV_TYPES, {
     return files.length > 1 ? `${files.length} new audio tracks · ${bar}` : `New audio track · ${bar}`;
   },
   where(t) {
-    if (t.kind === "sampler") return t;
+    if (t.kind === "recording") return t;
     const to = audioTarget(t);
     if (!to) return { kind: "none" };
     return to.kind === "lane" ? { kind: "lane", module: to.module, lane: to.lane, beat: to.beat } : to;
   },
   drop(files, t) {
-    if (t.kind === "sampler") return void dropOnSampler(files, t);
+    if (t.kind === "recording") return void dropOnRecording(files, t);
     const to = audioTarget(t);
     if (!to) return;
     const incoming = files.flatMap((f): Incoming[] => (f.path ? [{ name: f.name, path: f.path }] : f.file ? [{ name: f.name, file: f.file }] : []));

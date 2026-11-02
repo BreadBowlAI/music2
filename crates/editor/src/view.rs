@@ -22,13 +22,15 @@ use std::path::Path;
 use m2_ir::{FNode, FOp, Kernels, Kind, Node, Op, Origin, PortKind, Unit, split_ref};
 use m2_script::sites::{Arg, Site};
 use serde::Serialize;
+use serde_json::Value as Json;
 
 use m2_session::{Home, Session};
 
 use crate::cable::{Inlet, Outlet, inlets, outlets};
-use crate::controls::{Control, Declared, controls, declared, not_insertable};
+use crate::controls::{Control, Declared, controls, declared, not_insertable, options_of};
 use crate::effect::{Listens, bypass_refused, calls_of, effect_at, is_bypassed, listens, move_row};
-use crate::sampler::{self, SamplerCard};
+use crate::kind::{self, Choice};
+use crate::settings::Setting;
 use crate::sites::{Params, fn_params};
 use crate::voices;
 
@@ -37,6 +39,8 @@ pub struct GraphView {
     /// The accepted revision this view shows; edits name it.
     pub revision: u64,
     pub modules: Vec<ModuleView>,
+    /// The song's drum kits (KIT-1): each bus and the Drum tracks that go to it.
+    pub drum_kits: Vec<crate::kits::DrumKit>,
     /// Why the files on disk don't compile right now (the view shows the last
     /// revision that did).
     pub draft_errors: Vec<String>,
@@ -79,8 +83,12 @@ pub struct PortEdge {
 pub struct InputPort {
     /// Unique within its node.
     pub id: String,
-    /// Where it is written in the call (`cutoff`, `hats.in`), or the port it feeds.
+    /// The declared control it is, by its label (CARD-34); else where it is written in the call
+    /// (`hats.in`), or the port it feeds.
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with (`hats`), said apart (CARD-34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     /// `audio`, `control` or `notes`.
     pub kind: &'static str,
     /// The knob that sets it, when a number is written there.
@@ -95,6 +103,10 @@ pub struct InputPort {
     /// The automation lane that drives it (8b.5): "Follows the Cutoff lane", and Show lane.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lane: Option<LaneRef>,
+    /// The declared control of the call it is (`cutoff`, `channels.hats.db`), whatever drives it: a
+    /// knob, a cable, a lane or the code (CARD-25). None for an input port (notes, audio).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub slot: Option<String>,
 }
 
 /// A lane, by its module's key and its own.
@@ -106,7 +118,7 @@ pub struct LaneRef {
 
 impl InputPort {
     fn new(id: String, label: &str, kind: &'static str) -> InputPort {
-        InputPort { id, label: label.to_string(), kind, knob: None, inlet: None, readonly: None, lane: None }
+        InputPort { id, label: label.to_string(), entry: None, kind, knob: None, inlet: None, readonly: None, lane: None, slot: None }
     }
 }
 
@@ -141,7 +153,7 @@ pub struct ViewNode {
     pub inlets: Vec<InletView>,
     /// Whether its result is audio, which an effect can go after.
     pub audio: bool,
-    /// The ComponentId of the component the call is an instance of (`std:delay`), whatever the
+    /// The ComponentId of the component the call is an instance of (`@m2/effects:delay`), whatever the
     /// name it is called by (PKG-9).
     pub component: Option<String>,
     /// The effect this node is, by its descriptor's label (`Delay`), if it can be removed.
@@ -166,12 +178,18 @@ pub struct ViewNode {
     /// graph state's `plugins` and the plugin routes name it (HOST-7).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub plugin: Option<String>,
-    /// A sampler's card: the files it plays. A WAV dropped on it sets its file.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub sampler: Option<SamplerCard>,
     /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<String>,
+    /// Its component's settings, in its descriptor's order (CARD-1).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub settings: Vec<Setting>,
+    /// Its card's groups, when its descriptor declares some (CARD-25).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<crate::views::CardGroup>,
+    /// Its card's views, resolved for the call (CARD-26).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<crate::views::CardView>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -209,7 +227,11 @@ impl MoveRow {
 pub struct InletView {
     /// What disconnecting names.
     pub id: String,
+    /// The declared control it is, by its label (CARD-34); else where it is written, or the port.
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with, said apart (CARD-34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     /// The name written there, and the node it comes from.
     pub name: String,
     pub from: String,
@@ -218,7 +240,11 @@ pub struct InletView {
 /// A value written in the code that has no supported source edit.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ReadOnly {
+    /// The declared control it is, by its label (CARD-34); else where it is written, or the port.
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with, said apart (CARD-34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
     pub expression: String,
     pub reason: String,
     pub file: Option<String>,
@@ -231,8 +257,14 @@ pub struct ReadOnly {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct Knob {
     pub id: String,
+    /// The declared control it is, by its label (CARD-34); else where it is written, or the port.
     pub label: String,
-    pub value: f64,
+    /// A dictionary entry's key, which `label` starts with (`hats`), said apart (CARD-34).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub entry: Option<String>,
+    /// What it plays, as its code writes it (CARD-20): a number in its unit, a choice's name, or a
+    /// switch's `true` or `false`. So the option it plays is the one whose value this is.
+    pub value: Json,
     /// The number written in the code; empty while the control is inherited.
     pub literal: String,
     /// The constant's unit: a quantity's own (`semis(60)` is semitones wherever it goes), else
@@ -247,8 +279,9 @@ pub struct Knob {
     /// Written in the code; false while it plays its declared default (inherited), until its
     /// first edit writes it into the call.
     pub written: bool,
-    /// The declared default, when the controls it feeds declare one in its unit.
-    pub default: Option<f64>,
+    /// The declared default, as its code would write it, when the controls it feeds declare one in
+    /// its unit.
+    pub default: Option<Json>,
     /// The declared control it is (`cutoff`, `channels.hats.db`) and its component
     /// (`std:lowpass`), when it feeds exactly one.
     pub slot: Option<String>,
@@ -262,6 +295,12 @@ pub struct Knob {
     /// Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automate_refused: Option<String>,
+    /// What it is (CARD-2): a number, a choice or a switch control (CARD-20), whose menu writes its
+    /// option's name or `true` or `false`, or a plugin's stepped parameter as a choice or a switch
+    /// (CARD-6), whose menu writes its option's number.
+    pub kind: kind::Kind,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<Choice>,
 }
 
 /// What every declared control a value feeds says of `f`, when they all agree.
@@ -510,6 +549,17 @@ pub fn view(session: &Session) -> GraphView {
             }
         };
 
+        // The declared control written at an argument path of a group's call (CARD-25), and what it
+        // is called (CARD-34).
+        let declared_at = |g: &Group, path: &[String]| -> Option<(String, kind::Name)> {
+            let Group::Site(s) = g else { return None };
+            let component = m.frames.iter().find(|f| f.site == *s && f.component.is_some())?.component.as_deref()?;
+            let desc = rev.compiled.components.get(component)?;
+            let slot = crate::views::slot_at(desc, options_of(m, *s).ok().flatten(), path)?;
+            let name = kind::named(desc.control(&slot)?.label.as_deref(), &slot);
+            Some((slot, name))
+        };
+
         // A direct value belongs to the innermost containing call. A shared
         // source gets its own node, so consumers cannot look independently editable.
         let mut knobs: BTreeMap<Group, Vec<Knob>> = BTreeMap::new();
@@ -518,6 +568,8 @@ pub fn view(session: &Session) -> GraphView {
         // Where each knob (by id) and read-only value is written, to order a node's inputs.
         let mut knob_at: HashMap<String, Written> = HashMap::new();
         let mut readonly_at: BTreeMap<Group, Vec<Written>> = BTreeMap::new();
+        // The declared control each read-only value is, in the same order (CARD-25).
+        let mut readonly_slot: BTreeMap<Group, Vec<Option<String>>> = BTreeMap::new();
         let groups: Vec<Group> = {
             let mut g: Vec<Group> = all.iter().filter_map(|n| call_group(n)).collect();
             g.sort();
@@ -568,14 +620,13 @@ pub fn view(session: &Session) -> GraphView {
                 _ => None,
             };
             let path = written_at.as_ref().unwrap_or(&o.arg);
-            // A declared control is named by its declaration: `cutoff`, or `hats.db` in a dictionary.
+            // A declared control is named by its declaration, whatever writes it (CARD-34): `cutoff`,
+            // or `hats.db` in a dictionary; anything else by where it is written.
             let declared = declared(&rev.compiled, m, o, None);
-            let label = if let Some(d) = declared.as_ref().filter(|_| inherited) {
-                d.label.clone()
-            } else if path.len() > 1 {
-                path[1..].join(".")
-            } else {
-                consumer.as_ref().map(|(_, p)| p.clone()).unwrap_or_else(|| at.callee.clone())
+            let name = match declared.as_ref() {
+                Some(d) => kind::Name { label: d.label.clone(), entry: d.entry.clone() },
+                None if path.len() > 1 => kind::written(&path[1..]),
+                None => kind::Name { label: consumer.as_ref().map(|(_, p)| p.clone()).unwrap_or_else(|| at.callee.clone()), entry: None },
             };
             let Some(c) = control else {
                 let (expression, reason, start) = if inherited {
@@ -604,8 +655,10 @@ pub fn view(session: &Session) -> GraphView {
                     (expression, reason.to_string(), start)
                 };
                 readonly_at.entry(home.clone()).or_default().push((at.file.clone(), start));
+                readonly_slot.entry(home.clone()).or_default().push(declared.as_ref().map(|d| d.slot.clone()));
                 readonly.entry(home).or_default().push(ReadOnly {
-                    label,
+                    label: name.label,
+                    entry: name.entry,
                     expression,
                     reason,
                     file: Some(at.file.clone()),
@@ -614,6 +667,16 @@ pub fn view(session: &Session) -> GraphView {
                 });
                 continue;
             };
+            // A hosted plugin's parameter it sets: a switch or a choice when stepped (CARD-6); else
+            // what its unit says: a choice or a switch control (CARD-20), or a number.
+            let (kind, options) = all
+                .iter()
+                .find_map(|k| match &k.op {
+                    Op::Plugin { plugin, inputs, .. } => inputs.iter().find(|(_, r)| split_ref(r).0 == n.id).map(|(p, _)| (plugin, p)),
+                    _ => None,
+                })
+                .and_then(|(plugin, port)| session.packages.plugin_param(plugin, port))
+                .map_or_else(|| kind::of_unit(c.unit), |(p, steps)| kind::of_param(p.stepped, p.min, p.max, steps));
             let port = consumer.and_then(|(sig, p)| sig?.inputs.iter().find(|i| i.name == p));
             let port_unit = port.and_then(|p| match p.kind {
                 PortKind::Control(u) => u,
@@ -629,23 +692,24 @@ pub fn view(session: &Session) -> GraphView {
             };
             let default = agreed(&c.declared, |d| d.default).flatten();
             let single = c.declared.first().filter(|_| c.declared.len() == 1);
-            let label = match single {
-                Some(d) => d.label.clone(),
-                None => label,
+            let name = match single {
+                Some(d) => kind::Name { label: d.label.clone(), entry: d.entry.clone() },
+                None => name,
             };
             // Written values in the order the call writes them; the ones it leaves out after.
             let place = if inherited { at.end } else { at.arg(&o.arg).map_or(at.start, |a| a.span().0) };
             knob_at.insert(c.id.clone(), (at.file.clone(), place));
             knobs.entry(home).or_default().push(Knob {
                 id: c.id.clone(),
-                label,
-                value: c.value,
+                label: name.label,
+                entry: name.entry,
+                value: kind::said(c.unit, c.value).unwrap_or(Json::Null),
                 literal: c.literal.clone(),
                 unit: unit.map(Unit::name),
                 range: range.map(|(lo, hi)| [lo, hi]),
                 log,
                 written: c.written,
-                default,
+                default: default.and_then(|d| kind::said(c.unit, d)),
                 slot: single.map(|d| d.slot.clone()),
                 component: single.map(|d| d.component.clone()),
                 origin: c.origin.clone(),
@@ -654,6 +718,8 @@ pub fn view(session: &Session) -> GraphView {
                 uses: c.uses,
                 home: c.home,
                 automate_refused: automate_refused(c, &value_key(&c.origin).expect("keyed")),
+                kind,
+                options,
             });
         }
         // Cables end on the innermost call containing the name, like knobs.
@@ -663,9 +729,12 @@ pub fn view(session: &Session) -> GraphView {
             let Some(outlet) = outlets.iter().find(|o| o.id == inlet.from && o.module == m.key) else { continue };
             cabled.insert(inlet.id.clone(), (inlet, outlet));
             let home = innermost(&groups, &sites, inlet).unwrap_or(Group::Site(inlet.site));
-            // Name it after its property, or else the one port it feeds in that call.
-            let label = if inlet.path.len() > 1 {
-                inlet.path[1..].join(".")
+            // Name it as the control it is (CARD-34), or after its property, or else the one port
+            // it feeds in that call.
+            let name = if let Some((_, name)) = declared_at(&home, &inlet.path) {
+                name
+            } else if inlet.path.len() > 1 {
+                kind::written(&inlet.path[1..])
             } else {
                 let port = all
                     .iter()
@@ -677,14 +746,16 @@ pub fn view(session: &Session) -> GraphView {
                         _ => vec![],
                     })
                     .collect::<Vec<_>>();
-                match port.as_slice() {
+                let label = match port.as_slice() {
                     [one] => one.clone(),
                     _ => format!("input {}", inlet.path[0].parse::<usize>().map_or(0, |i| i + 1)),
-                }
+                };
+                kind::Name { label, entry: None }
             };
             connected.entry(home).or_default().push(InletView {
                 id: inlet.id.clone(),
-                label,
+                label: name.label,
+                entry: name.entry,
                 name: inlet.name.clone(),
                 from: outlet.id.clone(),
             });
@@ -778,13 +849,13 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => listens(session, sites[s]),
                 _ => None,
             };
-            let sampler = match g {
-                Group::Site(s) if kind == "call" => sampler::card(&rev.compiled, *s),
-                _ => None,
-            };
             let voices = match g {
                 Group::Site(s) if kind == "call" => voices::card(&rev.compiled, *s),
                 _ => None,
+            };
+            let settings = match (g, &component) {
+                (Group::Site(s), Some(c)) if kind == "call" => crate::settings::of_card(rev, m, sites[s], c),
+                _ => vec![],
             };
             nodes.push(ViewNode {
                 id: id.clone(),
@@ -806,8 +877,10 @@ pub fn view(session: &Session) -> GraphView {
                 menu,
                 listens,
                 plugin: plugins.get(g).cloned(),
-                sampler,
                 voices,
+                settings,
+                groups: vec![],
+                views: vec![],
             });
             id
         };
@@ -915,8 +988,10 @@ pub fn view(session: &Session) -> GraphView {
                 menu: None,
                 listens: None,
                 plugin: None,
-                sampler: None,
                 voices: None,
+                settings: vec![],
+                groups: vec![],
+                views: vec![],
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {
@@ -959,18 +1034,36 @@ pub fn view(session: &Session) -> GraphView {
         for &(g, id) in &ordered {
             let row = inputs.entry(id.clone()).or_default();
             for k in knobs.get(g).into_iter().flatten() {
-                let port = InputPort { knob: Some(k.id.clone()), ..InputPort::new(format!("knob:{}", k.id), &k.label, "control") };
+                let port = InputPort {
+                    knob: Some(k.id.clone()),
+                    slot: k.slot.clone(),
+                    entry: k.entry.clone(),
+                    ..InputPort::new(format!("knob:{}", k.id), &k.label, "control")
+                };
                 row.push((port, knob_at.get(&k.id).cloned()));
             }
+            let slots = readonly_slot.get(g).cloned().unwrap_or_default();
             for (i, (value, at)) in readonly.get(g).into_iter().flatten().zip(readonly_at.get(g).into_iter().flatten()).enumerate() {
-                let port = InputPort { readonly: Some(i), ..InputPort::new(format!("value:{i}"), &value.label, "control") };
+                let slot = slots.get(i).cloned().flatten();
+                let port = InputPort {
+                    readonly: Some(i),
+                    slot,
+                    entry: value.entry.clone(),
+                    ..InputPort::new(format!("value:{i}"), &value.label, "control")
+                };
                 row.push((port, Some(at.clone())));
             }
             for c in connected.get(g).into_iter().flatten() {
                 let (inlet, outlet) = cabled[&c.id];
                 let kind =
                     call_output(session, outlet.site).and_then(|(module, r)| kind_of(session, module, r)).map_or("control", kind_name);
-                let port = InputPort { inlet: Some(c.id.clone()), ..InputPort::new(format!("inlet:{}", c.id), &c.label, kind) };
+                let slot = declared_at(g, &inlet.path).map(|(slot, _)| slot);
+                let port = InputPort {
+                    inlet: Some(c.id.clone()),
+                    slot,
+                    entry: c.entry.clone(),
+                    ..InputPort::new(format!("inlet:{}", c.id), &c.label, kind)
+                };
                 if let Some(i) = inlet.path.first().and_then(|i| i.parse().ok()) {
                     written_at.insert((id.clone(), port.id.clone()), i);
                 }
@@ -1025,8 +1118,10 @@ pub fn view(session: &Session) -> GraphView {
                 at.into_iter().min_by_key(|c| c.label != *port)
             });
         }
-        // The inputs an automation lane drives, by node and port (8b.5).
+        // The inputs an automation lane drives, by node and port (8b.5); the notes lane each node
+        // reads, for a keys view's audition (CARD-28).
         let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
+        let mut notes_of: HashMap<String, LaneRef> = HashMap::new();
         for ((to, _, r, from), cable) in reads.iter().zip(cables) {
             let (to_id, from_id) = (&ids[to], &ids[from]);
             let from_port = give(from_id, r);
@@ -1047,13 +1142,19 @@ pub fn view(session: &Session) -> GraphView {
                         };
                         let inside = written.filter(|(f, at)| site.is_some_and(|x| &x.file == f && x.start <= *at && *at < x.end));
                         let path = site.zip(inside.as_ref()).and_then(|(x, (_, at))| path_around(x, *at));
-                        let label = match (&path, ports[&(to, from_port.clone())].as_slice()) {
-                            (Some(p), _) if p.len() > 1 => p[1..].join("."),
-                            (_, [one]) => one.to_string(),
-                            (Some(p), _) => format!("input {}", p[0].parse::<usize>().map_or(1, |i| i + 1)),
-                            (None, _) => "in".to_string(),
+                        // As the control it is (CARD-34), or where it is written, or the port.
+                        let declared = path.as_deref().and_then(|p| declared_at(to, p));
+                        let name = match (&declared, &path, ports[&(to, from_port.clone())].as_slice()) {
+                            (Some((_, name)), ..) => name.clone(),
+                            (_, Some(p), _) if p.len() > 1 => kind::written(&p[1..]),
+                            (_, _, [one]) => kind::Name { label: one.to_string(), entry: None },
+                            (_, Some(p), _) => {
+                                kind::Name { label: format!("input {}", p[0].parse::<usize>().map_or(1, |i| i + 1)), entry: None }
+                            }
+                            (_, None, _) => kind::Name { label: "in".to_string(), entry: None },
                         };
-                        let port = InputPort::new(id.clone(), &label, kind(r));
+                        let slot = declared.map(|(slot, _)| slot);
+                        let port = InputPort { slot, entry: name.entry, ..InputPort::new(id.clone(), &name.label, kind(r)) };
                         if let Some(i) = path.as_ref().and_then(|p| p[0].parse().ok()) {
                             written_at.insert((to_id.clone(), id.clone()), i);
                         }
@@ -1066,6 +1167,11 @@ pub fn view(session: &Session) -> GraphView {
                 && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Control(_)))
             {
                 driven.insert((to_id.clone(), to_port.clone()), LaneRef { module: m.key.clone(), lane: lane.clone() });
+            }
+            if let Some(Op::Lane { lane }) = source(r).map(|n| &n.op)
+                && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Events(_)))
+            {
+                notes_of.entry(to_id.clone()).or_insert_with(|| LaneRef { module: m.key.clone(), lane: lane.clone() });
             }
             let late = late.contains(&(to.clone(), *r));
             let bypassed = through.contains(&(to.clone(), *r));
@@ -1087,6 +1193,15 @@ pub fn view(session: &Session) -> GraphView {
                 _ => None,
             })
             .collect();
+        // Each call card's site and descriptor, for its groups and views.
+        let card_of: HashMap<String, (u32, &m2_script::Descriptor)> = ids
+            .iter()
+            .filter_map(|(g, id)| {
+                let Group::Site(s) = g else { return None };
+                let component = m.frames.iter().find(|f| f.site == *s && f.component.is_some())?.component.as_deref()?;
+                Some((id.clone(), (*s, &**rev.compiled.components.get(component)?)))
+            })
+            .collect();
         for n in &mut nodes {
             let mut row = inputs.remove(&n.id).unwrap_or_default();
             row.sort_by_key(|(_, at)| at.as_ref().filter(|(f, _)| files.get(&n.id) == Some(&f.as_str())).map(|(_, o)| *o));
@@ -1102,6 +1217,11 @@ pub fn view(session: &Session) -> GraphView {
                     None => n.listens = None,
                 }
             }
+            // Its groups and views (CARD-25, CARD-26), over its inputs and settings as they now are.
+            if let Some((site, desc)) = card_of.get(&n.id) {
+                n.groups = crate::views::groups(desc, n);
+                n.views = crate::views::views(m, *site, desc, n, notes_of.get(&n.id));
+            }
             let mut names = HashSet::new();
             if !n.inputs.iter().all(|p| names.insert(p.label.clone())) {
                 for p in &mut n.inputs {
@@ -1115,7 +1235,12 @@ pub fn view(session: &Session) -> GraphView {
         }
         modules.push(ModuleView { key: m.key.clone(), label: m.label().to_string(), track: m.track, nodes, edges, port_edges });
     }
-    GraphView { revision: rev.number, modules, draft_errors: session.draft_errors.iter().map(|d| d.to_string()).collect() }
+    GraphView {
+        revision: rev.number,
+        modules,
+        drum_kits: crate::kits::drum_kits(session),
+        draft_errors: session.draft_errors.iter().map(|d| d.to_string()).collect(),
+    }
 }
 
 #[cfg(test)]

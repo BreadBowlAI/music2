@@ -108,10 +108,11 @@ fn an_inherited_control_is_written_into_its_call_as_a_lane() {
     let sound = render(&s);
     let kick = f.read("tracks/kick.ts");
     let a = s.automate(s.accepted().number, "tracks/kick.ts#1/@decay").unwrap();
-    assert_eq!((a.lane.to_string(), a.name.as_str()), ("kick/decay".to_string(), "decay"));
+    // Named by its label: One drum's decay is "decay ×", times the drum's own (review Y15).
+    assert_eq!((a.lane.to_string(), a.name.as_str()), ("kick/decay".to_string(), "decay ×"));
     let now = f.read("tracks/kick.ts");
-    assert!(now.contains("kick(lane.notes(\"hits\"), { decay: lane.control(\"decay\", \"seconds\", "), "{now}");
-    assert_eq!(lane(&s, "kick", "decay").map(|l| (l.0, l.2)), Some((Some("seconds"), 0)));
+    assert!(now.contains("drums.drum(lane.notes(\"hits\"), { decay: lane.control(\"decay\", \"scalar\", "), "{now}");
+    assert_eq!(lane(&s, "kick", "decay").map(|l| (l.0, l.2)), Some((Some("scalar"), 0)));
     assert_eq!(render(&s), sound, "the default, as spelled, is what played");
     s.undo().unwrap();
     assert_eq!(f.read("tracks/kick.ts"), kick);
@@ -172,7 +173,7 @@ fn the_new_lanes_key_is_free() {
 fn the_lane_is_named_after_the_control() {
     let f = Fixture::new();
     f.write("music2.toml", MANIFEST);
-    let song = "import { secs, song, track } from \"@m2/core\";\nimport { fm } from \"std/fm\";\nimport { sum } from \"std/math\";\n\
+    let song = "import { secs, song, track } from \"@m2/core\";\nimport { fm } from \"@m2/synths\";\nimport { sum } from \"std/math\";\n\
                 const keys = track(\"keys\", ({ lane }) => {\n  const lead = fm.custom(lane.notes(\"a\"), { detune: 5, decay: secs(2) });\n  \
                 const pad = fm.custom(lane.notes(\"b\"), { decay: secs(4) });\n  return sum(lead, pad);\n});\n\
                 export default song(() => keys.out);\n";
@@ -287,4 +288,114 @@ fn a_lane_read_by_name_is_taken_out() {
     remove(&mut s, "bass", "drop", Some(20.0)).unwrap();
     assert_eq!(f.read("tracks/bass.ts"), bass.replace("lane.mask(\"drop\")", "1"));
     assert!(!f.0.join("data/bass/drop.json").exists());
+}
+
+/// A project whose track `lead` plays `tone`, a sound of the project's own with a choice and a
+/// switch, called as `call`.
+fn with_choice(call: &str) -> Fixture {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "lib/tone.ts",
+        "import { component, control, port } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\
+         export const tone = component(\n  { id: \"tone\", controls: { shape: control.choice([\"saw\", \"square\", \"sine\"], \"saw\"), sub: control.bool(false) }, output: port.audio() },\n  () => osc.saw(110),\n);\n",
+    );
+    let song = format!(
+        "import {{ song, track }} from \"@m2/core\";\nimport {{ tone }} from \"./lib/tone\";\n\
+         const lead = track(\"lead\", () => {call});\nexport default song(() => lead.out);\n"
+    );
+    f.write("song.ts", song);
+    f
+}
+
+// HOME-2, CARD-14, CARD-15: Automate on a choice writes a lane of names, its fallback the name as
+// written; on a switch left out of its call, its default as true or false. Each lane's file is
+// a lane of names, empty; the IR's lane has the choice's unit and its place. Undo puts it back, and
+// Remove automation writes the fallback back as it was.
+#[test]
+fn automate_writes_a_lane_of_names() {
+    let f = with_choice("tone({ shape: \"square\" })");
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let song = f.read("song.ts");
+    let shape = s.controls().into_iter().find(|c| c.literal == "\"square\"").expect("the choice, written by its name");
+    assert_eq!((shape.value, shape.unit.map(|u| u.to_string())), (1.0, Some("choice<saw|square|sine>".into())));
+    // What a menu offers (review K6), and why a number isn't written: a choice is set by its name, a
+    // switch to true or false (CARD-21).
+    assert_eq!(shape.options(), Some(vec!["saw", "square", "sine"]));
+    let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
+    assert!(sub.is_switch() && sub.options().is_none() && !shape.is_switch());
+    let e = s.set(s.accepted().number, &shape.id, 2.0, None).unwrap_err().to_string();
+    assert!(e.contains("shape is one of \"saw\", \"square\" or \"sine\": set it by its name"), "{e}");
+    let e = s.set(s.accepted().number, &sub.id, 1.0, None).unwrap_err().to_string();
+    assert!(e.contains("sub is a switch: set it to true or false"), "{e}");
+    let a = s.automate(s.accepted().number, &shape.id).unwrap();
+    assert_eq!((a.lane.to_string(), a.edited.before.as_str()), ("lead/shape".to_string(), "shape \"square\""));
+    let want =
+        song.replace("() => tone({ shape: \"square\" })", "({ lane }) => tone({ shape: lane.control(\"shape\", \"choice\", \"square\") })");
+    assert_eq!(f.read("song.ts"), want);
+    assert_eq!(f.read("data/lead/shape.json"), "{\"unit\": \"choice\", \"clips\": []}\n");
+    let decl = |s: &Session, key: &str| {
+        let m = s.accepted().compiled.ir.modules.iter().find(|m| m.key == "lead").unwrap().clone();
+        m.lanes.iter().find(|l| l.key == key).map(|l| (l.kind.to_string(), l.default))
+    };
+    assert_eq!(decl(&s, "shape"), Some(("control<choice<saw|square|sine>>".to_string(), Some(1.0))));
+
+    // The switch the call leaves out: its default, false, written into the call as the lane.
+    let sub = s.controls().into_iter().find(|c| c.id.ends_with("/@sub")).expect("the switch left out");
+    s.automate(s.accepted().number, &sub.id).unwrap();
+    assert!(
+        f.read("song.ts")
+            .contains("shape: lane.control(\"shape\", \"choice\", \"square\"), sub: lane.control(\"sub\", \"switch\", false) })"),
+        "{}",
+        f.read("song.ts")
+    );
+    assert_eq!(f.read("data/lead/sub.json"), "{\"unit\": \"switch\", \"clips\": []}\n");
+    assert_eq!(decl(&s, "sub"), Some(("control<switch>".to_string(), Some(0.0))));
+
+    // Undo, then take the choice's automation out: at the playhead, the name its lane plays there;
+    // with none, its fallback as written.
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), want);
+    f.write("data/lead/shape.json", "{\"unit\": \"choice\", \"clips\": [{\"start\": 0, \"length\": 4, \"points\": [[0, \"sine\"]]}]}\n");
+    s.refresh();
+    remove(&mut s, "lead", "shape", Some(1.0)).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("() => tone({ shape: \"square\" })", "({ lane }) => tone({ shape: \"sine\" })"));
+    s.undo().unwrap();
+    remove(&mut s, "lead", "shape", None).unwrap();
+    assert_eq!(f.read("song.ts"), song.replace("() => tone(", "({ lane }) => tone("));
+    assert!(!f.0.join("data/lead/shape.json").exists());
+}
+
+/// `with_choice`, the track's function taking its lanes and running `body`.
+fn with_lanes(body: &str) -> Fixture {
+    let f = with_choice("tone()");
+    let song = f.read("song.ts").replace("track(\"lead\", () => tone())", &format!("track(\"lead\", ({{ lane }}) => {{\n  {body}\n}})"));
+    f.write("song.ts", song);
+    f
+}
+
+// CARD-14 (review K5): disconnecting a lane of names from a choice writes the choice's default as
+// its name, and from a switch as true or false. The lane still feeds another choice, or else
+// disconnecting it would leave a lane with no names: that is refused in words.
+#[test]
+fn disconnect_writes_a_choices_default_as_its_name() {
+    let f = with_lanes(
+        "const pick = lane.control(\"pick\", \"choice\", \"sine\");\n  const on = lane.control(\"on\", \"switch\", true);\n  tone({ shape: pick });\n  return tone({ shape: pick, sub: on });",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let song = f.read("song.ts");
+    let inlet = |s: &Session, name: &str| s.inlets().into_iter().rfind(|i| i.name == name).unwrap_or_else(|| panic!("{name} is a cable"));
+    let on = inlet(&s, "on");
+    let e = s.disconnect(on.revision, &on.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("on", "false"));
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap();
+    assert_eq!((e.before.as_str(), e.after.as_str()), ("pick", "\"saw\""));
+    assert_eq!(f.read("song.ts"), song.replace("tone({ shape: pick, sub: on })", "tone({ shape: \"saw\", sub: false })"));
+    // The lane's last choice: without it, the lane would have no names.
+    let pick = inlet(&s, "pick");
+    let e = s.disconnect(pick.revision, &pick.id).unwrap_err();
+    assert!(e.to_string().contains("pick is a lane of names, and this is the only choice it feeds"), "{e}");
 }

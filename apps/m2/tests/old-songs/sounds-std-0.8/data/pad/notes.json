@@ -1,0 +1,38 @@
+{"clips": [
+  {"id": "ved3qtx7", "start": 0, "length": 16, "notes": [
+    {"pitch": "A3", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "F3", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "A3", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "G3", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G3", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "B3", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "D4", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 12, "length": 4, "velocity": 0.7}
+  ]},
+  {"id": "tfvmvp25", "start": 48, "length": 16, "notes": [
+    {"pitch": "A3", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "F3", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "A3", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "G3", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "C4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "E4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G3", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "B3", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "D4", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "G4", "start": 12, "length": 4, "velocity": 0.7}
+  ]}
+]}

@@ -60,12 +60,15 @@ pub struct Control {
 /// value in the constant's unit.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Declared {
-    /// The ComponentId (`std:delay`).
+    /// The ComponentId (`@m2/effects:delay`).
     pub component: String,
     /// The slot (`time`, `channels.hats.db`).
     pub slot: String,
-    /// What a knob is called: the control's label, else its name (`hats.db` in a dictionary).
+    /// What a knob is called (CARD-34): the control's label, else its name; a dictionary entry's by
+    /// its key first (`hats.db`, `hats.loudness`).
     pub label: String,
+    /// A dictionary entry's key, which `label` starts with (`hats`), said apart.
+    pub entry: Option<String>,
     /// The range a knob shows (a hint, PKG-8) and whether it moves logarithmically: the
     /// declared ones when the value has the declared unit, an `accepts` entry's for its unit,
     /// else none.
@@ -89,10 +92,33 @@ impl Control {
     /// The value `value` plays as, exactly as a commit would write it (the literal's spelling,
     /// rounded through its units): what a gesture's update sends the engine (WRITE-22). Pure.
     pub fn audition(&self, value: f64) -> Result<f64, EditError> {
+        self.numbered()?;
         Ok(match &self.edit {
             Edit::Literal { lens, .. } => lens.propose(value)?.value,
             Edit::Insert(_) => lens::propose(value, 1.0)?.value,
         })
+    }
+
+    /// A choice's options, in place order (CARD-10): what its menu offers. None for anything else.
+    pub fn options(&self) -> Option<Vec<&'static str>> {
+        self.unit.and_then(Unit::options).map(|n| n.names().iter().map(|x| &**x).collect())
+    }
+
+    /// Whether it is a switch (CARD-11): true or false in the code, 1 or 0 here.
+    pub fn is_switch(&self) -> bool {
+        self.unit == Some(Unit::Switch)
+    }
+
+    /// Why it isn't set as a number, when it is a choice or a switch: its value is a name, or true or
+    /// false (CARD-10, CARD-11), never a place, and it is written as one (CARD-21), never dragged.
+    pub(crate) fn numbered(&self) -> Result<(), EditError> {
+        let name = self.declared.first().map_or("this value", |d| d.label.as_str());
+        let words = match (self.options(), self.is_switch()) {
+            (Some(o), _) => format!("{name} is one of {}: set it by its name", crate::kind::one_of(&o)),
+            (None, true) => format!("{name} is a switch: set it to true or false"),
+            (None, false) => return Ok(()),
+        };
+        Err(EditError::Rejected(words))
     }
 
     /// For a control its call leaves out: the edits writing `written` (a signal's name, or a
@@ -154,6 +180,19 @@ pub struct Audition {
     pub current: f64,
 }
 
+/// How a choice's place, or a switch's 1 or 0, is written in code (CARD-10, CARD-11): its name, or
+/// true or false. None for a number, or a place no option has.
+pub(crate) fn written_as(unit: Unit, value: f64) -> Option<String> {
+    match unit {
+        Unit::Switch => Some((value != 0.0).to_string()),
+        Unit::Choice(o) => {
+            let name = o.name(value as usize).filter(|_| value >= 0.0 && value.fract() == 0.0)?;
+            Some(serde_json::to_string(name).expect("a string serialises"))
+        }
+        _ => None,
+    }
+}
+
 /// The descriptor of the component whose instance frame `frame` of `m` is, if it was declared
 /// with one.
 pub(crate) fn component_of<'a>(compiled: &'a Compiled, m: &Module, frame: u32) -> Option<&'a Arc<Descriptor>> {
@@ -165,13 +204,14 @@ pub(crate) fn declared(compiled: &Compiled, m: &Module, origin: &Origin, unit: O
     let slot = origin.control.as_ref()?;
     let desc = component_of(compiled, m, slot.frame)?;
     let c = desc.control(&slot.slot)?;
-    // A dictionary entry's control is named by its key: `hats.db`.
-    let name = slot.slot.split_once('.').map_or(slot.slot.as_str(), |(_, rest)| rest);
     let range = desc.range_for(&slot.slot, unit);
+    // A dictionary entry's control is named by its key first: `hats.db` (CARD-34).
+    let name = crate::kind::named(c.label.as_deref(), &slot.slot);
     Some(Declared {
         component: desc.id.clone(),
         slot: slot.slot.clone(),
-        label: c.label.clone().unwrap_or_else(|| name.to_string()),
+        label: name.label,
+        entry: name.entry,
         range: range.map(|r| r.0),
         log: range.is_some_and(|r| r.1),
         default: c.default.as_ref().filter(|_| unit == c.unit).map(|d| d.value),
@@ -200,7 +240,11 @@ fn control(rev: &Revision, sites: &HashMap<u32, &Site>, m: &Module, origin: &Ori
         let insertion = Insertion::plan(site, desc, &slot.slot, text, options_of(m, site.id).ok()?, &rev.compiled.units).ok()?;
         (format!("{}#{}/@{}", site.file, site.ordinal, slot.slot), String::new(), 1.0, Edit::Insert(insertion))
     } else {
-        let lens = LiteralLens::read(site, origin, text, value)?;
+        // A choice or a switch is written by its name, or true or false (CARD-10, CARD-11).
+        let lens = match unit.filter(|u| !u.is_number()) {
+            Some(u) => LiteralLens::named(site, origin, text, u, value)?,
+            None => LiteralLens::read(site, origin, text, value)?,
+        };
         // A quantity (`hz(500)`) is its own call; a plain number is written in its instance's
         // call, or, for an old-form component, is a constant with no unit.
         let quantity = match &origin.control {
@@ -318,7 +362,8 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         return find(id).ok_or_else(|| EditError::NotFound(id.to_string()));
     }
     // Carry the target from revision `at`: its call must be untouched and in place.
-    let stale = EditError::Stale { current: accepted.number };
+    let file = id.rsplit_once('/').and_then(|(call, _)| call.rsplit_once('#')).map_or("", |(file, _)| file);
+    let stale = EditError::stale(s, at, file);
     let carried = || -> Option<Control> {
         let past = s.past(at)?;
         let (old, arg) = site_by_id(past.sites(), id)?;
@@ -328,7 +373,19 @@ fn resolve_with(s: &Session, at: u64, id: &str, find: impl Fn(&str) -> Option<Co
         let site = accepted.compiled.sites.iter().find(|x| x.file == old.file && x.start == to && x.end == to + (old.end - old.start))?;
         find(&format!("{}#{}/{}", site.file, site.ordinal, arg.join(".")))
     };
-    carried().ok_or(stale)
+    // Changed since only by the window that asks, moving no ids (AGENT-2): the id names the same
+    // control now; one its own value wrote in gave it a new id, by the same call and slot.
+    let own = || -> Option<Control> {
+        if !s.only_own_since(at, file) {
+            return None;
+        }
+        find(id).or_else(|| {
+            let slot = id.rsplit_once("/@").map(|(_, slot)| slot)?;
+            let call = id.rsplit_once('/')?.0;
+            controls(s).into_iter().find(|c| c.id.starts_with(&format!("{call}/")) && c.declared.first().is_some_and(|d| d.slot == slot))
+        })
+    };
+    carried().or_else(own).ok_or(stale)
 }
 
 /// The call `id` names (`tracks/bass.ts#8/1`), and the argument path after it.

@@ -4,6 +4,7 @@
 - Press **⌘F** (Ctrl+F off the Mac) anywhere outside a text field, type a few words, and press **Enter** to add what you found.
 - One search finds everything you can add: instruments, sounds (presets), effects, samples and your plugins, music2's own and your packs'.
 - **Space** plays a short preview first. **Esc** closes.
+- After what you have, **From the library** shows what you can get: **Get** fetches it and adds it ([Getting packs from the library](library.md)).
 
 ## The panel
 
@@ -17,12 +18,16 @@ Each row says what it is called, then quietly what kind of sound it is and where
 | Type | Find; every word must match |
 | ↓ ↑ | Move from row to row, across the groups |
 | Space | Play the row's preview, after you moved to it with ↓ or ↑, or clicked it. Again, or moving, stops it |
-| Enter | Add it, and close. Pressed right after typing, it adds the best match for what you typed, as soon as the search has it |
-| Esc | Close |
+| Enter | Add it, and close. Pressed right after typing, it adds the best match for what you typed, as soon as the search has it. On a row From the library, Get it first |
+| Esc | Close; while a Get comes, cancel it |
 
 A row also drags: an instrument onto the timeline, an effect onto a track, as the side browser's rows do, and a sound (a preset) onto a track, which loads it into that track's instrument or effect it is for.
 
 In the code editor ⌘F finds text in your code, as it always did. In a text field it does nothing.
+
+## From the library
+
+Below what you have, a last group, **From the library**, lists what you can get from music2's library of shared packs: each row names its pack, with **Get** at its right. Space plays it as any row; Enter or Get downloads it, checks it, and adds it, its progress in its row. [Getting packs from the library](library.md) says how, and what music2 sends (only what you play or get, never what you type).
 
 ## What Enter does
 
@@ -39,7 +44,7 @@ Each is one step that **Undo** (⌘Z) takes back, and a note at the bottom says 
 ## How it finds things
 
 - Each word you type must match somewhere: the name, the start of a word in it, a word of what it is (its group, what code calls it, a drum the kit plays), or a word of its description. Capitals don't matter, and neither do dashes, dots and other marks: `hi-hat` finds what `hi hat` finds, and `synth.pluck` the Synth pluck.
-- An item's id, as code and `m2 search` write it (`std:reverb`), finds that item first.
+- An item's id, as code and `m2 search` write it (`@m2/effects:reverb`), finds that item first.
 - The best match is selected: the name itself, then names that start with what you typed, then a word of the name, a tag, the description.
 - music2's own sounds come before yours, and yours before plugins.
 

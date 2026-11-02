@@ -204,3 +204,7 @@ pub(crate) use routes;
 #[cfg(test)]
 #[path = "api_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "answers_tests.rs"]
+mod answers_tests;

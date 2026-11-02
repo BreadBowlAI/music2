@@ -1,8 +1,8 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Copy, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
-import { graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument } from "../lib/graph";
+import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
 import { trackMade } from "../lib/events";
 import { changeInstrument, currentInstrument, notesLane } from "../lib/instrument";
 import { chord, opt } from "../lib/native";
@@ -11,6 +11,7 @@ import { DEFAULT_ORDER, TRACK_COLORS, type TrackColorName } from "../lib/palette
 import { isPlugin, pluginInstruments, usePluginList, wantPlugins } from "../lib/plugins";
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { editing } from "../lib/history";
 import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
@@ -22,7 +23,7 @@ import PluginsFoot from "./PluginsFoot";
 // Every one is one undo step on the server; the timeline shows the result, so only what may be off
 // screen or is structural (add, duplicate, delete) says so in a toast (taste.md §2.14).
 
-/** What a dragged instrument row of the browser carries: its component (`std:synth-pluck`). */
+/** What a dragged instrument row of the browser carries: its component (`@m2/synths:synth-pluck`). */
 export const INSTRUMENT_DRAG = "application/x-m2-instrument";
 
 /** ⌘⌫ as this platform writes it. */
@@ -78,14 +79,14 @@ function nameOf(graph: GraphState, module: string) {
 }
 
 /** The graph as the server has it now, so what an edit made can be selected at once. */
-async function refreshed() {
+export async function refreshed() {
   const graph = await graphApi.get();
   useStore.getState().set({ graph });
   return graph;
 }
 
 /** Select a track an edit made and light its row (taste.md §2.13): nothing else opens, so Space, M and S work at once. */
-function arrived(module: string, lane: string | undefined) {
+export function arrived(module: string, lane: string | undefined) {
   useShell.getState().select(module);
   if (lane) trackMade(module, lane);
 }
@@ -117,7 +118,7 @@ export function newTrack() {
 }
 
 /** Add a track playing `instrument` below `after` (else last): selected and lit, with an Undo. */
-export async function addTrack(instrument: Instrument, after: string | null) {
+export async function addTrack(instrument: Instrument, after: string | null): Promise<string | undefined> {
   const graph = writable();
   if (!graph) return;
   lastAdded = instrument.component;
@@ -127,6 +128,67 @@ export async function addTrack(instrument: Instrument, after: string | null) {
     await refreshed();
     arrived(r.module, instrument.lane);
     toast(r.label === instrument.label ? `Added ${r.label}` : `Added ${r.label} (${instrument.label})`, undoAction(graph.session, r.step));
+    return r.module;
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/** + Track's group of kits (KIT-5): several tracks at once, worded so beside the Drum. */
+export const KITS = "Drum kit (several tracks)";
+
+/** A row of + Track's list: an instrument, a plugin, an audio track, or a kit (KIT-5), which says so. */
+export type Row = Instrument & { kit?: KitPreset };
+
+/** The kits as + Track's rows, each its kit's, by the id `kit:<instrument>/<name>`, in the kits' group. */
+export function kitRows(kits: KitPreset[]): Row[] {
+  return kits.map((k) => ({
+    component: `kit:${k.component}/${k.name}`,
+    label: k.name,
+    name: "",
+    module: "",
+    description: `${k.tracks.join(", ")} and a Drums bus`,
+    category: KITS,
+    lane: "",
+    pack: k.pack,
+    kit: k,
+  }));
+}
+
+/** Add kit `kit` below `after` (else last), KIT-5: its bus and tracks, the first track selected and lit, with an Undo. */
+export async function addKit(kit: KitPreset, after: string | null) {
+  const graph = writable();
+  if (!graph) return;
+  lastAdded = `kit:${kit.component}/${kit.name}`;
+  const toast = useStore.getState().toast;
+  try {
+    const r = await graphApi.addKit(graph.session, kit, after);
+    await refreshed();
+    // Its tracks' lane, as + Track lists its instrument (a drum's, `hits`).
+    arrived(r.tracks[0]?.module ?? r.module, graph.instruments?.find((i) => i.component === kit.component)?.lane);
+    toast(`Added the ${kit.name}: ${r.tracks.map((t) => t.label).join(", ")}, going to ${r.label}`, undoAction(graph.session, r.step));
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+
+/**
+ * Make it a kit (KIT-22): drum machine track `module` becomes a kit's bus, with a Drum track for each
+ * sound its notes use going to it. The bus is selected, so Beat shows the kit; the toast says what
+ * it made and what went, with an Undo.
+ */
+export async function makeKit(module: string) {
+  const graph = writable();
+  if (!graph) return;
+  const name = nameOf(graph, module);
+  const toast = useStore.getState().toast;
+  try {
+    const r = await graphApi.makeKit(graph.session, module, name);
+    await refreshed();
+    useShell.getState().select(r.module);
+    const said = r.said.map((s) => `${s[0].toUpperCase()}${s.slice(1)}.`);
+    toast([`Made ${name} a kit: ${r.tracks.map((t) => t.label).join(", ")}, going to it.`, `${r.keeps}`, ...said].join(" "), undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
   }
@@ -137,7 +199,7 @@ export async function duplicateTrack(module: string) {
   const graph = writable();
   if (!graph || module === "song") return;
   const name = nameOf(graph, module);
-  const lane = graph.timeline.tracks.find((t) => t.module === module)?.lanes.find((l) => l.kind !== "control")?.key;
+  const lane = graph.timeline.tracks.find((t) => t.module === module)?.lanes.find((l) => !isAutomation(l))?.key;
   const toast = useStore.getState().toast;
   try {
     const r = await graphApi.duplicateTrack(graph.session, module, name);
@@ -210,6 +272,51 @@ export function moved(order: string[], module: string, before: string) {
 const trackOrder = (graph: GraphState) => graph.timeline.tracks.filter((t) => t.track && t.module !== "song").map((t) => t.module);
 
 /**
+ * The order this window's last move wrote, from its drop until the window shows it (AGENT-2: a
+ * change of `layout.json` makes no revision, so the gate can't wait for it): the next move goes from
+ * it, one after another (`queue`), so a quick second move never undoes the first. Done once the
+ * timeline draws that order, or 3 s after its answer (another window's move came since).
+ */
+let sent: { session: number; order: string[]; answered?: number; queue: Promise<unknown> } | null = null;
+const SENT_MS = 3000;
+useStore.subscribe((s) => {
+  const g = s.graph;
+  if (sent && (!g || g.session !== sent.session || (sent.answered !== undefined && trackOrder(g).join() === sent.order.join()))) sent = null;
+});
+
+/**
+ * Move `module` to place `at` among the other tracks (0: the top), as the window drew them, after
+ * the move before it: from the order that one wrote while the window doesn't show it yet.
+ */
+function reorder(graph: GraphState, module: string, at: number, name: string) {
+  const session = graph.session;
+  const before = sent?.session === session && !(sent.answered !== undefined && Date.now() - sent.answered > SENT_MS) ? sent : null;
+  const mine: NonNullable<typeof sent> = { session, order: [], queue: Promise.resolve() };
+  // On its way from the drop: an Undo, or a gesture, waits for it.
+  const ours = editing();
+  mine.queue = (before?.queue ?? Promise.resolve())
+    .then(async () => {
+      const now = useStore.getState().graph;
+      if (!now || now.session !== session) return;
+      const base = before?.order.length ? before.order : trackOrder(now);
+      const rest = base.filter((k) => k !== module);
+      const order = [...rest.slice(0, at), module, ...rest.slice(at)];
+      mine.order = order;
+      if (order.join() === base.join()) return;
+      // Made from `base`: the server refuses it, saying who, when the tracks moved since.
+      await graphApi.layout(session, { order, base }, { name: `moving ${name}` });
+      mine.answered = Date.now();
+    })
+    .catch((error) => useStore.getState().toast(message(error)))
+    .finally(() => {
+      // Refused, or nothing written: nothing for the next move to go from.
+      if (sent === mine && mine.answered === undefined) sent = null;
+      ours.end();
+    });
+  sent = mine;
+}
+
+/**
  * Drag a track's header up or down to move it (taste.md §3.4): after 4px, the header follows the
  * pointer and a 2px line shows where it lands; letting go writes the new order (no toast; ⌘Z puts
  * it back). The Song row is pinned and never a target.
@@ -240,8 +347,9 @@ export function startReorder(e: React.PointerEvent, module: string) {
     window.removeEventListener("pointercancel", end);
     useReorder.setState({ module: null, dy: 0, before: null });
     if (!dragging || ev.type !== "pointerup" || !before) return;
-    const name = nameOf(graph, module);
-    graphApi.layout(graph.session, { order: moved(order, module, before) }, { name: `moving ${name}` }).catch((error) => useStore.getState().toast(message(error)));
+    // Where it lands among the others, as drawn: from the order the window's last move wrote.
+    const rest = order.filter((k) => k !== module);
+    reorder(graph, module, before === END ? rest.length : rest.indexOf(before), nameOf(graph, module));
   };
   window.addEventListener("pointermove", move);
   window.addEventListener("pointerup", end);
@@ -260,6 +368,9 @@ function fileOf(graph: GraphState, module: string) {
   return [...count].sort((a, b) => b[1] - a[1])[0]?.[0] ?? null;
 }
 
+/** A row's id in the page: its component's, with nothing an id can't hold (a kit's name has spaces). */
+const rowId = (r: Row) => `instrument-${encodeURIComponent(r.component)}`;
+
 /** A key the way a new track's is proposed (ID-2), for the list's foot: close enough to say where it goes. */
 function proposed(label: string, taken: Set<string>) {
   const base = label.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 32) || "track";
@@ -268,15 +379,16 @@ function proposed(label: string, taken: Set<string>) {
 }
 
 /**
- * Instruments matching `query`, in their groups (drums first): by name, as a typeahead takes it
- * ("plu" is Pluck, though a description says "plus"), else by description or category.
+ * Rows matching `query`, in their groups (drums first): by name, as a typeahead takes it ("plu" is
+ * Pluck, though a description says "plus"), a kit by its group's words too ("drum" lists the Drum
+ * and the kits); else by description or category.
  */
-export function instrumentGroups(list: Instrument[], query: string) {
+export function instrumentGroups<R extends Row>(list: R[], query: string) {
   const q = query.trim().toLowerCase();
-  const by = (fields: (i: Instrument) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
-  const named = by((i) => [i.label, i.name]);
+  const by = (fields: (i: R) => string[]) => list.filter((i) => fields(i).some((t) => t.toLowerCase().includes(q)));
+  const named = by((i) => [i.label, i.name, ...(i.kit ? [i.category] : [])]);
   const hits = !q ? list : named.length ? named : by((i) => [i.description, i.category]);
-  const groups: { name: string; items: Instrument[] }[] = [];
+  const groups: { name: string; items: R[] }[] = [];
   for (const i of hits) {
     const g = groups.find((x) => x.name === i.category) ?? (groups.push({ name: i.category, items: [] }), groups[groups.length - 1]);
     g.items.push(i);
@@ -309,13 +421,20 @@ function InstrumentPicker({
   onClose: () => void;
 }) {
   const [query, setQuery] = useState("");
-  // + Track's groups end with Audio (lane A's Q8), then Plugins (gaps #32); Change Instrument has neither.
+  // + Track's groups: the Drums, then the kits (KIT-5), then the instruments; they end with Audio
+  // (lane A's Q8), then Plugins (gaps #32). Change Instrument has no kits, Audio or Plugins.
   const listed = graph.instruments;
+  const kits = graph.kit_presets;
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => {
     if (!swap) wantPlugins();
   }, [swap]);
-  const all = useMemo(() => [...(listed ?? []), ...(swap ? [] : [AUDIO_TRACK, ...pluginInstruments(plugins)])], [listed, swap, plugins]);
+  const all = useMemo((): Row[] => {
+    const instruments = listed ?? [];
+    if (swap) return instruments;
+    const drums = instruments.filter((i) => i.category === "Drums").length;
+    return [...instruments.slice(0, drums), ...kitRows(kits ?? []), ...instruments.slice(drums), AUDIO_TRACK, ...pluginInstruments(plugins)];
+  }, [listed, kits, swap, plugins]);
   const groups = useMemo(() => instrumentGroups(all, query), [all, query]);
   const flat = groups.flatMap((g) => g.items);
   const playing = swap ? currentInstrument(graph, swap) : undefined;
@@ -330,10 +449,11 @@ function InstrumentPicker({
   useLayoutEffect(() => field.current?.focus(), []);
   const taken = new Set(graph.view.modules.map((m) => m.key));
   const name = swap ? nameOf(graph, swap) : "";
-  const pick = (i: Instrument | undefined) => {
+  const pick = (i: Row | undefined) => {
     if (!i) return;
     onClose();
     if (i === AUDIO_TRACK) return void addAudioTrack(after);
+    if (i.kit) return void addKit(i.kit, after);
     if (!swap) return void addTrack(i, after);
     // The one it plays: nothing to change.
     if (i.component !== playing?.component) void changeInstrument(swap, i);
@@ -365,7 +485,7 @@ function InstrumentPicker({
           role="combobox"
           aria-expanded
           aria-controls="instrument-options"
-          aria-activedescendant={current ? `instrument-${current.component}` : undefined}
+          aria-activedescendant={current ? rowId(current) : undefined}
           spellCheck={false}
           className="flex-1 min-w-0 bg-transparent outline-none text-base text-fg placeholder:text-fg-off"
           onChange={(e) => {
@@ -394,7 +514,7 @@ function InstrumentPicker({
               return (
                 <div
                   key={i.component}
-                  id={`instrument-${i.component}`}
+                  id={rowId(i)}
                   role="option"
                   aria-selected={on}
                   aria-checked={swap ? ticked : undefined}
@@ -425,9 +545,11 @@ function InstrumentPicker({
               ? `${fileOf(graph, swap) ?? "its code"} · ${current.name}(lane.notes("${notesLane(graph, swap)}"))`
               : current === AUDIO_TRACK
                 ? `tracks/${proposed("Audio", taken)}.ts · lane.audio("clips")`
-                : isPlugin(current.component)
-                  ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
-                  : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
+                : current.kit
+                  ? `tracks/${proposed("Drums", taken)}.ts · bus(…), and a track for each drum going to it`
+                  : isPlugin(current.component)
+                    ? `tracks/${proposed(current.label, taken)}.ts · plugin("${current.component}", { notes: lane.notes("notes") })`
+                    : `tracks/${proposed(current.label, taken)}.ts · ${current.name}(lane.notes("${current.lane}"))`}
           </span>
         </div>
       )}
@@ -471,7 +593,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const locked = lockReason(graph, useStore.getState().connected);
   const track = graph.timeline.tracks.find((t) => t.module === module);
-  const automation = !!track?.lanes.some((l) => l.kind === "control");
+  const automated = !!track?.lanes.some(isAutomation);
   const open = useShell((s) => s.open.has(module));
   const file = fileOf(graph, module);
   const run = (f: () => void) => () => {
@@ -525,6 +647,11 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
           Change instrument…
         </MenuRow>
       )}
+      {graph.drum_machines?.includes(module) && (
+        <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={graph.make_kit_keeps} onClick={run(() => void makeKit(module))}>
+          Make it a kit
+        </MenuRow>
+      )}
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
@@ -543,7 +670,7 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       >
         Colour
       </MenuRow>
-      {automation && (
+      {automated && (
         <MenuRow icon={<SlidersHorizontal size={14} />} shortcut="A" onClick={run(() => useShell.getState().toggleLanes(module, []))}>
           {open ? "Hide automation" : "Show automation"}
         </MenuRow>

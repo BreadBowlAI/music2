@@ -61,7 +61,7 @@ fn the_card_says_how_an_instrument_plays() {
     f.write(
         "song.ts",
         "import { kernel, ms, poly, song, track, type Note } from \"@m2/core\";\n\
-         import { drums } from \"std/drums\";\nimport { fm } from \"std/fm\";\nimport { mixer } from \"std/mix\";\nimport { synth } from \"std/synth\";\n\
+         import { drums } from \"@m2/drums\";\nimport { fm } from \"@m2/synths\";\nimport { mixer } from \"std/mix\";\nimport { synth } from \"@m2/synths\";\n\
          const tone = (n: Note) => kernel(\"std:sine\", { freq: kernel(\"std:mtof\", { pitch: n.pitch }) });\n\
          const lead = track(\"lead\", ({ lane }) => synth.lead(lane.notes(\"notes\")));\n\
          const pad = track(\"pad\", ({ lane }) => synth.pad(lane.notes(\"notes\")));\n\

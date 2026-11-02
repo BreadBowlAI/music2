@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, Renderer, Runner, Stats, TapAt, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, RINGS, Renderer, Runner, Stats, TapAt, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -112,6 +112,53 @@ fn copy_taps_change_no_bit() {
     }
 }
 
+// TAP-2, RENDER-33: with every tap on, every pure fixture plays the export's bits, the whole song:
+// a live plan with a meter at every overlay site and at every node with sound, watched, and every
+// ring pointed at the output or a node with sound, moved on to the next ones before every buffer,
+// while the meters are taken and the rings read as the server reads them.
+#[test]
+fn every_tap_on_changes_no_bit() {
+    for name in PURE {
+        let song = fixture(name);
+        let frames = (song.seconds() * song.rate as f64) as usize;
+        let export = offline(&song, frames);
+        let mut r = Renderer::prepare(
+            &song.flat,
+            &song.data,
+            &song.packages,
+            song.rate,
+            &mut m2_runtime::audio::Cache::default(),
+            &m2_plugins::Owner::discard(),
+            m2_runtime::Basis::Fresh,
+        )
+        .unwrap();
+        r.set_strict(false);
+        let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
+        let sound: Vec<TapAt> = (0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node).collect();
+        let mut meters: Vec<Vec<TapAt>> = (0..song.flat.overlays.len()).map(|k| vec![TapAt::Site(k)]).collect();
+        meters.extend(sound.iter().map(|&a| vec![a]));
+        r.tap(&meters).unwrap();
+        let taps = r.info().taps.clone().expect("a live plan has taps");
+        taps.watch(true);
+        let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
+        let (_player, mut d) = playing(r, song.rate);
+        let (mut turn, mut read, mut framed) = (0, vec![], 0);
+        let heard = hear(&mut d, frames, &mut |_, _| {
+            for ring in 0..RINGS {
+                if taps.frames(ring, 0, 1024, &mut read).is_some() {
+                    framed += read.len();
+                }
+                taps.point(ring, Some(points[(turn + ring) % points.len()])).unwrap();
+            }
+            drop(taps.take());
+            turn += 1;
+        });
+        assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
+        assert!(framed > 0, "{name}: the rings were read");
+        assert_eq!(first_diff(&heard, &export), None, "{name}: a tap changed what plays");
+    }
+}
+
 // RENDER-26, RENDER-26a: a swap of the same data, while notes sound, changes nothing at all.
 #[test]
 fn a_no_op_swap_changes_no_bit() {
@@ -171,14 +218,14 @@ export default song(() => mixer({ drums: drums.out }));
             (
                 "tracks/drums.ts",
                 r#"import { track } from "@m2/core";
-import { drums } from "std/drums";
+import { drums } from "@m2/drums";
 import { mixer } from "std/mix";
 
 export default track("drums", ({ lane }) =>
   mixer({
     kit: drums.kit(lane.notes("kit")),
-    snare: drums.snare(lane.notes("snare")),
-    hats: drums.hats(lane.notes("hats")),
+    snare: drums.drum(lane.notes("snare"), { drum: "snare" }),
+    hats: drums.drum(lane.notes("hats"), { drum: "hats" }),
   }),
 );
 "#,
@@ -191,12 +238,13 @@ export default track("drums", ({ lane }) =>
     )
 }
 
-/// A chord held for 3 seconds at 120 bpm, on std's pad, through `effect`, a call of one of
-/// std/fx's effects on `x`: one song per effect, so each is judged on its own.
+/// A chord held for 3 seconds at 120 bpm, on @m2/synths' pad, through `effect`, a call of one of
+/// @m2/effects' effects on `x` (std/fx's before std 0.6): one song per effect, so each is judged on
+/// its own.
 fn held(name: &str, effect: &str) -> Song {
     let chord: Vec<Value> = [48, 55, 60, 64, 67].iter().map(|p| json!({"pitch": p, "start": 0, "length": 6})).collect();
     let track = format!(
-        "import {{ track }} from \"@m2/core\";\nimport {{ pad }} from \"std/instruments\";\nimport {{ {name} }} from \"std/fx\";\n\n\
+        "import {{ track }} from \"@m2/core\";\nimport {{ pad }} from \"@m2/synths\";\nimport {{ {name} }} from \"@m2/effects\";\n\n\
          export default track(\"held\", ({{ lane }}) => {{\n  const x = pad(lane.notes(\"notes\"));\n  return {effect};\n}});\n"
     );
     project(
@@ -279,6 +327,60 @@ fn round_robin_takes_turns_by_the_notes_live_as_in_the_export() {
     for idle in [2 * SR as usize, 5 * BLOCK] {
         assert_eq!(first_diff(&live_after_idle(&song, idle, frames), &export), None, "played after {idle} frames stopped");
     }
+}
+
+// PKG-16 §3, RENDER-39: `turns: "key"` gives each key its own turns, as SFZ does, from each note's
+// `keyCount`. A kick (C2) and a snare (D2) that alternate on one lane, each with two takes (the same
+// two files, played at their roots): with the lane's count the kick takes only the first and the
+// snare only the second; with a turn for each key each takes 1, 2. The same live after the engine
+// sat stopped as in the export; and a jump back to the start carries each key's count on, as the
+// lane's does.
+#[test]
+fn a_turn_for_each_key() {
+    let keys = |turns: &str| {
+        format!(
+            "import {{ track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\
+             export default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => sampler(lane.notes(\"notes\"), {{ {turns}regions: [\
+             {{ file: \"soft-1.wav\", root: 36, keys: [36, 36], round_robin: [1, 2] }}, {{ file: \"soft-2.wav\", root: 36, keys: [36, 36], round_robin: [2, 2] }},\
+             {{ file: \"soft-1.wav\", root: 38, keys: [38, 38], round_robin: [1, 2] }}, {{ file: \"soft-2.wav\", root: 38, keys: [38, 38], round_robin: [2, 2] }}] }}));\n"
+        )
+    };
+    // Kick, snare, kick, snare, a beat apart.
+    let notes = "{\"clips\": [{\"id\": \"kicksnar\", \"start\": 0, \"length\": 4, \"notes\": [\
+                 {\"pitch\": 36, \"start\": 0, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": 38, \"start\": 1, \"length\": 0.5, \"velocity\": 0.5},\
+                 {\"pitch\": 36, \"start\": 2, \"length\": 0.5, \"velocity\": 0.5}, {\"pitch\": 38, \"start\": 3, \"length\": 0.5, \"velocity\": 0.5}]}]}";
+    let fixture = "core/session/tests/fixtures/sampler-regions";
+    let lane = fixture_with(fixture, &[("tracks/keys.ts", &keys("")), ("data/keys/notes.json", notes)]);
+    let key = fixture_with(fixture, &[("tracks/keys.ts", &keys("turns: \"key\", ")), ("data/keys/notes.json", notes)]);
+    let frames = (key.seconds() * key.rate as f64) as usize;
+    // A beat is 0.5 s at 120 bpm; each take is 0.12 s, so each note's sound is its own.
+    let beat = key.rate as usize / 2;
+    let note = |out: &[[f32; 2]], k: usize| out[k * beat..k * beat + beat / 2].to_vec();
+    let by_lane = offline(&lane, frames);
+    assert!(note(&by_lane, 0) == note(&by_lane, 2) && note(&by_lane, 1) == note(&by_lane, 3), "the lane's count: each drum one take");
+    assert!(note(&by_lane, 0) != note(&by_lane, 1));
+    let export = offline(&key, frames);
+    assert!(peak(&note(&export, 0)) > 0.05, "the notes sound");
+    assert!(note(&export, 0) == note(&export, 1) && note(&export, 2) == note(&export, 3), "the kick's turn 1 is the snare's");
+    assert!(note(&export, 0) != note(&export, 2), "each takes turns on its own key");
+    for idle in [2 * SR as usize, 5 * BLOCK] {
+        assert_eq!(first_diff(&live_after_idle(&key, idle, frames), &export), None, "played after {idle} frames stopped");
+    }
+    // Kick, snare, kick, then back to the start before the second snare: the snare's second note
+    // takes its second take, where it took its first before.
+    let (player, mut d) = Player::driven(key.rate);
+    player.open(key.renderer()).unwrap();
+    let play = player.transport(Cmd::Play).unwrap();
+    let first = hear(&mut d, 5 * beat / 2, &mut |_, _| {});
+    let back = player.transport(Cmd::Seek(0.0)).unwrap();
+    let second = hear(&mut d, 3 * beat, &mut |_, _| {});
+    let from = |seq: u64, heard: usize| player.applied(seq).expect("applied").clock as usize - heard;
+    let (a, b) = (from(play, 0), from(back, first.len()));
+    let (first, second) = (&first[a..], &second[b..]);
+    assert!(note(first, 1) == note(&export, 1) && note(first, 2) == note(&export, 2), "the first time, as the export");
+    // (The jump's fade touches the kick right after it: the notes after are bit for bit.)
+    assert!(note(second, 1) == note(&export, 3), "the snare's second note: its second take");
+    assert!(note(second, 2) == note(&export, 2), "the kick's fourth note: its second take");
 }
 
 // PKG-16.4, RENDER-16: a release region plays when its note ends, wherever on the block grid. A
@@ -914,4 +1016,91 @@ fn a_latent_plugin_on_a_bus_stays_aligned() {
     assert_eq!(peak(&out), 0.0, "offline, the bus and the dry path inverted cancel exactly");
     let heard = live(&cancel, cancel.rate as usize * 4, None);
     assert_eq!(peak(&heard), 0.0, "live, the same");
+}
+
+/// A song of every tool of `@m2/mixing` (PACK-26): a kick through the transient shaper, a pad
+/// through the EQ and a gate the kick keys, keys through the de-esser, and the mix through the
+/// multiband compressor. `mix` is the mixer's channels.
+fn mixing_song(mix: &str) -> Song {
+    let notes = |pitches: &[&str], every: f64, length: f64| {
+        let notes: Vec<Value> = (0..(8.0 / every) as usize)
+            .flat_map(|i| pitches.iter().map(move |p| json!({"pitch": p, "start": i as f64 * every, "length": length, "velocity": 0.8})))
+            .collect();
+        json!({"clips": [{"id": "c1", "start": 0, "length": 8, "notes": notes}]}).to_string()
+    };
+    let song = format!(
+        "import {{ song }} from \"@m2/core\";\nimport {{ deesser, eq, gate, multiband, transient }} from \"@m2/mixing\";\n\
+         import {{ master, mixer }} from \"std/mix\";\nimport keys from \"./tracks/keys\";\nimport kick from \"./tracks/kick\";\n\
+         import pad from \"./tracks/pad\";\n\n\
+         export default song(() => master(multiband(mixer({mix}), {{ lowRatio: 3, lowThreshold: -24, highGain: 1 }})));\n"
+    );
+    project(
+        "mixing",
+        &[
+            (
+                "music2.toml",
+                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\
+                 \"@m2/drums\" = \"2\"\n\"@m2/mixing\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
+            ),
+            ("song.ts", &song),
+            (
+                "tracks/kick.ts",
+                "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\n",
+            ),
+            (
+                "tracks/pad.ts",
+                "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\nexport default track(\"pad\", ({ lane }) => synth.pad(lane.notes(\"chords\")));\n",
+            ),
+            (
+                "tracks/keys.ts",
+                "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\nexport default track(\"keys\", ({ lane }) => synth.pluck(lane.notes(\"chords\")));\n",
+            ),
+            ("data/kick/hits.json", &notes(&["C1"], 1.0, 0.25)),
+            ("data/pad/chords.json", &notes(&["C3", "E3", "G3"], 4.0, 4.0)),
+            ("data/keys/chords.json", &notes(&["E5", "B5"], 0.5, 0.25)),
+        ],
+    )
+}
+
+// PACK-26, RENDER-2, RENDER-33: a song that plays every tool of @m2/mixing, its gate keyed by
+// another track, renders the same bits on 4 threads as on one, and plays live what it exports. The
+// gate opens on each kick and shuts between them.
+#[test]
+fn the_mixing_tools_give_the_same_bits_on_1_and_4_threads() {
+    let song = mixing_song(
+        "{ kick: transient(kick.out, { attack: 6, sustain: -3 }), \
+         pad: gate(eq(pad.out, { on1: true, freq1: 120, gain4: 3, shape8: \"high shelf\", on8: true, gain8: -4 }), kick.out, \
+         { threshold: -30, hold: 0.04, release: 0.08, range: -60 }), keys: deesser(keys.out, { freq: 5000, threshold: -40, amount: 8 }) }",
+    );
+    let kernels: Vec<&str> = song
+        .flat
+        .nodes
+        .iter()
+        .filter_map(|n| if let m2_ir::FOp::Kernel { kernel, .. } = &n.op { Some(kernel.as_str()) } else { None })
+        .collect();
+    for tool in ["eq", "gate", "transient", "deesser", "multiband"] {
+        assert!(kernels.contains(&format!("@m2/mixing:{tool}").as_str()), "the song plays @m2/mixing:{tool}: {kernels:?}");
+    }
+    let frames = (song.seconds() * song.rate as f64) as usize;
+    let one = offline(&song, frames);
+    assert!(peak(&one) > 0.1, "the song sounds: {}", peak(&one));
+    for (n, diff, on_workers, _) in on_threads(&song, frames, &[4], &one) {
+        assert_eq!(diff, None, "the mixing song on {n} threads: the same bits");
+        assert!(on_workers > 0, "the mixing song on {n} threads: tasks ran on workers");
+    }
+    check("the mixing song", &song, frames, None);
+    // The pad alone, through the gate the kick keys, against the pad alone ungated: open just after
+    // each kick (a beat is 0.5 s), as it is; shut at its range, -80 dB, once its release is over. The
+    // kick holds the key over the closing level for about 230 ms, then come the hold (40 ms) and the
+    // release (80 ms), so it is shut from about 390 ms: measured from 400 ms to 475 ms (review Z5).
+    let gated = offline(&mixing_song("{ pad: gate(pad.out, kick.out, { threshold: -30, hold: 0.04, release: 0.08 }) }"), frames);
+    let ungated = offline(&mixing_song("{ pad: pad.out }"), frames);
+    let beat = song.rate as usize / 2;
+    let db = |r: std::ops::Range<usize>| 20.0 * (rms(&gated[r.clone()]) / rms(&ungated[r])).log10();
+    let (open, shut): (Vec<f32>, Vec<f32>) =
+        (1..7).map(|b| (db(b * beat + beat / 50..b * beat + beat / 5), db(b * beat + beat * 8 / 10..b * beat + beat * 19 / 20))).unzip();
+    assert!(
+        open.iter().all(|o| o.abs() < 1.0) && shut.iter().all(|s| (s + 80.0).abs() < 2.0),
+        "the kick opens the pad's gate, and it shuts to its range: open {open:?} dB, shut {shut:?} dB"
+    );
 }

@@ -2,7 +2,9 @@
 // red circle (the record sign everyone knows; taste.md §2.6 gains it, D18); counting in, the beats
 // left (4, 3, 2, 1) on `danger-soft`; recording, a white circle on `danger`. No animation. A
 // right-click (or Ctrl-click on a Mac) opens its options, kept on this machine, and Settings for the
-// MIDI keyboards or the sound input an audio track records from (io).
+// MIDI keyboards or the sound input an audio track records from (io). Since track recording, Punch
+// (record only between the loop's edges, MON-10) and Overdub (notes into the clip under them,
+// MON-12) are there too, and the tooltip says when Punch is on.
 
 import clsx from "clsx";
 import { Check, Circle } from "lucide-react";
@@ -32,7 +34,7 @@ export default function RecordButton() {
     ? "Stop recording (R). The song plays on"
     : counting
       ? "Counting in. R, Esc or Space stops it"
-      : "Record (R) · right-click for options";
+      : `Record (R)${opts.punch ? " · Punch: between the loop's edges" : ""} · right-click for options`;
   const close = () => setMenu(null);
   return (
     <>
@@ -89,6 +91,34 @@ export default function RecordButton() {
             }}
           >
             Snap notes to the grid
+          </MenuRow>
+          <MenuRow
+            role="menuitemcheckbox"
+            data-menu-item="punch"
+            aria-checked={opts.punch}
+            icon={tick(opts.punch)}
+            detail="Record only between the loop's edges, and replace what was there."
+            onMouseDown={keepFocus}
+            onClick={() => {
+              close();
+              void setRecordOption({ punch: !opts.punch });
+            }}
+          >
+            Punch in and out
+          </MenuRow>
+          <MenuRow
+            role="menuitemcheckbox"
+            data-menu-item="overdub"
+            aria-checked={opts.overdub}
+            icon={tick(opts.overdub)}
+            detail="Add the notes you play to the clip under them."
+            onMouseDown={keepFocus}
+            onClick={() => {
+              close();
+              void setRecordOption({ overdub: !opts.overdub });
+            }}
+          >
+            Overdub
           </MenuRow>
           <div role="separator" className="my-1 h-px bg-line" />
           <MenuRow

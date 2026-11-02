@@ -1,0 +1,10 @@
+{"clips": [
+  {"id": "4nra80t7", "start": 16, "length": 32, "notes": [
+    {"pitch": "D3", "start": 15, "length": 0.25, "velocity": 0.8},
+    {"pitch": "A2", "start": 15.25, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 15.5, "length": 0.25, "velocity": 0.85},
+    {"pitch": "D3", "start": 31, "length": 0.25, "velocity": 0.8},
+    {"pitch": "A2", "start": 31.25, "length": 0.25, "velocity": 0.8},
+    {"pitch": "D#2", "start": 31.5, "length": 0.25, "velocity": 0.85}
+  ]}
+]}

@@ -139,6 +139,73 @@ fn installing_twice_is_a_no_op_and_a_new_hash_is_refused() {
     assert!(!installed.exists() && !t.store().join("@test").exists(), "its empty folders go too");
 }
 
+/// Every file and folder under `dir`, with when it last changed.
+fn stamps(dir: &Path) -> Vec<(PathBuf, std::time::SystemTime)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            out.push((e.path(), e.metadata().unwrap().modified().unwrap()));
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-16, PACK-18: m2 installs the packs music2 ships into a fresh HOME's store the first time it
+// opens it, so a song made from the starter template builds offline, with no registry; a second
+// m2 finds them there and writes nothing in the store.
+#[test]
+fn m2_installs_the_bundled_packs_and_a_template_song_builds_offline() {
+    let t = Temp::new("bundled");
+    let song = t.0.join("song");
+    ok(t.m2(&["new", song.to_str().unwrap(), "--template", "starter"]));
+    assert!(song.join("music2.lock").is_file(), "the template's lock comes with it");
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    let listed = ok(t.m2(&["pack", "list"]));
+    for pack in bundled_versions() {
+        assert!(listed.contains(&pack), "{pack} in {listed}");
+    }
+    let before = stamps(&t.store());
+    std::thread::sleep(std::time::Duration::from_millis(20));
+    ok(t.m2(&["check", song.to_str().unwrap()]));
+    assert_eq!(stamps(&t.store()), before, "a second m2 writes nothing in the store");
+}
+
+/// Each pack the source tree bundles, as `<name> <version>`: `@m2/effects 1.1.0`.
+fn bundled_versions() -> Vec<String> {
+    let packs = m2_song::pack::bundled(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs"));
+    packs.iter().map(|d| m2_song::pack::PkgManifest::at(d).unwrap()).map(|m| format!("{} {}", m.package.name, m.package.version)).collect()
+}
+
+// PACK-19 (review S9): `m2 pack install` takes a folder's pack named in music2's own scope only as
+// a version music2 comes with, those very files; any other `@m2/` is refused in words.
+#[test]
+fn a_folders_m2_pack_installs_only_as_music2s_own() {
+    let t = Temp::new("scope");
+    let ours = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/effects");
+    let effects = bundled_versions().into_iter().find(|p| p.starts_with("@m2/effects ")).unwrap();
+    let same = t.0.join("same");
+    copy(&ours, &same);
+    let said = ok(t.m2(&["pack", "install", same.to_str().unwrap()]));
+    assert!(said.contains(&format!("{effects} is already installed")), "{said}");
+    let changed = t.0.join("changed");
+    copy(&ours, &changed);
+    std::fs::write(changed.join("README.md"), "# Not music2's\n").unwrap();
+    let said = failed(t.m2(&["pack", "install", changed.to_str().unwrap()]));
+    assert!(said.contains(&format!("@m2/ is music2's own scope: {effects}")) && said.contains("`@you/effects`"), "{said}");
+    let new = t.0.join("new");
+    copy(&fixtures().join("tiny"), &new);
+    let toml = std::fs::read_to_string(new.join("m2pkg.toml")).unwrap().replace("name = \"@test/tiny\"", "name = \"@m2/free-synths\"");
+    std::fs::write(new.join("m2pkg.toml"), toml).unwrap();
+    let said = failed(t.m2(&["pack", "install", new.to_str().unwrap()]));
+    assert!(said.contains("@m2/ is music2's own scope: @m2/free-synths 0.1.0"), "{said}");
+    assert!(!ok(t.m2(&["pack", "list"])).contains("free-synths"));
+}
+
 // PACK-12: check names each problem in words and exits 1.
 #[test]
 fn check_says_what_is_wrong() {
@@ -165,19 +232,27 @@ fn check_says_what_is_wrong() {
     for want in ["tool.sh", "licence", "sparkle", "samples/gone.wav"] {
         assert!(text.contains(want), "says {want}: {text}");
     }
-    // An effect without a category isn't one the lists can offer, nor an instrument.
-    assert!(text.contains("tiny-crunch"), "{text}");
+    // An effect without a category isn't one the lists can offer, nor an instrument: named, as one
+    // its author forgot (PACK-12).
+    assert!(text.lines().any(|l| l.contains("tiny-crunch") && l.contains("has no category")), "{text}");
 }
 
-// PACK-12: a new pack checks as made, and installs.
+// PACK-12: a new pack checks as made, and installs. PACK-23 (review Y16): it asks for @m2/core by
+// the SDK's major alone.
 #[test]
 fn a_new_pack_checks() {
     let t = Temp::new("new");
     let folder = t.0.join("felt");
     let out = t.m2(&["pack", "new", folder.to_str().unwrap(), "--name", "@alice/felt-piano"]);
     assert!(out.status.success(), "{}", said(&out));
+    let manifest = std::fs::read_to_string(folder.join("m2pkg.toml")).unwrap();
+    assert!(manifest.contains("\n\"@m2/core\" = \"2\"\n"), "{manifest}");
     let out = t.m2(&["pack", "check", folder.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
+    // Its voice is std's typed blocks, which TypeScript checks as you type; never a kernel's
+    // inputs by name, which only the build checks (review S8).
+    let index = std::fs::read_to_string(folder.join("src/index.ts")).unwrap();
+    assert!(index.contains("from \"std/dsp\"") && !index.contains("kernel("), "{index}");
     let out = t.m2(&["pack", "new", t.0.join("x").to_str().unwrap(), "--name", "felt"]);
     assert_eq!(out.status.code(), Some(1), "a name that isn't @owner/name: {}", said(&out));
 }
@@ -392,6 +467,9 @@ fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
     std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
     std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"kick\"\n").unwrap();
     short_wav(&drums.join("samples/kicks/Boom.wav"));
+    // FMT-24: a FLAC sample checks too, and is found.
+    let flac = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    std::fs::copy(flac, drums.join("samples/kicks/Thud.flac")).unwrap();
     let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
     assert!(out.status.success(), "{}", said(&out));
     let out = t.m2(&["pack", "install", drums.to_str().unwrap()]);
@@ -400,15 +478,20 @@ fn a_pack_of_samples_alone_checks_and_its_samples_are_checked() {
     let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
     assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Boom.wav", "{items}");
     assert_eq!((&items[0]["package"], &items[0]["sample"]["instrument"]), (&serde_json::json!("@alice/drums"), &serde_json::json!("kick")));
+    let out = t.m2(&["search", "thud", "--kind", "sample", "--json"]);
+    let items: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| panic!("{}", said(&out)));
+    assert_eq!(items[0]["id"], "sample:@alice/drums:samples/kicks/Thud.flac", "{items}");
 
     std::fs::write(drums.join("samples/kicks/broken.wav"), b"RIFF0000WAVEnope").unwrap();
     std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\ninstrument = \"cowbell\"\n\n[file.\"snares/gone.wav\"]\n").unwrap();
     let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
     assert_eq!(out.status.code(), Some(1), "{}", said(&out));
     let text = said(&out);
-    for want in
-        ["samples/kicks/broken.wav doesn't read as a WAV file", "instrument cowbell isn't one of", "no WAV file samples/snares/gone.wav"]
-    {
+    for want in [
+        "samples/kicks/broken.wav doesn't read as a WAV file",
+        "instrument cowbell isn't one of",
+        "no WAV or FLAC file samples/snares/gone.wav",
+    ] {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
@@ -429,7 +512,7 @@ fn tiny_with_kernel(t: &Temp, version: &str, tag: &str) -> PathBuf {
     wasm.extend(tag.as_bytes());
     std::fs::write(dir.join("k.wasm"), &wasm).unwrap();
     let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
-    let tone = "\nimport { hz, kernel } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
+    let tone = "\nimport { hz } from \"@m2/core\";\n\n/** A sine of the pack's own kernel. */\nexport const tinyTone = component(\n  {\n    \
                 id: \"tiny-tone\",\n    label: \"Tiny tone\",\n    signature: signature<(notes: Events) => Audio>(),\n    \
                 inputs: { notes: port.notes() },\n    output: port.audio(),\n    editor: { category: \"Keys\", description: \"A sine\" },\n  },\n  \
                 (_notes: Events): Audio => kernel(\"@test/tiny:sine\", { freq: hz(440) }),\n);\n";
@@ -496,11 +579,11 @@ fn a_version_this_app_cant_run_is_never_chosen() {
     let song = t.0.join("packs/song-store");
     let s = song.to_str().unwrap();
     ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
-    // 0.1.1 needs std 0.9: install refuses it here, so it is put in the store as a newer app would.
+    // 0.1.1 needs std 0.10: install refuses it here, so it is put in the store as a newer app would.
     let later = tiny_at(&t, "0.1.1");
     let toml = std::fs::read_to_string(later.join("m2pkg.toml")).unwrap();
     assert!(toml.contains("std = \"0.4\""), "{toml}");
-    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.9\"")).unwrap();
+    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.10\"")).unwrap();
     ok(t.m2(&["pack", "build", later.to_str().unwrap()]));
     copy(&later, &t.store().join("@test/tiny/0.1.1"));
 
@@ -514,7 +597,7 @@ fn a_version_this_app_cant_run_is_never_chosen() {
     ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
     std::fs::remove_file(song.join("music2.lock")).unwrap();
     let text = failed(t.m2(&["check", s]));
-    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.9\""] {
+    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.10\""] {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
@@ -579,7 +662,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );
@@ -643,16 +726,102 @@ fn an_sfz_imports_checks_and_renders_alike_on_1_and_4_threads() {
     assert!(peak(0.25, 0.3) > 0, "the release sounds as the soft note ends");
 }
 
-// PACK-14: a FLAC sample stops the import before anything is written.
+// PACK-14, FMT-24, RENDER-2: an SFZ whose recordings are FLAC imports into a pack that keeps them
+// as they are, checks, and plays the very bits of the same pack made of the WAVs of them.
 #[test]
-fn a_flac_sample_stops_the_import() {
+fn a_flac_sample_is_copied_and_renders_as_its_wav() {
     let t = Temp::new("sfz-flac");
+    let flacs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac/tiny-keys");
+    let mut renders = vec![];
+    for kind in ["wav", "flac"] {
+        let input = t.0.join(format!("in-{kind}"));
+        copy(&sfz_fixture(), &input);
+        if kind == "flac" {
+            for e in std::fs::read_dir(input.join("samples")).unwrap().flatten() {
+                std::fs::remove_file(e.path()).unwrap();
+            }
+            for e in std::fs::read_dir(&flacs).unwrap().flatten() {
+                std::fs::copy(e.path(), input.join("samples").join(e.file_name())).unwrap();
+            }
+            for sfz in ["Tiny Keys.sfz", "soft.sfz"] {
+                let text = std::fs::read_to_string(input.join(sfz)).unwrap();
+                std::fs::write(input.join(sfz), text.replace(".wav", ".flac")).unwrap();
+            }
+        }
+        let pack = t.0.join(format!("pack-{kind}"));
+        let sfz = input.join("Tiny Keys.sfz");
+        let text = ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+        assert!(text.contains("tiny-keys plays 5 regions from 5 recordings") && text.contains("good to install"), "{kind}: {text}");
+        if kind == "flac" {
+            assert_eq!(std::fs::read(pack.join("samples/c4-loud.flac")).unwrap(), std::fs::read(flacs.join("c4-loud.flac")).unwrap());
+            let toml = std::fs::read_to_string(pack.join("instruments/tiny-keys.toml")).unwrap();
+            assert!(toml.contains("file = \"samples/g4-soft.flac\"") && !toml.contains(".wav"), "{toml}");
+        }
+        let song = t.0.join(format!("song-{kind}"));
+        tiny_keys_song(&song, &pack);
+        let out = t.0.join(format!("{kind}.wav"));
+        ok(t.m2(&["render", song.to_str().unwrap(), out.to_str().unwrap(), "--seconds", "4"]));
+        renders.push(std::fs::read(&out).unwrap());
+    }
+    assert!(renders[0] == renders[1], "the pack of FLACs plays the bits of the pack of WAVs");
+}
+
+// FMT-24, PACK-12 (review F1): a pack's audio is held to a whole decode's budget, read from each
+// file's header, never decoded: a recording of silence that says 2^27 + 1 samples (29 KB, as FLAC)
+// stops `m2 pack import-sfz`, naming it, and the pack's audio may hold 2^28 samples in all.
+#[test]
+fn a_pack_whose_audio_is_over_its_budget_is_refused() {
+    let t = Temp::new("budget");
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac");
     copy(&sfz_fixture(), &t.0.join("in"));
     let sfz = t.0.join("in/Tiny Keys.sfz");
     std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.flac")).unwrap();
+    std::fs::copy(fixtures.join("bomb.flac"), t.0.join("in/samples/c4-loud.flac")).unwrap();
     let pack = t.0.join("pack");
     let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
-    assert!(text.contains("c4-loud.flac is a FLAC file: convert it to WAV first; music2 reads only WAV for now"), "{text}");
+    assert!(
+        text.contains(
+            "samples/c4-loud.flac is too long: it holds 134217729 samples (frames × channels), more than music2 decodes \
+                       whole (134217728, about 23 minutes of stereo at 48 kHz)"
+        ),
+        "{text}"
+    );
+    assert!(!pack.exists());
+    // A recording at the most, beside a short sample, fits; a second one is more than a pack holds.
+    // Their headers alone say so: each file is a header and one block.
+    let drums = t.0.join("drums");
+    std::fs::create_dir_all(drums.join("recordings")).unwrap();
+    std::fs::write(drums.join("m2pkg.toml"), "[package]\nname = \"@alice/drums\"\nversion = \"1.0.0\"\nlicense = \"CC0-1.0\"\n").unwrap();
+    std::fs::write(drums.join("samples.toml"), "[folder.\"kicks\"]\n").unwrap();
+    short_wav(&drums.join("samples/kicks/Boom.wav"));
+    std::fs::copy(fixtures.join("at-the-most.flac"), drums.join("recordings/a.flac")).unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert!(out.status.success(), "{}", said(&out));
+    std::fs::copy(fixtures.join("at-the-most.flac"), drums.join("recordings/b.flac")).unwrap();
+    let out = t.m2(&["pack", "check", drums.to_str().unwrap()]);
+    assert_eq!(out.status.code(), Some(1), "{}", said(&out));
+    let text = said(&out);
+    assert!(
+        text.contains(
+            "the pack's audio holds 268440256 samples in all (frames × channels of every WAV and FLAC in it), more than a \
+                       pack may hold (268435456, 1 GiB as music2 plays it)"
+        ),
+        "{text}"
+    );
+}
+
+// PACK-14, FMT-24: a recording of another kind than WAV or FLAC (told by its first bytes) stops the
+// import before anything is written, naming it.
+#[test]
+fn an_ogg_sample_stops_the_import() {
+    let t = Temp::new("sfz-ogg");
+    copy(&sfz_fixture(), &t.0.join("in"));
+    let sfz = t.0.join("in/Tiny Keys.sfz");
+    std::fs::write(&sfz, std::fs::read_to_string(&sfz).unwrap().replace("c4-loud.wav", "c4-loud.ogg")).unwrap();
+    std::fs::write(t.0.join("in/samples/c4-loud.ogg"), b"OggS\0\x02 a sound in another kind of file").unwrap();
+    let pack = t.0.join("pack");
+    let text = failed(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/tiny-keys"]));
+    assert!(text.contains("c4-loud.ogg isn't a WAV or FLAC file: music2 reads those two; save it as a WAV first"), "{text}");
     assert!(!pack.exists());
 }
 
@@ -749,4 +918,81 @@ fn an_sfz_beside_the_working_folder_reads_only_its_folder() {
     let text = failed(t.m2_in(&t.0.join("in"), &["pack", "import-sfz", "i.sfz", "../pack", "--name", "@test/x"]));
     assert!(text.contains("i.sfz:1: `sample=../secret.wav` leaves the SFZ's folder"), "{text}");
     assert!(!t.0.join("pack").exists());
+}
+
+// Review Y12: `m2 kernels` lists every kernel a song can call: std's, and the kernels of the packs
+// music2 comes with (PACK-21), read from the store as any pack is (PACK-16), so an agent finds the
+// polysynth's, the drums' and the effects' voices there.
+#[test]
+fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
+    let t = Temp::new("kernels");
+    let listed = ok(t.m2(&["kernels"]));
+    for id in [
+        "std:svf",
+        "@m2/synths:synth",
+        "@m2/synths:fm",
+        "@m2/drums:drum",
+        "@m2/drums:one",
+        "@m2/effects:delay",
+        "@m2/effects:bitcrush",
+        "@m2/mixing:eq",
+        "@m2/wavetable:voice",
+    ] {
+        assert!(
+            listed.lines().any(|l| l.starts_with(&format!("{id} ")) || l.starts_with(&format!("{id}("))),
+            "{id} isn't listed:\n{listed}"
+        );
+    }
+}
+
+/// Every file under `dir` with its bytes, sorted.
+fn tree_of(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = vec![];
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            if e.file_type().unwrap().is_dir() {
+                stack.push(e.path());
+            } else {
+                out.push((e.path().strip_prefix(dir).unwrap().to_path_buf(), std::fs::read(e.path()).unwrap()));
+            }
+        }
+    }
+    out.sort();
+    out
+}
+
+// PACK-6 (review Y18): `m2 pack install <folder>` copies the pack into the store and never writes
+// into the folder it installs from: no `m2pack.json` is left there (`m2 pack build` is the one
+// command that writes it), and a folder it may only read installs as well.
+#[test]
+fn installing_from_a_folder_writes_nothing_into_it() {
+    let t = Temp::new("install-read-only");
+    let folder = t.0.join("felt");
+    ok(t.m2(&["pack", "new", folder.to_str().unwrap(), "--name", "@alice/felt-piano"]));
+    let before = tree_of(&folder);
+    m2_song::pack::read_only_inside(&folder).unwrap();
+    m2_song::pack::set_read_only(&folder, true).unwrap();
+    let out = t.m2(&["pack", "install", folder.to_str().unwrap()]);
+    for dir in walk_dirs(&folder) {
+        writable(&dir);
+    }
+    assert!(out.status.success(), "a folder it may only read installs: {}", said(&out));
+    assert_eq!(tree_of(&folder), before, "nothing is written into the folder");
+    assert!(!folder.join("m2pkg.json").exists() && !folder.join("m2pack.json").exists());
+}
+
+/// Every folder under `dir`, `dir` too.
+fn walk_dirs(dir: &Path) -> Vec<PathBuf> {
+    let mut out = vec![dir.to_path_buf()];
+    let mut i = 0;
+    while i < out.len() {
+        for e in std::fs::read_dir(&out[i]).unwrap().flatten() {
+            if e.file_type().unwrap().is_dir() {
+                out.push(e.path());
+            }
+        }
+        i += 1;
+    }
+    out
 }

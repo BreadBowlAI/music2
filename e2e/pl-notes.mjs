@@ -1,5 +1,6 @@
 // Polish lane D, D1 and D2 (the polish plan §6): the roll's right-click menu and its note tools
-// (transpose, quantize, legato, humanize, swing, duplicate, delete), Q in the roll, ⌥← and ⌥→
+// (transpose, quantize, legato, humanize, swing and the grooves since track notes, duplicate,
+// delete), Q in the roll, ⌥← and ⌥→
 // left to the page, a Ctrl-click on a Mac that opens the menu and moves nothing, ⌘= and ⌘− zoom
 // the roll while it has the keyboard (X3); the song's key
 // in the top bar, written into layout.json, and the roll's rows out of the key shaded. A PC page's
@@ -10,7 +11,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, box, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
@@ -34,6 +35,8 @@ async function setBass(notes) {
   }
   await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === notes.length);
   await sleep(150);
+  // The roll writes the lane as the page shows it: the page shows this write first.
+  await caughtUp();
   return read(FILE);
 }
 const revision = async () => (await state()).view.revision;
@@ -122,13 +125,16 @@ const want = [
   ["legato", "Legato", ""],
   ["humanize", "Humanize", ""],
   ["swing", "Swing", ""],
+  ["groove-laid-back", "Laid back", ""],
+  ["groove-pushed", "Pushed", ""],
+  ["groove-accents", "Accents", ""],
   ["duplicate", "Duplicate", "⌘D"],
   ["delete", "Delete", "⌫"],
 ];
 const got = r1.map((r) => [r.id, r.id === "swing" ? "Swing" : r.label, r.shortcut]);
 check(JSON.stringify(got) === JSON.stringify(want), `its rows, in order, with their keys: ${JSON.stringify(got)}`);
 const swings = await page.$$eval("[data-testid=note-menu] [data-swing]", (els) => els.map((e) => e.textContent));
-check(swings.join() === "Light,Medium,Heavy", `Swing is a row of three: ${swings}`);
+check(swings.join() === "50%,55%,60%,66%,71%", `Swing is a row of five amounts, the server's (NOTE-7): ${swings}`);
 const tips = Object.fromEntries(r1.map((r) => [r.id, r.title]));
 check(
   tips.quantize === "Move the notes onto the grid" &&
@@ -252,11 +258,11 @@ e = await emptyAt();
 await page.mouse.click(e.x, e.y, { button: "right" });
 await until(() => menu().then(Boolean), 2000);
 rev = await revision();
-await page.click('[data-testid=note-menu] [data-swing="medium"]');
+await page.click('[data-testid=note-menu] [data-swing="60"]');
 const swungStarts = [0, 0.3, 0.5, 0.8, 1, 1.3, 1.5, 1.8];
 check(
   await until(async () => JSON.stringify((await bassClip()).notes.map((x) => x.start)) === JSON.stringify(swungStarts)),
-  `Swing Medium on 1/16 notes: the second of each pair 0.05 of a beat later (60%), the first where it was: ${(await bassClip()).notes.map((x) => x.start)}`,
+  `Swing 60% on 1/16 notes: the second of each pair 0.05 of a beat later, the first where it was: ${(await bassClip()).notes.map((x) => x.start)}`,
 );
 check((await bassClip()).notes.every((x, i) => Math.abs(x.start + x.length - sixteenths[i].start - 0.25) < 1e-9), "each moved note keeps its end, so it never runs into the next");
 check(await oneStep(rev), "one undo step");
@@ -266,16 +272,16 @@ e = await emptyAt();
 await page.mouse.click(e.x, e.y, { button: "right" });
 await until(() => menu().then(Boolean), 2000);
 rev = await revision();
-await page.click('[data-testid=note-menu] [data-swing="medium"]');
+await page.click('[data-testid=note-menu] [data-swing="60"]');
 await sleep(800);
-check(read(FILE) === once && (await revision()) === rev, "Swing Medium twice is the same as once: it sets notes to their swung place");
+check(read(FILE) === once && (await revision()) === rev, "Swing 60% twice is the same as once: it sets notes to their swung place");
 e = await emptyAt();
 await page.mouse.click(e.x, e.y, { button: "right" });
 await until(() => menu().then(Boolean), 2000);
-await page.click('[data-testid=note-menu] [data-swing="light"]');
+await page.click('[data-testid=note-menu] [data-swing="55"]');
 check(
   await until(async () => JSON.stringify((await bassClip()).notes.map((x) => x.start)) === "[0,0.275,0.5,0.775,1,1.275,1.5,1.775]"),
-  `Light after Medium puts them at Light's place (55%): ${(await bassClip()).notes.map((x) => x.start)}`,
+  `55% after 60% puts them at 55%'s place: ${(await bassClip()).notes.map((x) => x.start)}`,
 );
 await key("Meta+z");
 await undoTo(base, "Swing");
@@ -320,6 +326,9 @@ await undoTo(base, "Delete every note");
 
 // ---------------------------------------------------------------- ⌥← and ⌥→ are the page's (X1); Ctrl-click on a Mac (X7)
 
+// ⌘A selects the notes the roll draws, and a note is pressed where it is drawn: the roll shows the
+// undo first (a read of what it draws, not a gesture's wait).
+await caughtUp();
 await page.focus("[data-testid=notes]");
 await key("Meta+a");
 await until(async () => (await shown()).every((x) => x.selected));
@@ -366,8 +375,8 @@ n = await noteAt(1);
 await page.mouse.click(n.x, n.y, { button: "right" });
 check(await until(() => menu().then(Boolean), 2000), "the menu still opens");
 const r3 = await rows();
-check(r3.length === 10 && r3.filter((r) => r.id !== "swing").every((r) => r.disabled && r.title.includes("compiles")), `its rows are disabled, the tooltip saying why: ${r3[0]?.title}`);
-check(await page.$$eval("[data-testid=note-menu] [data-swing]", (els) => els.every((b) => b.disabled)), "Swing's three too");
+check(r3.length === 13 && r3.filter((r) => r.id !== "swing").every((r) => r.disabled && r.title.includes("compiles")), `its rows are disabled, the tooltip saying why: ${r3[0]?.title}`);
+check(await page.$$eval("[data-testid=note-menu] [data-swing]", (els) => els.length === 5 && els.every((b) => b.disabled)), "Swing's five too");
 await page.keyboard.press("Escape");
 write("tracks/bass.ts", bassTs);
 check(await until(async () => !(await page.$("[data-testid=notes-locked]"))), "once it compiles, the roll is editable again");
@@ -417,7 +426,11 @@ const rows2 = await page.$eval("[data-testid=key-picker] [data-root=C]", (c) => 
 });
 check(rows2.ftop > rows2.top, "in two rows of six: F♯ starts the second");
 const scales = await page.$$eval("[data-testid=key-picker] [data-scale]", (els) => els.map((e) => `${e.textContent}:${e.getAttribute("aria-checked")}`));
-check(scales.join() === "Major:true,Minor:false" && (await page.$("[data-testid=no-key][disabled]")) !== null, `Major · Minor (Major first), and No key, off while there is none: ${scales}`);
+const allScales = ["Major", "Minor", "Dorian", "Phrygian", "Lydian", "Mixolydian", "Locrian", "Harmonic minor", "Melodic minor", "Major pentatonic", "Minor pentatonic", "Blues", "Chromatic"];
+check(
+  scales.join() === allScales.map((x, i) => `${x}:${i === 0}`).join() && (await page.$("[data-testid=no-key][disabled]")) !== null,
+  `the table's thirteen scales (NOTE-1), Major first and picked, and No key, off while there is none: ${scales}`,
+);
 await sleep(400);
 await page.screenshot({ path: `${ROOT}/pl-notes-key-picker.png` });
 const badKey = await lint("[data-testid=key-picker]");

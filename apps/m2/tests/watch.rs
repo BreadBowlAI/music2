@@ -95,6 +95,22 @@ fn m2_watch_prints_one_json_line_an_event() {
     assert!(!events.iter().any(|e| e["t"] == "meters"), "no meters without --meters");
 }
 
+// TAP-4: `m2 watch --meters` asks the app for the meters, and gets them while the song plays; the
+// app runs them only for a socket that asks, and a watch without `--meters` doesn't.
+#[test]
+fn m2_watch_meters_asks_for_the_meters() {
+    let a = App::open("first-song", |_| {});
+    let (mut quiet, _) = watch(&a.home, a.dir(), &[]);
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(a.running.state.meters.receiver_count(), 0, "a watch that didn't ask doesn't listen");
+    let (mut child, rx) = watch(&a.home, a.dir(), &["--meters"]);
+    a.running.state.graph.transport("play").unwrap();
+    let lines = lines_until(&rx, 20, |l| l.iter().any(|l| l.starts_with(r#"{"t":"meters""#)));
+    let _ = (child.kill(), quiet.kill());
+    let meters = parsed(&lines).into_iter().find(|e| e["t"] == "meters").unwrap_or_else(|| panic!("no meters: {lines:?}"));
+    assert!(meters["tracks"].is_object() && meters["out"].is_array(), "{meters}");
+}
+
 // AGENT-6: when the app goes away (its socket drops, with no close frame, as when it quits), `m2
 // watch` prints what it heard, then `closed`, and exits 0.
 #[test]

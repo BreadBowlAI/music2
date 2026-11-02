@@ -102,10 +102,10 @@ fn loop_run(song: &Song, wraps: usize, panic: bool) -> (Vec<(f32, f32)>, Vec<Tra
 fn a_loop_keeps_its_tails_for_10_minutes() {
     let reverb = loop_probe(json!([
         {"id": "sz", "op": "const", "value": 0.98}, {"id": "dm", "op": "const", "value": 0}, {"id": "mx", "op": "const", "value": 1},
-        {"id": "x", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "v", "size": "sz", "damping": "dm", "mix": "mx"}}]));
+        {"id": "x", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "v", "size": "sz", "damping": "dm", "mix": "mx"}}]));
     let delay = loop_probe(json!([
         {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"}, {"id": "f", "op": "const", "value": 0.9}, {"id": "mx", "op": "const", "value": 1},
-        {"id": "x", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "mx"}}]));
+        {"id": "x", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "mx"}}]));
     let lap = 3_265_512 - 2_902_677;
     // Beat 132 is 4 beats into the loop.
     let note = 2_993_386u64 - 2_902_677;
@@ -263,7 +263,7 @@ fn random_edits_and_jumps_never_strand_a_gate() {
     let first = notes_of(&mut seed);
     let song = pad(first.clone());
     let delayed =
-        synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d", first, at_bpm(120.0));
+        synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d", first, at_bpm(120.0));
     let songs = [&song, &delayed];
     let r = song.renderer();
     let mut sent = (0, r.info());
@@ -314,8 +314,13 @@ fn a_swapped_in_note_plays_at_its_frame_and_changes_nothing_before() {
         }
         json!({"clips": [{"id": "a", "start": 0, "length": 16, "notes": n}]})
     };
-    let song =
-        synth(0.2, json!([{"id": "x", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "v"}}]), "x", base(false), at_bpm(120.0));
+    let song = synth(
+        0.2,
+        json!([{"id": "x", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "v"}}]),
+        "x",
+        base(false),
+        at_bpm(120.0),
+    );
     let (pa, mut a) = play(&song);
     let (pb, mut b) = play(&song);
     let mut x = fill(&mut a, SR as usize);
@@ -342,7 +347,7 @@ fn audio_lane_song(rate: u32) -> Song {
     let dir = temp("clicks");
     std::fs::write(
         dir.join("music2.toml"),
-        format!("[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"1\"\n"),
+        format!("[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"2\"\n"),
     )
     .unwrap();
     std::fs::write(dir.join("song.ts"), "").unwrap();
@@ -506,7 +511,7 @@ fn tails_decay_after_stop() {
                 {"id": "o", "op": "kernel", "kernel": "std:noise"},
                 {"id": "a", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]}},
             {"id": "mx", "op": "const", "value": 1},
-            {"id": "x", "op": "kernel", "kernel": "std:reverb", "inputs": {"in": "v", "mix": "mx"}}]),
+            {"id": "x", "op": "kernel", "kernel": "@m2/effects:reverb", "inputs": {"in": "v", "mix": "mx"}}]),
         "x",
         json!([{"key": "notes", "kind": "events<note>"}]),
         DataSet::with_lanes(Arrangement::default(), [(addr("notes"), notes(note(0.2)))]),
@@ -514,7 +519,7 @@ fn tails_decay_after_stop() {
     let delay = synth(
         0.02,
         json!([{"id": "t", "op": "const", "value": 0.1, "unit": "seconds"}, {"id": "f", "op": "const", "value": 0.6},
-            {"id": "x", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f"}}]),
+            {"id": "x", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f"}}]),
         "x",
         note(0.2),
         at_bpm(120.0),
@@ -541,7 +546,7 @@ fn tails_decay_after_stop() {
                 {"id": "t", "op": "const", "value": 0.5, "unit": "seconds"},
                 {"id": "f", "op": "const", "value": 0.2},
                 {"id": "m", "op": "const", "value": 1},
-                {"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "a", "time": "t", "feedback": "f", "mix": "m"}}]}}]),
+                {"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "a", "time": "t", "feedback": "f", "mix": "m"}}]}}]),
         "v",
         json!([{"key": "notes", "kind": "events<note>"}]),
         DataSet::with_lanes(Arrangement::default(), [(addr("notes"), notes(note(0.2)))]),
@@ -570,7 +575,7 @@ fn tremolo_holds_while_stopped_and_never_jumps() {
         &[
             (
                 "song.ts",
-                "import { kernel, song } from \"@m2/core\";\nimport { tremolo } from \"std/fx\";\n\n\
+                "import { kernel, song } from \"@m2/core\";\nimport { tremolo } from \"@m2/effects\";\n\n\
                  export default song(() => tremolo(kernel(\"std:square\", { freq: 0 }), { rate: 3, depth: 1 }));\n",
             ),
             ("data/arrangement.json", &json!({"tempo": [{"beat": 0, "bpm": 120}], "meter": []}).to_string()),
@@ -656,7 +661,7 @@ fn a_hold_freezes_and_resumes_without_a_step() {
         {"id": "t", "op": "const", "value": 0.25, "unit": "seconds"},
         {"id": "f", "op": "const", "value": 0.6},
         {"id": "m", "op": "const", "value": 0.5},
-        {"id": "x", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}},
+        {"id": "x", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v", "time": "t", "feedback": "f", "mix": "m"}},
     ]);
     let notes = json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 69, "start": 0, "length": 4}]}]});
     let song = synth(0.05, delay, "x", notes, at_bpm(120.0));
@@ -921,6 +926,44 @@ fn profile() -> &'static str {
     if cfg!(debug_assertions) { "debug assertions on: the dev profile" } else { "release" }
 }
 
+// MON-8, MON-13: two audio lanes hear at once, each its own channel of a four-channel input, through
+// its own track; stopping one leaves the other.
+#[test]
+fn hearing_two_lanes_each_hears_its_own() {
+    let nodes = json!([{"id": "a", "op": "lane", "lane": "a"}, {"id": "b", "op": "lane", "lane": "b"},
+        {"id": "ha", "op": "const", "value": 0.5}, {"id": "hb", "op": "const", "value": 0.25},
+        {"id": "ga", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "a", "by": "ha"}},
+        {"id": "gb", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "b", "by": "hb"}},
+        {"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "ga", "b": "gb"}}]);
+    let lanes = json!([{"key": "a", "kind": "audio<1>"}, {"key": "b", "kind": "audio<1>"}]);
+    let s = song(nodes, "sum", lanes, DataSet::with_lanes(at_bpm(120.0), []));
+    let r = s.renderer();
+    let generation = r.generation();
+    let slot = |k: &str| r.info().lanes.iter().position(|l| l.lane.lane == k).unwrap() as u32;
+    let (a, b) = (slot("a"), slot("b"));
+    let (player, mut d) = playing(r, SR);
+    player.name_inputs(&["Desk:4"]);
+    let listen = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    assert_eq!((listen.channels, listen.rings.len()), (4, 2), "a ring for each pair");
+    player.hear(generation, a, Some((&listen, m2_play::Channels::One(0)))).unwrap();
+    player.hear(generation, b, Some((&listen, m2_play::Channels::One(2)))).unwrap();
+    let mut buf = vec![0.0f32; 2 * 480];
+    let mut run = |player: &m2_play::Player, d: &mut m2_play::Driver| {
+        let mut heard = vec![];
+        for _ in 0..20 {
+            player.inject_channels(&[vec![0.8; 480], vec![0.1; 480], vec![0.4; 480], vec![0.2; 480]]).unwrap();
+            d.fill(&mut buf, 2);
+            heard.extend_from_slice(&buf);
+        }
+        heard[heard.len() / 2..].to_vec()
+    };
+    let both = run(&player, &mut d);
+    assert!(both.iter().all(|x| (x - 0.5).abs() < 1e-6), "channel 1 at half and channel 3 at a quarter: {:?}", &both[..4]);
+    player.hear(generation, a, None).unwrap();
+    let one = run(&player, &mut d);
+    assert!(one.iter().all(|x| (x - 0.1).abs() < 1e-6), "only lane b hears now: {:?}", &one[..4]);
+}
+
 // MON-8: hearing yourself plays the sound input on the take's audio lane, so the track's effects and
 // fader play it: here a fader at half. An export renders without it, and once it stops, the lane is
 // silent again.
@@ -933,8 +976,8 @@ fn hearing_yourself_plays_through_the_track_and_never_in_an_export() {
     let generation = r.generation();
     let slot = r.info().lanes.iter().position(|l| l.lane.lane == "clips").unwrap() as u32;
     let (player, mut d) = playing(r, SR);
-    player.open_input(&m2_play::InputChoice::default()).unwrap();
-    player.hear(generation, slot, true).unwrap();
+    let listen = player.open_input(&m2_play::InputChoice::default()).unwrap();
+    player.hear(generation, slot, Some((&listen, m2_play::Channels::One(0)))).unwrap();
     let mut buf = vec![0.0f32; 2 * 480];
     let mut heard = vec![];
     for _ in 0..40 {
@@ -949,7 +992,7 @@ fn hearing_yourself_plays_through_the_track_and_never_in_an_export() {
     for b in 0..40 {
         assert!(offline.render_block(b * 128).unwrap().iter().all(|f| *f == [0.0; 2]), "the export hears nothing");
     }
-    player.hear(generation, slot, false).unwrap();
+    player.hear(generation, slot, None).unwrap();
     for _ in 0..4 {
         player.inject_input(&[0.8; 480]).unwrap();
         d.fill(&mut buf, 2);

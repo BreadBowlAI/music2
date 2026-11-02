@@ -6,7 +6,7 @@
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, key } = await open(1440, 900);
 
 const CUTOFF = "data/bass/cutoff.json";
 const lane = async (k) => (await state()).timeline.tracks.find((t) => t.module === "bass")?.lanes.find((l) => l.key === k);
@@ -32,6 +32,8 @@ const id = cutoff.clips[0].id;
 write(CUTOFF, JSON.stringify({ unit: "hz", clips: [{ id, start: 0, length: 16, points: [[0, 30], [8, 1000], [16, 15000]] }] }));
 check(await until(async () => JSON.stringify((await lane("cutoff"))?.clips[0]?.points) === "[[0,30],[8,1000],[16,15000]]"), "Bass's Cutoff lane, in Hz, has points at 30 Hz, 1 kHz and 15 kHz");
 const base = read(CUTOFF);
+// The page draws, and Draw mode paints on, the points as the page shows them: the outside write's, once it has it.
+await caughtUp();
 // Bass's automation, shown by its header's chevron.
 await page.click('[data-fold="bass"]');
 check(await until(async () => !!(await drawing("bass.cutoff"))), "the chevron shows Bass's automation lanes");

@@ -1,0 +1,7 @@
+# In short: every text file is checked out with LF line endings on every OS, as it is committed.
+# The packs whose bytes a hash pins (songs' music2.lock files and packs/versions.toml name them) are
+# never converted at all: a CRLF would change their hashes (PACK-17).
+* text=auto eol=lf
+packs/** -text
+core/session/tests/fixtures/packs/** -text
+e2e/fixtures/library/** -text

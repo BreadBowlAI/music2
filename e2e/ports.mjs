@@ -257,6 +257,95 @@ check(read("tracks/bass.ts") === before, "let go away from any input, nothing is
 await page.click('button[aria-label="Fit to panel"]');
 check(await until(async () => Math.abs((await nodeWidth()) - w0) < 0.5), "Fit goes back to the fitted size");
 
+// ---------------------------------------------------------------- Fit with scrollbars that take room
+// A Mac with a mouse (or "Show scroll bars: Always") has scrollbars that take room from the panel, as
+// this browser has without --hide-scrollbars. Fit must not depend on them (DV-5): one fitted to the
+// room the scrollbars leave shrinks the graph when its scrollbar shows, then grows it when the
+// scrollbar goes, every frame: the graph flickers until the panel's size or the zoom changes. Bass at
+// 100% is wider than a 1440 px panel, so a scrollbar shows under it; at 75% it isn't.
+const bars = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"], ignoreDefaultArgs: ["--hide-scrollbars"] });
+const tab = await bars.newPage();
+await tab.setViewport({ width: 1440, height: 900 });
+tab.on("console", (m) => m.type() === "error" && errors.push(m.text()));
+tab.on("pageerror", (e) => errors.push(String(e)));
+await tab.evaluateOnNewDocument((token) => {
+  window.__M2__ = { native: false, token, platform: "macos" };
+  try {
+    localStorage.setItem("m2.browser.open", "false");
+    localStorage.setItem("m2.graph.panel", "300");
+  } catch {}
+}, sess.page_token);
+await tab.goto(sess.url, { waitUntil: "domcontentloaded" });
+await tab.waitForSelector("[data-testid=graph] [data-module]", { timeout: 8000 });
+await tab.click('[data-module-tab="bass"]');
+await tab.waitForSelector('[data-module="bass"]');
+const barRoom = () =>
+  tab.evaluate(() => {
+    const d = document.createElement("div");
+    d.style.cssText = "position:absolute;overflow:scroll;width:50px;height:50px";
+    document.body.append(d);
+    const room = d.offsetWidth - d.clientWidth;
+    d.remove();
+    return room;
+  });
+// Where scrollbars float over the page (a Mac with a trackpad), the page gets ones that take room, as with a mouse.
+if (!(await barRoom())) {
+  await tab.addStyleTag({ content: "* { scrollbar-width: auto !important; scrollbar-color: auto !important } ::-webkit-scrollbar { width: 12px; height: 12px }" });
+}
+const bar = await barRoom();
+// Bass's size at 100% (its nodes' box, before the zoom scales it) and the panel's width.
+const at1 = await tab.$eval('[data-module="bass"] [data-canvas] > div > div', (e) => ({
+  w: parseFloat(e.style.width),
+  h: parseFloat(e.style.height),
+  panel: document.querySelector("[data-testid=graph]").offsetWidth,
+}));
+// The panel's padding and the module's, each side (NodeGraph's CHROME_W, CHROME_H).
+const PADS = 64;
+check(
+  bar > 0 && at1.w + PADS > at1.panel && at1.w * 0.75 + PADS < at1.panel - bar,
+  `with scrollbars that take ${bar}px, Bass at 100% is wider than the ${at1.panel}px panel, and at 75% narrower`,
+);
+// The panel's heights where Bass at 100% fits it only with no scrollbar under it, and a few either side.
+const lo = Math.floor(at1.h + PADS) - 2, hi = Math.ceil(at1.h + PADS + bar) + 2;
+// Waits until the panel's size and the zoom hold still for half a second (or 4 s pass), and says what they went through.
+const settle = () =>
+  tab.evaluate(
+    () =>
+      new Promise((done) => {
+        const el = document.querySelector("[data-testid=graph]");
+        const states = [];
+        const t0 = performance.now();
+        let since = t0;
+        const frame = () => {
+          const now = performance.now();
+          const s = `${el.clientWidth}×${el.clientHeight} at ${document.querySelector("[data-zoom]").dataset.zoom}`;
+          if (s !== states.at(-1)) (states.push(s), (since = now));
+          if (now - since >= 500) return done({ still: true, states });
+          if (now - t0 >= 4000) return done({ still: false, states });
+          requestAnimationFrame(frame);
+        };
+        requestAnimationFrame(frame);
+      }),
+  );
+const split = mid(await (await tab.$("[data-testid=split]")).boundingBox());
+const panelH = () => tab.$eval("[data-testid=graph]", (e) => e.offsetHeight);
+const h0 = await panelH();
+await tab.mouse.move(split.x, split.y);
+await tab.mouse.down();
+const shaky = [], zooms = [];
+for (let h = lo; h <= hi; h++) {
+  await tab.mouse.move(split.x, split.y - (h - h0));
+  await until(async () => (await panelH()) === h);
+  const { still, states } = await settle();
+  const got = await panelH();
+  if (!still || got !== h) shaky.push(`${h}px${got !== h ? ` (is ${got})` : ""}: ${states.length} states, ${states.slice(-2).join(", ")}`);
+  zooms.push(Number(await tab.$eval("[data-zoom]", (e) => e.dataset.zoom)));
+}
+await tab.mouse.up();
+check(shaky.length === 0, `fitted, Bass holds still at every panel height from ${lo} to ${hi}px${shaky.length ? `; not at ${shaky.join("; ")}` : ""}`);
+check(zooms.every((z, i) => i === 0 || z >= zooms[i - 1]), `and its zoom never drops as the panel grows (${zooms.join(" ")})`);
+await bars.close();
+
 check(errors.length === 0, `no console errors ${errors.join(" | ")}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 await browser.close();

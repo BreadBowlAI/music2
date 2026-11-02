@@ -41,7 +41,9 @@ const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) })
 // The lists are made as a song opens (PACK-11): open it again.
 check((await post("/close", {})).status === 200 && (await post("/open", { path: PROJ })).status === 200, "the song opens again");
 const manifest = read("music2.toml");
-check(!fs.existsSync(`${PROJ}/music2.lock`), "it has no music2.lock");
+// first-song locks @m2/synths, the pack music2 ships that it plays (PACK-18), and no other.
+const locked = read("music2.lock");
+check(locked.includes('name = "@m2/synths"') && !locked.includes("@test/tiny"), "its music2.lock locks @m2/synths alone");
 
 const row = '[data-browser-instrument="@test/tiny:tiny-keys"]';
 check(await until(() => page.$(row), 15000), "Tiny keys is in the browser");
@@ -50,7 +52,7 @@ check(group === "Keys", `under its category, Keys (${group})`);
 const title = await page.$eval(row, (e) => e.getAttribute("title"));
 check(title.includes("From @test/tiny 0.1.0"), `its tooltip names its pack (${JSON.stringify(title)})`);
 check(!!(await page.$('[data-browser-item="@test/tiny:tiny-crunch"]')), "its effect, Tiny crunch, is with the effects");
-const std = await page.$eval('[data-browser-instrument="std:synth-pluck"]', (e) => e.getAttribute("title")).catch(() => "");
+const std = await page.$eval('[data-browser-instrument="std:sampler"]', (e) => e.getAttribute("title")).catch(() => "");
 check(std !== "" && !std.includes("From "), "std's rows name no pack");
 
 // ---------------------------------------------------------------- add: one edit, with its pack
@@ -72,7 +74,7 @@ const libs = (await api("/types")).body?.files?.map((f) => f.path) ?? [];
 check(libs.includes("@test/tiny/index.ts"), "and they hold the pack's sources");
 await page.click('button[aria-label="Undo"]');
 check(await until(async () => (await tracks()).length === before.length), "one Undo takes the track away");
-check(await until(() => read("music2.toml") === manifest && !fs.existsSync(`${PROJ}/music2.lock`)), "and the pack's line and the lock with it");
+check(await until(() => read("music2.toml") === manifest && read("music2.lock") === locked), "and the pack's line and its lock entry with it");
 
 // ---------------------------------------------------------------- the Packs list
 

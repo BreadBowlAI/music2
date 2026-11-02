@@ -74,7 +74,7 @@ An example body:
 
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio or set. It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove or hits (the beat grid's steps). It writes the song: one undo step.
 
 An example body:
 
@@ -119,7 +119,7 @@ Put an effect after a call's sound, by its component id as the state's effects l
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "std:delay"}
+{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}
 ```
 
 ### `POST /api/graph/effect/bypass`
@@ -186,6 +186,16 @@ An example body:
 {"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}
 ```
 
+### `POST /api/graph/kit/drum`
+
+Add a Drum track to a drum kit, by its bus: playing a sound of the Drum's, named by it, going to the bus. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "bus": "drums", "sound": "snare"}
+```
+
 ### `POST /api/graph/label`
 
 Rename a track's label (its key stays). It writes the song: one undo step.
@@ -219,6 +229,16 @@ An example body:
 ### `GET /api/graph/leases`
 
 The drags in progress: knobs, clips and the tempo.
+
+### `POST /api/graph/loudness`
+
+Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop.
+
+An example body:
+
+```json
+{"session": 7, "client": "w1", "on": true}
+```
 
 ### `POST /api/graph/markers`
 
@@ -342,7 +362,7 @@ An example body:
 
 ### `POST /api/graph/sample`
 
-Give a Sampler a WAV file on this computer. It writes the song: one undo step. Bodies up to 1024 MiB.
+Give a recording on a card (a Sampler's file, or `setting` of the call) a WAV file on this computer. It writes the song: one undo step. Bodies up to 1024 MiB.
 
 An example body:
 
@@ -350,14 +370,44 @@ An example body:
 {"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}
 ```
 
-### `POST /api/graph/set`
+### `POST /api/graph/scope`
 
-Write a knob's value into the code, as one undo step (for an agent, never a drag's commit). It writes the song: one undo step.
+Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop.
 
 An example body:
 
 ```json
-{"session": 7, "revision": 42, "id": "song.ts#2/0.hats.pan", "gesture": "set", "value": 0.45}
+{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
+```
+
+### `POST /api/graph/sections`
+
+A section gesture, on whole bars of every track: paste, duplicate, move, delete, insert-bars or delete-bars. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "gesture": {"op": "duplicate", "start": 32, "end": 64}}
+```
+
+### `POST /api/graph/sections/copy`
+
+Copy whole bars of every track: each lane's kind and the clips that overlap them, for a section paste.
+
+An example body:
+
+```json
+{"session": 7, "start": 32, "end": 64}
+```
+
+### `POST /api/graph/set`
+
+Write a knob's value (a number, a choice's name, true or false), or a setting's (a number, one of its options, true or false, a file in assets/, a track), into the code, as one undo step; more knobs in `with` are written with it as the same step (for an agent, never a drag's commit). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "revision": 42, "id": "tracks/bass.ts#3/@shape", "gesture": "set", "value": "square"}
 ```
 
 ### `POST /api/graph/song-key`
@@ -382,6 +432,16 @@ An example body:
 
 ```json
 {"session": 7}
+```
+
+### `POST /api/graph/take`
+
+Choose which take an audio clip over a loop plays (from 1). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}
 ```
 
 ### `POST /api/graph/tempo`
@@ -411,7 +471,7 @@ Add a track playing an instrument, by its component id as the state's instrument
 An example body:
 
 ```json
-{"session": 7, "component": "std:synth-pluck", "label": "Pluck", "after": "keys"}
+{"session": 7, "component": "@m2/synths:synth-pluck", "label": "Pluck", "after": "keys"}
 ```
 
 ### `POST /api/graph/track/delete`
@@ -441,7 +501,27 @@ Change a track's instrument, by its component id as the state's instruments list
 An example body:
 
 ```json
-{"session": 7, "module": "keys", "component": "std:synth-pad"}
+{"session": 7, "module": "keys", "component": "@m2/synths:synth-pad"}
+```
+
+### `POST /api/graph/track/kit`
+
+Add a drum kit: a Drums bus and the kit's tracks, each going to it, by its name as the state's kit_presets list it. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "component": "@m2/drums:drum", "kit": "808 kit", "after": "keys"}
+```
+
+### `POST /api/graph/track/make-kit`
+
+Make a track that plays the drum machine a kit: the track its bus, a Drum track for each sound its notes use going to it (the state's drum_machines lists them). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "track": "beat"}
 ```
 
 ### `POST /api/graph/track/mute`
@@ -488,6 +568,16 @@ An example body:
 {"session": 7}
 ```
 
+### `POST /api/graph/upgrade`
+
+Move a song made for an older music2 to this one in one step, as m2 upgrade does: one undo step, written only if the song then builds (check: only say what it would change). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "check": false}
+```
+
 ### `GET /api/library`
 
 Search everything you can add: instruments, sounds (presets), effects, samples and plugins, best first; q's words may name a kind, loop, one-shot, a tempo or a key; fits (a beat) keeps the loops that fit the song there.
@@ -502,25 +592,47 @@ Its query, as JSON:
 
 Your sample folders, each with how many samples it has and whether it is being indexed.
 
+### `POST /api/library/get`
+
+Get a pack or a sample from the library (the registry): a pack's whole version installed, checked, or one sample added to the song with its note; or a version the open song locks and is missing. Answers once it is done; `get` events say how far. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"id": "library:@alice/felt-piano:felt-piano"}
+```
+
+### `POST /api/library/get/cancel`
+
+Stop the Get running: nothing of it is kept.
+
+### `GET /api/library/missing`
+
+The packs the open song's music2.lock names that aren't installed, each with whether the library has that very version to get.
+
 ### `GET /api/library/preview`
 
-An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file.
+An item's preview: a short WAV of it playing, rendered offline and kept; a sample's own file (a FLAC's as the WAV of it).
 
 Its query, as JSON:
 
 ```json
-{"id": "std:synth-pluck"}
+{"id": "@m2/synths:synth-pluck"}
 ```
 
 ### `POST /api/library/sample`
 
-Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or a Sampler's file at `call`. It writes the song: one undo step.
+Add a sample from the library to the song: copied into assets/ with a note of where it came from, then a clip at `to` (a loop follows the song's tempo), or the recording of call `call` (a Sampler's file, or its `setting`). It writes the song: one undo step.
 
 An example body:
 
 ```json
 {"session": 7, "id": "sample:std:samples/kit/kick.wav", "to": {"kind": "below", "beat": 0}}
 ```
+
+### `POST /api/library/store-changed`
+
+Tell the app packs were installed or removed outside it (m2 pack get does): the open song's lists are made again, and a song that waited for a pack builds.
 
 ### `GET /api/packs`
 
@@ -556,6 +668,10 @@ The templates and examples a new song can start from, and the songs folder.
 
 This computer's settings: the sound output, where new songs go, Record's options, the MIDI keyboards and the sound input.
 
+### `GET /api/theory`
+
+The scales a key can have, the chords a stamp places and the grooves, each with its name and what it does.
+
 ### `POST /api/tx/check`
 
 Check a Tx: its delta, the delta's hash and the diagnostics; nothing is written. Bodies up to 144 MiB.
@@ -588,6 +704,10 @@ The tools key gets 403 for these (AGENT-11): ask the musician, or show them wher
 
 Say what the musician looks at (the page posts it).
 
+### `POST /api/graph/arm`
+
+Arm a track to record, or disarm it, and choose the input channels it records.
+
 ### `POST /api/graph/audition`
 
 Play or let go of notes on a lane, as the piano roll and the keyboard do.
@@ -599,6 +719,14 @@ Close the open song.
 ### `POST /api/graph/compare`
 
 Hear the newest change made elsewhere Before or After it (V), or close the pill.
+
+### `POST /api/graph/draft`
+
+Keep a window's text of a code file not yet saved, so a crash doesn't lose it (text null takes it out).
+
+### `POST /api/graph/draft/left`
+
+Say that unsaved code the song opened with was restored or discarded, so it isn't offered again.
 
 ### `POST /api/graph/export`
 
@@ -698,7 +826,7 @@ Drop the take, or stop counting in.
 
 ### `POST /api/graph/record/start`
 
-Record a take on a notes lane or an audio lane.
+Record a take on the armed tracks, or on a notes lane or an audio lane; punch on the loop, overdub notes.
 
 ### `POST /api/graph/record/stop`
 

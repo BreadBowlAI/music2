@@ -4,9 +4,8 @@
 // recorded (`gate_tests.rs`): std's one-note sounds keep these bits on these velocities.
 
 import { ms, song, track } from "@m2/core";
-import { fm } from "std/fm";
+import { fm, synth } from "@m2/synths";
 import { mixer } from "std/mix";
-import { synth } from "std/synth";
 
 const lead = track("lead", { name: "Lead" }, ({ lane }) => synth.lead(lane.notes("notes"), { glide: ms(70) }));
 const sub = track("sub", { name: "Sub" }, ({ lane }) => synth.sub(lane.notes("notes")));

@@ -10,18 +10,20 @@ use serde_json::{Value, json};
 use crate::graph::Graph;
 use crate::library::{Folders, Previews, preview};
 
-/// A server with no song open, and the tools key `t00ls`, keeping `folders` (scratch ones).
-fn serving(folders: Folders) -> crate::Running {
+/// A server with no song open, and the tools key `t00ls`, keeping `folders` (scratch ones). With no
+/// store named, the tests' store of the packs music2 ships: the app always keeps one (PACK-16).
+fn serving(mut folders: Folders) -> crate::Running {
+    folders.packs.get_or_insert_with(m2_song::pack::test_store);
     let options =
         crate::ServeOptions { port: 0, web_dir: std::env::temp_dir().join("m2-no-web"), token: "t00ls".into(), page_token: "t0k".into() };
-    let running = crate::start_with(options, Graph::silent()).unwrap();
+    let running = crate::start_with(options, Graph::silent().stored()).unwrap();
     running.state.keep_library(folders);
     running
 }
 
-/// std alone: what a preview may load with no song open.
+/// std and the packs music2 ships (PACK-15): what a preview may load with no song open.
 fn std_only() -> Vec<(String, PathBuf)> {
-    vec![("std".to_string(), crate::resources::std_dir())]
+    std::iter::once(("std".to_string(), crate::resources::std_dir())).chain(m2_song::pack::test_packs()).collect()
 }
 
 /// `GET path` with the tools key: the status, the content type and the body.
@@ -80,7 +82,7 @@ fn wavs(dir: &Path) -> Vec<PathBuf> {
 
 /// Store your preset `name` for std's Synth pluck in `yours`, with this brightness.
 fn mine(yours: &Path, name: &str, brightness: f64) {
-    yours_for(yours, "std:synth-pluck", name, brightness);
+    yours_for(yours, "@m2/synths:synth-pluck", name, brightness);
 }
 
 /// Store your preset `name` for `sound` in `yours`, with this brightness.
@@ -101,13 +103,16 @@ fn yours_for(yours: &Path, sound: &str, name: &str, brightness: f64) {
 fn the_library_route_answers_the_one_search() {
     let scratch = Scratch::new("route");
     let running = serving(Folders { presets: Some(scratch.0.join("Presets")), ..Folders::default() });
-    assert_eq!(found(&running.url, "reverb")[0], "std:reverb");
-    assert_eq!(found(&running.url, "glass pluck")[0], "sound:std/std:synth-pluck/Glass");
+    assert_eq!(found(&running.url, "reverb")[0], "@m2/effects:reverb");
+    assert_eq!(found(&running.url, "glass pluck")[0], "sound:std/@m2/synths:synth-pluck/Glass");
     mine(&scratch.0.join("Presets"), "Glass pluck", 3000.0);
-    assert_eq!(found(&running.url, "glass pluck")[..2], ["sound:yours/std:synth-pluck/Glass pluck", "sound:std/std:synth-pluck/Glass"]);
+    assert_eq!(
+        found(&running.url, "glass pluck")[..2],
+        ["sound:yours/@m2/synths:synth-pluck/Glass pluck", "sound:std/@m2/synths:synth-pluck/Glass"]
+    );
     assert_eq!(
         found(&running.url, "delay effects"),
-        ["std:delay", "std:reverb"],
+        ["@m2/effects:delay", "@m2/effects:reverb"],
         "a kind typed is a filter: no sounds; Reverb by its category"
     );
     let (_, _, body) = get(&running.url, "/api/library?q=synth%20pluck");
@@ -120,16 +125,16 @@ fn the_library_route_answers_the_one_search() {
             first["instrument"].as_bool(),
             first["preview"].as_bool()
         ),
-        (Some("instrument"), Some("Synth pluck"), Some("std"), Some(true), Some(true))
+        (Some("instrument"), Some("Synth pluck"), Some("@m2/synths"), Some(true), Some(true))
     );
     let all = found(&running.url, "");
-    assert!(all.len() > 40 && all.contains(&"std:drum-kit".to_string()), "every item with no words: {}", all.len());
+    assert!(all.len() > 40 && all.contains(&"@m2/drums:drum".to_string()), "every item with no words: {}", all.len());
 
     // With a song open: what its build offers.
     let dir = Scratch::new("route-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir.0);
     running.state.graph.open(&dir.0).unwrap();
-    assert_eq!(found(&running.url, "reverb")[0], "std:reverb");
+    assert_eq!(found(&running.url, "reverb")[0], "@m2/effects:reverb");
 }
 
 // LIB-1: a search never waits for a plugin scan, which can take minutes: while one runs it
@@ -144,7 +149,7 @@ fn a_search_never_waits_for_a_plugin_scan() {
     std::thread::spawn(move || tx.send(found(&url, "reverb")));
     let answer = rx.recv_timeout(std::time::Duration::from_secs(30));
     drop(scan);
-    assert_eq!(answer.expect("the search answers while the plugins are scanned").first().map(String::as_str), Some("std:reverb"));
+    assert_eq!(answer.expect("the search answers while the plugins are scanned").first().map(String::as_str), Some("@m2/effects:reverb"));
 }
 
 /// A copy of `from` at `to`, but its audio.
@@ -168,7 +173,7 @@ fn a_preview_is_kept_until_what_it_renders_changes() {
     let (yours, cache) = (scratch.0.join("Presets"), scratch.0.join("cache"));
     let previews = Previews::default();
     mine(&yours, "Mine", 2000.0);
-    let id = "sound:yours/std:synth-pluck/Mine";
+    let id = "sound:yours/@m2/synths:synth-pluck/Mine";
     let first = preview(&previews, id, &std_only(), Some(&yours), &cache).unwrap();
     assert!(first.rendered && first.file.starts_with(&cache), "{:?}", first.file);
     let bytes = std::fs::read(&first.file).unwrap();
@@ -210,8 +215,8 @@ fn a_preview_is_kept_until_what_it_renders_changes() {
     );
     std::fs::remove_file(&busy).unwrap();
 
-    let pad = preview(&previews, "std:synth-pad", &std_only(), Some(&yours), &cache).unwrap();
-    assert!(pad.rendered && !preview(&previews, "std:synth-pad", &std_only(), Some(&yours), &cache).unwrap().rendered);
+    let pad = preview(&previews, "@m2/synths:synth-pad", &std_only(), Some(&yours), &cache).unwrap();
+    assert!(pad.rendered && !preview(&previews, "@m2/synths:synth-pad", &std_only(), Some(&yours), &cache).unwrap().rendered);
     assert_eq!(wavs(&cache).len(), 2);
     assert!(std::fs::read_dir(&cache).unwrap().flatten().all(|e| e.path().is_file()), "no song is left in the cache");
 }
@@ -225,7 +230,7 @@ fn a_second_ask_waits_for_the_first_render() {
     let asks: Vec<_> = (0..2)
         .map(|_| {
             let (previews, cache) = (previews.clone(), cache.clone());
-            std::thread::spawn(move || preview(&previews, "std:synth-strings", &std_only(), None, &cache).unwrap())
+            std::thread::spawn(move || preview(&previews, "@m2/synths:synth-strings", &std_only(), None, &cache).unwrap())
         })
         .collect();
     let answers: Vec<_> = asks.into_iter().map(|a| a.join().unwrap()).collect();
@@ -240,7 +245,7 @@ fn the_preview_route_answers_a_wav_or_says_why_not() {
     let scratch = Scratch::new("route-preview");
     let cache = scratch.0.join("previews");
     let running = serving(Folders { presets: Some(scratch.0.join("Presets")), previews: Some(cache.clone()), ..Folders::default() });
-    let (status, kind, body) = get(&running.url, "/api/library/preview?id=std:fm-bell");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=@m2/synths:fm-bell");
     assert_eq!((status, kind.as_str(), &body[..4]), (200, "audio/wav", &b"RIFF"[..]));
     assert_eq!(wavs(&cache).iter().map(std::fs::read).collect::<Result<Vec<_>, _>>().unwrap(), [body], "kept in its cache folder");
     let (status, _, body) = get(&running.url, "/api/library/preview?id=std:sampler");
@@ -257,13 +262,17 @@ fn a_packs_instrument_plays_from_its_pack() {
     let scratch = Scratch::new("pack");
     let acme = scratch.0.join("acme");
     std::fs::create_dir_all(acme.join("src")).unwrap();
-    std::fs::write(acme.join("m2pkg.toml"), "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n").unwrap();
+    std::fs::write(
+        acme.join("m2pkg.toml"),
+        "[package]\nname = \"@acme/tones\"\nversion = \"0.1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
+    )
+    .unwrap();
     std::fs::write(
         acme.join("src/keys.ts"),
-        r#"import { component, port, signature, type Audio, type Events } from "@m2/core";
-import { synth } from "std/synth";
+        r#"import { component, poly, port, signature, type Audio, type Events } from "@m2/core";
+import { adsr, osc, svf, vca } from "std/dsp";
 
-/** A test pack's instrument, built on std's pluck. */
+/** A test pack's instrument, built built from std's blocks (a pack never imports another, PACK-3). */
 export const bell = component(
   {
     id: "bell",
@@ -274,7 +283,8 @@ export const bell = component(
     output: port.audio(),
     editor: { category: "Instruments", description: "A bell from a pack" },
   },
-  (notes: Events): Audio => synth.pluck(notes),
+  (notes: Events): Audio =>
+    poly(notes, (n) => vca(svf.lowpass(osc.saw(n.pitch), 4500), adsr(n.gate, { decay: 0.45, sustain: 0, release: 0.25 })), { voices: 12 }),
 );
 "#,
     )
@@ -310,7 +320,7 @@ fn loops_pack(dir: &Path) {
     std::fs::write(
         dir.join("m2pkg.toml"),
         "[package]\nname = \"@alice/loops\"\nversion = \"1.2.0\"\nlicense = \"CC-BY-4.0\"\nauthors = [\"Alice Example\"]\n\n\
-         [dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n",
+         [dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
     )
     .unwrap();
     std::fs::write(dir.join("samples.toml"), "[folder.\"loops\"]\ntags = [\"dusty\"]\n\n[folder.\"one-shots\"]\n").unwrap();
@@ -451,6 +461,84 @@ fn a_samples_preview_is_its_file_and_only_a_listed_one() {
     }
 }
 
+/// A FLAC fixture's bytes, as libsndfile made it (`core/runtime/tests/fixtures/flac/make.py`).
+fn flac(name: &str) -> Vec<u8> {
+    std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/runtime/tests/fixtures/flac").join(name)).unwrap()
+}
+
+/// Each channel's samples as their bits.
+fn bits(a: &m2_runtime::audio::Asset) -> Vec<Vec<u32>> {
+    a.channels.iter().map(|c| c.iter().map(|s| s.to_bits()).collect()).collect()
+}
+
+const SNARE: &str = "sample:@alice/loops:samples/one-shots/snare.flac";
+
+// LIB-6, FMT-24: a FLAC sample's preview is the WAV of its samples, made when it is asked for, so
+// the page needs no FLAC decoder: the FLAC's very bits.
+#[test]
+fn a_flac_samples_preview_is_the_wav_of_it() {
+    let scratch = Scratch::new("flac-preview");
+    let store = scratch.0.join("Packs");
+    let dir = store.join("@alice/loops/1.2.0");
+    loops_pack(&dir);
+    std::fs::write(dir.join("samples/one-shots/snare.flac"), flac("24bit-stereo.flac")).unwrap();
+    m2_editor::packs::build(&dir).unwrap();
+    let running = serving(Folders { packs: Some(store.clone()), ..Folders::default() });
+    let (status, kind, body) = get(&running.url, &format!("/api/library/preview?id={}", enc(SNARE)));
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "{}", String::from_utf8_lossy(&body));
+    let wav = scratch.0.join("preview.wav");
+    std::fs::write(&wav, &body).unwrap();
+    assert_eq!(hound::WavReader::open(&wav).unwrap().spec().bits_per_sample, 24);
+    let want = bits(&m2_runtime::decode::load(&dir.join("samples/one-shots/snare.flac")).unwrap());
+    assert!(bits(&m2_runtime::decode::load(&wav).unwrap()) == want, "the FLAC's bits");
+}
+
+// LIB-6, FMT-24 (review F5): a FLAC sample's preview is held to 64 MB as the WAV it makes, checked
+// from its header before it is decoded: 64 MiB frames of silence (14 KB as FLAC) has none, in words.
+#[test]
+fn a_flac_whose_wav_is_over_64_mb_has_no_preview() {
+    let scratch = Scratch::new("flac-long");
+    let mine = scratch.0.join("Samples");
+    std::fs::create_dir_all(&mine).unwrap();
+    std::fs::write(mine.join("Long Hum.flac"), flac("silence-64mib.flac")).unwrap();
+    let running = with_settings(&scratch);
+    added(&running, &mine);
+    let real = std::fs::canonicalize(&mine).unwrap();
+    let id = format!("sample:folder:{}", real.join("Long Hum.flac").display());
+    let (status, _, body) = get(&running.url, &format!("/api/library/preview?id={}", enc(&id)));
+    assert_eq!(status, 404, "{} bytes served", body.len());
+    let words = json(&body)["error"].as_str().unwrap().to_string();
+    assert!(words.contains("as a WAV it is 65 MB, too long to preview here (up to 64 MB)"), "{words}");
+}
+
+// LIB-7, FMT-24: adding a FLAC sample brings in the WAV of its samples, with its bits, and a note
+// with the pack's credit and what the WAV was made from.
+#[test]
+fn adding_a_flac_sample_brings_in_its_wav_with_its_note() {
+    let scratch = Scratch::new("add-flac");
+    let pack = scratch.0.join("loops");
+    loops_pack(&pack);
+    let source = flac("16bit-stereo.flac");
+    std::fs::write(pack.join("samples/one-shots/snare.flac"), &source).unwrap();
+    let song = Scratch::new("add-flac-song");
+    song_with_pack(&song.0, &pack);
+    let running = serving(Folders::default());
+    let session = running.state.graph.open(&song.0).unwrap()["session"].as_u64().unwrap();
+    let (status, done) =
+        post(&running.url, "/api/library/sample", "t00ls", &json!({"session": session, "id": SNARE, "to": {"kind": "below", "beat": 0}}));
+    assert_eq!(status, 200, "{done:#}");
+    assert_eq!((&done["asset"], &done["reused"], &done["noted"]), (&json!("snare.wav"), &json!(false), &json!(true)));
+    let want = bits(&m2_runtime::decode::load(&pack.join("samples/one-shots/snare.flac")).unwrap());
+    assert!(bits(&m2_runtime::decode::load(&song.0.join("assets/snare.wav")).unwrap()) == want, "the FLAC's bits");
+    let note: Value = serde_json::from_str(&std::fs::read_to_string(song.0.join("assets/snare.wav.json")).unwrap()).unwrap();
+    let from = json!({"pack": "@alice/loops", "version": "1.2.0", "file": "samples/one-shots/snare.flac", "author": "Alice Example", "license": "CC-BY-4.0"});
+    let made = json!({"file": "snare.flac", "format": "FLAC", "sha256": m2_song::Sha::of(&source).hex()});
+    assert_eq!(note, json!({"from": from, "made_from": made}));
+    assert!(!song.0.join("assets/snare.flac").exists(), "no FLAC in assets/");
+    let track = done["tracks"][0]["module"].as_str().unwrap().to_string();
+    assert_eq!(audio_clips(&song.0, &track)[0]["asset"], json!("snare.wav"));
+}
+
 /// The open song's session and the clips of its audio lane `module`, as the files say.
 fn audio_clips(dir: &Path, module: &str) -> Vec<Value> {
     let text = std::fs::read_to_string(dir.join(format!("data/{module}/clips.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
@@ -564,29 +652,34 @@ fn a_sample_dropped_on_a_sampler_is_its_file() {
 }
 
 // LIB-5: a folder of yours is kept in the settings and indexed in the background: a search never
-// waits for it, and finds its samples once it is; what isn't WAV is counted; Remove forgets it.
+// waits for it, and finds its samples once it is; what isn't WAV or FLAC is counted; Remove forgets
+// it.
 #[test]
 fn a_folder_is_indexed_in_the_background() {
     let scratch = Scratch::new("folder");
     let mine = scratch.0.join("My Samples");
     tone(&mine.join("Kicks/Big Kick.wav"), 1, 0.2);
     tone(&mine.join("Loops/Funk Guitar 92 Gmin.wav"), 2, 1.0);
-    std::fs::write(mine.join("Loops/vox.flac"), b"fLaC").unwrap();
+    std::fs::write(mine.join("Loops/Vox Chop.flac"), flac("16bit-mono.flac")).unwrap();
+    std::fs::write(mine.join("Loops/vox.mp3"), b"ID3 not read").unwrap();
     let running = serving(Folders { samples: Some(scratch.0.join("cache")), ..Folders::default() });
     running.state.keep_settings(scratch.0.join("settings.json"));
+    // Kept by its real path: where the temporary folder is through a link (a Mac's /var is
+    // /private/var), that is not the path asked.
+    let real = std::fs::canonicalize(&mine).unwrap();
     let (status, shown) = post(&running.url, "/api/library/folders", "t0k", &json!({"add": mine}));
     assert_eq!(status, 200, "{shown:#}");
-    assert_eq!(shown["folders"][0]["path"], json!(mine));
+    assert_eq!(shown["folders"][0]["path"], json!(real));
     let kept: Value = serde_json::from_str(&std::fs::read_to_string(scratch.0.join("settings.json")).unwrap()).unwrap();
-    assert_eq!(kept["samples"], json!([mine]));
+    assert_eq!(kept["samples"], json!([real]));
     assert!(running.state.sample_index.settled(std::time::Duration::from_secs(60)), "indexed");
     items(&running.url, "q=sample");
     let (_, _, body) = get(&running.url, "/api/library?q=sample");
     let found = json(&body);
     let labels: Vec<&str> =
         found["items"].as_array().unwrap().iter().filter(|i| i["package"] == "yours").map(|i| i["label"].as_str().unwrap()).collect();
-    assert_eq!(labels, ["Big Kick", "Funk Guitar 92 Gmin"]);
-    assert_eq!(found["folders"]["not_wav"], json!(1), "WAV only for now");
+    assert_eq!(labels, ["Big Kick", "Funk Guitar 92 Gmin", "Vox Chop"], "a FLAC is a sample too (FMT-24)");
+    assert_eq!(found["folders"]["not_wav"], json!(1), "the MP3: WAV and FLAC only for now");
     let funk = found["items"].as_array().unwrap().iter().find(|i| i["label"] == "Funk Guitar 92 Gmin").unwrap();
     assert_eq!(
         (&funk["sample"]["bpm"], &funk["sample"]["key"], &funk["sample"]["from"]),
@@ -848,4 +941,48 @@ fn a_place_no_clip_can_go_is_refused_before_any_copy() {
     assert!(status >= 400 && why["error"].as_str().unwrap().contains("plays notes"), "{status} {why:#}");
     let left: Vec<_> = std::fs::read_dir(song.0.join("assets")).into_iter().flatten().flatten().map(|e| e.file_name()).collect();
     assert!(left.is_empty(), "nothing copied: {left:?}");
+}
+
+/// A pack in `dir`, `@alice/piano` 0.1.0, of one instrument written as data (PACK-13) that plays
+/// one recording: what `m2 pack import-sfz` makes.
+fn data_pack(dir: &Path) {
+    std::fs::create_dir_all(dir.join("instruments")).unwrap();
+    std::fs::write(
+        dir.join("m2pkg.toml"),
+        "[package]\nname = \"@alice/piano\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("instruments/piano.toml"),
+        "label = \"Felt piano\"\ncategory = \"Keys\"\nengine = \"std:sampler\"\nmode = \"gate\"\n\n[[region]]\nfile = \"samples/C4.wav\"\nroot = 60\nkeys = [0, 127]\n",
+    )
+    .unwrap();
+    tone(&dir.join("samples/C4.wav"), 1, 0.5);
+}
+
+// LIB-1, LIB-3, REG-6 (gaps #47): an instrument written as data is in the library with no song
+// open, and its preview renders, with no song open and with one that takes its pack.
+#[test]
+fn a_data_instrument_is_listed_and_previewed_with_or_without_a_song() {
+    let scratch = Scratch::new("data-instrument");
+    let store = scratch.0.join("Packs");
+    let installed = store.join("@alice/piano/0.1.0");
+    data_pack(&installed);
+    m2_editor::packs::build(&installed).unwrap();
+    let running = serving(Folders { packs: Some(store), previews: Some(scratch.0.join("previews")), ..Folders::default() });
+    assert_eq!(found(&running.url, "felt piano")[0], "@alice/piano:piano");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=%40alice%2Fpiano%3Apiano");
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "{}", String::from_utf8_lossy(&body));
+
+    let song = Scratch::new("data-instrument-song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song.0);
+    let pack = scratch.0.join("piano");
+    data_pack(&pack);
+    let manifest = std::fs::read_to_string(song.0.join("music2.toml")).unwrap();
+    let line = format!("\"@alice/piano\" = {{ path = {} }}\n", serde_json::to_string(&pack.to_string_lossy()).unwrap());
+    std::fs::write(song.0.join("music2.toml"), manifest + &line).unwrap();
+    running.state.graph.open(&song.0).unwrap();
+    assert_eq!(found(&running.url, "felt piano")[0], "@alice/piano:piano");
+    let (status, kind, body) = get(&running.url, "/api/library/preview?id=%40alice%2Fpiano%3Apiano");
+    assert_eq!((status, kind.as_str()), (200, "audio/wav"), "with a song open: {}", String::from_utf8_lossy(&body));
 }

@@ -1,0 +1,21 @@
+{
+  "m2preset": 1,
+  "name": "Short pluck",
+  "sound": "@m2/wavetable:wavetable",
+  "values": {
+    "attack": 0.001,
+    "cutoff": 900,
+    "decay": 0.35,
+    "filterDecay": 0.18,
+    "filterEnv": 4,
+    "filterSustain": 0,
+    "levelB": 0.4,
+    "pitchB": 12,
+    "positionA": 0.4,
+    "positionB": 1,
+    "q": 1.2,
+    "release": 0.3,
+    "sustain": 0,
+    "velSens": 0.6
+  }
+}

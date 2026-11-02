@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 /// A component as its descriptor declares it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Descriptor {
-    /// The ComponentId: `<package>:<id>` (`std:delay`), or a project component's bare id (PKG-9).
+    /// The ComponentId: `<package>:<id>` (`@m2/effects:delay`), or a project component's bare id (PKG-9).
     pub id: String,
     pub label: String,
     /// The module that defines it, as imported: `std/fx`, or a project path (`lib/fx.ts`).
@@ -55,13 +55,15 @@ pub enum PortKind {
     Any,
 }
 
-/// A declared control (PKG-3), or a dictionary slot when `each` is set (PKG-6).
+/// A declared control (PKG-3), or a dictionary slot when `each` is set (PKG-6). A choice's unit is
+/// its options and a switch's is `switch` (CARD-12); each has no range, log, accepts or smooth.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ControlDesc {
     pub name: String,
     /// None for `control.any()`, typed by what flows in, and for a dictionary slot.
     pub unit: Option<Unit>,
-    /// What a call that leaves it out gets (PKG-4); none when a call must give it.
+    /// What a call that leaves it out gets (PKG-4); none when a call must give it. A choice's is
+    /// its option's place, a switch's 1 or 0 (CARD-10, CARD-11).
     pub default: Option<Spelled>,
     /// The range a knob shows, in base units: a hint unless `strict` (PKG-8).
     pub range: Option<(f64, f64)>,
@@ -114,6 +116,10 @@ pub struct SettingDesc {
     /// Left out, it is `undefined`: no call needs it, though it has no default (`.optional()`).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// What a card names it by, as a control's label (CARD-34). Written only when given, so every
+    /// other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -146,6 +152,68 @@ pub struct Editor {
     /// What an instrument's notes play, by MIDI note (`36: "Kick"`): the piano roll's row names.
     #[serde(default)]
     pub notes: BTreeMap<u8, String>,
+    /// Pictures over its values, in the order declared (CARD-16). Written only when there are
+    /// some, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub views: Vec<View>,
+    /// Its card's groups, in order (CARD-17). Written only when there are some.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<Group>,
+    /// Said on purpose: code plays it, and no list offers it (PKG-7). Such a component has no category.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub unlisted: bool,
+    /// The kits an instrument names, in order (KIT-3): what + Track's Drum kit makes. Written only
+    /// when there are some, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub kits: Vec<Kit>,
+}
+
+/// A kit a drum names (KIT-3): its name, the tracks a new one makes, in order, and its bus's fader.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Kit {
+    pub name: String,
+    pub tracks: Vec<KitTrack>,
+    /// Its bus's fader in dB, as written (KIT-4): written only when given, so a kit that gives
+    /// none keeps its bytes; none is 0 dB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub db: Option<Spelled>,
+}
+
+/// One track of a kit: its name, and values of the instrument's own controls, in the order written,
+/// each as an insert carries one (a choice's place, a switch's 1 or 0).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KitTrack {
+    pub name: String,
+    pub values: Vec<Insert>,
+}
+
+/// A view (CARD-16): a picture over values the sound declares, by a name of its own (`amp`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct View {
+    pub name: String,
+    #[serde(flatten)]
+    pub of: ViewOf,
+}
+
+/// What a view draws, by the names of the controls (or the setting) it shows.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ViewOf {
+    /// Its four times and level: an envelope's shape, whose corners move them.
+    Envelope { attack: String, decay: String, sustain: String, release: String },
+    /// A frequency, and a q or a resonance from 0 to 1 (CARD-30): a filter's curve, whose peak moves them.
+    Filter { cutoff: String, q: String },
+    /// A `regions` or `keymap` setting: which recording plays on which keys.
+    Keys { regions: String },
+    /// The sound's output as it plays.
+    Scope,
+}
+
+/// A group of a card (CARD-17): its name, and the values and views in it, in order.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Group {
+    pub name: String,
+    pub items: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -163,6 +231,13 @@ pub struct UnitCtor {
     pub scale: f64,
     /// The spelling a value in base units is written with: exactly one per unit.
     pub canonical: bool,
+}
+
+impl ControlDesc {
+    /// A choice's options, in place order (CARD-10).
+    pub fn options(&self) -> Option<m2_ir::Names> {
+        self.unit.and_then(Unit::options)
+    }
 }
 
 impl Descriptor {

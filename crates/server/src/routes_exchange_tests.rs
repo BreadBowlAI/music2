@@ -9,7 +9,7 @@ use super::*;
 use crate::graph::Graph;
 use crate::{ServeOptions, start_with};
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from 'std/instruments';\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\n\
                     const b = track('bass', { name: 'Bass' }, ({ lane }) => bass(lane.notes('notes')));\nexport default song(() => b.out);\n";
 const NOTES: &str = r#"{"clips": [{"id": "a", "start": 4, "length": 4, "notes": [{"pitch": "E2", "start": 1, "length": 1}]}]}"#;
 
@@ -18,7 +18,7 @@ fn project(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-routes-exchange-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/bass")).unwrap();
-    let manifest = "[project]\nname = \"groove\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"groove\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     std::fs::write(dir.join("data/bass/notes.json"), NOTES).unwrap();
@@ -58,9 +58,11 @@ fn notes(path: &Path) -> Vec<(u8, u64, u64)> {
 #[test]
 fn the_song_and_a_clip_are_written_where_picked() {
     let dir = project("picked");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let picked = dir.with_extension("picked");
@@ -105,9 +107,11 @@ fn a_midi_file_is_never_written_into_the_song() {
     let beside = dir.with_extension("beside");
     let _ = std::fs::remove_dir_all(&beside);
     std::fs::create_dir_all(&beside).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     let before = std::fs::read_dir(&dir).unwrap().count();
@@ -193,9 +197,11 @@ fn upload(url: &str, path: &str, bytes: &[u8]) -> (u16, Value) {
 #[test]
 fn a_midi_file_comes_into_a_notes_lane_as_one_undo_step() {
     let dir = project("import");
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     std::fs::write(dir.join("riff.mid"), riff()).unwrap();
@@ -239,10 +245,10 @@ fn groove() -> Vec<u8> {
     m2_editor::smf::write(&Smf { format: 1, ppq: 96, tracks })
 }
 
-// C2b, Q35, Q36: a file of two parts below the tracks asks the tempo question first, writing
-// nothing; answered Use, it is two new tracks and the file's tempo from the bar, one undo step
-// named on the server. As bytes (a browser) with Keep onto a track's row, and onto a notes lane
-// (two parts: new tracks after it, not into it).
+// C2b, Q35, Q36, KIT-8: a file of two parts below the tracks asks the tempo question first, writing
+// nothing; answered Use, it is new tracks (its drums a kit: a Drums bus, a Kick and a Snare) and
+// the file's tempo from the bar, one undo step named on the server. As bytes (a browser) with Keep
+// onto a track's row, and onto a notes lane (two parts: new tracks after it, not into it).
 #[test]
 fn an_import_below_asks_then_writes() {
     let dir = project("below");
@@ -252,9 +258,11 @@ fn an_import_below_asks_then_writes() {
         "import { master, mixer } from 'std/mix';\nexport default song(() => master(mixer({ bass: b.out })));",
     );
     std::fs::write(dir.join("song.ts"), mixed).unwrap();
-    let running =
-        start_with(ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() }, Graph::silent())
-            .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
     let url = &running.url;
     std::fs::write(dir.join("groove.mid"), groove()).unwrap();
@@ -272,8 +280,8 @@ fn an_import_below_asks_then_writes() {
         "{done:#}"
     );
     let labels: Vec<&str> = done["tracks"].as_array().unwrap().iter().filter_map(|t| t["label"].as_str()).collect();
-    assert_eq!(labels, ["Drums", "Low"]);
-    assert_eq!(done["made"].as_array().map(Vec::len), Some(2));
+    assert_eq!(labels, ["Drums", "Kick", "Snare", "Low"]);
+    assert_eq!(done["made"].as_array().map(Vec::len), Some(3), "a clip for each but the bus");
     let arrangement = m2_song::Arrangement::read(&std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap()).unwrap();
     let tempo: Vec<(f64, f64)> = arrangement.tempo.iter().map(|t| (t.beat, t.bpm)).collect();
     assert_eq!(tempo, [(0.0, 120.0), (4.0, 128.0)], "the file's tempo from bar 2");
@@ -281,14 +289,46 @@ fn an_import_below_asks_then_writes() {
     let q =
         |to: &Value| format!("/api/graph/midifile/import?session={session}&name=groove.mid&tempo=keep&to={}", urlencode(&to.to_string()));
     let (status, done) = upload(url, &q(&json!({"kind": "track", "module": "bass", "beat": 0})), &groove());
-    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(2)), "{done:#}");
+    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(4)), "{done:#}");
     // Onto Bass's notes lane: two parts are new tracks.
     let (status, done) = upload(url, &q(&json!({"kind": "lane", "module": "bass", "lane": "notes", "beat": 0})), &groove());
-    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(2)), "{done:#}");
+    assert_eq!((status, done["tracks"].as_array().map(Vec::len)), (200, Some(4)), "{done:#}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// `text` for a query string.
 fn urlencode(text: &str) -> String {
     text.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}
+
+// KIT-8 (review K1): a one-part drum file dropped onto a Drum's lane comes in as a kit after that
+// track: a Drums bus and a Drum track for each sound, never every hit as the lane's one drum.
+#[test]
+fn a_drum_loop_dropped_on_a_drums_lane_comes_in_as_a_kit() {
+    let dir = project("drum-lane");
+    let song = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { master, mixer } from 'std/mix';\n\
+                const k = track('kick', { name: 'Kick' }, ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                export default song(() => master(mixer({ kick: k.out })));\n";
+    std::fs::write(dir.join("song.ts"), song).unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    use m2_editor::smf::{Event, Smf, SmfTrack};
+    let hit = |key, at: u64| [(at, Event::NoteOn { channel: 9, key, velocity: 100 }), (at + 24, Event::NoteOff { channel: 9, key })];
+    let events: Vec<(u64, Event)> = [hit(36, 0), hit(42, 48), hit(38, 96), hit(42, 144)].concat();
+    let end = events.last().unwrap().0;
+    let file = m2_editor::smf::write(&Smf { format: 1, ppq: 96, tracks: vec![SmfTrack { name: Some("Loop".into()), events, end }] });
+    std::fs::write(dir.join("loop.mid"), file).unwrap();
+    let to = json!({"kind": "lane", "module": "kick", "lane": "hits", "beat": 0});
+    let (status, done) =
+        post(&running.url, "/api/graph/midifile/import", &json!({"session": session, "path": dir.join("loop.mid"), "to": to}));
+    assert_eq!(status, 200, "{done:#}");
+    let labels: Vec<&str> = done["tracks"].as_array().unwrap().iter().filter_map(|t| t["label"].as_str()).collect();
+    assert_eq!(labels, ["Drums", "Kick 2", "Snare", "Hats"], "{done:#}");
+    let kick = std::fs::read_to_string(dir.join("data/kick/hits.json")).unwrap_or_default();
+    assert!(!kick.contains("F#2"), "the Kick's own lane takes no hats: {kick}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

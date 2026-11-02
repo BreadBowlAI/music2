@@ -16,7 +16,9 @@ export default function MidiStatus({ graph }: { graph: GraphState }) {
   if (!devices.length) return null;
   // The lane named, if the song still has it.
   const track = target && graph.timeline.tracks.find((t) => t.module === target.module && t.lanes.some((l) => l.key === target.lane && l.kind === "notes"));
-  const plays = track ? `plays ${track.label}` : "Select a track with notes to play it";
+  // A kit's: each pad plays the Drum of its sound (KIT-25).
+  const kit = target?.kit && graph.view.drum_kits?.find((k) => k.bus === target.kit);
+  const plays = kit ? `plays the ${kit.label} kit, each pad its drum` : track ? `plays ${track.label}` : "Select a track with notes to play it";
   const on = devices.filter((d) => !off.includes(d));
   const quiet = devices.filter((d) => off.includes(d));
   const title = [

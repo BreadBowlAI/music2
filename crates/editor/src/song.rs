@@ -119,7 +119,9 @@ fn write(s: &mut Session, after: Arrangement, label: (String, String)) -> Result
     }
     let file = path(FILE)?;
     let op = Op::Write { file, bytes: Payload::Text(text.into()) };
-    let tx = plan::planned(s, label.clone(), vec![op], Expect::Confined(Confined::default()));
+    let mut tx = plan::planned(s, label.clone(), vec![op], Expect::Confined(Confined::default()));
+    // A tempo or a meter changed: where music sits in time moved (AGENT-2).
+    tx.beats = true;
     let done = plan::run(s, tx, move |_, checked: &Checked| match checked.candidate().project.arrangement == read {
         true => Ok(()),
         false => Err(EditError::Rejected("the arrangement wouldn't be what was asked".into())),

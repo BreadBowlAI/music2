@@ -11,6 +11,12 @@ impl Graph {
     /// Set the song's markers to `markers` (`m2_editor::markers::set`). Answers `{file, before,
     /// after, revision}`.
     pub fn markers(&self, token: u64, markers: Vec<Marker>) -> Result<Value> {
-        self.edit(token, move |s| m2_editor::markers::set(s, markers))
+        self.markers_from(token, markers, None)
+    }
+
+    /// [`Graph::markers`], made from the list `base`: refused when the markers changed since
+    /// (AGENT-2).
+    pub fn markers_from(&self, token: u64, markers: Vec<Marker>, base: Option<Vec<Marker>>) -> Result<Value> {
+        self.edit(token, move |s| m2_editor::markers::set_from(s, markers, base))
     }
 }

@@ -17,12 +17,13 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
 fn m2(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", std::env::temp_dir().join("m2-tests-no-app")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", m2_song::pack::test_home()).args(args).output().unwrap()
 }
 
 fn stderr(out: &Output) -> String {
@@ -129,7 +130,12 @@ fn bounce_names_a_track_by_its_key() {
     let files = provenance["packages"]["std"]["files"].as_object().unwrap();
     assert!(files.keys().any(|f| f.starts_with("std/")) && files.values().all(|h| h.as_str().is_some_and(|h| h.len() == 64)), "{files:?}");
     // What the runtime ran: the kernels' wasm and the manifest that declares them.
-    assert!(["std/m2pkg.toml", "std/kernels/std.wasm", "std/src/instruments.ts"].iter().all(|f| files.contains_key(*f)), "{files:?}");
+    assert!(["std/m2pkg.toml", "std/kernels/std.wasm", "std/src/dsp.ts"].iter().all(|f| files.contains_key(*f)), "{files:?}");
+    // And the pack the kick is from (PACK-15), with the version the song locks (PACK-5, PACK-18).
+    let synths = &provenance["packages"]["@m2/synths"];
+    assert!(synths["files"].as_object().is_some_and(|f| f.contains_key("@m2/synths/src/simple.ts")), "{synths:#}");
+    let lock = std::fs::read_to_string(song.join("music2.lock")).unwrap();
+    assert!(synths["hash"].as_str().is_some_and(|h| h.starts_with("sha256:") && lock.contains(h)), "{synths:#}");
     // Never over an asset that exists (FMT-14).
     let out = m2(&["bounce", dir, "kick-bounce", "--track", "kick", "--seconds", "0.1"]);
     assert!(!out.status.success() && stderr(&out).contains("assets are never replaced"), "{}", stderr(&out));

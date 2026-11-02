@@ -30,7 +30,7 @@ This is the most important difference in music software.
 | Can you change it? | Completely: any note, or the whole instrument | Mostly as a whole: cut, move, stretch |
 | Makes sound by | Being played by an **instrument** | Just playing back |
 
-**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#recording-and-playing-live)).
+**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#recording-and-playing-live)).
 
 ## Time: tempo, beats, bars and the grid
 
@@ -39,16 +39,38 @@ This is the most important difference in music software.
 - A **bar** (or measure) is a group of beats. Almost all pop uses **4/4 time**: 4 beats per bar. Song parts are counted in bars ("an 8-bar chorus").
 - The **grid** splits beats into smaller steps for placing notes. **1/16** means four steps per beat; that's where hi-hats and fast patterns live. **Quantize** snaps notes onto the grid, and **humanize** nudges them a little so they sound less robotic.
 
-**In music2:** the tempo and the time signature are in the top bar. Drag the tempo up or down, or double-click it and type. Click the time signature to pick another. To change them partway through the song, right-click the ruler. The grid goes from 1/4 to 1/64, and ⌘3 makes it triplets (three notes in the space of two). Right-click a note for **Quantize** (or press Q), **Humanize** and **Swing**. The **metronome** (K) clicks on each beat while the song plays, a higher click on each bar's first beat.
+**In music2:** the tempo and the time signature are in the top bar. Drag the tempo up or down, or double-click it and type. Click the time signature to pick another. To change them partway through the song, right-click the ruler. The grid goes from 1/4 to 1/64, and ⌘3 makes it triplets (three notes in the space of two). Right-click a note for **Quantize** (or press Q), **Humanize**, **Swing** (50% is straight; about 66% is a shuffle, the bouncy feel of blues) and the **grooves**: Laid back, Pushed and Accents, each giving the notes a feel. A groove moves only notes on its own grid: a beat of triplets under a swing of sixteenths stays as it is. The **metronome** (K) clicks on each beat while the song plays, a higher click on each bar's first beat.
 
 ## Key, scale and chords
 
-- A **scale** is a set of 7 of the 12 notes that sound good together. **Major** sounds bright and happy; **minor** sounds emotional and moody. A lot of dance-pop is in minor, which is how it sounds happy and sad at once.
+- A **scale** is the set of notes that sound right together, usually 7 of the 12. **Major** sounds bright and happy; **minor** sounds emotional and moody. A lot of dance-pop is in minor, which is how it sounds happy and sad at once.
+- Other scales change one or two notes for another mood: **Dorian** (minor, but brighter), **Mixolydian** (major, but bluesy), **Harmonic minor** (classical, Middle Eastern). A **pentatonic** scale keeps only 5 notes, so almost nothing you play sounds wrong; **blues** adds one note to minor pentatonic.
 - The **key** is a scale plus its home note, such as "A minor". A minor uses only the white keys: A B C D E F G.
 - A **chord** is several notes played together, usually 3 (a **triad**).
 - A **chord progression** is the order of chords, usually one per bar, repeating. Chords are named by their place in the scale with Roman numerals. The most famous pop progression is **I–V–vi–IV** (in C major: C, G, Am, F). In minor keys, **i–VI–III–VII** is a classic.
 
-**In music2:** click **Key** in the top bar and pick the song's key, such as A minor. The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. More scales ([gap #6](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)), chord stamps and an arpeggiator ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)) are still to come.
+**In music2:** click **Key** in the top bar and pick the song's root (A) and its scale (Minor, or another of the 13). The Notes view then shades the rows that aren't in the key, so the notes that fit stand out. In Notes:
+
+| To | Do this |
+|---|---|
+| Only ever play notes of the key | Turn on **Lock to key**. A note you draw, drag or paste goes to the nearest note of the key; a note exactly between two goes down. ↑ and ↓ move to the next note of the key. |
+| Place a whole chord at once | Pick one in **Chord ▾** (Triad, 7th, Sus2, Sus4, Add9). In Draw mode (B) a click places it, and a drag sets how long it lasts; in Select mode, double-click. The chord is built on the row you click, from the key's own notes, so every note of it is in the key. The pointer shows its name and numeral first ("Dm · ii"), or why there is none there. Press I for the next inversion. |
+
+The words a chord stamp uses:
+
+| Word | What it means |
+|---|---|
+| **Root** | The note a chord is built on, and named after: D in D minor. |
+| **Triad** | Three notes, each two notes of the key above the last (D F A): the most common chord. |
+| **7th** | A triad with a fourth note on top, two notes of the key higher (D F A C): richer. |
+| **Sus2**, **Sus4** | A triad with its middle note one note of the key lower (D E A) or higher (D G A): open, or waiting to move on. On some notes of a key they sound tense. |
+| **Add9** | A triad with the note just above its root added an octave up (D F A E): bright. |
+| **Inversion** | The same chord with its lowest notes moved up an octave (F A D): it sits higher, and moves more smoothly to the next chord. |
+| **Numeral** | The chord's place in the key, counted from the key's root: I, ii, iii… Upper case is a major chord, lower case a minor one; ° is diminished (tense), + augmented. |
+
+In a pentatonic or blues key (5 or 6 notes), only the chords whose notes are all in the key are placed, so there are fewer: the pointer says why one isn't. A chromatic key (all 12 notes) has no chords to stamp.
+
+An arpeggiator (a chord played one note at a time) is still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)).
 
 ## The parts of a pop song
 
@@ -61,7 +83,7 @@ This is the most important difference in music software.
 | **Counter-melody** | A second tune that answers the melody in its gaps | Plucks, strings |
 | **Arp** (arpeggio) | A chord played one note at a time, fast and repeating | Sparkly 16th-note patterns |
 
-**In music2:** **+ Track** (⌘T) lists every sound, drums first. The **Drum kit** plays kick, snare, clap, hats, toms and more from one lane, or pick one drum alone, such as Snare. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.kit`, `synth.sub` and so on ([`std/src/drums.ts`](https://github.com/BreadBowlAI/music2/blob/main/std/src/drums.ts), [`std/src/synth.ts`](https://github.com/BreadBowlAI/music2/blob/main/std/src/synth.ts), [`std/src/fm.ts`](https://github.com/BreadBowlAI/music2/blob/main/std/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) uses them all.
+**In music2:** **+ Track** (⌘T) lists every sound, drums first. A **Drum kit** is several tracks at once, a drum on each (Kick, Snare, Hats…) and a bus they all go to ([Drum kits](sounds.md#drum-kits)); a **Drum** is one drum on one track, picked from its menu. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.drum`, `synth.sub` and so on ([`packs/@m2/drums/src/index.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/drums/src/index.ts), [`packs/@m2/synths/src/synth.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/synth.ts), [`packs/@m2/synths/src/fm.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) uses them all.
 
 ## How a synthesizer makes sound
 
@@ -74,7 +96,7 @@ Most instruments in music2 are **synthesizers**: they build sound from scratch. 
 
 A **sampler** is the other kind of instrument: instead of building sound, it plays a **recording** (a **sample**) at different pitches.
 
-**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). `synth.custom` has them all in one synth, with unison (up to seven stacked voices), a ladder filter with its own envelope, and drive; `fm.custom` builds sound by FM instead (one sine bending another's pitch, which gives bells and electric pianos). std's **Sampler** plays a WAV file on each note, higher or lower by the note; loop points and velocity layers are still to come ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)). Each std instrument is a short function you can read and copy.
+**In music2:** these blocks are in `std/dsp` (`osc.sine`, `osc.saw`, `osc.square`, `osc.tri`, `adsr`, `svf`), `std/filter` and `std/control` (`lfo`). `synth.custom` has them all in one synth, with unison (up to seven stacked voices), a ladder filter with its own envelope, and drive; `fm.custom` builds sound by FM instead (one sine bending another's pitch, which gives bells and electric pianos). std's **Sampler** plays a WAV file on each note, higher or lower by the note, and recorded instruments with loops and velocity layers (`regions`). The synths and drums are `@m2/synths` and `@m2/drums`, packs that come with music2; each instrument is a short function you can read and copy.
 
 ## Effects: changing a sound
 
@@ -126,4 +148,5 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Chop** or **slice** | Cut a recording into short pieces and replay them as a new rhythm | Audio clips with an `offset` into the file |
 | **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | Not in music2 |
 | **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | music2 makes up for a plugin's latency, so every track stays in time, live and in exports |
-| **True peak** | The real loudest point of the audio, which streaming services check | Not shown in the app yet: its meters show each track's level, red at 0 dB ([gap #20](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#mixing)). `m2 listen` measures it, for agents |
+| **True peak** | The real loudest point of the audio, which streaming services check | **Peak** on Master's strip in the Mix view, the loudest of the last 3 seconds; `m2 listen` measures it too, for agents |
+| **LUFS** | Loudness as ears hear it; streaming services play songs at about −14 LUFS | On Master's strip in the Mix view (the last 3 seconds), and in the Export dialog (the whole song, after an export) |

@@ -13,9 +13,9 @@ use super::super::midi::Event;
 use super::super::tests::Fixture;
 use super::*;
 
-const SONG: &str = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
-                    const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
-                    const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+const SONG: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                    const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                    const k = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                     export default song(() => sum(b.out, k.out));\n";
 /// Frames a beat lasts at 120 bpm, and a callback's.
 const BEAT: f64 = 24_000.0;
@@ -67,7 +67,7 @@ impl Rig {
             fixture.put(path, text);
         }
         let (p, d) = Player::driven(48_000);
-        let graph = Graph::with_player(p);
+        let graph = Graph::with_player(p).stored();
         let token = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
         let mut rig = Rig { fixture, graph, d, token, anchor: (0, 0.0), filled: 0 };
         rig.fill(4);
@@ -191,6 +191,82 @@ fn a_take_records_midi_notes_where_they_were_heard() {
     assert!(!r.graph.status().playing, "the stop stopped");
 }
 
+// RENDER-36: the pedal isn't recorded, but a take keeps each note as it sounded: a key let go under
+// the pedal ends where the pedal lifts, or where the key is struck again; one let go with the pedal
+// up ends at its Off.
+#[test]
+fn a_take_keeps_a_note_the_pedal_held() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    let on = r.key(&[0x90, 60, 100]);
+    r.key(&[0xB0, 64, 127]);
+    r.to(1.0);
+    r.key(&[0x80, 60, 0]);
+    r.to(1.5);
+    let up = r.key(&[0xB0, 64, 0]);
+    r.to(2.0);
+    r.key(&[0xB0, 64, 127]);
+    let on2 = r.key(&[0x90, 62, 100]);
+    r.to(2.25);
+    r.key(&[0x80, 62, 0]);
+    r.to(2.75);
+    let again = r.key(&[0x90, 62, 90]);
+    r.to(3.0);
+    r.key(&[0xB0, 64, 0]);
+    let off3 = r.key(&[0x80, 62, 0]);
+    r.to(3.5);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let c = &r.clips()[0];
+    let (pitch, start, length, _) = note(c, 0);
+    assert_eq!(pitch, 60.0);
+    assert!(on.has(start) && up.has(start + length), "held to the pedal's lift: {on:?} to {up:?}, written {start} for {length}");
+    let (pitch, start, length, _) = note(c, 1);
+    assert_eq!(pitch, 62.0);
+    assert!(
+        on2.has(start) && again.has(start + length),
+        "held to the key struck again: {on2:?} to {again:?}, written {start} for {length}"
+    );
+    let (_, start, length, velocity) = note(c, 2);
+    assert!(again.has(start) && off3.has(start + length) && velocity == 90.0 / 127.0, "the new one, to its Off: {start} for {length}");
+    assert_eq!(c["notes"].as_array().unwrap().len(), 3, "no pedal in the lane");
+}
+
+// RENDER-36 (review E8): a Stop lets the pedal up for the take as for the lane. The foot still down,
+// a key let go after it ends at its Off in the next take, as the voices end it there, not where the
+// foot at last lifts.
+#[test]
+fn a_stop_lets_the_takes_pedal_up_too() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    r.key(&[0xB0, 64, 127]);
+    r.to(1.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written().get("empty").is_some(), "the first take holds no note");
+    r.fill(10);
+    let from = r.graph.status().beat;
+    r.anchored(0, from);
+    r.start(false, None);
+    r.to(from + 0.5);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(from + 1.0);
+    let off = r.key(&[0x80, 60, 0]);
+    r.to(from + 2.0);
+    r.key(&[0xB0, 64, 0]);
+    r.to(from + 2.5);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let c = &r.clips()[0];
+    let (pitch, start, length, _) = note(c, 0);
+    let at = c["start"].as_f64().unwrap();
+    assert_eq!(pitch, 60.0);
+    assert!(on.less(at).has(start) && off.less(at).has(start + length), "to its Off: {on:?} to {off:?}, written {start} for {length}");
+}
+
 // D4: a note goes where it was heard between two callbacks, not on the callback's line.
 #[test]
 fn notes_land_between_callbacks() {
@@ -269,6 +345,28 @@ fn stop_writes_one_tx_named_recording_on_bass() {
     assert_eq!(r.clips().len(), 1);
     r.graph.undo(r.token).unwrap();
     assert!(r.clips().is_empty(), "one Undo takes it back");
+}
+
+// AGENT-2: the news that a take was written names its undo step, and whether it moved ids, as an
+// edit's answer does, so the window that recorded it keeps it as its own: its ⌘Z takes it back
+// before the window shows it.
+#[test]
+fn a_takes_news_names_its_step() {
+    let mut r = Rig::new();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(0.5);
+    r.key(&[0x90, 48, 90]);
+    r.to(1.0);
+    r.key(&[0x80, 48, 0]);
+    r.graph.transport("stop").unwrap();
+    let said = r.written();
+    let top = r.graph.state().unwrap()["undo_name"].clone();
+    assert_eq!((&top["name"], &top["source"]), (&json!("recording on Bass"), &json!("page")), "{top}");
+    assert!(top["step"].is_u64(), "{top}");
+    assert_eq!(said["written"]["step"], top["step"], "the take's step, by its id: {said}");
+    assert_eq!(said["written"]["moved"], json!([]), "notes written in a lane move no ids: {said}");
+    assert_eq!(said["written"]["undo_name"]["name"], json!("recording on Bass"), "and Undo's name for it: {said}");
 }
 
 #[test]
@@ -364,7 +462,8 @@ fn quantize_puts_starts_on_the_grid() {
     assert!(length >= off.lo - on.hi - SLACK && length <= off.hi - on.lo + SLACK, "its length kept: {length}");
 }
 
-// Q27: the first pass only. At the loop's end the take is written, and the loop plays on.
+// MON-11 (was Q27's first pass only): at the loop's end the first pass is written, the loop plays
+// on, and the take goes round, recording the next pass.
 #[test]
 fn a_loop_wrap_writes_the_first_pass() {
     let mut r = Rig::new();
@@ -383,7 +482,8 @@ fn a_loop_wrap_writes_the_first_pass() {
     assert!(r.graph.status().beat < 1.0, "round the loop");
     let c = &r.clips()[0];
     assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)));
-    assert!(!r.graph.recording(), "recording ended");
+    assert!(r.graph.recording(), "recording the next pass");
+    assert_eq!(r.graph.state().unwrap()["record"]["pass"], json!(1));
 }
 
 // D5: a note struck just after the wrap is no part of the take, and never lands at its start.
@@ -827,7 +927,7 @@ fn a_cancel_just_after_the_count_still_stops_the_song() {
 /// it renders (`m2_play`'s injected input).
 mod audio {
     use super::*;
-    use m2_play::InputChoice;
+    use m2_play::{Channels, InputChoice};
 
     const VOX: &str = "import { song, track } from '@m2/core';\n\
                        const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
@@ -843,20 +943,33 @@ mod audio {
         token: u64,
         /// The engine clock where the transport is at beat 0 (or the take's start).
         anchor: u64,
-        /// What the input hears at each engine clock.
+        /// What the input hears at each engine clock, on every channel; or on each, by channel.
         sound: Box<dyn Fn(u64) -> f32>,
+        each: Option<Box<dyn Fn(u64, usize) -> f32>>,
     }
 
     impl Rig {
         fn new() -> Rig {
+            Rig::with(VOX, &[], &[])
+        }
+
+        /// A rig whose song is `song`, with `files` beside it, and whose silent inputs are `inputs`
+        /// (`Desk:4`: one called Desk, with 4 channels).
+        fn with(song: &str, files: &[(&str, &str)], inputs: &[&str]) -> Rig {
             // Through a link, as on a Mac: the song opens by its real path, not this one.
             let fixture = Fixture::linked();
-            fixture.put("song.ts", VOX);
+            fixture.put("song.ts", song);
             fixture.put("data/vox/clips.json", "{\"clips\": []}\n");
+            for (path, text) in files {
+                fixture.put(path, text);
+            }
             let (player, d) = Player::driven(48_000);
-            let graph = Graph::with_player(player.clone());
+            if !inputs.is_empty() {
+                player.name_inputs(inputs);
+            }
+            let graph = Graph::with_player(player.clone()).stored();
             let token = graph.open(&fixture.0).unwrap()["session"].as_u64().unwrap();
-            let mut rig = Rig { fixture, graph, player, d, token, anchor: 0, sound: Box::new(|_| 0.0) };
+            let mut rig = Rig { fixture, graph, player, d, token, anchor: 0, sound: Box::new(|_| 0.0), each: None };
             rig.fill(4);
             rig
         }
@@ -865,11 +978,20 @@ mod audio {
         fn fill(&mut self, n: usize) {
             let mut buf = [0.0f32; 2 * CALLBACK];
             for k in 0..n {
-                if self.player.input().is_some() {
+                if let Some(listen) = self.player.input() {
                     let first = self.d.engine().map_or(0, |e| e.out_clock());
                     let heard = first.saturating_sub(LATE);
-                    let samples: Vec<f32> = (0..CALLBACK as u64).map(|j| (self.sound)(heard + j)).collect();
-                    self.player.inject_input(&samples).unwrap();
+                    match &self.each {
+                        Some(f) => {
+                            let each: Vec<Vec<f32>> =
+                                (0..listen.channels as usize).map(|c| (0..CALLBACK as u64).map(|j| f(heard + j, c)).collect()).collect();
+                            self.player.inject_channels(&each).unwrap();
+                        }
+                        None => {
+                            let samples: Vec<f32> = (0..CALLBACK as u64).map(|j| (self.sound)(heard + j)).collect();
+                            self.player.inject_input(&samples).unwrap();
+                        }
+                    }
                 }
                 self.d.fill(&mut buf, 2);
                 drop(self.d.drain_retired());
@@ -892,7 +1014,7 @@ mod audio {
         }
 
         fn start(&self, count_in: bool, hear: bool) -> Value {
-            let opts = Options { count_in, quantize: None, input: InputChoice::default(), hear };
+            let opts = Options { count_in, quantize: None, input: InputChoice::default(), hear, ..Default::default() };
             self.graph.record_start(self.token, "vox", "clips", opts).unwrap()
         }
 
@@ -1034,21 +1156,26 @@ mod audio {
         assert!(r.fixture.0.join("assets/Vox take.wav").is_file(), "the file stays");
     }
 
-    // Q27, D20: the first pass only, as a notes take: written at the loop's end, as long as the loop.
+    // MON-11 (was Q27's first pass only): at the loop's end the take goes round, and its file keeps
+    // the first pass to the sample, then the second. Stopped just into the second, the clip covers
+    // the loop and plays the first, the newest whole pass.
     #[test]
-    fn a_take_ends_at_the_loop_end() {
+    fn a_take_over_the_loop_keeps_its_first_pass_to_the_sample() {
         let mut r = Rig::new();
         r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
         r.anchor = r.graph.engine_clock().unwrap();
         r.sound = Box::new(|_| 0.5);
         r.start(false, false);
         r.to(4.2);
+        assert!(r.graph.recording(), "round the loop, still recording");
+        assert!(r.graph.status().playing && r.graph.status().beat < 1.0, "round the loop, playing on");
+        r.graph.transport("stop").unwrap();
         let said = r.written();
         assert!(said["written"].is_object(), "{said}");
-        assert!(r.graph.status().playing && r.graph.status().beat < 1.0, "round the loop, playing on");
         let c = &r.clips()[0];
-        assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)), "{c}");
-        assert_eq!(r.samples(c).0.len(), 4 * BEAT as usize, "the first pass, to the sample");
+        assert_eq!((c["start"].as_f64(), c["length"].as_f64(), c["offset"].as_f64()), (Some(0.0), Some(4.0), Some(0.0)), "{c}");
+        let (s, _, _) = r.samples(c);
+        assert!(s.len() > 4 * BEAT as usize && s[..4 * BEAT as usize].iter().all(|x| *x == 0.5), "the first pass, to the sample");
     }
 
     // D22: a writer that falls more than the ring (4 s) behind writes silence for what the ring lost,
@@ -1300,6 +1427,315 @@ mod audio {
         r.graph.transport("stop").unwrap();
         r.written();
     }
+
+    /// The file's note beside clip `c`'s asset: its takes, in seconds (MON-11).
+    fn takes_of(r: &Rig, c: &Value) -> Vec<f64> {
+        let note: Value = serde_json::from_str(&r.fixture.read(&format!("assets/{}.json", c["asset"].as_str().unwrap()))).unwrap();
+        note["takes"].as_array().unwrap().iter().map(|t| t.as_f64().unwrap()).collect()
+    }
+
+    fn arm(r: &Rig, module: &str, lane: Option<&str>, armed: Option<bool>, channels: Option<Channels>, hear: bool) -> Result<Value> {
+        r.graph.arm(r.token, module, lane, armed, channels, InputChoice::default(), hear)
+    }
+
+    /// One callback, the input hearing `x` on every channel: what came out.
+    fn heard(r: &mut Rig, x: f32) -> Vec<f32> {
+        r.sound = Box::new(move |_| x);
+        r.fill(8);
+        let mut buf = [0.0f32; 2 * CALLBACK];
+        r.player.inject_input(&[x; CALLBACK]).unwrap();
+        r.d.fill(&mut buf, 2);
+        buf.to_vec()
+    }
+
+    // MON-9, MON-8: an armed audio track hears its input through the track, with no take, while
+    // Settings' Hear yourself is on; off, or disarmed, it doesn't. Nothing is written.
+    #[test]
+    fn an_armed_track_monitors_without_a_take() {
+        let mut r = Rig::new();
+        let armed = arm(&r, "vox", Some("clips"), Some(true), None, true).unwrap();
+        assert_eq!(armed, json!({"armed": {"vox": "clips"}, "channels": {}}));
+        let out = heard(&mut r, 0.5);
+        assert!(out.iter().all(|x| (*x - 0.5).abs() < 1e-6), "heard through the track: {:?}", &out[..4]);
+        assert!(!r.graph.recording() && r.graph.state().unwrap()["record"].is_null(), "no take");
+        assert!(!r.graph.status().playing, "the song is stopped");
+        assert_eq!(r.graph.state().unwrap()["arm"]["armed"], json!({"vox": "clips"}), "the state says it");
+        r.graph.set_input(InputChoice::default(), false);
+        assert!(heard(&mut r, 0.5).iter().all(|x| *x == 0.0), "Hear yourself off: not heard");
+        r.graph.set_input(InputChoice::default(), true);
+        assert!(heard(&mut r, 0.25).iter().all(|x| (*x - 0.25).abs() < 1e-6), "on again: heard");
+        arm(&r, "vox", None, Some(false), None, true).unwrap();
+        assert!(heard(&mut r, 0.5).iter().all(|x| *x == 0.0), "disarmed: not heard");
+        assert!(r.clips().is_empty(), "nothing written");
+        assert_eq!(r.graph.undo_names().0, None, "no undo step");
+    }
+
+    // MON-13: a track armed on channels 3–4 of a four-channel input records them, as a stereo take,
+    // each where it was heard; one armed on channel 2 records it alone, as a mono take. Channels the
+    // input hasn't are refused in words.
+    #[test]
+    fn input_three_and_four_record_their_own_channels() {
+        let mut r = Rig::with(VOX, &[], &["Desk:4"]);
+        arm(&r, "vox", Some("clips"), Some(true), Some(Channels::Pair(2)), false).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.each = Some(Box::new(|_, c| [0.1, 0.2, 0.3, 0.4][c]));
+        r.start(false, false);
+        r.to(1.0);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        let (s, _, channels) = r.samples(&r.clips()[0]);
+        assert_eq!(channels, 2, "a pair is a stereo take");
+        assert!(s.len() >= 2 * (BEAT as usize - 2 * CALLBACK), "{} samples", s.len());
+        assert!(s.chunks(2).all(|f| f == [0.3, 0.4]), "channel 3 left, channel 4 right: {:?}", &s[..4]);
+        let refused = arm(&r, "vox", None, None, Some(Channels::Pair(4)), false).unwrap_err().to_string();
+        assert_eq!(refused, "Desk has no input 5–6: it has 1 to 4.");
+        arm(&r, "vox", None, None, Some(Channels::One(1)), false).unwrap();
+        r.graph.seek(4.0).unwrap();
+        r.fill(2);
+        r.start(false, false);
+        r.fill(60);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        let c = r.clips().into_iter().find(|c| c["start"].as_f64() >= Some(4.0)).unwrap();
+        let (s, _, channels) = r.samples(&c);
+        assert_eq!(channels, 1, "one channel is a mono take");
+        assert!(!s.is_empty() && s.iter().all(|x| *x == 0.2), "channel 2 alone: {:?}", &s[..4]);
+    }
+
+    const BAND: &str = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                        const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
+                        const gtr = track('gtr', { name: 'Gtr' }, ({ lane }) => lane.audio('clips'));\n\
+                        const keys = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                        export default song(() => sum(sum(vox.out, gtr.out), keys.out));\n";
+
+    // MON-9, MON-14: Record records into every armed track at once: a microphone on channel 1, a
+    // guitar on 3–4, and the keys the MIDI keyboard plays (the armed notes track, whatever is
+    // selected). One Tx, one undo step, which takes all three back.
+    #[test]
+    fn record_records_into_every_armed_track() {
+        let mut r = Rig::with(BAND, &[("data/gtr/clips.json", "{\"clips\": []}\n")], &["Desk:4"]);
+        assert_eq!(r.graph.midi(Event::Plugged("Keys")).as_deref(), Some("Keys is connected. It plays the selected track."));
+        arm(&r, "vox", Some("clips"), Some(true), Some(Channels::One(0)), false).unwrap();
+        arm(&r, "gtr", Some("clips"), Some(true), Some(Channels::Pair(2)), false).unwrap();
+        let armed = arm(&r, "keys", Some("notes"), Some(true), None, false).unwrap();
+        assert_eq!(armed["armed"], json!({"gtr": "clips", "keys": "notes", "vox": "clips"}));
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.each = Some(Box::new(|_, c| [0.1, 0.2, 0.3, 0.4][c]));
+        let before = r.graph.undo_names().0;
+        let shown = r.start(false, false);
+        assert_eq!(shown["lanes"].as_array().map(Vec::len), Some(3), "{shown}");
+        r.to(1.0);
+        assert_eq!(r.graph.midi(Event::Bytes("Keys", &[0x90, 60, 100])), None);
+        r.to(1.5);
+        assert_eq!(r.graph.midi(Event::Bytes("Keys", &[0x80, 60, 0])), None);
+        r.to(2.0);
+        let refused = arm(&r, "vox", None, Some(false), None, false).unwrap_err().to_string();
+        assert_eq!(refused, "A take is recording: arm tracks before you record.");
+        r.graph.transport("stop").unwrap();
+        let said = r.written();
+        assert!(said["written"].is_object(), "{said}");
+        let read = |path: &str| serde_json::from_str::<Value>(&r.fixture.read(path)).unwrap()["clips"].as_array().unwrap().clone();
+        let (vox, gtr, keys) = (read("data/vox/clips.json"), read("data/gtr/clips.json"), read("data/keys/notes.json"));
+        assert_eq!((vox.len(), gtr.len(), keys.len()), (1, 1, 1), "a clip on each");
+        let (v, _, vc) = r.samples(&vox[0]);
+        let (g, _, gc) = r.samples(&gtr[0]);
+        assert!(vc == 1 && v.iter().all(|x| *x == 0.1), "the microphone: channel 1, mono");
+        assert!(gc == 2 && g.chunks(2).all(|f| f == [0.3, 0.4]), "the guitar: channels 3–4");
+        assert_eq!(keys[0]["notes"].as_array().unwrap().len(), 1, "the keys: the note played");
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Keys, Gtr, Vox"));
+        r.graph.undo(r.token).unwrap();
+        assert!(read("data/vox/clips.json").is_empty() && read("data/gtr/clips.json").is_empty(), "one undo takes all three back");
+        let keys = r.fixture.0.join("data/keys/notes.json");
+        assert!(!keys.exists() || read("data/keys/notes.json").is_empty(), "and the keys' clip");
+        assert_eq!(r.graph.undo_names().0, before, "one step");
+    }
+
+    // MON-11, MON-14: three passes over the loop and a stop just into a fourth: one file of every
+    // pass, one after another, its note listing them; one clip over the loop playing the third, the
+    // newest whole pass. Choosing the first is one undo step, which takes it back.
+    #[test]
+    fn three_loop_passes_make_three_takes() {
+        let mut r = Rig::new();
+        r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap();
+        let (a, pass) = (r.anchor, 4 * BEAT as u64);
+        r.sound = Box::new(move |c| if c < a { 0.0 } else { 0.1 * ((c - a) / pass + 1) as f32 });
+        r.start(false, false);
+        // The take thread finds the take's start: the writer writes as it records.
+        r.fill(2);
+        r.graph.record_tick();
+        r.to(12.5);
+        r.graph.transport("stop").unwrap();
+        let said = r.written();
+        assert!(said["written"].is_object(), "{said}");
+        let clips = r.clips();
+        assert_eq!(clips.len(), 1, "one clip: {clips:?}");
+        let c = &clips[0];
+        assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)), "over the loop: {c}");
+        assert_eq!(takes_of(&r, c), [0.0, 2.0, 4.0, 6.0], "every pass, where it starts in the file");
+        assert_eq!(c["offset"].as_f64(), Some(4.0), "the third plays: the fourth was cut short");
+        let (s, _, _) = r.samples(c);
+        for k in 0..3 {
+            let pass = &s[k * 4 * BEAT as usize..(k + 1) * 4 * BEAT as usize];
+            let off: Vec<(usize, f32)> = pass.iter().copied().enumerate().filter(|(_, x)| *x != 0.1 * (k + 1) as f32).take(4).collect();
+            assert!(off.is_empty(), "pass {} to the sample: {off:?}", k + 1);
+        }
+        // The Takes menu: the view lists them; the first chosen.
+        let state = r.graph.state().unwrap();
+        let lane = state["timeline"]["tracks"].as_array().unwrap().iter().find(|t| t["module"] == "vox").unwrap()["lanes"][0].clone();
+        assert_eq!(lane["takes"][c["asset"].as_str().unwrap()], json!([0.0, 2.0, 4.0, 6.0]));
+        let clip = ClipRef { lane: LaneAddr::new("vox", "clips").unwrap(), id: c["id"].as_str().map(String::from), at: None, sha: None };
+        r.graph.choose_take(r.token, clip, 0, None).unwrap();
+        assert_eq!(r.clips()[0]["offset"].as_f64(), Some(0.0), "the first plays");
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("Vox take 1"));
+        r.graph.undo(r.token).unwrap();
+        assert_eq!(r.clips()[0]["offset"].as_f64(), Some(4.0), "one undo: the third again");
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Vox"));
+    }
+
+    // MON-10: a punch on beats 4 to 6, from beat 2: the song plays up to 4, records to 6 and plays
+    // on. The clip there is cut at both edges, as Split cuts it, and the take covers exactly the
+    // range.
+    #[test]
+    fn an_audio_punch_splits_what_was_there() {
+        let mut r = Rig::new();
+        r.anchor = r.graph.engine_clock().unwrap();
+        r.sound = Box::new(|_| 0.25);
+        r.start(false, false);
+        r.to(8.2);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        let first = r.clips()[0].clone();
+        r.graph.seek(2.0).unwrap();
+        r.fill(2);
+        r.graph.set_loop(Some((4.0, 6.0)), Some(false)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap() - (2.0 * BEAT) as u64;
+        r.sound = Box::new(|_| 0.75);
+        let opts = Options { punch: true, ..Default::default() };
+        r.graph.record_start(r.token, "vox", "clips", opts).unwrap();
+        r.to(3.0);
+        assert!(r.clips().len() == 1, "nothing yet on the way in");
+        // The take thread finds the take's start, so its writer writes as it records: past the
+        // range's end too, before the next tick sees the take end there.
+        r.graph.record_tick();
+        r.to(7.0);
+        let said = r.written();
+        assert!(said["written"].is_object(), "{said}");
+        assert!(r.graph.status().playing && r.graph.status().beat > 6.0, "the song plays on");
+        let c = r.clips();
+        let span = |c: &Value| (c["start"].as_f64().unwrap(), c["length"].as_f64().unwrap(), c["offset"].as_f64().unwrap());
+        assert_eq!(c.len(), 3, "{c:?}");
+        assert_eq!((span(&c[0]), c[0]["id"].clone()), ((0.0, 4.0, 0.0), first["id"].clone()), "the part before keeps its id");
+        assert_eq!(span(&c[1]), (4.0, 2.0, 0.0), "the take covers the range");
+        let after = span(&c[2]);
+        assert!(after.0 == 6.0 && (after.2 - 3.0).abs() < 1e-9, "the part after plays on from 3 s into its file: {after:?}");
+        assert!(c[0]["asset"] == first["asset"] && c[2]["asset"] == first["asset"] && c[1]["asset"] != first["asset"]);
+        let (s, _, _) = r.samples(&c[1]);
+        assert_eq!(s.len(), BEAT as usize * 2, "two beats to the sample");
+        assert!(s.iter().all(|x| *x == 0.75), "what was played in the range");
+    }
+
+    /// Vox's song with a Gtr track before it: Vox's lane moves to another slot.
+    const GTR_FIRST: &str = "import { song, track } from '@m2/core';\nimport { sum } from 'std/math';\n\
+                             const gtr = track('gtr', { name: 'Gtr' }, ({ lane }) => lane.audio('clips'));\n\
+                             const vox = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
+                             export default song(() => sum(gtr.out, vox.out));\n";
+
+    // MON-8 (review Q6): an armed track hears its input across a new plan in which its lane has
+    // another slot, once; disarmed it stops; and two armed tracks hear at once.
+    #[test]
+    fn an_armed_track_hears_across_a_new_plan() {
+        let mut r = Rig::new();
+        arm(&r, "vox", Some("clips"), Some(true), None, true).unwrap();
+        assert!(heard(&mut r, 0.5).iter().all(|x| (*x - 0.5).abs() < 1e-6), "armed: heard");
+        r.fixture.put("data/gtr/clips.json", "{\"clips\": []}\n");
+        r.fixture.put("song.ts", GTR_FIRST);
+        assert!(r.graph.poll());
+        r.fill(8);
+        r.graph.record_tick();
+        let out = heard(&mut r, 0.5);
+        assert!(out.iter().all(|x| (*x - 0.5).abs() < 1e-6), "still heard, once, through Vox: {:?}", &out[..4]);
+        arm(&r, "vox", None, Some(false), None, true).unwrap();
+        let out = heard(&mut r, 0.5);
+        assert!(out.iter().all(|x| *x == 0.0), "disarmed: silent {:?}", &out[..4]);
+        arm(&r, "gtr", Some("clips"), Some(true), None, true).unwrap();
+        arm(&r, "vox", Some("clips"), Some(true), None, true).unwrap();
+        let out = heard(&mut r, 0.25);
+        assert!(out.iter().all(|x| (*x - 0.5).abs() < 1e-6), "both hear: twice 0.25 {:?}", &out[..4]);
+    }
+
+    // MON-8 (review Q6): disarmed right after a new plan, before the take thread's tick, a track
+    // stops hearing: the lane that moved into the new plan hearing is told to stop.
+    #[test]
+    fn a_track_disarmed_right_after_a_new_plan_stops_hearing() {
+        let mut r = Rig::new();
+        arm(&r, "vox", Some("clips"), Some(true), None, true).unwrap();
+        assert!(heard(&mut r, 0.5).iter().all(|x| (*x - 0.5).abs() < 1e-6), "armed: heard");
+        r.fixture.put("data/gtr/clips.json", "{\"clips\": []}\n");
+        r.fixture.put("song.ts", GTR_FIRST);
+        assert!(r.graph.poll());
+        r.fill(8);
+        arm(&r, "vox", None, Some(false), None, true).unwrap();
+        let out = heard(&mut r, 0.5);
+        assert!(out.iter().all(|x| *x == 0.0), "disarmed: silent {:?}", &out[..4]);
+    }
+
+    // MON-10 (review Q4): a punch whose writer ran past its end before the take thread saw it: the
+    // waveform is made from the file as kept, never from the frames cut off.
+    #[test]
+    fn a_punchs_waveform_is_the_file_it_kept() {
+        let mut r = Rig::new();
+        r.fill(220);
+        r.graph.seek(2.0).unwrap();
+        r.fill(2);
+        r.graph.set_loop(Some((4.0, 6.0)), Some(false)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap() - (2.0 * BEAT) as u64;
+        r.sound = Box::new(|_| 0.75);
+        r.graph.record_start(r.token, "vox", "clips", Options { punch: true, ..Default::default() }).unwrap();
+        r.to(3.0);
+        r.graph.record_tick();
+        // The take thread ticks late: the writer has written a beat past the range's end.
+        r.to(7.0);
+        assert!(r.written()["written"].is_object());
+        let path = r.fixture.0.join("assets").join(r.clips()[0]["asset"].as_str().unwrap());
+        let frames = hound::WavReader::open(&path).unwrap().duration() as u64;
+        let peaks = crate::peaks::Store::global().of(&path).unwrap();
+        assert_eq!((frames, peaks.frames), (2 * BEAT as u64, 2 * BEAT as u64), "the waveform is the file's");
+    }
+
+    // MON-11 (review Q3): on a clip that follows the tempo, choosing a take plays it: its warp
+    // markers move with its offset, and an export of the song plays the take chosen.
+    #[test]
+    fn choosing_a_take_on_a_clip_that_follows_the_tempo_plays_it() {
+        let mut r = Rig::new();
+        r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap();
+        let (a, pass) = (r.anchor, 4 * BEAT as u64);
+        r.sound = Box::new(move |c| if c < a { 0.0 } else { 0.1 * ((c - a) / pass + 1) as f32 });
+        r.start(false, false);
+        r.fill(2);
+        r.graph.record_tick();
+        r.to(12.5);
+        r.graph.transport("stop").unwrap();
+        assert!(r.written()["written"].is_object());
+        let c = r.clips()[0].clone();
+        let clip = || ClipRef { lane: LaneAddr::new("vox", "clips").unwrap(), id: c["id"].as_str().map(String::from), at: None, sha: None };
+        let follow =
+            Gesture::Audio { clip: clip(), gain_db: None, fade_in: None, fade_out: None, reverse: None, follow: Some(true), offset: None };
+        r.graph.clips(r.token, follow).unwrap();
+        r.graph.choose_take(r.token, clip(), 0, None).unwrap();
+        let after = r.clips()[0].clone();
+        assert_eq!((after["offset"].as_f64(), after["warp"][0][0].as_f64()), (Some(0.0), Some(0.0)), "the markers moved with it: {after}");
+        r.graph.set_loop(None, Some(false)).unwrap();
+        let e = r.graph.export(m2_editor::render::Length::Seconds(2.0)).unwrap();
+        let out = r.fixture.0.join("out.wav");
+        e.render.write_float(&out, |_| {}).unwrap();
+        let s: Vec<f32> = hound::WavReader::open(&out).unwrap().samples::<f32>().map(Result::unwrap).collect();
+        let mut mid: Vec<f32> = s[s.len() / 4..3 * s.len() / 4].iter().map(|x| x.abs()).collect();
+        mid.sort_by(f32::total_cmp);
+        let median = mid[mid.len() / 2];
+        assert!((median - 0.1).abs() < 0.02, "the first pass plays, not the third: {median}");
+    }
 }
 
 // AGENT-3: while a take records, every agent's write is busy, whatever it touches: the take's
@@ -1350,9 +1786,9 @@ fn a_take_begun_while_an_agents_import_copies_leaves_nothing() {
     use crate::caller::{Caller, as_caller};
     use m2_editor::import::{Source, Target};
     // The rig's song, with an audio track to bring the file onto.
-    let song = "import { song, track } from '@m2/core';\nimport { kick } from 'std/instruments';\nimport { sum } from 'std/math';\n\
-                const b = track('bass', { name: 'Bass' }, ({ lane }) => kick(lane.notes('notes')));\n\
-                const k = track('keys', { name: 'Keys' }, ({ lane }) => kick(lane.notes('notes')));\n\
+    let song = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { sum } from 'std/math';\n\
+                const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                const k = track('keys', { name: 'Keys' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
                 const v = track('vox', { name: 'Vox' }, ({ lane }) => lane.audio('clips'));\n\
                 export default song(() => sum(sum(b.out, k.out), v.out));\n";
     let r = Rig::with(&[("song.ts", song), ("data/vox/clips.json", "{\"clips\": []}\n")]);
@@ -1395,4 +1831,488 @@ fn a_take_begun_while_an_agents_import_copies_leaves_nothing() {
     assert_eq!(left, Vec::<String>::new(), "nothing was left in assets/");
     assert!(!assets.exists(), "not even the folder, which the import made");
     assert_eq!(r.fixture.read("data/vox/clips.json"), clips, "no clip was placed");
+}
+
+/// Bass's notes lane holding clip `base0001` from 0, `beats` long, a C3 on each beat.
+fn base(beats: u32) -> String {
+    let notes: Vec<String> =
+        (0..beats).map(|b| format!("{{\"pitch\": 48, \"start\": {b}, \"length\": 0.25, \"velocity\": 0.5}}")).collect();
+    format!("{{\"clips\": [{{\"id\": \"base0001\", \"start\": 0, \"length\": {beats}, \"notes\": [{}]}}]}}\n", notes.join(", "))
+}
+
+/// The lane's notes in song time, as (pitch, start), in order.
+fn played(r: &Rig) -> Vec<(f64, f64)> {
+    let mut out = vec![];
+    for c in r.clips() {
+        let at = c["start"].as_f64().unwrap();
+        for i in 0..c["notes"].as_array().unwrap().len() {
+            let (p, s, _, _) = note(&c, i);
+            out.push((p, at + s));
+        }
+    }
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
+impl Rig {
+    /// The take thread's tick until `n` takes are written: what each said.
+    fn writes(&self, n: usize) -> Vec<Value> {
+        let t = std::time::Instant::now();
+        let mut out = vec![];
+        while out.len() < n {
+            out.extend(self.graph.record_tick().into_iter().filter(|v| v.get("written").is_some()));
+            assert!(t.elapsed() < Duration::from_secs(5), "{} of {n} takes written", out.len());
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        out
+    }
+}
+
+// MON-10: a punch on beats 4 to 8 with the loop off, from beat 0: the song plays from 0, recording
+// starts at 4 and ends at 8, where the song plays on. What was there in the range goes: the clip is
+// cut at both edges, its notes before and after stay where they were. Notes before and after the
+// range aren't kept.
+#[test]
+fn a_punch_replaces_only_its_range() {
+    let mut r = Rig::with(&[("data/bass/notes.json", &base(16))]);
+    r.graph.set_loop(Some((4.0, 8.0)), Some(false)).unwrap();
+    r.anchored(0, 0.0);
+    let shown = r.graph.record_start(r.token, "bass", "notes", Options { punch: true, ..Default::default() }).unwrap();
+    assert_eq!((&shown["from"], &shown["until"], &shown["start"]), (&json!(4.0), &json!(8.0), &json!(4.0)), "{shown}");
+    r.to(2.0);
+    r.key(&[0x90, 60, 100]);
+    r.to(2.25);
+    r.key(&[0x80, 60, 0]);
+    r.to(5.0);
+    let on = r.key(&[0x90, 64, 100]);
+    r.to(5.5);
+    r.key(&[0x80, 64, 0]);
+    r.to(8.5);
+    let said = r.written();
+    assert!(said["written"].is_object(), "{said}");
+    r.key(&[0x90, 67, 100]);
+    r.key(&[0x80, 67, 0]);
+    assert!(r.graph.status().playing, "the song plays on");
+    assert!(!r.graph.recording(), "the take ended at the range's end");
+    let clips = r.clips();
+    let spans: Vec<(&str, f64, f64)> =
+        clips.iter().map(|c| (c["id"].as_str().unwrap(), c["start"].as_f64().unwrap(), c["length"].as_f64().unwrap())).collect();
+    assert_eq!(spans.len(), 3, "{spans:?}");
+    assert_eq!((spans[0].0, spans[0].1, spans[0].2), ("base0001", 0.0, 4.0), "the part before keeps its id");
+    assert_eq!((spans[1].1, spans[1].2, spans[2].1, spans[2].2), (4.0, 4.0, 8.0, 8.0), "the take over the range, then the part after");
+    let notes = played(&r);
+    let (before, inside, after): (Vec<_>, Vec<_>, Vec<_>) = (
+        notes.iter().filter(|n| n.1 < 4.0).copied().collect(),
+        notes.iter().filter(|n| (4.0..8.0).contains(&n.1)).copied().collect(),
+        notes.iter().filter(|n| n.1 >= 8.0).copied().collect(),
+    );
+    assert_eq!(before, (0..4).map(|b| (48.0, b as f64)).collect::<Vec<_>>(), "the notes before stay");
+    assert_eq!(after, (8..16).map(|b| (48.0, b as f64)).collect::<Vec<_>>(), "the notes after stay");
+    assert_eq!(inside.len(), 1, "only the take's note inside: {inside:?}");
+    assert!(inside[0].0 == 64.0 && on.has(inside[0].1), "where it was heard: {on:?}, {inside:?}");
+}
+
+// MON-11: over the loop each pass is its own clip, written as the pass ends, so the next pass plays
+// it: three passes, three clips over the loop, three undo steps.
+#[test]
+fn each_pass_over_a_loop_is_its_own_clip() {
+    let mut r = Rig::new();
+    r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    for (k, pitch) in [60u8, 62, 64].into_iter().enumerate() {
+        r.to(k as f64 * 4.0 + 1.0);
+        r.key(&[0x90, pitch, 100]);
+        r.to(k as f64 * 4.0 + 1.5);
+        r.key(&[0x80, pitch, 0]);
+    }
+    r.to(12.5);
+    r.writes(3);
+    assert!(r.graph.recording(), "still going round");
+    r.graph.transport("stop").unwrap();
+    assert_eq!(r.written(), json!({"t": "take", "empty": true}), "the fourth pass: nothing played");
+    let clips = r.clips();
+    assert_eq!(clips.len(), 3, "{clips:?}");
+    let mut pitches = vec![];
+    for c in &clips {
+        assert_eq!((c["start"].as_f64(), c["length"].as_f64()), (Some(0.0), Some(4.0)), "over the loop: {c}");
+        assert_eq!(c["notes"].as_array().unwrap().len(), 1);
+        let (pitch, start, _, _) = note(c, 0);
+        assert!((start - 1.0).abs() < 0.05, "a beat in: {start}");
+        pitches.push(pitch);
+    }
+    pitches.sort_by(f64::total_cmp);
+    assert_eq!(pitches, [60.0, 62.0, 64.0], "one note a pass");
+    for _ in 0..3 {
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Bass"));
+        r.graph.undo(r.token).unwrap();
+    }
+    assert!(r.clips().is_empty(), "one undo step a pass");
+}
+
+// MON-12: with Overdub, a take over a clip adds its notes into it: one clip, both notes.
+#[test]
+fn overdub_merges_into_the_clip_under_it() {
+    let mut r = Rig::with(&[("data/bass/notes.json", &base(1))]);
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "bass", "notes", Options { overdub: true, ..Default::default() }).unwrap();
+    r.to(0.5);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(0.75);
+    r.key(&[0x80, 60, 0]);
+    r.to(1.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let clips = r.clips();
+    assert_eq!(clips.len(), 1, "{clips:?}");
+    assert_eq!((clips[0]["id"].as_str(), clips[0]["length"].as_f64()), (Some("base0001"), Some(4.0)), "the clip under it, grown to a bar");
+    let notes = played(&r);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    assert!(notes[0] == (48.0, 0.0) && notes[1].0 == 60.0 && on.has(notes[1].1), "both: {notes:?}");
+}
+
+/// A song with a kit: a Drums bus, and Kick, Snare and Hats going to it, each from its lane `hits`;
+/// and Bass, which the rig selects.
+const KIT: &str = "import { bus, song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\nimport { gain } from 'std/dsp';\n\
+                   import { master, mixer } from 'std/mix';\n\
+                   const d = bus('drums', { name: 'Drums' }, ({ input }) => gain(input));\n\
+                   const k = track('kick', { name: 'Kick' }, ({ lane }) => drums.drum(lane.notes('hits')));\n\
+                   const s = track('snare', { name: 'Snare' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'snare' }));\n\
+                   const h = track('hats', { name: 'Hats' }, ({ lane }) => drums.drum(lane.notes('hits'), { drum: 'hats' }));\n\
+                   const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                   export default song(() => master(mixer({ drums: d.out, kick: { in: k.out, to: 'drums' }, snare: { in: s.out, to: 'drums' }, \
+                   hats: { in: h.out, to: 'drums' }, bass: b.out })));\n";
+
+/// The kit's Drum tracks, each with what lane `hits` holds: its notes in song time, as (pitch, start).
+fn kit_notes(r: &Rig) -> [(&'static str, Vec<(f64, f64)>); 3] {
+    ["kick", "snare", "hats"].map(|m| {
+        let text = std::fs::read_to_string(r.fixture.0.join(format!("data/{m}/hits.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
+        let v: Value = serde_json::from_str(&text).unwrap();
+        let mut out = vec![];
+        for c in v["clips"].as_array().unwrap() {
+            let at = c["start"].as_f64().unwrap();
+            for i in 0..c["notes"].as_array().unwrap().len() {
+                let (p, s, _, _) = note(c, i);
+                out.push((p, ((at + s) * 4.0).round() / 4.0));
+            }
+        }
+        out.sort_by(|a, b| a.1.total_cmp(&b.1));
+        (m, out)
+    })
+}
+
+/// The lane `hits` of `module`'s clips, as (start, length).
+fn kit_clips(r: &Rig, module: &str) -> Vec<(f64, f64)> {
+    let text = std::fs::read_to_string(r.fixture.0.join(format!("data/{module}/hits.json"))).unwrap_or_else(|_| "{\"clips\": []}".into());
+    let v: Value = serde_json::from_str(&text).unwrap();
+    v["clips"].as_array().unwrap().iter().map(|c| (c["start"].as_f64().unwrap(), c["length"].as_f64().unwrap())).collect()
+}
+
+/// `pitch` struck at `beat` and let go a quarter beat later.
+fn hit(r: &mut Rig, pitch: u8, beat: f64) {
+    r.to(beat);
+    r.key(&[0x90, pitch, 100]);
+    r.to(beat + 0.25);
+    r.key(&[0x80, pitch, 0]);
+}
+
+/// Every beat of 16 on lane `hits` of the kit's every track, each at `pitch` 48.
+fn kit_base() -> Vec<(String, String)> {
+    ["kick", "snare", "hats"].iter().map(|m| (format!("data/{m}/hits.json"), base(16))).collect()
+}
+
+// KIT-26: a punch on a kit replaces every Drum track's lane between the loop's edges once any is
+// played there: the Kick's hit is its lane's one note there, and the Snare's and the Hats' lanes,
+// not played, are left empty there; the notes before and after stay. One undo puts it all back.
+#[test]
+fn a_punch_on_a_kit_replaces_every_drums_lane_in_its_range() {
+    let files = kit_base();
+    let mut files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    files.push(("song.ts", KIT));
+    let mut r = Rig::with(&files);
+    let before = kit_notes(&r);
+    r.graph.set_loop(Some((4.0, 8.0)), Some(false)).unwrap();
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "kick", "hits", Options { punch: true, ..Default::default() }).unwrap();
+    hit(&mut r, 36, 5.0);
+    r.to(8.5);
+    assert!(r.written()["written"].is_object());
+    let outside = |b: f64| !(4.0..8.0).contains(&b);
+    let base: Vec<(f64, f64)> = (0..16).map(f64::from).filter(|b| outside(*b)).map(|b| (48.0, b)).collect();
+    let mut kick = base.clone();
+    kick.insert(4, (36.0, 5.0));
+    assert_eq!(kit_notes(&r), [("kick", kick), ("snare", base.clone()), ("hats", base)]);
+    assert_eq!(kit_clips(&r, "snare"), [(0.0, 4.0), (8.0, 8.0)], "no clip of its own there");
+    assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Drums"));
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), before, "one undo");
+}
+
+// KIT-26: Overdub on a kit puts each hit into the clip under it on its own Drum track's lane; a lane
+// not played is left as it was.
+#[test]
+fn overdub_on_a_kit_puts_each_hit_into_its_lanes_clip() {
+    let files = kit_base();
+    let mut files: Vec<(&str, &str)> = files.iter().map(|(p, t)| (p.as_str(), t.as_str())).collect();
+    files.push(("song.ts", KIT));
+    let mut r = Rig::with(&files);
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "snare", "hits", Options { overdub: true, ..Default::default() }).unwrap();
+    hit(&mut r, 36, 0.5);
+    hit(&mut r, 38, 1.5);
+    r.to(2.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let base: Vec<(f64, f64)> = (0..16).map(|b| (48.0, f64::from(b))).collect();
+    let with = |p: f64, at: f64| {
+        let mut v = base.clone();
+        v.push((p, at));
+        v.sort_by(|a, b| a.1.total_cmp(&b.1));
+        v
+    };
+    assert_eq!(kit_notes(&r), [("kick", with(36.0, 0.5)), ("snare", with(38.0, 1.5)), ("hats", base.clone())]);
+    for m in ["kick", "snare", "hats"] {
+        assert_eq!(kit_clips(&r, m), [(0.0, 16.0)], "{m}: one clip, the one under it");
+    }
+}
+
+// KIT-26: over a loop, each pass of a kit's take is one Tx of every lane played: the first pass's
+// Kick and Snare in one undo step, the second's Hats in another.
+#[test]
+fn each_pass_over_a_loop_on_a_kit_is_one_step() {
+    let mut r = Rig::with(&[("song.ts", KIT)]);
+    r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "hats", "hits", Options::default()).unwrap();
+    hit(&mut r, 36, 1.0);
+    hit(&mut r, 38, 2.0);
+    hit(&mut r, 42, 5.0);
+    r.to(8.5);
+    r.writes(2);
+    r.graph.transport("stop").unwrap();
+    assert_eq!(r.written(), json!({"t": "take", "empty": true}), "the third pass: nothing played");
+    assert_eq!(kit_notes(&r), [("kick", vec![(36.0, 1.0)]), ("snare", vec![(38.0, 2.0)]), ("hats", vec![(42.0, 1.0)])]);
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), [("kick", vec![(36.0, 1.0)]), ("snare", vec![(38.0, 2.0)]), ("hats", vec![])], "the second pass");
+    r.graph.undo(r.token).unwrap();
+    assert_eq!(kit_notes(&r), [("kick", vec![]), ("snare", vec![]), ("hats", vec![])], "the first pass, both lanes");
+}
+
+// KIT-25, KIT-26: a take on a kit records the keyboard piano's keys on the Drum tracks that answer
+// to them, as a pad's.
+#[test]
+fn a_take_on_a_kit_records_the_keyboard_pianos_keys_on_their_drums() {
+    let mut r = Rig::with(&[("song.ts", KIT)]);
+    r.anchored(0, 0.0);
+    r.graph.record_start(r.token, "kick", "hits", Options::default()).unwrap();
+    let piano = |h: u32, key: f64| Audition {
+        module: Some("kick".into()),
+        lane: Some("hits".into()),
+        on: vec![Strike { h, pitch: key, velocity: 0.8 }],
+        record: true,
+        ..Audition::default()
+    };
+    for (h, key, at) in [(1, 38.0, 1.0), (2, 42.0, 2.0)] {
+        r.to(at);
+        r.graph.audition("w1", piano(h, key)).unwrap();
+        r.to(at + 0.25);
+        r.graph.audition("w1", Audition { off: vec![h], ..Audition::default() }).unwrap();
+    }
+    r.to(3.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    assert_eq!(kit_notes(&r), [("kick", vec![]), ("snare", vec![(38.0, 1.0)]), ("hats", vec![(42.0, 2.0)])]);
+}
+
+// MON-9: one notes track is armed at a time; while one is, the keyboards play it and Record records
+// it, whatever a window selects.
+#[test]
+fn arming_a_notes_track_disarms_the_other() {
+    let mut r = Rig::new();
+    let arm = |r: &Rig, module: &str| {
+        r.graph.arm(r.token, module, Some("notes"), Some(true), None, m2_play::InputChoice::default(), false).unwrap()
+    };
+    assert_eq!(arm(&r, "keys")["armed"], json!({"keys": "notes"}));
+    r.anchored(0, 0.0);
+    let shown = r.start(false, None);
+    assert_eq!(shown["lanes"], json!([{"module": "keys", "lane": "notes", "kind": "notes", "start": 0.0}]), "the armed track, not bass");
+    r.to(1.0);
+    r.key(&[0x90, 60, 100]);
+    r.to(1.5);
+    r.key(&[0x80, 60, 0]);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let keys: Value = serde_json::from_str(&std::fs::read_to_string(r.fixture.0.join("data/keys/notes.json")).unwrap()).unwrap();
+    assert_eq!(keys["clips"].as_array().map(Vec::len), Some(1), "recorded on Keys");
+    assert!(r.clips().is_empty(), "nothing on Bass");
+    assert_eq!(arm(&r, "bass")["armed"], json!({"bass": "notes"}), "arming Bass disarms Keys");
+}
+
+/// Every note of the lane in song time, as (pitch, start, end), in order.
+fn spans(r: &Rig) -> Vec<(f64, f64, f64)> {
+    let mut out = vec![];
+    for c in r.clips() {
+        let at = c["start"].as_f64().unwrap();
+        for i in 0..c["notes"].as_array().unwrap().len() {
+            let (p, s, l, _) = note(&c, i);
+            assert!(s >= 0.0, "a note starts inside its clip: {c}");
+            out.push((p, at + s, at + s + l));
+        }
+    }
+    out.sort_by(|a, b| a.1.total_cmp(&b.1));
+    out
+}
+
+// MON-11 (review Q1): over a loop that starts at beat 4, a key struck while the speakers play the
+// pass's last moments, the engine already round, stays in its pass, held to the loop's end; one
+// struck just after the wrap starts the next pass. Neither lands before the loop's start.
+#[test]
+fn keys_either_side_of_a_wrap_stay_in_their_pass() {
+    let mut r = Rig::new();
+    r.graph.set_loop(Some((4.0, 8.0)), Some(true)).unwrap();
+    r.graph.seek(4.0).unwrap();
+    r.fill(2);
+    r.anchored(0, 4.0);
+    r.start(false, None);
+    r.to(7.97);
+    let before = r.by_clock();
+    assert!(r.graph.status().beat < 5.0, "the engine is round already, the speakers not yet");
+    r.key(&[0x90, 72, 100]);
+    r.to(8.01);
+    let after = r.by_clock();
+    r.key(&[0x90, 74, 100]);
+    r.to(8.5);
+    r.key(&[0x80, 72, 0]);
+    r.key(&[0x80, 74, 0]);
+    r.to(9.0);
+    r.graph.transport("stop").unwrap();
+    // The first pass, then the second.
+    r.writes(2);
+    let notes = spans(&r);
+    assert_eq!(notes.len(), 2, "{notes:?}");
+    let (pitch, start, end) = notes.iter().copied().find(|n| n.0 == 72.0).unwrap();
+    assert!(pitch == 72.0 && (start - before).abs() < 0.03 && (end - 8.0).abs() < 1e-9, "in the first pass, to the loop's end: {notes:?}");
+    let (_, start, _) = notes.iter().copied().find(|n| n.0 == 74.0).unwrap();
+    assert!(start >= 4.0 && (start + 4.0 - after).abs() < 0.03, "at the start of the next pass: {notes:?}");
+}
+
+// MON-9 (review Q2): an armed track that leaves the song is disarmed at once: the state says so,
+// Record records the selected track again, and the MIDI keyboard plays it.
+#[test]
+fn an_armed_track_that_leaves_the_song_is_disarmed() {
+    let mut r = Rig::new();
+    r.graph.arm(r.token, "keys", Some("notes"), Some(true), None, m2_play::InputChoice::default(), false).unwrap();
+    let only_bass = "import { song, track } from '@m2/core';\nimport { drums } from '@m2/drums';\n\
+                     const b = track('bass', { name: 'Bass' }, ({ lane }) => drums.drum(lane.notes('notes')));\n\
+                     export default song(() => b.out);\n";
+    r.fixture.put("song.ts", only_bass);
+    assert!(r.graph.poll());
+    r.fill(8);
+    assert_eq!(r.graph.state().unwrap()["arm"]["armed"], json!({}), "Keys is gone: disarmed");
+    let mut buf = [0.0f32; 2 * CALLBACK];
+    r.graph.midi(Event::Bytes("Keys", &[0x90, 40, 120]));
+    let mut peak = 0.0f32;
+    for _ in 0..20 {
+        r.d.fill(&mut buf, 2);
+        peak = buf.iter().fold(peak, |m, x| m.max(x.abs()));
+    }
+    r.graph.midi(Event::Bytes("Keys", &[0x80, 40, 0]));
+    assert!(peak > 0.1, "the keyboard plays the selected Bass: {peak}");
+    r.fill(10);
+    let shown = r.graph.record_start(r.token, "bass", "notes", Options::default()).unwrap();
+    assert_eq!(shown["module"], json!("bass"), "Record records the selected track");
+    r.graph.record_cancel(r.token).unwrap();
+}
+
+// MON-10, MON-11 (review Q5): a key struck a moment before a take starts after its way in (the
+// song played up to the loop's start) lands on the take's first beat, as one in a count's last
+// beat does (D27).
+#[test]
+fn a_key_struck_just_before_a_way_in_ends_lands_on_the_first_beat() {
+    let mut r = Rig::new();
+    r.graph.set_loop(Some((4.0, 8.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(3.97);
+    r.key(&[0x90, 72, 100]);
+    r.to(4.5);
+    let off = r.key(&[0x80, 72, 0]);
+    r.to(5.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object(), "kept");
+    let notes = spans(&r);
+    assert_eq!(notes.len(), 1, "{notes:?}");
+    let (_, start, end) = notes[0];
+    assert!(start == 4.0 && off.has(end), "from the take's first beat to where it was let go: {notes:?}");
+}
+
+// MON-14 (review): undo of a punch and of an overdub gives the lane file back byte for byte.
+#[test]
+fn undo_puts_a_punch_and_an_overdub_back_byte_for_byte() {
+    let take = |r: &mut Rig, opts: &Options| {
+        r.graph.seek(0.0).unwrap();
+        r.fill(4);
+        r.anchored(0, 0.0);
+        r.graph.record_start(r.token, "bass", "notes", opts.clone()).unwrap();
+        r.to(5.0);
+        r.key(&[0x90, 64, 100]);
+        r.to(5.5);
+        r.key(&[0x80, 64, 0]);
+        r.to(8.5);
+        if r.graph.recording() {
+            r.graph.transport("stop").unwrap();
+        }
+        assert!(r.written()["written"].is_object());
+        r.graph.transport("stop").unwrap();
+        r.fill(4);
+    };
+    for opts in [Options { punch: true, ..Default::default() }, Options { overdub: true, ..Default::default() }] {
+        let mut r = Rig::with(&[("data/bass/notes.json", &base(16))]);
+        r.graph.set_loop(Some((4.0, 8.0)), Some(false)).unwrap();
+        take(&mut r, &opts);
+        r.graph.undo(r.token).unwrap();
+        let before = std::fs::read_to_string(r.fixture.0.join("data/bass/notes.json")).unwrap();
+        take(&mut r, &opts);
+        assert_ne!(std::fs::read_to_string(r.fixture.0.join("data/bass/notes.json")).unwrap(), before, "{opts:?}");
+        r.graph.undo(r.token).unwrap();
+        assert_eq!(std::fs::read_to_string(r.fixture.0.join("data/bass/notes.json")).unwrap(), before, "{opts:?}");
+    }
+}
+
+// MON-9, MON-11, RENDER-36: the pedal works on an armed track, pass by pass. A key let go under the
+// pedal is kept to the pedal's lift in its pass; one the pedal holds over the wrap ends at the
+// loop's end, its pass's clip on the armed Keys.
+#[test]
+fn the_pedal_holds_notes_on_an_armed_track_in_each_pass() {
+    let mut r = Rig::new();
+    r.graph.arm(r.token, "keys", Some("notes"), Some(true), None, m2_play::InputChoice::default(), false).unwrap();
+    r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(1.0);
+    r.key(&[0x90, 60, 100]);
+    r.key(&[0xB0, 64, 127]);
+    r.to(1.5);
+    r.key(&[0x80, 60, 0]);
+    r.to(2.5);
+    r.key(&[0xB0, 64, 0]);
+    r.to(5.0);
+    r.key(&[0x90, 62, 100]);
+    r.key(&[0xB0, 64, 127]);
+    r.to(5.5);
+    r.key(&[0x80, 62, 0]);
+    r.to(8.5);
+    r.key(&[0xB0, 64, 0]);
+    r.writes(2);
+    r.graph.transport("stop").unwrap();
+    r.written();
+    let keys: Value = serde_json::from_str(&std::fs::read_to_string(r.fixture.0.join("data/keys/notes.json")).unwrap()).unwrap();
+    let clips = keys["clips"].as_array().unwrap();
+    assert_eq!(clips.len(), 2, "a clip a pass, on the armed Keys: {keys}");
+    let mut ends: Vec<(f64, f64, f64)> = clips.iter().map(|c| note(c, 0)).map(|(p, s, l, _)| (p, s, s + l)).collect();
+    ends.sort_by(|a, b| a.0.total_cmp(&b.0));
+    assert!((ends[0].0, ends[1].0) == (60.0, 62.0), "{ends:?}");
+    assert!((ends[0].2 - 2.5).abs() < 0.05, "held by the pedal to its lift: {ends:?}");
+    assert!((ends[1].2 - 4.0).abs() < 1e-9, "held over the wrap: to the loop's end: {ends:?}");
+    assert!(r.clips().is_empty(), "nothing on the selected Bass");
 }

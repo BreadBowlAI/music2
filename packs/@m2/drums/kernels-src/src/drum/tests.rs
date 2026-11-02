@@ -1,0 +1,792 @@
+//! The drum voice: the General MIDI map, one-shot guarantees (an exact-zero start, an
+//! exact-zero end, chokes), levels, and what each drum is made of.
+
+use super::*;
+use crate::testkit::*;
+
+const NAMES: [&str; INPUTS] = [
+    "pitch",
+    "velocity",
+    "hits",
+    "count",
+    "model",
+    "kick_tune",
+    "kick_decay",
+    "punch",
+    "snare_tune",
+    "snap",
+    "snare_decay",
+    "clap_tone",
+    "clap_decay",
+    "hat_tone",
+    "hat_decay",
+    "open_decay",
+    "tom_tune",
+    "tom_decay",
+    "rim_tone",
+    "bell_tune",
+    "cymbal_decay",
+    "shake_decay",
+    "drive",
+    "kick_level",
+    "snare_level",
+    "hat_level",
+    "tom_level",
+    "perc_level",
+    "tune",
+    "decay",
+    "push",
+];
+
+fn patch(changes: &[(usize, f32)]) -> Vec<f32> {
+    let mut p = defaults("drum", &NAMES);
+    for &(port, v) in changes {
+        p[port] = v;
+    }
+    p
+}
+
+/// One hit at `pitch` (the kit), with `hits` on the choke input.
+fn hit(patch: &[f32], pitch: f32, velocity: f32, frames: usize, hits: &dyn Fn(usize) -> f32) -> Played {
+    let input = |p: usize, _c: usize, t: usize| match p {
+        PITCH => pitch,
+        VELOCITY => velocity,
+        HITS => hits(t),
+        _ => patch[p],
+    };
+    play::<Drum>(frames, BLOCK, &input)
+}
+
+fn kit(pitch: f32) -> Vec<f32> {
+    hit(&patch(&[]), pitch, 0.8, s(4.0), &|_| 0.0).left()
+}
+
+/// Every mapped General MIDI pitch: what it plays, and its peak window at velocity 0.8 (dBFS).
+const KIT: [(f32, Kind, f32, f32); 26] = [
+    (35.0, Kind::Kick, -8.0, -4.0),
+    (36.0, Kind::Kick, -8.0, -4.0),
+    (37.0, Kind::Rim, -15.0, -9.0),
+    (38.0, Kind::Snare, -11.0, -7.0),
+    (39.0, Kind::Clap, -11.0, -7.0),
+    (40.0, Kind::Snare, -11.0, -7.0),
+    (41.0, Kind::Tom, -11.0, -7.0),
+    (42.0, Kind::ClosedHat, -19.0, -13.0),
+    (43.0, Kind::Tom, -11.0, -7.0),
+    (44.0, Kind::PedalHat, -23.0, -15.0),
+    (45.0, Kind::Tom, -11.0, -7.0),
+    (46.0, Kind::OpenHat, -19.0, -13.0),
+    (47.0, Kind::Tom, -11.0, -7.0),
+    (48.0, Kind::Tom, -11.0, -7.0),
+    (49.0, Kind::Crash, -21.0, -15.0),
+    (50.0, Kind::Tom, -11.0, -7.0),
+    (51.0, Kind::Ride, -21.0, -15.0),
+    (54.0, Kind::Tambourine, -23.0, -17.0),
+    (56.0, Kind::Cowbell, -15.0, -9.0),
+    (57.0, Kind::Crash, -21.0, -15.0),
+    (59.0, Kind::Ride, -21.0, -15.0),
+    (69.0, Kind::Shaker, -23.0, -17.0),
+    (70.0, Kind::Shaker, -23.0, -17.0),
+    (75.0, Kind::Claves, -15.0, -9.0),
+    (0.0, Kind::Silent, 0.0, 0.0),
+    (60.0, Kind::Silent, 0.0, 0.0),
+];
+
+#[test]
+fn ports_match_the_manifest() {
+    patch(&[]);
+}
+
+#[test]
+fn levels() {
+    for &(pitch, kind, _, _) in &KIT {
+        let x = kit(pitch);
+        let end = last_sound(&x).map_or(0.0, |e| e as f32 / SR);
+        println!("{pitch:4} {kind:?}: peak {:6.1} dBFS, rms(50 ms) {:6.1}, ends {end:.3} s", db(peak(&x)), db(rms(&x[..s(0.05)])));
+    }
+}
+
+#[test]
+fn the_kit_follows_general_midi_at_mix_ready_levels() {
+    for &(pitch, kind, lo, hi) in &KIT {
+        assert_eq!(kind_of(-1.0, pitch).0, kind, "pitch {pitch}");
+        let x = kit(pitch);
+        if kind == Kind::Silent {
+            assert!(x.iter().all(|&v| v == 0.0));
+            continue;
+        }
+        let p = db(peak(&x));
+        assert!((lo..=hi).contains(&p), "{kind:?} at {pitch} peaks at {p:.1} dBFS, not {lo}..{hi}");
+    }
+    // Every other pitch is silent.
+    for pitch in 0..128 {
+        if !KIT.iter().any(|k| k.0 == pitch as f32) {
+            assert_eq!(kind_of(-1.0, pitch as f32).0, Kind::Silent, "pitch {pitch}");
+        }
+    }
+    // Alone, a drum ignores pitch, except the hats (pedal, open) and the tom (chromatic).
+    assert_eq!(kind_of(0.0, 80.0).0, Kind::Kick);
+    assert_eq!(kind_of(3.0, 46.0).0, Kind::OpenHat);
+    assert_eq!(kind_of(3.0, 60.0).0, Kind::ClosedHat);
+    assert_eq!(kind_of(4.0, 57.0), (Kind::Tom, 12.0, false));
+    assert_eq!(kind_of(9.0, 36.0).0, Kind::Silent);
+    assert_eq!(kind_of(f32::NAN, 36.0).0, Kind::Kick);
+}
+
+/// The drum's decay setting, for the tail rule (a fixed one where it has none).
+fn decay_of(kind: Kind) -> f32 {
+    let p = patch(&[]);
+    match kind {
+        Kind::Kick => p[KICK_DECAY],
+        Kind::Snare => p[SNARE_DECAY],
+        Kind::Clap => 0.032 + p[CLAP_DECAY],
+        Kind::ClosedHat => p[HAT_DECAY],
+        Kind::PedalHat => 0.025,
+        Kind::OpenHat => 0.015 + p[OPEN_DECAY],
+        Kind::Crash => p[CYMBAL_DECAY],
+        Kind::Ride => 0.7 * p[CYMBAL_DECAY],
+        // The low tom rings longest: √2 the tom's decay.
+        Kind::Tom => 1.42 * p[TOM_DECAY],
+        Kind::Rim => 0.025,
+        Kind::Claves => 0.06,
+        Kind::Cowbell => 0.6,
+        Kind::Shaker => p[SHAKE_DECAY],
+        Kind::Tambourine => 2.5 * p[SHAKE_DECAY],
+        Kind::Silent => 0.0,
+    }
+}
+
+#[test]
+fn hits_start_at_zero_and_end_in_exact_silence() {
+    for &(pitch, kind, _, _) in &KIT {
+        let out = hit(&patch(&[]), pitch, 1.0, s(5.0), &|_| 0.0);
+        let x = out.left();
+        assert_eq!(x[0], 0.0, "{kind:?} starts with a click");
+        let end = last_sound(&x).map_or(0, |e| e + 1);
+        let limit = s(decay_of(kind) * 1.5 + 0.02);
+        assert!(end <= limit, "{kind:?} sounds until {:.3} s, past {:.3}", end as f32 / SR, limit as f32 / SR);
+        if kind != Kind::Silent {
+            assert!(out.active[0], "{kind:?} isn't active while it sounds");
+        }
+        assert!(!out.active[limit + BLOCK], "{kind:?} is still active");
+        assert!(x.iter().all(|&v| v == 0.0 || v.abs() >= f32::MIN_POSITIVE));
+    }
+}
+
+#[test]
+fn extreme_settings_never_make_nan() {
+    for &pitch in &[36.0, 38.0, 39.0, 42.0, 46.0, 45.0, 49.0, 51.0, 37.0, 75.0, 56.0, 54.0, 69.0, 0.0, 127.0, f32::NAN] {
+        for (n, set) in torture(&patch(&[(DRIVE, 12.0)]), &[PITCH, HITS]).iter().enumerate() {
+            let input = |p: usize, _c: usize, t: usize| match p {
+                PITCH => pitch,
+                HITS => [0.0, 1.0, f32::NAN, 4096.0, -1e30, 0.5][t % 6],
+                _ => set[p],
+            };
+            let out = play::<Drum>(1_500, BLOCK, &input);
+            let bad = out.main().iter().position(|f| !f[0].is_finite() || f[0].abs() > 4.0);
+            assert_eq!(bad, None, "pitch {pitch}, set {n} {set:?}");
+        }
+    }
+}
+
+#[test]
+fn the_same_whatever_the_block_size() {
+    for &(pitch, ..) in &KIT {
+        let p = patch(&[(DRIVE, 6.0)]);
+        let hits = |t: usize| if t == 9_001 { 4096.0 } else { 0.0 };
+        let input = |port: usize, _c: usize, t: usize| match port {
+            PITCH => pitch,
+            HITS => hits(t),
+            VELOCITY => 0.9,
+            _ => p[port],
+        };
+        let reference = play::<Drum>(20_000, BLOCK, &input).out.remove(0);
+        for split in [1, 7, 64] {
+            let out = play::<Drum>(20_000, split, &input).out.remove(0);
+            assert!(out == reference, "pitch {pitch} in blocks of {split}");
+        }
+    }
+}
+
+/// Peak of `x` from `from` for `len` samples.
+fn peak_in(x: &[f32], from: usize, len: usize) -> f32 {
+    peak(&x[from..(from + len).min(x.len())])
+}
+
+#[test]
+fn a_closed_hat_chokes_an_open_one() {
+    let at = s(0.1);
+    let x = hit(&patch(&[]), 46.0, 0.8, s(1.0), &|t| if t == at { 4096.0 } else { 0.0 }).left();
+    let before = peak_in(&x, at - s(0.01), s(0.01));
+    let after = peak_in(&x, at + s(0.006), s(0.5));
+    assert!(before > 0.01 && after == 0.0, "{before} before, {after} after");
+    // Smoothly: no step bigger than the hat's own.
+    assert!(max_step(&x, at, at + s(0.006)) <= 1.5 * max_step(&x, at - s(0.02), at));
+}
+
+#[test]
+fn chokes_stay_in_their_group() {
+    let at = s(0.2);
+    let ringing = |pitch: f32, hits: f32| {
+        peak_in(&hit(&patch(&[]), pitch, 0.8, s(0.5), &|t| if t == at { hits } else { 0.0 }).left(), at + s(0.01), s(0.05))
+    };
+    let free = |pitch: f32| ringing(pitch, 0.0);
+    // A kick chokes a kick (two at once count 2 in its field), quickly.
+    assert_eq!(ringing(36.0, 1.0), 0.0);
+    assert_eq!(ringing(36.0, 2.0), 0.0);
+    // Two kicks, a clap, the hats and a crash don't choke a snare.
+    assert_eq!(ringing(38.0, 2.0 + 256.0 + 4096.0 + 65_536.0), free(38.0));
+    assert!(free(38.0) > 0.0);
+    assert_eq!(ringing(38.0, 16.0), 0.0);
+    // Toms, cowbells and rides ring through anything.
+    for pitch in [45.0, 56.0, 51.0] {
+        assert_eq!(ringing(pitch, 1_048_575.0), free(pitch), "pitch {pitch}");
+    }
+    // The field that marks every hit (for hitcount) chokes nothing: a tom's hit doesn't cut
+    // a kick, and a kick's hit (its field and its group's) still does.
+    let h = m2_dsp::kit::HIT_FIELD as f32;
+    assert_eq!(ringing(36.0, h), free(36.0));
+    assert_eq!(ringing(36.0, 8.0 * h), free(36.0));
+    assert_eq!(ringing(36.0, h + 1.0), 0.0);
+    assert_eq!(ringing(46.0, 2.0 * h + 4096.0), 0.0);
+    // A hit on the drum's own first sample is its own, not a choke.
+    let x = hit(&patch(&[]), 36.0, 0.8, s(0.3), &|t| if t == 0 { 1.0 } else { 0.0 }).left();
+    assert!(peak(&x[s(0.1)..]) > 0.01);
+}
+
+#[test]
+fn clap_bursts_fall_where_they_should() {
+    let x = kit(39.0);
+    let level = |ms: f32| rms(&x[s(ms * 0.001)..s((ms + 0.5) * 0.001)]);
+    for onset in [10.0, 21.0, 31.0] {
+        let (before, after) = (level(onset - 1.0), level(onset + 0.5));
+        assert!(after > 4.0 * before, "no burst at {onset} ms: {before} then {after}");
+    }
+    assert!(level(0.5) > 4.0 * level(8.5));
+}
+
+#[test]
+fn the_kick_lands_on_its_tune_and_decays_in_its_time() {
+    for (tune, decay) in [(48.0, 0.45), (40.0, 1.2), (60.0, 0.3)] {
+        let x = hit(&patch(&[(KICK_TUNE, tune), (KICK_DECAY, decay)]), 36.0, 0.8, s(3.0), &|_| 0.0).left();
+        let f = peak_hz(&x[s(0.15)..s(0.15) + 16_384], SR, 20.0, 200.0);
+        assert!((f / tune as f64 - 1.0).abs() < 0.03, "tune {tune}: the tail is at {f:.1} Hz");
+        // T60: the time from the peak to 60 dB below it.
+        let p = peak(&x);
+        let t60 = (0..x.len()).rfind(|&i| x[i].abs() > p * 1e-3).unwrap() as f32 / SR;
+        assert!((t60 / decay - 1.0).abs() < 0.15, "decay {decay}: T60 {t60:.3}");
+    }
+    // Punch starts it higher: its first half cycle is shorter.
+    let first_half = |punch: f32| {
+        let x = hit(&patch(&[(PUNCH, punch)]), 36.0, 0.8, s(0.5), &|_| 0.0).left();
+        (2..x.len()).find(|&i| x[i - 1] > 0.0 && x[i] <= 0.0).unwrap()
+    };
+    let (a, b, c) = (first_half(0.0), first_half(0.5), first_half(1.0));
+    assert!(a > b && b > c, "{a} {b} {c}");
+}
+
+#[test]
+fn the_snare_is_tuned_and_snap_brings_the_noise() {
+    let x = hit(&patch(&[(SNAP, 0.0)]), 38.0, 0.8, s(0.5), &|_| 0.0).left();
+    let f = peak_hz(&x[..s(0.2)], SR, 100.0, 300.0);
+    assert!((f / 190.0 - 1.0).abs() < 0.05, "body at {f:.1} Hz");
+    let noise_share = |snap: f32| {
+        let x = hit(&patch(&[(SNAP, snap)]), 38.0, 0.8, s(0.5), &|_| 0.0).left();
+        let spec = spectrum(&x[..16_384], SR);
+        spec.iter().filter(|s| s.0 > 1_000.0).map(|s| s.1).sum::<f64>() / spec.iter().map(|s| s.1).sum::<f64>()
+    };
+    let shares: Vec<f64> = [0.0, 0.3, 0.6, 1.0].iter().map(|&s| noise_share(s)).collect();
+    assert!(shares.windows(2).all(|w| w[1] > w[0]), "{shares:?}");
+}
+
+/// The share of `x`'s power above `f` Hz.
+fn above(x: &[f32], f: f64) -> f64 {
+    let spec = spectrum(x, SR);
+    spec.iter().filter(|s| s.0 > f).map(|s| s.1).sum::<f64>() / spec.iter().map(|s| s.1).sum::<f64>()
+}
+
+#[test]
+fn hats_and_cymbals_are_bright_and_metallic() {
+    for pitch in [42.0, 44.0, 46.0, 49.0, 51.0] {
+        let x = kit(pitch);
+        let share = above(&x[..16_384.min(x.len())], 5_000.0);
+        let want = if pitch < 47.0 { 0.8 } else { 0.5 };
+        assert!(share >= want, "pitch {pitch}: {:.0}% above 5 kHz", 100.0 * share);
+    }
+    // Harder hits are brighter.
+    let bright = |v: f32| centroid(&hit(&patch(&[]), 42.0, v, s(0.2), &|_| 0.0).left(), SR);
+    assert!(bright(1.0) > bright(0.3));
+}
+
+#[test]
+fn the_cowbell_rings_at_its_two_notes() {
+    let x = kit(56.0);
+    let spec = spectrum(&x[..16_384], SR);
+    let at = |f: f64| spec.iter().filter(|s| (s.0 - f).abs() < 15.0).map(|s| s.1).sum::<f64>();
+    let between = at(670.0) + at(450.0) + at(1_000.0);
+    assert!(at(540.0) > 30.0 * between && at(799.2) > 30.0 * between, "{} {} {}", at(540.0), at(799.2), between);
+}
+
+#[test]
+fn toms_climb_the_general_midi_ladder() {
+    let pitches = [41.0, 43.0, 45.0, 47.0, 48.0, 50.0];
+    let f: Vec<f64> = pitches.iter().map(|&p| peak_hz(&kit(p)[s(0.05)..s(0.05) + 8_192], SR, 40.0, 600.0)).collect();
+    for k in 0..pitches.len() {
+        let want = 130.0 * ((pitches[k] - 45.0) * 1.5 / 12.0).exp2() as f64;
+        assert!((f[k] / want - 1.0).abs() < 0.03, "GM {}: {:.1} Hz, want {want:.1}", pitches[k], f[k]);
+    }
+    // Alone, chromatic around A2.
+    let x = hit(&patch(&[(MODEL, 4.0)]), 57.0, 0.8, s(0.5), &|_| 0.0).left();
+    let f = peak_hz(&x[s(0.05)..s(0.05) + 8_192], SR, 40.0, 600.0);
+    assert!((f / 260.0 - 1.0).abs() < 0.03, "{f}");
+}
+
+#[test]
+fn a_reset_starts_over() {
+    for pitch in [36.0, 38.0, 39.0, 46.0, 49.0, 45.0, 37.0, 56.0, 69.0] {
+        let mut p = patch(&[(DRIVE, 6.0)]);
+        p[PITCH] = pitch;
+        assert_reset_starts_over::<Drum>(&p, 5_000);
+    }
+}
+
+#[test]
+fn velocity_sets_the_level() {
+    for &(pitch, kind, ..) in KIT.iter().filter(|k| k.1 != Kind::Silent) {
+        let level = |v: f32| peak(&hit(&patch(&[]), pitch, v, s(0.3), &|_| 0.0).left());
+        let (soft, mid, hard) = (level(0.3), level(0.8), level(1.0));
+        assert!(soft < mid && mid < hard, "{kind:?}: {soft} {mid} {hard}");
+        let drop = db(soft / mid);
+        assert!((-13.0..=-7.0).contains(&drop), "{kind:?}: velocity 0.3 is {drop:.1} dB from 0.8");
+    }
+}
+
+#[test]
+fn drive_crunches_without_getting_louder_than_full_scale() {
+    for pitch in [36.0, 38.0, 42.0] {
+        let clean = kit(pitch);
+        let driven = hit(&patch(&[(DRIVE, 24.0)]), pitch, 1.0, s(1.0), &|_| 0.0).left();
+        assert!(peak(&driven) < 1.0 && driven.iter().zip(&clean).any(|(a, b)| (a - b).abs() > 0.01), "pitch {pitch}");
+    }
+}
+
+// A decaying sine that starts at phase 0 leaves an offset behind it: the kick, the snare and
+// the toms are highpassed so a beat of them adds no DC to a mix.
+#[test]
+fn bodies_leave_no_offset() {
+    for pitch in [35.0, 36.0, 38.0, 40.0, 41.0, 45.0, 50.0] {
+        let x = kit(pitch);
+        let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+        let mean = x.iter().map(|&v| v as f64).sum::<f64>() / x.len() as f64;
+        // Without the highpass a kick leaves about 6e-4 of its peak here (over 4 s); with it,
+        // what is left (under 1e-5) is the fade-in on its first samples.
+        assert!(mean.abs() < 2e-5 * peak as f64, "{pitch}: mean {mean:e} for a peak of {peak}");
+    }
+}
+
+/// One hit at `pitch` with `count` (from hitcount: the hits its lane has played) on the
+/// count input, at `sr`.
+fn counted(pitch: f32, count: f32, sr: f32, changes: &[(usize, f32)]) -> Vec<f32> {
+    let p = patch(changes);
+    let input = |port: usize, _c: usize, _t: usize| match port {
+        PITCH => pitch,
+        VELOCITY => 0.8,
+        HITS => 0.0,
+        COUNT => count,
+        _ => p[port],
+    };
+    play_at::<Drum>(sr, 2, (sr * 0.5) as usize, BLOCK, &input).left()
+}
+
+#[test]
+fn every_hit_is_its_own_and_every_render_the_same() {
+    // The noise and the metal are seeded by the hit count: the next hit differs, and the same
+    // count gives the same bits.
+    let alike = |a: &[f32], b: &[f32]| {
+        let n = s(0.03);
+        let dot: f64 = a[..n].iter().zip(&b[..n]).map(|(x, y)| *x as f64 * *y as f64).sum();
+        dot / (rms(&a[..n]) as f64 * rms(&b[..n]) as f64 * n as f64)
+    };
+    for pitch in [38.0, 39.0, 42.0, 46.0, 49.0, 69.0] {
+        let (a, b) = (counted(pitch, 4.0, SR, &[]), counted(pitch, 5.0, SR, &[]));
+        assert!(a == counted(pitch, 4.0, SR, &[]), "pitch {pitch}: the same count, the same hit");
+        let c = alike(&a, &b);
+        assert!(c < 0.9, "pitch {pitch}: one hit and the next correlate {c:.3}");
+        assert!((db(rms(&a)) - db(rms(&b))).abs() < 1.5, "pitch {pitch}: and stay as loud");
+    }
+    // A kick is a kick: no noise in its body, so every hit is the same.
+    let kick = counted(36.0, 4.0, SR, &[(PUNCH, 0.0)]);
+    assert!(alike(&kick, &counted(36.0, 9.0, SR, &[(PUNCH, 0.0)])) > 0.999);
+    // Any count makes a hit: huge, broken and negative ones too.
+    for count in [16_777_215.0, 1e30, f32::NAN, f32::INFINITY, -3.0] {
+        let x = counted(38.0, count, SR, &[]);
+        assert!(x.iter().all(|v| v.is_finite()) && peak(&x) > 0.01, "count {count}");
+    }
+}
+
+#[test]
+fn levels_move_their_groups_only() {
+    let pk = |pitch: f32, changes: &[(usize, f32)]| db(peak(&counted(pitch, 0.0, SR, changes)));
+    for (pitch, level) in [
+        (36.0, KICK_LEVEL),
+        (38.0, SNARE_LEVEL),
+        (39.0, SNARE_LEVEL),
+        (37.0, SNARE_LEVEL),
+        (42.0, HAT_LEVEL),
+        (46.0, HAT_LEVEL),
+        (45.0, TOM_LEVEL),
+        (49.0, PERC_LEVEL),
+        (56.0, PERC_LEVEL),
+        (69.0, PERC_LEVEL),
+    ] {
+        let moved = pk(pitch, &[(level, -6.0)]) - pk(pitch, &[]);
+        assert!((moved + 6.0).abs() < 0.01, "pitch {pitch}: {moved:.2} dB");
+        for other in [KICK_LEVEL, SNARE_LEVEL, HAT_LEVEL, TOM_LEVEL, PERC_LEVEL].into_iter().filter(|&o| o != level) {
+            assert_eq!(pk(pitch, &[(other, -6.0)]), pk(pitch, &[]), "pitch {pitch}: another group's level");
+        }
+    }
+}
+
+#[test]
+fn noise_drums_are_as_loud_at_any_sample_rate() {
+    // White noise is scaled so its level in hertz, what the filters pass, doesn't depend on
+    // the rate. Measured below 20 kHz, the band both rates share; the brightest (a tambourine
+    // at 11 kHz) keeps a little more top at 96 kHz, where its filter is further from Nyquist.
+    for pitch in [38.0, 39.0, 69.0, 54.0] {
+        let at = |sr: f32| {
+            let x = counted(pitch, 0.0, sr, &[]);
+            let spec = spectrum(&x[..(sr * 0.3) as usize], sr);
+            // Parseval: the bins' power over n² is the mean square, both rates windowed alike.
+            let n = (2 * spec.len()) as f64;
+            10.0 * (spec.iter().filter(|b| b.0 < 20_000.0).map(|b| b.1).sum::<f64>() / (n * n)).log10()
+        };
+        let (a, b) = (at(48_000.0), at(96_000.0));
+        assert!((a - b).abs() < 1.5, "pitch {pitch}: {a:.1} dB at 48 kHz, {b:.1} at 96");
+    }
+}
+
+// CARD-33: a Drum's own knobs move whatever drum it plays. At 0, 1 and 0 (the kit's, left out)
+// they change no bit; a tune of 12 plays a tom an octave up, a decay of 2 lets a kick ring about
+// twice as long, and a push makes a snare snap harder.
+#[test]
+fn a_drums_knobs_move_the_drum_it_plays() {
+    let with = |model: f32, pitch: f32, changes: &[(usize, f32)]| {
+        let mut p = patch(changes);
+        p[MODEL] = model;
+        hit(&p, pitch, 0.8, s(3.0), &|_| 0.0).left()
+    };
+    for model in 0..9 {
+        let plain = with(model as f32, 45.0, &[]);
+        assert_eq!(plain, with(model as f32, 45.0, &[(TUNE, 0.0), (DECAY, 1.0), (PUSH, 0.0)]), "model {model}");
+    }
+    let tom = |tune: f32| peak_hz(&with(4.0, 45.0, &[(TUNE, tune)])[s(0.05)..s(0.3)], SR, 40.0, 1_000.0);
+    assert!((tom(12.0) / tom(0.0) - 2.0).abs() < 0.05, "a tom an octave up: {} → {}", tom(0.0), tom(12.0));
+    let rings = |decay: f32| last_sound(&with(0.0, 36.0, &[(DECAY, decay)])).unwrap() as f32;
+    assert!((rings(2.0) / rings(1.0) - 2.0).abs() < 0.3, "a kick rings {} then {} samples", rings(1.0), rings(2.0));
+    let bright = |push: f32| centroid(&with(1.0, 38.0, &[(PUSH, push)])[..s(0.2)], SR);
+    assert!(bright(0.4) > bright(0.0), "a pushed snare snaps harder: {} against {}", bright(0.4), bright(0.0));
+}
+
+/// `one`'s ports: the drum kernel's, but its drum is a menu, `drum`, where the kit has `model`.
+const ONE_NAMES: [&str; INPUTS] = {
+    let mut n = NAMES;
+    n[MODEL] = "drum";
+    n
+};
+
+#[test]
+fn ones_ports_match_the_manifest() {
+    defaults("one", &ONE_NAMES);
+}
+
+/// One drum (`one`) playing `drum`, its place in the menu, at `pitch`, with `hits` on the choke input.
+fn one(drum: f32, pitch: f32, frames: usize, changes: &[(usize, f32)], hits: &dyn Fn(usize) -> f32) -> Vec<f32> {
+    let mut p = defaults("one", &ONE_NAMES);
+    for &(port, v) in changes {
+        p[port] = v;
+    }
+    p[MODEL] = drum;
+    let input = |port: usize, _c: usize, t: usize| match port {
+        PITCH => pitch,
+        VELOCITY => 0.8,
+        HITS => hits(t),
+        _ => p[port],
+    };
+    play::<One>(frames, BLOCK, &input).left()
+}
+
+/// The menu's drums, by place, grouped by family (KIT-20): each with the General MIDI note it is the
+/// drum machine's drum at.
+const MENU: [(&str, f32); 17] = [
+    ("kick", 36.0),
+    ("kick 2", 35.0),
+    ("snare", 38.0),
+    ("snare 2", 40.0),
+    ("clap", 39.0),
+    ("hats", 42.0),
+    ("tom", 45.0),
+    ("rim", 37.0),
+    ("claves", 75.0),
+    ("cowbell", 56.0),
+    ("cymbal", 49.0),
+    ("cymbal 2", 57.0),
+    ("ride", 51.0),
+    ("ride 2", 59.0),
+    ("shaker", 69.0),
+    ("shaker 2", 70.0),
+    ("tambourine", 54.0),
+];
+
+/// The nine first sounds, by the drum voice's own model (0 to 8): the rest are the drum machine's
+/// drum at their note.
+const NINE: [&str; 9] = ["kick", "snare", "clap", "hats", "tom", "rim", "cowbell", "cymbal", "shaker"];
+
+// CARD-33 (review Y11): One drum's drum is a menu, a control its kernel reads when a hit starts:
+// each place plays the drum the kit's kernel plays with that model, bit for bit.
+#[test]
+fn one_drum_plays_each_drum_as_the_drum_kernel_does() {
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        // One of the nine by the drum kernel's model; another by the drum machine's map at its note.
+        let mut p = patch(&[]);
+        p[MODEL] = NINE.iter().position(|n| n == name).map_or(-1.0, |m| m as f32);
+        let drum = hit(&p, *pitch, 0.8, s(2.0), &|_| 0.0).left();
+        assert_eq!(one(place as f32, *pitch, s(2.0), &[], &|_| 0.0), drum, "{name}");
+    }
+}
+
+// CARD-33 (review Y11): every hit on One drum's lane is of its one drum, so a drum that chokes
+// (kick, snare, clap, hats, cymbal) is cut by the next hit whatever group drumhit marked it with,
+// as its single was; one that rings on (tom, rim, cowbell, shaker) never is. Its own first
+// sample's hit is its own.
+#[test]
+fn one_drum_chokes_on_any_hit_where_its_drum_chokes() {
+    let at = s(0.02);
+    let h = m2_dsp::kit::HIT_FIELD as f32;
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let after =
+            |hits: f32| peak_in(&one(place as f32, *pitch, s(0.3), &[], &|t| if t == at { hits } else { 0.0 }), at + s(0.01), s(0.02));
+        let free = after(0.0);
+        assert!(free > 0.0, "{name} rings");
+        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "cymbal" | "kick 2" | "snare 2" | "cymbal 2");
+        // A hit marked in the tom's group (no choke group: the field alone) and one in the kick's.
+        for hits in [h, h + 1.0, 2.0 * h + 4096.0] {
+            assert_eq!(after(hits) == 0.0, chokes, "{name}, a hit marked {hits}");
+        }
+        let first = one(place as f32, *pitch, s(0.3), &[], &|t| if t == 0 { h + 1.0 } else { 0.0 });
+        assert!(peak(&first[s(0.01)..]) > 0.0, "{name}: its own hit is no choke");
+    }
+}
+
+// CARD-33 (review Y7): every knob of One drum moves every drum its menu offers: `tune`, `decay`
+// (the rim's ring and the cowbell's too), `punch` (a kick's thump, a snare's snap, and on the
+// others how hard the hit's first 15 ms are) and `drive`.
+#[test]
+fn every_knob_of_one_drum_moves_every_drum_it_offers() {
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let play = |changes: &[(usize, f32)]| one(place as f32, *pitch, s(3.0), changes, &|_| 0.0);
+        let plain = play(&[]);
+        for (knob, value) in
+            [("tune", (TUNE, 5.0)), ("decay", (DECAY, 2.0)), ("punch", (PUSH, 0.8)), ("punch", (PUSH, -0.8)), ("drive", (DRIVE, 12.0))]
+        {
+            assert_ne!(play(&[value]), plain, "{name}'s {knob} at {} changes nothing", value.1);
+        }
+        let rings = |decay: f32| last_sound(&one(place as f32, *pitch, s(8.0), &[(DECAY, decay)], &|_| 0.0)).unwrap() as f32;
+        assert!(rings(2.0) > 1.3 * rings(1.0), "{name} rings longer at decay 2: {} then {} samples", rings(1.0), rings(2.0));
+        if !matches!(*name, "kick" | "snare") {
+            let first = |push: f32| peak_in(&play(&[(PUSH, push)]), 0, s(0.004));
+            assert!(
+                first(0.8) > first(0.0) && first(-0.8) < first(0.0),
+                "{name}'s punch moves its first ms: {} {} {}",
+                first(-0.8),
+                first(0.0),
+                first(0.8)
+            );
+        }
+    }
+}
+
+/// The editor's General MIDI table (`GM` in `crates/editor/src/drums.rs`), read from its source:
+/// each sound and its notes, in its order.
+fn general_midi() -> Vec<(String, Vec<u8>)> {
+    const SOURCE: &str = include_str!("../../../../../../crates/editor/src/drums.rs");
+    SOURCE
+        .lines()
+        .filter_map(|l| l.trim().strip_prefix("GmDrum { sound: \""))
+        .map(|rest| {
+            let (sound, rest) = rest.split_once('"').expect("a sound");
+            let notes = rest.split_once("&[").and_then(|(_, r)| r.split_once(']')).expect("its notes").0;
+            (sound.to_string(), notes.split(',').map(|n| n.trim().parse().expect("a note")).collect())
+        })
+        .collect()
+}
+
+// KIT-6, KIT-20: the editor's table, read from its source and in the Drum's menu order, gives every
+// note the drum machine plays to the sound whose Drum plays its very bits there (the hats' pedal and
+// open too), but the toms, which the drum machine spreads 1.5 semitones a step and the Drum's tom
+// plays chromatically; the notes it gives that the drum machine leaves silent are 52, 53 and 55.
+#[test]
+fn the_table_is_the_drum_machines() {
+    let gm = general_midi();
+    let sounds: Vec<&str> = gm.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(sounds, MENU.map(|(name, _)| name), "the table is in the Drum's menu order");
+    let mut silent = vec![];
+    for (place, (sound, notes)) in gm.iter().enumerate() {
+        for &n in notes {
+            let n = n as f32;
+            match (sound.as_str(), kind_of(-1.0, n).0) {
+                (_, Kind::Silent) => silent.push(n as u8),
+                ("tom", _) => assert_eq!(sound_at(place as f32, n), (Kind::Tom, n - 45.0, false), "the tom at {n} is chromatic"),
+                _ => assert!(one(place as f32, n, s(4.0), &[], &|_| 0.0) == kit(n), "the {sound} at {n}: the drum machine's bits"),
+            }
+        }
+    }
+    silent.sort();
+    assert_eq!(silent, [52, 53, 55]);
+    for n in 0..128u8 {
+        if kind_of(-1.0, n as f32).0 != Kind::Silent {
+            assert!(gm.iter().any(|(_, notes)| notes.contains(&n)), "the drum machine plays {n}, which the table gives no sound");
+        }
+    }
+}
+
+// KIT-20 (the review's U2): each other drum is the drum machine's at its own note, at any note: the
+// same drum, tuning and variant; its noise, seeded by the key it is on, follows the note, so at its
+// own note it plays the drum machine's very bits, and at another note the same drum, other noise.
+#[test]
+fn each_other_drum_is_the_drum_machines_at_its_note() {
+    for (place, (name, note)) in MENU.iter().enumerate().filter(|(_, (n, _))| !NINE.contains(n)) {
+        assert_ne!(kind_of(-1.0, *note).0, Kind::Silent, "{name}");
+        for pitch in [0.0, 24.0, 36.0, *note, 60.0, 127.0] {
+            assert_eq!(sound_at(place as f32, pitch), kind_of(-1.0, *note), "{name} at {pitch}");
+        }
+        assert!(one(place as f32, *note, s(4.0), &[], &|_| 0.0) == kit(*note), "{name} at its own note: the drum machine's bits");
+    }
+    // A place past the menu plays nothing, as before.
+    assert_eq!(sound_at(17.0, 36.0).0, Kind::Silent);
+    assert_eq!(sound_at(99.0, 36.0).0, Kind::Silent);
+}
+
+/// The bits of `x` as one number (FNV-1a over each sample's bits), for a test to pin.
+fn digest(x: &[f32]) -> u64 {
+    x.iter().flat_map(|v| v.to_bits().to_le_bytes()).fold(0xcbf2_9ce4_8422_2325, |h, b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The nine first sounds' bits at twelve notes, as `@m2/drums` 2.1.0 played them before KIT-20
+/// (`digest`): (place in today's menu, note, bits).
+const BEFORE: [(usize, f32, u64); 108] = [
+    (0, 24.0, 0x5abff48f9174b16e),
+    (0, 30.0, 0x527424f270cda65d),
+    (0, 34.0, 0xb8a5d00fd86df6f8),
+    (0, 41.0, 0x6757fcb6f7b1095b),
+    (0, 44.0, 0xe4e23b7661a65eed),
+    (0, 52.0, 0x86d93e53d25d446a),
+    (0, 53.0, 0x18cfa3ff8f155cb1),
+    (0, 55.0, 0xed2debad3fce25d6),
+    (0, 60.0, 0x8ceba9e403150a92),
+    (0, 71.0, 0x7bdcb18bb2b353c5),
+    (0, 38.0, 0x3e34fb8d036ca970),
+    (0, 36.0, 0x57fe6447165f9748),
+    (2, 24.0, 0x2739d56addf83f5f),
+    (2, 30.0, 0x6678570242d46b3e),
+    (2, 34.0, 0x8deeb26d242547a3),
+    (2, 41.0, 0x8c52c3629c1349bb),
+    (2, 44.0, 0xb136402f6576f2d6),
+    (2, 52.0, 0xe30ca1d3af264612),
+    (2, 53.0, 0xab483eb500aed0a7),
+    (2, 55.0, 0xb6ad3729b803fb77),
+    (2, 60.0, 0x5b85e8a6bea285d9),
+    (2, 71.0, 0x0dbef5f93b1a42bf),
+    (2, 38.0, 0x5262f74f91635b45),
+    (2, 36.0, 0xcd0a9e6ee705b910),
+    (4, 24.0, 0x34c3ce67a7680da1),
+    (4, 30.0, 0x059e0abf6b754d4e),
+    (4, 34.0, 0x25575b9686575736),
+    (4, 41.0, 0xcba539abaadea2d2),
+    (4, 44.0, 0x281958ce58f0f130),
+    (4, 52.0, 0x75c1ec39569c4c76),
+    (4, 53.0, 0xbf3994bf34cbb433),
+    (4, 55.0, 0x8b3ded5d97881704),
+    (4, 60.0, 0xc446663a91b2ca57),
+    (4, 71.0, 0x58c69cb720f006e1),
+    (4, 38.0, 0xc33bf6b90fffaa5e),
+    (4, 36.0, 0xba8ab20b8db42f65),
+    (5, 24.0, 0xa6cbee5ab5da352f),
+    (5, 30.0, 0x9752736c1541d1be),
+    (5, 34.0, 0x88c989b997fed5bd),
+    (5, 41.0, 0x97507637686a0be1),
+    (5, 44.0, 0x7f3f1b19fd2f1944),
+    (5, 52.0, 0xe0bfcf985fe536fb),
+    (5, 53.0, 0x3b1386dc985936ea),
+    (5, 55.0, 0x7d61470f8a4a2e70),
+    (5, 60.0, 0xeb40f85251012a97),
+    (5, 71.0, 0x8c00c3ffd113f8db),
+    (5, 38.0, 0xd2a266a223f17630),
+    (5, 36.0, 0x528547e966958e9d),
+    (6, 24.0, 0x56d2df68af22e945),
+    (6, 30.0, 0xd4937d0a4ebfe2b7),
+    (6, 34.0, 0x48590b5715f3a6be),
+    (6, 41.0, 0x2fb6eef832b2d73f),
+    (6, 44.0, 0x1026162839012af8),
+    (6, 52.0, 0x8534476d88ac8960),
+    (6, 53.0, 0x2851aac300820358),
+    (6, 55.0, 0x98afb62df05d76e9),
+    (6, 60.0, 0x564c8e08ee8c1a66),
+    (6, 71.0, 0x742a5afa2f0aa51b),
+    (6, 38.0, 0xddf72580da10612b),
+    (6, 36.0, 0x3e163667efc6416f),
+    (7, 24.0, 0x430ba0f549fae92b),
+    (7, 30.0, 0x430ba0f549fae92b),
+    (7, 34.0, 0x430ba0f549fae92b),
+    (7, 41.0, 0x430ba0f549fae92b),
+    (7, 44.0, 0x430ba0f549fae92b),
+    (7, 52.0, 0x430ba0f549fae92b),
+    (7, 53.0, 0x430ba0f549fae92b),
+    (7, 55.0, 0x430ba0f549fae92b),
+    (7, 60.0, 0x430ba0f549fae92b),
+    (7, 71.0, 0x430ba0f549fae92b),
+    (7, 38.0, 0x430ba0f549fae92b),
+    (7, 36.0, 0x430ba0f549fae92b),
+    (9, 24.0, 0x06977af6a342ea00),
+    (9, 30.0, 0x9c8a6a8691727fb4),
+    (9, 34.0, 0xd6b2ef0f5654d9f9),
+    (9, 41.0, 0x708e1de101f28fa1),
+    (9, 44.0, 0x6a555359226f6158),
+    (9, 52.0, 0x50782e30c0b43c5c),
+    (9, 53.0, 0xdeaaf3f6ea5a2c19),
+    (9, 55.0, 0x0e0c882a8d449611),
+    (9, 60.0, 0xea07c21340ef2cca),
+    (9, 71.0, 0x47ce347b1351b4f0),
+    (9, 38.0, 0x8f959ca1d9b9b2cd),
+    (9, 36.0, 0x43286ec066c01c76),
+    (10, 24.0, 0xdbd0631d3379ebb2),
+    (10, 30.0, 0x5e6948933430a62a),
+    (10, 34.0, 0x6a299d1b90554bbe),
+    (10, 41.0, 0x18d7b117b220d9bd),
+    (10, 44.0, 0xd23483f07a882969),
+    (10, 52.0, 0xbecee51b79e9fe56),
+    (10, 53.0, 0x2e696e3771af4821),
+    (10, 55.0, 0x2762b430c24ddae1),
+    (10, 60.0, 0xce56e93b7c636040),
+    (10, 71.0, 0x698222d8c92b2772),
+    (10, 38.0, 0x7e321e5ff2e1410f),
+    (10, 36.0, 0x0f2a4535fa23cbbd),
+    (14, 24.0, 0x0470d3e46c3c3b9e),
+    (14, 30.0, 0x2be99759fe6fa346),
+    (14, 34.0, 0x0721e7eb231380bc),
+    (14, 41.0, 0xd4b6573a025fcf7b),
+    (14, 44.0, 0xb54f5815d1fd37b2),
+    (14, 52.0, 0x528a9d4056be5354),
+    (14, 53.0, 0xfb8fb7a6294ed02a),
+    (14, 55.0, 0x6bd36b69c7e6f71b),
+    (14, 60.0, 0x3f40a3abd423f94c),
+    (14, 71.0, 0xc6d51a1f0fc92aaf),
+    (14, 38.0, 0xc1ff160ad744bd23),
+    (14, 36.0, 0xe0b12c76cdddce71),
+];
+
+// KIT-20: the nine first sounds play as they did, every bit, pinned: the menu grew at its end.
+#[test]
+fn the_first_nine_play_as_before() {
+    for (place, n, bits) in BEFORE {
+        assert_eq!(digest(&one(place as f32, n, s(4.0), &[], &|_| 0.0)), bits, "{} at {n}", MENU[place].0);
+    }
+}

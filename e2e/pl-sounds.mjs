@@ -1,10 +1,11 @@
 // Polish A3 and A4: change a track's instrument, and drum names in Notes (the polish plan's A3,
 // A4, Q5 to Q7). Change instrument… in a track's header menu opens + Track's list titled for the
-// track; typing and Return change Hats to the drum kit in its file, one undo step with a toast
+// track; typing and Return change Hats to FM metal in its file, one undo step with a toast
 // whose Undo puts the file back byte for byte; the list ticks what a track plays; Bass's cutoff,
 // set by code, is refused in words with Show code; the strip menu's row does the same; while the
 // code doesn't compile the row is off and says why; a PC page's keys; the lint with the list open.
-// Then drum names: a Drum kit track's clip in Notes names its rows (Kick, Snare, Closed hat) in an
+// Then drum names: a drum machine track's clip (written in code: no list offers it, KIT-2) in Notes
+// names its rows (Kick, Snare, Closed hat) in an
 // 88 px key column, its notes say their drum, a key set for the song never shades its rows (X26),
 // a short note keeps its name on one line inside it, and Keys' roll still says C3 in 56 px. A Lead's
 // card in Device says it plays one note at a time (track pm).
@@ -64,25 +65,29 @@ check(
   first?.title === "Change Hats's instrument" && first.shown === "Change Hats's instrument" && first.placeholder === "Find an instrument…" && first.focused,
   `titled for the track, its search field focused (${JSON.stringify(first)})`,
 );
-check(first?.ticked.length === 0, "Hats plays std/instruments' simple hat, which the list doesn't offer: nothing is ticked");
+check(same(first?.ticked, ["@m2/drums:drum"]), `Hats plays the Drum, which the list ticks (${JSON.stringify(first?.ticked)})`);
 await linted(LIST, "the list in change mode");
 await page.screenshot({ path: `${ROOT}/pl-sounds-list.png` });
-await page.keyboard.type("kit");
-check(await until(async () => (await listInfo())?.active === "std:drum-kit"), "typing kit picks the Drum kit");
-check((await listInfo())?.code === 'tracks/hats.ts · drums.kit(lane.notes("hits"))', `its foot shows the code it writes: ${(await listInfo())?.code}`);
+await page.keyboard.type("metal");
+check(await until(async () => (await listInfo())?.active === "@m2/synths:fm-metal"), "typing metal picks FM metal");
+check((await listInfo())?.code === 'tracks/hats.ts · fm.metal(lane.notes("hits"))', `its foot shows the code it writes: ${(await listInfo())?.code}`);
 const rev0 = await revision();
 await page.keyboard.press("Enter");
-const kit = orig.hats.replace('import { hat } from "std/instruments";', 'import { drums } from "std/drums";').replace('hat(lane.notes("hits"))', 'drums.kit(lane.notes("hits"))');
-check(await until(() => read("tracks/hats.ts") === kit), `Return writes drums.kit(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
-check((await revision()) === rev0 + 1 && read("song.ts") === orig.song, "one revision, and song.ts as it was");
-check(await toasted("Hats plays Drum kit now"), `a toast says "Hats plays Drum kit now" (${await toasts()})`);
+const metal = orig.hats
+  .replace('import { drums } from "@m2/drums";', 'import { fm } from "@m2/synths";')
+  .replace(/drums\.drum\(lane\.notes\("hits"\), \{[^}]*\}\)/, 'fm.metal(lane.notes("hits"))');
+check(await until(() => read("tracks/hats.ts") === metal), `Return writes fm.metal(lane.notes("hits")) in tracks/hats.ts (${read("tracks/hats.ts").split("\n").find((l) => l.includes("track("))})`);
+// The toast says the edit is done: since std 0.6 it writes music2.toml and music2.lock too (PACK-10),
+// so the files may land a moment before the revision does.
+check(await toasted("Hats plays FM metal now"), `a toast says "Hats plays FM metal now" (${await toasts()})`);
+check((await revision()) === rev0 + 1 && read("song.ts") === orig.song, `one revision, and song.ts as it was (${rev0} → ${await revision()})`);
 check(!(await page.$(LIST)), "the list closes");
 // Opened again, the list ticks what it plays now.
 await openMenu("hats");
 await page.click("[data-testid=track-menu] [data-testid=change-instrument]");
 await page.waitForSelector(LIST);
 const again = await listInfo();
-check(same(again?.ticked, ["std:drum-kit"]) && again.active === "std:drum-kit", `opened again, Drum kit is ticked and active (${JSON.stringify(again)})`);
+check(same(again?.ticked, ["@m2/synths:fm-metal"]) && again.active === "@m2/synths:fm-metal", `opened again, FM metal is ticked and active (${JSON.stringify(again)})`);
 await key("Escape");
 check(await until(async () => !(await page.$(LIST))), "Esc closes it");
 check(await clickToastAction("Undo").then(() => until(() => read("tracks/hats.ts") === orig.hats)), "the toast's Undo puts hats.ts back, byte for byte");
@@ -115,7 +120,7 @@ await page.waitForSelector(LIST);
 check((await listInfo())?.title === "Change Keys's instrument", "it opens the list for Keys");
 await page.keyboard.type("fm bell");
 await page.keyboard.press("Enter");
-check(await until(() => read("tracks/keys.ts").includes('fm.bell(lane.notes("chords"))') && read("tracks/keys.ts").includes('import { fm } from "std/fm";')), `Keys plays an FM bell: ${read("tracks/keys.ts").split("\n").find((l) => l.includes("track("))}`);
+check(await until(() => read("tracks/keys.ts").includes('fm.bell(lane.notes("chords"))') && read("tracks/keys.ts").includes('import { fm } from "@m2/synths";')), `Keys plays an FM bell: ${read("tracks/keys.ts").split("\n").find((l) => l.includes("track("))}`);
 check(await toasted("Keys plays FM bell now"), `with its toast (${await toasts()})`);
 await key("Meta+z");
 check(await until(() => read("tracks/keys.ts") === orig.keys), "⌘Z puts keys.ts back");
@@ -143,9 +148,11 @@ async function openClip(lane) {
 const keyLabel = (pitch) => page.$eval(`[data-testid=roll-keys] [data-key="${pitch}"]`, (e) => e.querySelector("span")?.textContent ?? "").catch(() => null);
 const keysWidth = () => page.$eval("[data-testid=roll-keys]", (e) => Math.round(e.getBoundingClientRect().width)).catch(() => null);
 const s0 = await state();
-const added = await post("/track/add", { session: s0.session, component: "std:drum-kit" });
-check(added.status === 200 && added.body.module === "drum-kit", `a Drum kit track is added (${JSON.stringify(added.body).slice(0, 80)})`);
-await until(async () => (await state()).timeline.tracks.some((t) => t.module === "drum-kit"));
+const added = await post("/track/add", { session: s0.session, component: "@m2/drums:drum", key: "drum-kit", label: "Drum machine" });
+check(added.status === 200 && added.body.module === "drum-kit", `a drum machine track is added (${JSON.stringify(added.body).slice(0, 80)})`);
+await until(() => fs.existsSync(`${PROJ}/tracks/drum-kit.ts`));
+write("tracks/drum-kit.ts", read("tracks/drum-kit.ts").replace("drums.drum(", "drums.kit("));
+await until(async () => Object.keys((await state()).timeline.tracks.find((t) => t.module === "drum-kit")?.lanes?.[0]?.names ?? {}).length > 0);
 const s1 = await state();
 const beat = [36, 42, 38, 42].map((pitch, i) => ({ pitch, start: i, length: 0.5, velocity: 0.8 }));
 const wrote = await post("/lane", { session: s1.session, revision: s1.view.revision, module: "drum-kit", lane: "hits", clips: [{ id: "kitbeat1", start: 0, length: 4, notes: beat }] });
@@ -154,6 +161,9 @@ const lanes = (await state()).timeline.tracks.find((t) => t.module === "drum-kit
 check(lanes[0].names?.["36"] === "Kick" && lanes[0].names?.["42"] === "Closed hat", "the timeline names its notes");
 await until(async () => !!(await page.$('[data-lane="drum-kit.hits"] [data-clip]')), 5000);
 check(await openClip("drum-kit.hits"), "its clip opens in Notes");
+// Folded, the roll shows only the drums the beat uses (NOTE-8): Fold off shows every row's name.
+await page.click("[data-testid=fold-rows]");
+await until(async () => !!(await page.$('[data-testid=roll-keys] [data-key="60"]')));
 check((await keyLabel(36)) === "Kick", `key 36 says Kick: ${await keyLabel(36)}`);
 check((await keyLabel(38)) === "Snare" && (await keyLabel(42)) === "Closed hat" && (await keyLabel(46)) === "Open hat", "38 says Snare, 42 Closed hat, 46 Open hat");
 check((await keyLabel(60)) === "" && (await keyLabel(40)) === "", "a row with no name has no label, not even a C");
@@ -195,7 +205,7 @@ const spill = await page.$$eval("[data-testid=notes] [data-note]", (els) =>
 const hatLabel = await page.$eval('[data-testid=notes] [data-note][data-pitch="42"] span', (e) => e.textContent).catch(() => null);
 check(outs > 0 && hatLabel === "Closed hat" && spill.length === 0, `a hat ${Math.round(await hatWidth())} px long keeps its name on one line, inside it: ${spill.join(" | ") || "every name fits"}`);
 for (let i = 0; i < outs; i++) await key("Meta+Equal");
-// A key set for the song never shades a drum kit's rows: a kit has no key (X26, review PL-T3).
+// A key set for the song never shades a drum machine's rows: it has no key (X26, review PL-T3).
 const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
 let layoutWas = null;
 try {
@@ -204,7 +214,7 @@ try {
 write("layout.json", JSON.stringify({ ...(layoutWas ? JSON.parse(layoutWas) : { order: [], tracks: {} }), key: { root: "E", scale: "minor" } }, null, 2));
 check(await until(async () => (await page.$eval("[data-testid=key-field]", (e) => e.textContent).catch(() => null)) === "E minor"), "E minor is set in layout.json");
 await new Promise((r) => setTimeout(r, 300));
-check((await shading()) === "", `the Drum kit's rows stay unshaded, not by E minor nor as black keys: a kit has rows, not keys (next D4c): ${await shading()}`);
+check((await shading()) === "", `the drum machine's rows stay unshaded, not by E minor nor as black keys: it has rows, not keys (next D4c): ${await shading()}`);
 check(await openClip("keys.chords"), "Keys' clip opens in Notes");
 check(await until(async () => (await shading()) === "1,3,5,8,10"), `Keys' roll is shaded by E minor: ${await shading()}`);
 if (layoutWas === null) fs.rmSync(`${PROJ}/layout.json`);
@@ -215,7 +225,7 @@ check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await k
 
 // A Lead plays one note at a time: its card in Device says so under its name, all of it in the tooltip.
 const s2 = await state();
-const lead = await post("/track/add", { session: s2.session, component: "std:synth-lead" });
+const lead = await post("/track/add", { session: s2.session, component: "@m2/synths:synth-lead" });
 await view("graph");
 await until(async () => !!(await page.$(`[data-module-tab="${lead.body.module}"]`)));
 await page.click(`[data-module-tab="${lead.body.module}"] [data-testid=track-label]`);

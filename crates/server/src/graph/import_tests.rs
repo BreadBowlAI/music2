@@ -18,7 +18,7 @@ fn project(name: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("m2-graph-import-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("data/vox")).unwrap();
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"1\"\nstd = \"0.5\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
     std::fs::write(dir.join("music2.toml"), manifest).unwrap();
     std::fs::write(dir.join("song.ts"), SONG).unwrap();
     std::fs::write(dir.join("data/vox/clips.json"), "{\"clips\": []}\n").unwrap();
@@ -40,7 +40,7 @@ fn float_wav(frames: usize) -> (Vec<u8>, Vec<i32>) {
 }
 
 fn opened(dir: &Path) -> (Graph, u64) {
-    let graph = Graph::silent();
+    let graph = Graph::silent().stored();
     let session = graph.open(dir).unwrap()["session"].as_u64().unwrap();
     (graph, session)
 }
@@ -123,6 +123,18 @@ fn a_read_only_window_refuses_an_import() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// FMT-14, FMT-24 (review F2): one import of `kick.flac` (it comes in as `kick.wav`) and `kick.wav`
+// brings both in, one numbered, as one step: each staged file has a part of its own.
+#[test]
+fn one_import_of_a_flac_and_a_wav_of_one_name_lands_both() {
+    let dir = project("one-name");
+    let (graph, session) = opened(&dir);
+    let flac = include_bytes!("../../../../core/runtime/tests/fixtures/flac/16bit-mono.flac");
+    let done = graph.import_audio(session, vec![bytes("kick.flac", flac), bytes("kick.wav", &float_wav(480).0)], onto_vox(0.0)).unwrap();
+    assert_eq!(done["assets"], json!(["kick.wav", "kick 2.wav"]), "{done:#}");
+    assert!(dir.join("assets/kick.wav").exists() && dir.join("assets/kick 2.wav").exists());
+}
+
 // Refused before anything is copied (D16): not an audio lane, not a WAV.
 #[test]
 fn a_refused_import_adds_nothing() {
@@ -135,7 +147,7 @@ fn a_refused_import_adds_nothing() {
     );
     assert!(why.unwrap_err().to_string().contains("no lane `nope`"));
     let why = graph.import_audio(session, vec![bytes("song.mp3", b"ID3 not a wav")], onto_vox(0.0)).unwrap_err().to_string();
-    assert!(why.starts_with("song.mp3 isn't a WAV file. music2 reads WAV files."), "{why}");
+    assert!(why.starts_with("song.mp3 isn't a WAV or FLAC file. music2 reads WAV and FLAC files."), "{why}");
     assert!(std::fs::read_dir(dir.join("assets")).map_or(true, |d| d.count() == 0));
     assert_eq!(clips(&dir), Vec::<Value>::new());
     let _ = std::fs::remove_dir_all(&dir);

@@ -121,7 +121,7 @@ function Dialog({ start, onClose }: { start: SaveAsStart; onClose: () => void })
             <div className="flex items-start gap-2 px-3 py-2 rounded-sm bg-warn-soft text-sm text-warn-strong">
               <TriangleAlert size={14} className="shrink-0 text-warn mt-px" />
               <span>
-                {unsaved === 1 ? "A file has" : `${unsaved} files have`} unsaved edits in the code editor. The copy has the saved files, and the edits are lost.
+                {unsaved === 1 ? "A file has" : `${unsaved} files have`} unsaved edits in the code editor. The copy has the saved files only: the edits stay with this song, which offers them back when it next opens.
               </span>
             </div>
           )}

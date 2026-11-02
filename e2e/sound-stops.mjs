@@ -1,7 +1,8 @@
 // The gaps lane of 8a's live half (RENDER-25): a sound that crashes while the song plays goes
 // silent alone, and the app says which sound, on which track, and what starts it again. On a server
 // of its own, on a copy of first-song, with a copy of std whose `noise` kernel traps at once (a
-// kernel with a bug: e2e/trapwasm.mjs), so only Hats' instrument uses it. Play: the toast names it
+// kernel with a bug: e2e/trapwasm.mjs), and hats written to play on std's noise (trapwasm.mjs'
+// NOISE_HATS), so only Hats' instrument uses it. Play: the toast names it
 // ("The instrument on Hats stopped working…") in words that fit on screen; the song plays on, Kick
 // sounding, Hats silent; it is said once, and listed among the song's problems (`sound.stopped`,
 // with Hats' key: the status popover's list); Stop All Sound (⌘.) starts it again, and it stops
@@ -13,7 +14,7 @@ import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { exe } from "./chrome.mjs";
 import { HEADLESS, REPO } from "./env.mjs";
-import { trapping } from "./trapwasm.mjs";
+import { NOISE_HATS, trapping } from "./trapwasm.mjs";
 
 const [ROOT, HOME] = process.argv.slice(2);
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -54,6 +55,7 @@ check(traps, "the copy of std is a module whose noise kernel traps at once");
 const song = `${ROOT}/song`;
 fs.rmSync(song, { recursive: true, force: true });
 fs.cpSync(`${REPO}/examples/first-song`, song, { recursive: true });
+fs.writeFileSync(`${song}/tracks/hats.ts`, NOISE_HATS);
 
 const file = `${ROOT}/stops.json`;
 fs.rmSync(file, { force: true });

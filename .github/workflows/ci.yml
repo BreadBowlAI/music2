@@ -68,7 +68,7 @@ jobs:
       - run: ci/pr.sh docs
 
   # fmt, actionlint, the gates and docs rules and the PR tier's verdicts, licences, the pool's
-  # models, the web build, std's kernels and std.wasm; RustSec's advisories only when a Cargo.lock
+  # models, the web build, the kernels and their wasm; RustSec's advisories only when a Cargo.lock
   # or deny.toml changed (they change with the date, not the code, so every pull request would go
   # red on the day one is published; nightly.yml checks them every night).
   quick:

@@ -752,7 +752,7 @@ pub fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     let mut session = lab.session(&dir)?;
     let target = call(&session, "tracks/t02.ts", "pluck")?;
     let t = Instant::now();
-    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    session.add_effect(session.accepted().number, &target, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
     let edited = crate::accepted(&session, t.elapsed());
     out.info("compile (not counted)", format!("{:.1} ms", edited.compile.as_secs_f64() * 1e3));
     let (e0, t0) = (a.now(), a.rig.probe().transport.context("the rig has no transport position")?);
@@ -891,7 +891,7 @@ pub fn tails(lab: &mut Lab, kind: Kind, o: &Opts) -> Result<Outcome> {
     let song = lab.compile(&dir)?;
     let mut session = lab.session(&dir)?;
     let target = call(&session, "tracks/t02.ts", "pluck")?;
-    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    session.add_effect(session.accepted().number, &target, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
     let delayed = crate::accepted(&session, std::time::Duration::ZERO);
     let mut out = Outcome::new("G7b tails of untouched tracks", rules("tails"), &format!("{} on {}", kind.name(), o.reference.name()));
     tails_of(lab, kind, o, &song, &delayed, None, &mut out)?;

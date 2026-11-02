@@ -1,20 +1,20 @@
-// std's calls, checked as the app's code editor checks songs (PKG-1, the step 5 design's D15):
-// what the fixtures and templates write, every effect as the editor adds it (its `insert`), and
-// controls left out written back in, positionally or in the options object (D5). A line that
-// should fail carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
+// The calls of std and of the packs music2 ships (@m2/synths, @m2/drums, @m2/effects: PACK-15),
+// checked as the app's code editor checks songs (PKG-1, the step 5 design's D15): what the fixtures
+// and templates write, every effect as the editor adds it (its `insert`), and controls left out
+// written back in, positionally or in the options object (D5). A line that should fail carries
+// `@ts-expect-error`, so a type that stops refusing it fails the check too.
 
-import { db, hz, khz, ms, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
+import { db, hz, khz, kernel, ms, poly, secs, semis, type Audio, type Control, type Events, type Region, type Signal } from "@m2/core";
+import { drums } from "@m2/drums";
+import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { bass, fm, pad, pluck, synth } from "@m2/synths";
 import { choose, lfo, when } from "std/control";
-import { adsr, follow, gain, noise, osc, pan, svf, vca } from "std/dsp";
+import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
-import { bitcrush, chorus, compress, delay, drive, duck, eq3, limit, phaser, reverb, tremolo, widen } from "std/fx";
-import { drums } from "std/drums";
-import { fm } from "std/fm";
-import { bass, hat, kick, pad, pluck } from "std/instruments";
+import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
-import { mono, synth } from "std/synth";
 
 declare const x: Audio, notes: Events, beats: Control<"beats">, l: Control<"unit01">, pitch: Control<"semitones">, s: Signal;
 
@@ -43,12 +43,12 @@ export const written = [
   xrange(lfo(beats, { period: 0.5 }), hz(200), khz(2.5)),
   bass(notes, { cutoff: blend(s, s, l) }),
   bass(notes, { cutoff: hz(420), drive: 3 }),
-  hat(notes),
-  hat(notes, { decay: ms(40) }),
+  drums.drum(notes, { drum: "hats" }),
+  drums.drum(notes, { drum: "hats", decay: 0.9 }),
   pluck(notes),
   pluck(notes, { brightness: hz(4200) }),
   pad(notes, { cutoff: hz(1600) }),
-  kick(notes),
+  drums.drum(notes),
   follow(x, { release: ms(150) }),
   adsr(l, { attack: ms(1), decay: ms(160), sustain: 0, release: ms(80) }),
   vca(svf.bandpass(noise(3), hz(1500), 1.2), scale(l, scale(l, 2))),
@@ -57,18 +57,21 @@ export const written = [
   reverb(x, { size: 0.6, mix: 0.2 }),
 ];
 
-// The instruments of std/synth, std/fm and std/drums: bare, with knobs and settings written,
-// and mono() around a voice of one's own.
+// The instruments of @m2/synths and @m2/drums: bare, with knobs and settings written, and
+// std's mono() around a voice of one's own.
 export const instruments: Audio[] = [
   synth.custom(notes),
   synth.custom(notes, { unison: 7, detune: 0.4, filterEnv: 2, filterDecay: ms(250), voices: 1, glide: ms(80) }),
+  // The wave shape, a choice: its names, or a lane of them.
+  synth.custom(notes, { shape: "sine", resonance: 0.4 }),
+  synth.lead(notes, { shape: "square", attack: ms(10), sustain: 0.7 }),
   synth.supersaw(notes, { detune: 0.5, cutoff: khz(12), release: secs(0.5) }),
   synth.lead(notes, { glide: ms(80), vibrato: semis(0.2) }),
   synth.lead(notes, { voices: 4 }),
   synth.pad(notes, { attack: secs(1), cutoff: l }),
   synth.pluck(notes, { brightness: hz(6000), decay: 0.3 }),
   synth.sub(notes, { drop: semis(12), drive: db(9), glide: ms(50), decay: secs(1.5) }),
-  synth.bass(notes, { cutoff: hz(500), bite: 2, decay: ms(150), glide: ms(30), velSens: 0.6 }),
+  synth.bass(notes, { cutoff: hz(500), bite: 2, biteDecay: ms(150), glide: ms(30), velSens: 0.6, release: ms(120) }),
   synth.strings(notes, { ensemble: 0.7 }),
   fm.custom(notes, { carrierA: 2, modulatorA: 3.5, amountA: 3, feedback: 0.3, drop: semis(5), voices: 6 }),
   fm.custom(notes, { voices: 1 }),
@@ -76,15 +79,11 @@ export const instruments: Audio[] = [
   fm.bell(notes, { decay: secs(6) }),
   fm.metal(notes, { drop: semis(12), feedback: 0.6, decay: ms(300) }),
   drums.kit(notes, { kickTune: hz(52), hatDecay: ms(30), drive: db(6), hatLevel: db(4), kickLevel: db(-2) }),
-  drums.kick(notes, { tune: 50, punch: 0.8 }),
-  drums.snare(notes, { snap: 0.8 }),
-  drums.clap(notes),
-  drums.hats(notes, { decay: ms(40), openDecay: ms(600) }),
-  drums.tom(notes, { tune: hz(110) }),
-  drums.rim(notes),
-  drums.cowbell(notes),
-  drums.cymbal(notes, { decay: secs(2.5) }),
-  drums.shaker(notes),
+  // The Drum from its menu, a setting; its knobs move the drum it plays.
+  drums.drum(notes),
+  drums.drum(notes, { drum: "snare", punch: 0.2 }),
+  drums.drum(notes, { drum: "tom", tune: semis(-3), decay: 1.5, voices: 8 }),
+  drums.drum(notes, { drum: "cymbal", drive: db(6) }),
   mono(notes, (n) => vca(osc.saw(n.pitch), adsr(n.gate)), { glide: ms(60) }),
   mono(notes, (n) => osc.square(n.pitch)),
   sampler(notes, { sample: "pluck.wav", mode: "gate", velocity: 0.5 }),
@@ -99,6 +98,11 @@ export const instruments: Audio[] = [
   }),
   sampler(notes, { regions: [take("C4-1.wav", 60, 2, 1), take("C4-2.wav", 60, 2, 2), ...piano, ...keyUps] }),
   sampler(notes, { regions: piano }),
+  // A turn for each key (PKG-16 §3, std 0.6.0), and a voice that reads its note's key count.
+  sampler(notes, { regions: piano, turns: "key" }),
+  poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, count: n.keyCount })),
+  // @ts-expect-error: turns are "lane" or "key".
+  sampler(notes, { regions: piano, turns: "note" }),
   // @ts-expect-error: a region needs a file.
   sampler(notes, { regions: [{ root: 60 }] }),
   // @ts-expect-error: a trigger is "attack" or "release".
@@ -162,7 +166,7 @@ export const inserted = [
   delay(x, { time: secs(0.5), mix: 0.3 }),
   duck(x, l, { depth: -6 }),
   bass(notes, { drive: 6, voices: 2 }),
-  kick(notes, { tune: 50, decay: s }),
+  drums.drum(notes, { tune: 5, decay: s }),
   master(x, { ceiling: -3 }),
   lfo(beats, { period: 2, phase: 0.25, shape: "tri" }),
   adsr(l, { attack: 0.01 }),
@@ -193,6 +197,12 @@ mtof();
 synth.supersaw(notes, { glide: ms(80) });
 // @ts-expect-error a signal for the unison count, a setting
 synth.custom(notes, { unison: l });
+// @ts-expect-error a wave shape the synth doesn't have
+synth.custom(notes, { shape: "noise" });
+// @ts-expect-error a drum the Drum's menu doesn't offer
+drums.drum(notes, { drum: "gong" });
+// @ts-expect-error the old single drums are the Drum's menu now
+drums.kick(notes);
 // @ts-expect-error the kit's knobs are named by their drum
 drums.kit(notes, { tune: 52 });
 // @ts-expect-error the 808's drop was called punch once

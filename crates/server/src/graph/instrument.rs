@@ -6,7 +6,7 @@ use serde_json::Value;
 use super::Graph;
 
 impl Graph {
-    /// Change track `module`'s instrument to `component` (`std:synth-pad`): its one instrument call
+    /// Change track `module`'s instrument to `component` (`@m2/synths:synth-pad`): its one instrument call
     /// becomes a call of that one, reading the same notes, at its own settings. One Tx and one undo
     /// step, labelled "Bass plays Pad". Refused in words when the track has no instrument call of
     /// its own, two, a plugin, or a setting the code computes.

@@ -11,6 +11,9 @@
 //! - `songs`: where new songs go (and Exports with them); null is `~/Music/music2`.
 //! - `samples` (LIB-5): `["/Users/me/Samples"]`, your sample folders, whose WAV files the library
 //!   lists. Left out while there are none.
+//! - `registry` (REG-11): `"https://…"`, the registry ⌘F's From the library reads, when
+//!   `M2_REGISTRY` names none; left out, the default (none until the owner picks the bucket's
+//!   address). Read as the app starts.
 //! - `record` (lane B, Q18): `{"count_in": true, "quantize": false}`: Record counts in one bar first,
 //!   and snaps the take's notes to Notes' grid. Left out while both are the defaults.
 //! - `midi` (lane B, Q28): `{"off": ["Keystation 49"]}`: the MIDI keyboards turned off, by the names
@@ -43,6 +46,9 @@ pub struct Kept {
     /// Your sample folders (LIB-5).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<PathBuf>,
+    /// The registry's address (REG-11), when it isn't the default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registry: Option<String>,
     /// Record's options (lane B).
     #[serde(default, skip_serializing_if = "RecordKept::is_default")]
     pub record: RecordKept,
@@ -86,15 +92,25 @@ pub struct RecordKept {
     pub count_in: bool,
     #[serde(default)]
     pub quantize: bool,
+    /// Record only between the loop's edges (MON-10); written only when on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub punch: bool,
+    /// A notes take goes into the clip under it (MON-12); written only when on.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub overdub: bool,
 }
 
 fn yes() -> bool {
     true
 }
 
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 impl Default for RecordKept {
     fn default() -> RecordKept {
-        RecordKept { count_in: true, quantize: false }
+        RecordKept { count_in: true, quantize: false, punch: false, overdub: false }
     }
 }
 
@@ -238,7 +254,7 @@ mod tests {
         let t = Temp::new("record");
         let file = t.0.join("settings.json");
         let s = Settings::new(file.clone());
-        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: false }, "counts in, doesn't snap");
+        assert_eq!(s.read().record, RecordKept::default(), "counts in, doesn't snap");
         assert!(s.read().midi.off.is_empty());
         s.change(|k| k.songs = Some("/x".into())).unwrap();
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -246,7 +262,7 @@ mod tests {
         s.change(|k| (k.record.count_in, k.record.quantize) = (false, true)).unwrap();
         s.change(|k| k.midi.off = vec!["Keystation 49".into()]).unwrap();
         let again = Settings::new(file.clone()).read();
-        assert_eq!(again.record, RecordKept { count_in: false, quantize: true });
+        assert_eq!(again.record, RecordKept { count_in: false, quantize: true, ..RecordKept::default() });
         assert_eq!(again.midi.off, ["Keystation 49"]);
         assert_eq!(again.songs.as_deref(), Some(Path::new("/x")), "the others are kept");
         let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
@@ -264,7 +280,21 @@ mod tests {
         assert_eq!(s.read().input, kept.input, "read back");
         // Half a record object reads with the other half's default.
         std::fs::write(&file, r#"{"record": {"quantize": true}}"#).unwrap();
-        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true });
+        assert_eq!(s.read().record, RecordKept { count_in: true, quantize: true, ..RecordKept::default() });
+    }
+
+    // REG-11: the registry the settings name is read, and kept through a change of another
+    // setting: a file written whole never drops it.
+    #[test]
+    fn the_registry_in_the_settings_is_kept_through_a_change() {
+        let t = Temp::new("registry");
+        let file = t.0.join("settings.json");
+        std::fs::write(&file, r#"{"registry": "https://packs.example"}"#).unwrap();
+        let s = Settings::new(file.clone());
+        assert_eq!(s.read().registry.as_deref(), Some("https://packs.example"));
+        s.change(|k| k.songs = Some("/x".into())).unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&std::fs::read(&file).unwrap()).unwrap();
+        assert_eq!(json["registry"], serde_json::json!("https://packs.example"));
     }
 
     // A file that doesn't read (half written by an older build, or edited by hand) is the

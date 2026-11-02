@@ -28,7 +28,10 @@ use serde_json::{Value, json};
 
 use crate::app;
 
-const USAGE: &str = "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]";
+/// How `m2 listen` is called: its usage in the one table (AGENT-12).
+fn usage() -> &'static str {
+    crate::commands::find("listen").map_or("", |c| c.usage)
+}
 /// Bars rendered before the range and dropped (RENDER-4).
 const PREROLL_BARS: u64 = 2;
 /// How long `m2 listen` waits for the open app's answer before it reads the song's files instead.
@@ -55,20 +58,20 @@ fn args(all: &[String]) -> Result<Args> {
     while let Some(arg) = it.next() {
         if !arg.starts_with("--") {
             if dir.is_some() {
-                bail!("m2 listen takes one song, not `{arg}` too: {USAGE}");
+                bail!("m2 listen takes one song, not `{arg}` too: {}", usage());
             }
             dir = Some(PathBuf::from(arg));
             continue;
         }
         if seen.contains(&arg.as_str()) {
-            bail!("{arg} is named twice: {USAGE}");
+            bail!("{arg} is named twice: {}", usage());
         }
         seen.push(arg);
         let mut value = || -> Result<String> {
             match it.next() {
                 Some(v) if !v.starts_with("--") => Ok(v.clone()),
-                Some(v) => bail!("{arg} needs a value, not the flag {v}: {USAGE}"),
-                None => bail!("{arg} needs a value: {USAGE}"),
+                Some(v) => bail!("{arg} needs a value, not the flag {v}: {}", usage()),
+                None => bail!("{arg} needs a value: {}", usage()),
             }
         };
         match arg.as_str() {
@@ -87,10 +90,10 @@ fn args(all: &[String]) -> Result<Args> {
             "--png" => a.png = Some(PathBuf::from(value()?)),
             "--as-heard" => a.as_heard = true,
             "--json" => a.json = true,
-            other => bail!("m2 listen doesn't know {other}: {USAGE}"),
+            other => bail!("m2 listen doesn't know {other}: {}", usage()),
         }
     }
-    a.dir = dir.context(USAGE)?;
+    a.dir = dir.context(usage())?;
     Ok(a)
 }
 

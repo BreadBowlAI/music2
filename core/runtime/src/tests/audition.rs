@@ -53,7 +53,7 @@ fn a_live_note_sounds_and_ends() {
 fn probed(data: &DataSet) -> (Rig, u64, m2_plugins::Handle) {
     m2_plugins::test_main_thread();
     probe::install();
-    let mut pk = std_packages();
+    let mut pk = own_packages();
     let mut ir = song(
         json!([{"id": "n", "op": "lane", "lane": "notes"}, {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "n"}}]),
         "p",
@@ -129,12 +129,12 @@ fn a_live_note_survives_stop_seek_and_wrap() {
 #[test]
 fn a_live_note_moves_with_its_lane_across_an_activation() {
     let plain = synth(0.05, json!([]), "v");
-    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "std:delay", "inputs": {"in": "v"}}]), "d");
+    let delayed = synth(0.05, json!([{"id": "d", "op": "kernel", "kernel": "@m2/effects:delay", "inputs": {"in": "v"}}]), "d");
     let data = DataSet::empty();
     // Notes enough to outgrow the scheduler: 300 at beat 64.
     let many: Vec<Value> = (0..300).map(|k| json!({"pitch": k % 100, "start": 64, "length": 1})).collect();
     let grown = with_notes(json!({"clips": [{"id": "c", "start": 0, "length": 128, "notes": many}]}), at_bpm(120.0));
-    let pk = std_packages();
+    let pk = own_packages();
     let (p, d) = (flat(&plain), flat(&delayed));
     let (mut rig, g) = rig(&plain, &data);
     rig.cmd(Cmd::Play);
@@ -164,7 +164,7 @@ fn a_live_note_moves_with_its_lane_across_an_activation() {
 #[test]
 fn a_replaced_consumer_ends_its_live_notes() {
     let (gated, enveloped) = (synth(0.0, json!([]), "v"), synth(0.05, json!([]), "v"));
-    let pk = std_packages();
+    let pk = own_packages();
     let (mut rig, g) = rig(&gated, &DataSet::empty());
     rig.send(on(g, 1, 7, 69.0));
     assert!(peak(&rig.run(8 * BLOCK)) > 0.5);
@@ -395,4 +395,24 @@ fn a_plugin_hears_the_bend_as_midi() {
     let kinds: Vec<(i64, Note)> = notes.iter().map(|n| (n.0, n.1)).collect();
     assert_eq!(kinds, [(0, Note::Midi), (0, Note::Midi), (0, Note::On)], "{notes:?}");
     assert_eq!((notes[0].2, notes[1].2), (midi([0xE0, 0x7F, 0x7F]), midi([0xB0, 1, 100])));
+}
+
+// RENDER-37: a plugin gets the pedal as MIDI, in order with its notes, and each note's Off when its
+// key is let go: the voices' holding is a poly's, never the plugin's.
+#[test]
+fn a_plugin_gets_the_pedal_and_its_offs_on_time() {
+    let (mut rig, g, h) = probed(&DataSet::empty());
+    rig.send(wheel(g, 1, [0xB0, 64, 127]));
+    rig.send(on(g, 1, 7, 60.0));
+    rig.run(BLOCK);
+    rig.send(off(g, 1, 7));
+    rig.run(BLOCK);
+    rig.send(wheel(g, 1, [0xB0, 64, 0]));
+    rig.run(BLOCK);
+    let notes = probe::stats(h).unwrap().notes();
+    let kinds: Vec<(i64, Note)> = notes.iter().map(|n| (n.0, n.1)).collect();
+    let midi = |b: [u8; 3]| i32::from_le_bytes([b[0], b[1], b[2], 0]);
+    let at = |block: i64| block * BLOCK as i64;
+    assert_eq!(kinds, [(at(0), Note::Midi), (at(0), Note::On), (at(1), Note::Off), (at(2), Note::Midi)], "{notes:?}");
+    assert_eq!((notes[0].2, notes[3].2), (midi([0xB0, 64, 127]), midi([0xB0, 64, 0])));
 }

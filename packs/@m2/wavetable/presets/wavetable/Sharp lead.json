@@ -1,0 +1,22 @@
+{
+  "m2preset": 1,
+  "name": "Sharp lead",
+  "sound": "@m2/wavetable:wavetable",
+  "values": {
+    "attack": 0.004,
+    "cutoff": 3000,
+    "filterDecay": 0.3,
+    "filterEnv": 2,
+    "filterSustain": 0.4,
+    "keytrack": 0.6,
+    "levelB": 0.5,
+    "lfoPosition": 0.05,
+    "lfoRate": 5.5,
+    "pitchB": 0.08,
+    "positionA": 0.85,
+    "positionB": 0.67,
+    "q": 2,
+    "release": 0.2,
+    "velSens": 0.4
+  }
+}

@@ -101,7 +101,8 @@ fn every_declared_control_is_a_knob() {
                         );
                     }
                     if let Some([lo, hi]) = k.range {
-                        assert!(lo <= k.value && k.value <= hi, "{at}: {} is outside {lo}..{hi}", k.value);
+                        let v = k.value.as_f64().unwrap_or_else(|| panic!("{at}: {} isn't a number", k.value));
+                        assert!(lo <= v && v <= hi, "{at}: {v} is outside {lo}..{hi}");
                     }
                     if !k.written {
                         assert_eq!(*node, format!("{}#{}", site.file, site.ordinal), "{at}: on its call");
@@ -138,7 +139,7 @@ fn knob_unit_is_the_constants() {
     let knobs: Vec<&Knob> = view.modules[0].nodes.iter().flat_map(|n| &n.knobs).collect();
     let knob = |label: &str| knobs.iter().find(|k| k.label == label).unwrap_or_else(|| panic!("no {label} in {knobs:?}"));
     assert_eq!((knob("freq").unit, knob("freq").range, knob("freq").log), (Some(Unit::Semitones.name()), Some([0.0, 127.0]), false));
-    assert_eq!((knob("gain").unit, knob("gain").range, knob("gain").default), (Some(Unit::Unit01.name()), None, None));
+    assert_eq!((knob("gain").unit, knob("gain").range, knob("gain").default.clone()), (Some(Unit::Unit01.name()), None, None));
 }
 
 // D4, D10: one literal reaching two slots (`const g = frac(0.3)` given to a delay's feedback and
@@ -150,7 +151,7 @@ fn a_shared_literal_is_one_control() {
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { frac, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"std/fx\";\n\
+        "import { frac, song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { delay } from \"@m2/effects\";\n\
          export default song(() => {\n  const g = frac(0.3);\n  return delay(osc.saw(110), { feedback: g, mix: g });\n});\n",
     );
     let s = f.open();
@@ -164,9 +165,10 @@ fn a_shared_literal_is_one_control() {
     assert_eq!((knobs[0].slot.as_deref(), knobs[0].range), (None, None), "the two slots declare other ranges");
 }
 
-// HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home. The
-// view is checked as it is sent, so a value without the field fails; so is the timeline, whose tempo
-// and time signatures live in `data/arrangement.json` (8b.2).
+// HOME-1 (a CI gate from step 5): every value `controls()` and the view return names its home, a
+// card's settings included (CARD-1). The view is checked as it is sent, so a value without the
+// field fails; so is the timeline, whose tempo and time signatures live in `data/arrangement.json`
+// (8b.2).
 #[test]
 fn every_value_names_its_home() {
     for (name, f) in FIXTURES.iter().map(|n| (*n, fixture(n))).chain([("every-component", every_component())]) {
@@ -177,7 +179,9 @@ fn every_value_names_its_home() {
         let view = serde_json::to_value(s.view()).unwrap();
         let mut values = 0;
         for n in view["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap()) {
-            for v in n["knobs"].as_array().unwrap().iter().chain(n["readonly"].as_array().unwrap()) {
+            // A card's settings too (CARD-1), sent only when it has some.
+            let settings = n["settings"].as_array().into_iter().flatten();
+            for v in n["knobs"].as_array().unwrap().iter().chain(n["readonly"].as_array().unwrap()).chain(settings) {
                 assert_eq!(v["home"], "code", "{name}: {v}");
                 values += 1;
             }
@@ -201,7 +205,7 @@ impl StdCopy {
     }
 
     fn packages(&self) -> m2_runtime::PackageSet {
-        let mut p = m2_runtime::PackageSet::default();
+        let mut p = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
         p.load(&self.0.0).unwrap();
         p
     }
@@ -219,15 +223,15 @@ fn a_broken_package_module_still_opens() {
         // filter.ts and fx.ts import neither the other, nor does any module import both.
         let filter = std::fs::read_to_string(dir.join("src/filter.ts")).unwrap();
         let another =
-            "\nexport const echo = component({ id: \"delay\", inputs: { in: port.audio() }, output: port.audio() }, (x: Audio) => x);\n";
+            "\nexport const echo = component({ id: \"limit\", inputs: { in: port.audio() }, output: port.audio() }, (x: Audio) => x);\n";
         std::fs::write(dir.join("src/filter.ts"), format!("{filter}{another}")).unwrap();
     });
     let f = Fixture::new();
     f.write("music2.toml", crate::testing::MANIFEST);
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { kick } from \"std/instruments\";\n\
-         const k = track(\"kick\", ({ lane }) => kick(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
+        "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\
+         const k = track(\"kick\", ({ lane }) => drums.drum(lane.notes(\"hits\")));\nexport default song(() => k.out);\n",
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
@@ -235,9 +239,9 @@ fn a_broken_package_module_still_opens() {
     assert!(invalid.iter().any(|m| m.contains("std/control") && m.contains("broken on purpose")), "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
-    assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:delay"));
-    assert!(catalog.components.contains_key("std:kick") && catalog.components.contains_key("std:reverb"));
-    assert!(s.effects().iter().all(|e| e.component != "std:delay"));
+    assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
+    assert!(catalog.components.contains_key("@m2/synths:pluck") && catalog.components.contains_key("std:compress"));
+    assert!(s.effects().iter().all(|e| e.component != "std:limit"));
     let rev = s.accepted();
     let r = m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(0.1).unwrap();
     assert_eq!(r.len(), 4800, "the song plays");
@@ -278,11 +282,12 @@ const SPELLED: [(&str, &str); 2] =
 
 // Critique 1 of the step 5 design, D5, D11, PKG-1: every call the planners write type-checks as
 // the code editor checks songs (strict, against the SDK and std sources). On every-component,
-// each control a call leaves out is written in (a number as a value edit writes it, and a signal's
-// name as `connect` does), each effect is added, and each instrument + Track lists is added as a
+// each control a call leaves out is written in (a number as a value edit writes it, a choice's name
+// or a switch's true or false, and a number's signal by name as `connect` does), each effect is added, and each instrument + Track lists is added as a
 // new track's `track(…)` call (8b.1); each mixer channel with no pan gets its first pan, and each
 // that leaves out its fader gets one in the style of a mixer whose other entries write `db(…)`
-// (8b.3b); every call so written is listed in tests/forms/forms.ts, which must be as recorded
+// (8b.3b), and each kit's tracks are added with their values (KIT-5); every call so written is
+// listed in tests/forms/forms.ts, which must be as recorded
 // here. `tsc -p crates/editor/tests/forms` type-checks it with web's tsc, in web's
 // `npm run typecheck` and so in `npm run build`.
 #[test]
@@ -301,8 +306,17 @@ fn planned_call_forms_are_current() {
     for c in &inherited {
         let call = site(c.origin.site);
         let slot = c.origin.slot().unwrap();
-        let value = c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() });
+        // A choice's value is written as its name and a switch's as true or false (CARD-21); no
+        // cable of a number reaches either (CARD-12).
+        let steps = c.unit.filter(|u| !u.is_number());
+        let value = match steps {
+            Some(u) => crate::kind::said(Some(u), c.value).expect("one of its places").to_string(),
+            None => c.number(&if c.value == 0.0 { "0".to_string() } else { c.value.to_string() }),
+        };
         for (what, written) in [("a value", value.as_str()), ("a cable", "wobble")] {
+            if steps.is_some() && written == "wobble" {
+                continue;
+            }
             let Some(edits) = c.planned(written) else { continue };
             if written == "wobble" && edits[0].0 < wobble_end {
                 continue;
@@ -349,8 +363,33 @@ fn planned_call_forms_are_current() {
         let binding = crate::tracks::instrument_binding(&i);
         assert!(imported.contains(binding), "every-component doesn't import {binding}, which a track playing {} imports", i.component);
         let key = crate::keys::propose(&i.label, |_| false);
-        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label)));
+        forms.push(format!("    // {} added as a track\n    {},\n", i.component, crate::tracks::track_call_text(&i, &key, &i.label, "")));
     }
+    // Each kit's tracks (KIT-5), each call with the kit's values, under the key and name it proposes.
+    for k in crate::drums::presets(&s) {
+        let i = s.instruments().into_iter().find(|i| i.component == k.component).expect("the kit's instrument");
+        let d = &s.catalog().components[&k.component];
+        for t in &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks {
+            let (values, ctors) = crate::tracks::values_text(d, &t.values, &[], &s.accepted().compiled.units).unwrap();
+            assert!(ctors.is_empty(), "every-component imports no unit for {}'s {}", k.name, t.name);
+            let key = crate::keys::propose(&t.name, |_| false);
+            forms.push(format!(
+                "    // {}'s {} added as a track\n    {},\n",
+                k.name,
+                t.name,
+                crate::tracks::track_call_text(&i, &key, &t.name, &values)
+            ));
+        }
+    }
+    // + Drum in the beat grid (KIT-15): a Drum track playing the sound picked.
+    let drum = s.instruments().into_iter().find(|i| i.component == crate::drums::DRUM).expect("the Drum is listed");
+    let d = &s.catalog().components[crate::drums::DRUM];
+    let snare = crate::kits::sound_value(d, "snare").expect("the Drum's snare");
+    let (values, _) = crate::tracks::values_text(d, &[snare], &[], &s.accepted().compiled.units).unwrap();
+    forms.push(format!(
+        "    // + Drum: a Drum playing a snare\n    {},\n",
+        crate::tracks::track_call_text(&drum, "snare", "Snare", &values)
+    ));
     // An installed instrument plugin added as a track (gaps #32), as the probe.
     forms.push(format!(
         "    // clap:m2.probe added as a track\n    {},\n",
@@ -362,7 +401,7 @@ fn planned_call_forms_are_current() {
     for kind in crate::bus::BusKind::ALL {
         let name = crate::bus::bus_import(kind);
         assert!(imported.contains(name), "every-component doesn't import {name}, which a {kind:?} bus imports");
-        forms.push(format!("    // a {kind:?} bus added\n    {},\n", crate::bus::bus_call_text(kind, "bus", &format!("{kind:?}"))));
+        forms.push(format!("    // a {kind:?} bus added\n    {},\n", crate::bus::bus_call_text(kind, "bus", &format!("{kind:?}"), "")));
     }
     let (body, ret) = rest.split_once("  return ").expect("its return");
     let text = format!(

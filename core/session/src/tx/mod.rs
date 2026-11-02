@@ -31,6 +31,8 @@ mod hook_tests;
 #[cfg(test)]
 mod kill_tests;
 #[cfg(test)]
+mod lands_tests;
+#[cfg(test)]
 mod muted_tests;
 #[cfg(test)]
 mod props;
@@ -43,7 +45,7 @@ mod steps_tests;
 #[cfg(test)]
 mod take_tests;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
@@ -292,6 +294,29 @@ pub(crate) enum Blocked {
     Changed,
 }
 
+/// The files whose ids `tx` moves (AGENT-2), judged by the kind of change it is, never by comparing
+/// ids: none for one the app's planner wrote values in place with, adding no call (`in_place`: a
+/// knob, a menu, a switch); for any other, every code file it touches, and every file or folder it
+/// removes or renames (a track's `data/<module>/`). No id names the manifest, the arrangement, a
+/// lane's clips and notes, or the presentation (`layout.json`).
+pub fn moves(tx: &Tx) -> BTreeSet<String> {
+    if tx.in_place {
+        return BTreeSet::new();
+    }
+    let mut out = BTreeSet::new();
+    for op in &tx.ops {
+        let still = match op {
+            Op::Clips { .. } => true,
+            Op::TextEdit { file, .. } | Op::Write { file, .. } => file.class() != Class::Code,
+            Op::Remove { .. } | Op::Rename { .. } => false,
+        };
+        if !still {
+            out.extend(op.paths().iter().map(|p| p.to_string()));
+        }
+    }
+    out
+}
+
 /// An undo step made of a Tx: its inverse, ready to commit (WRITE-21).
 #[derive(Clone, Debug)]
 pub(crate) struct TxStep {
@@ -316,12 +341,65 @@ pub(crate) struct TxStep {
     /// (AGENT-2): both follow it through undo and redo.
     pub id: u64,
     pub source: crate::session::Source,
+    /// The hash each file it touches held before its change, None where there was none: what its
+    /// undo puts back (WRITE-23). A file it touches that isn't here held what the step left.
+    pub before: BTreeMap<TxPath, Option<Sha>>,
+    /// The before-images it names in `.music2/tx/blobs/`, each with its size, read when it is
+    /// recorded: undo's bound for them counts each once (WRITE-26).
+    pub images: Vec<(Sha, u64)>,
+    /// The name of its record in `.music2/undo/`, once written (WRITE-25).
+    pub record: Option<Sha>,
+    /// The files whose ids its change moved, by its kind ([`moves`]): what its undo and its redo
+    /// move too (AGENT-2).
+    pub moved: BTreeSet<String>,
+    /// Its revision also took in a change made elsewhere: a file saved outside the app, read as the
+    /// commit's baseline (R2), rode along (AGENT-2).
+    pub mixed: bool,
+    /// Its change moved beats (`Tx::beats`): its undo and its redo do too (AGENT-2).
+    pub beats: bool,
 }
 
 impl TxStep {
     pub fn new(inverse: Tx, raw: bool, data_only: bool, file: String) -> TxStep {
         let size = retained(&inverse);
-        TxStep { inverse, raw, data_only, file, size, made: 0, name: None, id: 0, source: crate::session::Source::Page }
+        let source = crate::session::Source::Page;
+        let moved = moves(&inverse);
+        TxStep {
+            inverse,
+            raw,
+            data_only,
+            file,
+            size,
+            made: 0,
+            name: None,
+            id: 0,
+            source,
+            before: BTreeMap::new(),
+            images: vec![],
+            record: None,
+            moved,
+            mixed: false,
+            beats: false,
+        }
+    }
+
+    /// [`TxStep::new`] for a Tx whose disk work was `targets`: what each held before is what its
+    /// undo puts back.
+    fn of_targets(inverse: Tx, raw: bool, data_only: bool, file: String, targets: &[Target]) -> TxStep {
+        let mut step = TxStep::new(inverse, raw, data_only, file);
+        for t in targets {
+            let held: Vec<(&str, Option<Sha>)> = match t {
+                Target::Write { path, before, .. } => vec![(path, before.as_ref().map(|b| b.sha))],
+                Target::Remove { path, before } => vec![(path, Some(before.sha))],
+                Target::Rename { from, to, hash, .. } => vec![(from, Some(*hash)), (to, None)],
+            };
+            for (path, sha) in held {
+                if let Ok(p) = TxPath::new(path) {
+                    step.before.insert(p, sha);
+                }
+            }
+        }
+        step
     }
 
     /// The before-images in `blobs/` it needs.
@@ -745,7 +823,7 @@ impl Session {
     /// the expectation: that is how an agent learns the hash (WRITE-11), and how a planner probes
     /// a candidate.
     pub fn check(&mut self, tx: &Tx) -> Result<Checked, Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let mut p = self.prepare(tx, &currents)?;
         let seen = matches!(tx.expect, Expect::Seen(_));
         if !seen {
@@ -761,7 +839,7 @@ impl Session {
     /// commit is when `raw`. A judged one is kept for the commit of the same Tx that may follow, as
     /// [`Session::check`] keeps it.
     pub(crate) fn built(&mut self, tx: &Tx, raw: bool) -> Result<Arc<Revision>, Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let mut p = self.prepare(tx, &currents)?;
         let candidate = p.candidate.clone();
         if !raw {
@@ -788,7 +866,7 @@ impl Session {
             assert(self, &checked).map_err(Uncommitted::Asserted)?;
             return self.commit(tx).map_err(refused);
         }
-        let currents = self.read_all(&tx).map_err(refused)?;
+        let currents = self.read_all(&tx, false).map_err(refused)?;
         let mut p = self.prepare(&tx, &currents).map_err(refused)?;
         // The expectation is judged before the assertion, as `check` does, except on `Seen`.
         let seen = matches!(tx.expect, Expect::Seen(_));
@@ -885,7 +963,7 @@ impl Session {
         if raw || journal {
             return self.commit_raw(tx);
         }
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, false)?;
         let key = self.key(tx, &currents);
         // What check built is reused when nothing moved since; the expectation is judged here
         // either way (a check on `Seen` never judged it).
@@ -902,8 +980,9 @@ impl Session {
     }
 
     /// Steps 2 to 4 and the disk checks of WRITE-3a: the Tx's shape, the draft rule, and every
-    /// target as it is on disk now.
-    fn read_all(&mut self, tx: &Tx) -> Result<BTreeMap<TxPath, Current>, Refusal> {
+    /// target as it is on disk now. `raw`: committed unjudged (`commit_raw`), so one that makes the
+    /// files the revision that plays goes ahead whatever the draft's errors (WRITE-21a).
+    fn read_all(&mut self, tx: &Tx, raw: bool) -> Result<BTreeMap<TxPath, Current>, Refusal> {
         tx.validate().map_err(rejected)?;
         let touched = tx.touched();
         // A Tx touching an interrupted commit's targets waits until it is finished or discarded,
@@ -936,7 +1015,7 @@ impl Session {
             // The draft rule (C7): a Tx touching code needs the draft's code to compile; one
             // touching only data needs an accepted code revision to read its lanes against.
             let code = touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest));
-            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() {
+            if (code || self.accepted.code_rev == 0) && !self.draft_errors.is_empty() && !(raw && self.lands_on_accepted(tx)) {
                 let mut d = built(self.draft_errors.clone());
                 if !code {
                     d.insert(0, Diagnostic::error("code.build", "the project's code has never compiled, so its lanes aren't known yet"));
@@ -1038,7 +1117,7 @@ impl Session {
     }
 
     /// Step 5: the bases, and each op applied to the current content.
-    fn plan(&self, tx: &Tx, currents: &BTreeMap<TxPath, Current>, decls: &m2_song::Decls) -> Result<Planned, Refusal> {
+    fn plan(&self, tx: &Tx, currents: &BTreeMap<TxPath, Current>, decls: &m2_song::Decls, raw: bool) -> Result<Planned, Refusal> {
         let mut conflicts: Vec<ConflictFile> = vec![];
         let mut planned = Planned {
             news: vec![],
@@ -1057,8 +1136,10 @@ impl Session {
         // interrupted commit itself left the code broken, everything waits, and Finish and
         // Discard must still apply.
         let recovery = matches!(tx.expect, Expect::Journal(_));
+        // One that makes the draft the revision that plays takes in what waits whole.
+        let lands = raw && !recovery && !self.waiting.is_empty() && self.lands_on_accepted(tx);
         for (p, b) in &tx.base {
-            if !recovery && self.waits(p) {
+            if !recovery && !lands && self.waits(p) {
                 conflicts.push(changed(p, &currents[p], Some("changed on disk together with code that doesn't compile yet".into())));
             }
             if p.is_text()
@@ -1400,7 +1481,7 @@ impl Session {
     /// Steps 5 to 9 and 11: the bases, the baseline, the candidate, the delta and the diagnostics.
     fn prepare(&mut self, tx: &Tx, currents: &BTreeMap<TxPath, Current>) -> Result<Prepared, Refusal> {
         let accepted = self.accepted.clone();
-        let planned = self.plan(tx, currents, &accepted.compiled.decls)?;
+        let planned = self.plan(tx, currents, &accepted.compiled.decls, false)?;
 
         // 6. The baseline: the accepted revision with each touched file as it is on disk.
         let differs: Vec<&TxPath> = currents
@@ -1582,11 +1663,7 @@ impl Session {
                 None,
             ));
         }
-        let wrote = {
-            let writing = self.before_write.is_some().then(|| self.writing(&candidate));
-            self.stage(tx, &planned.targets, vec![], writing.as_ref())?
-        };
-        // The draft follows the files this commit wrote; nothing else of it changes.
+        // The draft follows the files this commit writes; nothing else of it changes.
         let mut draft = self.draft.clone();
         for (path, _) in &planned.news {
             remove_under(&mut draft, &path.path());
@@ -1606,13 +1683,22 @@ impl Session {
             }
         }
         settle_assets(&mut draft);
+        // Its undo step, in the history ahead of its files (WRITE-25).
+        let mut step = self.inverse_step(tx, &planned, self.accepted.number + 1, Some(&baseline));
+        self.history_ahead(&mut step, &draft);
+        let wrote = {
+            let writing = self.before_write.is_some().then(|| self.writing(&candidate));
+            match self.stage(tx, &planned.targets, vec![], writing.as_ref()) {
+                Ok(wrote) => wrote,
+                Err(e) => return Err(self.never_landed(e)),
+            }
+        };
         for (file, text) in &planned.bases {
             match planned.base_shas.get(file) {
                 Some(sha) => self.texts.put_hashed(*sha, text),
                 None => self.texts.put(text),
             };
         }
-        let step = self.inverse_step(tx, &planned, self.accepted.number + 1, Some(&baseline));
         // Only layout.json written: no revision (PLANE-3), though it is undone like any Tx.
         let number = if changed_paths(&self.accepted.snapshot, &candidate.snapshot).is_empty() {
             self.accepted.number
@@ -1623,8 +1709,23 @@ impl Session {
                 Target::Write { path, after, .. } => Some((PathBuf::from(path), *after)),
                 _ => None,
             });
-            self.accept_known(snapshot, project, compiled, &known.collect())
+            // By who sent it; what an outside writer saved that rode along, by them (AGENT-2).
+            let outside: BTreeSet<String> = match step.mixed {
+                true => changed_paths(&self.accepted.snapshot, &baseline.snapshot).iter().map(|p| m2_song::path::slashed(p)).collect(),
+                false => BTreeSet::new(),
+            };
+            self.accepting = Some(self.by.clone());
+            let number = self.accept_known(snapshot, project, compiled, &known.collect());
+            // What it moved, as its step says (an undo's and a redo's are set as they are pushed).
+            if let Some(a) = self.authored.back_mut() {
+                (a.moved, a.beats) = (step.moved.clone(), step.beats);
+            }
+            if !outside.is_empty() {
+                self.authored.push_back(crate::session::Authored::outside(number, outside));
+            }
+            number
         };
+        self.took_in = step.mixed;
         self.draft = draft;
         self.cache = None;
         let a = &self.accepted;
@@ -1652,7 +1753,21 @@ impl Session {
         inverse.base = planned.inverse_base.clone();
         // Shown where the change is now: a renamed file or folder by its new name.
         let file = inverse.touched().first().or(tx.touched().first()).map(|p| p.to_string()).unwrap_or_default();
-        TxStep::new(inverse, raw, data_only, file)
+        let mut step = TxStep::of_targets(inverse, raw, data_only, file, &planned.targets);
+        step.moved = moves(tx);
+        step.beats = tx.beats;
+        step.mixed = baseline.is_some_and(|b| !std::ptr::eq(b, &*self.accepted));
+        step
+    }
+
+    /// A change written ahead in the history whose files never landed (WRITE-25): a new change's
+    /// history is written as it is again. An undo's or a redo's is, once its step is back on its
+    /// stack ([`Session::step`]).
+    fn never_landed(&mut self, e: Refusal) -> Refusal {
+        if self.moving.is_none() {
+            self.keep_history();
+        }
+        e
     }
 
     /// What a commit to `candidate` tells the host before it is journaled (PLANE-5).
@@ -1759,9 +1874,9 @@ impl Session {
     /// result may not compile, P3), the undo of a save, and inverses of Tx committed on a seen
     /// delta.
     fn commit_raw(&mut self, tx: &Tx) -> Result<(Committed, Option<TxStep>), Refusal> {
-        let currents = self.read_all(tx)?;
+        let currents = self.read_all(tx, true)?;
         let decls = self.accepted.compiled.decls.clone();
-        let planned = self.plan(tx, &currents, &decls)?;
+        let planned = self.plan(tx, &currents, &decls, true)?;
         let tidy = match &tx.expect {
             Expect::Journal(id) => vec![id.clone()],
             _ => vec![],
@@ -1784,21 +1899,36 @@ impl Session {
             ));
         }
         let before = self.accepted.clone();
-        let wrote = self.stage(tx, &planned.targets, tidy.clone(), None)?;
+        let mut draft = self.draft.clone();
+        apply_news(&mut draft, &planned.news);
+        settle_assets(&mut draft);
+        // Its undo step, in the history ahead of its files (WRITE-25).
+        let step = self.inverse_step(tx, &planned, self.accepted.number + 1, None);
+        let mut step = TxStep { raw: true, ..step };
+        self.history_ahead(&mut step, &draft);
+        let wrote = match self.stage(tx, &planned.targets, tidy.clone(), None) {
+            Ok(wrote) => wrote,
+            Err(e) => return Err(self.never_landed(e)),
+        };
         if !tidy.is_empty() {
             // Every journal is judged again: one this recovery completed (an older commit whose
             // Finish this was) is tidied, and no fix stays offered that no longer applies.
             self.rescan();
         }
-        let mut draft = self.draft.clone();
-        apply_news(&mut draft, &planned.news);
-        settle_assets(&mut draft);
         self.cache = None;
+        self.accepting = Some(self.by.clone());
+        self.took_in = false;
+        let was = self.accepted.number;
         self.take_in(draft);
+        self.accepting = None;
+        // Its own: the paths it wrote, moving what its step says; what else came in with it from
+        // the draft (an outside change that waited for the code) is outside the app's (AGENT-2).
+        if self.accepted.number != was {
+            let wrote: BTreeSet<String> = tx.touched().iter().map(|p| p.to_string()).collect();
+            self.authored_as(self.accepted.number, &wrote, &step.moved, step.beats);
+        }
         self.problems = self.gather_problems();
         let number = self.accepted.number;
-        let step = self.inverse_step(tx, &planned, number, None);
-        let step = TxStep { raw: true, ..step };
         let a = &self.accepted;
         let delta = if Arc::ptr_eq(&before, a) {
             GraphDelta::default()
@@ -1846,6 +1976,32 @@ impl Session {
         tx
     }
 
+    /// Whether committing `tx` leaves the draft as the accepted revision has it: it writes back (or
+    /// removes) exactly the files where the draft differs from the revision that plays. Such a raw
+    /// Tx builds whatever the draft's errors, as it makes the draft that revision: the draft rule
+    /// and the waiting rule let it through (WRITE-21a: an upgrade redone after its undo, FMT-25). A
+    /// judged one keeps them: its baseline is the files on disk, which don't build.
+    pub(crate) fn lands_on_accepted(&self, tx: &Tx) -> bool {
+        let snap = &self.accepted.snapshot;
+        if !self.accepted.has_code() {
+            return false;
+        }
+        let mut writes = BTreeMap::new();
+        for op in &tx.ops {
+            let (file, bytes) = match op {
+                Op::Write { file, bytes: Payload::Text(t) } => (file, Some(t.as_bytes())),
+                Op::Remove { file } => (file, None),
+                _ => return false,
+            };
+            writes.insert(file.path(), bytes);
+        }
+        let lands = writes.iter().all(|(p, bytes)| match bytes {
+            Some(b) => !snap.not_utf8.contains_key(p) && snap.files.get(p).map(|t| t.as_bytes()) == Some(*b),
+            None => !snap.files.contains_key(p) && !snap.binaries.contains_key(p),
+        });
+        lands && changed_paths(&self.draft, snap).iter().all(|p| writes.contains_key(p))
+    }
+
     /// Whether undo step `step` would go ahead now, without compiling: writer access, the draft
     /// rule, no target waiting, and every base applies to the accepted revision (WRITE-21).
     pub(crate) fn can_tx(&self, step: &TxStep) -> bool {
@@ -1860,14 +2016,18 @@ impl Session {
             return Some(Blocked::ReadOnly);
         }
         let touched = tx.touched();
-        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() {
+        // A raw step whose undo or redo makes the files the revision that plays (WRITE-21a).
+        let lands = step.raw && self.lands_on_accepted(tx);
+        if touched.iter().any(|p| matches!(p.class(), Class::Code | Class::Manifest)) && !self.draft_errors.is_empty() && !lands {
             return Some(Blocked::Draft);
         }
-        if touched.iter().any(|p| self.waits(p)) {
+        if touched.iter().any(|p| self.waits(p)) && !lands {
             return Some(Blocked::Waiting);
         }
         let changed = Some(Blocked::Changed);
-        let snap = &self.accepted.snapshot;
+        // What its bases are judged against: the revision that plays, or, for one that lands on
+        // it from a draft that waits, the draft (the files on disk).
+        let snap = if lands { &self.draft } else { &self.accepted.snapshot };
         for op in &tx.ops {
             match op {
                 Op::TextEdit { file, edits } => {

@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, Check, CodeXml, Drum, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -12,17 +12,18 @@ import {
   laneValue,
   lockReason,
   parseValue,
+  picks,
   stepValue,
   toUnit,
   type BusKind,
   type GraphState,
-  type Knob as KnobInfo,
+  type NumberKnob as KnobInfo,
   type LaneRef,
   type MixStrip,
   type StripSend,
 } from "../lib/graph";
 import { laneMade } from "../lib/events";
-import { OUT } from "../lib/meters";
+import { channelMeter, OUT, useLoudness } from "../lib/meters";
 import { mod } from "../lib/native";
 import { muteInSongCall } from "../lib/overlays";
 import { tones } from "../lib/palette";
@@ -33,7 +34,7 @@ import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKno
 import { useGlows } from "../lib/notice";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
-import { Colours, openChangeInstrument } from "./Tracks";
+import { Colours, makeKit, openChangeInstrument } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
@@ -129,8 +130,11 @@ function Empty({ children, at }: { children: React.ReactNode; at?: { file: strin
 export default function Mix({ graph }: { graph: GraphState }) {
   const locked = useStore((s) => lockReason(graph, s.connected));
   const selected = useShell((s) => s.selected);
-  // Every knob of the view, by id: a strip names its fader and pan by them.
-  const knobs = useMemo(() => new Map(graph.view.modules.flatMap((m) => m.nodes.flatMap((n) => n.knobs.map((k) => [k.id, k] as const)))), [graph.view.modules]);
+  // Every knob of the view, by id: a strip names its fader and pan by them. Only numbers have faders.
+  const knobs = useMemo(
+    () => new Map(graph.view.modules.flatMap((m) => m.nodes.flatMap((n) => n.knobs.flatMap((k) => (picks(k) ? [] : [[k.id, k] as const]))))),
+    [graph.view.modules],
+  );
   const mix = graph.mix;
   // The bus channels, in the mixer's order: each strip has a row for each (RENDER-34).
   const buses = useMemo(() => mix.strips.flatMap((s) => (s.bus && s.channel ? [{ key: s.channel, label: s.label }] : [])), [mix.strips]);
@@ -188,7 +192,8 @@ const Strip = memo(function Strip({ strip, selected, knobs, session, revision, l
   const [menu, setMenu] = useState(false);
   const at = placeOf(db ?? pan) ?? mixer;
   const editable = !locked;
-  const meter = tracks ? <StripMeter channels={strip.modules} name={strip.label} /> : null;
+  // After its fader when it has a channel (TAP-5); else its tracks, where they enter the song.
+  const meter = tracks ? <StripMeter channels={strip.channel ? [channelMeter(strip.channel)] : strip.modules} name={strip.label} fader={!!strip.channel} /> : null;
   return (
     <div
       data-strip={strip.channel ?? one ?? ""}
@@ -289,7 +294,7 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer, buses }: St
       <div ref={name} className="h-5 shrink-0 px-1.5 flex items-center justify-center">
         <span data-testid="strip-name" className="text-sm font-medium text-fg">Master</span>
       </div>
-      <div className="h-[46px] shrink-0" />
+      <MasterLoudness />
       <div className="h-6 shrink-0" />
       <div className="shrink-0" style={{ height: buses.length * SEND_H }} />
       {knob ? (
@@ -305,14 +310,41 @@ function MasterStrip({ knob, lane, session, revision, locked, mixer, buses }: St
   );
 }
 
+/** A number as taste.md writes it: "−14", with a true minus. */
+const minus = (n: number) => (n < 0 ? `−${-n}` : String(n));
+
 /**
- * A strip's meter (taste.md §2.8; Q1 to Q3, X23): two bars, left and right, 3 px each with 1 px
- * between (Master's 5 px), beside the fader, its travel tall. A track's is read where its sound
- * enters the mixer, so its fader doesn't move it; a strip of several tracks shows the louder of
- * them on each side. Above it, a clip dot stays lit until clicked. Master's is the song's output,
- * with no dot: it ends in a limiter. Placed in the fader's column, so a drag on it moves the fader.
+ * Master's loudness (TAP-6), where a track's pan would be: the last 3 seconds in LUFS, and the
+ * loudest point of them between samples (the true peak), while the song plays; "—" until there is
+ * one (it takes 3 seconds) or in silence.
  */
-function StripMeter({ channels, name, master = false }: { channels: string[]; name: string; master?: boolean }) {
+function MasterLoudness() {
+  const { short, peak } = useLoudness();
+  return (
+    <div
+      data-testid="master-loudness"
+      className="h-[46px] shrink-0 px-1.5 flex flex-col items-center justify-center gap-0.5 tabular-nums cursor-default"
+      title="How loud the song is, as ears hear it: the last 3 seconds, in LUFS. Streaming services play songs at about −14 LUFS. Peak is the loudest point between samples: over 0 dB, it can distort when it's played or streamed."
+    >
+      <span data-testid="master-lufs" className="text-sm font-medium text-fg whitespace-nowrap">
+        {short === null ? "— LUFS" : `${minus(short)} LUFS`}
+      </span>
+      <span data-testid="master-peak" className="text-xs text-fg-muted whitespace-nowrap">
+        {peak === null ? "Peak —" : `Peak ${minus(peak)} dB`}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A strip's meter (taste.md §2.8; Q1 to Q3, X23; TAP-5): two bars, left and right, 3 px each with
+ * 1 px between (Master's 5 px), beside the fader, its travel tall. A strip with a channel reads it
+ * after its fader, so the fader moves it; one without reads its tracks where they enter the song,
+ * the louder of them on each side. Above it, a clip dot stays lit until clicked. Master's is the
+ * song's output, with no dot: it ends in a limiter. Placed in the fader's column, so a drag on it
+ * moves the fader.
+ */
+function StripMeter({ channels, name, master = false, fader = false }: { channels: string[]; name: string; master?: boolean; fader?: boolean }) {
   const width = master ? 11 : 7;
   return (
     <>
@@ -321,7 +353,7 @@ function StripMeter({ channels, name, master = false }: { channels: string[]; na
           channels={channels}
           bars={2}
           label={`${name} level`}
-          title={master ? "The song's level" : `${name}'s level. Its fader doesn't change this meter.`}
+          title={master ? "The song's level" : fader ? `${name}'s level, after its fader.` : `${name}'s level.`}
           className="w-full h-full"
         />
       </div>
@@ -567,6 +599,9 @@ function StripMenu({
   const [colours, setColours] = useState<HTMLElement | null>(null);
   const current = useStore((s) => s.graph?.timeline.tracks.find((t) => t.module === module)?.colour);
   const inSong = useStore((s) => modules.length > 0 && modules.every((m) => s.graph?.overlays?.heard[m] === "muted-in-song"));
+  // It plays the drum machine: Make it a kit (KIT-24).
+  const machine = useStore((s) => !!module && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps);
   const run = (f: () => void) => () => {
     onClose();
     f();
@@ -606,6 +641,11 @@ function StripMenu({
               onClick={run(() => openChangeInstrument(module, anchor))}
             >
               Change instrument…
+            </MenuRow>
+          )}
+          {machine && (
+            <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={keeps} onClick={run(() => void makeKit(module))}>
+              Make it a kit
             </MenuRow>
           )}
           <MenuRow
@@ -689,7 +729,7 @@ function Fader({
   const [typing, setTyping] = useState<{ text: string; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
 
   /** `n` steps (taste.md §5.2), written as one edit half a second after the last. */
   const step = (n: number) => g.step((v) => faderStep(v, n));
@@ -892,7 +932,7 @@ function Fader({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -941,11 +981,12 @@ function Pan({
   const label = `${name} pan`;
   const toast = useStore((s) => s.toast);
   const blank = useMemo(() => centre(channel), [channel]);
-  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob.
+  // The pan its first move wrote, in the revision that wrote it, until the view has it as a knob, or
+  // shows a newer revision without it (undone before the window showed it).
   const [made, setMade] = useState<{ knob: KnobInfo; revision: number } | null>(null);
   useEffect(() => {
-    if (knob) setMade(null);
-  }, [knob]);
+    if (knob || (made && revision > made.revision)) setMade(null);
+  }, [knob, revision]);
   const live = knob ? { knob, revision } : (made ?? { knob: blank, revision });
   const first = !knob && !made;
   const g = useKnobGesture({ session, revision: live.revision, knob: live.knob, editable, name: label, label });
@@ -976,7 +1017,7 @@ function Pan({
     graphApi
       .mixInsert(session, channel, "pan", 0, { name: label })
       .then((r) => {
-        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision };
+        const m = { knob: { ...blank, id: r.control, written: true, literal: "0" }, revision: r.revision ?? live.revision };
         setMade(m);
         if (now.cancelled) return g.show(0);
         g.start(m);
@@ -1021,7 +1062,7 @@ function Pan({
     return true;
   };
 
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const unit = Math.min(1, Math.max(0, toUnit(k, value)));
   const grip = useKnobDrag({
     value: unit,
@@ -1137,7 +1178,7 @@ function Pan({
           label={label}
           value={value}
           at={menu}
-          editable={editable && !g.saving}
+          editable={editable}
           locked={locked}
           onAutomate={() => {
             setMenu(null);
@@ -1308,7 +1349,7 @@ function SendKnob({
   const svg = useRef<SVGSVGElement>(null);
   const root = useRef<HTMLDivElement>(null);
   const [menu, setMenu] = useState(false);
-  const disabled = (!editable && !g.dragging()) || g.saving;
+  const disabled = !editable && !g.dragging();
   const clamp = (u: number) => Math.min(1, Math.max(0, u));
   const unit = clamp(toUnit(k, value));
   const reset = clamp(toUnit(k, k.default ?? value));

@@ -1,6 +1,6 @@
 import { hz, ms, poly, track } from "@m2/core";
+import { reverb } from "@m2/effects";
 import { adsr, noise, svf, vca } from "std/dsp";
-import { reverb } from "std/fx";
 import { scale } from "std/math";
 
 // A clap built from std parts: a burst of noise through a bandpass filter, in a small room.

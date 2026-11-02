@@ -132,7 +132,7 @@ fn notes(p: Phrase) -> Vec<Note> {
 }
 
 /// How code imports `id`, as `alias`: the import line, and what calls it. `synth.pluck` from
-/// `std/synth` is `import { synth as alias } from "std/synth";`, called as `alias.pluck`.
+/// `@m2/synths` is `import { synth as alias } from "@m2/synths";`, called as `alias.pluck`.
 fn imported(catalog: &Catalog, id: &str, alias: &str) -> Result<(String, String), String> {
     let cant = || format!("{id} can't be imported, so it has no preview.");
     let exports = catalog.exports.get(id).ok_or_else(cant)?;
@@ -197,8 +197,8 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     let mut files = BTreeMap::new();
     files.insert("data/arrangement.json".to_string(), ARRANGEMENT.to_string());
     let text = if d.is_effect() {
-        let (keys_import, keys) = imported(catalog, "std:synth-pluck", "keys")?;
-        let (kit_import, kit) = imported(catalog, "std:drum-kit", "kit")?;
+        let (keys_import, keys) = imported(catalog, "@m2/synths:synth-pluck", "keys")?;
+        let (kit_import, kit) = imported(catalog, "@m2/drums:drum-kit", "kit")?;
         let both = format!("mixer({{ keys: {keys}(lane.notes(\"keys\")), drums: {kit}(lane.notes(\"hits\")) }})");
         // The loop: Am then F, plucked, over a kick, a snare and hats. Bar 1 is dry, bar 2 goes
         // through the effect.
@@ -237,6 +237,35 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     };
     files.insert("song.ts".into(), text);
     Ok(Song { files })
+}
+
+/// What `item`'s preview renders, in the library `packages` (std among them) and `yours` (your
+/// Presets folder) make: its song, with a sound's preset values from its package's folder or
+/// yours, and the packages it loads, std and the item's own (LIB-3). The one step the app's ⌘F
+/// and the registry's robot (REG-5) both take, so both make the same preview. Why there is none,
+/// in words.
+pub fn of(
+    item: &Item,
+    catalog: &Catalog,
+    packages: &[(String, PathBuf)],
+    yours: Option<&Path>,
+) -> Result<(Song, Vec<(String, PathBuf)>), String> {
+    // std (the song's mixer, an effect's loop) and the item's own package.
+    let own = item.component.split_once(':').map_or("", |(p, _)| p);
+    let loads: Vec<(String, PathBuf)> = packages.iter().filter(|(n, _)| n == m2_song::pack::STD || n == own).cloned().collect();
+    let values = match &item.preset {
+        Some(p) => {
+            // A package's own presets are in its folder; yours in yours.
+            let dir = match p.from.as_str() {
+                "std" => loads.iter().find(|(n, _)| *n == item.package).and_then(|(_, d)| crate::presets::factory(d, &item.component)),
+                _ => yours.map(|y| y.join(crate::presets::folder(&item.component))),
+            };
+            let dir = dir.ok_or_else(|| format!("{} can't be found.", p.name))?;
+            crate::presets::read(&dir, &item.component, &p.name)?.values
+        }
+        None => BTreeMap::new(),
+    };
+    Ok((song(item, catalog, &values)?, loads))
 }
 
 /// The files of package folder `dir` a render reads: its manifest, its kernels and its code.
@@ -345,15 +374,6 @@ pub fn loudness(samples: &[f32]) -> Option<f64> {
     Some(lufs(mean(&kept)))
 }
 
-/// A version as a manifest asks for it: `1` of `1.4.0`, `0.4` of `0.4.0`.
-pub(super) fn wanted(version: &str) -> String {
-    match version.split('.').collect::<Vec<_>>().as_slice() {
-        ["0", minor, ..] => format!("0.{minor}"),
-        [major, ..] => major.to_string(),
-        [] => version.to_string(),
-    }
-}
-
 /// Render `song` with `packages` loaded, in `work` (a folder of the cache, made here and removed
 /// after), and write the preview to `out`: 16-bit stereo at [`RATE`], [`SECONDS`] long, through a
 /// part file renamed into place, which goes if anything fails. A pure render, so the same song and
@@ -386,14 +406,20 @@ impl Drop for Part<'_> {
 
 fn render_in(song: &Song, packages: &[(String, PathBuf)], work: &Path, out: &Path) -> Result<()> {
     let mut set = PackageSet::default();
-    let mut deps = format!("\"@m2/core\" = \"{}\"\n", wanted(m2_script::SDK_VERSION));
+    let mut deps = format!("\"@m2/core\" = \"{}\"\n", crate::packs::line_for(m2_script::SDK_VERSION));
     for (name, dir) in packages {
-        let p = set.load(dir).with_context(|| format!("loading the {name} package"))?;
+        // std as the host loads it; a pack as one, never trusted as std by its folder's word (ABI-11).
+        let p = match name.as_str() {
+            m2_song::pack::STD => set.load(dir),
+            _ => set.load_pack(dir, name),
+        };
+        let p = p.with_context(|| format!("loading the {name} package"))?;
         // A pack from its folder, as the song's build found it (PACK-7): the preview's song has no
-        // lock, and the folder may be a path pack's, not the store's.
+        // lock, and the folder may be a path pack's, not the store's. Its whole path: the song is
+        // in `work`, and a relative one would be read from there.
         let wants = match name.as_str() {
-            m2_song::pack::STD => format!("\"{}\"", wanted(&p.version)),
-            _ => format!("{{ path = {} }}", serde_json::to_string(&dir.to_string_lossy())?),
+            m2_song::pack::STD => format!("\"{}\"", crate::packs::line_for(&p.version)),
+            _ => format!("{{ path = {} }}", serde_json::to_string(&std::path::absolute(dir)?.to_string_lossy())?),
         };
         deps += &format!("{} = {wants}\n", serde_json::to_string(name)?);
     }

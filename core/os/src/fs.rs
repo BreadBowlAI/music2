@@ -98,6 +98,27 @@ pub fn make_dirs(folder: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Write `bytes` at `to` whole: to a temporary name beside it (`.<name>.<pid>.<n>.part`), pushed,
+/// then renamed over it, so a reader, or a crash, finds the old file or the new one, never half.
+/// What `.music2/` keeps this way: the undo history, unsaved code, the view settings.
+pub fn replace(to: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static N: AtomicU64 = AtomicU64::new(0);
+    let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let tmp = to.with_file_name(format!(".{name}.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let done = (|| {
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
+        f.write_all(bytes)?;
+        push(&f)?;
+        std::fs::rename(&tmp, to)
+    })();
+    if done.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    done
+}
+
 /// The folder `p` is in: `.` for a bare name.
 pub fn folder_of(p: &Path) -> &Path {
     p.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."))
@@ -229,6 +250,20 @@ mod tests {
         fn drop(&mut self) {
             let _ = std::fs::remove_dir_all(&self.0);
         }
+    }
+
+    // WRITE-25: `replace` writes a file whole, over what was there, and leaves no temporary file;
+    // one that can't be made (no folder) leaves nothing either.
+    #[test]
+    fn replace_writes_whole_and_leaves_nothing_beside() {
+        let t = Temp::new("replace");
+        let p = t.0.join("index.json");
+        replace(&p, b"one").unwrap();
+        replace(&p, b"two, longer").unwrap();
+        assert_eq!(std::fs::read(&p).unwrap(), b"two, longer");
+        assert!(replace(&t.0.join("gone/index.json"), b"x").is_err());
+        let names: Vec<String> = std::fs::read_dir(&t.0).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["index.json"]);
     }
 
     // RENDER-30: a read at an offset reads those bytes, leaves the file's position alone, and

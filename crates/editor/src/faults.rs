@@ -4,12 +4,13 @@
 //! ("The delay on Bass", "loop.wav on Drums"), as a problem with its track's key. An offline render
 //! that a fault stopped says so with the namer's words ([`Faulted`]).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use m2_ir::{FOp, Flat, Ir};
-use m2_runtime::PackageSet;
+use m2_ir::{FOp, Flat, Ir, Op};
 use m2_runtime::fault::{Code, Failed, Fault, Subject};
+use m2_runtime::{PackageSet, TooSlow};
+use m2_script::Descriptor;
 use m2_session::{Compiled, Revision};
 use m2_song::{DataSet, Diagnostic};
 
@@ -21,6 +22,11 @@ pub trait Song: Send + Sync {
     /// The packages it was built with (PACK-9): a render of it runs their kernels, whatever the
     /// set shows now.
     fn view(&self) -> &Arc<m2_runtime::View>;
+    /// The descriptor of each component its build declared, by ComponentId: what names a sound by
+    /// its label (ABI-7). None when it doesn't say.
+    fn components(&self) -> Option<&BTreeMap<String, Arc<Descriptor>>> {
+        None
+    }
 }
 
 impl Song for Revision {
@@ -35,6 +41,9 @@ impl Song for Revision {
     }
     fn view(&self) -> &Arc<m2_runtime::View> {
         &self.compiled.view
+    }
+    fn components(&self) -> Option<&BTreeMap<String, Arc<Descriptor>>> {
+        Some(&self.compiled.components)
     }
 }
 
@@ -51,6 +60,9 @@ impl Song for Compiled {
     fn view(&self) -> &Arc<m2_runtime::View> {
         &self.view
     }
+    fn components(&self) -> Option<&BTreeMap<String, Arc<Descriptor>>> {
+        Some(&self.components)
+    }
 }
 
 /// A song's parts, each its own: one rooted at a track (a stem, `m2 bounce --track`), whose graph
@@ -60,6 +72,7 @@ pub struct Parts {
     pub flat: Flat,
     pub data: DataSet,
     view: Arc<m2_runtime::View>,
+    components: Option<BTreeMap<String, Arc<Descriptor>>>,
 }
 
 impl Parts {
@@ -68,7 +81,7 @@ impl Parts {
     /// renders with them whatever the session shows by then; and `song`'s data.
     pub fn of(song: &dyn Song, ir: Ir, packages: &PackageSet) -> Result<Parts, Vec<m2_ir::Diagnostic>> {
         let flat = m2_ir::check(&ir, &*packages.viewing(song.view()))?;
-        Ok(Parts { ir, flat, data: song.data().clone(), view: song.view().clone() })
+        Ok(Parts { ir, flat, data: song.data().clone(), view: song.view().clone(), components: song.components().cloned() })
     }
 }
 
@@ -84,6 +97,9 @@ impl Song for Parts {
     }
     fn view(&self) -> &Arc<m2_runtime::View> {
         &self.view
+    }
+    fn components(&self) -> Option<&BTreeMap<String, Arc<Descriptor>>> {
+        self.components.as_ref()
     }
 }
 
@@ -109,6 +125,12 @@ impl Faulted {
         e.chain().find_map(|c| c.downcast_ref::<Faulted>())
     }
 }
+
+/// How a FLAC comes into a song as a clip (FMT-24): as the WAV of its samples.
+const NOT_WAV: &str = "To use a FLAC, import it (File ▸ Import Audio…): music2 brings it in as a WAV.";
+
+/// How long a file one whole decode may make is (FMT-24's budget), in words.
+const TOO_LONG: &str = "over 134,217,728 samples, about 23 minutes of stereo at 48 kHz";
 
 /// Names the faults of one plan, made when the plan is prepared from the song it plays, or for an
 /// offline render. It holds that song, so it names nothing until asked.
@@ -160,9 +182,13 @@ impl Namer {
     pub fn problem(&self, code: Code, parts: &[Subject]) -> Option<Diagnostic> {
         let on = "The rest of the song plays on.";
         let (message, module) = match code {
-            Code::Unreadable | Code::StretchFailed => {
+            Code::Unreadable | Code::NotWav | Code::TooLong | Code::StretchFailed => {
                 let s = *parts.first()?;
                 let message = match (code, s) {
+                    (Code::NotWav, _) => {
+                        let (file, place) = self.clip(s)?;
+                        format!("{file} {place} isn't a WAV file, so it plays silent: a clip plays WAV files only. {NOT_WAV} {on}")
+                    }
                     (Code::StretchFailed, _) => {
                         let (file, place) = self.clip(s)?;
                         format!("The warped clip of {file} {place} can't be stretched, so it plays silent. {on}")
@@ -172,6 +198,10 @@ impl Namer {
                         format!(
                             "{file} {place} can't be read, so it plays silent. It may be damaged, or on a drive that isn't plugged in. {on}"
                         )
+                    }
+                    (Code::TooLong, Subject::Asset { node, .. }) => {
+                        let (file, who) = (self.asset(s)?, lower(&self.sound_named(node as usize)));
+                        format!("{file}, which {who} plays, is too long to hold whole ({TOO_LONG}), so it plays silent. {on}")
                     }
                     (_, Subject::Asset { node, .. }) => {
                         let (file, who) = (self.asset(s)?, lower(&self.sound_named(node as usize)));
@@ -210,6 +240,10 @@ impl Namer {
                 "{} stopped working, so music2 made it silent. {on} music2 starts it again from its saved settings. If it stops again \
                  soon after, it stays silent until you open the song again.",
                 self.plugin_named(first)
+            ),
+            Code::TooSlow => format!(
+                "{} took too long and was stopped. It stays silent until the song is built again. {on}",
+                self.slow_sound(&flat.nodes[first].name)
             ),
             Code::PluginCrashed | Code::PluginHung => {
                 let names: Vec<String> = nodes.iter().map(|&n| self.plugin_named(n)).collect();
@@ -255,17 +289,118 @@ impl Namer {
                 None => format!("A file the song plays can't be read, {not}"),
             },
             (Code::Unreadable, _) => format!("{part} can't be read, {not} It may be damaged, or on a drive that isn't plugged in."),
+            (Code::NotWav, _) => format!("{part} isn't a WAV file, {not} A clip plays WAV files only. {NOT_WAV}"),
+            (Code::TooLong, Subject::Asset { node, .. }) => match self.asset(f.subject) {
+                Some(file) => format!(
+                    "{file}, which {} plays, is too long to hold whole ({TOO_LONG}), {not}",
+                    lower(&self.sound_named(node as usize))
+                ),
+                None => format!("A file the song plays is too long to hold whole ({TOO_LONG}), {not}"),
+            },
+            (Code::TooLong, _) => format!("{part} is too long to hold whole ({TOO_LONG}), {not}"),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
+            (Code::TooSlow, s) => {
+                let sound = match s {
+                    Subject::Node(n) => self.song.flat().nodes.get(n as usize).map(|n| self.slow_sound(&n.name)),
+                    _ => None,
+                };
+                format!("{} took too long and was stopped, {not}", sound.unwrap_or(part))
+            }
             // No offline render reads the sound input.
             (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),
         }
     }
 
-    /// `e`, from an offline render: the fault that stopped it, named, when one did ([`Faulted`]).
+    /// `e`, from an offline render: the fault that stopped it, named, when one did ([`Faulted`]);
+    /// or a kernel too slow to be made (ABI-7).
     pub fn faulted(&self, e: anyhow::Error) -> anyhow::Error {
-        match e.downcast_ref::<Failed>() {
-            Some(f) => Faulted { code: f.fault.code.diag(), words: self.failed(f.fault, f.why()) }.into(),
+        if let Some(f) = e.downcast_ref::<Failed>() {
+            return Faulted { code: f.fault.code.diag(), words: self.failed(f.fault, f.why()) }.into();
+        }
+        match e.downcast_ref::<TooSlow>() {
+            Some(slow) => {
+                Faulted { code: Code::TooSlow.diag(), words: format!("{}, so the file wasn't made.", self.too_slow(slow)) }.into()
+            }
             None => e,
+        }
+    }
+
+    /// A kernel too slow to be made, as its plan was ([`TooSlow`] at a sandbox's birth, ABI-7):
+    /// "Growl on Bass, from @alice/growl, took too long to get ready and was stopped".
+    pub fn too_slow(&self, slow: &TooSlow) -> String {
+        format!("{} took too long to get ready and was stopped", self.slow_sound(&slow.node))
+    }
+
+    /// The sound node `name` (`<module>/<id>`, a voice's node too) is part of, as the song's code
+    /// wrote it, with its place and whose code it runs (ABI-7), as a sentence's subject:
+    /// - made inside a package's component: the outermost such call, by the component's label, and
+    ///   its package ("Growl on Bass, from @alice/growl,"); and when the time-checked code it runs
+    ///   (a pack's kernels, [`m2_runtime::packages::checked`]) is another package's, that one too
+    ///   ("…, from @bob/synth, with sound code from @alice/growl,");
+    /// - a kernel the song's own code calls: the kernel by its name, and its package ("The growl on
+    ///   Bass, from @alice/growl,");
+    /// - an instrument the song's own code writes: as the song's own, with the packages whose
+    ///   time-checked kernels its voices run ("The instrument on Keys, from the song's own code,
+    ///   with sound code from @alice/growl,").
+    ///
+    /// A node not in the song is named as it is.
+    pub fn slow_sound(&self, name: &str) -> String {
+        let ir = self.song.ir();
+        let found = ir.modules.iter().find_map(|m| {
+            let id = name.strip_prefix(m.key.as_str())?.strip_prefix('/')?;
+            let mut at = None;
+            crate::controls::walk(&m.nodes, &mut |n| {
+                if at.is_none() && n.id == id {
+                    // The kernels it runs: its own, or its voices'.
+                    let mut kernels = vec![];
+                    let mut kernel_of = |n: &m2_ir::Node| {
+                        if let Op::Kernel { kernel, .. } = &n.op {
+                            kernels.push(kernel.clone());
+                        }
+                    };
+                    kernel_of(n);
+                    let what = match &n.op {
+                        Op::Kernel { kernel, .. } => m2_song::pack::split_id(kernel).map_or(kernel.as_str(), |(_, k)| k).to_string(),
+                        Op::Poly { body, .. } => {
+                            crate::controls::walk(&body.nodes, &mut kernel_of);
+                            "instrument".to_string()
+                        }
+                        _ => id.to_string(),
+                    };
+                    at = Some((n.frame, kernels, what, matches!(n.op, Op::Kernel { .. })));
+                }
+            });
+            at.map(|(frame, kernels, what, kernel)| (m, frame, kernels, what, kernel))
+        });
+        let Some((m, frame, kernels, what, kernel)) = found else { return name.to_string() };
+        let place = self.place_of(&m.key);
+        // The packages whose time-checked code it runs, in order, once each: as the build loaded
+        // them, so never std's, nor a pack music2 ships (ABI-11).
+        let view = self.song.view();
+        let mut code: Vec<&str> = kernels
+            .iter()
+            .filter_map(|k| m2_song::pack::split_id(k).map(|(p, _)| p))
+            .filter(|p| view.get(p).is_none_or(|p| p.checked))
+            .collect();
+        code.sort();
+        code.dedup();
+        let label = |id: &str| self.song.components().and_then(|c| c.get(id)).map(|d| d.label.clone());
+        let component = m.chain(frame).into_iter().filter_map(|f| f.component.as_deref()).find_map(|id| {
+            let (package, bare) = m2_song::pack::split_id(id)?;
+            Some((label(id).unwrap_or_else(|| bare.to_string()), package))
+        });
+        let with = |skip: &str| match code.iter().filter(|p| **p != skip).copied().collect::<Vec<_>>() {
+            others if others.is_empty() => String::new(),
+            others => format!(" with sound code from {},", or(&others)),
+        };
+        match (component, kernel) {
+            (Some((label, package)), _) => format!("{} {place}, from {package},{}", capital(&label), with(package)),
+            // A kernel the song's own code calls: its own package's.
+            (None, true) => match kernels.first().and_then(|k| m2_song::pack::split_id(k)) {
+                Some((package, _)) => format!("The {what} {place}, from {package},"),
+                None => format!("The {what} {place}"),
+            },
+            (None, false) => format!("The {what} {place}, from the song's own code,{}", with("")),
         }
     }
 
@@ -341,11 +476,25 @@ pub fn plugin_named(song: &dyn Song, packages: &PackageSet, node: usize) -> Stri
     format!("{plugin} ({track})")
 }
 
+/// `words` with a capital first letter, to start a sentence.
+fn capital(words: &str) -> String {
+    let mut c = words.chars();
+    c.next().map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
+}
+
 /// `The x` as `the x`, inside a sentence.
 fn lower(words: &str) -> String {
     match words.strip_prefix("The ") {
         Some(rest) => format!("the {rest}"),
         None => words.to_string(),
+    }
+}
+
+/// `a`, `a or b`, `a, b or c`.
+fn or(names: &[&str]) -> String {
+    match names {
+        [rest @ .., last] if !rest.is_empty() => format!("{} or {last}", rest.join(", ")),
+        _ => names.concat(),
     }
 }
 

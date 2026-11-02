@@ -55,23 +55,6 @@ impl Asset {
     }
 }
 
-/// Read a WAV file (integer or float, mono or stereo; extra channels are dropped).
-pub fn load_wav(path: &Path) -> Result<Asset> {
-    let mut r = hound::WavReader::open(path).with_context(|| format!("opening {}", path.display()))?;
-    let spec = r.spec();
-    let ch = spec.channels.max(1) as usize;
-    let interleaved: Vec<f32> = match spec.sample_format {
-        hound::SampleFormat::Float => r.samples::<f32>().collect::<Result<_, _>>()?,
-        hound::SampleFormat::Int => {
-            let scale = 1.0 / (1u64 << (spec.bits_per_sample - 1)) as f32;
-            r.samples::<i32>().map(|s| s.map(|v| v as f32 * scale)).collect::<Result<_, _>>()?
-        }
-    };
-    let keep = ch.min(2);
-    let channels = (0..keep).map(|c| interleaved.iter().skip(c).step_by(ch).copied().collect()).collect();
-    Ok(Asset { channels, sample_rate: spec.sample_rate as f64 })
-}
-
 /// Write planar audio as a 32-bit float WAV (lossless for anything the engine makes).
 pub fn write_wav(path: &Path, channels: &[Vec<f32>], sample_rate: u32) -> Result<()> {
     let file = std::fs::File::create(path).with_context(|| format!("creating {}", path.display()))?;
@@ -248,12 +231,14 @@ impl Default for Renders {
 }
 
 /// What a file that may be played gave: its audio, none (it holds no audio), or an error (it is
-/// there, but can't be read or decoded: `asset.unreadable`).
+/// there, but can't be read or decoded: `asset.unreadable`; or a clip's isn't a WAV, FMT-24).
 #[derive(Clone)]
 pub(crate) enum Found<T> {
     Plays(T),
     Empty,
     Unreadable,
+    NotWav,
+    TooLong,
 }
 
 impl<T> Found<T> {
@@ -261,6 +246,8 @@ impl<T> Found<T> {
         match read {
             Ok(t) if empty(&t) => Found::Empty,
             Ok(t) => Found::Plays(t),
+            Err(e) if e.downcast_ref::<stream::NotWav>().is_some() => Found::NotWav,
+            Err(e) if e.downcast_ref::<crate::decode::TooLong>().is_some() => Found::TooLong,
             Err(_) => Found::Unreadable,
         }
     }
@@ -270,6 +257,8 @@ impl<T> Found<T> {
             Found::Plays(t) => Found::Plays(f(t)),
             Found::Empty => Found::Empty,
             Found::Unreadable => Found::Unreadable,
+            Found::NotWav => Found::NotWav,
+            Found::TooLong => Found::TooLong,
         }
     }
 }
@@ -298,7 +287,7 @@ impl Cache {
         let decodes = &mut self.decodes;
         let a = self.kernels.entry(sha).or_insert_with(|| {
             *decodes += 1;
-            Found::of(load_wav(&path), Asset::is_empty).map(Arc::new)
+            Found::of(crate::decode::load(&path), Asset::is_empty).map(Arc::new)
         });
         Some(a.clone().map(|a| (sha, a)))
     }
@@ -453,8 +442,9 @@ impl KernelAssets {
                 }
                 let found = match cache.kernel_asset(data, a) {
                     Some(Found::Plays(x)) => Some(x),
-                    Some(Found::Unreadable) => {
-                        report.report(Code::Unreadable, Subject::Asset { node: i as u32, slot: slot as u32 });
+                    Some(f @ (Found::Unreadable | Found::NotWav | Found::TooLong)) => {
+                        let code = if matches!(f, Found::TooLong) { Code::TooLong } else { Code::Unreadable };
+                        report.report(code, Subject::Asset { node: i as u32, slot: slot as u32 });
                         None
                     }
                     Some(Found::Empty) | None => None,
@@ -687,6 +677,9 @@ impl AudioLane {
                 Found::Plays((sha, w)) => found.push((i as u32, c, ClipKey::of(sha, c, tempo, sample_rate, stretch), w)),
                 Found::Empty => {}
                 Found::Unreadable => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
+                Found::NotWav => tell.report.faults().report(tell.fault(Code::NotWav, i as u32)),
+                // Never from a clip's file, which streams: no whole decode.
+                Found::TooLong => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
             }
         }
         let key = LaneKey { clips: found.iter().map(|f| f.2.clone()).collect(), channels };

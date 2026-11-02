@@ -55,11 +55,11 @@ fn fix(p: &Plain) -> &str {
     p.fix.as_deref().unwrap_or("")
 }
 
-const KEYS: &str = "import { track } from \"@m2/core\";\nimport { pluck } from \"std/instruments\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => pluck(lane.notes(\"notes\")));\n";
+const KEYS: &str = "import { track } from \"@m2/core\";\nimport { pluck } from \"@m2/synths\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => pluck(lane.notes(\"notes\")));\n";
 
 #[test]
 fn a_unit_mistake_says_what_it_wants() {
-    let bass = "import { db, track } from \"@m2/core\";\nimport { bass } from \"std/instruments\";\nimport { lowpass } from \"std/filter\";\n\nexport default track(\"bass\", { name: \"Bass\" }, ({ lane }) => {\n  return lowpass(bass(lane.notes(\"notes\")), db(-3));\n});\n";
+    let bass = "import { db, track } from \"@m2/core\";\nimport { bass } from \"@m2/synths\";\nimport { lowpass } from \"std/filter\";\n\nexport default track(\"bass\", { name: \"Bass\" }, ({ lane }) => {\n  return lowpass(bass(lane.notes(\"notes\")), db(-3));\n});\n";
     let (f, s) = broken(&[("tracks/bass.ts", bass)]);
     let (raw, p) = draft(&f, &s);
     assert!(raw.contains("expects control<hz>, got control<db>") && raw.contains("tracks/bass.ts:6:10"), "{raw}");
@@ -69,8 +69,10 @@ fn a_unit_mistake_says_what_it_wants() {
 
 #[test]
 fn an_empty_input() {
-    let keys = "import { track } from \"@m2/core\";\nimport { reverb } from \"std/fx\";\n\nexport default track(\"keys\", { name: \"Keys\" }, () => reverb());\n";
-    let (f, s) = broken(&[("tracks/keys.ts", keys)]);
+    let keys = "import { track } from \"@m2/core\";\nimport { reverb } from \"@m2/effects\";\n\nexport default track(\"keys\", { name: \"Keys\" }, () => reverb());\n";
+    // first-song plays no @m2/effects: the song lists it, as adding reverb would (PACK-10).
+    let manifest = fixture("examples/first-song").read("music2.toml") + "\"@m2/effects\" = \"1\"\n";
+    let (f, s) = broken(&[("tracks/keys.ts", keys), ("music2.toml", &manifest)]);
     let (raw, p) = draft(&f, &s);
     assert!(raw.contains("reverb(): the input in is missing"), "{raw}");
     assert_eq!(p.words, "Reverb needs a sound to work on, but it gets none.", "{raw}");
@@ -85,7 +87,7 @@ fn an_empty_input() {
 
 #[test]
 fn mono_and_stereo() {
-    let keys = "import { kernel, track } from \"@m2/core\";\nimport { pluck } from \"std/instruments\";\nimport { pan } from \"std/dsp\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => kernel(\"std:hitcount\", { hits: pan(pluck(lane.notes(\"notes\")), 0.5) }));\n";
+    let keys = "import { kernel, track } from \"@m2/core\";\nimport { pluck } from \"@m2/synths\";\nimport { pan } from \"std/dsp\";\n\nexport default track(\"keys\", { name: \"Keys\" }, ({ lane }) => kernel(\"std:hitcount\", { hits: pan(pluck(lane.notes(\"notes\")), 0.5) }));\n";
     let (f, s) = broken(&[("tracks/keys.ts", keys)]);
     let (raw, p) = draft(&f, &s);
     assert!(raw.contains("is mono") && raw.contains("but a stereo signal is connected"), "{raw}");
@@ -101,9 +103,9 @@ fn a_name_not_known_proposes_its_import() {
     let (raw, p) = draft(&f, &s);
     assert!(raw.contains("pluk is not defined"), "{raw}");
     assert_eq!(p.words, "`pluk` isn't known in tracks/keys.ts.");
-    assert_eq!(fix(&p), "Did you mean pluck? Import it: `import { pluck } from \"std/instruments\"`.");
+    assert_eq!(fix(&p), "Did you mean pluck? Import it: `import { pluck } from \"@m2/synths\"`.");
     // Spelt right, not imported: its import. A plain function std exports (not a component) too.
-    for (name, module) in [("pluck", "std/instruments"), ("lfo", "std/control")] {
+    for (name, module) in [("pluck", "@m2/synths"), ("lfo", "std/control")] {
         let keys = format!(
             "import {{ track }} from \"@m2/core\";\n\nexport default track(\"keys\", {{ name: \"Keys\" }}, ({{ lane }}) => {name}(lane.notes(\"notes\")));\n"
         );
@@ -143,11 +145,11 @@ fn a_missing_file_lists_the_tracks() {
     assert_eq!(p.words, "song.ts brings in `./tracks/bas`, which isn't there.", "{raw}");
     assert_eq!(fix(&p), "The track files are: bass, hats, keys, kick.");
     // A package's module that isn't there: the package's modules.
-    let keys = KEYS.replace("std/instruments", "std/instrument");
+    let keys = KEYS.replace("@m2/synths", "std/dps");
     let (f, s) = broken(&[("tracks/keys.ts", &keys)]);
     let (raw, p) = draft(&f, &s);
-    assert_eq!(p.words, "tracks/keys.ts brings in `std/instrument`, which isn't there.", "{raw}");
-    assert!(fix(&p).starts_with("Check its name: std has ") && fix(&p).contains("std/instruments"), "{}", fix(&p));
+    assert_eq!(p.words, "tracks/keys.ts brings in `std/dps`, which isn't there.", "{raw}");
+    assert!(fix(&p).starts_with("Check its name: std has ") && fix(&p).contains("std/dsp"), "{}", fix(&p));
 }
 
 #[test]

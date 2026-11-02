@@ -8,17 +8,24 @@
 //!   WebSocket, [`Graph::midi_target`]): its selected track's notes lane. It stays until another
 //!   window says otherwise or another song opens; with none, or a lane that has gone, a key plays
 //!   nothing. A target changed while a key is held leaves that note where it sounds until its Off.
-//! - **Which messages:** Note On (velocity 0 is an Off) and Note Off; the sustain pedal (CC 64),
-//!   which holds back Offs until it lifts; All Notes Off and All Sound Off (CC 123, 120), which let
-//!   go of every note; the pitch wheel (pitch bend), the mod wheel (CC 1) and reset all controllers
-//!   (CC 121), which reach the target lane live (RENDER-14's `Midi`, D8 of track pm). The rest are
-//!   ignored (aftertouch, other controllers, clock…).
+//! - **Which messages:** Note On (velocity 0 is an Off) and Note Off; All Notes Off and All Sound
+//!   Off (CC 123, 120), which let go of every note; the pitch wheel (pitch bend), the mod wheel
+//!   (CC 1), the sustain pedal (CC 64) and reset all controllers (CC 121), which reach the target
+//!   lane live (RENDER-14's `Midi`, D8 of track pm, RENDER-35). The rest are ignored (aftertouch,
+//!   other controllers, clock…).
+//! - **The pedal** reaches the lane, and each key's Off reaches it when the key is let go: the
+//!   lane's voices hold the sound while the pedal is down (RENDER-38), and a plugin holds its own
+//!   (RENDER-37). A take keeps a key let go under the pedal until the pedal lifts or the key is
+//!   struck again, so it records the note as it sounded (RENDER-36).
 //! - **The wheels go back to rest** on the lane they moved when the keyboard lets go: unplugged, All
 //!   Notes Off, turned off in Settings, another target, or ⌘. (a panic, in the engine). A song
 //!   closed takes its lanes with it.
 //! - **A keyboard's notes** are an audition source of its own, `midi:<name>`, whose handles are
 //!   `note + 128 × channel`, so two channels never share a key. The watchdog never lets it go
 //!   (Q6): unplugging it, All Notes Off, ⌘. (a panic) or closing the song does.
+//! - **A kit** (KIT-25): while what keys play is a drum kit's bus or one of its Drum tracks, a key
+//!   goes to the kit's Drum track whose sound answers to its note, the first of two, at its own
+//!   pitch, by the kit the song shows ([`Pads`]); a note none answers to plays nothing, said once.
 //! - **Never through the session** (RENDER-29): a compile never holds a key up.
 
 use std::collections::BTreeSet;
@@ -28,7 +35,7 @@ pub use m2_os::midi::Event;
 use serde_json::{Value, json};
 
 use super::audition::{Audition, Strike};
-use super::{Graph, Inner};
+use super::{ControlPlane, Graph, Inner};
 
 /// What the control plane keeps of MIDI.
 #[derive(Default)]
@@ -38,13 +45,65 @@ pub(super) struct Midi {
     target: Option<Target>,
     /// Keyboards turned off in Settings, by name (lane B, Q28): they neither play nor record.
     off: BTreeSet<String>,
+    /// The notes no Drum of the kit keys play answers to, said already (KIT-25): by the kit's bus
+    /// and the key, until keys play something else.
+    unanswered: BTreeSet<(String, u8)>,
+}
+
+/// A drum kit as keys play it (KIT-25): its bus, its name, and its Drum tracks in the kit's order,
+/// each its key, its notes lane and the sound it plays (none when the code works it out), as the
+/// song shown now has them (KIT-1).
+pub(super) struct Pads {
+    pub bus: String,
+    pub label: String,
+    pub rows: Vec<(String, String, Option<String>)>,
+}
+
+impl Pads {
+    /// The kit track `module` is in, its bus or one of its Drum tracks, in the song shown now.
+    pub(super) fn of(cp: &ControlPlane, module: &str) -> Option<Pads> {
+        let kits = cp.open.as_ref()?.shown.state["view"]["drum_kits"].as_array()?;
+        let in_it = |k: &&Value| k["bus"] == module || k["rows"].as_array().is_some_and(|r| r.iter().any(|r| r["track"] == module));
+        let k = kits.iter().find(in_it)?;
+        let rows = k["rows"]
+            .as_array()?
+            .iter()
+            .filter_map(|r| {
+                Some((r["track"].as_str()?.to_string(), r["lane"].as_str()?.to_string(), r["sound"].as_str().map(String::from)))
+            })
+            .collect();
+        Some(Pads { bus: k["bus"].as_str()?.to_string(), label: k["label"].as_str().unwrap_or("Drums").to_string(), rows })
+    }
+
+    /// The Drum track and lane that answers to `key` (KIT-6): the first whose sound has the note.
+    pub(super) fn answers(&self, key: u8) -> Option<(String, String)> {
+        self.rows
+            .iter()
+            .find(|(_, _, sound)| sound.as_deref().is_some_and(|s| m2_editor::drums::notes_of(s).contains(&key)))
+            .map(|(m, l, _)| (m.clone(), l.clone()))
+    }
+}
+
+impl Midi {
+    /// The words for note `key`, which no Drum of kit `p` answers to: the first time since keys
+    /// played something else, else none (KIT-25).
+    pub(super) fn unanswered(&mut self, p: &Pads, key: u8) -> Option<String> {
+        self.unanswered.insert((p.bus.clone(), key)).then(|| {
+            format!(
+                "No drum of the {} kit answers to {} ({key}). + Drum in Beat adds one.",
+                p.label,
+                m2_song::lane::pitch_name(f64::from(key)).unwrap_or_default()
+            )
+        })
+    }
 }
 
 struct Keyboard {
     name: String,
     /// The sustain pedal is down.
     pedal: bool,
-    /// Keys let go while the pedal was down: their Offs, sent when it lifts.
+    /// Keys let go while the pedal was down: a take keeps their notes until it lifts, or until the
+    /// key is struck again (RENDER-36).
     held_back: BTreeSet<u32>,
 }
 
@@ -77,7 +136,8 @@ enum Said {
     Off {
         h: u32,
     },
-    Pedal(bool),
+    /// The sustain pedal (CC 64), as it goes to the lane: down at 64 or more.
+    Pedal([u8; 3]),
     AllOff,
     /// A wheel: pitch bend, CC 1 or CC 121.
     Wheel([u8; 3]),
@@ -93,7 +153,7 @@ fn read(bytes: &[u8]) -> Said {
             Said::On { h: key(n), pitch: f64::from(n & 0x7F), velocity: f64::from(v & 0x7F) / 127.0 }
         }
         (0x90 | 0x80, Some(n), Some(_)) => Said::Off { h: key(n) },
-        (0xB0, Some(64), Some(v)) => Said::Pedal(v >= 64),
+        (0xB0, Some(64), Some(v)) => Said::Pedal([status, 64, v & 0x7F]),
         (0xE0, Some(l), Some(m)) => Said::Wheel([status, l & 0x7F, m & 0x7F]),
         (0xB0, Some(c @ (1 | 121)), Some(v)) => Said::Wheel([status, c, v & 0x7F]),
         (0xB0, Some(120 | 123), _) => Said::AllOff,
@@ -128,26 +188,24 @@ impl Graph {
                 self.audition_gone(&client(name));
                 known.then(|| format!("{name} was unplugged. Its notes stopped."))
             }
-            Event::Bytes(name, bytes) => {
-                self.midi_message(name, bytes);
-                None
-            }
+            Event::Bytes(name, bytes) => self.midi_message(name, bytes),
         }
     }
 
-    /// One message from keyboard `name`, as audition: an On on the target, an Off (or held back by
-    /// the pedal), the pedal, or every note let go.
-    fn midi_message(&self, name: &str, bytes: &[u8]) {
+    /// One message from keyboard `name`, as audition: an On on the target (on a kit, the Drum track
+    /// that answers to it), an Off (kept in a take while the pedal is down), the pedal, or every
+    /// note let go. Answers the words for a note no Drum of a kit answers to, the first time.
+    fn midi_message(&self, name: &str, bytes: &[u8]) -> Option<String> {
         let said = read(bytes);
         if said == Said::Nothing {
-            return;
+            return None;
         }
         let a = {
             let mut cp = self.inner.control.lock();
             let token = cp.open.as_ref().map(|p| p.engine.token);
             // Turned off in Settings: it plays and records nothing (lane B).
             if cp.midi.off.contains(name) {
-                return;
+                return None;
             }
             let target = cp.midi.target.clone().filter(|t| Some(t.token) == token);
             // While a take records, keys play its lane, whatever a window selects (lane B, D8).
@@ -155,42 +213,75 @@ impl Graph {
                 Some((module, lane)) => Some(Target { token: token.unwrap_or_default(), module, lane }),
                 None => target,
             };
-            let Some(k) = cp.midi.keyboards.iter_mut().find(|k| k.name == name) else { return };
+            // A kit's bus or Drum track: each key goes to the Drum track that answers to it (KIT-25).
+            let pads = target.as_ref().and_then(|t| Pads::of(&cp, &t.module));
+            let k = cp.midi.keyboards.iter_mut().find(|k| k.name == name)?;
             match said {
                 Said::On { h, pitch, velocity } => {
-                    // Struck again under the pedal: audition lets the old one go first.
-                    k.held_back.remove(&h);
-                    let Some(t) = target else { return };
-                    Audition { module: Some(t.module), lane: Some(t.lane), on: vec![Strike { h, pitch, velocity }], ..Audition::default() }
-                }
-                Said::Off { h } if k.pedal => {
-                    k.held_back.insert(h);
-                    return;
-                }
-                Said::Off { h } => Audition { off: vec![h], ..Audition::default() },
-                Said::Pedal(down) => {
-                    k.pedal = down;
-                    if down {
-                        return;
+                    // Struck again under the pedal: the take's note it held ends here (RENDER-36).
+                    let again = k.held_back.remove(&h);
+                    let key = pitch as u8;
+                    let lane = match (target, &pads) {
+                        (None, _) => None,
+                        (Some(t), None) => Some((t.module, t.lane)),
+                        (Some(_), Some(p)) => p.answers(key),
+                    };
+                    // A note no Drum of the kit answers to plays nothing: said once (KIT-25).
+                    let unanswered = match (&lane, &pads) {
+                        (None, Some(p)) => cp.midi.unanswered(p, key),
+                        _ => None,
+                    };
+                    drop(cp);
+                    if again {
+                        self.take_lets_go(&client(name), &[h]);
                     }
-                    Audition { off: std::mem::take(&mut k.held_back).into_iter().collect(), ..Audition::default() }
+                    let Some((module, lane)) = lane else { return unanswered };
+                    Audition { module: Some(module), lane: Some(lane), on: vec![Strike { h, pitch, velocity }], ..Audition::default() }
+                }
+                // The lane hears it let go: its voices hold the sound while the pedal is down
+                // (RENDER-38). A take keeps the note until the pedal lifts (RENDER-36).
+                Said::Off { h } => {
+                    if k.pedal {
+                        k.held_back.insert(h);
+                    }
+                    Audition { off: vec![h], pedalled: k.pedal, ..Audition::default() }
+                }
+                Said::Pedal(bytes) => {
+                    let down = bytes[2] >= 64;
+                    let lifted = if k.pedal && !down { std::mem::take(&mut k.held_back) } else { BTreeSet::new() };
+                    k.pedal = down;
+                    drop(cp);
+                    self.wheel(&client(name), target.map(|t| (t.module, t.lane)), bytes);
+                    self.take_lets_go(&client(name), &lifted.into_iter().collect::<Vec<_>>());
+                    return None;
                 }
                 Said::AllOff => {
-                    k.held_back.clear();
+                    // Its release puts the lane's pedal up, and ends what a take kept.
+                    (k.pedal, k.held_back) = (false, BTreeSet::new());
                     drop(cp);
                     self.audition_gone(&client(name));
-                    return;
+                    return None;
                 }
                 Said::Wheel(bytes) => {
                     drop(cp);
                     self.wheel(&client(name), target.map(|t| (t.module, t.lane)), bytes);
-                    return;
+                    return None;
                 }
-                Said::Nothing => return,
+                Said::Nothing => return None,
             }
         };
         // No song open, or a lane nothing plays: nothing sounds, and nobody is told.
         let _ = self.audition(&client(name), a);
+        None
+    }
+
+    /// A seek or a Stop let the lanes' pedals up (RENDER-36): every keyboard's pedal is up for its
+    /// take too, until the foot lifts and presses it again. A take that ran ended there, with the
+    /// notes it kept.
+    pub(super) fn midi_pedals_up(&self) {
+        for k in &mut self.inner.control.lock().midi.keyboards {
+            (k.pedal, k.held_back) = (false, BTreeSet::new());
+        }
     }
 
     /// What MIDI keyboards play from now on: lane `(module, lane)` of the open song, or nothing.
@@ -201,6 +292,8 @@ impl Graph {
             let mut cp = self.inner.control.lock();
             let token = cp.open.as_ref().map(|p| p.engine.token).context("no project is open")?;
             cp.midi.target = target.map(|(module, lane)| Target { token, module, lane });
+            // Keys play something else: a note no Drum answers to is said again (KIT-25).
+            cp.midi.unanswered.clear();
             // While a take records, keys play its lane (lane B, D8).
             let plays = cp.record.lane(Some(token)).or_else(|| cp.midi.target.as_ref().map(|t| (t.module.clone(), t.lane.clone())));
             (cp.midi.keyboards.iter().map(|k| client(&k.name)).collect::<Vec<_>>(), plays)
@@ -237,7 +330,11 @@ impl Inner {
     pub(super) fn midi_state(&self) -> Value {
         let cp = self.control.lock();
         let token = cp.open.as_ref().map(|p| p.engine.token);
-        let target = cp.midi.target.as_ref().filter(|t| Some(t.token) == token).map(|t| json!({"module": t.module, "lane": t.lane}));
+        let target = cp.midi.target.as_ref().filter(|t| Some(t.token) == token).map(|t| match Pads::of(&cp, &t.module) {
+            // A kit's: keys play it by sound (KIT-25).
+            Some(p) => json!({"module": t.module, "lane": t.lane, "kit": p.bus}),
+            None => json!({"module": t.module, "lane": t.lane}),
+        });
         let mut v = json!({"devices": cp.midi.keyboards.iter().map(|k| k.name.as_str()).collect::<Vec<_>>(), "target": target});
         // Turned off in Settings (lane B): named only when some are.
         if !cp.midi.off.is_empty() {

@@ -74,7 +74,7 @@ fn untouched_files_continue_whatever_changed() {
     let mut s = d.open();
     let (a, b) = edited(&d, &mut s, "tracks/keys.ts", |t| {
         t.replace("pluck(lane.notes(\"chords\"))", "delay(pluck(lane.notes(\"chords\")))")
-            .replace("import { pluck }", "import { delay } from \"std/fx\";\nimport { pluck }")
+            .replace("import { pluck }", "import { delay } from \"@m2/effects\";\nimport { pluck }")
     });
     let c = continues(&a, &b);
     let old = &a.compiled.flat;
@@ -89,7 +89,7 @@ fn probes(body: &str) -> Dir {
     m2_plugins::test_main_thread();
     m2_plugins::probe::install();
     let song = format!(
-        "import {{ plugin, song }} from \"@m2/core\";\nimport {{ delay }} from \"std/fx\";\nimport {{ sum }} from \"std/math\";\n\
+        "import {{ plugin, song }} from \"@m2/core\";\nimport {{ delay }} from \"@m2/effects\";\nimport {{ sum }} from \"std/math\";\n\
          export default song(() => {{\n{body}\n}});\n"
     );
     Dir::with(&[("song.ts", &song)])
@@ -145,7 +145,7 @@ fn keyed_plugins_follow_their_paths() {
 /// A one-track song whose track sums what `body` makes of its notes lane `n`.
 fn summed(body: &str) -> Dir {
     let song = format!(
-        "import {{ key, song, track }} from \"@m2/core\";\nimport {{ pluck }} from \"std/instruments\";\nimport {{ sum }} from \"std/math\";\n\
+        "import {{ key, song, track }} from \"@m2/core\";\nimport {{ pluck }} from \"@m2/synths\";\nimport {{ sum }} from \"std/math\";\n\
          const t = track(\"t\", ({{ lane }}) => {{\n  const n = lane.notes(\"n\");\n  return sum(...{body});\n}});\nexport default song(() => t.out);\n"
     );
     Dir::with(&[("song.ts", &song)])

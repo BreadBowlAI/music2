@@ -475,11 +475,20 @@ pub(crate) fn commit(s: &mut Session, tx: Tx) -> Result<crate::Edited, EditError
 
 /// Reorder the tracks: `order` must be every track there is, once each.
 pub fn reorder(s: &mut Session, order: &[String]) -> Result<crate::Edited, EditError> {
+    reorder_from(s, order, None)
+}
+
+/// [`reorder`], made from the order `base` (AGENT-2): refused, saying who changed it, when the
+/// tracks aren't in that order now, so a move made elsewhere meanwhile is never lost.
+pub fn reorder_from(s: &mut Session, order: &[String], base: Option<&[String]>) -> Result<crate::Edited, EditError> {
     let read = read_disk(&s.accepted().project.dir);
     if matches!(read, Read::Invalid(_)) {
         return Err(unreadable());
     }
     let view = effective(&default_order(s), &read);
+    if let Some(base) = base {
+        crate::list_since(s, "the track order", view.order == base)?;
+    }
     let mut want = order.to_vec();
     want.sort();
     let mut have = view.order.clone();

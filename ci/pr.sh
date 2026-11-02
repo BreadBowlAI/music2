@@ -32,8 +32,10 @@
 #                               (ci/tally-test.sh) and of the npm lockfiles' check
 #                               (ci/npm-licenses-test.sh)
 #   ci/pr.sh quick              lint's checks, then the cases of the gates rule, the pool's models,
-#                               the web typecheck and build, std's kernels (tests, clippy) and
-#                               std.wasm rebuilt to the committed bytes
+#                               the web typecheck and build, the kernels' workspace (tests, clippy:
+#                               std's and music2's own packs'), every kernel module music2 ships
+#                               rebuilt to the committed bytes (std/build.sh --check, ABI-10), and
+#                               that check's own cases (ci/wasm-test.sh)
 #   ci/pr.sh models             the pool's models alone (core/pool/tests/models.rs, in release, and
 #                               their lint), as ci/check.sh's "pool models" row: the Mac's nightly
 #                               job runs them, as arm64 can catch an ordering too weak that x86 hides
@@ -151,6 +153,8 @@ if [ -e "$OUT" ] && [ ! -e "$OUT/.m2-check" ]; then
   echo "ci/pr.sh: $OUT wasn't made by a check, so it is left alone: name another folder in M2_PR_OUT"
   exit 2
 fi
+# A pack installed in the last run's scratch HOME is read-only (PACK-6, PACK-16).
+if [ -e "$OUT" ]; then chmod -R u+w "$OUT"; fi
 rm -rf "$OUT" && mkdir -p "$OUT/home" && : > "$OUT/.m2-check" || exit 2
 : > "$OUT/results"
 BEFORE=$(git status --porcelain)
@@ -227,15 +231,16 @@ lint() {
   check fmt fmt.log sh -c 'cargo fmt --all --check && cd std/kernels-src && cargo fmt --all --check'
   if tools actionlint zizmor deny; then
     # No shellcheck or pyflakes inside actionlint: their versions differ from machine to machine,
-    # and every run: block only calls a script here.
-    check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && node ci/ci-ok.mjs --check-workflow'
+    # and every run: block only calls a script here. The registry repo's template workflows
+    # (registry/.github, REG-10) are checked the same way, though they run in that repo, not here.
+    check workflows actionlint.log sh -c 'actionlint -color -shellcheck= -pyflakes= && actionlint -color -shellcheck= -pyflakes= registry/.github/workflows/*.yml && node ci/ci-ok.mjs --check-workflow'
     # The workflows' and dependabot.yml's security, zizmor's default persona, every finding a
     # failure; a finding judged safe is ignored in place, with its reason. --offline: no audit
     # that asks GitHub (an action's known holes change with the date, not the code).
-    check zizmor zizmor.log zizmor --offline --no-progress --color never .github
+    check zizmor zizmor.log zizmor --offline --no-progress --color never .github registry/.github
     # No advisories (the advisories step), so no advisory database is fetched: the same answer every day.
     check licences licences.log sh -c 'cargo deny --locked --color never --config deny.toml check bans licenses sources &&
-      cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered bans licenses sources &&
+      cargo deny --locked --color never --manifest-path std/kernels-src/Cargo.toml --config deny.toml check -A license-not-encountered -A license-exception-not-encountered bans licenses sources &&
       node ci/npm-licenses.mjs'
   fi
   check guide guide.log ci/guide.sh check
@@ -278,7 +283,8 @@ case $STEP in
     check "pool models" pool-models.log models
     check "web build" web.log web
     check "std kernels" kernels.log sh -c 'cd std/kernels-src && cargo test --locked --release --workspace && cargo clippy --locked --workspace --all-targets -- -D warnings'
-    check std.wasm std-wasm.log std/build.sh --check ;;
+    check wasm wasm.log std/build.sh --check
+    check "wasm cases" wasm-test.log ci/wasm-test.sh ;;
 
   models)
     check "pool models" pool-models.log models ;;
@@ -326,8 +332,8 @@ case $STEP in
           check "sleeps list" sleeps-list.log sleeps_list "$OUT"
         fi
       fi
-      # PLAT-7: no test wrote in the cache folder of the HOME it ran with.
-      check "cache untouched" cache-left.log ci/cache-left.sh "$OUT/home"
+      # PLAT-7, PACK-16: no test wrote in the cache folder or the Music folder of the HOME it ran with.
+      check "home untouched" cache-left.log ci/cache-left.sh "$OUT/home"
     fi ;;
 
   suites)

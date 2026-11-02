@@ -44,9 +44,9 @@
       "../../std/m2pkg.toml": "std/m2pkg.toml",
       "../../std/kernels/*.wasm": "std/kernels/",
       "../../std/src/": "std/src/",
-      "../../std/presets/": "std/presets/",
       "../../std/samples.toml": "std/samples.toml",
       "../../std/samples/kit/*.wav": "std/samples/kit/",
+      "../../packs/": "packs/",
       "../../templates/": "templates/",
       "../../examples/": "examples/"
     },

@@ -86,7 +86,7 @@ fn every_write_command_forwards() {
         vec!["tempo", dir, "128"],
         vec!["meter", dir, "7/8", "--at", "9"],
         vec!["title", dir, "Night Drive"],
-        vec!["add-effect", dir, "tracks/keys.ts#1", "std:delay"],
+        vec!["add-effect", dir, "tracks/keys.ts#1", "@m2/effects:delay"],
         vec!["remove-effect", dir, "tracks/keys.ts#1"],
         vec!["delete-data", dir, "data/kick/old.json"],
         vec!["edit", dir, "tracks/hats.ts", "--old", "track(\"hats\"", "--new", "track(\"hat2\""],

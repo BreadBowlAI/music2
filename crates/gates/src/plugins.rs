@@ -456,7 +456,7 @@ fn add_effect(lab: &mut Lab, kind: Kind, o: &Opts, song: &Song, out: &mut Outcom
     let mut session = lab.session(&dir)?;
     let target = kick_call(&session, &dir)?;
     let t = Instant::now();
-    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    session.add_effect(session.accepted().number, &target, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
     let edited = crate::accepted(&session, t.elapsed());
     let (e0, t0) = (a.now(), a.rig.probe().transport.context("the rig has no transport position")?);
     // What building the plugins alone takes: the same renderer, built again.
@@ -494,7 +494,7 @@ fn effect_heard(lab: &mut Lab, kind: Kind, o: &Opts, from: &Path, out: &mut Outc
     }
     let mut session = lab.session(&dir)?;
     let target = kick_call(&session, &dir)?;
-    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    session.add_effect(session.accepted().number, &target, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
     let edited = crate::accepted(&session, std::time::Duration::ZERO);
     let e0 = decks[0].now();
     let sent = decks[0].change(&edited, Change::Structure)?;
@@ -529,8 +529,8 @@ fn kick_call(session: &m2_session::Session, dir: &Path) -> Result<String> {
         .compiled
         .sites
         .iter()
-        .find(|s| s.in_project && s.file == "tracks/kick.ts" && s.callee == "kick")
-        .with_context(|| format!("no call to kick in {}", dir.join("tracks/kick.ts").display()))?;
+        .find(|s| s.in_project && s.file == "tracks/kick.ts" && s.callee == "drums.drum")
+        .with_context(|| format!("no call to drums.drum in {}", dir.join("tracks/kick.ts").display()))?;
     Ok(format!("{}#{}", site.file, site.ordinal))
 }
 
@@ -580,7 +580,7 @@ fn kept(lab: &mut Lab, kind: Kind, o: &Opts, lead: &Song, out: &mut Outcome) -> 
     let mut session = lab.session(&song.dir)?;
     let target = kick_call(&session, &song.dir)?;
     let t = Instant::now();
-    session.add_effect(session.accepted().number, &target, "std:delay").map_err(|e| anyhow!("{e}"))?;
+    session.add_effect(session.accepted().number, &target, "@m2/effects:delay").map_err(|e| anyhow!("{e}"))?;
     let edited = crate::accepted(&session, t.elapsed());
     deck.run_to(played + song.frame(1.5))?;
     let pre = deck.rig.plugins().expect("checked");

@@ -1,6 +1,7 @@
 //! Every `m2` command, declared once (AGENT-12): `m2`'s usage and `m2 docs commands` (the guide's
 //! `docs/guide/commands.md`) are both made from [`COMMANDS`]. A command `m2` doesn't know is
-//! refused, exit status 2.
+//! refused, exit status 2; so is a word a command doesn't take, since each `usage` is also the
+//! grammar its words are read against (AGENT-13, `words.rs`).
 //!
 //! Each entry's `words` is what `m2` prints; `more` is what the guide adds. Both are Markdown: the
 //! usage strips the backticks.
@@ -11,7 +12,8 @@ pub struct Command {
     pub name: &'static str,
     /// Other words that run it (`build` for `check`).
     pub also: &'static [&'static str],
-    /// How it is called: one form a line, each starting `m2 `.
+    /// How it is called: one form a line, each starting `m2 `, and the grammar its words are read
+    /// against (AGENT-13): its place words, then its flags, `[…]` around what can be left out.
     pub usage: &'static str,
     /// What it does, in a few lines.
     pub words: &'static str,
@@ -34,8 +36,9 @@ musician sees it there, and `m2 undo` takes it back. While the musician drags wh
 records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, \
 changing nothing. Don't write the song's files directly while the app has it open: the app can't \
 refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files \
-itself, and undo isn't kept once it exits. Reading, rendering and `bounce` without `--place` work all \
-the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
+itself, each write an undo step of the song's history, yours by `--as`, which the app reads back \
+when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without \
+`--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
 listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can \
 do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
@@ -44,8 +47,13 @@ in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/mus
 `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built \
 from.
 
-`m2` alone, `m2 help` or `m2 --help` prints this; `m2 --version` (or `-V`) prints which `m2` this is. A command `m2` doesn't know is refused, with exit \
-status 2. `m2 docs` prints the guide, built into this `m2`.";
+`m2` alone, `m2 help` or `m2 --help` prints this, and `m2 --version` (or `-V`) which `m2` this is. \
+`m2 <command> --help` prints that command's part. A command `m2` doesn't know is refused, with exit status 2. So is a word a command \
+doesn't take, before anything is read or written, and `m2` says which: a flag it hasn't got, a flag without its value, \
+a word too many or too few. A word that starts with `-` is a flag, unless it is a number (`-6`), has a space in it, \
+or is `-` alone: standard input, where the usage says `| -`. A flag's value is the next word, unless that is a flag; \
+a `<text>` is the next word whatever it is. Flags can go anywhere after the command, but `--as` and `--why` go last. \
+`m2 docs` prints the guide, built into this `m2`.";
 
 /// The guide's page only: commands to try, on a copy of an example.
 pub const EXAMPLES: &str = "\
@@ -56,7 +64,7 @@ m2 render /tmp/m2-scratch out.wav
 m2 controls /tmp/m2-scratch                                     # ids look like song.ts#2/0.hats.pan
 m2 set /tmp/m2-scratch 'song.ts#2/0.hats.pan' 0.45
 m2 set /tmp/m2-scratch 'tracks/hats.ts#1/@decay' 0.08            # a control the call leaves out: writes { decay: 0.08 }
-m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' std:delay
+m2 add-effect /tmp/m2-scratch 'tracks/hats.ts#1' @m2/effects:delay
 
 m2 new /tmp/m2-resample --example resample
 m2 bounce /tmp/m2-resample keys-again --track keys              # render the keys track to assets/keys-again.wav
@@ -99,16 +107,22 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "listen",
         also: &[],
-        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with tx.json] [--png out.png] [--json]",
+        usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]",
         words: "measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, ten octave bands, \
                 stereo and masking, for the mix and each track, its own sound and as it reaches the mix. The bars \
                 count from 1 (else the loop when one is on, else the song), with 2 bars of preroll; `--tracks` \
-                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx checked \
-                and never written, before and after; `--png` draws the bands over time. Its own process, at \
+                measures those alone; `--as-heard` with the musician's listening mute and solo; `--with` a Tx (from a file, or \
+                standard input) checked and never written, before and after; `--png` draws the bands over time. Its own process, at \
                 background priority, one at a time; it writes nothing into the song",
         more: "It works with the app open or closed. [Listening](listening.md) says what each number means.",
     },
-    Command { name: "kernels", also: &[], usage: "m2 kernels [--json]", words: "list every kernel and its typed ports", more: "" },
+    Command {
+        name: "kernels",
+        also: &[],
+        usage: "m2 kernels [--json]",
+        words: "list every kernel and its typed ports: std's, and those of the packs music2 comes with",
+        more: "",
+    },
     Command {
         name: "bounce",
         also: &[],
@@ -122,8 +136,9 @@ pub const COMMANDS: &[Command] = &[
         name: "graph",
         also: &[],
         usage: "m2 graph <project> [--json]",
-        words: "the graph the canvas shows: calls, their knobs, connections",
-        more: "",
+        words: "the graph the canvas shows: calls, their knobs and settings, connections",
+        more: "A card whose sound puts its values in groups prints each group as a heading over its rows, with More \
+               last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.",
     },
     Command {
         name: "controls",
@@ -141,7 +156,9 @@ pub const COMMANDS: &[Command] = &[
         usage: "m2 set <project> <control> <value> [--expect V]",
         words: "change one, verified by the compiler (values in the control's units); `--expect` refuses unless it \
                 is V now",
-        more: "",
+        more: "A knob that is a menu or a switch takes a word: one of its options' names (`square`), or true or false \
+               (On, Off). A setting is set the same way, by its id (a card's `settings` in `m2 graph <project> --json`, \
+               such as `tracks/bass.ts#3/@shape`): a number, true or false, or a word such as `square`.",
     },
     Command {
         name: "automate",
@@ -163,17 +180,40 @@ pub const COMMANDS: &[Command] = &[
         name: "add-track",
         also: &[],
         usage: "m2 add-track <project> <instrument> [--name N] [--key ID] [--after ID]",
-        words: "add a track playing an instrument (`std:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its \
+        words: "add a track playing an instrument (`@m2/synths:synth-pluck`, or `synth.pluck`): its file in `tracks/`, its \
                 import and mixer channel in `song.ts`, an empty notes lane, and its place and colour in \
                 `layout.json`, verified",
         more: "It is what + Track does. `--name \"Lead Vox\"` names it, `--key` gives its key, `--after kick` puts it \
                below that track.",
     },
     Command {
+        name: "add-kit",
+        also: &[],
+        usage: "m2 add-kit <project> <kit> [--after ID]",
+        words: "add a drum kit by its name (`808 kit`, `909 kit`, `Basic kit`): a Drums bus, and the kit's tracks, each \
+                a Drum playing its drum from an empty lane of its own and going to the bus; one edit that undo takes \
+                back, verified",
+        more: "It is what + Track ▸ Drum kit does. `m2 add-kit . \"808 kit\" --after keys` puts the kit below that track. \
+               The kits are the packs' own: `@m2/drums` names three. Mix each drum on its own track, and the whole kit \
+               on the Drums bus. [Drum kits](sounds.md#drum-kits) says more.",
+    },
+    Command {
+        name: "make-kit",
+        also: &[],
+        usage: "m2 make-kit <project> <track>",
+        words: "make a track that plays the drum machine a drum kit: the track becomes the kit's bus, keeping its \
+                name, channel and effects, and each sound its notes use gets a Drum track of its own going to it, \
+                its knobs and levels carried; one edit that undo takes back, verified",
+        more: "It is what Make it a kit in the track's menu does. Same drums, pitches, levels and lengths; each hit's \
+               noise comes out a little different. Notes the drum machine played nothing for go, and it names them. \
+               `m2 upgrade` names each track that plays the drum machine. [Drum kits](sounds.md#drum-kits) says more.",
+    },
+    Command {
         name: "import",
         also: &[],
-        usage: "m2 import <project> <file.wav>… [--track ID] [--at BAR]",
-        words: "bring WAV files into `assets/` (a copy, or the same bytes already there; a taken name numbered) and \
+        usage: "m2 import <project> <file.wav|file.flac>… [--track ID] [--at BAR]",
+        words: "bring WAV or FLAC files into `assets/` (a copy, or the same bytes already there; a taken name numbered; \
+                a FLAC as the WAV of its samples, with a note of what it was made from) and \
                 place their clips from bar BAR (1 if not given): on a track's audio lane one after another, or \
                 without `--track` each on a new audio track named after it, at the end; one edit that undo takes back",
         more: "With the song open in the app, the app brings them in, as one undo step, and nothing is copied while \
@@ -210,7 +250,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "layout",
         also: &[],
-        usage: "m2 layout <project> order <IDs…>\nm2 layout <project> colour <ID> <colour>\nm2 layout <project> reset",
+        usage: "m2 layout <project> order <IDs…>\nm2 layout <project> colour|color <ID> <colour>\nm2 layout <project> reset",
         words: "reorder or recolour tracks in `layout.json` (no revision), or write the default layout over one that \
                 doesn't read; the colours are rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet \
                 and lime",
@@ -264,15 +304,15 @@ pub const COMMANDS: &[Command] = &[
         name: "effects",
         also: &[],
         usage: "m2 effects <project>",
-        words: "the effects packages offer, by id (`std:delay`), and the calls they can go after",
+        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after",
         more: "",
     },
     Command {
         name: "add-effect",
         also: &[],
         usage: "m2 add-effect <project> <call> <effect>",
-        words: "wrap a call's audio in an effect, named by its component id (`std:delay`) or its export \
-                (`std/fx.delay`), verified",
+        words: "wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export \
+                (`@m2/effects.delay`), verified",
         more: "",
     },
     Command {
@@ -307,6 +347,21 @@ pub const COMMANDS: &[Command] = &[
                `.music2/tx/<id>.json`). Every command prints the problems it finds with the commands that fix them.",
     },
     Command {
+        name: "upgrade",
+        also: &[],
+        usage: "m2 upgrade <project> [--check]",
+        words: "move a song made for an older music2 to this one in one step: its `@m2/core`, std and packs lines and its \
+                lock, its imports of what moved into the packs, the single drums as the Drum with their knobs converted, and \
+                renamed knobs, keeping its sound. One undo step, written only if all of it converts exactly and the song then \
+                builds; `--check` says what it would change, and writes nothing",
+        more: "It prints each file it changes, the lines before (`-`) and after (`+`). What it can't convert exactly it names \
+               by file and line, with the line to write, and then writes nothing (exit 1): change those by hand, then run it \
+               again. What it converts as well as it can (the simple kick and hat, other sounds than the Drum's) it names to \
+               check. It never changes your presets, which are outside the song: it names those of sounds that moved. A song \
+               made for this music2 is left as it is. While the app has the song open, the app runs it, as one undo step there. \
+               See [Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2).",
+    },
+    Command {
         name: "tx",
         also: &[],
         usage: "m2 tx <project> <tx.json | -> [--check] [--seen HASH]",
@@ -327,19 +382,43 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 pack new <folder> --name @owner/name\nm2 pack import-sfz <file.sfz> <folder> --name @owner/name [--label L] \
                 [--category C] [--license L]\nm2 pack check <folder>\nm2 pack build <folder>\nm2 pack install <folder>\n\
-                m2 pack list\nm2 pack remove @owner/name <version>\nm2 pack lock <project>\nm2 pack update <project> [@owner/name]",
+                m2 pack get <@owner/name>[@<version>]\nm2 pack get [<project>]\nm2 pack list\nm2 pack remove @owner/name <version>\n\
+                m2 pack lock <project>\nm2 pack update <project> [@owner/name]",
         words: "make, check and install packs: instruments, effects, sounds and recordings in a folder. `new` makes one with an \
                 example instrument; `import-sfz` makes one from an SFZ instrument (its recordings, as an instrument written as \
                 data), saying what it couldn't keep; `check` says in words what the registry would refuse (exit 1); `build` writes its \
-                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `list` and `remove` show and \
-                take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must \
+                `m2pack.json`; `install` checks, builds and copies it into your store, read-only; `get` gets one from the library \
+                (the registry), the latest version unless one is named, or every pack a song's `music2.lock` names that isn't \
+                installed; `list` and `remove` show and take out what is installed; `lock` writes the song's `music2.lock` from its `music2.toml`, moving only what must \
                 move; `update` moves the song to the newest installed version each line allows (or that pack's only)",
         more: "Your store is `~/Music/music2/Packs`, one folder a version (`Packs/@alice/felt-piano/1.2.0/`). A version is never \
                changed: installing one that is there with other files is refused, and installing it again when its copy was \
                changed puts it back. A song keeps the version it was made with in `music2.lock`; adding a pack's instrument or \
                effect in the app writes it. To move a song to another version, change its line in `music2.toml`, then run \
-               `m2 pack lock`; both lock and update work while the song doesn't build. See [Packs](packs.md) and \
+               `m2 pack lock`; both lock and update work while the song doesn't build. `get` reads the registry \
+               `M2_REGISTRY` names, else `registry` in `~/.music2/settings.json`; each file is checked by its hash, and a pack \
+               is installed whole or not at all. See [Packs](packs.md), [Getting packs from the library](library.md) and \
                [Making a pack](making-a-pack.md).",
+    },
+    Command {
+        name: "registry",
+        also: &[],
+        usage: "m2 registry check <registry> [--base <registry>] [--author <github-login>]\nm2 registry add <registry> <pack-folder> \
+                --source <url>\nm2 registry pending <registry> --out <bucket> [--from <bucket>]\nm2 registry build <registry> \
+                --sources <folder> --out <bucket> [--from <bucket>] [--made <time>] [--to-delete <file>]",
+        words: "the pack registry's robot, and listing your pack in it. `check` reads every pack file strictly and says what a \
+                change broke: a listed version changed or a take-down taken back (`--base`: the registry before), a file \
+                changed by someone not its scope's (`--author`); `add` checks your pack, writes its `m2pack.json` and lists \
+                its version in `packs/@owner/name.toml`; `pending` prints the versions the bucket hasn't got yet, each with \
+                its hash and where to get it; `build` refuses to change anything the bucket publishes, then builds each \
+                pending version on its own from `<sources>/<its hash>/`, writing its files, previews and facts into \
+                `--out` by hash, then the catalog. A version that fails is left out and stays pending (exit 1)",
+        more: "The registry is a folder: one file a pack, `packs/@owner/name.toml`, `tags.txt`, the words a pack's tags \
+               may use, and `removed.toml`, the versions taken down, which only music2's people list. `--from` is the \
+               bucket as it is: what it has isn't built again, and what it publishes never changes: `https://…` (the \
+               bucket's own address, never a cache), a folder or `file:///…`. `--made` is the catalog's time, `2026-10-30T12:00:00Z` (now, when it is left out), so \
+               one registry and one time always make the same bytes. `--to-delete` writes the bucket paths of taken-down \
+               versions' files that no other version uses, one a line. See [Making a pack](making-a-pack.md#listing-it-in-the-registry).",
     },
     Command {
         name: "plugin-state",
@@ -361,20 +440,41 @@ pub const COMMANDS: &[Command] = &[
         name: "clips",
         also: &[],
         usage: "m2 clips <project> create <track>/<lane> --at <place> [--length B] [--beats]\n\
-                m2 clips <project> move <clip>… --by B [--to <track>/<lane>] [--copy] [--beats]\n\
+                m2 clips <project> move <clip>… [--by B] [--to <track>/<lane>] [--copy] [--beats]\n\
                 m2 clips <project> resize <clip> --start <place> --length B [--beats]\n\
                 m2 clips <project> split <clip>… --at <place> [--beats]\n\
-                m2 clips <project> join <clip>…\n\
-                m2 clips <project> duplicate <clip>… [--grid B]\n\
-                m2 clips <project> quantize <clip>… --grid B [--ends]\n\
-                m2 clips <project> delete <clip>…\n\
+                m2 clips <project> join <clip>… [--beats]\n\
+                m2 clips <project> duplicate <clip>… [--grid B] [--beats]\n\
+                m2 clips <project> quantize <clip>… --grid B [--ends] [--beats]\n\
+                m2 clips <project> delete <clip>… [--beats]\n\
                 m2 clips <project> json <gesture.json | ->",
         words: "one clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), \
                 or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or \
                 beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app \
                 sends it",
-        more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste`, `notes`, \
-               `points`, `audio` and `set`.",
+        more: "Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with \
+               `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
+               song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a \
+               Drum's lane: `{\"op\": \"hits\", \"module\": \"kick\", \"lane\": \"hits\", \"at\": [0, 1], \"step\": 0.25, \
+               \"to\": \"on\"}`, `to` being `on`, `off` or `{\"velocity\": 0.5}`). `m2 call <song> /api/theory` lists \
+               the chords and grooves.",
+    },
+    Command {
+        name: "sections",
+        also: &[],
+        usage: "m2 sections <project> duplicate <bars> [--to <bar>]\n\
+                m2 sections <project> move <bars> --to <bar>\n\
+                m2 sections <project> delete <bars>\n\
+                m2 sections <project> insert-bars <bars>\n\
+                m2 sections <project> delete-bars <bars>\n\
+                m2 sections <project> json <gesture.json | ->",
+        words: "one gesture on whole bars of every track at once, as one edit that undo takes back. `<bars>` are bars \
+                counted from 1 (`9-16`, or `9` for one), or a marker's name (`Chorus`: to the next marker). \
+                `duplicate` copies them right after themselves (or to bar `--to`) and `move` moves them, each in \
+                place of what was there; `delete` empties them; `insert-bars` opens as many empty bars where they \
+                start, and `delete-bars` takes them out: everything after moves, markers and tempo changes too",
+        more: "A clip that crosses the bars' edge is split there. `json` also takes `paste`, with a copied section, \
+               as `POST /api/graph/sections` does. See [Sections](sections.md).",
     },
     Command {
         name: "unautomate",
@@ -441,7 +541,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "point",
         also: &[],
-        usage: "m2 point <project> <target> <words>\nm2 point <project> --clear",
+        usage: "m2 point <project> <target> [<words>]\nm2 point <project> --clear",
         words: "show a note in the open app at `track:bass`, `clip:bass/notes:<id>`, `lane:bass/cutoff`, `knob:<id>` \
                 or `bars:9-16` (by `--as`); it never moves the musician's view: they press play. `--clear` takes it \
                 away; so does their OK",
@@ -475,7 +575,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "search",
         also: &[],
-        usage: "m2 search <words…> [--kind <kind>] [--json]",
+        usage: "m2 search [<words…>] [--kind <kind>] [--json]",
         words: "find what can be added to a song: instruments, sounds (presets), effects, samples and plugins, best \
                 first, with the search ⌘F asks in the app. One line each: its name, its kind, what it is and where \
                 it is from, and its id, which adding it names",
@@ -486,7 +586,10 @@ pub const COMMANDS: &[Command] = &[
                the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
                which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
                `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \
-               takes), and a sound's `preset`. [Finding sounds](finding-sounds.md) says more.",
+               takes), and a sound's `preset`. After what you have come the library's items of packs you haven't got \
+               (when a registry is set), each marked `library`, its id `library:<id>`, with `library`: its pack, \
+               version, licence and the bytes `m2 pack get` fetches; the search runs on this computer and sends \
+               nothing. [Finding sounds](finding-sounds.md) says more.",
     },
     Command {
         name: "docs",
@@ -500,6 +603,12 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
+/// Flags that are gone: never shown, but still known, so that the command says why, in words that
+/// need the song read first (`--sr`: it renders at the song's own rate, which it names). One
+/// written with a value (`--sr N`) takes the next word when it isn't a flag; any may be given
+/// more than once: whatever is given, the command says it is gone.
+pub const GONE: &[(&str, &str)] = &[("render", "--sr N"), ("bounce", "--sr N"), ("plugin-state", "--force")];
+
 /// The command `word` runs, by its name or another word for it.
 pub fn find(word: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.name == word || c.also.contains(&word))
@@ -509,23 +618,31 @@ pub fn find(word: &str) -> Option<&'static Command> {
 pub fn usage() -> String {
     let mut out = format!("{TITLE}\n\nUSAGE:\n");
     for c in COMMANDS {
-        let forms: Vec<String> = c.usage.lines().flat_map(|f| wrap_form(f, WIDTH - 2)).collect();
-        // One short form: the words start beside it; else below the forms.
-        let beside = forms.len() == 1 && forms[0].chars().count() + 3 <= WORDS;
-        if !beside {
-            for f in &forms {
-                out += &format!("  {f}\n");
-            }
-        }
-        for (i, w) in wrap(&plain(c.words), WIDTH - WORDS).iter().enumerate() {
-            if i == 0 && beside {
-                out += &format!("  {:<width$}{w}\n", forms[0], width = WORDS - 2);
-            } else {
-                out += &format!("{}{w}\n", " ".repeat(WORDS));
-            }
-        }
+        out += &entry(c);
     }
     format!("{out}\n{}\n", wrap(&plain(NOTES), WIDTH).join("\n"))
+}
+
+/// One command's part of the usage: its forms, and its words beside or below them. `m2 <command>
+/// --help` prints it (AGENT-13).
+pub fn entry(c: &Command) -> String {
+    let mut out = String::new();
+    let forms: Vec<String> = c.usage.lines().flat_map(|f| wrap_form(f, WIDTH - 2)).collect();
+    // One short form: the words start beside it; else below the forms.
+    let beside = forms.len() == 1 && forms[0].chars().count() + 3 <= WORDS;
+    if !beside {
+        for f in &forms {
+            out += &format!("  {f}\n");
+        }
+    }
+    for (i, w) in wrap(&plain(c.words), WIDTH - WORDS).iter().enumerate() {
+        if i == 0 && beside {
+            out += &format!("  {:<width$}{w}\n", forms[0], width = WORDS - 2);
+        } else {
+            out += &format!("{}{w}\n", " ".repeat(WORDS));
+        }
+    }
+    out
 }
 
 /// The guide's page of every command, `docs/guide/commands.md`, as `m2 docs commands` prints it.
@@ -672,15 +789,14 @@ mod tests {
         assert!(extra.is_empty(), "apps/m2/src/commands.rs declares {extra:?}, which m2 doesn't run");
     }
 
-    /// Flags m2 reads only to refuse them, with why: never shown.
-    const REFUSED: &[&str] = &[
-        "--sr",    // a song renders at its own rate (RENDER-31a)
-        "--force", // plugin-state replaces a state as one edit, which undo puts back
-        "--bras",  // listen's test of a misspelt flag
+    /// Flags only tests name, as ones m2 hasn't got: never shown.
+    const TESTS: &[&str] = &[
+        "--bras", // listen's test of a misspelt flag
+        "--nope", // words.rs's test of a flag no command has
     ];
 
     // AGENT-12: every flag m2 reads is in a command's usage, or in the notes (--as, --why), but
-    // those it reads only to refuse.
+    // those gone, which it knows only to refuse (GONE).
     #[test]
     fn every_flag_is_shown() {
         let shown: String = COMMANDS.iter().map(|c| c.usage).chain([NOTES]).collect::<Vec<_>>().join("\n");
@@ -697,7 +813,8 @@ mod tests {
             }
         }
         assert!(read.contains("--json") && read.contains("--as"), "no flags found in {}: {read:?}", dir.display());
-        let hidden: Vec<_> = read.iter().filter(|f| !shown.contains(f.as_str()) && !REFUSED.contains(&f.as_str())).collect();
+        let gone: Vec<&str> = GONE.iter().map(|(_, f)| f.split(' ').next().unwrap()).chain(TESTS.iter().copied()).collect();
+        let hidden: Vec<_> = read.iter().filter(|f| !shown.contains(f.as_str()) && !gone.contains(&f.as_str())).collect();
         assert!(hidden.is_empty(), "m2 reads {hidden:?}, which no usage line in apps/m2/src/commands.rs shows");
     }
 

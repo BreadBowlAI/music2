@@ -45,20 +45,118 @@ impl Wheels {
     }
 }
 
+/// How many notes have started on each key of a lane, as a pool counts them (RENDER-39): the key is
+/// the pitch rounded, 0 to 127, and notes that start on one sample on one key count once. Counted
+/// from the notes alone, so never by engine time; kept in the pool, and reset with it.
+pub(crate) struct KeyCounts {
+    n: [u32; 128],
+    /// The engine sample each key last counted a start at.
+    at: [u64; 128],
+}
+
+/// Where a count wraps: the integers below it are exact in f32, as `std:hitcount`'s.
+const COUNT_WRAP: u32 = 1 << 24;
+
+impl KeyCounts {
+    pub(crate) const NONE: KeyCounts = KeyCounts { n: [0; 128], at: [u64::MAX; 128] };
+
+    /// Count a note on `pitch` starting at engine sample `t`: its key's count, itself included.
+    pub(crate) fn count(&mut self, t: u64, pitch: f32) -> u32 {
+        let key = key_of(pitch);
+        if self.at[key] != t {
+            self.at[key] = t;
+            self.n[key] = self.n[key] % (COUNT_WRAP - 1) + 1;
+        }
+        self.n[key]
+    }
+}
+
+/// The key of a note on `pitch`: its pitch rounded, 0 to 127.
+fn key_of(pitch: f32) -> usize {
+    if pitch.is_nan() { 0 } else { pitch.round().clamp(0.0, 127.0) as usize }
+}
+
+/// The sustain pedal's state after `e`, if `e` moves it (RENDER-35): down at 64 or more.
+pub(crate) fn pedal(e: &Event) -> Option<bool> {
+    match *e {
+        Event::Midi { bytes: [status, 64, v], .. } if status & 0xF0 == 0xB0 => Some(v >= 64),
+        Event::Midi { bytes: [status, 121, _], .. } if status & 0xF0 == 0xB0 => Some(false),
+        _ => None,
+    }
+}
+
+/// What the pedal does to one note (RENDER-38): its id, its pitch, the sample its Off came at
+/// (`u64::MAX` until it does), and whether the pedal holds it.
+pub(crate) trait Pedalled {
+    fn id(&self) -> u32;
+    fn pitch(&self) -> f32;
+    fn end(&mut self, at: u64);
+    fn ended(&self) -> bool;
+    fn held(&mut self) -> &mut bool;
+}
+
+/// A walk over notes: it calls what it is given on each one.
+pub(crate) type EachNote<'a, N> = dyn FnMut(&mut dyn FnMut(&mut N)) + 'a;
+
+/// One block's `events` from engine sample `start`, the pedal `down` as the block starts, over the
+/// notes `each` visits (RENDER-38): a note's Off ends it at its frame, or, the pedal down there,
+/// holds it; the pedal going up ends every note it holds at its frame, and a key struck again ends
+/// the one held on that key. Returns the pedal as the block ends. Never allocates.
+pub(crate) fn hold<N: Pedalled>(events: &[Event], mut down: bool, start: u64, each: &mut EachNote<N>) -> bool {
+    for e in events {
+        let at = start + e.frame() as u64;
+        if let Some(now) = pedal(e) {
+            if down && !now {
+                each(&mut |n: &mut N| {
+                    if std::mem::take(n.held()) {
+                        n.end(at);
+                    }
+                });
+            }
+            down = now;
+            continue;
+        }
+        match *e {
+            Event::Off { id, .. } => each(&mut |n: &mut N| {
+                if n.id() == id && !n.ended() && !*n.held() {
+                    match down {
+                        true => *n.held() = true,
+                        false => n.end(at),
+                    }
+                }
+            }),
+            Event::On { pitch, .. } => {
+                let key = key_of(pitch);
+                each(&mut |n: &mut N| {
+                    if *n.held() && key_of(n.pitch()) == key {
+                        *n.held() = false;
+                        n.end(at);
+                    }
+                });
+            }
+            _ => {}
+        }
+    }
+    down
+}
+
 /// The voice a note starting at engine sample `t` gets, or none (`steal: "none"` and every voice
-/// busy): a free voice, else the one `steal` names. A voice given a note this block is taken last.
+/// busy): a free voice, else the one `steal` names. A voice given a note this block is taken last,
+/// and one whose note only the pedal holds first (RENDER-38): its key is up, as a piano's damper
+/// would be.
 pub(crate) fn pick(voices: &[VoiceSlot], steal: Steal) -> Option<usize> {
     if let Some(i) = voices.iter().position(|v| v.note.is_none() && !v.taken) {
         return Some(i);
     }
     let all = 0..voices.len();
+    let kept = |i: usize| !voices[i].note.is_some_and(|n| n.held);
     match steal {
-        Steal::Oldest => all.min_by_key(|&i| voices[i].born),
+        Steal::Oldest => all.min_by_key(|&i| (kept(i), voices[i].born)),
         // The lowest peak over its last block; a tie goes to the oldest.
         Steal::Quietest => all.min_by(|&a, &b| {
-            let key = |i: usize| (voices[i].taken, voices[i].last_peak, voices[i].born);
-            let ((ta, pa, ba), (tb, pb, bb)) = (key(a), key(b));
-            ta.cmp(&tb).then(pa.total_cmp(&pb)).then(ba.cmp(&bb))
+            let key = |i: usize| (voices[i].taken, kept(i), voices[i].last_peak, voices[i].born);
+            let ((ta, ka, pa, ba), (tb, kb, pb, bb)) = (key(a), key(b));
+            ta.cmp(&tb).then(ka.cmp(&kb)).then(pa.total_cmp(&pb)).then(ba.cmp(&bb))
         }),
         Steal::None => None,
     }
@@ -71,7 +169,11 @@ struct Held {
     id: u32,
     pitch: f32,
     velocity: f32,
+    /// Its key's count (RENDER-39).
+    count: f32,
     kept: bool,
+    /// Let go while the pedal is down: it stays until the pedal lifts (RENDER-38).
+    pedalled: bool,
 }
 
 /// One block's pitch, gate and velocity, by frame: what a one-note voice's note fields read.
@@ -79,6 +181,8 @@ pub(crate) struct Cv {
     pub(crate) pitch: [f32; BLOCK],
     pub(crate) gate: [f32; BLOCK],
     pub(crate) velocity: [f32; BLOCK],
+    /// The key count of the note it plays (RENDER-39).
+    pub(crate) count: [f32; BLOCK],
 }
 
 /// A `"mono"` or `"legato"` poly's one note at a time: the notes held, the slide, and this
@@ -100,6 +204,7 @@ pub(crate) struct Mono {
     gate: bool,
     pitch: f32,
     velocity: f32,
+    key_count: f32,
     target: f32,
     step: f32,
     /// Frames of the slide left.
@@ -109,9 +214,9 @@ pub(crate) struct Mono {
 
 impl Mono {
     pub(crate) fn new(sample_rate: f64) -> Mono {
-        let none = Held { id: 0, pitch: 0.0, velocity: 0.0, kept: false };
+        let none = Held { id: 0, pitch: 0.0, velocity: 0.0, count: 0.0, kept: false, pedalled: false };
         Mono {
-            cv: Cv { pitch: [60.0; BLOCK], gate: [0.0; BLOCK], velocity: [0.0; BLOCK] },
+            cv: Cv { pitch: [60.0; BLOCK], gate: [0.0; BLOCK], velocity: [0.0; BLOCK], count: [0.0; BLOCK] },
             starts: [0; BLOCK],
             n_starts: 0,
             started: false,
@@ -121,6 +226,7 @@ impl Mono {
             gate: false,
             pitch: 60.0,
             velocity: 0.0,
+            key_count: 0.0,
             target: 60.0,
             step: 0.0,
             left: 0,
@@ -186,23 +292,54 @@ impl Mono {
         self.left = 0;
     }
 
-    /// One block of `events`, `glide` the slide's time in seconds at each frame (none: 0): fills
-    /// [`Mono::cv`] and [`Mono::starts`].
-    pub(crate) fn block(&mut self, events: &[Event], glide: Option<&[f32]>, alloc: Alloc) {
+    /// One block of `events`, starting at engine sample `start_at`, `glide` the slide's time in seconds
+    /// at each frame (none: 0): fills [`Mono::cv`] and [`Mono::starts`]. Each note is counted on its
+    /// key in `keys` (RENDER-39). While `pedal` is down, a note let go stays held until it lifts,
+    /// or until its key is struck again (RENDER-38).
+    pub(crate) fn block(
+        &mut self,
+        events: &[Event],
+        start_at: u64,
+        keys: &mut KeyCounts,
+        pedal: &mut bool,
+        glide: Option<&[f32]>,
+        alloc: Alloc,
+    ) {
         self.n_starts = 0;
         let mut e = 0;
         for i in 0..BLOCK {
             let sounding = self.top();
-            // This frame's events: Offs first, then Ons (RENDER-14). An On whose Off came on the
-            // same frame is no note.
+            // This frame's events: the controllers, then Offs, then Ons (RENDER-14). An On whose Off
+            // came on the same frame is no note, unless the pedal holds it.
             let mut start = None;
             while let Some(ev) = events.get(e).filter(|ev| ev.frame() as usize <= i) {
+                if let Some(down) = self::pedal(ev) {
+                    if *pedal && !down {
+                        while let Some(k) = self.held[..self.count].iter().position(|h| h.pedalled) {
+                            let id = self.held[k].id;
+                            self.remove(id);
+                        }
+                    }
+                    *pedal = down;
+                }
                 match *ev {
+                    Event::Off { id, .. } if *pedal => {
+                        if let Some(h) = self.held[..self.count].iter_mut().find(|h| h.id == id) {
+                            h.pedalled = true;
+                        }
+                    }
                     Event::Off { id, .. } => self.remove(id),
                     Event::On { id, pitch, velocity, frame, .. } => {
+                        let count = keys.count(start_at + frame as u64, pitch) as f32;
+                        // A key struck again lets go of the note the pedal held on it.
+                        while let Some(k) = self.held[..self.count].iter().position(|h| h.pedalled && key_of(h.pitch) == key_of(pitch)) {
+                            let id = self.held[k].id;
+                            self.remove(id);
+                        }
+                        // Let go on its own frame: no note, unless the pedal holds it.
                         let ended = events[..e].iter().any(|x| matches!(*x, Event::Off { id: o, frame: f, .. } if o == id && f == frame));
-                        if !ended {
-                            self.push(Held { id, pitch, velocity, kept: false });
+                        if !ended || *pedal {
+                            self.push(Held { id, pitch, velocity, count, kept: false, pedalled: ended });
                             start = Some(self.count - 1);
                         }
                     }
@@ -230,7 +367,7 @@ impl Mono {
                     }
                     again = true;
                 }
-                self.velocity = s.velocity;
+                (self.velocity, self.key_count) = (s.velocity, s.count);
                 if !self.started {
                     (self.started, self.first) = (true, i as u16);
                 }
@@ -239,7 +376,7 @@ impl Mono {
             {
                 // The note sounding ended and an older one is held: back to it.
                 self.slide(t.pitch, glide);
-                self.velocity = t.velocity;
+                (self.velocity, self.key_count) = (t.velocity, t.count);
                 again = alloc.mode == Mode::Mono;
             } else if self.left > 0 {
                 self.left -= 1;
@@ -258,6 +395,7 @@ impl Mono {
             self.cv.gate[i] = if gate { 1.0 } else { 0.0 };
             self.cv.pitch[i] = self.pitch;
             self.cv.velocity[i] = self.velocity;
+            self.cv.count[i] = self.key_count;
         }
     }
 }

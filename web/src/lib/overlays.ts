@@ -11,6 +11,7 @@ import type { Heard, OverlayState } from "./graph8b";
 import { editing, recorded } from "./history";
 import { token } from "./native";
 import { useStore } from "./store";
+import { http } from "./http";
 
 /** The tracks muted and soloed while listening, by key. */
 export interface Sets {
@@ -51,7 +52,7 @@ const auth: Record<string, string> = token ? { "x-m2-token": token } : {};
 
 /** POST `body` to a graph route; an error answer throws with the server's words. */
 async function post<T>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
+  const res = await http(`/api/graph${path}`, { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify(body) });
   const data = await readJson(res);
   if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
   return data as T;
@@ -237,7 +238,7 @@ export async function muteInSongCall(session: number, modules: string[], muted: 
   const ours = editing();
   try {
     const r = await post<Edited>("/track/mute", { session, modules, muted });
-    if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true }, ours);
+    if (r.before !== r.after) recorded(session, r, { name: muted ? "mute in song" : "unmute in song", structural: true });
     return r;
   } finally {
     ours.end();

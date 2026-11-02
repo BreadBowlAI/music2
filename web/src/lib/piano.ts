@@ -2,11 +2,14 @@
 // track's notes, as Logic's Musical Typing does. Keys by their place (`e.code`), so other keyboard
 // layouts play the same notes. A is C, the white keys run A S D F G H J K L ; ' and the black ones
 // W E T Y U O P above them, from C to the F an octave and a half up; Z and X move an octave down and
-// up (A from C1 to C7). Every note at one velocity, 0.8 (`KEY_VELOCITY`).
+// up (A from C1 to C7). − and = step the velocity down and up by 10%, from 10% to 100% (80% at
+// first, `KEY_VELOCITY`), as C and V do in Logic's and Live's musical typing (MON-15): here C stays
+// the loop's key while the piano is on (taste.md §3.9), and − and = sit at the keyboard's top
+// right, away from the notes.
 //
-// Off at every launch, never kept. While on, it owns exactly its 20 keys (the 18 notes, Z and X)
-// with no ⌘, ⌃ or ⌥, outside text fields, the code editor and dialogs: their shortcuts (A, S, E, X,
-// Z, K) wait until it is off. Every other key keeps its own (Space, Return, C, M, B, Q…). A note
+// Off at every launch, never kept. While on, it owns exactly its 22 keys (the 18 notes, Z, X, − and
+// =) with no ⌘, ⌃ or ⌥, outside text fields, the code editor and dialogs: their shortcuts (A, S, E,
+// X, Z, K, −, =) wait until it is off. Every other key keeps its own (Space, Return, C, M, B, Q…). A note
 // sounds until its key comes up; the window losing focus, the page hidden, or ⌘ pressed or let go
 // (a Mac sends no key up for a letter let go while ⌘ is held) lets every note go. Nothing is written:
 // there is nothing to undo. ⌘K (Ctrl+K off the Mac) turns it on and off, from anywhere.
@@ -26,6 +29,10 @@ export const WHITE: [string, string][] = [["KeyA", "A"], ["KeyS", "S"], ["KeyD",
 /** Each black key and the white key it sits after. */
 export const BLACK: [string, string, number][] = [["KeyW", "W", 0], ["KeyE", "E", 1], ["KeyT", "T", 3], ["KeyY", "Y", 4], ["KeyU", "U", 5], ["KeyO", "O", 7], ["KeyP", "P", 8]];
 const DOWN = "KeyZ", UP = "KeyX";
+/** Velocity down and up, a step each. */
+const SOFTER = "Minus", LOUDER = "Equal";
+/** Velocity's step, and its lowest and highest. */
+const STEP = 0.1, SOFTEST = 0.1, LOUDEST = 1;
 /** A's octave: C1 to C7. C4 is MIDI 60. */
 export const LOWEST = 1, HIGHEST = 7;
 
@@ -36,11 +43,13 @@ interface Piano {
   on: boolean;
   /** A's octave. */
   octave: number;
+  /** What a key strikes at, 0.1 to 1 (MON-15). */
+  velocity: number;
   /** The keys held now, by `e.code`, and the pitch each plays: a new map at each change, so the card redraws. */
   held: ReadonlyMap<string, number>;
 }
 
-export const usePiano = create<Piano>(() => ({ on: false, octave: 4, held: new Map() }));
+export const usePiano = create<Piano>(() => ({ on: false, octave: 4, velocity: KEY_VELOCITY, held: new Map() }));
 
 /** The audition handle of each key held (null: it sounds nothing, as no track was selected). */
 const handles = new Map<string, number | null>();
@@ -91,12 +100,18 @@ function down(e: KeyboardEvent) {
   if (e.key === "Meta") return letGo();
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   const note = e.code in NOTE_KEYS;
-  if (!note && e.code !== DOWN && e.code !== UP) return;
+  if (!note && ![DOWN, UP, SOFTER, LOUDER].includes(e.code)) return;
   if (theirs(e)) return;
   // The key is the piano's: no shortcut runs too.
   e.preventDefault();
   e.stopImmediatePropagation();
   if (e.repeat) return;
+  if (e.code === SOFTER || e.code === LOUDER) {
+    const { velocity } = usePiano.getState();
+    const next = Math.round((velocity + (e.code === LOUDER ? STEP : -STEP)) * 10) / 10;
+    usePiano.setState({ velocity: Math.min(LOUDEST, Math.max(SOFTEST, next)) });
+    return;
+  }
   if (!note) {
     const { octave } = usePiano.getState();
     usePiano.setState({ octave: Math.min(HIGHEST, Math.max(LOWEST, octave + (e.code === UP ? 1 : -1))) });
@@ -107,7 +122,7 @@ function down(e: KeyboardEvent) {
   const t = currentTarget();
   // With no track to play, the key is still the piano's: it plays nothing.
   // A take records what it plays (lane B).
-  handles.set(e.code, t ? strike(t.module, t.lane, pitch, KEY_VELOCITY, { always: true, record: true }) : null);
+  handles.set(e.code, t ? strike(t.module, t.lane, pitch, usePiano.getState().velocity, { always: true, record: true }) : null);
   setHeld(e.code, pitch);
 }
 

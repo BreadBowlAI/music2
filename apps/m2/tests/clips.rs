@@ -16,12 +16,13 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
 fn m2(args: &[&str]) -> Output {
-    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", std::env::temp_dir().join("m2-tests-no-app")).args(args).output().unwrap()
+    Command::new(env!("CARGO_BIN_EXE_m2")).env("HOME", m2_song::pack::test_home()).args(args).output().unwrap()
 }
 
 fn said(o: &Output) -> String {
@@ -79,8 +80,8 @@ fn clip_gestures_from_the_terminal() {
         (&["move", "kick/hits@9.3.2", "--by", "1", "--to", "bass/cutoff"][..], "A notes clip can't go on an automation lane"),
         (&["create", "kick/hits", "--at", "9.5"][..], "bar 9 has 4 beats"),
         (&["delete", "kick/hits"][..], "isn't a clip"),
-        (&["fold", "kick/hits:x"][..], "create|move|resize|split"),
-        (&["delete", "kick/hits@9.3.2", "--copy"][..], "--copy isn't something"),
+        (&["fold", "kick/hits:x"][..], "create, move, resize, split"),
+        (&["delete", "kick/hits@9.3.2", "--copy"][..], "`--copy` isn't a flag of"),
     ] {
         let o = m2(&[&["clips", dir][..], args].concat());
         assert!(!o.status.success() && said(&o).contains(says), "{args:?}: {}", said(&o));

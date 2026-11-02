@@ -78,7 +78,7 @@ fn suite(host: &dyn PluginHost) -> Vec<String> {
     };
     heard.push(format!("gain {:?}", value(probe::GAIN)));
     heard.push(format!("text {:?}", host.main_call(h, MainCall::Text(probe::GAIN, 0.5)).map(|r| format!("{r:?}")).unwrap()));
-    heard.push(format!("info again {}", matches!(host.main_call(h, MainCall::Info).unwrap(), Reply::Info(i) if i.params.len() == 2)));
+    heard.push(format!("info again {}", matches!(host.main_call(h, MainCall::Info).unwrap(), Reply::Info(i) if i.params.len() == 4)));
     heard.push(format!("log {:?}", host.main_call(h, MainCall::TakeLog).map(|r| format!("{r:?}")).unwrap()));
     let (bits, status) = play(host, h, 12);
     heard.push(format!("played {} samples, {:?}, a sum of {}", bits.len(), status[0], bits.iter().map(|&b| b as u64).sum::<u64>()));

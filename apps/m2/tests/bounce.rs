@@ -18,7 +18,8 @@ struct Temp(PathBuf);
 
 impl Drop for Temp {
     fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
+        // Read-only files too: a pack m2 installed in a HOME here (PACK-16).
+        let _ = m2_song::pack::remove_tree(&self.0);
     }
 }
 
@@ -30,7 +31,7 @@ fn bounce_of_a_track_still_writes_its_file() {
     let song = temp.0.join("first-song");
     copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
     let out = Command::new(env!("CARGO_BIN_EXE_m2"))
-        .env("HOME", std::env::temp_dir().join("m2-tests-no-app"))
+        .env("HOME", m2_song::pack::test_home())
         .args(["bounce", song.to_str().unwrap(), "bass-stem", "--track", "bass"])
         .env("M2_AUDIO", "none")
         .env("M2_MIDI", "none")
@@ -45,7 +46,7 @@ fn bounce_of_a_track_still_writes_its_file() {
     let seconds = 32.0 * 60.0 / 124.0 + 2.0;
     assert_eq!(wav.duration() as u64, (seconds * spec.sample_rate as f64).round() as u64);
 
-    let mut packages = m2_runtime::PackageSet::default();
+    let mut packages = m2_runtime::PackageSet::default().with_store(m2_song::pack::test_store());
     packages.load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std")).unwrap();
     let c = m2_session::compile(&m2_song::Project::open(&song).unwrap(), &mut packages).unwrap_or_else(|e| panic!("{e:?}"));
     let ir = rooted(&c.ir, "bass", "out").unwrap();
