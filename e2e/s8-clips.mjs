@@ -317,7 +317,7 @@ const seenIt = await until(async () => (await state()).timeline.tracks.find((t) 
 const outside = read("data/hats/hits.json");
 await page.mouse.move(mid(b).x + 4 * PPB, mid(b).y, { steps: 4 });
 await page.mouse.up();
-check(seenIt && (await until(async () => (await toasts()).some((t) => t.includes("changed in another window or by an agent")))), `an outside edit while it was held: the drop is refused in words: ${(await toasts()).join(" | ")}`);
+check(seenIt && (await until(async () => (await toasts()).some((t) => t.includes("was changed outside the app")))), `an outside edit while it was held: the drop is refused, naming outside the app: ${(await toasts()).join(" | ")}`);
 await sleep(300);
 check(read("data/hats/hits.json") === outside, "and the file keeps the outside edit");
 
