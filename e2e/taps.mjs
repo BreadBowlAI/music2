@@ -127,11 +127,17 @@ await sleep(800);
 check(heard.length - met > 5 && scoped.length === from, "stopped, its frames stop; the meters go on");
 
 // The loudness is measured only while the Mix view shows (TAP-4, TAP-6).
+// The next six meters messages, however fast they come: GitHub's Mac sends about 8 a second, not
+// 30 (its sleeps run long), so 600 ms there held five.
 await key("Alt+1");
 await sleep(600);
 met = heard.length;
-await sleep(600);
-check(heard.length - met > 5 && heard.slice(met).every((h) => !h.m.loudness), "the Mix view gone, the meters carry no loudness: nothing measures it");
+await until(() => heard.length - met > 5, 5000);
+const gone = heard.slice(met);
+check(
+  gone.length > 5 && gone.every((h) => !h.m.loudness),
+  `the Mix view gone, the meters carry no loudness: nothing measures it (${gone.length} messages, ${gone.filter((h) => h.m.loudness).length} with loudness)`,
+);
 
 // ---------------------------------------------------------------- the song's loudness at export (TAP-7)
 
