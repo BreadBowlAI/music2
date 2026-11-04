@@ -340,11 +340,12 @@ fn the_loudness_meter_follows_the_songs_rate() {
 }
 
 // TAP-5 (the review's P8): meters that can't be laid out after the faders fall back to each track
-// before its fader, which can't fail, and the status says so in words.
+// before its fader, which can't fail, and the status says so in words. In a folder reached through
+// a link, as every one in a Mac's temporary folder is.
 #[test]
 fn meters_that_cant_be_laid_out_fall_back_and_say_so() {
     let song = kick_and_bass("export default song(() => mixer({ kick: kick.out, bass: bass.out }));\n");
-    let fixture = Fixture::new();
+    let fixture = Fixture::linked();
     super::BREAK.lock().push(fixture.0.clone());
     fixture.put("song.ts", &song);
     let (p, driver) = Player::driven(48_000);

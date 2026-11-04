@@ -64,8 +64,9 @@ pub(crate) struct Layout {
     pub(super) why: Option<String>,
 }
 
-/// Songs whose meters can't be laid out after the faders, by folder: the tests' way to make the
-/// refusal a bug would be.
+/// Songs whose meters can't be laid out after the faders, by folder (by its real path: a song's is
+/// its folder's real path, which on a Mac is not the temporary folder's as named): the tests' way to
+/// make the refusal a bug would be.
 #[cfg(test)]
 pub(super) static BREAK: parking_lot::Mutex<Vec<std::path::PathBuf>> = parking_lot::Mutex::new(vec![]);
 
@@ -87,7 +88,7 @@ fn layout(rev: &Revision, faders: bool) -> (Vec<Vec<TapAt>>, Layout) {
             }
         }
         #[cfg(test)]
-        if BREAK.lock().contains(&rev.project.dir) {
+        if BREAK.lock().iter().any(|d| d.canonicalize().is_ok_and(|d| d == rev.project.dir)) {
             taps.push(vec![TapAt::Node(usize::MAX)]);
         }
     }
