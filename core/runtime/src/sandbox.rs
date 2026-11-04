@@ -109,7 +109,7 @@ pub(crate) struct Host {
     buf: Vec<u8>,
     pcm: [Vec<f32>; 2],
     piece: Option<(u32, u64, u64)>,
-    /// The epoch ([`limit::epoch`]) the call that runs now is stopped at: what a read from a file
+    /// The tick ([`limit::now`]) the call that runs now is stopped at: what a read from a file
     /// moves on by the time it took.
     deadline: u64,
 }
@@ -158,7 +158,7 @@ pub(crate) const ASSET_READ: (&str, &str) = ("m2", "asset_read");
 /// index (RENDER-28). From a [`Held::Disk`] one it reads the file, and a file it can't read traps.
 fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u32, dst: u32, frames: u32) -> wasmtime::Result<u32> {
     let Some(memory) = caller.data().memory else { wasmtime::bail!("m2.asset_read before its sandbox has a memory") };
-    let started = limit::epoch();
+    let started = limit::now();
     let (bytes, host) = memory.data_and_store_mut(&mut caller);
     let (at, n) = (dst as usize, frames as usize);
     let Some(out) = at.checked_add(4 * n).and_then(|end| bytes.get_mut(at..end)) else {
@@ -180,10 +180,10 @@ fn asset_read(mut caller: Caller<'_, Host>, handle: u32, channel: u32, frame: u3
     };
     out[4 * got..].fill(0);
     // The ticks a read from a file took aren't the kernel's (ABI-6): its deadline moves on by them.
-    let spent = limit::epoch() - started;
+    let spent = limit::now() - started;
     if spent > 0 && matches!(host.assets.get(handle as usize), Some(Held::Disk(_))) {
         host.deadline += spent;
-        let left = host.deadline.saturating_sub(limit::epoch());
+        let left = limit::left(host.deadline);
         caller.as_context_mut().set_epoch_deadline(left);
     }
     Ok(got as u32)
@@ -263,8 +263,9 @@ fn imports(store: &mut Store<Host>, module: &Module) -> Result<Vec<Extern>> {
 
 /// Give the next call into `store` `ticks` before it is stopped (ABI-6).
 fn arm(store: &mut Store<Host>, ticks: u64) {
-    store.data_mut().deadline = limit::epoch() + ticks;
-    store.set_epoch_deadline(ticks);
+    let deadline = limit::now() + ticks;
+    store.data_mut().deadline = deadline;
+    store.set_epoch_deadline(limit::left(deadline));
 }
 
 /// Whether `e` says a call ran past its deadline (ABI-6).

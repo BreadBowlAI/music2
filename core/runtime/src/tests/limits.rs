@@ -492,6 +492,23 @@ fn an_offline_render_past_its_limit_fails_in_time() {
     assert_eq!(format!("{e}"), "a/k took too long and was stopped: one call into it ran past 300 ms");
 }
 
+// ABI-6: the limit is time on the clock, not the ticker's sleeps. With every sleep of the ticker
+// five times its tick, as on GitHub's Mac (each 10 ms sleep took about 54 ms there: a call's 5 s
+// limit stopped it after 27 s), a call is still stopped no sooner than its limit, and within a late
+// sleep after it.
+#[test]
+fn a_late_ticker_stops_a_call_at_its_limit_still() {
+    let pk = l_packages(Limits { live: Limits::default().live, offline: Duration::from_secs(1) });
+    let f = check(&two_tracks("spin", 1.0), &pk).unwrap();
+    let (e, took) = crate::limit::late_ticker(4 * TICK, || {
+        let t = Instant::now();
+        let e = Renderer::new(&f, &DataSet::empty(), &pk, SR).unwrap().render(2.0).unwrap_err();
+        (e, t.elapsed())
+    });
+    assert!(took >= Duration::from_secs(1) && took < Duration::from_secs(2), "stopped at its limit: {took:?}");
+    assert_eq!(format!("{e}"), "a/k took too long and was stopped: one call into it ran past 1 s");
+}
+
 // ABI-6, ABI-7: a kernel whose `k_new` never returns is refused as the plan is made, live (its
 // birth has the offline limit) and offline, naming its node, within the limit.
 #[test]
