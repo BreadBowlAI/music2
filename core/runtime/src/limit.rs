@@ -1,7 +1,8 @@
 //! The time limit on every call into a pack's kernel (ABI-6, ABI-7, `docs/kernel-abi.md`):
 //! wasmtime's epoch interruption. The compiled code checks, at each function's start and each
 //! loop's turn, whether the engine's epoch has reached the deadline its store was given, and traps
-//! once it has. One thread, the ticker, moves the epoch on every [`TICK`]. Each call into a pack's
+//! once it has. One thread, the ticker, moves the epoch on with the clock, a tick every [`TICK`]
+//! ([`start`]). Each call into a pack's
 //! sandbox is given its deadline just before it starts ([`crate::sandbox`]), so a call still running
 //! at it stops, wherever it is. The checks cost a call about a fifth of its time, so std's modules,
 //! music2's own, are compiled without them, by an engine of their own
@@ -9,8 +10,8 @@
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use wasmtime::Engine;
 
@@ -18,7 +19,7 @@ use wasmtime::Engine;
 pub(crate) const TICK: Duration = Duration::from_millis(10);
 
 /// How long one call into a kernel may run (ABI-6). A call is never stopped before its limit,
-/// and is stopped within a [`TICK`] after it while the ticker keeps time.
+/// and is stopped within a [`TICK`] after it, or within one late sleep of the ticker ([`start`]).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct Limits {
     /// A call the live engine makes into a sealed sandbox of a plan prepared for it: `k_process`,
@@ -62,24 +63,77 @@ pub(crate) fn ticks(limit: Duration) -> u64 {
 /// doesn't show; the two move on together.
 static EPOCH: AtomicU64 = AtomicU64::new(0);
 
-/// The epoch now, by [`EPOCH`].
+/// When the ticker started: its clock's zero. Tick `n` is due [`TICK`] × `n` after it.
+static ORIGIN: OnceLock<Instant> = OnceLock::new();
+
+/// The epoch now, by [`EPOCH`]: where the engine's is. It may be behind [`now`], by the ticks the
+/// ticker's last sleep ran late.
 pub(crate) fn epoch() -> u64 {
     EPOCH.load(Ordering::Relaxed)
 }
 
-/// Start `engine`'s ticker: a thread that moves its epoch on every [`TICK`], for as long as the
-/// engine lives.
+/// The ticks due by now on the ticker's clock: where the epoch is, or will be once the ticker
+/// wakes. A deadline is counted from here, so a ticker that sleeps late never stops a call early.
+/// Never allocates.
+pub(crate) fn now() -> u64 {
+    ORIGIN.get().map_or(0, |o| (o.elapsed().as_nanos() / TICK.as_nanos()) as u64)
+}
+
+/// The ticks to give a store so that its call is stopped at epoch `deadline` (by [`now`]'s count):
+/// the engine's epoch may be behind the clock.
+pub(crate) fn left(deadline: u64) -> u64 {
+    deadline.saturating_sub(epoch())
+}
+
+/// Start `engine`'s ticker: a thread that moves its epoch on with the clock, a tick every
+/// [`TICK`], for as long as the engine lives. The epoch is the ticks due since the ticker started,
+/// not the sleeps it made: a sleep that ends late (a busy machine, or GitHub's Mac, where a 10 ms
+/// sleep took about 54 ms) moves it on by every tick due, so a call is stopped at its limit's time,
+/// within a late sleep after it.
 pub(crate) fn start(engine: &Engine) {
     let engine = engine.weak();
+    let origin = *ORIGIN.get_or_init(Instant::now);
     let ticker = std::thread::Builder::new().name("m2-kernel-ticker".into()).spawn(move || {
         loop {
-            std::thread::sleep(TICK);
+            let next = origin + Duration::from_nanos(TICK.as_nanos() as u64 * (epoch() + 1));
+            std::thread::sleep(next.saturating_duration_since(Instant::now()) + late());
             let Some(engine) = engine.upgrade() else { return };
-            engine.increment_epoch();
-            EPOCH.fetch_add(1, Ordering::Relaxed);
+            for _ in epoch()..now() {
+                engine.increment_epoch();
+                EPOCH.fetch_add(1, Ordering::Relaxed);
+            }
         }
     });
     ticker.expect("a thread for the kernels' ticker");
+}
+
+/// How much later than [`TICK`] each of the ticker's sleeps ends: none, but in a test of a late
+/// ticker ([`late_ticker`]).
+fn late() -> Duration {
+    #[cfg(test)]
+    return Duration::from_nanos(LATE.load(Ordering::Relaxed));
+    #[cfg(not(test))]
+    Duration::ZERO
+}
+
+/// [`late`], in ns.
+#[cfg(test)]
+static LATE: AtomicU64 = AtomicU64::new(0);
+
+/// `f`, with each of the ticker's sleeps lasting `late` more than it asks, as a busy or a cloud
+/// machine's sleeps may (tests). The ticker is the process's: what else runs then has it late too.
+#[cfg(test)]
+pub(crate) fn late_ticker<R>(late: Duration, f: impl FnOnce() -> R) -> R {
+    /// Puts the ticker back on time when dropped, a panic of `f`'s too.
+    struct OnTime;
+    impl Drop for OnTime {
+        fn drop(&mut self) {
+            LATE.store(0, Ordering::Relaxed);
+        }
+    }
+    LATE.store(late.as_nanos() as u64, Ordering::Relaxed);
+    let _on_time = OnTime;
+    f()
 }
 
 /// The boxes whose birth ran past its limit, by their shape's hash (RENDER-25: the kernel, its
@@ -127,5 +181,19 @@ pub(crate) fn said(d: Duration) -> String {
     match d.as_millis() {
         ms if ms < 1000 || !ms.is_multiple_of(1000) => format!("{ms} ms"),
         ms => format!("{} s", ms / 1000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ABI-6 (review M3): a test of a late ticker whose code panics leaves the ticker on time: the
+    // process's other tests never get it late.
+    #[test]
+    fn a_late_ticker_is_on_time_again_after_a_panic() {
+        let r = std::panic::catch_unwind(|| late_ticker(4 * TICK, || panic!("a test failed with the ticker late")));
+        assert!(r.is_err());
+        assert_eq!(late(), Duration::ZERO);
     }
 }
