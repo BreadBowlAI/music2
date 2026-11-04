@@ -10,8 +10,8 @@
 //    writes a `db()` call, which moves song.ts's ids: a pan pressed at once isn't sent, and says so;
 //  - two Reverbs, Move right on the inner one, and its size dragged at once: not sent, said,
 //    neither Reverb changed; ⌘Z of the move, and a drag at once: the same (P1);
-//  - an agent's hit, then its undo: the window's drag drawn with the hit is refused naming the
-//    agent, not the app (P7);
+//  - an agent's hit, then its undo while the window's drag drawn with the hit is held, shown before
+//    the drag is let go: refused naming the agent, not the app (P7);
 //  - an agent's marker while a marker is dragged is kept; two quick marker moves of the window's
 //    own, a state read between, are both kept (P4);
 //  - bars deleted right after an agent inserted bars before them: refused, naming the agent, and
@@ -176,12 +176,6 @@ const hatsClip = () => JSON.parse(read("data/hats/hits.json")).clips[0];
 const clip = '[data-lane="hats.hits"] [data-clip]';
 await page.$eval(clip, (e) => e.scrollIntoView({ block: "center", inline: "start" }));
 const PPB = 24;
-const edge = async (x, y, dx) => {
-  await page.mouse.move(x, y);
-  await page.mouse.down();
-  await page.mouse.move(x + dx, y, { steps: 8 });
-  await page.mouse.up();
-};
 const text = read("data/hats/hits.json");
 const s2 = await state();
 const hit = { ...hatsClip(), notes: [...hatsClip().notes, { pitch: hatsClip().notes[0].pitch, start: 0.5, length: 0.25 }] };
@@ -194,9 +188,18 @@ const tx = {
 check((await agent("/api/tx/commit", { session: s2.session, tx })).status === 200, "an agent puts a hit in the hats clip");
 await settle();
 const b = await box(clip);
-check((await agent("/api/graph/undo", { session: s2.session })).status === 200 && read("data/hats/hits.json") === text, "and takes it back");
-// At once: the clip's edge, as drawn with the agent's hit.
-await edge(b.x + 3, b.y + b.height / 2, 4 * PPB);
+// The clip's edge pressed and dragged part of the way as drawn with the agent's hit; the agent
+// takes it back, and the drag is let go only once the page shows that: it goes from the revision it
+// was pressed at, so the server can say who changed the clip since (as on GitHub's Mac, where a
+// drag is slow enough that the page always shows the undo before the let-go).
+const [ex, ey] = [b.x + 3, b.y + b.height / 2];
+await page.mouse.move(ex, ey);
+await page.mouse.down();
+await page.mouse.move(ex + 2 * PPB, ey, { steps: 4 });
+check((await agent("/api/graph/undo", { session: s2.session })).status === 200 && read("data/hats/hits.json") === text, "and takes it back, while the drag is held");
+await caughtUp();
+await page.mouse.move(ex + 4 * PPB, ey, { steps: 4 });
+await page.mouse.up();
 check(await until(() => seen.some((t) => /the agent Claude changed/.test(t))), `the drag is refused, naming the agent who undid: ${said()}`);
 check(!seen.some((t) => /changed in the app/.test(t)), `not the app: ${said()}`);
 check(read("data/hats/hits.json") === text, "nothing written");
