@@ -1,0 +1,67 @@
+# TEMP (track mac-nightly): the Mac nightly's failing tests and suites alone, on each push to this
+# branch. Taken out before the pull request.
+name: Mac probe
+
+on:
+  push:
+    branches: [mac-nightly]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      M2_AUDIO: none
+      M2_MIDI: none
+      CARGO_TERM_COLOR: never
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/puppeteer
+          key: chrome-headless-shell-133.0.6943.141-${{ runner.os }}
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: . -> target/pr
+          shared-key: nightly-macos
+          save-if: false
+      - run: (cd web && npm ci --no-audit --no-fund && npm run build)
+      - run: (cd e2e && npm ci --no-audit --no-fund && { [ -x "$HOME/.cache/puppeteer/chrome-headless-shell/mac_arm-133.0.6943.141/chrome-headless-shell-mac-arm64/chrome-headless-shell" ] || node_modules/.bin/browsers install chrome-headless-shell@133.0.6943.141 --path "$HOME/.cache/puppeteer"; })
+      - run: |
+          export CARGO_TARGET_DIR=target/pr
+          cargo build --locked -p m2-server --example headless
+          cargo build --locked -p m2
+          cargo build --locked -p m2-plugins --bin m2-plugin-host
+      - if: ${{ !cancelled() }}
+        run: |
+          mkdir -p ~/probe
+          CARGO_TARGET_DIR=target/pr cargo test --locked -p m2-runtime --lib limits 2>&1 | tee ~/probe/runtime.log
+          CARGO_TARGET_DIR=target/pr cargo test --locked -p m2-server --lib -- graph::faults graph::meters 2>&1 | tee ~/probe/server.log
+      - if: ${{ !cancelled() }}
+        run: |
+          for i in 1 2 3; do
+            for s in own-base taps nx-piano; do
+              M2_HEADLESS=target/pr/debug/examples/headless node e2e/run.mjs $s fix --out ~/probe/e2e-$i 2>&1 | tail -3
+            done
+          done
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-probe
+          path: ~/probe/
+          retention-days: 3

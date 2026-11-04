@@ -21,6 +21,13 @@ import { createHash } from "node:crypto";
 import { check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 
 const { page, errors, toasts, key, box, view, show, state, api, caughtUp, hold, drag } = await open(1440, 900, { late: 400 });
+// TEMP trace (track mac-nightly): every request of the page's to /api, answered or not, with times.
+const T0 = Date.now();
+const tr = (...a) => console.log(`TRACE ${Date.now() - T0} ms`, ...a);
+page.on("request", (r) => /\/api\//.test(r.url()) && tr("req", r.method(), r.url().replace(/^.*\/api/, "/api"), (r.postData() ?? "").slice(0, 160)));
+page.on("response", async (r) => /\/api\//.test(r.url()) && tr("res", r.status(), r.request().method(), r.url().replace(/^.*\/api/, "/api"), r.request().method() === "POST" ? (await r.text().catch(() => "")).slice(0, 200) : ""));
+page.on("console", (m) => tr("console", m.type(), m.text().slice(0, 200)));
+const traceAt = async (what) => tr(what, JSON.stringify({ shown: await page.$eval("[data-revision]", (e) => e.dataset.revision).catch(() => "?"), server: (await state()).view?.revision, toasts: await toasts().catch(() => []), knob: await page.$eval('[data-testid=mix] [data-knob="hats.pan"]', (e) => e.outerHTML.slice(0, 200)).catch(() => "none") }));
 const refusals = [];
 page.on("response", (r) => r.status() >= 400 && /\/api\//.test(r.url()) && refusals.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "/api")} ${r.status()}`));
 let seen = [];
@@ -61,14 +68,20 @@ const pan = () => /hats: \{ in: hats\.out, db: db\(-6\), pan: (-?[\d.]+) \}/.exe
 const keysPanNow = () => /keys: \{ in: keys\.out, db: db\(-5\), pan: (-?[\d.]+) \}/.exec(read("song.ts"))?.[1];
 
 // ---------------------------------------------------------------- an outside save rides along (P3)
+await traceAt("start");
 await view("mix");
-await page.waitForSelector(hatsPan);
+await traceAt("mix shown");
+await page.waitForSelector(hatsPan, { timeout: 10000 }).catch(async (e) => { await traceAt("no hats pan"); throw e; });
 await settle();
+await traceAt("settled");
 const set1 = page.waitForResponse((r) => r.url().endsWith("/api/graph/set"));
 write("song.ts", read("song.ts").replace("pan: -0.25", "pan: 0.6"));
 // At once: the hats pan, whose commit takes the outside save in with it.
 await turn(hatsPan, 30);
+await traceAt("turned");
+const t1 = setInterval(() => traceAt("waiting"), 1000);
 const mixed = await (await set1).json();
+clearInterval(t1);
 check(mixed.mixed === true, `the window's commit says it took in a change made elsewhere: ${JSON.stringify({ mixed: mixed.mixed, revision: mixed.revision })}`);
 // At once: the keys pan, drawn at -0.25 before both.
 await turn(keysPan, 30);
