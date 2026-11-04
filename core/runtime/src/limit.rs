@@ -124,10 +124,16 @@ static LATE: AtomicU64 = AtomicU64::new(0);
 /// machine's sleeps may (tests). The ticker is the process's: what else runs then has it late too.
 #[cfg(test)]
 pub(crate) fn late_ticker<R>(late: Duration, f: impl FnOnce() -> R) -> R {
+    /// Puts the ticker back on time when dropped, a panic of `f`'s too.
+    struct OnTime;
+    impl Drop for OnTime {
+        fn drop(&mut self) {
+            LATE.store(0, Ordering::Relaxed);
+        }
+    }
     LATE.store(late.as_nanos() as u64, Ordering::Relaxed);
-    let r = f();
-    LATE.store(0, Ordering::Relaxed);
-    r
+    let _on_time = OnTime;
+    f()
 }
 
 /// The boxes whose birth ran past its limit, by their shape's hash (RENDER-25: the kernel, its
@@ -175,5 +181,19 @@ pub(crate) fn said(d: Duration) -> String {
     match d.as_millis() {
         ms if ms < 1000 || !ms.is_multiple_of(1000) => format!("{ms} ms"),
         ms => format!("{} s", ms / 1000),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ABI-6 (review M3): a test of a late ticker whose code panics leaves the ticker on time: the
+    // process's other tests never get it late.
+    #[test]
+    fn a_late_ticker_is_on_time_again_after_a_panic() {
+        let r = std::panic::catch_unwind(|| late_ticker(4 * TICK, || panic!("a test failed with the ticker late")));
+        assert!(r.is_err());
+        assert_eq!(late(), Duration::ZERO);
     }
 }
