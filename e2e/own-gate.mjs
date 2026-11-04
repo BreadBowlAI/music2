@@ -261,5 +261,45 @@ await edge(b.x + 3, b.y + b.height / 2, 4 * PPB);
 check(await until(() => seen.some((t) => t.includes("the agent Claude changed"))), `the window's drag is refused, naming the agent: ${said()}`);
 await sleep(800);
 check(read("data/hats/hits.json") === kept, `the agent's clip is kept: ${JSON.stringify(hatsClip()).slice(0, 80)}`);
+
+// ---------------------------------------------------------------- an own ⌘Z that moves beats, mid-drag
+// A drag pressed on the clip, then the window's own ⌘Z of its bar insert (which moves beats) while
+// it is held: let go once the page shows the undo, it isn't sent, and says so (AGENT-2). It goes
+// from the revision it was pressed at, so the window's own change since is seen.
+const ruler = await box("[data-testid=ruler]");
+await page.mouse.click(ruler.x + 2, ruler.y + ruler.height - 6, { button: "right" });
+await page.waitForSelector("[data-testid=ruler-menu] [data-menu-item=add-marker]", { timeout: 2000 });
+await page.click("[data-testid=ruler-menu] [data-menu-item=add-marker]");
+await page.waitForSelector("[data-testid=marker-name]", { timeout: 2000 });
+await page.keyboard.type("Intro");
+await page.keyboard.press("Enter");
+await until(async () => !!(await box('[data-marker-name="Intro"]')));
+const intro = await box('[data-marker-name="Intro"]');
+await page.mouse.click(intro.x + 6, intro.y + intro.height / 2, { button: "right" });
+await page.waitForSelector('[data-testid=clip-menu] [data-menu-item="select"]', { timeout: 2000 });
+await page.click('[data-testid=clip-menu] [data-menu-item="select"]');
+await until(async () => !!(await page.$("[data-testid=section]")));
+const inserted = page.waitForResponse((r) => r.url().endsWith("/api/graph/sections"));
+await key("Meta+i");
+await inserted;
+await caughtUp();
+await page.keyboard.press("Escape");
+const before = read("data/hats/hits.json");
+await page.$eval(clip, (e) => e.scrollIntoView({ block: "center", inline: "start" }));
+const c = await box(clip);
+watch();
+refusals.length = 0;
+await page.mouse.move(c.x + 3, c.y + c.height / 2);
+await page.mouse.down();
+await page.mouse.move(c.x + 3 + 2 * PPB, c.y + c.height / 2, { steps: 4 });
+await key("Meta+z");
+check(await until(() => read("data/hats/hits.json") !== before), "⌘Z takes the window's bar insert back while the drag is held");
+await caughtUp();
+const unInserted = read("data/hats/hits.json");
+await page.mouse.move(c.x + 3 + 4 * PPB, c.y + c.height / 2, { steps: 4 });
+await page.mouse.up();
+check(await until(() => seen.includes(MOVED)), `let go, the drag isn't sent, and says so: ${said()}`);
+await sleep(800);
+check(read("data/hats/hits.json") === unInserted && !refusals.some((r) => r.includes("/clips")), `nothing written, nothing sent: ${said()}`);
 clearInterval(watching);
 done(errors);

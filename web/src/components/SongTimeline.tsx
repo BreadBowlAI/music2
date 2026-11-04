@@ -735,7 +735,9 @@ export default function SongTimeline({
      * if every change since was the window's own (the clip as its own edit left it, a trim a moment
      * before, is what it drags). Else as drawn at the press, from the revision it was pressed at
      * (`pressed`), never one the window showed during the drag: a clip changed since by another
-     * writer is refused, naming who (WRITE-12, AGENT-2).
+     * writer is refused, naming who (WRITE-12, AGENT-2); and after a change of the window's own
+     * during the drag that moved beats or a track's lanes (a ⌘Z of its bar insert), it isn't sent
+     * and says "The song changed while you pressed. Try again." (`MOVED`).
      */
     const drop = (d: Drag, lease: LaneLease | null, again: { from: number; make: (timeline: TimelineView) => Drag | null } | null, pressed: number) => {
       setDrag({ ...d, landed: Infinity });
