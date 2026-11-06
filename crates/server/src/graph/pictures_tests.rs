@@ -463,23 +463,24 @@ fn a_measure_that_runs_too_long_is_stopped_and_waits() {
     assert_eq!(rig.graph.measures_tried(), 1, "and isn't measured again while it waits");
 }
 
-// CARD-85: while a knob is dragged, a frame measures the click alone, so the drag stays smooth; at
-// rest the response is checked too, and a sound that changes with how loud it is greys again.
+// CARD-85: a sound greyed at rest stays greyed through a drag, measuring nothing, never a smooth
+// wrong curve; and back at rest it is greyed still. A linear one draws the click alone as it is
+// dragged (a_measured_curve_follows_a_knobs_drag).
 #[test]
-fn a_drag_draws_the_click_and_rest_checks_it() {
+fn a_sound_greyed_at_rest_stays_greyed_through_a_drag() {
     let rig = measured();
     let greyed = "Squash's picture can't measure its sound: its sound changes with how loud it is, so music2 can't measure its curve: its pack must draw it.";
     assert_eq!(rig.ask_in("w1", "sq", "Squash", "curve")["picture"]["why"], greyed, "at rest");
+    let tried = rig.graph.measures_tried();
     let (token, rev, knob) = (rig.token(), rig.revision(), rig.knob_in("sq", "Squash", "threshold"));
-    rig.graph.preview_for(Some("w1"), token, rev, &knob, "g1", -40.0).unwrap();
-    let drag = sent(&rig.graph.pictures_frame(), "w1", 0);
-    assert_eq!(
-        drag[0]["shapes"][0]["points"].as_array().map(Vec::len),
-        Some(512),
-        "while dragged, its click's curve: {:?}",
-        drag[0]["why"]
-    );
+    for (i, v) in [-40.0, -45.0, -50.0].into_iter().enumerate() {
+        rig.graph.preview_for(Some("w1"), token, rev, &knob, "g1", v).unwrap();
+        let drag = sent(&rig.graph.pictures_frame(), "w1", 0);
+        assert_eq!(drag.last().unwrap()["why"], greyed, "frame {i} of the drag: still greyed");
+        assert_eq!(drag.last().unwrap()["shapes"], Value::Null);
+    }
+    assert_eq!(rig.graph.measures_tried(), tried, "and nothing was measured while it was dragged");
     rig.graph.cancel_preview(token, &knob, "g1").unwrap();
     let rest = sent(&rig.graph.pictures_frame(), "w1", 0);
-    assert_eq!(rest.last().unwrap()["why"], greyed, "at rest again, checked");
+    assert_eq!(rest.last().unwrap()["why"], greyed, "at rest again");
 }

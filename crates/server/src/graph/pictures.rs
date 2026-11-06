@@ -111,6 +111,9 @@ pub(super) struct Measures {
     kept: parking_lot::Mutex<std::collections::VecDeque<(String, Measured)>>,
     /// Each call stopped for its time, by when: it may have been a busy computer.
     slow: parking_lot::Mutex<HashMap<String, Instant>>,
+    /// Each call's last verdict at rest, by call and code: measured, or why it can't be. A drag
+    /// keeps a grey verdict and measures nothing (CARD-85).
+    verdicts: parking_lot::Mutex<HashMap<String, Result<(), String>>>,
     rendered: std::sync::atomic::AtomicU64,
     tried: std::sync::atomic::AtomicU64,
 }
@@ -247,7 +250,8 @@ fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Foun
 /// Each measured layer of `shapes`, a part's too, filled with its points (CARD-80): measured from
 /// an offline copy of `f`'s call at the values it was drawn at, within [`measure::budget`], or taken
 /// from what was kept for the same copy (CARD-84). A drag's frame measures the click alone; at rest
-/// it is checked too. A copy stopped for its time is measured again only after [`BACK_OFF`], and is
+/// it is checked too, and a call whose last verdict at rest was grey stays grey through a drag,
+/// measuring nothing. A copy stopped for its time is measured again only after [`BACK_OFF`], and is
 /// never kept as the sound's (CARD-85).
 fn fill(f: &Found, measures: &Measures, shapes: &mut [Value]) -> Result<(), Unmeasured> {
     let mut packages: Option<m2_runtime::PackageSet> = None;
@@ -281,12 +285,29 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
         let copy = measure::copy(&f.rev, packages, &f.module, &f.node, &values, layer)
             .map_err(|why| Unmeasured::Cant(format!("can't measure its sound: {why}")))?;
         let pass = if f.dragged { measure::Pass::Drag } else { measure::Pass::Rest };
+        let call = format!("{}\n{}\n{}\n{}", f.rev.code_rev, f.module, f.node, f.view);
+        // A sound greyed at rest stays greyed while it is dragged: never a smooth wrong curve.
+        if pass == measure::Pass::Drag
+            && let Some(Err(why)) = measures.verdicts.lock().get(&call).cloned()
+        {
+            return Err(Unmeasured::Cant(why));
+        }
+        let at_rest = |verdict: Result<(), String>| {
+            if pass == measure::Pass::Rest {
+                measures.verdicts.lock().insert(call.clone(), verdict);
+            }
+        };
         let points = match measures.get(&copy.key) {
             // A drag's frame takes what was measured either way; at rest, only what was checked.
-            Some(Ok((p, checked))) if checked || pass == measure::Pass::Drag => p,
-            Some(Err(why)) => return Err(Unmeasured::Cant(why)),
+            Some(Ok((p, checked))) if checked || pass == measure::Pass::Drag => {
+                at_rest(Ok(()));
+                p
+            }
+            Some(Err(why)) => {
+                at_rest(Err(why.clone()));
+                return Err(Unmeasured::Cant(why));
+            }
             _ => {
-                let call = format!("{}\n{}\n{}\n{}", f.rev.code_rev, f.module, f.node, f.view);
                 if measures.slow.lock().get(&call).is_some_and(|t| t.elapsed() < BACK_OFF) {
                     return Err(Unmeasured::Slow);
                 }
@@ -297,11 +318,13 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
                         measures.rendered.fetch_add(1, Relaxed);
                         let points = Arc::new(points);
                         measures.put(copy.key.clone(), Ok((points.clone(), pass == measure::Pass::Rest)));
+                        at_rest(Ok(()));
                         points
                     }
                     Err(measure::Failed::Cant(why)) => {
                         let why = format!("can't measure its sound: {why}");
                         measures.put(copy.key.clone(), Err(why.clone()));
+                        at_rest(Err(why.clone()));
                         return Err(Unmeasured::Cant(why));
                     }
                     // Stopped for its time: never kept as the sound's, since a busy computer may
