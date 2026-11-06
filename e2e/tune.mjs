@@ -88,8 +88,8 @@ await page.click('[data-effect-browser] [data-effect="tune"]');
 const added = 'tune(lane.audio("clips"), { glide: 0.1, amount: 1 })';
 check(await until(() => read("tracks/vox.ts").includes(added), 15000), `Tune goes around the vocal, in its track, at Natural: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/vox.ts").includes('import { tune } from "@m2/vocals";') && read("song.ts").includes("vox: vox.out,"), "imported there; the song reads the track as it did");
-check(/^"@m2\/vocals" = "1\.0"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
-check(/name = "@m2\/vocals"\nversion = "1\.0\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(/^"@m2\/vocals" = "1\.1"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
+check(/name = "@m2\/vocals"\nversion = "1\.1\.0"/.test(read("music2.lock")), "music2.lock locks it");
 
 // ---------------------------------------------------------------- no key: the card says so (VOX-26)
 
