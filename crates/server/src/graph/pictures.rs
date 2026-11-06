@@ -101,16 +101,16 @@ const MEASURES: usize = 64;
 /// as a picture's draw does, CARD-64).
 pub(super) const BACK_OFF: Duration = Duration::from_secs(10);
 
-/// A measure's points, or why it can't be measured.
-type Measured = Result<Arc<Vec<f64>>, String>;
+/// A measure's points, and whether they were checked at rest (CARD-85); or why it can't be measured.
+type Measured = Result<(Arc<Vec<f64>>, bool), String>;
 
 /// What a measure gave, kept by what it was made from (CARD-84): its points, or why it can't be
 /// measured; and the calls stopped for their time, by call and code, since when.
 #[derive(Default)]
 pub(super) struct Measures {
     kept: parking_lot::Mutex<std::collections::VecDeque<(String, Measured)>>,
-    /// Each copy stopped for its time once, by its key; and each call stopped, by when.
-    slow: parking_lot::Mutex<(HashMap<String, u32>, HashMap<String, Instant>)>,
+    /// Each call stopped for its time, by when: it may have been a busy computer.
+    slow: parking_lot::Mutex<HashMap<String, Instant>>,
     rendered: std::sync::atomic::AtomicU64,
     tried: std::sync::atomic::AtomicU64,
 }
@@ -155,6 +155,9 @@ struct Found {
     from: String,
     /// The revision it is drawn from, which a measured layer copies its call from (CARD-81).
     rev: Arc<m2_session::Revision>,
+    /// Whether a live lease moves one of its values: a drag's frame, whose measure is the click
+    /// alone (CARD-85).
+    dragged: bool,
 }
 
 impl Pictures {
@@ -234,15 +237,18 @@ fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Foun
         .with_context(|| format!("{} has no picture named {view}", n.title.as_deref().unwrap_or(node)))?;
     let playing = |id: &str| cp.leases.live.iter().find(|l| l.token == token && l.control.id == id).map(|l| l.playing);
     let ask = call.at(playing);
-    let from = format!("{}\n{}\n{view}\n{}", ask.key, ask.descriptor.id, ask.values);
+    let dragged = call.values.iter().any(|v| v.knob.as_deref().and_then(playing).is_some());
+    // A drag's frame and the same values at rest are drawn apart: only at rest is it checked.
+    let from = format!("{}\n{}\n{view}\n{}\n{dragged}", ask.key, ask.descriptor.id, ask.values);
     let rev = accepted.clone();
-    Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from, rev })
+    Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from, rev, dragged })
 }
 
 /// Each measured layer of `shapes`, a part's too, filled with its points (CARD-80): measured from
 /// an offline copy of `f`'s call at the values it was drawn at, within [`measure::budget`], or taken
-/// from what was kept for the same copy (CARD-84). A copy stopped for its time is measured again only
-/// after [`BACK_OFF`], and a second stop at the same values is kept (CARD-85).
+/// from what was kept for the same copy (CARD-84). A drag's frame measures the click alone; at rest
+/// it is checked too. A copy stopped for its time is measured again only after [`BACK_OFF`], and is
+/// never kept as the sound's (CARD-85).
 fn fill(f: &Found, measures: &Measures, shapes: &mut [Value]) -> Result<(), Unmeasured> {
     let mut packages: Option<m2_runtime::PackageSet> = None;
     fill_in(f, measures, shapes, &mut packages)
@@ -274,21 +280,23 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
         });
         let copy = measure::copy(&f.rev, packages, &f.module, &f.node, &values, layer)
             .map_err(|why| Unmeasured::Cant(format!("can't measure its sound: {why}")))?;
+        let pass = if f.dragged { measure::Pass::Drag } else { measure::Pass::Rest };
         let points = match measures.get(&copy.key) {
-            Some(Ok(p)) => p,
+            // A drag's frame takes what was measured either way; at rest, only what was checked.
+            Some(Ok((p, checked))) if checked || pass == measure::Pass::Drag => p,
             Some(Err(why)) => return Err(Unmeasured::Cant(why)),
-            None => {
+            _ => {
                 let call = format!("{}\n{}\n{}\n{}", f.rev.code_rev, f.module, f.node, f.view);
-                if measures.slow.lock().1.get(&call).is_some_and(|t| t.elapsed() < BACK_OFF) {
+                if measures.slow.lock().get(&call).is_some_and(|t| t.elapsed() < BACK_OFF) {
                     return Err(Unmeasured::Slow);
                 }
                 measures.tried.fetch_add(1, Relaxed);
                 let span = Span { log: x.scale == "log", lo: x.lo, hi: x.hi };
-                match copy.measure(packages, span, measure::budget(copy.rate())) {
+                match copy.measure(packages, span, measure::budget(copy.rate()), pass) {
                     Ok(points) => {
                         measures.rendered.fetch_add(1, Relaxed);
                         let points = Arc::new(points);
-                        measures.put(copy.key.clone(), Ok(points.clone()));
+                        measures.put(copy.key.clone(), Ok((points.clone(), pass == measure::Pass::Rest)));
                         points
                     }
                     Err(measure::Failed::Cant(why)) => {
@@ -296,17 +304,10 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
                         measures.put(copy.key.clone(), Err(why.clone()));
                         return Err(Unmeasured::Cant(why));
                     }
+                    // Stopped for its time: never kept as the sound's, since a busy computer may
+                    // have stopped it; tried again after the back-off.
                     Err(measure::Failed::Slow) => {
-                        let mut slow = measures.slow.lock();
-                        slow.1.insert(call, Instant::now());
-                        let times = slow.0.entry(copy.key.clone()).or_default();
-                        *times += 1;
-                        if *times >= 2 {
-                            let why = "took too long to measure at these values, twice, and was stopped".to_string();
-                            drop(slow);
-                            measures.put(copy.key.clone(), Err(why.clone()));
-                            return Err(Unmeasured::Cant(why));
-                        }
+                        measures.slow.lock().insert(call, Instant::now());
                         return Err(Unmeasured::Slow);
                     }
                 }
@@ -361,7 +362,7 @@ fn said(f: &Found, drawn: Drawn, measures: &Measures) -> Value {
                     Err(Unmeasured::Slow) => {
                         let s = BACK_OFF.as_secs();
                         out["why"] = json!(format!(
-                            "{}'s picture, from {}, took too long to measure and was stopped; it is tried again in {s} s.",
+                            "{}'s picture, from {}, took too long to measure (the computer may be busy) and was stopped; it is tried again in {s} s.",
                             f.call.label,
                             whose(f)
                         ));

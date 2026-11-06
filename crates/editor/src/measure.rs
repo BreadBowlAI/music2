@@ -67,6 +67,14 @@ const SHORT: usize = 1 << 14;
 /// What a response says of no sound: −120 dB.
 const FLOOR: f64 = -120.0;
 
+/// Which measure a draw asks for (CARD-85): a drag's frame, the click alone, or at rest, the click
+/// and the checks that it stays the same at every level and every time.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pass {
+    Drag,
+    Rest,
+}
+
 /// Why a measure gave no points (CARD-81, CARD-85).
 #[derive(Clone, Debug, PartialEq)]
 pub enum Failed {
@@ -719,8 +727,9 @@ impl Copy {
     }
 
     /// Its layer's points (CARD-82, CARD-83): a response across `x`, or a hit's columns. Refused in
-    /// words, or stopped past `budget` (CARD-85).
-    pub fn measure(&self, packages: &PackageSet, x: Span, budget: Duration) -> Result<Vec<f64>, Failed> {
+    /// words, or stopped past `budget` (CARD-85). A drag's frame (`pass`) listens to the click alone;
+    /// at rest, the response is checked at a quieter level and a later start too.
+    pub fn measure(&self, packages: &PackageSet, x: Span, budget: Duration, pass: Pass) -> Result<Vec<f64>, Failed> {
         let until = &Spent::new(budget);
         if let Layer::Hit { seconds, .. } = self.layer {
             let sound: Vec<f64> = self.frames(packages, budget)?.iter().map(|[l, r]| 0.5 * (*l as f64 + *r as f64)).collect();
@@ -747,6 +756,10 @@ impl Copy {
             )));
         }
         h.truncate(end.max(1));
+        if pass == Pass::Drag {
+            let points = response(&h, self.rate, x);
+            return if until.over() { Err(Failed::Slow) } else { Ok(points) };
+        }
         // The same at a 32nd of the level, and from a later start: a sound that stays the same at
         // every level and every time gives the same click (review M2).
         let check = self.frames_in(CHECK);

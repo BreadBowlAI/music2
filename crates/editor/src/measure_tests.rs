@@ -69,7 +69,7 @@ const ROOMY: Duration = Duration::from_secs(5);
 /// The response of `module`'s call of `callee` at `v`, measured as a picture's is.
 fn measured(s: &Session, module: &str, callee: &str, v: serde_json::Value) -> Result<Vec<f64>, Failed> {
     let c = copy(s.accepted(), &s.packages, module, &id_in(s, module, callee), &values(v), Layer::Response).map_err(Failed::Cant)?;
-    c.measure(&s.packages, HZ, ROOMY)
+    c.measure(&s.packages, HZ, ROOMY, Pass::Rest)
 }
 
 /// The cookbook's biquads (Robert Bristow-Johnson's), in dB at `hz`: the bilinear transform of an
@@ -158,7 +158,7 @@ fn a_response_listens_until_its_click_dies_away() {
         }
         // The short delay against a fixed listen of 2^19 frames, worked out the same way.
         let c = copy(s.accepted(), &s.packages, "d", &id_in(&s, "d", "delay"), &Map::new(), Layer::Response).unwrap();
-        let points = c.measure(&s.packages, HZ, ROOMY).unwrap();
+        let points = c.measure(&s.packages, HZ, ROOMY, Pass::Rest).unwrap();
         let long = response(&c.step(&s.packages, 1 << 19).unwrap(), rate, HZ);
         let worst =
             points.chunks(2).zip(long.chunks(2)).filter(|(_, l)| l[1] > -60.0).map(|(p, l)| (p[1] - l[1]).abs()).fold(0.0, f64::max);
@@ -189,6 +189,45 @@ fn a_sound_that_changes_with_level_or_time_is_refused() {
     assert_eq!(measured(&s, "d", "drive", json!({})), level, "drive");
     assert_eq!(measured(&s, "c", "compress", json!({})), level, "compress");
     assert_eq!(measured(&s, "ch", "chorus", json!({})), time, "chorus");
+}
+
+// CARD-85: a drag's frame measures the click alone, so it stays smooth; the checks of level and
+// time run at rest. A compressor's curve is drawn while its knob moves, and greyed at rest.
+#[test]
+fn a_drag_frame_measures_the_click_alone() {
+    let body = "const c = track('c', () => compress(osc.saw(110), { threshold: -30, ratio: 10, makeup: 0 }));\n\
+                const l = track('l', () => lowpass(osc.saw(110), { cutoff: 2400, q: 2 }));\n\
+                export default song(() => sum(c.out, l.out));\n";
+    let (_f, s) = open_at(48_000, body);
+    let measure = |module: &str, callee: &str, pass| {
+        let c = copy(s.accepted(), &s.packages, module, &id_in(&s, module, callee), &Map::new(), Layer::Response).unwrap();
+        c.measure(&s.packages, HZ, ROOMY, pass)
+    };
+    assert_eq!(measure("c", "compress", Pass::Drag).map(|p| p.len()), Ok(2 * POINTS), "while dragged: its click's curve");
+    assert!(matches!(measure("c", "compress", Pass::Rest), Err(Failed::Cant(w)) if w.starts_with("its sound changes with how loud it is")));
+    assert_eq!(measure("l", "lowpass", Pass::Drag), measure("l", "lowpass", Pass::Rest), "a linear sound's curve is the same both ways");
+}
+
+// CARD-85: a drag's frame of the eight-band EQ's response stays under 8 ms of the thread's CPU at
+// p99 at 48 kHz. It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
+#[test]
+fn a_drag_frame_of_the_eq_stays_under_8_ms() {
+    let (_f, s) = open_at(48_000, "const e = track('e', () => eq(osc.saw(110)));\nexport default song(() => e.out);\n");
+    let rev = s.accepted();
+    let node = id_in(&s, "e", "eq");
+    let mut took: Vec<Duration> = (0..200)
+        .map(|i| {
+            let t = m2_os::thread::cpu_time();
+            let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(BUDGET);
+            let c = copy(rev, &packages, "e", &node, &values(json!({"gain4": (i % 48) as f64 / 2.0 - 12.0})), Layer::Response).unwrap();
+            assert_eq!(c.measure(&packages, HZ, BUDGET, Pass::Drag).unwrap().len(), 2 * POINTS);
+            m2_os::thread::cpu_time() - t
+        })
+        .collect();
+    took.sort();
+    let (median, p99) = (took[took.len() / 2], took[took.len() * 99 / 100]);
+    eprintln!("a drag's frame of the EQ: median {median:?}, p99 {p99:?}");
+    assert!(p99 < Duration::from_millis(8), "p99 {p99:?} (median {median:?}): over 8 ms");
 }
 
 // CARD-83 (review M6): a drum's hit, from the offline copy of its call, is a render of the song with
@@ -316,7 +355,7 @@ fn a_measure_is_stopped_past_its_budget() {
         let packages = s.packages.clone().with_offline_limit(BUDGET);
         let c = copy(rev, &packages, m, &id(&s, callee), &Map::new(), Layer::Response).unwrap();
         let t = Instant::now();
-        assert_eq!(c.measure(&packages, HZ, BUDGET), Err(Failed::Slow), "{callee}");
+        assert_eq!(c.measure(&packages, HZ, BUDGET, Pass::Rest), Err(Failed::Slow), "{callee}");
         assert!(t.elapsed() < Duration::from_millis(250), "{callee} stopped at {:?}", t.elapsed());
     }
 }
@@ -344,7 +383,7 @@ fn a_measure_follows_a_drag_inside_its_budget() {
                     let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(most);
                     let c = copy(rev, &packages, module, &node, &values(at(i)), layer).unwrap();
                     let span = if layer == Layer::Response { HZ } else { Span { log: false, lo: 0.0, hi: 1.0 } };
-                    assert!(!c.measure(&packages, span, most).unwrap().is_empty());
+                    assert!(!c.measure(&packages, span, most, Pass::Rest).unwrap().is_empty());
                     m2_os::thread::cpu_time() - t
                 })
                 .collect();

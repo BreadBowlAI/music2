@@ -259,6 +259,7 @@ fn a_pictures_words_are_in_the_view() {
 const MEASURED: &str = "import { axis, component, control, port, view } from '@m2/core';
 import { lowpass } from 'std/filter';
 import { drums } from '@m2/drums';
+import { compress } from 'std/fx';
 export const tone = component(
   {
     id: 'tone', label: 'Tone',
@@ -278,6 +279,17 @@ export const tone = component(
     nohit: { draw: (v, p) => [p.hit()], words: () => 'no hit' },
   },
 );
+export const squash = component(
+  {
+    id: 'squash', label: 'Squash',
+    inputs: { x: port.audio() },
+    controls: { threshold: control.db(-30).range(-60, 0) },
+    output: port.audio(),
+    editor: { views: { curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }) } },
+  },
+  (x, { threshold }) => compress(x, { threshold, ratio: 10, makeup: 0 }),
+  { curve: { draw: (v, p) => [p.response()], words: (v) => `squash at ${v.threshold} dB` } },
+);
 export const thump = component(
   {
     id: 'thump', label: 'Thump',
@@ -292,10 +304,11 @@ export const thump = component(
 ";
 
 const MEASURED_SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { sum } from 'std/math';\n\
-                             import { thump, tone } from './lib/sounds';\n\
+                             import { squash, thump, tone } from './lib/sounds';\n\
+                             const sq = track('sq', () => squash(osc.saw(110)));\n\
                              const lead = track('lead', () => tone(osc.saw(110), { cutoff: 2400, q: 2 }));\n\
                              const kick = track('kick', ({ lane }) => thump(lane.notes('hits'), { decay: 1 }));\n\
-                             export default song(() => sum(lead.out, kick.out));\n";
+                             export default song(() => sum(lead.out, kick.out, sq.out));\n";
 
 fn measured() -> Rig {
     let fixture = Fixture::new();
@@ -441,11 +454,32 @@ fn a_measure_that_runs_too_long_is_stopped_and_waits() {
     assert!(t.elapsed() < Duration::from_millis(500), "stopped within its budget: {:?}", t.elapsed());
     assert_eq!(
         answer["picture"]["why"],
-        "Spin's picture, from @test/spin, took too long to measure and was stopped; it is tried again in 10 s."
+        "Spin's picture, from @test/spin, took too long to measure (the computer may be busy) and was stopped; it is tried again in 10 s."
     );
     assert_eq!(rig.graph.measures_tried(), 1);
     rig.graph.preview_for(Some("w1"), rig.token(), rig.revision(), &rig.knob_in("a", "Spin", "drift"), "g1", 0.5).unwrap();
     let again = sent(&rig.graph.pictures_frame(), "w1", 0);
     assert_eq!(again[0]["why"], answer["picture"]["why"], "drawn again, it says so again");
     assert_eq!(rig.graph.measures_tried(), 1, "and isn't measured again while it waits");
+}
+
+// CARD-85: while a knob is dragged, a frame measures the click alone, so the drag stays smooth; at
+// rest the response is checked too, and a sound that changes with how loud it is greys again.
+#[test]
+fn a_drag_draws_the_click_and_rest_checks_it() {
+    let rig = measured();
+    let greyed = "Squash's picture can't measure its sound: its sound changes with how loud it is, so music2 can't measure its curve: its pack must draw it.";
+    assert_eq!(rig.ask_in("w1", "sq", "Squash", "curve")["picture"]["why"], greyed, "at rest");
+    let (token, rev, knob) = (rig.token(), rig.revision(), rig.knob_in("sq", "Squash", "threshold"));
+    rig.graph.preview_for(Some("w1"), token, rev, &knob, "g1", -40.0).unwrap();
+    let drag = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!(
+        drag[0]["shapes"][0]["points"].as_array().map(Vec::len),
+        Some(512),
+        "while dragged, its click's curve: {:?}",
+        drag[0]["why"]
+    );
+    rig.graph.cancel_preview(token, &knob, "g1").unwrap();
+    let rest = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!(rest.last().unwrap()["why"], greyed, "at rest again, checked");
 }

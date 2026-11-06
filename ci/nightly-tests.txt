@@ -67,4 +67,5 @@ m2-play::bit_identity live_on_n_threads_is_the_export_on_1  slow: 86 s
 m2-play::bit_identity every_pure_fixture_renders_the_same_bits_on_1_and_n_threads  slow: 81 s
 m2-editor spectrum::tests::thirty_one_spectra_fit_in_a_read_with_room  speed: 31 spectra under 16.5 ms, half a meters read (TAP-13; 5.8 ms measured on the Linux server; crates/editor/src/spectrum_tests.rs)
 m2-script pictures_tests::an_eight_band_curve_draws_inside_its_budget  speed: an eight-band curve's draw under 8 ms at p99 (CARD-75, core/script/src/pictures_tests.rs)
+m2-editor measure::tests::a_drag_frame_of_the_eq_stays_under_8_ms  speed: a drag's frame of the eight-band EQ's response under 8 ms of CPU at p99 at 48 kHz (CARD-85; 3.5 ms measured alone on the Linux server; crates/editor/src/measure_tests.rs)
 m2-editor measure::tests::a_measure_follows_a_drag_inside_its_budget  speed: a lowpass's and the EQ's responses and a 1 s hit, each inside its budget at p99, 20 ms at 48 kHz and 40 ms at 96 kHz, in CPU time (CARD-85; the EQ 7.0 and 12.2 ms measured alone on the Linux server, 11 ms at 48 kHz beside the other tests; crates/editor/src/measure_tests.rs)

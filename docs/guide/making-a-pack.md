@@ -255,7 +255,7 @@ A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a co
 
 Each may be in a picture once. They follow every drag at once, and the same values are measured only once. A measure has 20 ms (more at a higher rate); past that the picture greys, and it is tried again 10 s later.
 
-music2 draws a response only where it is exact. Otherwise the picture greys and says why, and your pack draws that curve from its own maths:
+music2 draws a response only where it is exact. It checks that when no knob is being dragged: while you drag, only the curve is measured, so it keeps up. Where it isn't exact, the picture greys and says why, and your pack draws that curve from its own maths:
 
 | The picture greys when the sound | For example | Draw instead |
 |---|---|---|
