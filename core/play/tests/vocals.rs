@@ -97,3 +97,32 @@ fn the_rest_of_a_tuned_song_waits_for_tune() {
     assert!(peak(&dry) > 0.1, "the voice sounds: {}", peak(&dry));
     assert!(peak(&out) < 1e-4, "the two cancel: what is left peaks at {}", peak(&out));
 }
+
+/// `clock − pos` of `Player::heard_frame` after each of `n` device buffers of `size` frames.
+fn heard_offsets(song: &Song, size: usize, n: usize) -> Vec<i64> {
+    let (player, mut d) = playing(song.renderer(), song.rate);
+    let mut data = vec![0.0f32; 2 * size];
+    let mut out = vec![];
+    for _ in 0..n {
+        d.fill(&mut data, 2);
+        drop(d.drain_retired());
+        let (clock, pos) = player.heard_frame().unwrap();
+        out.push(clock as i64 - pos as i64);
+    }
+    out
+}
+
+// RENDER-19, VOX-25 (the review's aside): `Player::heard_frame` pairs the engine clock and the
+// transport's frame at one moment, so while the song plays on, the one less the other never moves:
+// with buffers of 100 frames the engine renders blocks of 128 ahead, and what is left of a block
+// must count the same on both sides. A song with Tune (15 ms late) and one without.
+#[test]
+fn heard_frame_pairs_one_moment_late_or_not() {
+    let tuned = vocal_song("heard", &[("vox", "tune(osc.saw(216), { glide: 0 })")]);
+    let dry = vocal_song("heard-dry", &[("vox", "osc.saw(216)")]);
+    for (name, song) in [("dry", &dry), ("tuned", &tuned)] {
+        let offsets = heard_offsets(song, 100, 60);
+        let settled = &offsets[20..];
+        assert!(settled.iter().all(|o| *o == settled[0]), "{name}: clock less frame moves while it plays: {settled:?}");
+    }
+}
