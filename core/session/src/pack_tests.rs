@@ -138,10 +138,10 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
     for (asks, said) in [
         (
             "1",
-            "is made for @m2/core 1, and this app has @m2/core 2.3.0, whose changes may break it. Get a version of it made for \
+            "is made for @m2/core 1, and this app has @m2/core 2.4.0, whose changes may break it. Get a version of it made for \
              @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
         ),
-        ("3", "is made for @m2/core 3, newer than this app's 2.3.0. Update music2 to use it"),
+        ("3", "is made for @m2/core 3, newer than this app's 2.4.0. Update music2 to use it"),
     ] {
         let root = scratch(&format!("core-{asks}"));
         copy(&fixtures(), &root);
@@ -165,7 +165,7 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
 #[test]
 fn a_pack_made_for_an_older_minor_of_core_still_builds() {
     let mut first: Option<String> = None;
-    for asks in ["2", "2.0", "2.1", "2.2"] {
+    for asks in ["2", "2.0", "2.1", "2.2", "2.3", "2.4"] {
         let root = scratch(&format!("core-minor-{asks}"));
         copy(&fixtures(), &root);
         let manifest = root.join("tiny/m2pkg.toml");
@@ -183,6 +183,9 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
                 "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
                 "editor: { category: \"Drums\", description: \"A soft pluck, built from std's blocks\", kits: { Pair: { db: -3, tracks: [{ name: \"Dark\", brightness: 400 }, { name: \"Bright\" }] } } },",
             ),
+            // The song's key as a signal (VOX-12), read where a sound is built.
+            "2.4" => code.replace("import { component, control,", "import { component, control, time,")
+                + "\n/** The song's key, for a kernel that follows it. */\nexport const songKey = () => time.key;\n",
             _ => code,
         };
         std::fs::write(&index, code).unwrap();
