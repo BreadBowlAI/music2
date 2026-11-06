@@ -1171,5 +1171,133 @@ fn an_effect_goes_after_a_tracks_sound_where_the_song_reads_it() {
     assert_eq!(import(&s, "import:hook.out"), Some(false));
     let at = rev(&s);
     let e = s.add_effect(at, "import:hook.out", "std:duck").unwrap_err().to_string();
-    assert!(e.contains("song.ts reads Hook's sound in 2 places"), "{e}");
+    assert!(e.contains("the song reads Hook's sound in 2 places"), "{e}");
+}
+
+// ---------------------------------------------------------------- the review of track sidechain
+
+/// The starter with `song.ts`'s `from` written as `to`, opened.
+fn starter_with(from: &str, to: &str) -> (crate::testing::Fixture, Session) {
+    let f = crate::testing::fixture("templates/starter");
+    let song = f.read("song.ts");
+    assert!(song.contains(from), "the starter has {from}");
+    f.write("song.ts", song.replace(from, to));
+    let s = f.open();
+    (f, s)
+}
+
+// CARD-35 (review S2): the Tx is confined to the whole call, so the planner itself checks that
+// every other argument of the call is as it was, byte for byte: an edit that also touched one is
+// refused.
+#[test]
+fn a_listens_edit_that_touches_another_argument_is_refused() {
+    let f = keyless();
+    let mut s = f.open();
+    let original = f.read("song.ts");
+    let id = call_on(&s, "compress", "hook.out");
+    let site = current_site(&s, rev(&s), &id).unwrap().clone();
+    let (hook, opts) = (site.args[0].span(), site.args[1].span());
+    let threshold = original[opts.0 as usize..].find("-24").unwrap() as u32 + opts.0;
+    let edits = [(hook.1, hook.1, ", kick.out".to_string()), (threshold, threshold + 3, "-20".to_string())];
+    let e = text_tx(&mut s, &site, &original, &edits, Some("kick"), ("".into(), "kick.out".into()));
+    assert!(e.is_err(), "it changed the options too: {}", f.read("song.ts"));
+    assert_eq!(f.read("song.ts"), original);
+}
+
+// CARD-35 (review S4): a side written as an expression that gives `undefined` hears nothing, and
+// the row says so, as for one left out; a pick still replaces the expression.
+#[test]
+fn a_side_that_gives_undefined_reads_none() {
+    let (f, mut s) = starter_with("duck(bass.out, kick.env,", "duck(bass.out, false ? kick.env : undefined,");
+    let id = call_on(&s, "duck", "bass.out");
+    let r = row(&s, &id).unwrap();
+    assert_eq!((r.track.as_deref(), r.given, r.heard), (None, true, false), "{r:?}");
+    let at = rev(&s);
+    sidechain(&mut s, at, &id, Some("kick")).unwrap();
+    assert!(f.read("song.ts").contains("duck(bass.out, kick.env, { depth: db(-9) })"));
+}
+
+// CARD-35 (review S5): None takes out the argument and its own comments, and leaves the others'.
+#[test]
+fn none_keeps_the_other_arguments_comments() {
+    let (f, mut s) =
+        starter_with("duck(bass.out, kick.env, { depth: db(-9) })", "duck(bass.out /* dry */, kick.env /* key */, { depth: db(-9) })");
+    let original = f.read("song.ts");
+    let (at, id) = (rev(&s), call_on(&s, "duck", "bass.out"));
+    let done = sidechain(&mut s, at, &id, None).unwrap();
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("kick.env", ""));
+    assert_eq!(f.read("song.ts"), original.replace("duck(bass.out /* dry */, kick.env /* key */, {", "duck(bass.out /* dry */, {"));
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), original);
+    // On lines of their own, each with its comment.
+    let lines = "duck(\n          bass.out, // dry\n          kick.env, // the kick\n          { depth: db(-9) },\n        )";
+    let (f, mut s) = starter_with("duck(bass.out, kick.env, { depth: db(-9) })", lines);
+    let original = f.read("song.ts");
+    let (at, id) = (rev(&s), call_on(&s, "duck", "bass.out"));
+    sidechain(&mut s, at, &id, None).unwrap();
+    let none = "duck(\n          bass.out, // dry\n          { depth: db(-9) },\n        )";
+    assert_eq!(f.read("song.ts"), original.replace(lines, none));
+    // Put back, it goes where it was: before the options, on their line.
+    let (at, id) = (rev(&s), call_on(&s, "duck", "bass.out"));
+    sidechain(&mut s, at, &id, Some("kick")).unwrap();
+    assert!(f.read("song.ts").contains("bass.out, // dry\n          kick.env, { depth: db(-9) },"), "{}", f.read("song.ts"));
+}
+
+// CARD-36 (review S6): "read in one place" is the graph's: the sound's import feeds one node. Read
+// twice though written once, it has no +; and each refusal says which it is.
+#[test]
+fn a_sound_the_graph_reads_twice_has_no_plus() {
+    let audio = |s: &Session| {
+        let v = crate::view::view(s);
+        v.modules.iter().find(|m| m.key == "song").unwrap().nodes.iter().find(|n| n.id == "import:hook.out").map(|n| n.audio)
+    };
+    let refusal = |s: &mut Session| {
+        let at = rev(s);
+        s.add_effect(at, "import:hook.out", "std:duck").unwrap_err().to_string()
+    };
+    let (_f, mut s) =
+        starter_with("hook: { in: hook.out, db: db(4) },", "hook: { in: hook.out, db: db(4) },\n        again: (({ out }) => out)(hook),");
+    assert_eq!(audio(&s), Some(false));
+    let e = refusal(&mut s);
+    assert!(e.contains("the song reads Hook's sound in 2 places"), "{e}");
+    let (_f, mut s) = starter_with("hook: { in: hook.out, db: db(4) },", "hook: { in: [hook][0].out, db: db(4) },");
+    assert_eq!(audio(&s), Some(false));
+    let e = refusal(&mut s);
+    assert!(e.contains("song.ts doesn't write hook.out by name"), "{e}");
+}
+
+// CARD-35 (review S7): for a key left out, a compressor or a gate hears its own sound, so its None
+// reads "No other track"; a Duck's, which then hears nothing, reads None.
+#[test]
+fn a_keys_none_says_no_other_track() {
+    let f = keyless();
+    let s = f.open();
+    assert_eq!(row(&s, &call_on(&s, "compress", "hook.out")).unwrap().nothing, "No other track");
+    assert_eq!(row(&s, &call_on(&s, "duck", "chords.out")).unwrap().nothing, "None");
+}
+
+// CARD-35 (review S3, S9): the row comes right after the sound the call works on, found by its
+// port, wherever the options are written; and it is its input's row by what that input hears.
+#[test]
+fn the_row_comes_after_the_sound_with_options_in_a_name() {
+    let (f, s) = {
+        let f = crate::testing::fixture("templates/starter");
+        let song = f
+            .read("song.ts")
+            .replace("hook: { in: hook.out, db: db(4) },", "hook: { in: compress(hook.out, kick.out, glue), db: db(4) },")
+            .replace("export default song(", "const glue = { threshold: db(-24) };\n\nexport default song(");
+        f.write("song.ts", song);
+        let s = f.open();
+        (f, s)
+    };
+    let _ = f;
+    let id = call_on(&s, "compress", "hook.out");
+    let v = crate::view::view(&s);
+    let card = v.modules.iter().find(|m| m.key == "song").unwrap().nodes.iter().find(|n| n.id == id).unwrap().clone();
+    let labels: Vec<&str> = card.inputs.iter().map(|p| p.label.as_str()).collect();
+    // The options, written before the call, come first, as written; the key comes right after the
+    // sound, though its signal (kick.out, read before in the mixer) is written elsewhere.
+    let sound = labels.iter().position(|l| *l == "in").expect("the sound's row");
+    assert_eq!(labels[sound + 1], "key", "{labels:?}");
+    assert_eq!(card.listens.as_ref().and_then(|l| l.port.clone()), Some(card.inputs[sound + 1].id.clone()));
 }

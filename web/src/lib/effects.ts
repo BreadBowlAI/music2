@@ -43,6 +43,10 @@ export interface Listens {
   given: boolean;
   /** Whether None can be picked: the call may leave the input out. */
   optional: boolean;
+  /** Whether it hears a signal at all (a side that gives `undefined` hears nothing). */
+  heard: boolean;
+  /** What its None is called: "No other track" for a key (it hears its own sound), "None" for a Duck's side. */
+  nothing: string;
   /** The tracks it can listen to: key and name. */
   choices: [string, string][];
   refused?: string;

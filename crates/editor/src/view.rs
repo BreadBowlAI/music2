@@ -443,6 +443,12 @@ fn audio_out(session: &Session, site: u32) -> bool {
     matches!(call_output(session, site).and_then(|(m, r)| kind_of(session, m, r)), Some(Kind::Audio(_)))
 }
 
+/// A port reference with its port written out: `n3` is `n3.out`.
+fn whole_ref(r: &str) -> String {
+    let (node, port) = split_ref(r);
+    format!("{node}.{port}")
+}
+
 /// Every node, voices included.
 fn walk_nodes<'a>(ns: &'a [Node], f: &mut impl FnMut(&'a Node)) {
     for n in ns {
@@ -1137,6 +1143,7 @@ pub fn view(session: &Session) -> GraphView {
         // The inputs an automation lane drives, by node and port (8b.5); the notes lane each node
         // reads, for a keys view's audition (CARD-28).
         let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
+        let mut rows_by_ref: HashMap<(String, String), String> = HashMap::new();
         let mut notes_of: HashMap<String, LaneRef> = HashMap::new();
         for ((to, _, r, from), cable) in reads.iter().zip(cables) {
             let (to_id, from_id) = (&ids[to], &ids[from]);
@@ -1166,9 +1173,7 @@ pub fn view(session: &Session) -> GraphView {
                             (_, _, [one]) => kind::Name { label: one.to_string(), entry: None },
                             // Into several ports (a compressor's audio, which its detector hears
                             // too, PKG-19): as the input it is written as.
-                            (_, Some(p), _) if input_at(to, p).is_some() => {
-                                kind::Name { label: input_at(to, p).unwrap_or_default(), entry: None }
-                            }
+                            (_, Some(p), _) if let Some(input) = input_at(to, p) => kind::named(None, &input),
                             (_, Some(p), _) => {
                                 kind::Name { label: format!("input {}", p[0].parse::<usize>().map_or(1, |i| i + 1)), entry: None }
                             }
@@ -1184,6 +1189,8 @@ pub fn view(session: &Session) -> GraphView {
                     id
                 }
             };
+            // Each row by the signal it reads, for the row an input that listens hears (CARD-35).
+            rows_by_ref.entry((to_id.clone(), whole_ref(r))).or_insert_with(|| to_port.clone());
             if let Some(Op::Lane { lane }) = source(r).map(|n| &n.op)
                 && m.lanes.iter().any(|l| &l.key == lane && matches!(l.kind, Kind::Control(_)))
             {
@@ -1231,15 +1238,18 @@ pub fn view(session: &Session) -> GraphView {
                 p.lane = driven.get(&(n.id.clone(), p.id.clone())).cloned();
             }
             n.outputs = outputs.remove(&n.id).unwrap_or_default();
-            // A card's "Listens to" is its listening input's row, when it has one (CARD-35); with
-            // none (the call leaves the input out) the row stands alone.
-            // It comes right after the sound the call works on, wherever its signal is written (a
-            // track's export read before, as a compressor's key often is).
+            // A card's "Listens to" is the row of what its listening input hears, found by that
+            // signal, when it has one (CARD-35); with none (the call leaves the input out) the row
+            // stands alone. It comes right after the sound the call works on (its first argument's
+            // row, else its first audio row), wherever its own signal is written (a track's export
+            // read before, as a compressor's key often is).
             if let Some(l) = &mut n.listens {
-                l.port = n.inputs.iter().find(|p| p.label == l.input).map(|p| p.id.clone());
+                l.port = l.source.as_deref().and_then(|r| rows_by_ref.get(&(n.id.clone(), whole_ref(r)))).cloned();
                 if let Some(at) = n.inputs.iter().position(|p| Some(&p.id) == l.port.as_ref()) {
                     let row = n.inputs.remove(at);
-                    n.inputs.insert(n.inputs.len().min(1), row);
+                    let first = |p: &InputPort| written_at.get(&(n.id.clone(), p.id.clone())) == Some(&0);
+                    let sound = n.inputs.iter().position(first).or_else(|| n.inputs.iter().position(|p| p.kind == "audio"));
+                    n.inputs.insert(sound.map_or(0, |i| i + 1), row);
                 }
             }
             // Its groups and views (CARD-25, CARD-26), over its inputs and settings as they now are.

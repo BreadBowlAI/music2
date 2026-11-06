@@ -1458,10 +1458,10 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const l = node.listens!;
   const name = (key: string) => l.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
-  const now = l.track ? name(l.track) : l.given ? "another sound" : "None";
+  const now = l.track ? name(l.track) : l.heard ? "another sound" : l.nothing;
   const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
   const what = node.title ?? "It";
-  const title = l.given ? `${what} listens to ${now}. Choose another track` : `${what} listens to no other track. Choose one`;
+  const title = l.heard ? `${what} listens to ${now}. Choose another track` : `${what} listens to no other track. Choose one`;
   return (
     <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input?.label ?? l.input} data-listens>
       {input && <Dot id={input.id} kind={input.kind} filled={filled} />}
@@ -1471,7 +1471,7 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
         className={clsx(
           "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
           off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
-          !l.given && !off && "text-fg-muted",
+          !l.heard && !off && "text-fg-muted",
           anchor && "bg-accent-soft text-accent-strong",
         )}
         aria-haspopup="menu"
@@ -1507,13 +1507,13 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
             <MenuRow
               key="none"
               data-track=""
-              icon={<Check size={14} className={l.given ? "invisible" : undefined} />}
+              icon={<Check size={14} className={l.heard ? "invisible" : undefined} />}
               onClick={() => {
                 setAnchor(null);
-                if (l.given) void listenTo(node, null, "nothing");
+                if (l.given) void listenTo(node, null, l.nothing === "None" ? "nothing" : l.nothing.toLowerCase());
               }}
             >
-              None
+              {l.nothing}
             </MenuRow>
           )}
         </Popover>
