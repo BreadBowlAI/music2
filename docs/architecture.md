@@ -2045,24 +2045,31 @@ Everything else is counted and named in plain words when the import ends, never 
 
 **VOX-1.** `POST /api/graph/take` MAY carry a range, `from` and `to` in beats. Then take `take` MUST play over that range of the clip's comp, and the rest of the comp MUST play as it did: one Tx and one undo step, named "Comp on Vox" ([MON-14](#monitoring-overlays-and-mute-in-song)). Without a range the route chooses the take for the clip named, as [MON-11](#monitoring-overlays-and-mute-in-song) says. The route answers the edit. It is a song change, open to agents (`m2 call`), and it goes from a `revision` as any gesture does ([AGENT-2](#agents)).
 - *Why:* a singer's best take is made from their best lines (gap #25). Recording is the core's, so comping needs no pack.
+- *Today:* built in track `comp`: `TakeReq`'s `from` and `to` (`crates/server/src/routes_record.rs`), `Graph::choose_take`'s range (`crates/server/src/graph/record.rs`), and the editor's `Gesture::Comp`, which is off the wire as the take's own gesture is (`crates/editor/src/clips.rs`). Tested by `a_comp_over_a_loops_takes_is_one_undo_step` (`record_tests.rs`) and `e2e/comp.mjs`.
 
 **VOX-2.** The **comp** a range acts on MUST be the clip named and the clips of its lane that play the same file in a row with it: each starts after the one before it starts and ends after it ends, and starts no later than it ends, overlapping it by 50 ms at most. The file's note MUST list two takes or more. The range is cut to the comp's span; a range with nothing of the comp in it is refused in words. A cut less than 10 ms (in seconds) from the comp's edge, or from a join, moves onto it, so no piece is shorter than 10 ms.
 - *Why:* a copy of the chorus further on is another comp; a swipe on one mustn't change the other.
+- *Today:* built in track `comp` (`pieces` and `comp` in `crates/editor/src/comp.rs`). Tested by `a_comp_is_the_clips_of_one_file_in_a_row` (`crates/editor/src/comp_tests.rs`).
 
 **VOX-3.** A comp MUST be plain audio clips: each **piece** plays its take of the file by its `offset`, and a piece that follows the tempo by its warp markers too, which move with it as the Takes menu moves them ([MON-11](#monitoring-overlays-and-mute-in-song)). A piece's take is the one that holds the middle of the part of the file it plays. Pointed at another take, a piece plays the same place in that pass: where it reads in the file moves by the distance between the two takes' starts.
 - *Why:* no hidden state. Delete the file's note, and the pieces are plain clips that play as before.
+- *Today:* built in track `comp`. Tested by `a_swipe_plays_its_take_over_its_range_only` (a render plays each take where it should) and `a_comp_that_follows_the_tempo_moves_its_markers` (`comp_tests.rs`).
 
 **VOX-4.** At each **join**, the two pieces MUST overlap by 10 ms, 5 ms each side of the cut, worked out in beats from the tempo there. The piece before fades out over the overlap and the piece after fades in: 10 ms raised cosines, which add up to 1, so a join between two takes of the same sound can't be heard. The comp's first piece keeps the fade in of the clip that started it, and its last piece the fade out of the clip that ended it. Each comp makes every join of its comp again, so a join a later tempo change put a little off (at 60 bpm, 20 ms of overlap with 10 ms fades) is put right the next time the comp is touched.
 - *Why:* a cut with no crossfade clicks.
+- *Today:* built in track `comp` (`JOIN` in `comp.rs`). Tested by `a_swipe_plays_its_take_over_its_range_only` (the note's example, to 1e-9) and `the_joins_crossfade_to_one` (three passes of one sine, comped twice, render within 1e-5 of the clip it was made from).
 
 **VOX-5.** After a comp, two pieces side by side that play on from each other (the same file read on with no jump, the same volume) MUST be one clip: no join is left where the sound doesn't change. A piece the comp leaves as it was keeps its line, byte for byte. Of the clips a piece is made from, the earliest keeps its id; a new piece gets a fresh one ([FMT-12](#lane-files-and-clip-ids)). Comping the take that already plays there makes no change and no step.
 - *Why:* swiping Take 2 and then Take 3 back over the same bars must leave the one clip it started as.
+- *Today:* built in track `comp`. Tested by `a_comp_back_to_one_take_is_one_clip_again` (`comp_tests.rs`).
 
 **VOX-6.** A comp MUST refuse, in words and with no change, a piece that plays backwards or whose pitch is changed (its audio isn't read from its offset at its own speed, as Split refuses it), and a range that isn't two finite beats with `to` after `from`.
 - *Why:* the crossfades and the take's place are worked out from where a piece reads; those two read elsewhere.
+- *Today:* built in track `comp`. Tested by `a_comp_refuses_what_it_cant_cut` (`comp_tests.rs`).
 
 **VOX-7.** The **Takes** rows. A track whose lanes hold a comp MUST show **Takes** on its header. Clicking it opens one row per take under the lane, "Take 1", "Take 2"…, over each comp of the lane, the part of each row that plays lit in the track's colour; clicking it again closes them. A swipe along a row (press, drag, let go) comps that take over the beats swiped, snapped to the grid when snap is on; a click on a dim part of a row plays that take over the piece under it. Each is one undo step. Opening and closing the rows is no edit: they are worked out from the clips and the file's note, and the lane shows the comp as clips.
 - *Why:* the comp is chosen by ear, part by part, as Logic's take folders and Live's take lanes do.
+- *Today:* built in track `comp` (`web/src/components/TakeRows.tsx`, `web/src/lib/takes.ts`, Takes on `TrackHeader.tsx`). Each row draws its take's waveform over the comp. Tested by `e2e/comp.mjs`.
 
 ## Taps
 

@@ -35,8 +35,8 @@ crate::api::routes! {
         "Arm a track to record, or disarm it, and choose the input channels it records",
         r#"{"session": 7, "module": "vox", "lane": "clips", "armed": true, "channels": "3-4"}"#;
     POST "/api/graph/take" => take; writes, agents,
-        "Choose which take an audio clip over a loop plays (from 1)",
-        r#"{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}"#;
+        "Choose which take an audio clip over a loop plays (from 1); with `from` and `to` (beats), only there: a comp",
+        r#"{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2, "from": 4, "to": 6}"#;
     POST "/api/graph/input/inject" => input_inject; reads, musician,
         "What the sound input would hear next (only with M2_AUDIO_INPUT=inject, for the browser suites)",
         r#"{"tone": {"hz": 440, "seconds": 1}, "channel": 3}"#;
