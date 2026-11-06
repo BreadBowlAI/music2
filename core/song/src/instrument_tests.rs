@@ -280,3 +280,18 @@ fn a_turn_for_each_key_is_a_setting() {
     let p = err(&PIANO.replace("voices = 16\n", "voices = 16\nturns = \"note\"\n"));
     assert_eq!((p.line, p.message.as_str()), (11, "`turns = \"note\"` must be \"lane\" or \"key\""));
 }
+
+// PKG-15, PKG-16 rule 8: a data instrument's region may have a choke group and the group that cuts
+// it, `group` and `off_by`, read as numbers in PKG-15's order and given to the Sampler as written.
+#[test]
+fn a_regions_choke_groups_are_read() {
+    let text = "label = \"Hats\"\ncategory = \"Drums\"\nengine = \"std:sampler\"\n\
+                [[region]]\nfile = \"samples/open.wav\"\noff_by = 2\ngroup = 1\nkeys = [46, 46]\n\
+                [[region]]\nfile = \"samples/closed.wav\"\ngroup = 2\n";
+    let i = DataInstrument::read(text).unwrap_or_else(|p| panic!("{}", p.message));
+    let names: Vec<&str> = i.regions[0].fields.iter().map(|(k, _)| *k).collect();
+    assert_eq!(names, ["file", "keys", "group", "off_by"], "in PKG-15's order");
+    assert_eq!(i.regions[0].fields[3], ("off_by", Field::Number(2.0)));
+    let code = i.module("@a/hats", &Id::new("hats").unwrap());
+    assert!(code.contains("group: 1, off_by: 2") && code.contains("group: 2 }"), "{code}");
+}

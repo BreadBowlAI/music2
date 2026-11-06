@@ -120,6 +120,9 @@ pub struct Dependent {
     /// For a send to a bus or an output to it, in the mixer's file: the deletions taking it out.
     #[serde(skip)]
     cut: Vec<(u32, u32, String)>,
+    /// The bytes those deletions may change, when not the mixer's call: an optional input's call.
+    #[serde(skip)]
+    within: Option<(u32, u32)>,
 }
 
 /// What a delete did, or why it waits.
@@ -328,6 +331,19 @@ pub(crate) fn track_call_text(inst: &Instrument, key: &str, label: &str, values:
     format!("track({}{options}, ({{ lane }}) => {}(lane.notes({}){values}))", quoted(key), inst.name, quoted(&inst.lane))
 }
 
+/// [`track_call_text`] for a track whose lane another track reads (KIT-27): it returns its lane, by
+/// its key, beside its sound, `({ out: drums.drum(lane.notes("hits")), hits: lane.notes("hits") })`.
+pub(crate) fn exporting_call_text(inst: &Instrument, key: &str, label: &str, values: &str) -> String {
+    let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
+    let lane = quoted(&inst.lane);
+    format!(
+        "track({}{options}, ({{ lane }}) => ({{ out: {}(lane.notes({lane}){values}), {}: lane.notes({lane}) }}))",
+        quoted(key),
+        inst.name,
+        prop_key(&inst.lane)
+    )
+}
+
 /// What a new track's call writes after its notes for `values` of instrument `d` (a kit's, KIT-5):
 /// `, { drum: "kick", punch: -0.5 }`, each as its card writes it (a choice by its name, a switch
 /// true or false, a number in its spelling), and the unit constructors that needs from `@m2/core`;
@@ -369,7 +385,15 @@ pub(crate) fn instrument_binding(inst: &Instrument) -> &str {
 
 /// The text of a new track file playing `inst` from its lane, writing `values` after its notes,
 /// with the unit constructors `ctors` they need imported beside `track`.
-fn track_text(inst: &Instrument, key: &str, label: &str, file: &str, (values, ctors): &(String, Vec<String>)) -> String {
+fn track_text(
+    inst: &Instrument,
+    key: &str,
+    label: &str,
+    file: &str,
+    (values, ctors): &(String, Vec<String>),
+    reads: &[(String, String)],
+    exports: bool,
+) -> String {
     // A project's own instrument is imported by its path from the track's folder.
     let from = match inst.module.ends_with(".ts") {
         true => specifier(file, &inst.module),
@@ -377,12 +401,15 @@ fn track_text(inst: &Instrument, key: &str, label: &str, file: &str, (values, ct
     };
     let mut core: Vec<&str> = ctors.iter().map(String::as_str).chain(["track"]).collect();
     core.sort();
+    // The tracks whose lanes it reads, each by its binding and file (KIT-27).
+    let others: String =
+        reads.iter().map(|(binding, other)| format!("import {binding} from {};\n", quoted(&specifier(file, other)))).collect();
+    let call = if exports { exporting_call_text(inst, key, label, values) } else { track_call_text(inst, key, label, values) };
     format!(
-        "import {{ {} }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        "import {{ {} }} from \"@m2/core\";\nimport {{ {} }} from {};\n{others}\nexport default {call};\n",
         core.join(", "),
         instrument_binding(inst),
         quoted(&from),
-        track_call_text(inst, key, label, values)
     )
 }
 
@@ -527,6 +554,10 @@ pub struct NewTrack {
     /// Lanes of its own beside the one it plays, each its key and its file's text (a knob's lane,
     /// KIT-23).
     pub lanes: Vec<(String, String)>,
+    /// Optional notes inputs of its instrument, each given the hits of an earlier track of this
+    /// list, by its place: `("cutBy", 4)` writes `hats.hits` after the notes, imports that track, and
+    /// has it return its lane beside its sound (a kit's Open hat, cut by its Hats, KIT-28).
+    pub hits_of: Vec<(String, usize)>,
     /// Its channel a copy of track `like`'s, reading it where that one reads `like.out` (Bounce to
     /// audio, RENDER-40): the same fader, pan, effects, bus and sends; right after that channel.
     /// Its own `db` and `to` aren't given then.
@@ -751,7 +782,30 @@ pub(crate) fn add_tracks_as(
         let text = match (inst, plugin, bus) {
             (Some(i), ..) => {
                 let d = &s.catalog().components[&i.component];
-                track_text(i, &key, &label, &file, &values_text(d, &t.values, &t.code, &rev.compiled.units)?)
+                // The lanes of earlier tracks it reads (KIT-27): each imported by a name of its own.
+                let mut args = String::new();
+                let mut reads: Vec<(String, String)> = vec![];
+                for (slot, j) in &t.hits_of {
+                    let (Some(other), Some(other_file), Some(Play::Instrument(c))) =
+                        (keys_made.get(*j), files.get(*j), tracks.get(*j).map(|o| &o.play))
+                    else {
+                        return Err(EditError::Rejected("a new track reads the hits of a new track listed before it".into()));
+                    };
+                    let lane = &catalog.iter().find(|x| x.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?.lane;
+                    let taken: Vec<&str> =
+                        ["track", instrument_binding(i)].into_iter().chain(reads.iter().map(|(b, _)| b.as_str())).collect();
+                    let mut binding = camel(other);
+                    while taken.contains(&binding.as_str()) {
+                        binding.push_str("Track");
+                    }
+                    // Given by its place, after the notes (PKG-18): only one is, the Drum's.
+                    let _ = slot;
+                    args.push_str(&format!(", {binding}.{lane}"));
+                    reads.push((binding, other_file.clone()));
+                }
+                let exports = tracks.iter().any(|o| o.hits_of.iter().any(|(_, j)| *j == n));
+                let (values, ctors) = values_text(d, &t.values, &t.code, &rev.compiled.units)?;
+                track_text(i, &key, &label, &file, &(format!("{args}{values}"), ctors), &reads, exports)
             }
             (None, Some((id, _)), _) => crate::plugins::track_text(id, &key, &label),
             (None, None, Some(kind)) => {
@@ -1043,6 +1097,33 @@ fn call_of<'a>(rev: &'a Revision, m: &Module, doing: &str) -> Result<(&'a Site, 
     Ok((site, text))
 }
 
+/// When the read of a track at byte `at` of `file` is all an optional input's argument of call `c`
+/// says (PKG-18, `hats.hits`): the call, what it is called (its component's label), and the bytes
+/// that take the argument out with its comma, as None takes it out (CARD-35).
+fn optional_read<'a>(rev: &'a Revision, c: &'a Site, file: &str, at: u32) -> Option<(&'a Site, String, (u32, u32))> {
+    let text = rev.snapshot.files.get(Path::new(file))?;
+    let m = rev.compiled.ir.modules.iter().find(|m| m.frames.iter().any(|f| f.site == c.id && f.component.is_some()))?;
+    let id = m.frames.iter().find(|f| f.site == c.id)?.component.as_deref()?;
+    let d = rev.compiled.components.get(id)?;
+    let i = c.args.iter().position(|a| a.span().0 == at).filter(|i| *i > 0)?;
+    let (a, b) = c.args[i].span();
+    // The read alone: a name and an export, `hats.hits`.
+    let read = &text[a as usize..b as usize];
+    if !read.split('.').all(sites::identifier) || read.split('.').count() != 2 {
+        return None;
+    }
+    let lead = d.inputs.iter().map(|x| x.name.as_str()).filter(|n| !d.positional.iter().any(|p| p == n));
+    let name = lead.chain(d.positional.iter().map(String::as_str)).nth(i)?;
+    d.inputs.iter().find(|x| x.name == name && x.optional)?;
+    // An argument after it would move into its place, unless it is the call's options.
+    let options = crate::controls::options_of(m, c.id).ok().flatten();
+    if c.args.len() > i + 1 && options != Some(i + 1) {
+        return None;
+    }
+    let cut = crate::effect::taken_out(text, c.args[i - 1].span().1, b, c.args.len() > i + 1)?;
+    Some((c, d.label.clone(), cut))
+}
+
 /// The innermost call of the project at byte `at` of `file`.
 fn call_around<'a>(rev: &'a Revision, file: &str, at: u32) -> Option<&'a Site> {
     rev.compiled.sites.iter().filter(|x| x.in_project && x.file == file && x.start <= at && at < x.end).min_by_key(|x| x.end - x.start)
@@ -1176,6 +1257,10 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         let call = call_around(rev, &file, at);
         let line = rev.snapshot.files.get(Path::new(&file)).map_or(0, |t| t[..at as usize].matches('\n').count() as u32 + 1);
         let effect = call.and_then(|c| passes_audio(s, c).map(|d| (c, d)));
+        // An input a call may leave out that reads it alone (PKG-18, KIT-27: a Drum's cut): the
+        // argument goes with it, as None takes it out. An effect that hears it (a Duck's side) comes
+        // off whole, as before.
+        let optional = call.and_then(|c| optional_read(rev, c, &file, at));
         // The track a read in the song's own code feeds: the channel it sits in.
         let fed = match (reader == ROOT, &mixer) {
             (true, Some(mx)) => mx
@@ -1187,8 +1272,8 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         };
         let fed = fed.unwrap_or_else(|| reader.to_string());
         let fed_label = rev.compiled.ir.modules.iter().find(|x| x.key == fed).map_or(fed.clone(), |x| x.label().to_string());
-        let dep = match effect {
-            Some((c, d)) if c.args.first().is_some_and(|a| !(a.span().0 <= at && at < a.span().1)) => {
+        let dep = match (effect, optional) {
+            (Some((c, d)), _) if c.args.first().is_some_and(|a| !(a.span().0 <= at && at < a.span().1)) => {
                 let input = c.args[0].span();
                 Dependent {
                     module: fed,
@@ -1199,8 +1284,20 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                     removable: true,
                     site: Some((c.start, input.0, input.1, c.end)),
                     cut: vec![],
+                    within: None,
                 }
             }
+            (_, Some((c, d, cut))) => Dependent {
+                module: fed,
+                label: fed_label,
+                component: d,
+                file,
+                line,
+                removable: true,
+                site: None,
+                cut: vec![(cut.0, cut.1, String::new())],
+                within: Some((c.start, c.end)),
+            },
             _ => Dependent {
                 module: fed,
                 label: fed_label,
@@ -1210,6 +1307,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                 removable: false,
                 site: None,
                 cut: vec![],
+                within: None,
             },
         };
         if !dependents.iter().any(|d| d.site.is_some() && d.site == dep.site && d.file == dep.file) {
@@ -1232,6 +1330,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                 removable: true,
                 site: None,
                 cut,
+                within: None,
             });
         }
     }
@@ -1278,7 +1377,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         add(&mut edits, &mut ranges, &mx.file, removed, mx.call);
     }
     for d in dependents.iter().filter(|d| !d.cut.is_empty()) {
-        let call = mixer.as_ref().map_or((0, 0), |mx| mx.call);
+        let call = d.within.or(mixer.as_ref().map(|mx| mx.call)).unwrap_or((0, 0));
         edits.entry(d.file.clone()).or_default().extend(d.cut.iter().cloned());
         ranges.entry(d.file.clone()).or_default().push(Range::bytes(call.0, call.1));
     }

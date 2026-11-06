@@ -48,6 +48,9 @@ pub struct PortDesc {
     /// true, so every other descriptor keeps its bytes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// What its card's row of another track is called (CARD-35), when given: "Cut by".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -189,6 +192,11 @@ pub struct Kit {
 pub struct KitTrack {
     pub name: String,
     pub values: Vec<Insert>,
+    /// Its optional notes inputs, each given the hits of an earlier track of its kit, by that track's
+    /// name: `{ "cutBy": "Hats" }` (KIT-28). Written only when it has some, so every other
+    /// descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub inputs: BTreeMap<String, String>,
 }
 
 /// A view (CARD-16): a picture over values the sound declares, by a name of its own (`amp`).
@@ -275,10 +283,11 @@ impl Descriptor {
         self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
     }
 
-    /// Whether a new track can play it (PKG-7): notes first, its only input, and audio out. The
-    /// + Track list offers it only when it has a category, which groups it.
+    /// Whether a new track can play it (PKG-7): notes first, its only input but those a call may leave
+    /// out (PKG-20), and audio out. The + Track list offers it only when it has a category, which
+    /// groups it.
     pub fn is_instrument(&self) -> bool {
-        matches!(&self.inputs[..], [i] if i.kind == PortKind::Notes)
+        matches!(&self.inputs[..], [i, rest @ ..] if i.kind == PortKind::Notes && !i.optional && rest.iter().all(|r| r.optional))
             && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)
             && self.controls.iter().all(|c| c.each.is_none() && (c.optional || c.default.is_some()))
             && self.settings.iter().all(|s| s.default.is_some() || s.optional)

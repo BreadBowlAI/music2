@@ -33,8 +33,10 @@ export interface MoveRow {
 export interface Listens {
   /** The card's input row it is; none when the call leaves the input out (the row stands alone). */
   port?: string;
-  /** The input, by its name in the descriptor (`side`, `key`). */
+  /** The input, by its name in the descriptor (`side`, `key`, `cutBy`). */
   input: string;
+  /** What the row is called, its input's label ("Cut by"); "Listens to" when it has none. */
+  label?: string;
   /** The track whose sound the effect works on, by name. */
   of?: string;
   /** The track it listens to now, by key. */
@@ -132,6 +134,9 @@ export function moveEffect(node: ViewNode, title: string, other: string, earlier
  */
 export function listenTo(node: ViewNode, key: string | null, name: string) {
   const what = (node.title ?? "effect").toLowerCase();
-  const whose = node.listens?.of ? `${node.listens.of}'s ${what}` : `the ${what}`;
-  return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: `${whose} listens to ${name}` });
+  const l = node.listens;
+  const whose = l?.of ? `${l.of}'s ${what}` : `the ${what}`;
+  // An input with a label names the step by it, as the server does: "Open hat cut by Hats" (KIT-27).
+  const step = l?.label && l.of ? `${l.of} ${l.label.toLowerCase()} ${name}` : `${whose} listens to ${name}`;
+  return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: step });
 }

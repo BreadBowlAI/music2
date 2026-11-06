@@ -166,6 +166,8 @@ const REGION: &[(&str, Kind)] = &[
     ("volume", Kind::Number),
     ("pan", Kind::Number),
     ("offset", Kind::Number),
+    ("group", Kind::Number),
+    ("off_by", Kind::Number),
 ];
 
 /// Line and column (from 1, the column in characters) of byte `at` in `text`.

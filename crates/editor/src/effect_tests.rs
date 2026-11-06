@@ -970,10 +970,11 @@ fn the_picker_writes_the_tracks_env() {
     assert_eq!(f.read("song.ts"), original);
 }
 
-// Next D3 (Q27): a Duck in a track's file can't hear other tracks: refused in words, and its card
-// says so.
+// CARD-35 (since track choke, which reverses Next D3's Q27): a Duck in a track's file hears another
+// track as one in the song does: the pick imports it there (track files may import tracks; KIT-27's
+// cuts do), and writes its `env`; undo takes both back.
 #[test]
-fn a_duck_in_a_track_file_is_refused_in_words() {
+fn a_duck_in_a_track_file_listens_to_another_track() {
     let f = crate::testing::fixture("templates/starter");
     let bass = f.read("tracks/bass.ts");
     f.write(
@@ -985,6 +986,7 @@ fn a_duck_in_a_track_file_is_refused_in_words() {
             ),
     );
     let mut s = f.open();
+    let before = f.read("tracks/bass.ts");
     let id = s
         .accepted()
         .compiled
@@ -993,13 +995,19 @@ fn a_duck_in_a_track_file_is_refused_in_words() {
         .find(|x| x.callee == "duck" && x.file == "tracks/bass.ts")
         .map(|x| format!("{}#{}", x.file, x.ordinal))
         .unwrap();
-    let words = "Bass's Duck is in tracks/bass.ts, which can't hear other tracks. Change it in code.";
-    let at = rev(&s);
-    let e = sidechain(&mut s, at, &id, Some("kick")).unwrap_err().to_string();
-    assert!(e.contains(words), "{e}");
     let v = crate::view::view(&s);
     let card = v.modules.iter().find(|m| m.key == "bass").and_then(|m| m.nodes.iter().find(|n| n.id == id)).unwrap();
-    assert_eq!(card.listens.as_ref().and_then(|l| l.refused.as_deref()), Some(words));
+    let l = card.listens.as_ref().unwrap();
+    assert!(l.refused.is_none() && l.choices.iter().any(|(k, _)| k == "kick"), "{l:?}");
+    let at = rev(&s);
+    sidechain(&mut s, at, &id, Some("kick")).unwrap_or_else(|e| panic!("{e}"));
+    let now = f.read("tracks/bass.ts");
+    assert!(
+        now.contains("import kick from \"./kick\";") && now.contains("lane.notes(\"notes\"), { cutoff: hz(420), drive: 3 }), kick.env)"),
+        "{now}"
+    );
+    s.undo().unwrap();
+    assert_eq!(f.read("tracks/bass.ts"), before);
 }
 
 // ---------------------------------------------------------------- Listens to, from the descriptor (CARD-35)
@@ -1199,7 +1207,7 @@ fn a_listens_edit_that_touches_another_argument_is_refused() {
     let (hook, opts) = (site.args[0].span(), site.args[1].span());
     let threshold = original[opts.0 as usize..].find("-24").unwrap() as u32 + opts.0;
     let edits = [(hook.1, hook.1, ", kick.out".to_string()), (threshold, threshold + 3, "-20".to_string())];
-    let e = text_tx(&mut s, &site, &original, &edits, Some("kick"), ("".into(), "kick.out".into()));
+    let e = text_tx(&mut s, &site, &original, &edits, &[], Some("kick"), ("".into(), "kick.out".into()));
     assert!(e.is_err(), "it changed the options too: {}", f.read("song.ts"));
     assert_eq!(f.read("song.ts"), original);
 }
