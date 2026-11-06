@@ -51,8 +51,8 @@ fn the_kits_are_the_packs_own() {
     assert_eq!(
         got,
         [
-            ("808 kit", DRUM, "Drum", vec!["Kick", "Snare", "Clap", "Hats", "Toms", "Rim", "Cowbell", "Cymbal"]),
-            ("909 kit", DRUM, "Drum", vec!["Kick", "Snare", "Clap", "Hats", "Toms", "Rim", "Cymbal"]),
+            ("808 kit", DRUM, "Drum", vec!["Kick", "Snare", "Clap", "Hats", "Open hat", "Toms", "Rim", "Cowbell", "Cymbal"]),
+            ("909 kit", DRUM, "Drum", vec!["Kick", "Snare", "Clap", "Hats", "Open hat", "Toms", "Rim", "Cymbal"]),
             ("Basic kit", DRUM, "Drum", vec!["Kick", "Snare", "Hats"]),
         ]
     );
@@ -118,9 +118,11 @@ fn a_kit_takes_free_names_after_the_selected_track() {
     let mut s = f.open();
     let made = add_kit(&mut s, DRUM, "808 kit", Some("kick")).unwrap();
     let labels: Vec<&str> = made.iter().map(|m| m.label.as_str()).collect();
-    assert_eq!(labels, ["Drums", "Kick 2", "Snare", "Clap", "Hats 2", "Toms", "Rim", "Cowbell", "Cymbal"]);
+    assert_eq!(labels, ["Drums", "Kick 2", "Snare", "Clap", "Hats 2", "Open hat", "Toms", "Rim", "Cowbell", "Cymbal"]);
     let keys: Vec<&str> = made.iter().map(|m| m.module.as_str()).collect();
-    assert_eq!(&order(&s)[..11], [&["kick"][..], &keys, &["hats"][..]].concat(), "after the kick, together");
+    assert_eq!(&order(&s)[..12], [&["kick"][..], &keys, &["hats"][..]].concat(), "after the kick, together");
+    // The Open hat is cut by the kit's own Hats, Hats 2, not the song's (KIT-28).
+    assert!(f.read("tracks/open-hat.ts").contains("import hats2 from \"./hats-2\";"), "{}", f.read("tracks/open-hat.ts"));
     assert!(
         f.read("tracks/kick-2.ts").contains("drums.drum(lane.notes(\"hits\"), { drum: \"kick\", punch: -0.5, decay: 1.6 })"),
         "{}",
@@ -152,7 +154,8 @@ fn a_kit_nobody_names_is_refused() {
 // the master's limiter) under -1 dBTP, and about as loud as the drum machine's beat was, -17 LUFS
 // (±2), unless its fader is where its peak puts it (within 0.6 dB of -1): the peak holds first. Two
 // bars at velocity 0.8: the kick on every beat, the snare and the clap with it on 2 and 4, the hats
-// on the eighths (the last open), a cymbal, the rim and the cowbell on offbeats, a tom fill.
+// on the eighths (the last open, on the Open hat where the kit has one, KIT-28), a cymbal, the rim and
+// the cowbell on offbeats, a tom fill.
 #[test]
 fn every_kit_plays_its_beat_under_its_peak_and_as_loud_as_the_drum_machine() {
     let all = presets(&fixture("templates/empty").open());
@@ -165,7 +168,9 @@ fn every_kit_plays_its_beat_under_its_peak_and_as_loud_as_the_drum_machine() {
             let beats: Vec<(u8, f64)> = match kit.tracks[i].as_str() {
                 "Kick" => (0..8).map(|b| (36, b as f64)).collect(),
                 "Snare" | "Clap" => [1.0, 3.0, 5.0, 7.0].map(|b| (if kit.tracks[i] == "Snare" { 38 } else { 39 }, b)).to_vec(),
+                "Hats" if kit.tracks.iter().any(|t| t == "Open hat") => (0..15).map(|e| (42, e as f64 * 0.5)).collect(),
                 "Hats" => (0..16).map(|e| (if e == 15 { 46 } else { 42 }, e as f64 * 0.5)).collect(),
+                "Open hat" => vec![(46, 7.5)],
                 "Cymbal" => vec![(49, 0.0)],
                 "Rim" => vec![(37, 2.75), (37, 6.75)],
                 "Cowbell" => vec![(56, 0.5), (56, 4.5)],
@@ -211,13 +216,14 @@ fn every_kit_plays_its_beat_under_its_peak_and_as_loud_as_the_drum_machine() {
 #[test]
 fn each_sound_answers_to_its_general_midi_notes() {
     let got: Vec<(&str, &[u8], u8, &str)> = GM.iter().map(|g| (g.sound, g.notes, g.own, g.name)).collect();
-    let want: [(&str, &[u8], u8, &str); 17] = [
+    let want: [(&str, &[u8], u8, &str); 18] = [
         ("kick", &[36], 36, "Kick"),
         ("kick 2", &[35], 35, "Kick 2"),
         ("snare", &[38], 38, "Snare"),
         ("snare 2", &[40], 40, "Snare 2"),
         ("clap", &[39], 39, "Clap"),
         ("hats", &[42, 44, 46], 42, "Hats"),
+        ("open hat", &[], 46, "Open hat"),
         ("tom", &[41, 43, 45, 47, 48, 50], 45, "Toms"),
         ("rim", &[37], 37, "Rim"),
         ("claves", &[75], 75, "Claves"),
@@ -233,7 +239,7 @@ fn each_sound_answers_to_its_general_midi_notes() {
     assert_eq!(got, want);
     let s = fixture("templates/empty").open();
     let menu = s.catalog().components[DRUM].control("drum").and_then(|c| c.options()).expect("the Drum's menu");
-    let names: Vec<&str> = (0..17).filter_map(|i| menu.name(i)).collect();
+    let names: Vec<&str> = (0..GM.len()).filter_map(|i| menu.name(i)).collect();
     assert_eq!(names, GM.map(|g| g.sound), "in the Drum's menu order");
     for n in 0..=127u8 {
         let answer: Vec<&str> = GM.iter().filter(|g| g.notes.contains(&n)).map(|g| g.sound).collect();
@@ -319,7 +325,9 @@ fn played(call: &str, notes: &[(u8, f64)], seconds: f64) -> Vec<f32> {
 #[test]
 fn a_one_sound_lane_plays_the_drum_machines_bits_on_a_drum() {
     for g in GM.iter().filter(|g| g.sound != "tom") {
-        let keys: Vec<u8> = g.notes.iter().copied().filter(|n| ![52, 53, 55].contains(n)).collect();
+        // The open hat answers to no note of its own (KIT-28): it is the hats' 46, at its own.
+        let keys: Vec<u8> =
+            if g.notes.is_empty() { vec![g.own] } else { g.notes.iter().copied().filter(|n| ![52, 53, 55].contains(n)).collect() };
         let notes: Vec<(u8, f64)> =
             keys.iter().chain(&keys).chain(keys.iter().rev()).enumerate().map(|(i, n)| (*n, i as f64 * 0.25)).collect();
         let machine = played("drums.kit(lane.notes(\"hits\"))", &notes, 5.0);
@@ -461,4 +469,70 @@ fn the_empty_templates_drum_lines_build_beside_a_kit() {
     s.refresh();
     assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
     assert!(s.accepted().compiled.ir.modules.iter().any(|m| m.key == "beat"), "its Drum plays, beside the kit");
+}
+
+/// What a song's master plays, from its start, for `seconds`.
+fn master_of(s: &m2_session::Session, seconds: f64) -> Vec<[f32; 2]> {
+    let rev = s.accepted();
+    m2_runtime::Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, 48_000).unwrap().render(seconds).unwrap()
+}
+
+// KIT-28: the 808 kit's hats are two tracks, Hats and Open hat, and the Open hat is cut by the Hats:
+// the Hats return their lane beside their sound, the Open hat imports them and reads their hits as
+// `cutBy`. An open hat at beat 0 stops at the closed hat on beat 0.25, within the Drum's 4 ms fade:
+// after it the kit plays the closed hat alone, every bit; before it, the open hat as it rings uncut.
+#[test]
+fn the_808_kits_hats_choke() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let made = add_kit(&mut s, DRUM, "808 kit", None).unwrap();
+    let key = |label: &str| made.iter().find(|m| m.label == label).unwrap_or_else(|| panic!("{label}")).module.clone();
+    let (hats, open) = (key("Hats"), key("Open hat"));
+    let hats_file = f.read(&format!("tracks/{hats}.ts"));
+    assert!(
+        hats_file.contains("({ out: drums.drum(lane.notes(\"hits\"), { drum: \"hats\" }), hits: lane.notes(\"hits\") })"),
+        "{hats_file}"
+    );
+    let open_file = f.read(&format!("tracks/{open}.ts"));
+    assert!(open_file.contains(&format!("import hats from \"./{hats}\";")), "{open_file}");
+    assert!(open_file.contains("drums.drum(lane.notes(\"hits\"), hats.hits, { drum: \"open hat\" })"), "{open_file}");
+    // One undo step took the kit in; the Open hat is a row of the kit as any Drum track is (KIT-1).
+    let rows: Vec<String> = crate::kits::drum_kits(&s).iter().flat_map(|k| k.rows.iter().map(|r| r.track.clone())).collect();
+    assert!(rows.contains(&open) && rows.contains(&hats), "{rows:?}");
+    let note = |pitch: u8, at: f64| format!("{{\"pitch\": {pitch}, \"start\": {at}, \"length\": 0.25, \"velocity\": 0.8}}");
+    let lane = |module: &str, notes: &[String]| {
+        f.write(
+            &format!("data/{module}/hits.json"),
+            format!("{{\"clips\": [{{\"start\": 0, \"length\": 4, \"notes\": [{}]}}]}}", notes.join(", ")),
+        )
+    };
+    lane(&hats, &[note(42, 0.25)]);
+    lane(&open, &[note(46, 0.0)]);
+    let both = master_of(&f.open(), 1.0);
+    lane(&open, &[]);
+    let closed = master_of(&f.open(), 1.0);
+    lane(&open, &[note(46, 0.0)]);
+    lane(&hats, &[]);
+    let ringing = master_of(&f.open(), 1.0);
+    let at = 6_000; // beat 0.25 at 120 bpm
+    assert!(ringing[at..at + 4_800].iter().any(|x| x[0].abs() > 0.01), "the open hat rings on uncut");
+    assert_eq!(both[..at], ringing[..at], "the open hat as it was, up to the closed one");
+    assert_eq!(both[at + 193..], closed[at + 193..], "after 4 ms, the closed hat alone");
+}
+
+// KIT-27 (review C3): deleting the Hats of an 808 kit, whose hits cut its Open hat, asks first, the
+// Open hat's Drum named as a read it can lose; with cascade the cut goes with the Hats (the
+// argument and its import), as a Duck's side does, and the Open hat plays on, uncut.
+#[test]
+fn deleting_the_track_that_cuts_takes_the_cut_out() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    add_kit(&mut s, DRUM, "808 kit", None).unwrap();
+    let crate::Deleted::Asks(deps) = s.delete_track("hats", false).unwrap() else { panic!("it asks first") };
+    let said: Vec<(String, String, bool)> = deps.iter().map(|d| (d.label.clone(), d.component.clone(), d.removable)).collect();
+    assert_eq!(said, [("Open hat".to_string(), "Drum".to_string(), true)]);
+    let crate::Deleted::Done { .. } = s.delete_track("hats", true).unwrap() else { panic!("deleted") };
+    let open = f.read("tracks/open-hat.ts");
+    assert!(open.contains("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })") && !open.contains("hats"), "{open}");
+    assert!(s.draft_errors.is_empty() && s.problems().iter().all(|p| p.severity != m2_song::Severity::Error), "{:?}", s.problems());
 }

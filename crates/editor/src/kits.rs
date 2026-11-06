@@ -109,11 +109,17 @@ pub(crate) fn drum(rev: &Revision, module: &str) -> Option<DrumRow> {
     let m = rev.compiled.ir.modules.iter().find(|m| m.key == module && m.track)?;
     let frames: Vec<u32> = (0..m.frames.len() as u32).filter(|i| m.frames[*i as usize].component.as_deref() == Some(DRUM)).collect();
     let [frame] = frames[..] else { return None };
-    // What the Drum's voices read their notes from: one lane, or it isn't one of the track's.
+    // What the Drum's voices read their notes from: one lane, or it isn't one of the track's. The
+    // voices are its polys that play a drum: not the marks of a track's hits that cut it (KIT-27).
     let mut read: BTreeSet<Option<&str>> = BTreeSet::new();
     let mut sounds: BTreeSet<Option<String>> = BTreeSet::new();
+    let marks = |body: &m2_ir::Body| {
+        body.nodes
+            .iter()
+            .all(|b| matches!(&b.op, Op::Kernel { kernel, .. } if kernel == "std:drumhit") || !matches!(b.op, Op::Kernel { .. }))
+    };
     walk(&m.nodes, &mut |n: &Node| match (&n.op, &n.origin) {
-        (Op::Poly { events, .. }, _) if within(m, n.frame, frame) => {
+        (Op::Poly { events, body, .. }, _) if within(m, n.frame, frame) && !marks(body) => {
             read.insert(lane_of(m, events));
         }
         (Op::Const { value, unit }, Some(o)) if o.control.as_ref().is_some_and(|c| c.frame == frame && c.slot == "drum") => {

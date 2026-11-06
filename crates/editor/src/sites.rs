@@ -36,6 +36,51 @@ pub fn imported_names(source: &str, module: &str) -> Vec<String> {
     names
 }
 
+/// The key of the track (or bus) `source`'s default export makes, read from its code: the first
+/// argument of the `track(…)` or `bus(…)` call it exports, written straight there
+/// (`export default track("kick", …)`, any quotes, any line breaks) or bound to the `const` it
+/// exports (`const kick = track("kick", …); export default kick;`). None for anything else: what
+/// an import of the file reads is then not certain (CARD-35).
+pub fn default_track(source: &str) -> Option<String> {
+    use oxc::ast::ast::{Argument, ExportDefaultDeclarationKind, Expression};
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let key_of = |e: &Expression<'_>| -> Option<String> {
+        let Expression::CallExpression(call) = e.without_parentheses() else { return None };
+        let Expression::Identifier(callee) = &call.callee else { return None };
+        if callee.name != "track" && callee.name != "bus" {
+            return None;
+        }
+        match call.arguments.first()? {
+            Argument::StringLiteral(k) => k.value.as_str().map(str::to_string),
+            _ => None,
+        }
+    };
+    let mut consts: Vec<(String, Option<String>)> = vec![];
+    let mut exported = None;
+    for statement in &ret.program.body {
+        match statement {
+            Statement::VariableDeclaration(v) if v.kind.is_const() => {
+                for d in &v.declarations {
+                    if let BindingPattern::BindingIdentifier(id) = &d.id {
+                        consts.push((id.name.to_string(), d.init.as_ref().and_then(key_of)));
+                    }
+                }
+            }
+            Statement::ExportDefaultDeclaration(e) => {
+                exported = match &e.declaration {
+                    ExportDefaultDeclarationKind::Identifier(id) => {
+                        consts.iter().rev().find(|(n, _)| n.as_str() == id.name.as_str()).and_then(|(_, k)| k.clone())
+                    }
+                    d => d.as_expression().and_then(key_of),
+                };
+            }
+            _ => {}
+        }
+    }
+    exported
+}
+
 /// Where to insert text so that `source` imports `name` from `module`, and the text;
 /// `None` if it already does. Joins an existing `import { … } from module`, or else adds
 /// a line after the last import.
@@ -493,6 +538,76 @@ pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
     find.found.flatten()
 }
 
+/// What the function written at a span returns, as Cut by reads it to add an export (KIT-27): the
+/// returned expression's bytes, the object literal's when it is one (inside any parentheses), and
+/// whether it is an arrow's expression body, where an object written in its place needs parentheses.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FnResult {
+    pub start: u32,
+    pub end: u32,
+    pub object: Option<(u32, u32)>,
+    pub arrow: bool,
+}
+
+/// What the outermost function written inside `span` of `source` returns: its expression body, or
+/// the one `return` of its block, written last in it (no other return in it, nor in a block of it).
+/// None when that isn't so.
+pub fn fn_result(source: &str, span: (u32, u32)) -> Option<FnResult> {
+    use oxc::ast::ast::{ArrowFunctionBody, Expression, FunctionBody, ReturnStatement};
+    struct Returns(usize);
+    impl<'a> Visit<'a> for Returns {
+        fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
+            self.0 += 1;
+            walk::walk_return_statement(self, it);
+        }
+        // A function inside has returns of its own.
+        fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+    }
+    fn of(e: &Expression<'_>, arrow: bool) -> FnResult {
+        let s = e.span();
+        let inner = e.without_parentheses();
+        let object = matches!(inner, Expression::ObjectExpression(_)).then(|| (inner.span().start, inner.span().end));
+        FnResult { start: s.start, end: s.end, object, arrow }
+    }
+    fn body(b: &FunctionBody<'_>) -> Option<FnResult> {
+        let mut count = Returns(0);
+        for st in &b.statements {
+            count.visit_statement(st);
+        }
+        match (b.statements.last(), count.0) {
+            (Some(Statement::ReturnStatement(r)), 1) => r.argument.as_ref().map(|e| of(e, false)),
+            _ => None,
+        }
+    }
+    struct Find {
+        within: (u32, u32),
+        found: Option<Option<FnResult>>,
+    }
+    impl<'a> Visit<'a> for Find {
+        fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+            if self.found.is_none() && it.span.start >= self.within.0 && it.span.end <= self.within.1 {
+                self.found = Some(match &it.body {
+                    ArrowFunctionBody::FunctionBody(b) => body(b),
+                    e => e.as_expression().map(|e| of(e, true)),
+                });
+            }
+            walk::walk_arrow_function_expression(self, it);
+        }
+        fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+            if self.found.is_none() && it.span.start >= self.within.0 && it.span.end <= self.within.1 {
+                self.found = Some(it.body.as_ref().and_then(|b| body(b)));
+            }
+            walk::walk_function(self, it, flags);
+        }
+    }
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut find = Find { within: span, found: None };
+    find.visit_program(&ret.program);
+    find.found.flatten()
+}
+
 /// A function's parameter, as far as automate reads it.
 enum Param {
     /// `ctx`, with the span of its name.
@@ -586,6 +701,43 @@ impl<'a> Visit<'a> for FindFn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // CARD-35 (review D3): the key a file's default export makes, read from its code whatever its
+    // quotes and line breaks, through a const too; none for what isn't a track's or a bus's call.
+    #[test]
+    fn a_files_default_track_is_read_from_its_code() {
+        assert_eq!(default_track("export default track(\"kick\", ({ lane }) => x);").as_deref(), Some("kick"));
+        assert_eq!(
+            default_track("export default track(\n  'kick',\n  { name: \"Kick\" },\n  ({ lane }) => x,\n);").as_deref(),
+            Some("kick")
+        );
+        assert_eq!(default_track("const kick = track(\"kick\", () => x);\nexport default kick;").as_deref(), Some("kick"));
+        assert_eq!(default_track("export default bus(\"drums\", ({ input }) => gain(input));").as_deref(), Some("drums"));
+        assert_eq!(default_track("export default song(() => x);"), None);
+        assert_eq!(default_track("const k = \"kick\";\nexport default track(k, () => x);"), None);
+        assert_eq!(default_track("export const kick = track(\"kick\", () => x);"), None);
+    }
+
+    // KIT-27: what a track's function returns, in each form it is written, and none where that
+    // isn't certain.
+    #[test]
+    fn what_a_function_returns_is_found() {
+        let at = |src: &str| {
+            fn_result(src, (0, src.len() as u32)).map(|r| {
+                (src[r.start as usize..r.end as usize].to_string(), r.object.map(|(a, b)| src[a as usize..b as usize].to_string()), r.arrow)
+            })
+        };
+        assert_eq!(at("({ lane }) => drums.drum(lane.notes(\"hits\"))"), Some(("drums.drum(lane.notes(\"hits\"))".into(), None, true)));
+        assert_eq!(at("({ lane }) => ({ out: x, env })"), Some(("({ out: x, env })".into(), Some("{ out: x, env }".into()), true)));
+        assert_eq!(
+            at("({ lane }) => {\n  const k = f(lane);\n  return { out: k };\n}"),
+            Some(("{ out: k }".into(), Some("{ out: k }".into()), false))
+        );
+        assert_eq!(at("function ({ lane }) { return f(() => { return 1; }); }"), Some(("f(() => { return 1; })".into(), None, false)));
+        assert_eq!(at("({ lane }) => { if (a) return x; return y; }"), None);
+        assert_eq!(at("({ lane }) => { if (a) { return x; } }"), None);
+        assert_eq!(at("({ lane }) => { f(); }"), None);
+    }
 
     // HOME-2: automate reaches `lane` from inside a module's function in each form it is written,
     // adding it to the parameters only where that is certain.

@@ -996,3 +996,65 @@ fn walk_dirs(dir: &Path) -> Vec<PathBuf> {
     }
     out
 }
+
+// PACK-14, PKG-16 rule 8 (review C10): an SFZ whose open hat is `off_by` the closed hat's `group`
+// imports into a pack whose instrument chokes: rendered, the open hat rings on alone, and with a
+// closed hat at beat 0.25 it is gone once the closed hat's short click has played, 4 ms after it
+// starts at most.
+#[test]
+fn an_sfz_with_off_by_imports_and_chokes() {
+    let t = Temp::new("sfz-choke");
+    let input = t.0.join("in");
+    std::fs::create_dir_all(&input).unwrap();
+    let tone = |name: &str, frames: u32| {
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        let mut w = hound::WavWriter::create(input.join(name), spec).unwrap();
+        for i in 0..frames {
+            w.write_sample(((i as f64 * 500.0 / 48_000.0 * std::f64::consts::TAU).sin() * 16_000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    };
+    tone("open.wav", 48_000);
+    tone("closed.wav", 480);
+    std::fs::write(
+        input.join("hats.sfz"),
+        "<group> group=1 off_by=2\n<region> sample=open.wav key=46\n<group> group=2\n<region> sample=closed.wav key=42\n",
+    )
+    .unwrap();
+    let pack = t.0.join("pack");
+    let sfz = input.join("hats.sfz");
+    ok(t.m2(&["pack", "import-sfz", sfz.to_str().unwrap(), pack.to_str().unwrap(), "--name", "@test/hats", "--license", "CC0-1.0"]));
+    let render = |name: &str, notes: &str| {
+        let song = t.0.join(name);
+        std::fs::create_dir_all(song.join("data/hats")).unwrap();
+        let manifest = format!(
+            "[project]\nname = \"Hats\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@test/hats\" = {{ path = {:?} }}\n",
+            pack.to_str().unwrap()
+        );
+        std::fs::write(song.join("music2.toml"), manifest).unwrap();
+        std::fs::write(
+            song.join("song.ts"),
+            "import { song, track } from \"@m2/core\";\nimport { master, mixer } from \"std/mix\";\nimport { hats } from \"@test/hats/instruments\";\n\n\
+             const h = track(\"hats\", ({ lane }) => hats(lane.notes(\"notes\")));\n\nexport default song(() => master(mixer({ hats: h.out })));\n",
+        )
+        .unwrap();
+        std::fs::write(
+            song.join("data/hats/notes.json"),
+            format!("{{\"clips\": [{{\"id\": \"h4t5c1ip\", \"start\": 0, \"length\": 4, \"notes\": [{notes}]}}]}}\n"),
+        )
+        .unwrap();
+        let out = t.0.join(format!("{name}.wav"));
+        ok(t.m2(&["render", song.to_str().unwrap(), out.to_str().unwrap(), "--seconds", "1"]));
+        let s: Vec<i32> = hound::WavReader::open(&out).unwrap().into_samples::<i32>().map(Result::unwrap).collect();
+        s
+    };
+    let open = "{\"pitch\": 46, \"start\": 0, \"length\": 0.25, \"velocity\": 1}";
+    let closed = "{\"pitch\": 42, \"start\": 0.25, \"length\": 0.25, \"velocity\": 1}";
+    let alone = render("alone", open);
+    let cut = render("cut", &format!("{open}, {closed}"));
+    // Stereo frames at 48 kHz; beat 0.25 at 120 bpm is frame 6000.
+    let loud = |s: &[i32], from: usize, to: usize| s[2 * from..2 * to].iter().map(|x| x.abs()).max().unwrap_or(0);
+    assert!(loud(&alone, 7_000, 20_000) > 0, "the open hat rings on alone");
+    assert_eq!(cut[..12_000], alone[..12_000], "the same up to the closed hat");
+    assert_eq!(loud(&cut, 6_000 + 480 + 1, 20_000), 0, "after the closed hat's click, nothing: the open hat was cut");
+}

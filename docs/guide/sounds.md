@@ -113,11 +113,12 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   - The turns are the same in an export, and when you open the song and play it from the start. Play it again (Return, then Space), jump, or try notes on the lane, and the turns carry on from where they were, so a take may swap.
   - Every take of a round robin must be there wherever it plays: `[1, 3]` and `[2, 3]` with no `[3, 3]` is refused, since every third note would play nothing.
   - A `"release"` region plays to its end when the note stops, whatever `mode` says.
+  - Choke groups (a closed hat stopping an open one, inside one Sampler): give a region a `group` number, and the region it stops `off_by` that number. When a note starts a region of that group, every region whose `off_by` it is stops in 4 ms, in whatever voice it plays: `{ file: "open.wav", keys: [46, 46], off_by: 1 }, { file: "closed.wav", keys: [42, 42], group: 1 }`. A group whose `off_by` is its own number plays one hit at a time. One Sampler can be stopped by 8 groups at most. To stop a drum on another track, use a Drum's [Cut by](#cut-by).
   - A loop repeats while the key is held. It blends its last few milliseconds into the start, so it doesn't click. When you let go, the file plays on past the loop to its end (in `mode: "gate"`, fading over `release`).
   - A mistake is said in words when the song builds: "regions: region 3: keys 70 to 60: the lowest is above the highest".
   - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
 
-  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
+  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 - **The first instruments** (`@m2/synths`): `bass`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `synth.pluck` and `synth.pad`. The drums are the Drum's (`drums.drum`), alone or in a [drum kit](#drum-kits); the starter song plays its kick and hats on the Drum.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
@@ -196,7 +197,7 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.
-- An effect written in a track's own file can't listen to other tracks: its card says so. Move it to `song.ts`, where every track is.
+- An effect written in a track's own file lists the other tracks too: a pick adds an import of the track it listens to at the top of that file. Only a track written in `song.ts`, or in the effect's own file, can't be picked there: give it a file of its own.
 
 **`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 
@@ -222,18 +223,41 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 | The whole kit quieter, or glued together | the Drums bus: its fader, or an effect on it |
 | A beat, by clicking boxes | select a drum or the bus, then **Beat** (⌥5) in the dock: [the beat grid](window.md#the-beat-grid) |
 | One more drum in the kit | **+ Drum** in the beat grid's header |
+| One drum to stop another (a closed hat stops an open one) | on the drum that stops (the Open hat), its card's **Cut by** menu ▸ the drum that stops it (Hats). See [Cut by](#cut-by) |
 | Play the kit on pads (a MIDI pad controller or keyboard) | select the kit's bus or any of its drums: each pad plays the drum that answers to its General MIDI note, on that drum's track. A pad no drum answers to plays nothing, and a message says which, once |
 
 The kits that come with `@m2/drums`:
 
 | Kit | Tracks | What it is like |
 |---|---|---|
-| 808 kit | Kick, Snare, Clap, Hats, Toms, Rim, Cowbell, Cymbal | the Roland TR-808: a long, deep kick, toms and a cymbal that ring |
-| 909 kit | Kick, Snare, Clap, Hats, Toms, Rim, Cymbal | the TR-909: a punchy kick, a snappy snare, brighter hats |
+| 808 kit | Kick, Snare, Clap, Hats, Open hat, Toms, Rim, Cowbell, Cymbal | the Roland TR-808: a long, deep kick, toms and a cymbal that ring |
+| 909 kit | Kick, Snare, Clap, Hats, Open hat, Toms, Rim, Cymbal | the TR-909: a punchy kick, a snappy snare, brighter hats |
 | Basic kit | Kick, Snare, Hats | three drums to start a beat |
 
-- Each track is a Drum, its knobs set for the kit. Any note plays its drum, but the Hats track plays closed, pedal and open hats by the note (F#2, G#2 and A#2), so a closed hat cuts an open one off.
+- Each track is a Drum, its knobs set for the kit. Any note plays its drum, but the Hats track plays closed, pedal and open hats by the note (F#2, G#2 and A#2), so a closed hat cuts an open one off. The 808 and 909 kits have an **Open hat** track too, cut by the Hats, so the beat grid has a row for open hats.
 - The bus's fader starts where the kit puts it (808 kit −4 dB, 909 kit −3.8, Basic kit −2), so a beat of the whole kit stays under full scale, about as loud as the drum machine's was. Move it in the Mix view.
 - In code a kit is only that: tracks whose mixer channel goes to the bus, `kick: { in: kick.out, to: "drums" }`. Send a track elsewhere, or delete the bus, and it is a plain track again.
 - A MIDI file's drums come in as a kit, a track for each drum the file uses (Kick, Snare, Hats…), even when you drop the file on a Drum's row; notes no drum answers to go on a Percussion track, which plays them as a tom. A kit's tracks go out to a MIDI file as General MIDI drums: a Kick track's notes on another drum's note, or off General MIDI's drums (C1), as C2 (36); a Percussion track's notes as they are.
 - A Drum plays every note as its one sound. Every drum the drum machine played is a sound of the Drum's menu, so each comes in on a track of its own: a ride on a Ride track, a tambourine on a Tambourine track, claves on a Claves track. Only the toms differ: a Drum's tom steps a semitone a note, where General MIDI's toms (F2 to D3) are a semitone and a half apart.
+
+### Cut by
+
+**In short:** Cut by makes one drum stop when another plays: a closed hat stops an open one that is still ringing, as on every drum machine.
+
+| Word | Meaning |
+|---|---|
+| **cut** (or choke) | a drum stops at once, in 4 ms (four thousandths of a second), when another one plays. 4 ms is short enough to sound at once, long enough to make no click |
+| **open hat** | a hi-hat played open, so it rings; the Drum's menu has it as its own sound, **open hat** |
+
+| You want | Do this |
+|---|---|
+| The open hat stopped by the closed hat | select the Open hat track, then on its card in Device: **Cut by** ▸ **Hats** |
+| No cut | **Cut by** ▸ **None** |
+| It in code | `drums.drum(lane.notes("hits"), hats.hits, { drum: "open hat" })`: the hits that cut it come right after its own |
+| Delete the Hats | delete it as any track: the Open hat's cut goes with it (the delete asks first) |
+
+- Cut by is the Drum's **Listens to** row (see [Sidechain](#sidechain)), named for what it does. Its menu lists the song's other tracks that play notes from a file of their own. Picking one is one undo step, "Open hat cut by Hats". It writes three things: the other track's hits in the drum's call, an import of that track at the top of its file, and that track's hits handed out beside its sound: `({ out: drums.drum(lane.notes("hits")), hits: lane.notes("hits") })`. None takes out the hits in the call, and the import nothing reads any more; the other track keeps handing out its hits, which changes no sound.
+- Pads, keys and a take play A#2 (the open hat's note) on the Open hat track when the kit has one. A MIDI file music2 writes of such a kit comes back with its Open hat track, cut by the Hats.
+- A cut stops any drum, even one that rings on by itself (a ride, a tom). A hit at the very same moment as the drum's own hit doesn't cut it.
+- Where the code is written in a way the menu can't be sure of, the menu is greyed out and its tooltip says why: change it in code.
+- The Sampler has cuts of its own, inside one instrument: a region's `group` and `off_by` (as SFZ files have them), in the Sampler, above.

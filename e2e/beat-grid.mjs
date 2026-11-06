@@ -216,8 +216,8 @@ await page.click("[data-testid=add-drum]");
 await page.waitForSelector("[data-testid=add-drum-menu]");
 const sounds = await page.$$eval("[data-testid=add-drum-menu] [data-sound]", (els) => els.map((e) => e.dataset.sound));
 check(
-  sounds.join() === "kick,kick 2,snare,snare 2,clap,hats,tom,rim,claves,cowbell,cymbal,cymbal 2,ride,ride 2,shaker,shaker 2,tambourine",
-  `+ Drum offers the Drum's sounds, the drum machine's every drum (KIT-20) (${sounds})`,
+  sounds.join() === "kick,kick 2,snare,snare 2,clap,hats,open hat,tom,rim,claves,cowbell,cymbal,cymbal 2,ride,ride 2,shaker,shaker 2,tambourine",
+  `+ Drum offers the Drum's sounds, the drum machine's every drum (KIT-20) and the open hat (KIT-28) (${sounds})`,
 );
 await page.click('[data-testid=add-drum-menu] [data-sound="clap"]');
 check(await until(() => fs.existsSync(`${PROJ}/tracks/clap.ts`) && read("song.ts").includes('clap: { in: clap.out, to: "drums" }')), "Clap adds a track whose channel goes to the Drums bus");
