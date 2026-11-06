@@ -100,16 +100,17 @@ fn keep_bars(a: &mut Arrangement, bars: &[u64], from: usize) {
     }
 }
 
-/// Whether two arrangements count bars and beats the same: no meter written is 4/4 from the start.
+/// Whether two arrangements count bars and beats the same and say the same key: no meter written is
+/// 4/4 from the start.
 fn plays_same(a: &Arrangement, b: &Arrangement) -> bool {
-    let meters = |x: &Arrangement| if x.meter.is_empty() { vec![Meter::COMMON] } else { x.meter.clone() };
-    a.tempo == b.tempo && meters(a) == meters(b)
+    a.same_time(b) && a.key == b.key
 }
 
 /// Write `after` over the accepted arrangement, as one `Confined {}` Tx labelled `label`, and assert
 /// on the checked candidate that it plays exactly `after`. Writing what is there already writes
-/// nothing.
-fn write(s: &mut Session, after: Arrangement, label: (String, String)) -> Result<Edited, EditError> {
+/// nothing. `beats`: a tempo or a meter changed, so where music sits in time moved (AGENT-2); a key
+/// moves nothing in time (VOX-10).
+pub(crate) fn write(s: &mut Session, after: Arrangement, label: (String, String), beats: bool) -> Result<Edited, EditError> {
     let text = after.canonical();
     // The reader's own refusal (FMT-13), in its words: 20 to 999 BPM, and the rest.
     let read = Arrangement::read(&text).map_err(|d| EditError::Rejected(d.message.replace(&format!("{FILE}: "), "")))?;
@@ -120,8 +121,7 @@ fn write(s: &mut Session, after: Arrangement, label: (String, String)) -> Result
     let file = path(FILE)?;
     let op = Op::Write { file, bytes: Payload::Text(text.into()) };
     let mut tx = plan::planned(s, label.clone(), vec![op], Expect::Confined(Confined::default()));
-    // A tempo or a meter changed: where music sits in time moved (AGENT-2).
-    tx.beats = true;
+    tx.beats = beats;
     let done = plan::run(s, tx, move |_, checked: &Checked| match checked.candidate().project.arrangement == read {
         true => Ok(()),
         false => Err(EditError::Rejected("the arrangement wouldn't be what was asked".into())),
@@ -145,7 +145,7 @@ pub fn tempo(s: &mut Session, at: f64, bpm: f64) -> Result<Edited, EditError> {
     let before = tempo_words(&a, &a.tempo[i]);
     a.tempo[i].bpm = bpm;
     let after = tempo_words(&a, &a.tempo[i]);
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// Add a tempo change at `beat` (one there already is set instead).
@@ -159,7 +159,7 @@ pub fn tempo_change(s: &mut Session, beat: f64, bpm: f64) -> Result<Edited, Edit
         false => a.tempo.insert(i + 1, Tempo { beat, bpm }),
     }
     let after = tempo_words(&a, &Tempo { beat, bpm });
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// Remove the tempo change at `beat`. The first entry is the song's tempo, and stays.
@@ -174,7 +174,7 @@ pub fn remove_tempo(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
     let before = tempo_words(&a, &a.tempo[i]);
     a.tempo.remove(i);
     let after = tempo_words(&a, &a.tempo[i - 1]);
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// Remove the tempo change and the time signature change at `beat`, whichever are there, in one
@@ -206,7 +206,7 @@ pub fn remove_changes(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
         keep_bars(&mut a, &bars, i - 1);
     }
     let after = words(&a, t.map(|i| &a.tempo[i - 1]), m.map(|i| &a.meter[i - 1]));
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// A time signature FMT-13 allows: 1 to 64 beats of a whole, half, quarter, … or 32nd note.
@@ -238,7 +238,7 @@ pub fn meter(s: &mut Session, at: f64, beats: u32, unit: u32) -> Result<Edited, 
     a.meter[i] = meter_of(a.meter[i].beat, beats, unit)?;
     let after = meter_words(&a, &a.meter[i]);
     keep_bars(&mut a, &bars, i);
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// Add a time signature change on the bar line at or before `at`, in the meter before it (one
@@ -267,7 +267,7 @@ pub fn meter_change(s: &mut Session, at: f64, beats: u32, unit: u32) -> Result<E
     };
     let after = meter_words(&a, &m);
     keep_bars(&mut a, &bars, from);
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// Remove the time signature change at `beat`. The first is the song's own, and stays.
@@ -285,7 +285,7 @@ pub fn remove_meter(s: &mut Session, beat: f64) -> Result<Edited, EditError> {
     bars.remove(i);
     let after = meter_words(&a, &a.meter[i - 1]);
     keep_bars(&mut a, &bars, i - 1);
-    write(s, a, (before, after))
+    write(s, a, (before, after), true)
 }
 
 /// The byte range of `[project] name`'s value in a manifest, quotes and all, however it is written.

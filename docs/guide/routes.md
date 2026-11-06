@@ -450,12 +450,12 @@ An example body:
 
 ### `POST /api/graph/take`
 
-Choose which take an audio clip over a loop plays (from 1). It writes the song: one undo step.
+Choose which take an audio clip over a loop plays (from 1); with `from` and `to` (beats), only there: a comp. It writes the song: one undo step.
 
 An example body:
 
 ```json
-{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}
+{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2, "from": 4, "to": 6}
 ```
 
 ### `POST /api/graph/tempo`

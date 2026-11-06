@@ -1585,12 +1585,42 @@ mod audio {
         let lane = state["timeline"]["tracks"].as_array().unwrap().iter().find(|t| t["module"] == "vox").unwrap()["lanes"][0].clone();
         assert_eq!(lane["takes"][c["asset"].as_str().unwrap()], json!([0.0, 2.0, 4.0, 6.0]));
         let clip = ClipRef { lane: LaneAddr::new("vox", "clips").unwrap(), id: c["id"].as_str().map(String::from), at: None, sha: None };
-        r.graph.choose_take(r.token, clip, 0, None).unwrap();
+        r.graph.choose_take(r.token, clip, 0, None, None).unwrap();
         assert_eq!(r.clips()[0]["offset"].as_f64(), Some(0.0), "the first plays");
         assert_eq!(r.graph.undo_names().0.as_deref(), Some("Vox take 1"));
         r.graph.undo(r.token).unwrap();
         assert_eq!(r.clips()[0]["offset"].as_f64(), Some(4.0), "one undo: the third again");
         assert_eq!(r.graph.undo_names().0.as_deref(), Some("recording on Vox"));
+    }
+
+    // VOX-1: three passes over the loop; the Takes route with a range plays the first pass over
+    // beats 1 to 2 only: three clips, one undo step named "Comp on Vox", which takes it back.
+    #[test]
+    fn a_comp_over_a_loops_takes_is_one_undo_step() {
+        let mut r = Rig::new();
+        r.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+        r.anchor = r.graph.engine_clock().unwrap();
+        let (a, pass) = (r.anchor, 4 * BEAT as u64);
+        r.sound = Box::new(move |c| if c < a { 0.0 } else { 0.1 * ((c - a) / pass + 1) as f32 });
+        r.start(false, false);
+        r.fill(2);
+        r.graph.record_tick();
+        r.to(12.5);
+        r.graph.transport("stop").unwrap();
+        assert!(r.written()["written"].is_object());
+        let c = r.clips()[0].clone();
+        let clip = ClipRef { lane: LaneAddr::new("vox", "clips").unwrap(), id: c["id"].as_str().map(String::from), at: None, sha: None };
+        r.graph.choose_take(r.token, clip, 0, Some((1.0, 2.0)), None).unwrap();
+        let after = r.clips();
+        assert_eq!(after.len(), 3, "{after:?}");
+        assert_eq!(after[0]["id"], c["id"], "the first keeps its id");
+        assert!(
+            (after[1]["offset"].as_f64().unwrap() - (after[1]["start"].as_f64().unwrap() * BEAT / 48_000.0)).abs() < 1e-9,
+            "the first pass: {after:?}"
+        );
+        assert_eq!(r.graph.undo_names().0.as_deref(), Some("Comp on Vox"));
+        r.graph.undo(r.token).unwrap();
+        assert_eq!(r.clips(), [c], "one undo: the one clip again");
     }
 
     // MON-10: a punch on beats 4 to 6, from beat 2: the song plays up to 4, records to 6 and plays
@@ -1723,7 +1753,7 @@ mod audio {
         let follow =
             Gesture::Audio { clip: clip(), gain_db: None, fade_in: None, fade_out: None, reverse: None, follow: Some(true), offset: None };
         r.graph.clips(r.token, follow).unwrap();
-        r.graph.choose_take(r.token, clip(), 0, None).unwrap();
+        r.graph.choose_take(r.token, clip(), 0, None, None).unwrap();
         let after = r.clips()[0].clone();
         assert_eq!((after["offset"].as_f64(), after["warp"][0][0].as_f64()), (Some(0.0), Some(0.0)), "the markers moved with it: {after}");
         r.graph.set_loop(None, Some(false)).unwrap();

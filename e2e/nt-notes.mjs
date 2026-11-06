@@ -78,7 +78,7 @@ check(lockTitle.startsWith("Lock to key (C major): off.") && lockTitle.includes(
 await page.click("[data-testid=lock-key]");
 check(await until(async () => (await page.$eval("[data-testid=lock-key]", (e) => e.getAttribute("aria-pressed"))) === "true"), "a click turns it on");
 check(await until(() => view().roll?.lock === true), `kept in .music2/view.json as roll.lock: ${JSON.stringify(view().roll)}`);
-check(!read("layout.json").includes("lock"), "and never in the song's files");
+check(![fs.existsSync(`${PROJ}/layout.json`) ? read("layout.json") : "", read("data/arrangement.json")].some((t) => t.includes("lock")), "and never in the song's files");
 
 await page.click('[data-tool="draw"]');
 let rev = await revision();

@@ -4,6 +4,8 @@ import { moduleName, type Diagnostic, type TimelineTrack } from "../lib/graph";
 import { useHeard } from "../lib/graph8b";
 import { ROW_H } from "../lib/layout";
 import { useShell } from "../lib/shell";
+import { useStore } from "../lib/store";
+import { compsOf, useTakesOpen } from "../lib/takes";
 import Arm from "./Arm";
 import MuteSolo from "./MuteSolo";
 import TrackMeter from "./TrackMeter";
@@ -46,6 +48,9 @@ export default function TrackHeader({
   // M, S, the ⋯ and a meter: a track's. The Song row has the meter only.
   const mine = track.track && !song;
   const heard = useHeard(module);
+  // A lane that holds a comp: Takes opens its rows (VOX-7).
+  const tempo = useStore((s) => s.graph?.timeline.tempo);
+  const hasTakes = !!tempo && track.lanes.some((l) => compsOf(l, tempo).length > 0);
   // Muted in the song: struck through; muted while listening: muted; off by another's solo: fainter.
   const tone =
     heard === "muted-in-song" ? "text-fg-muted line-through" : heard === "muted" ? "text-fg-muted" : heard === "silenced" ? "text-fg-faint" : selected ? "text-fg-strong" : "text-fg";
@@ -80,6 +85,7 @@ export default function TrackHeader({
           listen="header"
           className={clsx("text-base", selected ? "font-semibold" : "font-medium", tone)}
         />
+        {mine && hasTakes && <TakesButton module={module} name={name} />}
         {track.bus && (
           <span data-testid="bus-tag" className="shrink-0 px-1 rounded-xs bg-hover text-xs text-fg-muted" title="A bus: it plays what other tracks send it">
             Bus
@@ -123,5 +129,28 @@ function Issues({ issues }: { issues: Diagnostic[] }) {
     >
       <Icon size={14} />
     </span>
+  );
+}
+
+/** Takes (VOX-7): opens and closes the track's Takes rows, one per take, under its lane. No edit. */
+function TakesButton({ module, name }: { module: string; name: string }) {
+  const open = useTakesOpen((s) => s.open.has(module));
+  return (
+    <button
+      data-testid="takes"
+      data-module={module}
+      aria-expanded={open}
+      title={open ? `Hide ${name}'s takes` : `Show ${name}'s takes: swipe along one to use that part`}
+      onMouseDown={(e) => e.preventDefault()}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={() => useTakesOpen.getState().toggle(module)}
+      className={clsx(
+        "shrink-0 inline-flex items-center gap-0.5 pl-1 pr-0.5 rounded-xs text-xs cursor-pointer transition-colors duration-80 ease-linear",
+        open ? "bg-accent-soft text-accent-strong" : "bg-hover text-fg-muted hover:text-fg",
+      )}
+    >
+      Takes
+      <ChevronRight size={12} className={clsx("transition-transform duration-140 ease-out", open && "rotate-90")} />
+    </button>
   );
 }

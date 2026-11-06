@@ -253,7 +253,7 @@ impl Project {
     /// file is the text it was read from there, as the same kind, keeps that read (the same
     /// data, as a parse of that text gives) instead of parsing it again.
     pub fn data(&self, decls: &Decls, previous: Option<&DataSet>) -> (DataSet, Vec<Diagnostic>) {
-        let mut diags = vec![];
+        let mut diags = self.arrangement.warnings();
         let mut lanes = BTreeMap::new();
         let mut read = BTreeMap::new();
         for (addr, kind) in &decls.lanes {

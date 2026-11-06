@@ -5,7 +5,7 @@
 //! revision the change made: the window that made an edit names it ("Hats pan", `POST
 //! /api/graph/step`), and the name follows the step through undo and redo. A step nobody named (an
 //! agent's Tx, `m2`, a save in another editor) is named plainly by what it changed: "Bass notes",
-//! "the tempo or time signature", "the code in tracks/bass.ts". The state says both tops as
+//! "the tempo, time signature or key", "the code in tracks/bass.ts". The state says both tops as
 //! `undo_name` and `redo_name` (`{name, structural, given}`, or null); an undo or a redo answers
 //! with the name of what it took back. Names last as long as their steps, which are kept with the
 //! song and read back when it opens (WRITE-23).
@@ -63,7 +63,7 @@ pub(super) fn event(token: u64, step: &StepName, undoable: bool, timeline: &Time
 /// arrangement by what it sets, code by its file.
 pub(super) fn plain(file: &str, timeline: &Timeline) -> String {
     if file == "data/arrangement.json" {
-        return "the tempo or time signature".into();
+        return "the tempo, time signature or key".into();
     }
     if let Some(rest) = file.strip_prefix("data/")
         && let Some((module, lane)) = rest.split_once('/')
@@ -87,7 +87,7 @@ pub(super) fn plain(file: &str, timeline: &Timeline) -> String {
     }
     match file {
         "music2.toml" => "the song's settings".into(),
-        "layout.json" => "the track order, colours, markers or the song's key".into(),
+        "layout.json" => "the track order, colours or markers".into(),
         _ if file.starts_with("assets/") => format!("the audio file {}", &file["assets/".len()..]),
         _ => format!("the file {file}"),
     }

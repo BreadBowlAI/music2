@@ -28,6 +28,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Record notes, or your voice or a guitar | R |
 | Record several tracks at once, each from its own input (3–4 too) | **R** on each track's header; right-click it for its input |
 | Fix one part by punching in, or keep a take each time round a loop | right-click Record ▸ **Punch in and out**; the clip's menu ▸ **Take 1**, **Take 2**, … |
+| Build one take from the best parts of several (comping) | **Takes** on the track's header, then swipe along a take ([how](audio.md#comp-the-best-parts-of-several-takes)) |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Turn a track into audio, to chop it, reverse it or pitch it; the song sounds the same | the track's menu ▸ **Bounce to audio** ([how](audio.md#bounce-a-track-to-audio)) |

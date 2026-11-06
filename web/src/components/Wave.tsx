@@ -225,8 +225,8 @@ export async function sendAudio(lane: TimelineLane, ref: ClipRef, set: Omit<Extr
   }
 }
 
-/** The inside of audio clip `clip`: its name, then its waveform, and (`edit`) its fade handles. */
-export const Wave = memo(function Wave({ clip, color, edit }: { clip: AudioClip; color: TrackColor; edit?: WaveEdit }) {
+/** The inside of audio clip `clip`: its name (unless `bare`: a take's row names its take), then its waveform, and (`edit`) its fade handles. */
+export const Wave = memo(function Wave({ clip, color, edit, bare }: { clip: AudioClip; color: TrackColor; edit?: WaveEdit; bare?: boolean }) {
   const peaks = usePeaks(clip);
   const ppb = useZoom();
   const tempo = useStore((s) => s.graph?.timeline.tempo) ?? NO_TEMPO;
@@ -350,10 +350,12 @@ export const Wave = memo(function Wave({ clip, color, edit }: { clip: AudioClip;
   };
   return (
     <>
-      <div data-clip-name className="absolute inset-x-0 top-0 px-1.5 text-xs leading-[14px] truncate pointer-events-none" style={{ height: STRIP, color: color.ink }}>
-        {audioLabel(clip)}
-      </div>
-      <div ref={box} data-wave={peaks ? "" : "loading"} aria-hidden className="absolute inset-x-0 bottom-0.5 pointer-events-none" style={{ top: STRIP }}>
+      {!bare && (
+        <div data-clip-name className="absolute inset-x-0 top-0 px-1.5 text-xs leading-[14px] truncate pointer-events-none" style={{ height: STRIP, color: color.ink }}>
+          {audioLabel(clip)}
+        </div>
+      )}
+      <div ref={box} data-wave={peaks ? "" : "loading"} aria-hidden className="absolute inset-x-0 bottom-0.5 pointer-events-none" style={{ top: bare ? 2 : STRIP }}>
         {peaks && tiles.map((x0) => <Tile key={x0} x0={x0} width={Math.min(TILE, width - x0)} height={height} peaks={peaks} shape={shape} fades={fades} ink={color.ink} />)}
       </div>
       {handles && (

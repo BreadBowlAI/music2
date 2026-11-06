@@ -41,7 +41,7 @@ Every change answers, at its top:
 
 | Field | Meaning |
 |---|---|
-| `revision` | The revision it made. Absent when it made none: a change of `layout.json` alone (the track order, colours, markers, the song's key) never does. |
+| `revision` | The revision it made. Absent when it made none: a change of `layout.json` alone (the track order, colours, markers) never does. |
 | `step` | Its undo step's id: what `m2 undo` and the Edit menu name it by. |
 | `moved` | The files whose ids it moved: every code file it changed, but for a value written where it is (a knob, a menu, a switch), and none for a change of data alone (clips, notes). An undo or a redo moves what its change moved. An id you read before it, in one of these files, may name something else now: read the song again before the next edit there. |
 | `beats` | Only when true: it moved where music sits in time (bars inserted or deleted, a tempo or a meter change), so a beat you read before it may be other music now. An undo or a redo says it as its change did. |
