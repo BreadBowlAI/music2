@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | A proposal, for the owner's yes (AGENTS.md rule 11). Nothing here is built. Revised after the skeptic's review (K1 to K15, §9 of this note). |
+| **Status** | Accepted by the owner on 2026-11-06 ("yes to all": D1 to D17 as recommended in §7). Revised after the skeptic's review (K1 to K15, §9 of this note). |
 | **Written** | 2026-11-06, from `main` at `de95d95a` |
 | **Builds on** | [Typed sounds](../cards/design.md) (accepted 2026-10-31): values typed, "the type says what, never how to draw it" (§2.2), views (§3.2), groups (§3.3), taps (§5), and §9's "no pack code in the window" |
 | **Gaps** | #59 (a spectrum view and the EQ's curve); the filter view that draws only a low-pass (gaps.md, Not built yet) |
