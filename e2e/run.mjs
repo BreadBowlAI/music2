@@ -201,6 +201,8 @@ export const SUITES = [
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
   ["tune", "fix", { expect: 25, s: 12 }],
+  // Its checks on Device's chain too (CARD-42): the key line is on a chain card as on the patch's.
+  ["tune", "chain", { expect: 25, s: 12 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],

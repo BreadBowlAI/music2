@@ -1210,7 +1210,7 @@ export function VoicesLine({ words }: { words: string }) {
  * The key a sound follows (VOX-26), under its name: "Key: A minor", read from the timeline (NOTE-2);
  * with none, "Every note allowed" and Set the key, which opens the key field in the top bar.
  */
-function KeyLine() {
+export function KeyLine() {
   const key = useStore((s) => s.graph?.timeline.key ?? null);
   return (
     <div

@@ -2188,7 +2188,7 @@ Everything else is counted and named in plain words when the import ends, never 
 
 **VOX-26.** The card of a call whose sound reads `time.key` MUST say the song's key under its name: "Key: A minor"; with none, "Every note allowed" (its tooltip: "No key set: every note is allowed.") and **Set the key**, which opens the key field ([VOX-10](#vocals)). It reads the key from the timeline ([NOTE-2](#notes-and-scales)), never from the signal, and whether the call reads it from the graph: no descriptor says so.
 - *Why:* a beginner must see why Tune leaves a note where it is (D3). Any sound that follows the key says so the same way.
-- *Today:* built in track `tune` (`ViewNode.reads_key`, `crates/editor/src/view.rs`; the line in `NodeGraph.tsx`). The card is as wide as any (216 px), so the note's longer words are its tooltip. Tested by `a_call_that_reads_the_key_says_so` (`crates/editor/src/views_tests.rs`) and `e2e/tune.mjs` (Tune added from the browser on a vocal track's sound in the song, [CARD-36](#listening-to-another-track), says Set the key; the key set, it says it; Glide and Amount turned).
+- *Today:* built in track `tune` (`ViewNode.reads_key`, `crates/editor/src/view.rs`; the line, `KeyLine` in `NodeGraph.tsx`, on the patch's cards and the chain's, `Chain.tsx`). The card is as wide as any (216 px), so the note's longer words are its tooltip. Tested by `a_call_that_reads_the_key_says_so` (`crates/editor/src/views_tests.rs`) and `e2e/tune.mjs` (Tune added from the browser on a vocal track's sound in the song, [CARD-36](#listening-to-another-track), says Set the key; the key set, it says it; Glide and Amount turned).
 
 ## Taps
 
