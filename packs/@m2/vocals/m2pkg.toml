@@ -43,10 +43,10 @@ outputs = ["out: control<semitones>"]
 
 [[kernel]]
 name = "shift"
-description = "Moves a voice by semitones and keeps its vowel colour (TD-PSOLA: a grain around each vocal pulse, laid out again at the new spacing); formant moves the colour on its own. With no clear pitch the sound passes through. Both channels use the same pulses. 15 ms late (VOX-23)"
+description = "Moves a voice by semitones and keeps its vowel colour (TD-PSOLA: a grain around each vocal pulse, laid out again at the new spacing); formant moves the colour on its own. With no clear pitch the sound passes through. Both channels use the same pulses. semitones from -7 to 12. 15 ms late (VOX-23)"
 inputs = [
   "in: audio<*>",
-  "semitones: control<semitones> = 0 in -12..12",
+  "semitones: control<semitones> = 0 in -7..12",
   "hz: control<hz> = 0",
   "clarity: control<unit01> = 0",
   "formant: control<semitones> = 0 in -12..12",

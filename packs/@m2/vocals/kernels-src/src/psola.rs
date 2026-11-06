@@ -34,7 +34,11 @@ use crate::yin::{HIGHEST, LOWEST};
 
 /// How late the output is, in seconds: the manifest's `latency_s`.
 pub const LATENCY_S: f64 = 0.015;
-/// How far `semitones` and `formant` reach, each way.
+/// How far `semitones` reaches: down to where a grain, two periods at most, still overlaps the
+/// next (7 down lays them 1.5 periods apart), and an octave up (review U1).
+const DOWN: f32 = -7.0;
+const UP: f32 = 12.0;
+/// How far `formant` reaches, each way.
 const MOST: f32 = 12.0;
 /// A grain that passes the sound through: half of it, in seconds.
 pub const PASS: f32 = 0.010;
@@ -430,7 +434,7 @@ impl Kernel for Shift {
             self.lp[i] = self.filter.tick(if channels == 2 { 0.5 * (x0 + x1) } else { x0 });
             self.quiet = if x0 != 0.0 || x1 != 0.0 { 0 } else { self.quiet.saturating_add(1) };
             self.track(io.input(HZ)[t], io.input(CLARITY)[t]);
-            let semitones = finite(io.input(SEMITONES)[t]).clamp(-MOST, MOST);
+            let semitones = finite(io.input(SEMITONES)[t]).clamp(DOWN, UP);
             let formant = finite(io.input(FORMANT)[t]).clamp(-MOST, MOST);
             let ratio = 2f64.powf(semitones as f64 / 12.0);
             let q = if formant == 0.0 { 1.0 } else { 2f32.powf(formant / 12.0) };

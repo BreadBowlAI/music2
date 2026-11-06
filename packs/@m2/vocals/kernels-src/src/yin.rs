@@ -20,8 +20,14 @@ use m2_kernel::{Cfg, Io, Kernel};
 
 use crate::fft::Fft;
 
-/// Samples between two readings, at every rate.
-pub const HOP: usize = 256;
+/// Seconds between two readings: 256 samples at 48 kHz.
+pub const HOP_S: f64 = 256.0 / 48_000.0;
+
+/// Samples between two readings at `sr`, so a reading costs the same share of a second at every
+/// rate (review U2).
+pub fn hop(sr: f32) -> usize {
+    ((HOP_S * sr as f64).round() as usize).max(1)
+}
 /// The lowest and highest pitch it finds, in Hz.
 pub const LOWEST: f32 = 70.0;
 pub const HIGHEST: f32 = 1200.0;
@@ -42,14 +48,16 @@ pub struct Pitch {
     /// The mono sum's last `span` samples, a ring; `at` is where the next goes.
     ring: Vec<f32>,
     at: usize,
-    /// Samples since the last reading.
+    /// Samples since the last reading, and between two.
     count: usize,
+    hop: usize,
     fft: Fft,
-    /// The transform's room: the sound, the window, and their spectra.
+    /// The transform's room: the sound and the window as one complex signal (the window the
+    /// imaginary part), its spectrum, then the product of the two spectra.
     re: Vec<f64>,
     im: Vec<f64>,
-    wre: Vec<f64>,
-    wim: Vec<f64>,
+    pre: Vec<f64>,
+    pim: Vec<f64>,
     /// Running sums of the squares, and `d′`.
     sq: Vec<f64>,
     dn: Vec<f64>,
@@ -71,9 +79,7 @@ impl Pitch {
         for i in 0..n {
             let v = if i < span { self.ring[(self.at + span - 1 - i) % span] as f64 } else { 0.0 };
             self.re[i] = v;
-            self.im[i] = 0.0;
-            self.wre[i] = if i < w { v } else { 0.0 };
-            self.wim[i] = 0.0;
+            self.im[i] = if i < w { v } else { 0.0 };
         }
         // Running sums of the squares: e(τ) is the energy of the `window` samples from τ.
         self.sq[0] = 0.0;
@@ -87,21 +93,25 @@ impl Pitch {
             (self.hz, self.clarity) = (0.0, 0.0);
             return;
         }
-        // r(τ) = Σ w[j]·x[j + τ]: the sound's spectrum times the window's, conjugated, back.
+        // r(τ) = Σ w[j]·x[j + τ]: the sound's spectrum times the window's, conjugated, back. Both
+        // are real, so one transform of `x + i·w` gives the two (X = (Z[k] + Z*[n-k]) / 2,
+        // W = (Z[k] − Z*[n-k]) / 2i): two transforms a reading, not three (review U2).
         self.fft.run(&mut self.re, &mut self.im, false);
-        self.fft.run(&mut self.wre, &mut self.wim, false);
         for k in 0..n {
-            let (a, b, c, d) = (self.re[k], self.im[k], self.wre[k], -self.wim[k]);
-            self.re[k] = a * c - b * d;
-            self.im[k] = a * d + b * c;
+            let j = (n - k) % n;
+            let (a, b, c, d) = (self.re[k], self.im[k], self.re[j], self.im[j]);
+            let (xr, xi) = (0.5 * (a + c), 0.5 * (b - d));
+            let (wr, wi) = (0.5 * (b + d), -0.5 * (a - c));
+            self.pre[k] = xr * wr + xi * wi;
+            self.pim[k] = xi * wr - xr * wi;
         }
-        self.fft.run(&mut self.re, &mut self.im, true);
+        self.fft.run(&mut self.pre, &mut self.pim, true);
         let scale = 1.0 / n as f64;
         // d′(τ), τ from 0 to longest + 1.
         self.dn[0] = 1.0;
         let mut sum = 0.0;
         for tau in 1..=longest + 1 {
-            let d = (e0 + energy(&self.sq, tau) - 2.0 * self.re[tau] * scale).max(0.0);
+            let d = (e0 + energy(&self.sq, tau) - 2.0 * self.pre[tau] * scale).max(0.0);
             sum += d;
             self.dn[tau] = if sum > 0.0 { d * tau as f64 / sum } else { 1.0 };
         }
@@ -154,11 +164,12 @@ impl Kernel for Pitch {
             ring: vec![0.0; span],
             at: 0,
             count: 0,
+            hop: hop(sr),
             fft,
             re: vec![0.0; n],
             im: vec![0.0; n],
-            wre: vec![0.0; n],
-            wim: vec![0.0; n],
+            pre: vec![0.0; n],
+            pim: vec![0.0; n],
             sq: vec![0.0; span + 1],
             dn: vec![0.0; longest + 2],
             hz: 0.0,
@@ -184,7 +195,7 @@ impl Kernel for Pitch {
             self.ring[self.at] = x;
             self.at = (self.at + 1) % span;
             self.count += 1;
-            if self.count == HOP {
+            if self.count == self.hop {
                 self.count = 0;
                 self.read();
             }

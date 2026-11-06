@@ -13,6 +13,8 @@ use crate::fft::Fft;
 
 const MANIFEST: &str = include_str!("../../m2pkg.toml");
 const BLOCK: usize = 128;
+/// A hop at 48 kHz.
+const HOP_48: usize = 256;
 const RATES: [f32; 3] = [44_100.0, 48_000.0, 96_000.0];
 /// Every note allowed (VOX-12), and C major.
 const EVERY: f32 = 4095.0;
@@ -317,23 +319,27 @@ fn pitch_hears_no_pitch_in_an_s_or_silence() {
     assert!(part(&t.clarity, sr, 1.6, 0.3).iter().all(|&c| c == 0.0), "and no clarity");
 }
 
-// VOX-21: pitch reads every 256 samples counted from its birth, and only the past: its readings
-// up to a moment don't hang on what comes after it, nor on how its blocks are split.
+// VOX-21 (review U2): pitch reads every 5.33 ms counted from its birth (235 samples at 44.1 kHz,
+// 256 at 48, 512 at 96), and only the past: its readings up to a moment don't hang on what comes
+// after it, nor on how its blocks are split.
 #[test]
-fn pitch_reads_every_256_samples_and_only_the_past() {
-    let sr = 48_000.0;
-    let a = Song { secs: 1.0, midi: &|t| 60.0 + 4.0 * t, vibrato: 0.2, formants: AH, s: None }.sing(sr);
-    let mut b = a.clone();
-    b[30_000..].iter_mut().for_each(|v| *v = -*v * 0.3);
-    let read = |x: &[f32], split: usize| -> Vec<f32> {
-        let input: Vec<[f32; 2]> = x.iter().map(|&v| [v, v]).collect();
-        tune_split(sr, 1, &input, EVERY, 0.0, 1.0, 0.0, split).hz
-    };
-    let (ra, rb) = (read(&a, BLOCK), read(&b, 37));
-    assert!(ra[..30_000] == rb[..30_000], "what came later changed an earlier reading");
-    let changes: Vec<usize> = (1..ra.len()).filter(|&i| ra[i] != ra[i - 1]).collect();
-    assert!(changes.len() > 100, "it reads a moving voice: {} changes", changes.len());
-    assert!(changes.iter().all(|i| i % HOP == HOP - 1), "a reading changes only at a hop: {:?}", &changes[..4]);
+fn pitch_reads_every_5_ms_and_only_the_past() {
+    for (sr, hop) in [(44_100.0, 235), (48_000.0, 256), (96_000.0, 512)] {
+        assert_eq!(yin::hop(sr), hop, "{sr} Hz");
+        let a = Song { secs: 1.0, midi: &|t| 60.0 + 4.0 * t, vibrato: 0.2, formants: AH, s: None }.sing(sr);
+        let mut b = a.clone();
+        let cut = (0.6 * sr) as usize;
+        b[cut..].iter_mut().for_each(|v| *v = -*v * 0.3);
+        let read = |x: &[f32], split: usize| -> Vec<f32> {
+            let input: Vec<[f32; 2]> = x.iter().map(|&v| [v, v]).collect();
+            tune_split(sr, 1, &input, EVERY, 0.0, 1.0, 0.0, split).hz
+        };
+        let (ra, rb) = (read(&a, BLOCK), read(&b, 37));
+        assert!(ra[..cut] == rb[..cut], "{sr} Hz: what came later changed an earlier reading");
+        let changes: Vec<usize> = (1..ra.len()).filter(|&i| ra[i] != ra[i - 1]).collect();
+        assert!(changes.len() > 100, "{sr} Hz: it reads a moving voice: {} changes", changes.len());
+        assert!(changes.iter().all(|i| i % hop == hop - 1), "{sr} Hz: a reading changes only at a hop: {:?}", &changes[..4]);
+    }
 }
 
 // ---------------------------------------------------------------- snap
@@ -453,7 +459,7 @@ fn with_no_move_the_voice_comes_back_15_ms_late() {
 #[test]
 fn shift_moves_the_pitch_an_fft_peak_measures() {
     for sr in RATES {
-        for (midi, by) in [(50.0, 4.0), (57.0, -3.0), (64.0, 1.0), (71.0, -7.0), (45.0, 7.0)] {
+        for (midi, by) in [(50.0, 4.0), (57.0, -3.0), (64.0, 1.0), (71.0, -7.0), (45.0, 7.0), (52.0, 12.0)] {
             let voice = steady(midi, 0.0, 1.2).sing(sr);
             let out = shifted(sr, &voice, by as f32, 0.0);
             let got = fft_hz(part(&out, sr, 0.3, 0.8), sr, hz_of(midi + by));
@@ -492,6 +498,20 @@ fn formants_made(sr: f32) -> [f64; 3] {
         let k = ((lo / bin) as usize..=(hi / bin) as usize).max_by(|&i, &j| p[i].total_cmp(&p[j])).unwrap();
         (k as f64 + 0.5 * (p[k - 1] - p[k + 1]) / (p[k - 1] - 2.0 * p[k] + p[k + 1])) * bin
     })
+}
+
+// VOX-23 (review U1): shift moves from 7 semitones down to 12 up, where its grains overlap; a move
+// past either end is that end, as its manifest's range says. An octave up is an octave up.
+#[test]
+fn shift_reaches_7_down_and_12_up() {
+    assert!(MANIFEST.contains("\"semitones: control<semitones> = 0 in -7..12\""), "the manifest's range");
+    let sr = 48_000.0;
+    for (midi, asked, by) in [(57.0, -12.0, -7.0), (57.0, -7.0, -7.0), (52.0, 12.0, 12.0), (52.0, 20.0, 12.0)] {
+        let voice = steady(midi, 0.0, 1.2).sing(sr);
+        let out = shifted(sr, &voice, asked as f32, 0.0);
+        let got = fft_hz(part(&out, sr, 0.3, 0.8), sr, hz_of(midi + by));
+        assert!(cents(got, hz_of(midi + by)).abs() < 5.0, "note {midi} asked to move {asked}: {:.2}, not {}", midi_of(got), midi + by);
+    }
 }
 
 // VOX-23 (D5): shifted by 4 semitones, the vowel keeps its formants, each within 5%.
@@ -598,8 +618,23 @@ fn at_glide_0_a_gliding_voice_steps_within_one_hop_of_each_note_change() {
     for (n, &at) in steps.iter().enumerate() {
         let edge = 60.0 + n as f64 + 0.6;
         let passed = (from..aim.len()).find(|&i| midi_of(t.hz[i] as f64) >= edge).unwrap();
-        assert!(at.abs_diff(passed) <= HOP, "step {} at {at}, the edge passed at {passed}", n + 1);
-        assert!(aim[at + 1..at + HOP].iter().all(|a| (a - (61.0 + n as f64)).abs() < 1e-3), "on the note after the step");
+        assert!(at.abs_diff(passed) <= HOP_48, "step {} at {at}, the edge passed at {passed}", n + 1);
+        assert!(aim[at + 1..at + HOP_48].iter().all(|a| (a - (61.0 + n as f64)).abs() < 1e-3), "on the note after the step");
+    }
+    // On the sound (review U3), by a plain autocorrelation, 15 ms late: the voice is on a note
+    // almost all the time, and moves from one to the next within 10 ms of where the singer's pitch
+    // passed their edge (0.1 past the middle).
+    let late_s = LATENCY_S;
+    let track = heard(&left(&t.out), sr, 62.0, 0.35 + late_s, 2.2 + late_s);
+    // A window of 20 ms over a step holds both notes: those within 11 ms of one don't count.
+    let steps_heard: Vec<f64> = track.windows(2).filter(|w| w[0].1.round() != w[1].1.round()).map(|w| w[1].0).collect();
+    let away: Vec<&(f64, f64)> = track.iter().filter(|(t, _)| steps_heard.iter().all(|s| (t - s).abs() > 0.011)).collect();
+    let on = away.iter().filter(|(_, m)| (m - m.round()).abs() < 0.1).count();
+    assert!(on as f64 > 0.98 * away.len() as f64, "on a note in {on} of {} milliseconds away from a step", away.len());
+    for n in 0..4 {
+        let edge = 0.25 + 0.5 * (n as f64 + 0.6);
+        let moved = track.iter().find(|(_, m)| m.round() >= 61.0 + n as f64).unwrap().0 - late_s;
+        assert!((moved - edge).abs() <= 0.010, "the sound steps to {} at {moved:.4} s, the singer passed the edge at {edge:.4} s", 61 + n);
     }
     // Between the steps, the voice is on its note (an FFT's peak of 40 ms there, 15 ms late).
     let late = latency_frames(LATENCY_S, sr as f64) as usize;
@@ -612,42 +647,52 @@ fn at_glide_0_a_gliding_voice_steps_within_one_hop_of_each_note_change() {
 }
 
 // VOX-20 (D4's Natural): at a glide of 0.1 s a note's vibrato mostly stays; at 0 it is flattened.
+// Measured on the sound by a plain autocorrelation (review U3), not by `pitch`, the kernel under test.
 #[test]
 fn a_glide_keeps_vibrato_and_robot_flattens_it() {
     let sr = 48_000.0;
     let voice = steady(64.2, 0.4, 2.0).sing(sr);
-    // The output's pitch as pitch hears it, from 0.5 s: how far it wobbles.
-    let wobble = |glide: f32| -> f64 {
-        let t = tune(sr, &voice, EVERY, glide, 1.0);
-        let heard = {
-            let mut p = Host::<Pitch>::of(cfg(sr, 1));
-            let mut got = vec![];
-            for chunk in left(&t.out).chunks(BLOCK) {
-                p.port_mut(0)[..chunk.len()].copy_from_slice(chunk);
-                p.process(chunk.len() as u32);
-                got.extend_from_slice(&p.port_mut(1)[..chunk.len()]);
-            }
-            got
-        };
-        let m: Vec<f64> = part(&heard, sr, 0.5, 1.4).iter().map(|&h| midi_of(h as f64)).collect();
+    let wobble = |x: &[f32]| -> f64 {
+        let m: Vec<f64> = heard(x, sr, 64.0, 0.5, 1.9).into_iter().map(|(_, m)| m).collect();
         m.iter().cloned().fold(f64::MIN, f64::max) - m.iter().cloned().fold(f64::MAX, f64::min)
     };
-    let (sung, natural, robot) = (wobble_of(&voice, sr), wobble(0.1), wobble(0.0));
-    assert!(natural > 0.6 * sung, "Natural keeps most of the vibrato: {natural:.2} of {sung:.2} semitones");
-    assert!(robot < 0.25 * sung, "Robot flattens it: {robot:.2} of {sung:.2}");
+    let tuned = |glide: f32| wobble(&left(&tune(sr, &voice, EVERY, glide, 1.0).out));
+    let (sung, natural, robot) = (wobble(&voice), tuned(0.1), tuned(0.0));
+    assert!(sung > 0.7, "the singer wobbles by 0.8 semitones: {sung:.2}");
+    assert!(natural > 0.8 * sung, "Natural keeps the vibrato: {natural:.2} of {sung:.2} semitones");
+    assert!(robot < 0.3 * sung, "Robot flattens it: {robot:.2} of {sung:.2}");
 }
 
-/// How far `x`'s pitch wobbles from 0.5 s, as pitch hears it.
-fn wobble_of(x: &[f32], sr: f32) -> f64 {
-    let mut p = Host::<Pitch>::of(cfg(sr, 1));
-    let mut got = vec![];
-    for chunk in x.chunks(BLOCK) {
-        p.port_mut(0)[..chunk.len()].copy_from_slice(chunk);
-        p.process(chunk.len() as u32);
-        got.extend_from_slice(&p.port_mut(1)[..chunk.len()]);
+/// The pitch of `x` from `from` to `to` seconds, every millisecond, as `(seconds, MIDI)`: the lag
+/// of the largest normalised autocorrelation over 20 ms, within 3 semitones of `near`, refined by a
+/// parabola. Another method than `pitch`'s (no difference function, no threshold).
+fn heard(x: &[f32], sr: f32, near: f64, from: f64, to: f64) -> Vec<(f64, f64)> {
+    let sr64 = sr as f64;
+    let w = (0.02 * sr64) as usize;
+    let (lo, hi) = ((sr64 / hz_of(near + 3.0)) as usize, (sr64 / hz_of(near - 3.0)).ceil() as usize + 1);
+    let mut out = vec![];
+    let mut t = from;
+    while t < to {
+        let c = (t * sr64) as usize;
+        let a = c - w / 2;
+        let r = |lag: usize| -> f64 {
+            let (mut xy, mut xx, mut yy) = (0.0, 0.0, 0.0);
+            for i in a..a + w {
+                let (p, q) = (x[i] as f64, x[i + lag] as f64);
+                xy += p * q;
+                xx += p * p;
+                yy += q * q;
+            }
+            xy / (xx * yy).sqrt().max(1e-30)
+        };
+        let rs: Vec<f64> = (lo - 1..=hi + 1).map(r).collect();
+        let k = (1..rs.len() - 1).max_by(|&i, &j| rs[i].total_cmp(&rs[j])).unwrap();
+        let bend = rs[k - 1] - 2.0 * rs[k] + rs[k + 1];
+        let lag = (lo - 1 + k) as f64 + if bend < 0.0 { 0.5 * (rs[k - 1] - rs[k + 1]) / bend } else { 0.0 };
+        out.push((t, midi_of(sr64 / lag)));
+        t += 0.001;
     }
-    let m: Vec<f64> = part(&got, sr, 0.5, 1.4).iter().map(|&h| midi_of(h as f64)).collect();
-    m.iter().cloned().fold(f64::MIN, f64::max) - m.iter().cloned().fold(f64::MAX, f64::min)
+    out
 }
 
 // ---------------------------------------------------------------- what every kernel guarantees

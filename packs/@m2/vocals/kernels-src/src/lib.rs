@@ -25,7 +25,7 @@ pub mod yin;
 
 pub use aim::Snap;
 pub use psola::{LATENCY_S, Shift};
-pub use yin::{HOP, Pitch};
+pub use yin::Pitch;
 
 abi!();
 
