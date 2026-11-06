@@ -1412,7 +1412,7 @@ impl Actor {
                 }
             }
         }
-        // What is asked of what plays when no new renderer was sent (TAP-9): the scopes follow the
+        // What is asked of what plays when no new renderer was sent (TAP-9): the looks follow the
         // accepted revision, and show only while what plays is built from its code.
         if !renderer && let Some(p) = o.plays.as_ref().filter(|p| dev.is_some_and(|d| d.epoch == p.epoch)) {
             let accepted = o.session.accepted_arc();

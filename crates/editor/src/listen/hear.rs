@@ -81,7 +81,7 @@ pub fn tapped(rev: &Revision) -> Vec<Tapped> {
                             Some(n) => {
                                 // A bus that passes its input on has no site: what enters its strip.
                                 if own.is_none() && m.bus {
-                                    own = mix::strip_input(rev, mx, &c.key).map(TapAt::Node);
+                                    own = mix::strip_input(rev, mx, &c.key).map(|i| TapAt::Port(i, 0));
                                 }
                                 let to = routes.get(&c.key).and_then(|r| r.to.clone());
                                 let why = to.as_ref().map(|b| {
@@ -221,7 +221,7 @@ pub fn hear(rev: Arc<Revision>, packages: &PackageSet, ask: &Ask) -> Result<Hear
         };
         let own = t.own.map(|a| tap(a, wants(pictured && t.strip.is_none())));
         let heard =
-            t.strip.as_ref().map(|&(_, n)| tap(TapAt::Node(n), Wants { bands: true, stereo: true, moments: true, picture: pictured }));
+            t.strip.as_ref().map(|&(_, n)| tap(TapAt::Port(n, 0), Wants { bands: true, stereo: true, moments: true, picture: pictured }));
         slots.push((own, heard));
     }
     let (mut runner, _pool) = threads_for(&r, ask.threads);

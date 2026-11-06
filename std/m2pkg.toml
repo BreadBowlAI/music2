@@ -15,6 +15,8 @@
 #   Ports using `*` share one type variable per kernel, so `add(a: *, b: *) -> out: *`
 #   adds two audio signals or two controls of the same unit.
 #   units: hz db gain semitones seconds beats unit01 bipolar scalar
+# `meters` (ABI-13): numbers a kernel gives the window to show, after its outputs, which nothing in
+# a song can read: compress, duck and limit say how far they turn down, in dB (ABI-14).
 # A default applies only when a kernel is called directly with that input unset
 # (`kernel("std:svf", { in: x })`): a component's descriptor gives what songs see (PKG-4).
 # `in lo..hi` is the knob range of a number written straight into a kernel input.
@@ -168,12 +170,14 @@ name = "duck"
 description = "Turn the input down by `depth` dB while `side` is high (sidechain)"
 inputs = ["in: audio<*>", "side: control<unit01>", "depth: control<db> = -8"]
 outputs = ["out: audio<*>"]
+meters = ["reduction: control<db>"]
 
 [[kernel]]
 name = "limit"
 description = "Peak limiter with a hard ceiling"
 inputs = ["in: audio<*>", "ceiling: control<db> = -1"]
 outputs = ["out: audio<*>"]
+meters = ["reduction: control<db>"]
 
 # ---------------------------------------------------------------- more effects
 # The chorus (@m2/effects' and @m2/synths' strings'), and std/fx's compression and EQ. Each kernel
@@ -208,6 +212,7 @@ inputs = [
   "key: audio<2>",
 ]
 outputs = ["out: audio<*>"]
+meters = ["reduction: control<db>"]
 
 [[kernel]]
 name = "eq3"

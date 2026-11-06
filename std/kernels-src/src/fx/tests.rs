@@ -208,3 +208,35 @@ fn playing_the_lfo_steps_as_it_always_did() {
 fn stopped_the_effects_wait_and_play_on_where_they_were() {
     effects::stopped_they_wait_and_play_on_where_they_were(ALL.iter().filter(|fx| FOLLOW.contains(&fx.name)));
 }
+
+// ABI-14: the compressor gives how far it turns down, in dB, its makeup aside: each block the most
+// of its frames, which the sound fell by at one of them; nothing for a sound under its knee.
+#[test]
+fn the_compressor_says_how_far_it_turns_down() {
+    let sine = |amp: f32| move |t: usize| amp * (TAU * (t as f64 * 220.0 / SR as f64).fract() as f32).sin();
+    let play = |amp: f32| {
+        m2_dsp::testing::play_at::<Compress>(SR, 1, 24_000, BLOCK, &|p, c, t| match p {
+            0 | 6 => sine(amp)(t) * (c == 0) as u8 as f32,
+            1 => -18.0,
+            2 => 4.0,
+            3 => 0.01,
+            4 => 0.15,
+            _ => 0.0,
+        })
+    };
+    let quiet = play(0.01);
+    assert!(quiet.out[1].iter().all(|f| f[0] == 0.0), "−40 dB, under its knee: nothing turned down");
+    let loud = play(1.0);
+    let (main, meter) = (loud.main(), &loud.out[1]);
+    let mut most = 0.0f32;
+    for (k, block) in meter.chunks(BLOCK).enumerate() {
+        assert!(block.iter().all(|f| f[0].to_bits() == block[0][0].to_bits()), "one number for the block");
+        let fell = (k * BLOCK..((k + 1) * BLOCK).min(main.len()))
+            .filter(|&t| sine(1.0)(t).abs() > 1e-3)
+            .map(|t| -20.0 * (main[t][0] / sine(1.0)(t)).abs().log10())
+            .fold(0.0f32, f32::max);
+        assert!((block[0][0] - fell).abs() < 2e-3, "block {k}: the meter says {} dB, the sound fell by {fell} dB", block[0][0]);
+        most = most.max(block[0][0]);
+    }
+    assert!(most > 10.0, "a full-scale sine 18 dB over at 4:1 is turned down more than 10 dB: {most}");
+}

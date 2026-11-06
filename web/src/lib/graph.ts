@@ -991,9 +991,17 @@ export const graphApi = {
       }),
       within,
     ),
-  /** Ask for the scope of box `node` of `module` (TAP-8), again within 10 s to keep it, or stop: its frames come on this window's socket. */
-  scope: (session: number, module: string, node: string, on: boolean) =>
-    call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
+  /** Ask for a look at box `node` of `module` (TAP-8, TAP-12): its scope (the default), spectrum, level or a meter, at `out`, `in` or the meter's name; again within 10 s to keep it, or stop. What it sees comes on this window's socket (`useLook` in `taps.ts`). */
+  look: (session: number, module: string, node: string, on: boolean, kind = "scope", at = "out") =>
+    call<{ look?: { module: string; node: string; kind: string; at: string; channels?: number | null; unit?: string | null; frames?: number[][] } }>("/look", {
+      session,
+      client: clientId,
+      module,
+      node,
+      kind,
+      at,
+      on,
+    }),
   /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
   setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
     edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),

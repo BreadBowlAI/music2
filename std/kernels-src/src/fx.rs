@@ -94,7 +94,8 @@ const KNEE: f32 = 6.0;
 /// Feed-forward compressor, stereo-linked, with a soft knee. The gain reduction (in dB)
 /// follows the peak level of `key` with `attack` and `release`. Inputs: in, threshold (dB),
 /// ratio (1 = off), attack (s), release (s), makeup (dB), key (stereo: what its detector hears,
-/// `in` itself or another sound, PKG-19).
+/// `in` itself or another sound, PKG-19). Its meter `reduction` (ABI-14): the gain reduction, its
+/// makeup aside, the most of the call's frames.
 pub struct Compress {
     sr: f32,
     /// Gain reduction now, in dB (0 or more).
@@ -106,7 +107,7 @@ pub struct Compress {
 
 impl Kernel for Compress {
     const INPUTS: usize = 7;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 2;
 
     fn new(cfg: &Cfg) -> Self {
         let sample_rate = cfg.sample_rate;
@@ -118,6 +119,7 @@ impl Kernel for Compress {
         let stereo = io.channels > 1;
         let ([l, r, threshold, ratio, attack, release, makeup, kl, kr], [ol, or]) =
             io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (6, 1)], [(0, 0), (0, 1)]);
+        let mut most = 0.0f32;
         for i in 0..ol.len() {
             let (xl, xr) = (sane(l[i]), if stereo { sane(r[i]) } else { 0.0 });
             // A mono key is copied to both sides, so its level is its one side's, as a mono
@@ -141,7 +143,9 @@ impl Kernel for Compress {
             let g = db_to_gain(self.makeup.next(clampf(makeup[i], -60.0, 24.0)) - self.env);
             ol[i] = xl * g;
             or[i] = xr * g;
+            most = most.max(self.env);
         }
+        io.meter(1, most);
     }
 }
 
