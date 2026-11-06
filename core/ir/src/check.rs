@@ -874,6 +874,10 @@ impl<'a> Checker<'a> {
         };
         if let Some((kernel, sig)) = sig {
             return sig.output_index(port).ok_or_else(|| {
+                // A meter is the window's alone (ABI-13): no wire reads one, so none changes a bit.
+                if sig.meter_index(port).is_some() {
+                    return format!("`{port}` is a meter of `{kernel}`: it is for the window to show, and nothing in the song can read it");
+                }
                 let have: Vec<&str> = sig.outputs.iter().map(|p| p.name.as_str()).collect();
                 format!("`{kernel}` has no output `{port}` (outputs: {})", have.join(", "))
             });
@@ -1443,6 +1447,11 @@ fn type_kernel(
             PortKind::Control(u) => Kind::Control(u.or(unit)),
             PortKind::Events(e) => Kind::Events(e),
         })
+        // Its meters, after its outputs: buffers of its node that no wire reads (ABI-13).
+        .chain(sig.meters.iter().map(|m| match m.kind {
+            PortKind::Control(u) => Kind::Control(u),
+            _ => Kind::Control(None),
+        }))
         .collect();
     Ok((inputs, channels, outs))
 }
@@ -1529,6 +1538,36 @@ mod tests {
         assert!(matches!(&n.op, FOp::Kernel { inputs, .. } if matches!(inputs[1], Input::Port { .. })), "{:?}", n.op);
         let e = check(&song(json!([{"id": "k", "op": "kernel", "kernel": "t:cut"}]), "k"), &k).unwrap_err();
         assert!(e.iter().any(|d| d.message.contains("input `in` (audio<1>) is not connected")), "{e:?}");
+    }
+
+    // ABI-13: a kernel's meters are buffers of its node after its outputs, typed by their units,
+    // and nothing in the graph may read one: a wire from it is refused in words.
+    #[test]
+    fn a_meter_is_kept_unread() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut k = kernels();
+        let comp = KernelSig::parse("t:comp", "", &s(&["in: audio<*>"]), &s(&["out: audio<*>"]), 0).unwrap();
+        k.insert("t:comp".into(), comp.with_meters(&s(&["reduction: control<db>"])).unwrap());
+        let nodes =
+            json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "c", "op": "kernel", "kernel": "t:comp", "inputs": {"in": "o"}}]);
+        let f = check(&song(nodes, "c"), &k).unwrap_or_else(|e| panic!("{e:?}"));
+        let n = f.nodes.iter().find(|n| n.name == "song/c").unwrap();
+        assert_eq!(n.outputs, [Kind::Audio(1), Kind::Control(Some(Unit::Db))], "its output, then its meter");
+        let read = json!([
+            {"id": "o", "op": "kernel", "kernel": "t:saw"},
+            {"id": "c", "op": "kernel", "kernel": "t:comp", "inputs": {"in": "o"}},
+            {"id": "v", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "o", "g": "c.reduction"}},
+        ]);
+        let e = check(&song(read, "v"), &k).unwrap_err();
+        assert!(
+            e.iter().any(|d| d.message.contains(
+                "input `g`: `reduction` is a meter of `t:comp`: it is for the window to show, and nothing in the song can read it"
+            )),
+            "{e:?}"
+        );
+        let e = check(&song(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "c", "op": "kernel", "kernel": "t:comp", "inputs": {"in": "o"}}]), "c.reduction"), &k)
+            .unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("`reduction` is a meter of `t:comp`")), "the song's output can't be one either: {e:?}");
     }
 
     #[test]
