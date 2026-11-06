@@ -54,6 +54,14 @@ declare const STEPS: unique symbol;
 export type Choice<O extends readonly string[] = readonly string[]> = Signal<ChoiceKind<O>> & { readonly [STEPS]: ChoiceKind<O> };
 /** A switch's signal (CARD-11): 1 for on, 0 for off. Only a switch takes it. */
 export type Switch = Signal<SwitchKind> & { readonly [STEPS]: SwitchKind };
+/** What the song's key's signal carries, for types only (VOX-12). */
+export type KeysetKind = { readonly keyset: true };
+/**
+ * The song's key as a signal, `time.key` (VOX-12): a set of notes, a whole number whose bit n is on
+ * when pitch class n (0 is C, 1 is C♯, … 11 is B) is in the key; 4095, every note, with no key.
+ * It isn't a number: only a kernel's port of the unit `keyset` takes it.
+ */
+export type Keyset = Signal<KeysetKind> & { readonly [STEPS]: KeysetKind };
 
 /** A kernel instance. As a signal it is its `out` port; `.port(name)` gives the others. */
 export class KernelNode<K = unknown> extends Signal<K> {
@@ -327,7 +335,7 @@ export type KernelSettings = { assets?: readonly string[]; values?: readonly num
  * Unset inputs use the kernel's defaults. `settings` gives it the files it reads and numbers fixed
  * at build: `kernel("std:sampler", { pitch }, { assets: ["kick.wav"], values: [60] })`.
  */
-export function kernel<K = unknown>(id: string, inputs: Record<string, Value | Choice | Switch | undefined> = {}, settings: KernelSettings = {}): KernelNode<K> {
+export function kernel<K = unknown>(id: string, inputs: Record<string, Value | Choice | Switch | Keyset | undefined> = {}, settings: KernelSettings = {}): KernelNode<K> {
   const site = takeSite(arguments);
   const scope = need(`kernel("${id}")`);
   const ins: Record<string, string> = {};
@@ -1684,6 +1692,8 @@ function definedAt(): string | undefined {
 type Home = { package: string | null; module: string; file: string };
 
 const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar"];
+/** The words for a knob, an input or a lane of the unit `keyset`, which none can be (VOX-12). */
+const NO_KEY_KNOB = "the song's key is no knob or lane: read it with time.key";
 const NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function declared(desc: Descriptor, body: (...args: any[]) => unknown, site: number | undefined): unknown {
@@ -1733,6 +1743,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   const input = (name: string, d: unknown, where: string): In => {
     if (!(d instanceof PortDecl)) fail(`${where} "${name}" must be declared with port.audio(), port.control(), port.notes() or port.any()`);
     const spec = specOf<PortSpec>(d as object);
+    if ((spec.unit as string) === "keyset") fail(`${where} "${name}": ${NO_KEY_KNOB}`);
     if (spec.unit !== undefined && !UNIT_NAMES.includes(spec.unit)) fail(`${where} "${name}" names no unit "${String(spec.unit)}" (units: ${UNIT_NAMES.join(", ")})`);
     const badLabel = spec.label === undefined ? undefined : labelProblem(spec.label);
     if (badLabel) fail(`${where} "${name}": ${badLabel}`);
@@ -1764,6 +1775,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     } else if (s.log) fail(`${what}: .log() needs a range`);
     else if (s.strict) fail(`${what}: .strict() needs a range`);
     for (const a of s.accepts) {
+      if ((a.unit as string) === "keyset") fail(`${what}: ${NO_KEY_KNOB}`);
       if (!UNIT_NAMES.includes(a.unit)) fail(`${what}: accepts names no unit "${String(a.unit)}" (units: ${UNIT_NAMES.join(", ")})`);
       if (a.unit === s.unit) fail(`${what}: accepts its own unit, ${a.unit}; give the range with .range()`);
       if (a.range) {
@@ -2638,7 +2650,7 @@ export type LaneOptions = {
   shared?: boolean;
 };
 
-/** Song time: where the song is, and whether it plays. Never the engine's own clock (RENDER-7). */
+/** Song time: where the song is, whether it plays, and its key. Never the engine's own clock (RENDER-7). */
 export type Time = {
   /** The song's position in beats. */
   readonly beats: Control<"beats">;
@@ -2646,6 +2658,8 @@ export type Time = {
   readonly seconds: Control<"seconds">;
   /** 1 while the song plays, 0 while it is stopped. An LFO that steps only while it is 1 waits while stopped. */
   readonly playing: Control<"unit01">;
+  /** The song's key, as a set of notes (VOX-12): for a kernel that follows the key, as Tune does. Every note with no key set. */
+  readonly key: Keyset;
 };
 
 /** Each component call's time nodes, by the scope they are made in, then `<frame>:<what>`. */
@@ -2657,10 +2671,11 @@ const callTimes = new WeakMap<Scope, Map<string, Signal>>();
  * being built (a voice has its own): so the node sits inside the call that reads it, in the graph
  * view and in the delta's names (WRITE-8), and adding a call beside another renames neither's.
  */
-function timeNode(of: "beats" | "seconds" | "playing"): Signal {
+function timeNode(of: "beats" | "seconds" | "playing" | "key"): Signal {
   const scope = need(`time.${of}`);
   const m = scope.module;
-  const unit: Unit = of === "playing" ? "unit01" : of;
+  // A keyset is no number's unit, so the checker alone knows it (VOX-12).
+  const unit: Unit | undefined = of === "playing" ? "unit01" : of === "key" ? undefined : of;
   const open = infoOf(m).open;
   if (!open.length) {
     let s = m.time.get(of);
@@ -2676,8 +2691,8 @@ function timeNode(of: "beats" | "seconds" | "playing"): Signal {
 }
 
 /**
- * Song time, for a component's body as for a track's: `time.beats`, `time.seconds` and
- * `time.playing`. The same as `ctx.time`.
+ * Song time, for a component's body as for a track's: `time.beats`, `time.seconds`,
+ * `time.playing` and `time.key`. The same as `ctx.time`.
  */
 export const time: Time = Object.freeze({
   get beats() {
@@ -2688,6 +2703,9 @@ export const time: Time = Object.freeze({
   },
   get playing() {
     return timeNode("playing") as Control<"unit01">;
+  },
+  get key() {
+    return timeNode("key") as Keyset;
   },
 });
 
@@ -2825,6 +2843,7 @@ function ctxFor(m: ModuleBuild): Ctx {
           stepsOf.set(s, unit === "switch" ? { kind: "switch" } : { kind: "choice", lane: rec, key, module: m.key });
           return produced(site, s);
         }
+        if (unit === "keyset") throw new Error(`lane "${key}": ${NO_KEY_KNOB}`);
         if (!UNIT_NAMES.includes(unit as Unit)) throw new Error(`lane "${key}": no unit ${shown(unit)} (units: ${UNIT_NAMES.join(", ")}; or "choice" or "switch")`);
         const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
         if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v))) throw new Error(`lane "${key}": its fallback must be a number, as ${unit === "hz" ? "hz(500)" : "0.5"}, not ${shown(v)}`);

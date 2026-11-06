@@ -12,11 +12,11 @@
 | Path | What it is |
 |---|---|
 | `song.ts`, `tracks/`, `lib/` | the code: how the song sounds (instruments, effects, the mix) |
-| `data/` | what plays: notes, automation (knob moves over time) and audio clips |
+| `data/` | what plays: notes, automation (knob moves over time) and audio clips; `data/arrangement.json` holds the tempo, the time signature and the song's key |
 | `assets/` | audio files. Never overwritten |
 | `music2.toml` | the song's name, format, sample rate, and the packs its code uses (`[dependencies]`) |
 | `music2.lock` | the exact version of each pack the song uses, made by music2. Never edit it by hand |
-| `layout.json` | the tracks' order and colours, markers and the song's key. Never heard |
+| `layout.json` | the tracks' order and colours, and markers. Never heard |
 | `.music2/` | this computer's own state. Never touch it |
 | `AGENTS.md`, `CLAUDE.md` | this page, for agents. The app ignores both |
 

@@ -83,7 +83,8 @@ fn a_name_of_two_lines_is_refused() {
     assert!(f.read("layout.json").contains(&"é".repeat(40)), "40 characters, not bytes");
 }
 
-// FMT-19: a key it doesn't know, the song's key, the order and colours: all kept as read.
+// FMT-19: a key it doesn't know, an older music2's song key (which the upgrade moves, VOX-14), the
+// order and colours: all kept as read.
 #[test]
 fn markers_keep_unknown_keys_and_the_key() {
     let f = fixture("examples/first-song");

@@ -4,7 +4,7 @@
 // the check too. `kinds_tests.rs` builds the same sound and its mistakes, and the build refuses
 // each of them again, even through `as any`.
 
-import { component, control, kernel, port, setting, view, type Audio, type Choice, type Control, type Ctx, type Events, type Switch } from "@m2/core";
+import { component, control, kernel, port, setting, time, view, type Audio, type Choice, type Control, type Ctx, type Events, type Keyset, type Switch } from "@m2/core";
 import { lowpass } from "std/filter";
 
 /** A sound that uses every kind a descriptor declares. */
@@ -291,3 +291,14 @@ labelled({ tableA: "square" });
 setting.int(8).label(8);
 // @ts-expect-error a label is text, a control's too
 control.db(0).label(true);
+
+// The song's key as a signal (VOX-12): a kernel takes it, typed `Keyset`; no number does, nor math.
+export const tuned = component(
+  { id: "tuned", inputs: { in: port.audio() }, output: port.audio() },
+  (x: Audio) => kernel<Audio>("test:tune", { in: x, key: time.key }),
+);
+export const songKey: Keyset = time.key;
+// @ts-expect-error a key isn't a number
+lowpass(tuned(lowpass(kernel<Audio>("std:saw"))), { cutoff: time.key });
+// @ts-expect-error a key isn't a level
+export const level: Control<"unit01"> = time.key;

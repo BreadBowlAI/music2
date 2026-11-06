@@ -60,6 +60,8 @@ import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { laneScale, type LaneScale } from "../lib/laneScale";
 import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
 import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
+import { TakeRows } from "./TakeRows";
+import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { useStore } from "../lib/store";
@@ -2590,6 +2592,13 @@ const TrackRows = memo(function TrackRows({
     </div>
   );
 
+  // Its Takes rows, under each audio lane whose clips play a loop's takes (VOX-7).
+  const takesOpen = useTakesOpen((s) => s.open.has(module)) && !last;
+  const takes = (lane: TimelineLane) =>
+    lane.kind === "audio" && (
+      <TakeRows key={`takes:${lane.key}`} module={module} lane={lane} color={color} selected={selected} headerW={headerW} width={width} height={h} editable={!locked && !waiting} />
+    );
+
   // Dragged to a new place: it follows the pointer, lifted (taste.md §3.4).
   const dy = useReorder((s) => (s.module === module ? s.dy : null));
   const movable = track.track && !last;
@@ -2625,7 +2634,8 @@ const TrackRows = memo(function TrackRows({
         <TrackHeader track={track} folds={controls.length > 0} open={open} selected={selected} song={!!last} issues={issues} height={h} />,
         { first: true, height: h, movable, edge: track.track && !last ? module : undefined },
       )}
-      {others.map((l) => row(l, <LaneLabel lane={l} height={h} />, { height: h }))}
+      {takesOpen && primary && takes(primary)}
+      {others.map((l) => [row(l, <LaneLabel lane={l} height={h} />, { height: h }), takesOpen && takes(l)])}
       {open &&
         controls
           .filter((l) => !hidden.has(l.key))

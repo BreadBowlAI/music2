@@ -127,9 +127,9 @@ fn stamps(k: &SongKey) -> Vec<String> {
 
 /// Chord `c` on root `root` (a pitch) in every inversion, by note names.
 fn voicings(k: &SongKey, root: &str, c: Chord) -> Vec<String> {
-    let p = m2_song::parse_pitch(root).unwrap();
+    let p = crate::parse_pitch(root).unwrap();
     (0..c.inversions())
-        .map(|inv| k.stamp(p, c, inv).unwrap().iter().map(|n| m2_song::lane::pitch_name(*n).unwrap()).collect::<Vec<_>>().join(" "))
+        .map(|inv| k.stamp(p, c, inv).unwrap().iter().map(|n| crate::lane::pitch_name(*n).unwrap()).collect::<Vec<_>>().join(" "))
         .collect()
 }
 

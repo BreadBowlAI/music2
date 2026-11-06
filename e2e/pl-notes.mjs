@@ -3,7 +3,7 @@
 // delete), Q in the roll, ⌥← and ⌥→
 // left to the page, a Ctrl-click on a Mac that opens the menu and moves nothing, ⌘= and ⌘− zoom
 // the roll while it has the keyboard (X3); the song's key
-// in the top bar, written into layout.json, and the roll's rows out of the key shaded. A PC page's
+// in the top bar, written into data/arrangement.json (VOX-10), and the roll's rows out of the key shaded. A PC page's
 // words, and the taste lint over the menu and the key picker.
 //
 //   node e2e/pl-notes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, box, key, status } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
@@ -381,16 +381,19 @@ await page.keyboard.press("Escape");
 write("tracks/bass.ts", bassTs);
 check(await until(async () => !(await page.$("[data-testid=notes-locked]"))), "once it compiles, the roll is editable again");
 
-// ---------------------------------------------------------------- the song's key (D2)
+// ---------------------------------------------------------------- the song's key (D2, VOX-10)
 
-const LAYOUT = "layout.json";
-const layoutKey = () => {
+const ARRANGEMENT = "data/arrangement.json";
+const arrangementWas = read(ARRANGEMENT);
+const songKey = () => {
   try {
-    return JSON.parse(read(LAYOUT)).key ?? null;
+    return JSON.parse(read(ARRANGEMENT)).key ?? null;
   } catch {
     return null;
   }
 };
+/** The arrangement as the fixture has it, with `key`, as a hand or an agent writes it. */
+const withKey = (key) => JSON.stringify({ ...JSON.parse(arrangementWas), key }, null, 2);
 const field = () => page.$eval("[data-testid=key-field]", (e) => ({ text: e.textContent, title: e.title, color: getComputedStyle(e).color })).catch(() => null);
 const picker = () => page.$("[data-testid=key-picker]");
 const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
@@ -408,7 +411,7 @@ const drawnShaded = (pitch) =>
 
 const f0 = await field();
 check(!!f0, "the top bar has a Key field");
-check(f0?.text === "Key" && f0.title.startsWith("The song's key. In Notes, rows not in the key are shaded. Saved in layout.json."), `it says "Key" while none is set, its tooltip what it does: ${f0?.text} · ${f0?.title.split("\n")[0]}`);
+check(f0?.text === "Key" && f0.title.startsWith("The song's key. In Notes, rows not in the key are shaded. Saved in data/arrangement.json."), `it says "Key" while none is set, its tooltip what it does: ${f0?.text} · ${f0?.title.split("\n")[0]}`);
 const order = await page.evaluate(() => {
   const r = (s) => document.querySelector(s)?.getBoundingClientRect();
   return { meter: r("[data-testid=meter-field]")?.right, key: r("[data-testid=key-field]")?.left };
@@ -443,13 +446,14 @@ check(await page.evaluate(() => document.activeElement?.dataset.testid === "note
 await page.click("[data-testid=key-field]");
 await until(() => picker().then(Boolean), 2000);
 await page.click('[data-testid=key-picker] [data-scale="minor"]');
-check(!(await layoutKey()), "Minor alone writes nothing while no key is set");
+check(!songKey() && read(ARRANGEMENT) === arrangementWas, "Minor alone writes nothing while no key is set");
 rev = await revision();
 await page.click('[data-testid=key-picker] [data-root="E"]');
-check(await until(() => JSON.stringify(layoutKey()) === JSON.stringify({ root: "E", scale: "minor" })), `E minor is written into layout.json: ${read(LAYOUT).replace(/\s+/g, " ")}`);
+check(await until(() => JSON.stringify(songKey()) === JSON.stringify({ root: "E", scale: "minor" })), `E minor is written into data/arrangement.json: ${read(ARRANGEMENT).replace(/\s+/g, " ")}`);
 check(await until(async () => !(await picker()), 2000), "a root closes the picker");
 check(await until(async () => (await field())?.text === "E minor"), `the field says "${(await field())?.text}"`);
-check((await revision()) === rev && read(FILE) === base, "nothing that plays changed: no revision, the notes as they were");
+const layoutHasKey = () => fs.existsSync(`${PROJ}/layout.json`) && "key" in JSON.parse(read("layout.json"));
+check(await until(async () => (await revision()) > rev && read(FILE) === base && !layoutHasKey()), "the key is the song's: a revision, the notes as they were, and none in layout.json");
 check(await until(async () => (await shading()) === "1,3,5,8,10" && (await drawnShaded(65)) && !(await drawnShaded(66))), `the roll shades the rows out of E minor: F (65) shaded, F♯ (66) plain (${await shading()})`);
 check(await until(async () => (await undoTitle()).startsWith("Undo key E minor")), `Undo names it: ${await undoTitle()}`);
 await page.screenshot({ path: `${ROOT}/pl-notes-e-minor.png` });
@@ -458,35 +462,35 @@ await page.screenshot({ path: `${ROOT}/pl-notes-e-minor.png` });
 await page.click("[data-testid=key-field]");
 await until(() => picker().then(Boolean), 2000);
 await page.click('[data-testid=key-picker] [data-scale="major"]');
-check(await until(() => layoutKey()?.scale === "major" && layoutKey()?.root === "E"), "Major with E minor set writes E major");
+check(await until(() => songKey()?.scale === "major" && songKey()?.root === "E"), "Major with E minor set writes E major");
 check(!!(await picker()), "and leaves the picker open");
 await page.click('[data-testid=key-picker] [data-root="Bb"]');
-check(await until(async () => (await field())?.text === "B♭ major" && layoutKey()?.root === "Bb"), `B♭ major: the file says Bb, the field ${(await field())?.text}`);
+check(await until(async () => (await field())?.text === "B♭ major" && songKey()?.root === "Bb"), `B♭ major: the file says Bb, the field ${(await field())?.text}`);
 
 // No key: the black keys' shading again, and the file without it.
 await page.click("[data-testid=key-field]");
 await until(() => picker().then(Boolean), 2000);
 await page.click("[data-testid=no-key]");
-check(await until(() => !("key" in JSON.parse(read(LAYOUT)))), "No key takes it out of layout.json");
+check(await until(() => read(ARRANGEMENT) === arrangementWas), "No key takes it out of data/arrangement.json, which is as it was");
 check(await until(async () => (await shading()) === "1,3,6,8,10" && (await field())?.text === "Key"), "the roll shades the black keys again; the field says Key");
 await key("Meta+z");
-check(await until(() => layoutKey()?.root === "Bb"), "⌘Z puts B♭ major back");
+check(await until(() => songKey()?.root === "Bb"), "⌘Z puts B♭ major back");
 await key("Meta+z");
 await key("Meta+z");
-check(await until(() => JSON.stringify(layoutKey()) === JSON.stringify({ root: "E", scale: "minor" })), "two more: E minor");
+check(await until(() => JSON.stringify(songKey()) === JSON.stringify({ root: "E", scale: "minor" })), "two more: E minor");
 await key("Meta+z");
-check(await until(async () => !layoutKey() && (await field())?.text === "Key"), "and one more, no key");
+check(await until(async () => !songKey() && (await field())?.text === "Key"), "and one more, no key");
 
-// A key written into layout.json by hand (a merge, an agent) shows too.
-write(LAYOUT, JSON.stringify({ order: [], tracks: {}, key: { root: "C", scale: "major" } }));
-check(await until(async () => (await field())?.text === "C major" && (await shading()) === "1,3,6,8,10"), "a key written into layout.json by hand shows: C major, whose rows out of it are the black keys'");
+// A key written into data/arrangement.json by hand (a merge, an agent) shows too.
+write(ARRANGEMENT, withKey({ root: "C", scale: "major" }));
+check(await until(async () => (await field())?.text === "C major" && (await shading()) === "1,3,6,8,10"), "a key written into data/arrangement.json by hand shows: C major, whose rows out of it are the black keys'");
 
 // The name keeps clear of the bar's groups as measured (Q23): a long name, with a key set, at the
 // app's smallest window, laid out as the Mac app's.
 const st0 = await state();
 const longName = "A very long song name that cannot fit in the top bar at all";
 check((await post("/title", { session: st0.session, name: longName })).status === 200, "a long name");
-write(LAYOUT, JSON.stringify({ order: [], tracks: {}, key: { root: "F#", scale: "minor" } }));
+write(ARRANGEMENT, withKey({ root: "F#", scale: "minor" }));
 await until(async () => (await field())?.text === "F♯ minor");
 const room = async () =>
   page.evaluate(() => {
@@ -538,8 +542,24 @@ check(typing && (await state()).name === longName, `a name being typed stays whi
 check(!!typedThen && typedThen.w >= typedAt.w && typedAt.w >= 120 && typedThen.top, `the field keeps its width, on top of its neighbours: ${JSON.stringify(typedAt)} then ${JSON.stringify(typedThen)}`);
 await key("Meta+z");
 await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) !== longName);
-fs.rmSync(`${PROJ}/${LAYOUT}`);
-check(await until(async () => (await field())?.text === "Key"), "layout.json gone: no key");
+write(ARRANGEMENT, arrangementWas);
+check(await until(async () => (await field())?.text === "Key"), "the arrangement as it was: no key");
+
+// A key an older music2 left in layout.json (VOX-14, AGENT-14): the song builds, but the status offers
+// Upgrade it, which moves the key into data/arrangement.json.
+const layoutWas = fs.existsSync(`${PROJ}/layout.json`) ? JSON.parse(read("layout.json")) : { order: [], tracks: {} };
+write("layout.json", JSON.stringify({ ...layoutWas, key: { root: "D", scale: "dorian" } }, null, 2));
+check(await until(async () => (await state()).upgrade === true, 15000) && (await field())?.text === "Key", "a key left in layout.json shows no key, and the state says the song waits for an upgrade");
+await status();
+await page.waitForSelector("[data-testid=upgrade-run]", { timeout: 5000 });
+await page.click("[data-testid=upgrade-run]");
+check(
+  await until(async () => (await field())?.text === "D Dorian" && JSON.stringify(songKey()) === JSON.stringify({ root: "D", scale: "dorian" }) && !layoutHasKey() && (await state()).upgrade === false),
+  `Upgrade it moves it into data/arrangement.json, and the field says ${(await field())?.text}`,
+);
+await page.keyboard.press("Escape");
+write(ARRANGEMENT, arrangementWas);
+await until(async () => (await field())?.text === "Key");
 
 // ---------------------------------------------------------------- a PC page
 

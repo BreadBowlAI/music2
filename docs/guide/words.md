@@ -28,6 +28,7 @@
 - **LUFS:** loudness as ears hear it. Streaming services play songs at about −14 LUFS; Master's strip and the Export dialog say a song's.
 - **Scope:** a picture of a sound's wave as it plays.
 - **Take:** one recording, from Record to stop.
+  - **Comp:** one take built from the best parts of several ([Audio](audio.md#comp-the-best-parts-of-several-takes)).
 - **Sampler:** an instrument that plays an audio file on each note, higher or lower by the note.
   - **Region:** one recording in a Sampler's map, with the notes, how hard and in which turn it plays ([Sounds](sounds.md)).
   - **Velocity layer:** the recordings of one note played at one strength; a soft note plays the soft layer.

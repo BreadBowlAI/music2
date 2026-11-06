@@ -1,5 +1,5 @@
-// The song's key (the polish plan's D2, Q22): `layout.json`'s `key`, shown in the top bar and as
-// shading in Notes, which can lock notes to it and stamp its chords. Nothing that plays reads it.
+// The song's key (VOX-10): `data/arrangement.json`'s `key`, shown in the top bar and as
+// shading in Notes, which can lock notes to it and stamp its chords. Sound reads it as `time.key`.
 //
 // The page knows no music of its own (NOTE-2): the scales, chords and grooves are the server's one
 // table (`GET /api/theory`, NOTE-1), and what the song's key means (its notes, the nearest of them
@@ -11,7 +11,7 @@ import { editing, recorded } from "./history";
 import { token } from "./native";
 import { http } from "./http";
 
-/** A key as `layout.json` writes it: its root ("C#", "Eb") and its scale by name ("harmonic-minor"). */
+/** A key as `data/arrangement.json` writes it: its root ("C#", "Eb") and its scale by name ("harmonic-minor"). */
 export interface SongKey {
   root: string;
   scale: string;
@@ -51,7 +51,7 @@ export interface KeyView extends SongKey {
 
 declare module "./graph" {
   interface TimelineView {
-    /** The song's key, from `layout.json`, with what it means; null when none is set. */
+    /** The song's key, from `data/arrangement.json`, with what it means; null when none is set. */
     key?: KeyView | null;
   }
 }
@@ -148,7 +148,7 @@ export function loadTheory() {
 }
 
 /**
- * Set the song's key, or with null take it out: a write of `layout.json` alone (`POST
+ * Set the song's key, or with null take it out: a write of `data/arrangement.json` alone (`POST
  * /api/graph/song-key`), one undo step, named "key A minor". Refused, it throws with the server's
  * words.
  */

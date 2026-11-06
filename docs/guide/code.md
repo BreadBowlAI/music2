@@ -14,7 +14,7 @@ my-song/
   tracks/
     bass.ts            # one file per track: its lanes, instrument and effects
   data/
-    arrangement.json   # tempo and time signature
+    arrangement.json   # tempo, time signature and key
     bass/              # one folder per track, named by its key
       notes.json       # one file per lane: data/<track key>/<lane key>.json
       cutoff.json      # (a key that is a Windows device name, such as aux, is written aux-)
@@ -41,7 +41,7 @@ std = "0.9"
 
 Each package the code imports from is listed: the SDK (`@m2/core`), std (the toolbox) and each pack, such as `@m2/synths`, one of the packs music2 ships ([Packs](packs.md)). `music2.lock` beside it holds the exact version of each pack.
 
-`arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0) and `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4). A beat is a quarter note.
+`arrangement.json` holds `tempo` (a list of `{ "beat", "bpm" }` changes, the first at beat 0), `meter` (a list of `{ "beat", "beats", "unit" }` time signatures; empty is 4/4) and `key`, the song's key: `{ "root": "A", "scale": "minor" }`, or left out for none. A beat is a quarter note. A root is written `C`, `C#`, `Eb` and so on; a scale by its name (`major`, `minor`, `dorian`, `harmonic-minor`, …; `GET /api/theory` lists them). One key is for the whole song. A key music2 doesn't know (a typo) is a warning, and the song plays as if it had no key.
 
 `layout.json` is written the first time you move, recolour or add a track: `{"order": ["kick", "hats", …], "tracks": {"kick": {"colour": "rose"}, …}}`. A colour is one of the twelve names (rose, teal, amber, indigo, green, plum, olive, blue, coral, cyan, violet, lime). A track that is missing for a while (commented out of `song.ts`) keeps its place and colour there, and keys the app doesn't know are kept as they are. If it stops being valid JSON (a git merge can leave `<<<<<<<` lines in it), the tracks show in their own order and colours, the status pill says so, and **Reset layout** there writes the default one over it (Undo brings the old text back).
 
@@ -133,6 +133,7 @@ A choice and a switch aren't numbers. A choice is written by one of its names (`
 | `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }`. For a choice the unit is `"choice"` and the fallback a name (`lane.control("shape", "choice", "saw")`); for a switch, `"switch"` and `true` or `false` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
 | `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
+| `time.key` | the song's key, as a set of notes: for a kernel that follows the key, as a tuner does. It isn't a number, so only a kernel's `control<keyset>` input takes it: bit 0 is C, bit 1 C♯, … bit 11 B, and with no key all twelve are on (4095). Changing the key while the song plays reaches it at once, and rebuilds nothing |
 | `poly(notes, voice, { voices, mode, retrigger, steal, glide })` | plays a voice for each note at once (`voices`, 16); or one note at a time, each starting again (`mode: "mono"`) or sliding from the one held (`"legato"`) over `glide` seconds; `retrigger: false` carries a voice on into its next note; `steal` says which note stops when too many are held: `"oldest"`, `"quietest"` or `"none"`. Inside the voice, its note gives `pitch`, `gate`, `velocity`, `modWheel` and `keyCount` (how many notes its key has played on the lane, this one included: what `turns: "key"` counts) |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
 | `kernel(id, inputs)` | one kernel, such as `kernel("std:svf", { … })` |

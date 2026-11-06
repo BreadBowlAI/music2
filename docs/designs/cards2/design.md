@@ -156,7 +156,7 @@ Sources are the pages read on 2026-11-06.
 
 | Where | Key | Does |
 |---|---|---|
-| a knob | ↑ ↓ (→ ←) | 1% of its range; with ⇧ 0.1% |
+| a knob | ↑ ↓ (→ ←) | one step (1% of a plain range, a 1% ratio in Hz, 0.1 dB, a semitone); with ⇧ ten steps, as taste.md §5.2 says, which wins over this note's first draft (⇧ for 0.1%) |
 | | PageUp, PageDown | 10% |
 | | Home, End, ⌫ | its lowest, its highest, its default |
 | | Enter (double-click) | type a value: "−3", "2k", "120ms" |
@@ -437,7 +437,7 @@ This covers every component shipped today, from `std/src/*.ts` and `packs/@m2/*/
 
 | Layer | Gains | Count |
 |---|---|---|
-| SDK (`@m2/core` 2.4.0, a minor: nothing removed) | `view.picture`; `axis.lin`, `axis.log`, `axis.time`; `p.line`, `p.fill`, `p.bars`, `p.handle`, `p.mark`, `p.label`, `p.play`, `p.part`; `p.response`, `p.hit`, `p.waveform`; `live.spectrum`, `live.level`, `live.meter`, `live.history`, `live.playhead`, `live.value`, `live.scope`; `knob` | **23 words** (`words` is a field of `view.picture`) |
+| SDK (`@m2/core`'s next minor once one has shipped, else 2.4.0 with `editor.face` and track `key`'s `time.key`; nothing removed) | `view.picture`; `axis.lin`, `axis.log`, `axis.time`; `p.line`, `p.fill`, `p.bars`, `p.handle`, `p.mark`, `p.label`, `p.play`, `p.part`; `p.response`, `p.hit`, `p.waveform`; `live.spectrum`, `live.level`, `live.meter`, `live.history`, `live.playhead`, `live.value`, `live.scope`; `knob` | **23 words** (`words` is a field of `view.picture`) |
 | Descriptor and manifest | `editor.face`; a picture's `words`; a kernel's meter outputs in `m2pkg.toml` | **3 fields** |
 | The view | `ViewNode.face`; a `picture` view part (its words, each dot's knob ids, and fixed or not with its why) | **2 fields** |
 | Routes and the socket | `POST /api/graph/picture` (ask for a card's shapes while shown; it lasts as a scope's ask does, TAP-8); a `pictures` socket message; a tap ask's `kind` (`scope`, `spectrum`, `level`, `meter`) and its point | **1 route, 1 message**, and a changed ask |
