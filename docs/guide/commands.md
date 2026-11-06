@@ -61,10 +61,10 @@ List every kernel and its typed ports: std's, and those of the packs music2 come
 ## m2 bounce
 
 ```
-m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N] [--place track.lane@beat] [--threads N]
+m2 bounce <project> <asset-name> [--track KEY] [--export out] [--from S] [--seconds N] [--place track.lane@beat | --in-place] [--threads N]
 ```
 
-Render a track, named by its key (or the whole song), to a new `assets/<asset-name>.wav` (never over one that exists), optionally placing it as a clip on an audio lane (both by key). `--export` names which of the track's outputs to render (`out` unless you say). `--place keys.lane@beat` puts the new file on an audio lane, as one edit.
+Render a track, named by its key (or the whole song), to a new `assets/<asset-name>.wav` (never over one that exists), optionally placing it as a clip on an audio lane (both by key). `--export` names which of the track's outputs to render (`out` unless you say). `--place keys.lane@beat` puts the new file on an audio lane, as one edit. `--in-place` (with `--track`) is the app's Bounce to audio: a new audio track right after the track plays the file in a copy of its mixer channel, and the track is muted in the song, as one undo step, so the song sounds the same.
 
 ## m2 graph
 

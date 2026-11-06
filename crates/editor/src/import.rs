@@ -506,7 +506,12 @@ pub fn track_label(f: &Imported) -> String {
 /// by its hash, so the clip plays it from the start, with no `asset.missing` until the folder's
 /// watcher catches up.
 pub fn take_in(s: &mut Session, files: &[Imported]) -> Result<(), EditError> {
-    let paths: BTreeSet<PathBuf> = files.iter().map(|f| Path::new(ASSETS).join(f.asset.as_str())).collect();
+    take_in_assets(s, files.iter().map(|f| &f.asset))
+}
+
+/// [`take_in`] for files already named into `assets/`, by their names: a bounce's (RENDER-40).
+pub(crate) fn take_in_assets<'a>(s: &mut Session, assets: impl Iterator<Item = &'a AssetName>) -> Result<(), EditError> {
+    let paths: BTreeSet<PathBuf> = assets.map(|a| Path::new(ASSETS).join(a.as_str())).collect();
     let dir = s.accepted().project.dir.clone();
     let snapshot = Snapshot::read_paths(&dir, &paths, &|_| true, BTreeSet::new()).map_err(|e| EditError::Io(format!("{e:#}")))?;
     s.take_in_only(snapshot, &paths);

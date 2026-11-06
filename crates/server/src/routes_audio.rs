@@ -28,6 +28,12 @@ crate::api::routes! {
     POST "/api/graph/audio/track" => audio_track; writes, agents,
         "Add an audio track",
         r#"{"session": 7, "label": "Vox", "after": "keys"}"#;
+    POST "/api/graph/bounce" => bounce; writes, agents,
+        "Bounce a track to audio: render it, add an audio track after it playing the file in a copy of its channel, and mute it in the song, as one undo step (name: the file in assets/, else a free one)",
+        r#"{"session": 7, "track": "keys", "name": "keys-bounce"}"#;
+    POST "/api/graph/bounce/stop" => bounce_stop; reads, agents,
+        "Stop the bounce that is rendering: nothing is added, and no file is left",
+        r#"{}"#;
     POST "/api/graph/sample" => sample up to UPLOAD; writes, agents,
         "Give a recording on a card (a Sampler's file, or `setting` of the call) a WAV file on this computer",
         r#"{"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}"#;
@@ -146,6 +152,32 @@ async fn audio_track(State(s): S, Json(r): Json<TrackReq>) -> Result<Json<Value>
     let result = blocking(move || state.graph.add_audio_track(r.session, r.label, r.after)).await;
     s.graph_changed();
     Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct BounceReq {
+    session: u64,
+    track: String,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+/// Bounce to audio (RENDER-40): `{session, track, name?}`. A write, answered once the bounce is in
+/// the song (one undo step, "bouncing Keys") or refused: the edit with the new track's `module` and
+/// `label`, the track `muted` and the `asset`. `bounce` events say how far it is (`crate::bounce`).
+async fn bounce(State(s): S, Json(r): Json<BounceReq>) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    let result = blocking(move || crate::bounce::run(&state, r.session, r.track, r.name)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+/// Stop the bounce that is rendering (RENDER-40): it leaves no file, and its request answers that
+/// it was stopped. Answers `{stopped}`: whether no bounce renders now.
+async fn bounce_stop(State(s): S) -> Result<Json<Value>, ApiError> {
+    let state = s.clone();
+    let stopped = blocking(move || Ok(crate::bounce::stop(&state))).await?;
+    Ok(Json(serde_json::json!({"stopped": stopped})))
 }
 
 #[derive(Deserialize)]

@@ -393,6 +393,22 @@ impl App {
         self.write("/api/graph/fix", &json!({"session": self.session, "fix": fix, "as": w.by, "why": w.why}), true)
     }
 
+    /// `m2 bounce --in-place` while the app has the song open (AGENT-1, RENDER-40): `body`
+    /// (`{track, name}`) sent to the app's own Bounce to audio, as this agent, waiting while busy,
+    /// as every write does. The app's answer.
+    pub fn bounce(&mut self, mut body: Value) -> Result<Value> {
+        body["session"] = json!(self.session);
+        let (status, bytes) = self.call("POST", "/api/graph/bounce", Some(&body), true)?;
+        let v = json_of(status, "", &bytes);
+        if status != 200 {
+            bail!("{}", words(&v));
+        }
+        if let Some(done) = done_in_app(&v) {
+            say_after(done);
+        }
+        Ok(v)
+    }
+
     /// `m2 import` while the app has the song open (AGENT-1): `body` (`{paths, to}`) sent to the
     /// app's own import, as this agent, so the files come into the song only inside the change that
     /// lands (AGENT-3); waiting while busy, as every write does. The app's answer.

@@ -72,6 +72,20 @@ An example body:
 {"session": 7, "module": "bass", "lane": "cutoff", "beat": 16}
 ```
 
+### `POST /api/graph/bounce`
+
+Bounce a track to audio: render it, add an audio track after it playing the file in a copy of its channel, and mute it in the song, as one undo step (name: the file in assets/, else a free one). It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "track": "keys", "name": "keys-bounce"}
+```
+
+### `POST /api/graph/bounce/stop`
+
+Stop the bounce that is rendering: nothing is added, and no file is left.
+
 ### `POST /api/graph/clips`
 
 A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove or hits (the beat grid's steps). It writes the song: one undo step.
