@@ -58,7 +58,9 @@ impl Graph {
             m2_editor::sung::packages_measuring(&o.session, &m).map_err(plain)
         })?;
         let found = m2_runtime::measure::measure(&packages, &measure, &file, &[])?;
-        Ok(json!({"measure": measure, "asset": asset, "hop": found.hop, "rate": found.rate, "outputs": found.outputs, "values": found.values}))
+        Ok(
+            json!({"measure": measure, "asset": asset, "hop": found.hop, "rate": found.rate, "outputs": found.outputs, "values": found.values}),
+        )
     }
 
     /// `gesture`, a Find notes (VOX-43) given what its measure found in the clip's file, and its

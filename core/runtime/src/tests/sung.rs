@@ -115,7 +115,15 @@ const BEATS: f64 = 6.0;
 /// A sung file at 48 kHz, 3 s: E3 from 0.3 to 0.8 s, G3 from 1.0 to 1.5, A3 from 1.8 to 2.4, with
 /// a little vibrato; silence between.
 fn sung_file(dir: &Path) {
-    let midi = |t: f64| (if t < 0.9 { 52.0 } else if t < 1.65 { 55.0 } else { 57.0 }) + 0.3 * (std::f64::consts::TAU * 5.5 * t).sin();
+    let midi = |t: f64| {
+        (if t < 0.9 {
+            52.0
+        } else if t < 1.65 {
+            55.0
+        } else {
+            57.0
+        }) + 0.3 * (std::f64::consts::TAU * 5.5 * t).sin()
+    };
     let level = |t: f64| sung_between(0.3, 0.8)(t) + sung_between(1.0, 1.5)(t) + sung_between(1.8, 2.4)(t);
     audio::write_wav(&dir.join("a.wav"), &[singer(RATE, 3.0, &midi, &level)], RATE).unwrap();
 }
@@ -221,7 +229,10 @@ fn after_any_order_of_edits_the_live_lane_plays_the_exports_bits() {
     let path = |a: &str| Some(dir.join(a));
     let plain = {
         let mut cache = audio::Cache::with_renders_in(None);
-        played(&audio::AudioLane::build_in(&[the_clip(json!([]), None)], &path, &mut cache, &tempo, RATE as f64, 1, makers, None).unwrap(), len)
+        played(
+            &audio::AudioLane::build_in(&[the_clip(json!([]), None)], &path, &mut cache, &tempo, RATE as f64, 1, makers, None).unwrap(),
+            len,
+        )
     };
     let (a, b, c) = (notes(0.0, 1.0), notes(0.5, 2.0), notes(0.0, -1.5));
     for (n, order) in [vec![&a, &b], vec![&b, &a, &c], vec![&a, &c, &a]].into_iter().enumerate() {
@@ -247,7 +258,13 @@ fn after_any_order_of_edits_the_live_lane_plays_the_exports_bits() {
             for (i, (x, y)) in now.iter().zip(&before).enumerate().filter(|_| !order[..e].contains(sung)) {
                 let inside = phrases.iter().any(|p| (p.from..p.to).contains(&i));
                 let want = if inside { *y } else { plain[i] };
-                assert_eq!(x.to_bits(), want.to_bits(), "order {n}, edit {e}: frame {i} ({} s) plays what it played before (inside {inside}; plain {}, before {y}, now {x})", secs(i), plain[i]);
+                assert_eq!(
+                    x.to_bits(),
+                    want.to_bits(),
+                    "order {n}, edit {e}: frame {i} ({} s) plays what it played before (inside {inside}; plain {}, before {y}, now {x})",
+                    secs(i),
+                    plain[i]
+                );
             }
             // Made, then worked out again from the last chunk back: each new chunk after an old one
             // fades in, and is worked out once more when the old one before it is gone.

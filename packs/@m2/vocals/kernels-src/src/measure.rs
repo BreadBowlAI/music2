@@ -217,7 +217,9 @@ impl Notes {
         self.pieces.push((from, n));
         // A piece too short joins the one it touches nearer in pitch; alone, it is no note.
         loop {
-            let short = (0..self.pieces.len()).filter(|&i| self.pieces[i].1 - self.pieces[i].0 < self.shortest).min_by_key(|&i| self.pieces[i].1 - self.pieces[i].0);
+            let short = (0..self.pieces.len())
+                .filter(|&i| self.pieces[i].1 - self.pieces[i].0 < self.shortest)
+                .min_by_key(|&i| self.pieces[i].1 - self.pieces[i].0);
             let Some(i) = short else { break };
             if self.pieces.len() == 1 {
                 self.pieces.clear();

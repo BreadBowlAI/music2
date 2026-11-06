@@ -22,7 +22,7 @@ impl File {
     /// `asset`'s file, read `cap` frames at a time, keeping `back` before each request.
     pub fn new(asset: Asset, cap: usize, back: usize) -> File {
         let cap = cap.max(4 * back + 16);
-        File { asset, cap, back, base: 0, held: 0, x: [vec![0.0; cap], vec![0.0; cap]], mono: vec![0.0; cap], }
+        File { asset, cap, back, base: 0, held: 0, x: [vec![0.0; cap], vec![0.0; cap]], mono: vec![0.0; cap] }
     }
 
     /// The file's own rate (0 for one that is missing).
@@ -87,7 +87,9 @@ impl File {
         let i = pos.floor() as i64;
         let t = (pos - i as f64) as f32;
         let x = &self.x[c];
-        let at = |k: i64| if k < 0 || k >= len { 0.0 } else { usize::try_from(k - self.base).ok().and_then(|i| x.get(i)).copied().unwrap_or(0.0) };
+        let at = |k: i64| {
+            if k < 0 || k >= len { 0.0 } else { usize::try_from(k - self.base).ok().and_then(|i| x.get(i)).copied().unwrap_or(0.0) }
+        };
         let (y0, y1, y2, y3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
         let c1 = 0.5 * (y2 - y0);
         let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;

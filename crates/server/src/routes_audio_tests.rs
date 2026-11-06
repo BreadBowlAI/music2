@@ -374,13 +374,15 @@ fn find_notes_through_the_server() {
     )
     .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
-    let (status, body) = get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Anotes"));
+    let (status, body) =
+        get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Anotes"));
     assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
     let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
     assert_eq!((m["hop"].as_u64(), m["rate"].as_f64()), (Some(256), Some(48_000.0)));
     assert_eq!(m["outputs"][3], "note");
     assert_eq!(m["values"][3].as_array().unwrap().len(), 24_000usize.div_ceil(256));
-    let (status, body) = get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Avoice"));
+    let (status, body) =
+        get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Avoice"));
     assert!(status == 400 && String::from_utf8_lossy(&body).contains("isn't a measure"), "{status} {}", String::from_utf8_lossy(&body));
     let gesture = serde_json::json!({"session": session, "gesture": {"op": "find_notes", "clip": {"module": "vox", "lane": "clips", "id": "a"},
         "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}});

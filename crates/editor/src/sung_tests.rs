@@ -51,7 +51,12 @@ fn measured(runs: &[(usize, usize, f32)]) -> Arc<Measured> {
         centre[a..b].fill(c);
     }
     let names = ["hz", "clarity", "level", "note", "centre"].map(String::from).to_vec();
-    Arc::new(Measured { hop: 256, rate: RATE as f64, outputs: names, values: vec![vec![0.0; hops], vec![0.0; hops], vec![0.0; hops], note, centre] })
+    Arc::new(Measured {
+        hop: 256,
+        rate: RATE as f64,
+        outputs: names,
+        values: vec![vec![0.0; hops], vec![0.0; hops], vec![0.0; hops], note, centre],
+    })
 }
 
 fn find(found: Arc<Measured>) -> Gesture {

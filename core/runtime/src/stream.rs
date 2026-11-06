@@ -1078,9 +1078,10 @@ impl AudioLane {
             Some(OLD) => {
                 let chunk = self.ring.chunk;
                 let (start, end) = (k * chunk, (k + 1) * chunk);
-                self.clips.iter().filter(|c| c.at < end && c.at + c.len > start).all(|c| {
-                    c.phrases_done((start.max(c.at) - c.at) as usize, (end.min(c.at + c.len) - c.at) as usize)
-                })
+                self.clips
+                    .iter()
+                    .filter(|c| c.at < end && c.at + c.len > start)
+                    .all(|c| c.phrases_done((start.max(c.at) - c.at) as usize, (end.min(c.at + c.len) - c.at) as usize))
             }
             Some(FADED) => k == 0 || self.ring.kind_of(k - 1) != Some(OLD),
             _ => false,

@@ -24,14 +24,14 @@ pub mod aim;
 pub mod fft;
 pub mod file;
 pub mod measure;
-pub mod psola;
 pub mod phrase;
+pub mod psola;
 pub mod yin;
 
 pub use aim::Snap;
 pub use measure::Notes;
-pub use psola::{LATENCY_S, Shift};
 pub use phrase::Voice;
+pub use psola::{LATENCY_S, Shift};
 pub use yin::Pitch;
 
 abi!();

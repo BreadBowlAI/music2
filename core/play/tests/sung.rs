@@ -37,8 +37,12 @@ fn misses(p: &Player) -> u64 {
 /// The frequency of the left channel of `x`'s second half, from its upward zero crossings.
 fn hz(x: &[[f32; 2]]) -> f64 {
     let x: Vec<f32> = x[x.len() / 2..].iter().map(|f| f[0]).collect();
-    let ups: Vec<f64> =
-        x.windows(2).enumerate().filter(|(_, w)| w[0] < 0.0 && w[1] >= 0.0).map(|(i, w)| i as f64 + (w[0] / (w[0] - w[1])) as f64).collect();
+    let ups: Vec<f64> = x
+        .windows(2)
+        .enumerate()
+        .filter(|(_, w)| w[0] < 0.0 && w[1] >= 0.0)
+        .map(|(i, w)| i as f64 + (w[0] / (w[0] - w[1])) as f64)
+        .collect();
     (ups.len() - 1) as f64 / ((ups[ups.len() - 1] - ups[0]) / SR as f64)
 }
 

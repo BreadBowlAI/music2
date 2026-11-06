@@ -925,7 +925,15 @@ mod sung {
         for sr in RATES {
             let song = Song {
                 secs: 2.2,
-                midi: &|t| if t < 0.7 { 60.0 } else if t < 1.25 { 64.0 } else { 67.0 },
+                midi: &|t| {
+                    if t < 0.7 {
+                        60.0
+                    } else if t < 1.25 {
+                        64.0
+                    } else {
+                        67.0
+                    }
+                },
                 vibrato: 0.25,
                 formants: AH,
                 s: Some((1.2, 1.35)),
@@ -1043,7 +1051,10 @@ mod sung {
         let notes = [[0.3, 0.6, 56.3, 1.5, 0.5]];
         let whole = voiced_split(sr, vec![x.clone(), x.clone()], sr, &[[0.0, 0.0]], (9_600, 62_400), &notes, BLOCK);
         for split in [1, 77] {
-            assert!(voiced_split(sr, vec![x.clone(), x.clone()], sr, &[[0.0, 0.0]], (9_600, 62_400), &notes, split) == whole, "split by {split}");
+            assert!(
+                voiced_split(sr, vec![x.clone(), x.clone()], sr, &[[0.0, 0.0]], (9_600, 62_400), &notes, split) == whole,
+                "split by {split}"
+            );
         }
     }
 
@@ -1113,7 +1124,16 @@ mod sung {
         for _ in 0..40 {
             let pick = |rng: &mut Lcg| EXTREMES[rng.next() as usize % EXTREMES.len()] as f64;
             let x = vec![pick(&mut rng) as f32; 4_000];
-            let values = Vec::leak(vec![pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng)]);
+            let values = Vec::leak(vec![
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+                pick(&mut rng),
+            ]);
             let time_map = Vec::leak(vec![[pick(&mut rng), pick(&mut rng)], [pick(&mut rng), pick(&mut rng)]]);
             let assets = Vec::leak(vec![native::asset(48_000.0, vec![x])]);
             let mut v = Host::<Voice>::of(Cfg { flags: OFFLINE, values, assets, time_map, ..Cfg::new(48_000.0, BLOCK, 1) });

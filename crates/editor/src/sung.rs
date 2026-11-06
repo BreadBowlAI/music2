@@ -48,7 +48,9 @@ pub fn refusal(c: &AudioClip) -> Option<String> {
 /// `note` number, its `centre` its pitch (VOX-43).
 pub fn found(c: &AudioClip, measure: &str, m: &Measured, tempo: &TempoMap) -> Result<Vec<Sung>, EditError> {
     let (Some(note), Some(centre)) = (m.output("note"), m.output("centre")) else {
-        return Err(EditError::Rejected(format!("`{measure}` doesn't find notes: Find notes needs a measure that writes `note` and `centre`")));
+        return Err(EditError::Rejected(format!(
+            "`{measure}` doesn't find notes: Find notes needs a measure that writes `note` and `centre`"
+        )));
     };
     let span = m2_runtime::audio::file_span(c, tempo);
     let mut out = vec![];
@@ -143,7 +145,9 @@ fn packages_with(s: &Session, ids: &[&str]) -> Result<PackageSet, EditError> {
     let view = set.view_of(&packs).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
     set.show(&view);
     if set.offline_decl(measure).is_none_or(|d| d.hop == 0) {
-        return Err(EditError::Rejected(format!("`{measure}` isn't a measure: a measure is an offline kernel with a hop, as `@m2/vocals:notes`")));
+        return Err(EditError::Rejected(format!(
+            "`{measure}` isn't a measure: a measure is an offline kernel with a hop, as `@m2/vocals:notes`"
+        )));
     }
     Ok(set)
 }
