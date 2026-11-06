@@ -1550,6 +1550,8 @@ export default song(({ lane, time }) => {
     track("m2-probe", { name: "m2 probe" }, ({ lane }) => plugin("clap:m2.probe", { notes: lane.notes("notes"), key: "m2-probe" })),
     // an audio track added
     track("audio", { name: "Audio" }, ({ lane }) => lane.audio("clips")),
+    // a mono track bounced
+    track("keys-audio", { name: "Keys audio" }, ({ lane }) => lane.audio("clips", 1)),
     // a Reverb bus added
     bus("bus", { name: "Reverb" }, ({ input }) => reverb(input, { mix: 1 })),
     // a Delay bus added

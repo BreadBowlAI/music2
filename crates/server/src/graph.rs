@@ -38,6 +38,7 @@
 
 mod actor;
 pub mod audition;
+pub(crate) mod bounce;
 pub mod busy;
 pub mod clips;
 pub(crate) mod compare;
