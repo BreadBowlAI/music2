@@ -246,6 +246,15 @@ The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1,
 
 A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a colour. Lengths count characters, and no text may hold a control character or a line break.
 
+**Measured from the sound.** Two more words draw what your sound really does, not your own maths. music2 makes a copy of the call at the card's values (a knob being dragged too), plays it on its own, away from what you hear, and fills the shape in for you:
+
+| Word | Draws | Axes |
+|---|---|---|
+| `p.response({ tone, name })` | the curve of an EQ, a filter or an echo: a click played through the copy, and how loud each frequency comes out | `x` in `hz`, `y` in `db` |
+| `p.hit({ note, seconds, tone })` | one note of an instrument: `note` (60 if left out) held for `seconds` (the x axis's end if left out, 4 at most), drawn as its wave | `x` in `seconds` (`axis.time`), `y` in `bipolar` (−1 to 1) |
+
+Each may be in a picture once. They follow every drag at once, and the same values are measured only once. A response is exact for a sound that stays the same however loud it is (EQs, filters, delays); for one that changes with level (a compressor, drive), draw your own curve. A response needs a sound that takes audio in, and a hit one that plays notes: otherwise the picture greys and says why. A curve that is measured can't be wrong about the sound, so use it wherever it fits: `draw: (v, p) => [p.response(), p.handle(v.freq, v.gain, { x: "freq", y: "gain" })]`.
+
 **A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. The wheel and the arrow keys step a value as its knob's do, and a run of steps is one undo step. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
 
 ```ts
