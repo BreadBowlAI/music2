@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| **Status** | Proposed, for the owner's yes (AGENTS.md rule 11). Nothing here is built. Revised after the skeptic's review (V1 to V23). Rules: VOX-1 to VOX-n in the contract, written by the tracks of §8. |
+| **Status** | Accepted by the owner on 2026-11-06 ("yes to all": D1 to D12 as recommended in §9). Revised after the skeptic's review (V1 to V23). Rules: VOX-1 to VOX-n in the contract, written by the tracks of §8. |
 | **Written** | 2026-11-06, from `main` at 8d37e209 |
-| **Serves** | gap 50 (pitch correction), gap 51 (editing a vocal's notes), gap #25 (comping). It also gives gap 52 (slicing), gap 54 (vocal sounds) and gap #16 (the key in code) parts they need. Gaps 50 to 54 are on branch `gaps2`, not yet on `main` |
+| **Serves** | gap 50 (pitch correction), gap 51 (editing a vocal's notes), gap #25 (comping). It also gives gap 52 (slicing), gap 54 (vocal sounds) and gap #16 (the key in code) parts they need. Gaps 50 to 54 are in [gaps.md](../../gaps.md) |
 
 **In short**
 - **Tune** is a new effect for a voice. It moves each sung note onto the nearest note of the song's key. One knob,
