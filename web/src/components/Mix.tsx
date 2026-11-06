@@ -648,8 +648,8 @@ function StripMenu({
               Make it a kit
             </MenuRow>
           )}
-          {/* RENDER-40: a bus plays what it is sent, and a track muted in the song would bounce silence. */}
-          {!bus && !inSong && (
+          {/* RENDER-40: a bus too ("print the drums"); a track muted in the song would bounce silence. */}
+          {!inSong && (
             <MenuRow
               icon={<AudioWaveform size={14} />}
               disabled={!!locked}

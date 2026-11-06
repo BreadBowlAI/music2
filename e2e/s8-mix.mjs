@@ -299,7 +299,14 @@ check(!!(await page.$('[data-view-tab="mix"][aria-selected="true"]')), "and the 
 await page.click(`${strip("keys")} [data-testid=strip-name]`, { button: "right" });
 const items = await page.waitForSelector("[data-testid=strip-menu]", { timeout: 2000 }).then(() => page.$$eval("[data-testid=strip-menu] [role=menuitem]", (els) => els.map((e) => e.textContent))).catch(() => []);
 check(
-  items.length === 5 && items[0] === "Rename" && items[1] === "Change instrument…" && items[2].startsWith("Colour") && items[3].startsWith("Mute in song") && items[4].startsWith("Edit in code"),
+  // Bounce to audio (RENDER-40) after Change instrument…, as the track menu has it after Duplicate.
+  items.length === 6 &&
+    items[0] === "Rename" &&
+    items[1] === "Change instrument…" &&
+    items[2].startsWith("Bounce to audio") &&
+    items[3].startsWith("Colour") &&
+    items[4].startsWith("Mute in song") &&
+    items[5].startsWith("Edit in code"),
   `a right-click opens its menu: ${items}`,
 );
 // Its Edit in code opens song.ts at the channel, which ⌥4 doesn't: the row names no key.

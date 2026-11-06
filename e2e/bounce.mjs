@@ -2,7 +2,8 @@
 // audio, with its words, and so does its Mix strip's. A click renders Keys, adds Keys audio right
 // under it playing the file, and mutes Keys in the song: one undo step, "bouncing Keys", the toast
 // saying so with Undo, the new track selected. Played, the new track's meter moves. ⌘Z takes it all
-// back: every file of the song as it was, the bounced file kept in assets/. The lint, and a picture.
+// back: every file of the song as it was, the bounced file kept in assets/. A long bounce shows a box
+// saying how far it is, and its Stop adds nothing and leaves no file. The lint, and a picture.
 //
 //   node e2e/bounce.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -76,5 +77,23 @@ check(await until(() => !fs.existsSync(`${PROJ}/tracks/keys-audio.ts`)), "⌘Z t
 check(await until(() => files.every((f) => (fs.existsSync(`${PROJ}/${f}`) ? read(f) : null) === before[f])), "and puts song.ts, Keys and the layout back as they were");
 check(await until(async () => (await state()).overlays?.heard?.keys !== "muted-in-song"), "Keys is heard again");
 check(fs.existsSync(`${PROJ}/assets/keys-bounce.wav`), "the bounced file stays in assets/");
+
+// ---------------------------------------------------------------- a long bounce shows, and Stop takes it back
+
+// Keys's clip made 20000 beats long (2.7 hours): its render takes many seconds on any computer.
+const chords = read("data/keys/chords.json");
+const long = chords.replace('"start": 0, "length": 32, "notes"', '"start": 0, "length": 20000, "notes"');
+check(long !== chords, "Keys's clip, made long by an outside edit");
+const rev = (await state()).view.revision;
+fs.writeFileSync(`${PROJ}/data/keys/chords.json`, long);
+await until(async () => (await state()).view.revision > rev, 15000);
+await page.click('[data-track-menu="keys"]');
+await page.waitForSelector(row);
+await page.click(row);
+check(await until(() => has("[data-testid=bouncing]"), 8000), "a box says it is bouncing");
+check((await page.$eval("[data-testid=bouncing]", (e) => e.textContent)).includes("Bouncing Keys to audio"), "in its words");
+await page.click("[data-testid=bounce-stop]");
+check(await until(async () => (await toasts()).some((t) => t.includes("Stopped bouncing Keys: nothing was added")), 15000), `Stop says what it did: ${(await toasts()).join(" | ")}`);
+check(!(await has("[data-testid=bouncing]")) && !fs.existsSync(`${PROJ}/tracks/keys-audio.ts`) && !fs.existsSync(`${PROJ}/assets/keys-bounce-2.wav`), "nothing is added, and no file is left");
 
 done(errors);

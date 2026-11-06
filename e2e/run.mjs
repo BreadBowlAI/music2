@@ -178,7 +178,7 @@ export const SUITES = [
   ["kits", "fix", { expect: 18, s: 6 }],
   ["beat-grid", "fix", { expect: 62, s: 9 }],
   ["make-kit", "fix", { expect: 24, s: 8 }],
-  ["bounce", "fix", { expect: 21, s: 4 }],
+  ["bounce", "fix", { expect: 26, s: 6 }],
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],

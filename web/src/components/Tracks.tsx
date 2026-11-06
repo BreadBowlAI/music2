@@ -229,7 +229,8 @@ export async function bounceTrack(module: string) {
     arrived(r.module, "clips");
     toast(`Bounced ${name} to audio: ${r.label} plays it, and ${name} is muted in the song`, undoAction(graph.session, r.step));
   } catch (error) {
-    toast(`Couldn't bounce ${name}: ${message(error)}`);
+    const said = message(error);
+    toast(said.startsWith("The bounce was stopped") ? `Stopped bouncing ${name}: nothing was added` : `Couldn't bounce ${name}: ${said}`);
   }
 }
 
@@ -677,8 +678,8 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
-      {/* RENDER-40: a bus plays what it is sent, and a track muted in the song would bounce silence. */}
-      {!track?.bus && !inSong && (
+      {/* RENDER-40: a bus too ("print the drums"); a track muted in the song would bounce silence. */}
+      {!inSong && (
         <MenuRow
           icon={<AudioWaveform size={14} />}
           disabled={!!locked}
