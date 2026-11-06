@@ -808,9 +808,9 @@ impl Clip {
         }
         let got = if oa < oz { old.piece((oa - old.at) as usize, (oz - old.at) as usize, s).map(drop) } else { Ok(()) };
         if oa < oz && got.is_ok() {
-            for c in 0..self.channels {
+            for (c, v) in vals.iter_mut().enumerate().take(self.channels) {
                 let from = &s.vals[c.min(old.channels - 1)];
-                vals[c][(oa - a) as usize..(oz - a) as usize].copy_from_slice(&from[..(oz - oa) as usize]);
+                v[(oa - a) as usize..(oz - a) as usize].copy_from_slice(&from[..(oz - oa) as usize]);
             }
         }
         s.vals = vals;
