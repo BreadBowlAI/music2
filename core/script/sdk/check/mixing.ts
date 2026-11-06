@@ -4,7 +4,7 @@
 // stops refusing it fails the check too.
 
 import { db, hz, khz, ms, type Audio } from "@m2/core";
-import { deesser, eq, gate, multiband, transient } from "@m2/mixing";
+import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
 
 declare const x: Audio, kick: Audio, snare: Audio;
 
@@ -15,6 +15,10 @@ export const mixing: Audio[] = [
   transient(x, { attack: 6, sustain: 0 }),
   deesser(x, { freq: 6000, threshold: -30, amount: 6 }),
   multiband(x),
+  pump(x, { depth: -8, shape: 0.5 }),
+  pump(x),
+  // Pump's rate is a menu of note lengths; its depth takes dB.
+  pump(x, { rate: "1/8", depth: db(-12), shape: 1 }),
   // A band's shape is a menu, its on a switch; its numbers take units.
   eq(x, { shape3: "high shelf", freq3: khz(4), gain3: db(3), q3: 0.7, on1: true, shape1: "low cut", freq1: hz(80) }),
   // A gate keyed by another track's sound, with its values.
@@ -32,4 +36,8 @@ export const mixing: Audio[] = [
   gate(x, kick, snare),
   // @ts-expect-error: a gate's key is a sound, not a number.
   gate(x, 0.5),
+  // @ts-expect-error: Pump's rate is one of its note lengths.
+  pump(x, { rate: "1/3" }),
+  // @ts-expect-error: Pump takes no key: it follows the song's beats.
+  pump(x, kick),
 ];

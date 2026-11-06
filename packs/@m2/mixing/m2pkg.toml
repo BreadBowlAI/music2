@@ -1,19 +1,22 @@
 [package]
 name = "@m2/mixing"
-version = "1.0.0"
+version = "1.1.0"
 license = "MIT OR Apache-2.0"
-description = "music2's mixing tools: an eight-band parametric EQ, a gate, a transient shaper, a de-esser and a multiband compressor"
+description = "music2's mixing tools: an eight-band parametric EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["mixing", "eq", "gate", "transient", "de-esser", "multiband", "compressor", "dynamics"]
+tags = ["mixing", "eq", "gate", "transient", "de-esser", "multiband", "compressor", "dynamics", "pump", "sidechain"]
 # Its own kernels (PACK-21, PACK-26), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/
 # is no part of the pack (PACK-20).
 wasm = "kernels/mixing.wasm"
 
 [dependencies]
-# @m2/core 2, the pack contract (PACK-22): any 2.x runs it, and a change to @m2/core that would
-# break it is a 3.0.0. It uses none of std's code, so it needs no std.
-"@m2/core" = "2"
+# @m2/core 2, the pack contract (PACK-22), from 2.3, whose inputs a call may leave out (the gate's
+# key, PKG-18); a change to @m2/core that would break it is a 3.0.0. Pump is std's blocks (an LFO
+# of the song's beats, its math and duck, PACK-28), whose duck may be called with no side since std
+# 0.9's track sidechain; the rest uses none of std's code.
+"@m2/core" = "2.3"
+std = "0.9"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/mixing:eq", …)`.
