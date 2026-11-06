@@ -907,6 +907,7 @@ impl AudioLane {
         let stretch = makers.stretch;
         let mut found = vec![];
         let mut phrases = vec![];
+        let mut unheard = vec![];
         for (i, c) in clips.iter().enumerate() {
             let Some(path) = asset_path(&c.asset) else { continue };
             match cache.wav(&path) {
@@ -915,9 +916,10 @@ impl AudioLane {
                     // Its edited phrases, when its `render` is a kernel the song has (RENDER-30b).
                     let kernel = c.render.as_deref().and_then(|id| makers.render(id));
                     let specs = kernel.as_ref().map(|_| phrases_of(c, tempo, sample_rate)).unwrap_or_default();
-                    // Edits that can't play are said, never dropped in silence (the review's S8).
+                    // Edits that can't play are said, never dropped in silence (the review's S8): by
+                    // the lane, so each plan that plays it is told (a lane a build keeps too).
                     if c.render.is_some() && c.sung.iter().any(m2_song::Sung::edited) && specs.is_empty() {
-                        tell.report.faults().report(tell.fault(Code::NotesUnheard, i as u32));
+                        unheard.push(i as u32);
                     }
                     let mut made = vec![];
                     for p in &specs {
@@ -986,6 +988,9 @@ impl AudioLane {
         }
         let mut lane = AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone()), Some(tell.clone()));
         lane.warps = warps;
+        for i in unheard {
+            lane.fault(Code::NotesUnheard, i);
+        }
         let lane = Arc::new(lane);
         cache.lanes.insert(key, lane.clone());
         Ok(lane)

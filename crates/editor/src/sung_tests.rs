@@ -265,11 +265,19 @@ fn a_set_from_before_anothers_change_to_its_lane_is_refused() {
     let mut c = the_clip(&s);
     c.sung[1].straighten = 0.5;
     let set = |c: &AudioClip| Gesture::Set { lane: vox(), put: vec![serde_json::to_value(c).unwrap()], delete: vec![] };
+    // An agent straightens a note while the musician drags another.
+    s.act_as(m2_session::Source::Agent("Claude".into()), None);
     edit(&mut s, &set(&c)).unwrap();
+    s.act_as(m2_session::Source::Page, None);
     let mut drag = c.clone();
     drag.sung[1].straighten = 0.0;
     drag.sung[0].move_by = 2.0;
     let late = crate::clips::edit_since(&mut s, &set(&drag), "tx-late", Some(base));
-    assert!(matches!(late, Err(crate::EditError::Changed(_))), "{:?}", late.map(|d| d.edited));
+    let Err(why @ crate::EditError::Changed(_)) = late else { panic!("refused as changed since: {:?}", late.map(|d| d.edited)) };
+    let words = why.to_string();
+    assert!(
+        words.contains("the agent Claude changed it") && words.contains("try again"),
+        "the refusal names who changed the lane: {words}"
+    );
     assert_eq!(the_clip(&s).sung[1].straighten, 0.5, "the other change stays");
 }
