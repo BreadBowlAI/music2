@@ -51,8 +51,16 @@ fn table() -> Value {
 struct SongKeyReq {
     session: u64,
     /// `{root, scale}`, or null for no key: read by the edit, so one that doesn't read is
-    /// refused in words.
-    key: Option<Written>,
+    /// refused in words. Other fields are ignored, so the timeline's key, posted back as it is
+    /// published, reads; the file's own `key` takes no other field (FMT-13).
+    key: Option<KeyAsked>,
+}
+
+/// A key as a request gives it: its root and its scale, whatever else it says.
+#[derive(Deserialize)]
+struct KeyAsked {
+    root: String,
+    scale: String,
 }
 
 /// The song's key (VOX-10): `{session, key: {root, scale} | null}`, written into
@@ -60,7 +68,9 @@ struct SongKeyReq {
 /// write. Answers `{file, before, after, revision}`.
 async fn song_key(State(s): S, Json(r): Json<SongKeyReq>) -> ApiResult {
     let state = s.clone();
-    let result = crate::caller::blocking(move || state.graph.song_key(r.session, r.key)).await.map_err(anyhow::Error::from)?;
+    let result = crate::caller::blocking(move || state.graph.song_key(r.session, r.key.map(|k| Written { root: k.root, scale: k.scale })))
+        .await
+        .map_err(anyhow::Error::from)?;
     s.graph_changed();
     Ok(Json(result?))
 }

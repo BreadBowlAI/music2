@@ -91,5 +91,9 @@ fn a_key_that_doesnt_read_is_refused_in_words() {
     let (status, answer) = post(json!({"root": "d♭", "scale": "Major Pentatonic"}));
     assert_eq!((status, &answer["after"]), (200, &json!("C♯ major pentatonic")), "{answer}");
     assert!(arrangement().contains("\"key\": {\"root\": \"C#\", \"scale\": \"major-pentatonic\"}"), "{}", arrangement());
+    // The timeline's key, posted back as it is published (its name, notes, snap and chords too), is
+    // read by its root and scale.
+    let (status, answer) = post(json!({"root": "A", "scale": "minor", "name": "A minor", "notes": [9, 11, 0, 2, 4, 5, 7]}));
+    assert_eq!((status, &answer["after"]), (200, &json!("A minor")), "{answer}");
     let _ = std::fs::remove_dir_all(&dir);
 }
