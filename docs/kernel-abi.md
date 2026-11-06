@@ -186,7 +186,7 @@ A kernel music2 runs off the audio thread, to make something from a file, never 
 
 | Part | Rule |
 |---|---|
-| Manifest | `offline = true` on its `[[kernel]]`. No inputs, one `audio` output. `audio<*>` gets the source's channels |
+| Manifest | `offline = true` on its `[[kernel]]`. No inputs, one `audio` output (a measure: controls, below). `audio<*>` gets the source's channels |
 | Song code | can't call it: the error `kernel.offline`, at the call. No song's graph has it |
 | `flags` | bit 0 set |
 | Source | its asset 0, read from the file on disk ([held as **disk**](#the-asset-import)), never whole |
@@ -194,6 +194,7 @@ A kernel music2 runs off the audio thread, to make something from a file, never 
 | Time map | `time_map_len` pairs of f64 at `time_map`: (source seconds, output seconds from the output's start), in order. Between two pairs, time runs in a straight line. Before the first and after the last, the nearest line goes on. One pair: speed 1 through it. None: the source as it is |
 | A run | one sandbox, born, sealed and prewarmed as any. Then `k_process(state, io, 0, n)` again and again, `n` at most `max_block`: each call writes the next `n` frames of the output. The host stops when it has the frames it wants |
 | Output | goes to its sink a block at a time. The host never holds the source or the output whole |
+| A measure | `hop = N` on its `[[kernel]]` (since track `sung`, VOX-41): its outputs are controls, one or more, and no audio. It runs at its source's own rate, with no time map, and each frame it writes is its numbers at the source's frame `k × N`: ⌈frames / N⌉ frames in all. `@m2/vocals:notes` is one |
 | When | live, on the session's stretch thread, one run at a time in the order asked, while what it has made already plays; a run no longer wanted is stopped between calls. Offline (an export, a range render), before the render plays |
 
 The five rules hold for offline kernels too: memory only at birth, a reset that takes none, and the rest.

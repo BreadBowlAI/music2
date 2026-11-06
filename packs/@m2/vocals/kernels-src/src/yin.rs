@@ -67,8 +67,30 @@ pub struct Pitch {
 }
 
 impl Pitch {
-    fn span(&self) -> usize {
+    /// The samples a reading looks at: `window` and a longest period before it, and two more.
+    pub fn span(&self) -> usize {
         self.ring.len()
+    }
+
+    /// The samples each difference sums over: the longest period, 1/70 s.
+    pub fn window(&self) -> usize {
+        self.window
+    }
+
+    /// The reading of `samples`, the mono sum's last [`Self::span`] samples, oldest first (fewer
+    /// are silence before them), as a hop reads its ring: `hz`, `clarity` and `level`. How the
+    /// offline kernels read a file at a hop they choose (VOX-42, VOX-45): the same numbers as a
+    /// reading of the same samples while playing.
+    pub fn read_window(&mut self, samples: &[f32]) -> (f32, f32, f32) {
+        let span = self.span();
+        let n = samples.len().min(span);
+        self.ring[..span - n].fill(0.0);
+        for (r, &x) in self.ring[span - n..].iter_mut().zip(&samples[samples.len() - n..]) {
+            *r = sane(x);
+        }
+        self.at = 0;
+        self.read();
+        (self.hz, self.clarity, self.level)
     }
 
     /// One reading, from the ring.

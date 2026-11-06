@@ -86,9 +86,19 @@ An example body:
 
 Stop the bounce that is rendering: nothing is added, and no file is left.
 
+### `GET /api/graph/clip/measure`
+
+What a measure finds in an audio file, every hop, as bytes: a u32 header length, a JSON header (hop, rate, hops, outputs), then each output's numbers as f32. @m2/vocals:notes gives the voice's pitch (hz), how sure (clarity), its level, each note's number and its sung pitch (centre); outputs (a comma list) picks some.
+
+Its query, as JSON:
+
+```json
+{"session": 7, "asset": "vox.wav", "measure": "@m2/vocals:notes", "outputs": "hz,clarity,level"}
+```
+
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove or hits (the beat grid's steps). It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove, hits (the beat grid's steps) or find_notes (a voice's notes). It writes the song: one undo step.
 
 An example body:
 

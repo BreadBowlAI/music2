@@ -39,6 +39,9 @@ const KEPT: Duration = Duration::from_secs(2);
 const FADING: Duration = Duration::from_millis(200);
 /// How often the thread looks again with nothing to do.
 const IDLE: Duration = Duration::from_millis(10);
+/// How far along the transport's path a chunk is never worked out again (RENDER-30b), in seconds:
+/// the sound thread may be about to read it.
+const GUARD: f64 = 0.05;
 
 struct Entry {
     module: String,
@@ -115,7 +118,9 @@ impl Disk {
             let (lanes, at) = self.snapshot();
             let urgent = (!self.paused.load(Ordering::Relaxed)).then(|| most_urgent(&lanes, &at)).flatten();
             match urgent {
-                Some((lane, k, wanted)) => {
+                // Asked again as it is stored, where playback is then (the review's S5).
+                Some((lane, k, _, true)) => lane.refresh_unless(k, &|k| soon(&lane, &self.at()).contains(&k)),
+                Some((lane, k, wanted, false)) => {
                     lane.fill_chunk(k, &|x| wanted.contains(&x));
                 }
                 None => {
@@ -125,6 +130,15 @@ impl Disk {
                 }
             }
         }
+    }
+
+    /// Where playback goes, as it is now.
+    fn at(&self) -> At {
+        let mut st = self.state();
+        let (heading, now) = (self.heading)();
+        st.left.retain(|l| l.0.elapsed() < FADING);
+        let left = st.left.iter().map(|l| l.1).collect();
+        At { beat: st.hint.unwrap_or(heading), now, looping: st.looping, left }
     }
 
     /// Every lane alive, those of the plan sent last first; and where playback goes.
@@ -316,10 +330,32 @@ pub(crate) fn wanted(lane: &AudioLane, at: &At) -> Vec<u64> {
     out
 }
 
+/// The chunks of `lane` the sound thread may read within [`GUARD`] along the transport's path
+/// (through a loop's wrap), from where playback is, where it is about to be, and where recent seeks
+/// left from: none of them is worked out again (RENDER-30b).
+pub(crate) fn soon(lane: &AudioLane, at: &At) -> Vec<u64> {
+    let (c, guard) = (lane.chunk(), (GUARD * lane.rate()) as u64);
+    let looped = at.looping.map(|(a, b)| (lane.frame_of(a), lane.frame_of(b))).filter(|&(s, e)| e > s);
+    let mut out = vec![];
+    for b in [at.now, at.beat].into_iter().chain(at.left.iter().copied()) {
+        let p = lane.frame_of(b);
+        match looped {
+            Some((s, e)) if p < e && p + guard > e => {
+                out.extend(p / c..e.div_ceil(c));
+                out.extend(s / c..(s + guard - (e - p)).div_ceil(c));
+            }
+            _ => out.extend(p / c..(p + guard).div_ceil(c)),
+        }
+    }
+    out
+}
+
 /// The most urgent chunk a lane lacks and can fill now (a render being made may not have made its
 /// frames yet): the lowest rank in its wanted list, lanes of the plan sent last first. With the
-/// lane and its whole wanted list, which its fill must not evict.
-fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64, Vec<u64>)> {
+/// lane and its whole wanted list, which its fill must not evict. Else the most urgent chunk to
+/// work out again: one worked out while a phrase it reads wasn't whole, which now is, and which
+/// the sound thread isn't about to read (`true`, RENDER-30b).
+fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64, Vec<u64>, bool)> {
     let wants: Vec<Vec<u64>> = lanes.iter().map(|l| wanted(l, at)).collect();
     let most = wants.iter().map(Vec::len).max().unwrap_or(0);
     for rank in 0..most {
@@ -328,9 +364,53 @@ fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64
                 && !l.ready(k)
                 && l.can_fill(k)
             {
-                return Some((l.clone(), k, w.clone()));
+                return Some((l.clone(), k, w.clone(), false));
+            }
+        }
+    }
+    for rank in 0..most {
+        for (l, w) in lanes.iter().zip(&wants) {
+            if let Some(&k) = w.get(rank)
+                && l.stale(k)
+                && !soon(l, at).contains(&k)
+            {
+                return Some((l.clone(), k, w.clone(), true));
             }
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use m2_runtime::audio::AudioLane;
+
+    use super::{At, soon};
+
+    /// A lane of 10 s of audio at 48 kHz in a song at 120 bpm: a chunk is 0.25 s, half a beat.
+    fn lane() -> AudioLane {
+        AudioLane::of_renders(vec![(0, Arc::new(vec![vec![0.1f32; 480_000]]))], 1, 48_000.0)
+    }
+
+    // RENDER-30b (the review's S5): the chunks never worked out again are those the sound thread may
+    // read within 50 ms along the transport's path: from where it plays, where it is about to be,
+    // and where recent seeks left from; through a loop's wrap to the loop's start.
+    #[test]
+    fn soon_is_the_next_50_ms_along_the_path() {
+        let l = lane();
+        let at = |beat, now, looping, left: Vec<f64>| At { beat, now, looping, left };
+        // Beat 1.92 is 0.96 s: chunk 3, and 50 ms on reaches chunk 4.
+        assert_eq!(soon(&l, &at(1.92, 1.92, None, vec![])), [3, 4, 3, 4]);
+        // Mid-chunk: only that chunk.
+        assert_eq!(soon(&l, &at(1.25, 1.25, None, vec![])), [2, 2]);
+        // A seek's target and where a seek left from.
+        let s = soon(&l, &at(8.0, 1.25, None, vec![5.0]));
+        assert!(s.contains(&16) && s.contains(&2) && s.contains(&10), "{s:?}");
+        // 20 ms before a loop's end at beat 4 (chunk 8 starts there): the loop's start, beat 1, is
+        // reached within the 50 ms.
+        let s = soon(&l, &at(3.96, 3.96, Some((1.0, 4.0)), vec![]));
+        assert!(s.contains(&7) && s.contains(&2) && !s.contains(&8), "{s:?}");
+    }
 }

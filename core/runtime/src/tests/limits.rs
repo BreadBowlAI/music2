@@ -688,6 +688,7 @@ fn a_slow_file_read_is_not_the_kernels_time() {
             rate: SR as f64,
             channels: 1,
             frames: tone.len(),
+            measure: false,
         };
         let mut made = vec![];
         let t = Instant::now();

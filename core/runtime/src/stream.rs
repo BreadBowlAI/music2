@@ -22,7 +22,7 @@ use std::fs::File;
 use std::io::Read;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, AtomicUsize, Ordering, fence};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::task::Waker;
 
@@ -526,7 +526,8 @@ impl Making {
     }
 }
 
-/// Where a warped clip's stretch is kept in `folder` (`<cache>/renders`, FMT-16's), named by
+/// Where a warped clip's stretch, or an edited phrase's render (RENDER-30b, its key told apart by
+/// its first word), is kept in `folder` (`<cache>/renders`, FMT-16's), named by
 /// everything the kernel was given: its key holds the stretch kernel's module hash (the sx plan's
 /// D8), so a new std makes new renders, and the time map itself, so a new way of making the map
 /// does too.
@@ -644,6 +645,78 @@ pub(crate) struct Clip {
     pub(crate) src: Source,
     /// Its place among the lane's clips in the song's data: what a fault names ([`crate::fault::Subject::Clip`]).
     pub(crate) index: u32,
+    /// Its edited phrases, in order (RENDER-30b): each plays over its frames in place of the
+    /// normal path. Only on a clip that plays forwards.
+    pub(crate) phrases: Vec<Arc<Phrase>>,
+    /// What names its normal path: a clip of the lane a build replaces with the same one is the
+    /// same clip, whose phrases play over a new one's until its renders are whole.
+    pub(crate) normal: u64,
+    /// What names it across builds: its file and its id, when it has one.
+    pub(crate) same: Option<u64>,
+    /// While its stretch hasn't made the frames a chunk reads: the same clip of the lane this one
+    /// replaced, which plays there instead (the review's S4). Let go once the stretch is whole.
+    pub(crate) old: Mutex<Option<(Arc<AudioLane>, usize)>>,
+}
+
+/// An edited phrase of a clip (RENDER-30b): its frames in the clip's output, `from..to`, its
+/// crossfade's length at each end, and its render by the clip's `render` kernel, `to - from`
+/// frames of the clip's channels. Until its render is whole, `before` plays over it: the phrases of
+/// the same clip's last render that reach it (each whole, or itself with its own `before`), or with
+/// none the normal path.
+pub(crate) struct Phrase {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) fade: usize,
+    pub(crate) render: Arc<Raw>,
+    pub(crate) before: Vec<Arc<Phrase>>,
+}
+
+impl Phrase {
+    /// Whether its render is whole: it plays its own frames.
+    fn whole(&self) -> bool {
+        self.render.whole()
+    }
+
+    /// The weight of its own frame `i` (of the clip) against the normal path: raised cosines
+    /// `fade` frames long at each end, 1 between.
+    fn weight(&self, i: usize) -> f32 {
+        let d = (i - self.from).min(self.to - 1 - i);
+        if d >= self.fade { 1.0 } else { 0.5 - 0.5 * libm::cosf(std::f32::consts::PI * (d as f32 + 0.5) / self.fade as f32) }
+    }
+
+    /// Lay its frames `i0..i1` (clip frames) over `vals`, which hold the clip's from frame `base`:
+    /// its own when whole, else what played over it before. True when its own render isn't whole
+    /// yet, so what it laid is what played before.
+    fn lay(&self, base: usize, i0: usize, i1: usize, vals: &mut [Vec<f32>], channels: usize, s: &mut PhraseScratch) -> Result<bool> {
+        let (a, b) = (i0.max(self.from), i1.min(self.to));
+        if a >= b {
+            return Ok(false);
+        }
+        if !self.whole() {
+            for p in &self.before {
+                p.lay(base, a, b, vals, channels, s)?;
+            }
+            // Old till its render is whole; one that failed never will be, and keeps what it plays.
+            return Ok(!self.render.failed());
+        }
+        self.render.read(a - self.from, b - self.from, &mut s.bytes, &mut s.win)?;
+        for (c, v) in vals.iter_mut().enumerate().take(channels) {
+            let y = &s.win[c.min(self.render.channels - 1)];
+            for i in a..b {
+                let w = self.weight(i);
+                let x = &mut v[i - base];
+                *x = *x * (1.0 - w) + y[i - a] * w;
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// A phrase's reading room.
+#[derive(Default)]
+pub(crate) struct PhraseScratch {
+    bytes: Vec<u8>,
+    win: [Vec<f32>; 2],
 }
 
 impl Clip {
@@ -653,34 +726,115 @@ impl Clip {
             Source::Render(r, _) => r.channels,
             Source::Mem(m, _) => m.len(),
         };
-        Clip { at, len: len as u64, channels, src, index }
+        Clip { at, len: len as u64, channels, src, index, phrases: vec![], normal: 0, same: None, old: Mutex::new(None) }
     }
 
-    /// Whether it plays a stretch that failed.
+    /// Whether it plays a stretch, or a phrase's render, that failed.
     fn stretch_failed(&self) -> bool {
-        matches!(&self.src, Source::Render(r, _) if r.failed())
+        matches!(&self.src, Source::Render(r, _) if r.failed()) || self.phrases.iter().any(|p| p.render.failed())
+    }
+
+    /// Whether every phrase over its samples `i0..i1` has its render whole, or never will, and its
+    /// stretch has made the frames they read: what it plays there is its own.
+    fn phrases_done(&self, i0: usize, i1: usize) -> bool {
+        let stretched = match &self.src {
+            Source::Render(r, sh) => r.has(sh.span(i0, i1).1),
+            _ => true,
+        };
+        stretched && self.phrases.iter().filter(|p| p.from < i1 && p.to > i0).all(|p| p.whole() || p.render.failed())
+    }
+
+    /// The clip it replaced, while its stretch hasn't made frames `i0..i1`: what plays there.
+    fn standing_in(&self, i0: usize, i1: usize) -> Option<(Arc<AudioLane>, usize)> {
+        let Source::Render(r, sh) = &self.src else { return None };
+        let mut old = self.old.lock().unwrap_or_else(|e| e.into_inner());
+        if r.whole() {
+            *old = None;
+            return None;
+        }
+        if r.has(sh.span(i0, i1).1) { None } else { old.clone() }
     }
 
     /// Whether its samples `i0..i1` can be worked out now: a render being made has made every
     /// frame they read.
     fn has(&self, i0: usize, i1: usize) -> bool {
         match &self.src {
-            Source::Render(r, sh) => r.has(sh.span(i0, i1).1),
+            Source::Render(r, sh) => r.has(sh.span(i0, i1).1) || self.old.lock().unwrap_or_else(|e| e.into_inner()).is_some(),
             Source::Wav(..) | Source::Mem(..) => true,
         }
     }
 
     /// Its samples `i0..i1` (from its start), each channel into `s.vals`, as the clip's whole
-    /// render has them.
-    fn piece(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
+    /// render has them, its phrases laid over the normal path before its gain and fades
+    /// (RENDER-30b). True when a phrase played what it played before, its render not whole yet.
+    fn piece(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<bool> {
+        if let Some((lane, o)) = self.standing_in(i0, i1) {
+            self.as_before(&lane.clips[o], i0, i1, s)?;
+            return Ok(true);
+        }
+        if self.phrases.iter().all(|p| p.to <= i0 || p.from >= i1) {
+            self.plain(i0, i1, s)?;
+            return Ok(false);
+        }
+        let ch = self.channels;
+        let sh = match &self.src {
+            Source::Wav(_, sh) | Source::Render(_, sh) | Source::Mem(_, sh) => *sh,
+        };
+        // Its normal path with no gain, the phrases over it, then the gain: where no phrase is,
+        // the same products as the plain piece's.
+        let gained = Shape { gain: 1.0, fade_in: 0, fade_out: 0, ..sh };
+        self.plain_shaped(i0, i1, s, &gained)?;
+        let mut fell = false;
+        for p in self.phrases.iter().filter(|p| p.to > i0 && p.from < i1) {
+            fell |= p.lay(i0, i0, i1, &mut s.vals[..], ch, &mut s.phrase)?;
+        }
+        for v in s.vals.iter_mut().take(ch) {
+            for (k, x) in v.iter_mut().enumerate() {
+                *x *= gain_at(i0 + k, sh.len, sh.gain, sh.fade_in, sh.fade_out);
+            }
+        }
+        Ok(fell)
+    }
+
+    /// Its samples `i0..i1` as `old`, the clip it replaced, played them, by where they are on the
+    /// lane; silence where `old` doesn't reach.
+    fn as_before(&self, old: &Clip, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
+        let (a, z) = (self.at + i0 as u64, self.at + i1 as u64);
+        let (oa, oz) = (a.max(old.at), z.min(old.at + old.len));
+        let mut vals = std::mem::take(&mut s.vals);
+        for v in vals.iter_mut().take(self.channels) {
+            v.clear();
+            v.resize(i1 - i0, 0.0);
+        }
+        let got = if oa < oz { old.piece((oa - old.at) as usize, (oz - old.at) as usize, s).map(drop) } else { Ok(()) };
+        if oa < oz && got.is_ok() {
+            for (c, v) in vals.iter_mut().enumerate().take(self.channels) {
+                let from = &s.vals[c.min(old.channels - 1)];
+                v[(oa - a) as usize..(oz - a) as usize].copy_from_slice(&from[..(oz - oa) as usize]);
+            }
+        }
+        s.vals = vals;
+        got
+    }
+
+    /// [`Self::piece`] with no phrase: the normal path.
+    fn plain(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
+        let sh = match &self.src {
+            Source::Wav(_, sh) | Source::Render(_, sh) | Source::Mem(_, sh) => *sh,
+        };
+        self.plain_shaped(i0, i1, s, &sh)
+    }
+
+    /// The normal path's samples `i0..i1`, shaped by `sh` (the clip's own, or with no gain).
+    fn plain_shaped(&self, i0: usize, i1: usize, s: &mut Scratch, sh: &Shape) -> Result<()> {
         let ch = self.channels;
         match &self.src {
-            Source::Render(r, sh) => {
+            Source::Render(r, _) => {
                 let (j0, j1) = sh.span(i0, i1);
                 r.read(j0, j1, &mut s.bytes, &mut s.win)?;
                 sh.place(&s.win[..ch], j0, i0..i1, &mut s.vals);
             }
-            Source::Mem(d, sh) => {
+            Source::Mem(d, _) => {
                 let (j0, j1) = sh.span(i0, i1);
                 for (w, d) in s.win.iter_mut().zip(d.iter()) {
                     w.clear();
@@ -688,7 +842,7 @@ impl Clip {
                 }
                 sh.place(&s.win[..ch], j0, i0..i1, &mut s.vals);
             }
-            Source::Wav(w, sh) => {
+            Source::Wav(w, _) => {
                 let n = sh.len;
                 let (j0, j1) = if sh.reverse { (n - i1, n - i0) } else { (i0, i1) };
                 // The source frames the cubic reads at these positions touch, within the file.
@@ -717,11 +871,13 @@ pub(crate) struct Scratch {
     win: [Vec<f32>; 2],
     vals: [Vec<f32>; 2],
     chunk: Vec<f32>,
+    phrase: PhraseScratch,
 }
 
 impl Scratch {
     fn bytes(&self) -> usize {
-        self.bytes.capacity() + 4 * (self.win.iter().chain(&self.vals).map(Vec::capacity).sum::<usize>() + self.chunk.capacity())
+        let phrase = self.phrase.bytes.capacity() + 4 * self.phrase.win.iter().map(Vec::capacity).sum::<usize>();
+        self.bytes.capacity() + 4 * (self.win.iter().chain(&self.vals).map(Vec::capacity).sum::<usize>() + self.chunk.capacity()) + phrase
     }
 }
 
@@ -730,7 +886,16 @@ struct Slot {
     tag: AtomicU64,
     /// Channel-major, `channels × chunk`.
     data: Box<[AtomicU32]>,
+    /// How its chunk was worked out: [`PURE`], [`OLD`] or [`FADED`] (RENDER-30b).
+    kind: AtomicU8,
 }
+
+/// A chunk worked out from what its clips play now.
+const PURE: u8 = 0;
+/// A chunk worked out while a phrase it reads wasn't whole: what played there before.
+const OLD: u8 = 1;
+/// The first new chunk after an old one: its first 5 ms fade from old to new.
+const FADED: u8 = 2;
 
 /// A lane's ring of slots, and what the sound thread and the fillers share about it.
 pub(crate) struct Ring {
@@ -762,7 +927,11 @@ impl Ring {
         let audio_chunks = merged.iter().map(|r| r.end - r.start).sum::<u64>();
         let n = (audio_chunks as usize).min(SLOTS);
         let slots = (0..n)
-            .map(|_| Slot { tag: AtomicU64::new(EMPTY), data: (0..channels * chunk as usize).map(|_| AtomicU32::new(0)).collect() })
+            .map(|_| Slot {
+                tag: AtomicU64::new(EMPTY),
+                data: (0..channels * chunk as usize).map(|_| AtomicU32::new(0)).collect(),
+                kind: AtomicU8::new(PURE),
+            })
             .collect();
         Ring {
             chunk,
@@ -807,14 +976,20 @@ impl Ring {
 
     /// Put `samples` (channel-major) in slot `i` as chunk `k`: marked busy first, so a reader that
     /// meets it mid-write sees a miss.
-    fn store(&self, i: usize, k: u64, samples: &[f32]) {
+    fn store(&self, i: usize, k: u64, samples: &[f32], kind: u8) {
         let slot = &self.slots[i];
         slot.tag.store(BUSY, Ordering::Relaxed);
         fence(Ordering::Release);
         for (d, s) in slot.data.iter().zip(samples) {
             d.store(s.to_bits(), Ordering::Relaxed);
         }
+        slot.kind.store(kind, Ordering::Relaxed);
         slot.tag.store(k, Ordering::Release);
+    }
+
+    /// How chunk `k` was worked out, when a slot holds it.
+    fn kind_of(&self, k: u64) -> Option<u8> {
+        self.slot_of(k).map(|s| s.kind.load(Ordering::Acquire))
     }
 }
 
@@ -889,6 +1064,9 @@ impl AudioLane {
             if let Source::Render(r, _) = &c.src {
                 r.watch(w);
             }
+            for p in &c.phrases {
+                p.render.watch(w);
+            }
         }
     }
 
@@ -914,33 +1092,106 @@ impl AudioLane {
         });
         let Some(i) = victim else { return false };
         r.cursor.store((i + 1) % n, Ordering::Relaxed);
-        if let Err(clip) = self.sum(k, &mut s) {
-            s.chunk.fill(0.0);
-            self.fault(Code::Unreadable, clip);
-        }
+        let fell = self.work_out(k, &mut s);
+        r.store(i, k, &s.chunk, if fell { OLD } else { PURE });
+        true
+    }
+
+    /// Work out chunk `k` into `s.chunk`, reporting what failed: true when a phrase it reads
+    /// played what it played before (RENDER-30b).
+    fn work_out(&self, k: u64, s: &mut Scratch) -> bool {
+        let r = &self.ring;
+        let fell = match self.sum(k, s) {
+            Ok(fell) => fell,
+            Err(clip) => {
+                s.chunk.fill(0.0);
+                self.fault(Code::Unreadable, clip);
+                false
+            }
+        };
         let (start, end) = (k * r.chunk, (k + 1) * r.chunk);
         for c in self.clips.iter().filter(|c| c.at < end && c.at + c.len > start && c.stretch_failed()) {
             self.fault(Code::StretchFailed, c.index);
         }
-        r.store(i, k, &s.chunk);
-        true
+        fell
+    }
+
+    /// Whether chunk `k` is held as worked out while a phrase it reads wasn't whole, and can be
+    /// worked out again now: every such phrase's render is whole; or it is the first new chunk
+    /// after an old one, and the chunk before it is old no more (RENDER-30b).
+    pub fn stale(&self, k: u64) -> bool {
+        match self.ring.kind_of(k) {
+            Some(OLD) => {
+                let chunk = self.ring.chunk;
+                let (start, end) = (k * chunk, (k + 1) * chunk);
+                self.clips
+                    .iter()
+                    .filter(|c| c.at < end && c.at + c.len > start)
+                    .all(|c| c.phrases_done((start.max(c.at) - c.at) as usize, (end.min(c.at + c.len) - c.at) as usize))
+            }
+            Some(FADED) => k == 0 || self.ring.kind_of(k - 1) != Some(OLD),
+            _ => false,
+        }
+    }
+
+    /// Work chunk `k` out again in its slot: a [`Self::stale`] one. The first new chunk after an old
+    /// one fades from its old samples to the new over its first 5 ms, and is worked out again once
+    /// the chunk before it is old no more. Off the sound thread only, and never for a chunk the
+    /// transport is about to read: the sound thread reading it meanwhile would miss.
+    pub fn refresh(&self, k: u64) {
+        self.refresh_unless(k, &|_| false);
+    }
+
+    /// [`Self::refresh`], unless `near(k)` says, as it is stored, that the transport is about to read
+    /// chunk `k` (the review's S5): asked after the work, so a seek sent meanwhile, or a slow
+    /// work out, never has a chunk changed under the playhead. Such a chunk stays old.
+    pub fn refresh_unless(&self, k: u64, near: &dyn Fn(u64) -> bool) {
+        let r = &self.ring;
+        let mut s = r.fill.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(i) = r.slots.iter().position(|sl| sl.tag.load(Ordering::Acquire) == k) else { return };
+        let fell = self.work_out(k, &mut s);
+        if near(k) || r.slots[i].tag.load(Ordering::Acquire) != k {
+            return;
+        }
+        let after_old = k > 0 && r.kind_of(k - 1) == Some(OLD);
+        let kind = if fell {
+            OLD
+        } else if after_old {
+            FADED
+        } else {
+            PURE
+        };
+        if kind == FADED {
+            let (chunk, fade) = (r.chunk as usize, ((0.005 * self.rate).round() as usize).max(1));
+            let slot = &r.slots[i];
+            for c in 0..r.channels {
+                for f in 0..fade.min(chunk) {
+                    let old = f32::from_bits(slot.data[c * chunk + f].load(Ordering::Relaxed));
+                    let x = &mut s.chunk[c * chunk + f];
+                    *x = crate::fade::xfade(old, *x, f as u32, fade as u32);
+                }
+            }
+        }
+        r.store(i, k, &s.chunk, kind);
     }
 
     /// Sum chunk `k` of every clip, in order, into `s.chunk` (channel-major): what the old copy
-    /// added up for each of its frames. Err: the place of the clip whose file couldn't be read.
-    fn sum(&self, k: u64, s: &mut Scratch) -> Result<(), u32> {
+    /// added up for each of its frames. True when a phrase played what it played before
+    /// (RENDER-30b). Err: the place of the clip whose file couldn't be read.
+    fn sum(&self, k: u64, s: &mut Scratch) -> Result<bool, u32> {
         let chunk = self.ring.chunk;
         let (start, end) = (k * chunk, (k + 1) * chunk);
         let mut acc = std::mem::take(&mut s.chunk);
         acc.clear();
         acc.resize(self.channels * chunk as usize, 0.0);
+        let mut fell = false;
         let summed = (|| {
             for clip in &self.clips {
                 if clip.at >= end || clip.at + clip.len <= start {
                     continue;
                 }
                 let (from, to) = (start.max(clip.at), end.min(clip.at + clip.len));
-                clip.piece((from - clip.at) as usize, (to - clip.at) as usize, s).map_err(|_| clip.index)?;
+                fell |= clip.piece((from - clip.at) as usize, (to - clip.at) as usize, s).map_err(|_| clip.index)?;
                 let data = &s.vals;
                 let mono_down = self.channels == 1 && clip.channels > 1;
                 for c in 0..self.channels {
@@ -953,7 +1204,7 @@ impl AudioLane {
                     }
                 }
             }
-            Ok(())
+            Ok(fell)
         })();
         s.chunk = acc;
         summed

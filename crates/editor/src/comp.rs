@@ -31,7 +31,7 @@ const SAME: f64 = 1e-9;
 #[derive(Debug, PartialEq)]
 pub enum Piece {
     Same(usize),
-    Made(usize, AudioClip),
+    Made(usize, Box<AudioClip>),
 }
 
 /// What a comp needs to know of the file: where each take starts in it, and how long it is, in
@@ -323,7 +323,7 @@ pub fn comp(
                 && same(c.fade_out, was.fade_out)
                 && c.warp.len() == was.warp.len()
                 && c.warp.iter().zip(&was.warp).all(|(a, b)| same(a.0, b.0) && same(a.1, b.1));
-        out.push(if kept { Piece::Same(s.from) } else { Piece::Made(s.from, c) });
+        out.push(if kept { Piece::Same(s.from) } else { Piece::Made(s.from, Box::new(c)) });
     }
     Ok(out)
 }

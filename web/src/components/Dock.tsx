@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ChevronDown, ChevronUp, CodeXml, Drum, Piano, SlidersHorizontal, SlidersVertical } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { dockView, findNoteClip, kitOf, moduleName, type GraphState } from "../lib/graph";
+import { dockView, findLane, findNoteClip, kitOf, moduleName, type GraphState } from "../lib/graph";
 import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
@@ -12,6 +12,7 @@ import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import CodeView from "./CodeView";
 import Mix from "./Mix";
 import NoteView from "./NoteView";
+import SungView from "./SungView";
 import TrackName from "./TrackName";
 import { Button, EmptyState, keepFocus, Segment } from "./ui";
 
@@ -144,12 +145,17 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
   const [coded, setCoded] = useState(view === "code");
   if (view === "code" && !coded) setCoded(true);
   const live = clip && findNoteClip(graph.timeline, clip) ? clip : null;
+  // An audio clip's voice's notes (VOX-46).
+  const voice = clip && !live && findLane(graph.timeline, clip.module, clip.lane)?.kind === "audio" ? clip : null;
+  const track = graph.timeline.tracks.find((t) => t.module === module)?.label ?? module;
   return (
     <>
       {open && view === "device" && <Device graph={graph} module={module} />}
       {open && view === "notes" &&
         (live ? (
           <NoteView key={`${live.module}:${live.lane}:${live.id}`} graph={graph} clip={live} />
+        ) : voice ? (
+          <SungView key={`${voice.module}:${voice.lane}:${voice.id}`} graph={graph} clip={voice} track={track} />
         ) : (
           <Empty testid="notes">Select a clip, or double-click in the timeline to make one.</Empty>
         ))}

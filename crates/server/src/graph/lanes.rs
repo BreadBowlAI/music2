@@ -153,6 +153,7 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
         | Gesture::Points { clip, .. }
         | Gesture::Audio { clip, .. }
         | Gesture::Comp { clip, .. }
+        | Gesture::FindNotes { clip, .. }
         | Gesture::Stamp { clip, .. } => add(&clip.lane),
         Gesture::Split { clips, .. }
         | Gesture::Join { clips }

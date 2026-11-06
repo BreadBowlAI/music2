@@ -51,6 +51,7 @@ pub mod gauge;
 mod keep;
 pub mod latency;
 pub(crate) mod limit;
+pub mod measure;
 mod offline;
 mod overlay;
 pub mod packages;
@@ -2897,7 +2898,8 @@ impl Renderer {
         });
         let keep = keep.as_ref();
         let stretch = offline::Kernel::of(packages, offline::STRETCH);
-        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, stretch.as_ref(), &report)?;
+        let makers = audio::Makers { stretch: stretch.as_ref(), packages: Some(packages) };
+        let mut lanes = LanePlan::new(flat, data, cache, &tempo, rate, keep, makers, &report)?;
         let used = used(flat);
         let mut shapes: Vec<Option<Shape>> =
             flat.nodes.iter().zip(&used).map(|(n, &u)| if u { Shape::of(n, packages, &assets) } else { None }).collect();

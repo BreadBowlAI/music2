@@ -99,3 +99,27 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 - **Tune works from about D2 (73 Hz) up to about D6 (1,200 Hz).** A lower note, such as a bass singer's low C, comes through untuned.
 - **It works best on one voice at a time.** A choir, or a voice with a loud band behind it, confuses it.
 - **Agents:** `tune(x, { glide, amount })` from `"@m2/vocals"` in any track's code; `m2 listen` measures the result ([listening](listening.md)).
+
+## Edit a voice's notes
+
+**Find notes** finds each note a singer sang in a recorded clip, so you can fix one note without singing it again (as Melodyne and Logic's Flex Pitch do). It comes with music2, in the pack `@m2/vocals`.
+
+| To do this | Do this | What happens |
+|---|---|---|
+| See the notes | Right-click a vocal clip, then **Find notes** | Each sung note shows in the **Notes** view as a bar, over the clip's waveform. The line through it is the pitch the singer sang. One undo step. The song gets `@m2/vocals` if it didn't have it. |
+| Fix a flat or sharp note | Drag the note up or down | It moves by whole semitones (one piano key). Hold **⌥** to move it by cents (a hundredth of a semitone). With **Lock to key** on, it lands on a note of the song's key. |
+| Calm a wobble | Right-click the note, then **Straighten** | At 100% the note sings one straight pitch; at 0% it keeps the singer's wobble (vibrato). |
+| Move a word onto the beat | Drag the note sideways | Only that note and the gaps beside it stretch. The clip now follows the song's tempo. |
+| Make a note longer or shorter | Drag its left or right edge | The same: only the note and its gaps change. |
+| Find the notes again | **Find notes** in the Notes view | Your edits stay on the notes they were on. |
+
+- **Each edit is one undo step**, and you hear it at once, even while the song plays.
+- **A note moves at most 7 semitones down and 12 up.** Further, the voice would sound broken, so the drag stops and says so.
+- **The voice keeps its colour** when a note moves, as with Tune.
+- **Only the notes you edit change.** After a pitch edit or Straighten, the rest of the clip plays exactly as it did. After a timing edit the whole clip follows the song's tempo, so the notes you didn't move may sit up to 8 ms (8 thousandths of a second) off.
+- **Copies are separate.** Fixing a note in one copy of a chorus doesn't change the other copies.
+- **Split a clip, and each piece keeps its notes.** A note across the cut is in both pieces.
+- **One voice at a time.** Find notes doesn't hear chords, or a voice with a loud band behind it.
+- **Find notes needs the clip played forwards, at its own pitch.** If edited notes can't play (the clip turned around, or its pitch changed by hand), the song's problems say so, and they play as sung.
+- **An older song** may play `@m2/vocals` 1.0.0, which can't find notes: Find notes says so, and `m2 pack update @m2/vocals` updates it.
+- **Agents:** the notes are the clip's `sung` field in its lane file, `{"at", "length", "pitch", "move", "straighten"}` (seconds of the file; MIDI numbers with cents), with `"render": "@m2/vocals:voice"`. Find notes is the clip gesture `{"op": "find_notes", "clip", "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}`; `GET /api/graph/clip/measure` gives the pitch line, as bytes ([routes](routes.md)). A `set` of the clip from an older `revision` is refused when another changed the lane since.

@@ -241,6 +241,83 @@ pub struct AudioClip {
     /// moment lands on its beat, following the tempo map.
     #[serde(default)]
     pub warp: Vec<(f64, f64)>,
+    /// The id of a pack's offline kernel that plays its edited `sung` notes (VOX-40, RENDER-30b).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub render: Option<String>,
+    /// Its voice's notes, by `at` (VOX-40): Find notes writes them, the roll edits them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sung: Vec<Sung>,
+}
+
+/// One note of a recorded voice (VOX-40): where it is in the clip's file, its pitch as sung, and
+/// how it is edited. What plays is the pitch line plus `move_by`, pulled toward
+/// `pitch + move_by` by `straighten`.
+#[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Sung {
+    /// Seconds in the clip's file.
+    pub at: f64,
+    pub length: f64,
+    /// The note as sung: a MIDI number with cents.
+    pub pitch: f64,
+    /// Semitones it is moved by.
+    #[serde(rename = "move", default)]
+    pub move_by: f64,
+    /// 0 keeps the sung wobble; 1 plays one straight pitch.
+    #[serde(default)]
+    pub straighten: f64,
+}
+
+impl Sung {
+    /// The lowest and highest `move`: as far as `@m2/vocals:shift` reaches (VOX-23).
+    pub const DOWN: f64 = -7.0;
+    pub const UP: f64 = 12.0;
+
+    /// Whether it plays otherwise than it was sung (RENDER-30b).
+    pub fn edited(&self) -> bool {
+        self.move_by != 0.0 || self.straighten != 0.0
+    }
+
+    /// Where it ends in the file.
+    pub fn end(&self) -> f64 {
+        self.at + self.length
+    }
+
+    /// Why it can't be read, if it can't (VOX-40).
+    pub fn problem(&self) -> Option<String> {
+        let finite = [self.at, self.length, self.pitch, self.move_by, self.straighten].iter().all(|x| x.is_finite());
+        if !finite {
+            return Some("its numbers must all be numbers".into());
+        }
+        if self.at < 0.0 || self.length <= 0.0 {
+            return Some("`at` can't be negative and `length` must be above 0".into());
+        }
+        if !(0.0..=127.0).contains(&self.pitch) {
+            return Some(format!("`pitch` must be from 0 to 127, not {}", number(self.pitch)));
+        }
+        if !(Sung::DOWN..=Sung::UP).contains(&self.move_by) {
+            return Some(format!(
+                "`move` must be from -7 to 12 semitones, as far as a voice can be moved and still sound right, not {}",
+                number(self.move_by)
+            ));
+        }
+        if !(0.0..=1.0).contains(&self.straighten) {
+            return Some(format!("`straighten` must be from 0 to 1, not {}", number(self.straighten)));
+        }
+        None
+    }
+}
+
+/// Whether `id` reads as a pack's kernel's id, `@owner/pack:name` (VOX-40): never std's, whose
+/// kernels play no clip's edited notes (the review's S9).
+pub fn kernel_id(id: &str) -> bool {
+    match id.split_once(':') {
+        Some((p, n)) => {
+            let pack = p.strip_prefix('@').and_then(|r| r.split_once('/')).is_some_and(|(o, k)| !o.is_empty() && !k.is_empty());
+            pack && !n.is_empty() && !id.chars().any(|c| c.is_whitespace() || c.is_control())
+        }
+        None => false,
+    }
 }
 
 /// The kind a lane is declared with: how its file is read.
@@ -408,6 +485,15 @@ impl LaneData {
                     if c.warp.windows(2).any(|w| w[1].0 <= w[0].0 || w[1].1 <= w[0].1) {
                         return Err(invalid(format!("{at}: `warp` markers must move forward in both source time and beats")));
                     }
+                    if let Some(r) = &c.render
+                        && !kernel_id(r)
+                    {
+                        return Err(invalid(format!("{at}: `render` must name a pack's kernel, as `@owner/pack:name`, not {}", string(r))));
+                    }
+                    if let Some((n, why)) = c.sung.iter().enumerate().find_map(|(n, x)| Some((n, x.problem()?))) {
+                        return Err(invalid(format!("{at}: sung note {}: {why}", n + 1)));
+                    }
+                    c.sung.sort_by(sung_order);
                 }
                 Ok(LaneData::Audio(sorted(clips, |c| (c.start, c.id.as_deref()))))
             }
@@ -620,7 +706,12 @@ impl LaneData {
             }
             LaneData::Control { clips, .. } => *clips = sorted(std::mem::take(clips), |c| (c.start, c.id.as_deref())),
             LaneData::Steps { clips, .. } => *clips = sorted(std::mem::take(clips), |c| (c.start, c.id.as_deref())),
-            LaneData::Audio(c) => *c = sorted(std::mem::take(c), |c| (c.start, c.id.as_deref())),
+            LaneData::Audio(c) => {
+                for c in c.iter_mut() {
+                    c.sung.sort_by(sung_order);
+                }
+                *c = sorted(std::mem::take(c), |c| (c.start, c.id.as_deref()));
+            }
         }
     }
 
@@ -711,6 +802,15 @@ fn shape_hint(c: &Value, kind: &LaneKind) -> &'static str {
         (LaneKind::Audio, "notes") => " (it holds notes, but this is an audio lane)",
         (LaneKind::Audio, _) => " (it holds automation points, but this is an audio lane)",
     }
+}
+
+/// Sung notes by `at`, then by each other field (VOX-40).
+fn sung_order(a: &Sung, b: &Sung) -> Ordering {
+    a.at.total_cmp(&b.at)
+        .then(a.length.total_cmp(&b.length))
+        .then(a.pitch.total_cmp(&b.pitch))
+        .then(a.move_by.total_cmp(&b.move_by))
+        .then(a.straighten.total_cmp(&b.straighten))
 }
 
 /// Notes by start, then pitch, then length and velocity: a total order, so no two notes'
@@ -896,7 +996,28 @@ impl Clip for AudioClip {
         write_number(out, self.pitch);
         out.push_str(", \"warp\": [");
         pairs(out, &self.warp);
-        out.push_str("]}");
+        out.push(']');
+        if let Some(r) = &self.render {
+            out.push_str(", \"render\": ");
+            write_string(out, r);
+        }
+        if !self.sung.is_empty() {
+            out.push_str(", \"sung\": [");
+            for (i, n) in self.sung.iter().enumerate() {
+                out.push_str(if i == 0 { "{" } else { ", {" });
+                for (k, (key, x)) in
+                    [("at", n.at), ("length", n.length), ("pitch", n.pitch), ("move", n.move_by), ("straighten", n.straighten)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    let _ = write!(out, "{}\"{key}\": ", if k == 0 { "" } else { ", " });
+                    write_number(out, x);
+                }
+                out.push('}');
+            }
+            out.push(']');
+        }
+        out.push('}');
     }
 
     fn other_id(&mut self) -> &mut Option<Value> {
@@ -1264,6 +1385,61 @@ mod tests {
         assert!(
             invalid(r#"{"clips": [{"start": 0, "length": 1, "asset": "a.wav", "warp": [[0, 0], [1, 0]]}]}"#, &LaneKind::Audio)
                 .contains("warp")
+        );
+    }
+
+    // VOX-40: an audio clip's sung notes and its render read and write in canonical form: after
+    // `warp`, only when there, the notes by `at`, each note's five fields in order; a clip with
+    // neither writes as before.
+    #[test]
+    fn sung_notes_read_and_write_in_canonical_form() {
+        let text = r#"{"clips": [{"id": "z1b4r9td", "start": 64, "length": 4, "asset": "vox/lead.wav",
+            "sung": [{"straighten": 0.6, "at": 1.7, "length": 0.52, "pitch": 66.92, "move": 0.08},
+                     {"at": 1.25, "length": 0.37, "pitch": 64.31, "move": -0.31}],
+            "render": "@m2/vocals:voice"}]}"#;
+        let data = LaneData::read(text, &LaneKind::Audio).unwrap();
+        let LaneData::Audio(c) = &data else { panic!() };
+        assert_eq!(c[0].render.as_deref(), Some("@m2/vocals:voice"));
+        assert_eq!(c[0].sung[0], Sung { at: 1.25, length: 0.37, pitch: 64.31, move_by: -0.31, straighten: 0.0 });
+        assert!(c[0].sung[0].edited() && !Sung { move_by: 0.0, ..c[0].sung[0] }.edited());
+        let written = canonical(&data);
+        assert_eq!(
+            written,
+            "{\"clips\": [\n  {\"id\": \"z1b4r9td\", \"start\": 64, \"length\": 4, \"asset\": \"vox/lead.wav\", \"offset\": 0, \"gain_db\": 0, \
+             \"fade_in\": 0, \"fade_out\": 0, \"reverse\": false, \"pitch\": 0, \"warp\": [], \"render\": \"@m2/vocals:voice\", \
+             \"sung\": [{\"at\": 1.25, \"length\": 0.37, \"pitch\": 64.31, \"move\": -0.31, \"straighten\": 0}, \
+             {\"at\": 1.7, \"length\": 0.52, \"pitch\": 66.92, \"move\": 0.08, \"straighten\": 0.6}]}\n]}\n"
+        );
+        assert_eq!(LaneData::read(&written, &LaneKind::Audio).unwrap(), data, "it reads back as it was");
+        let plain = LaneData::read(r#"{"clips": [{"start": 0, "length": 1, "asset": "a.wav"}]}"#, &LaneKind::Audio).unwrap();
+        assert!(!canonical(&plain).contains("sung") && !canonical(&plain).contains("render"), "a clip with neither writes as before");
+    }
+
+    // VOX-40: a number out of its range, or a render that isn't a kernel's id, makes the lane fail
+    // to read, saying which.
+    #[test]
+    fn a_sung_note_out_of_range_breaks_the_lane() {
+        let with = |note: &str| format!(r#"{{"clips": [{{"start": 0, "length": 1, "asset": "a.wav", "sung": [{note}]}}]}}"#);
+        let ok = r#"{"at": 0, "length": 1, "pitch": 60}"#;
+        assert!(LaneData::read(&with(ok), &LaneKind::Audio).is_ok());
+        for (note, says) in [
+            (r#"{"at": 0, "length": 1, "pitch": 60, "move": 13}"#, "`move` must be from -7 to 12"),
+            (r#"{"at": 0, "length": 1, "pitch": 60, "move": -7.5}"#, "`move` must be from -7 to 12"),
+            (r#"{"at": 0, "length": 0, "pitch": 60}"#, "`length` must be above 0"),
+            (r#"{"at": -1, "length": 1, "pitch": 60}"#, "`at` can't be negative"),
+            (r#"{"at": 0, "length": 1, "pitch": 128}"#, "`pitch` must be from 0 to 127"),
+            (r#"{"at": 0, "length": 1, "pitch": 60, "straighten": 2}"#, "`straighten` must be from 0 to 1"),
+        ] {
+            let why = invalid(&with(note), &LaneKind::Audio);
+            assert!(why.contains("sung note 1") && why.contains(says), "{note}: {why}");
+        }
+        assert!(invalid(&with(r#"{"at": 0, "length": 1, "pitch": 60, "bend": 1}"#), &LaneKind::Audio).contains("bend"));
+        let render = |r: &str| format!(r#"{{"clips": [{{"start": 0, "length": 1, "asset": "a.wav", "render": {r}}}]}}"#);
+        assert!(LaneData::read(&render(r#""@m2/vocals:voice""#), &LaneKind::Audio).is_ok());
+        assert!(invalid(&render(r#""voice""#), &LaneKind::Audio).contains("`render` must name a pack's kernel"));
+        assert!(
+            invalid(&render(r#""std:stretch""#), &LaneKind::Audio).contains("`render` must name a pack's kernel"),
+            "no std kernel (S9)"
         );
     }
 

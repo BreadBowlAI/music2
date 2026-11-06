@@ -215,6 +215,17 @@ pub enum Gesture {
         step: f64,
         to: Hit,
     },
+    /// Find notes (VOX-43): the clip's `sung` notes from measure `measure` (`@m2/vocals:notes`) of
+    /// its file, and `render` (`@m2/vocals:voice`) to play the edited ones. The server measures the
+    /// file first, off the session's lock, and gives the gesture what it `found`.
+    #[serde(rename = "find_notes")]
+    FindNotes {
+        clip: ClipRef,
+        measure: String,
+        render: String,
+        #[serde(skip)]
+        found: Option<std::sync::Arc<m2_runtime::measure::Measured>>,
+    },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
     /// added) and clips deleted by id.
     Set {
@@ -536,6 +547,12 @@ fn apply_then(
                 )));
             }
             if let Some(r) = reverse {
+                // Played backwards, edited notes would play as sung (RENDER-30b, the review's S8).
+                if *r && !c.reverse && c.render.is_some() && c.sung.iter().any(m2_song::Sung::edited) {
+                    return Err(EditError::Rejected(
+                        "This clip's notes are edited, and played backwards they would play as sung: set their moves and straightening back to 0 first, or reverse a copy.".into(),
+                    ));
+                }
                 c.reverse = *r;
             }
             if let Some(o) = offset {
@@ -557,6 +574,19 @@ fn apply_then(
                 Some(false) => c.warp.clear(),
                 _ => {}
             }
+            l.keep[i] = Some(Clip::Audio(c));
+        }
+        Gesture::FindNotes { clip, measure, render, found } => {
+            let tempo = rev.compiled.data.tempo();
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Audio(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Find notes finds the notes of a recorded voice: an audio clip.".into()));
+            };
+            let found = found.as_deref().ok_or_else(|| {
+                EditError::Rejected(format!("Find notes measures the clip's file by `{measure}` first: ask the server for it"))
+            })?;
+            crate::sung::find(&mut c, measure, render, found, tempo)?;
             l.keep[i] = Some(Clip::Audio(c));
         }
         Gesture::Set { lane, put, delete } => {
@@ -680,7 +710,7 @@ fn apply_then(
                 match p {
                     crate::comp::Piece::Same(k) => kept[k] = true,
                     crate::comp::Piece::Made(k, a) => {
-                        let mut a = Clip::Audio(a);
+                        let mut a = Clip::Audio(*a);
                         if std::mem::replace(&mut kept[k], true) {
                             a.set_id(None);
                             l.added.push((a, false));
@@ -1707,12 +1737,23 @@ impl Work<'_> {
     /// breaks the id rule, or one whose id an earlier clip of the lane has, gets a fresh one.
     fn finish(self, mint: &mut dyn FnMut(&LaneAddr) -> String) -> Vec<LaneEdit> {
         let mut edits = vec![];
+        let tempo = self.rev.compiled.data.tempo();
+        // An audio clip a gesture wrote keeps only the sung notes that reach the part of its file
+        // it plays (VOX-44); one it left as it was keeps its line.
+        let trim = |c: Clip| match c {
+            Clip::Audio(mut a) => {
+                crate::sung::trim(&mut a, tempo);
+                Clip::Audio(a)
+            }
+            c => c,
+        };
         for (addr, l) in self.lanes {
             let same = l.added.is_empty() && l.keep.iter().zip(&l.was).all(|(k, w)| k.as_ref() == Some(w));
             if same {
                 continue;
             }
-            let out: Vec<(Clip, bool)> = l.keep.into_iter().flatten().map(|c| (c, false)).chain(l.added).collect();
+            let kept = l.keep.into_iter().zip(&l.was).filter_map(|(k, w)| k.map(|k| if &k == w { k } else { trim(k) }));
+            let out: Vec<(Clip, bool)> = kept.map(|c| (c, false)).chain(l.added.into_iter().map(|(c, m)| (trim(c), m))).collect();
             edits.push(finished(addr, &l.kind, out, mint));
         }
         edits
@@ -1793,6 +1834,16 @@ pub fn apply_as(rev: &Revision, g: &Gesture, tx_id: &str) -> Result<Vec<LaneEdit
     apply(rev, g, &mut mint)
 }
 
+/// The audio clip `clip` names in `rev`.
+pub fn audio_clip(rev: &Revision, clip: &ClipRef) -> Result<AudioClip, EditError> {
+    let mut w = Work { rev, lanes: BTreeMap::new(), then: None };
+    let (lane, i) = w.resolve(clip)?;
+    match &w.lanes[&lane].was[i] {
+        Clip::Audio(a) => Ok(a.clone()),
+        _ => Err(EditError::Rejected("That isn't an audio clip.".into())),
+    }
+}
+
 /// `g` with each clip it names pinned to its hash in `rev`, where the gesture carries none: what a
 /// lane lease saw, so an outside change to a clip it drags ends the lease (WRITE-22a).
 pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
@@ -1819,6 +1870,7 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Points { clip, .. }
         | Gesture::Audio { clip, .. }
         | Gesture::Comp { clip, .. }
+        | Gesture::FindNotes { clip, .. }
         | Gesture::Stamp { clip, .. }
         | Gesture::Paste { into: Some(clip), .. } => pin(clip)?,
         Gesture::Create { .. }
@@ -1848,8 +1900,11 @@ pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>)
         crate::beats_since(s, since, "where the song's music is")?;
     }
     // A comp acts on every piece of its comp, not only the clip it names (VOX-1), as the Beat
-    // grid's steps act on their lane.
-    if let (Gesture::Hits { lane, .. } | Gesture::Comp { clip: ClipRef { lane, .. }, .. }, Some(since)) = (g, since) {
+    // grid's steps act on their lane; and `set` writes clips whole, as a voice's roll sends them,
+    // so another's change to the lane since is refused rather than written over (the review's S7).
+    if let (Gesture::Hits { lane, .. } | Gesture::Comp { clip: ClipRef { lane, .. }, .. } | Gesture::Set { lane, .. }, Some(since)) =
+        (g, since)
+    {
         let file = DataPath::lane(lane).to_string();
         let folder = format!("data/{}/", lane.module);
         crate::unchanged_since(s, since, &file, |p| p == file || p == folder.trim_end_matches('/'))?;
@@ -1875,7 +1930,14 @@ pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>)
     }
     let label = describe(rev, &edits);
     let lanes = wrote.iter().map(|w| w.lane.clone()).collect();
-    let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ..Confined::default() }));
+    // Find notes writes the song's dependency on the measure's pack when it lacks it (PACK-10).
+    let (mut ops, mut ranges) = (ops, BTreeMap::new());
+    if let Gesture::FindNotes { measure, render, .. } = g {
+        let also = crate::packs::needs_all(s, &[measure.as_str(), render.as_str()])?;
+        ops.extend(also.ops);
+        ranges.extend(also.ranges);
+    }
+    let mut tx = plan::planned(s, label.clone(), ops, Expect::Confined(Confined { lanes, ranges, ..Confined::default() }));
     tx.id = tx_id.clone();
     let done = plan::run(s, tx, |_, checked| read_as_written(checked, &wrote))?;
     Ok(ClipsEdited { edited: Edited { revision: done.number, file: shown, before: label.0, after: label.1 }, made })
