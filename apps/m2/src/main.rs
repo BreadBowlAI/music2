@@ -662,6 +662,51 @@ fn run(args: Vec<String>) -> Result<()> {
                             serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
                         format!("      {:14} {what} view", v.name)
                     };
+                    // A call's code, on one line (CARD-41).
+                    if let Some(code) = &n.code {
+                        println!("      code: {code}");
+                    }
+                    // A row of a group or of the face, as the card shows it (CARD-25, CARD-41).
+                    let row_line = |row: &m2_editor::views::Row| -> Result<Option<String>> {
+                        Ok(Some(match row {
+                            m2_editor::views::Row::Input(id) => {
+                                let Some(p) = n.inputs.iter().find(|p| &p.id == id) else { return Ok(None) };
+                                match (&p.knob, p.readonly, &p.inlet, &p.lane) {
+                                    (Some(k), ..) => match n.knobs.iter().find(|x| &x.id == k) {
+                                        Some(k) => knob_line(k)?,
+                                        None => return Ok(None),
+                                    },
+                                    (_, Some(i), ..) => match n.readonly.get(i) {
+                                        Some(r) => readonly_line(r),
+                                        None => return Ok(None),
+                                    },
+                                    (_, _, Some(c), _) => {
+                                        let from = n.inlets.iter().find(|x| &x.id == c).map_or("", |x| x.name.as_str());
+                                        format!("      {:14} ← {from}", p.label)
+                                    }
+                                    (_, _, _, Some(l)) => format!("      {:14} follows the {} lane", p.label, l.lane),
+                                    _ => format!("      {}", p.label),
+                                }
+                            }
+                            m2_editor::views::Row::Setting(id) => match n.settings.iter().find(|x| &x.id == id) {
+                                Some(x) => setting_line(x)?,
+                                None => return Ok(None),
+                            },
+                            m2_editor::views::Row::View(name) => match n.views.iter().find(|v| &v.name == name) {
+                                Some(v) => view_line(v),
+                                None => return Ok(None),
+                            },
+                        }))
+                    };
+                    // Its face as a heading over its rows, before its groups (CARD-41).
+                    if !n.face.is_empty() {
+                        println!("    Face");
+                        for row in &n.face {
+                            if let Some(line) = row_line(row)? {
+                                println!("{line}");
+                            }
+                        }
+                    }
                     if n.groups.is_empty() {
                         for k in &n.knobs {
                             println!("{}", knob_line(k)?);
@@ -681,36 +726,9 @@ fn run(args: Vec<String>) -> Result<()> {
                     for g in &n.groups {
                         println!("    {}", g.name);
                         for row in &g.rows {
-                            let line = match row {
-                                m2_editor::views::Row::Input(id) => {
-                                    let Some(p) = n.inputs.iter().find(|p| &p.id == id) else { continue };
-                                    match (&p.knob, p.readonly, &p.inlet, &p.lane) {
-                                        (Some(k), ..) => match n.knobs.iter().find(|x| &x.id == k) {
-                                            Some(k) => knob_line(k)?,
-                                            None => continue,
-                                        },
-                                        (_, Some(i), ..) => match n.readonly.get(i) {
-                                            Some(r) => readonly_line(r),
-                                            None => continue,
-                                        },
-                                        (_, _, Some(c), _) => {
-                                            let from = n.inlets.iter().find(|x| &x.id == c).map_or("", |x| x.name.as_str());
-                                            format!("      {:14} ← {from}", p.label)
-                                        }
-                                        (_, _, _, Some(l)) => format!("      {:14} follows the {} lane", p.label, l.lane),
-                                        _ => format!("      {}", p.label),
-                                    }
-                                }
-                                m2_editor::views::Row::Setting(id) => match n.settings.iter().find(|x| &x.id == id) {
-                                    Some(x) => setting_line(x)?,
-                                    None => continue,
-                                },
-                                m2_editor::views::Row::View(name) => match n.views.iter().find(|v| &v.name == name) {
-                                    Some(v) => view_line(v),
-                                    None => continue,
-                                },
-                            };
-                            println!("{line}");
+                            if let Some(line) = row_line(row)? {
+                                println!("{line}");
+                            }
                         }
                     }
                 }

@@ -72,7 +72,7 @@ Render a track, named by its key (or the whole song), to a new `assets/<asset-na
 m2 graph <project> [--json]
 ```
 
-The graph the canvas shows: calls, their knobs and settings, connections. A card whose sound puts its values in groups prints each group as a heading over its rows, with More last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.
+The graph the canvas shows: calls, their knobs and settings, connections. Each call prints its code on one line (`code:`), as the card's code line shows it. A card whose sound names a face prints it as a heading, Face, over its rows; one whose sound puts its values in groups prints each group as a heading over its rows, with More last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.
 
 ## m2 controls
 

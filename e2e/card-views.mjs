@@ -9,10 +9,25 @@
 // Automate on the shape makes a lane of names: a clip on it shows its name, and a click on the clip
 // picks a name from a menu there, one points gesture. Each state linted.
 //
-//   node e2e/card-views.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
+// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (CARD-42): its groups are tabs
+// there, so the patch's own checks (the titles, folding, its "N more" row, the shape's menu, the
+// scope scrolled out of sight) are left to the patch run, and the pictures are reached by their tabs.
+//
+//   node e2e/card-views.mjs <root> <home> <project>     (the `fix` or `chain` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+
+/** Run on Device's chain (the `chain` kind), else on the patch. */
+const CHAIN = process.env.E2E_DEVICE === "chain";
+/** The scroller Device draws in. */
+const DEVICE = CHAIN ? "[data-testid=chain]" : "[data-testid=graph]";
+/** On the chain, show the tab that holds `name`'s values (CARD-43); on the patch every group shows. */
+const tab = async (name) => {
+  if (!CHAIN) return;
+  await page.click(`${card} [data-tab="${name}"]`);
+  await until(async () => !!(await page.$(`${card} [data-tab-panel="${name}"]`)));
+};
 
 const { page, errors, api, key, view, box, posts } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
@@ -27,7 +42,7 @@ cdp.on("Network.webSocketFrameSent", ({ response }) => {
   } catch {}
 });
 await page.reload({ waitUntil: "domcontentloaded" });
-await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
+await page.waitForSelector(`${DEVICE} [data-module]`, { timeout: 10000 });
 
 /** The lint over what is inside `sel`. */
 const linted = async (sel, what) => {
@@ -111,10 +126,11 @@ await until(async () => !!(await page.$('[data-module-tab="wobble"]')), 15000);
 await page.click('[data-module-tab="wobble"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-module="wobble"] [data-node="wobble"]';
-check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), "Wobble's card shows its groups");
+check(await until(async () => !!(await page.$(CHAIN ? `${card}[data-frame] [data-tab="Amp"]` : `${card} [data-group]`)), 15000), CHAIN ? "Wobble's card shows its groups as tabs" : "Wobble's card shows its groups");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "start", inline: "center" }));
 await sleep(200);
 
+if (!CHAIN) {
 // ---------------------------------------------------------------- groups (CARD-25)
 
 const groups = () => page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
@@ -151,18 +167,22 @@ check(await until(async () => !!(await page.$("[data-testid=pointer-show]"))), "
 await page.click("[data-testid=pointer-show]");
 check(await until(async () => (await groups()).length === 4 && !!(await page.$(`${card} [data-knob-id="${sustainNow}"]`))), "Show unfolds the card to the knob");
 await page.click("[data-testid=pointer-ok]").catch(() => {});
+}
 
 // ---------------------------------------------------------------- a choice's menu and a switch (CARD-20, CARD-21)
 
 const tracked = read("tracks/wobble.ts");
 const shape = `${card} [data-knob="shape"]`;
+// The menu is the patch's: the chain draws a choice of three as a segmented control (frame).
+let n = posts.length;
+if (!CHAIN) {
 check((await page.$eval(shape, (e) => `${e.dataset.kind} ${e.dataset.value} ${!!e.dataset.knobId}`)) === 'choice "saw" true', "shape is a menu, at saw, and still a knob (its id)");
 await page.click(`${shape} [data-testid=setting-menu]`);
 await page.waitForSelector("[data-testid=setting-options]");
 const options = await page.$$eval("[data-testid=setting-options] [role=menuitem]", (els) => els.map((e) => e.textContent));
 check(JSON.stringify(options) === '["saw","square","sine"]', `its menu lists its names: ${JSON.stringify(options)}`);
 await linted("[data-testid=setting-options]", "the shape's menu");
-let n = posts.length;
+n = posts.length;
 await page.click('[data-testid=setting-options] [data-option="square"]');
 check(await until(() => read("tracks/wobble.ts") === tracked.replace('{ shape: "saw",', '{ shape: "square",')), `picking square writes its name: ${read("tracks/wobble.ts").match(/shape: "\w+"/)?.[0]}`);
 check(posts.slice(n).filter((p) => p.url === "/api/graph/set").length === 1, "one write, no drag");
@@ -171,6 +191,7 @@ check(await until(async () => (await page.$eval(shape, (e) => e.dataset.value)) 
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes the code back, byte for byte");
+}
 const sub = `${card} [data-knob="sub"] [role=switch]`;
 await seen(sub);
 check((await page.$eval(sub, (e) => e.getAttribute("aria-checked"))) === "false", "sub is a switch, off");
@@ -183,6 +204,7 @@ check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes i
 
 // ---------------------------------------------------------------- the envelope's corner (CARD-27, CARD-22)
 
+await tab("Amp");
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
 const handle = await seen(`${card} [data-view="amp"] [data-handle="attack"]`);
@@ -205,6 +227,7 @@ await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes it back");
 
 // The filter's peak: cutoff and q in one edit.
+await tab("Filter");
 const peak = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
 await page.mouse.move(peak.x + peak.width / 2, peak.y + peak.height / 2);
 await page.mouse.down();
@@ -232,6 +255,7 @@ await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes it back");
 
 // The keys view: its region over its keys; a click plays the key under it, as hard as it is high.
+await tab("More");
 await seen(`${card} [data-view="keys"]`);
 await page.screenshot({ path: `${ROOT}/views-pictures.png` });
 check(!!(await page.$(`${card} [data-view="keys"] [data-region="tone.wav"]`)), "the keys view draws tone.wav's region");
@@ -257,14 +281,17 @@ check(await until(async () => (await frames()) >= 5, 10000), `while the song pla
 await page.keyboard.press("Space");
 // Out of sight, the card stops asking (TAP-4): scrolled out of the Device view, or the view left.
 const scopeAsks = () => posts.filter((p) => p.url === "/api/graph/look").map((p) => JSON.parse(p.body).on);
-await page.$eval("[data-testid=graph]", (e) => e.scrollTo({ top: 0, left: 0 }));
-await page.$eval(`${card} [data-scope]`, (e) => {
-  const g = document.querySelector("[data-testid=graph]");
-  g.scrollTop += e.getBoundingClientRect().bottom - g.getBoundingClientRect().top + 50;
-});
-check(await until(() => scopeAsks().at(-1) === false), `scrolled out of sight, the scope stops asking: ${JSON.stringify(scopeAsks().slice(-3))}`);
-await seen(`${card} [data-scope]`);
-check(await until(() => scopeAsks().at(-1) === true), "back in sight, it asks again");
+// The patch is taller than the dock, so its scope can be scrolled away; the chain's card fits.
+if (!CHAIN) {
+  await page.$eval("[data-testid=graph]", (e) => e.scrollTo({ top: 0, left: 0 }));
+  await page.$eval(`${card} [data-scope]`, (e) => {
+    const g = document.querySelector("[data-testid=graph]");
+    g.scrollTop += e.getBoundingClientRect().bottom - g.getBoundingClientRect().top + 50;
+  });
+  check(await until(() => scopeAsks().at(-1) === false), `scrolled out of sight, the scope stops asking: ${JSON.stringify(scopeAsks().slice(-3))}`);
+  await seen(`${card} [data-scope]`);
+  check(await until(() => scopeAsks().at(-1) === true), "back in sight, it asks again");
+}
 await view("mix");
 check(await until(() => scopeAsks().at(-1) === false), "the Device view left, it stops");
 await view("graph");

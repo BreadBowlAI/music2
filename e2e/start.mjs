@@ -14,7 +14,7 @@ await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);
 const H = { "x-m2-token": sess.page_token };
 const api = async (path, body) => {
   const r = await fetch(`${sess.url}/api/${path}`, body === undefined ? { headers: H } : { method: "POST", headers: { ...H, "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -99,7 +99,7 @@ await app.setViewport({ width: 1440, height: 900, deviceScaleFactor: 2 });
 const invoked = [];
 await app.exposeFunction("__invoked", (cmd, args) => invoked.push([cmd, args]));
 await app.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: true, token, platform: "macos" };
+  window.__M2__ = { native: true, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
   window.__TAURI_INTERNALS__ = {
     invoke: async (cmd, args) => { window.__invoked(cmd, JSON.parse(JSON.stringify(args ?? {}))); return 0; },
     transformCallback: () => 0,

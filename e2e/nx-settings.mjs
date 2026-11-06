@@ -88,7 +88,7 @@ async function pageOn(s, { pc = false, app = false, picked = null } = {}) {
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.evaluateOnNewDocument(
     (token, platform, app, picked) => {
-      window.__M2__ = { native: app, token, platform };
+      window.__M2__ = { native: app, token, platform }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
       if (!app) return;
       const callbacks = new Map();
       const menu = [];

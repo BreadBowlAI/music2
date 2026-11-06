@@ -9,6 +9,8 @@
 //              cables  a one-file song (fixtures/)     node suite <root>
 //              fix     examples/first-song open        node suite <root> <home> <project>
 //              attn    same as fix                     node suite <root> <home> <project>
+//              chain   same as fix, with E2E_DEVICE=chain: the window's Device shows the chain
+//                      (CARD-42), so a suite's checks that aren't the patch's own run on it
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
@@ -109,7 +111,11 @@ export const SUITES = [
   ["ag-focus", "export", { expect: 91, s: 8 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
+  // On Device's chain (CARD-42): all but the dashed cable, which the chain doesn't draw.
+  ["nx-effects", "chain", { expect: 46, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["sidechain", "fix", { expect: 17, s: 20 }],
+  // Its checks on Device's chain too (CARD-42): every one holds there, and one more says the + is the Bass row's.
+  ["sidechain", "chain", { expect: 18, s: 20 }],
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
@@ -189,6 +195,9 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 36, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
+  // On Device's chain (CARD-42): the pictures by their tabs, the switch, the scope and the lane of names.
+  ["card-views", "chain", { expect: 41, s: 12 }],
+  ["frame", "fix", { expect: 77, s: 14 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
@@ -204,7 +213,7 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
 ];
-const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
+const KINDS = ["proj", "cables", "fix", "attn", "chain", "empty", "none", "export", "library"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
@@ -400,6 +409,7 @@ function prepare(dir, kind) {
     cables: [dir],
     fix: [dir, home, proj],
     attn: [dir, home, proj],
+    chain: [dir, home, proj],
     empty: [dir, "empty"],
     none: [dir, home],
     export: [dir, home, proj, cli],
@@ -482,7 +492,7 @@ async function serveBucket(dir) {
   return { url: `http://127.0.0.1:${server.address().port}`, stop };
 }
 
-function envFor(home, clap, probe) {
+function envFor(home, clap, probe, kind) {
   const env = { ...process.env, HOME: home, M2_AUDIO: "none", M2_MIDI: "inject", M2_AUDIO_INPUT: "inject", M2_AUDIO_INPUTS: "Test mic,USB mic", E2E_CHROME: chrome, E2E_REPO: opts.repo, E2E_HEADLESS: headless };
   delete env.CLAP_PATH;
   delete env.M2_PROBE;
@@ -491,6 +501,9 @@ function envFor(home, clap, probe) {
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   // The probe plugin, which a debug server installs (br-plugins).
   if (probe) env.M2_PROBE = "1";
+  // The chain kind: the suite's page opens with Device showing the chain (fixlib's open).
+  delete env.E2E_DEVICE;
+  if (kind === "chain") env.E2E_DEVICE = "chain";
   return env;
 }
 
@@ -499,7 +512,7 @@ async function runOne(suite, kind, o = {}, stream) {
   const dir = path.join(root, name);
   const logFile = path.join(root, `${name}.log`);
   const { home, open, args } = prepare(dir, kind);
-  const env = envFor(home, o.clap, o.probe);
+  const env = envFor(home, o.clap, o.probe, kind);
   const bucket = kind === "library" ? await serveBucket(dir) : null;
   if (bucket) env.M2_REGISTRY = bucket.url;
   // However the run ends, the bucket's server stops with it.

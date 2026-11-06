@@ -166,6 +166,10 @@ pub struct Editor {
     /// Its card's groups, in order (CARD-17). Written only when there are some.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<Group>,
+    /// Its card's face, by the names of its values and views, in order (CARD-40). Written only when
+    /// there is one, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub face: Vec<String>,
     /// Said on purpose: code plays it, and no list offers it (PKG-7). Such a component has no category.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub unlisted: bool,

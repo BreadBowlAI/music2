@@ -70,16 +70,23 @@ import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
 import { makeKit } from "./Tracks";
-import { MenuValue, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
+import { MenuValue, Segmented, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
 import { useFolded } from "../lib/folded";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
-const Locked = createContext<string | null>(null);
+export const Locked = createContext<string | null>(null);
 /** A track's name by its key, for the controls that name one (a mixer channel's `hats.db`: Hats volume). */
-const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
+export const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
 /** The Song's mixer, drawn as one compact card (MX-6): its node and how many channels it has. */
-const MixerCard = createContext<{ id: string; channels: number } | null>(null);
+export const MixerCard = createContext<{ id: string; channels: number } | null>(null);
+/** Whether the cards here draw their ports: the patch's do, the chain's don't (CARD-42). */
+export const Ports = createContext(true);
+/**
+ * What feeds each input that no cable names, by `node<port`: in the chain, where no cable is drawn,
+ * the call that drives it ("← Blend", CARD-42).
+ */
+export const Fed = createContext<Map<string, string>>(new Map());
 
 /** The merged input of the compact mixer card: every channel's input, as one port. */
 const CHANNELS = "channels";
@@ -611,7 +618,7 @@ interface Cable { from: string; name: string; kind: PortKind; x0: number; y0: nu
 const held = new Map<string, { knob: string; node: string }>();
 
 /** React keys for a module's nodes and knobs: their ids, but a held drag's knob and node keep their keys (see `held`). */
-function stableKeys(nodes: ViewNode[], leases: GraphLease[] | undefined) {
+export function stableKeys(nodes: ViewNode[], leases: GraphLease[] | undefined) {
   const knobs = new Map<string, string>();
   const keep = new Map<string, string>();
   for (const l of leases ?? []) {
@@ -828,6 +835,8 @@ function importTitle(label: string) {
 
 /** An input: its kind's mark centred on a node's left edge, filled when something is connected to it. */
 function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; filled: boolean; className?: string }) {
+  // The chain draws no ports (CARD-42).
+  if (!useContext(Ports)) return null;
   return (
     <span
       data-port-dot
@@ -869,23 +878,6 @@ function NodeCard({
   onCable: (node: ViewNode, output: OutputPort, e: React.PointerEvent) => void;
   style: React.CSSProperties;
 }) {
-  const toast = useStore((s) => s.toast);
-  const [picking, setPicking] = useState<HTMLElement | null>(null);
-  const closePicker = useCallback(() => setPicking(null), []);
-  // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
-  // another call now: its menu closes then.
-  const [menu, setMenu] = useState<HTMLElement | null>(null);
-  // Its Presets popover (FMT-22), open from the header's Presets button.
-  const [presets, setPresets] = useState<HTMLElement | null>(null);
-  const call = `${node.id} ${node.label}`;
-  useEffect(() => {
-    setMenu(null);
-    setPresets(null);
-  }, [call]);
-  const why = useContext(Locked);
-  /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
-  const edited = (p: Promise<{ revision?: number; step?: number }>, words: string) =>
-    p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
   // Just the header, its one circle beside it (see `compact`).
   const small = compact(node);
   // The Song's mixer, as one compact card (MX-6).
@@ -895,15 +887,9 @@ function NodeCard({
   // A call by its component's label ("LFO", "Reverb"); a track's signal by the track; a lane or an
   // output by the rule controls follow (`cutoff` → Cutoff). No caption under it: the glyph and the
   // place say what kind it is (principle 4).
-  const titled =
-    node.kind === "import"
-      ? importTitle(node.label)
-      : node.kind === "lane" || node.kind === "export"
-        ? controlLabel({ label: node.label })
-        : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
+  const titled = titleOf(node, effects);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
-  // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
   // Its settings (CARD-7); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
   const settings = mixing ? [] : settingsOf(node);
   // Its rows as drawn: in its groups, with its first alone when folded (CARD-25).
@@ -912,13 +898,7 @@ function NodeCard({
   const drawnInputs = rows.flatMap((x) => (x.t === "input" ? [x.port] : []));
   const recordings = settings.filter((x) => x.kind === "recording" && !x.readonly);
   const tracks = useContext(Tracks);
-  // The drum machine's card offers Make it a kit (KIT-24), on a track that plays it.
-  const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
-  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
-  const sound =
-    node.kind === "call" &&
-    !mixing &&
-    (!!node.plugin || (!!node.component && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component))));
+  const why = useContext(Locked);
   return (
     <div
       className="group/card absolute rounded-md bg-raised ring-1 ring-line flex flex-col"
@@ -959,120 +939,10 @@ function NodeCard({
             <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} className={clsx("transition-transform duration-140 ease-out", !folded && "rotate-90")} />
           </button>
         )}
-        {sound && (
-          <button
-            className={clsx(
-              "shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
-              presets && "bg-accent-soft text-accent-strong",
-            )}
-            data-presets={node.id}
-            title={`Presets for ${titled}: load one, or save these settings`}
-            aria-haspopup="dialog"
-            aria-expanded={!!presets}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              const button = e.currentTarget;
-              setPresets((p) => (p ? null : button));
-            }}
-          >
-            Presets
-          </button>
-        )}
-        {machine && (
-          <button
-            className="shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
-            data-make-kit={module}
-            title={why ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
-            disabled={!editable}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => void makeKit(module)}
-          >
-            Make it a kit
-          </button>
-        )}
-        {node.effect && node.menu && (
-          <button
-            className={clsx(
-              "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-[opacity,color,background-color] duration-80 ease-linear",
-              menu ? "opacity-100 bg-accent-soft text-accent-strong" : "opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100",
-            )}
-            data-effect-menu={node.id}
-            title={`More for ${titled}`}
-            aria-label={`${node.effect} menu`}
-            aria-haspopup="menu"
-            aria-expanded={!!menu}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={(e) => {
-              const button = e.currentTarget;
-              setMenu((m) => (m ? null : button));
-            }}
-          >
-            <Ellipsis size={14} />
-          </button>
-        )}
-        {node.effect && (
-          <button
-            className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
-            title={why ?? `Remove ${titled}, keeping what it was applied to`}
-            aria-label={`Remove ${node.effect}`}
-            disabled={!editable}
-            onClick={() => void edited(graphApi.removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true }), `Removed ${titled}`)}
-          >
-            <Trash2 size={14} />
-          </button>
-        )}
-        {node.audio && effects.length > 0 && (
-          <button
-            className={clsx(
-              "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear",
-              picking && "bg-accent-soft text-accent-strong",
-            )}
-            title={why ?? "Add an effect after this"}
-            aria-label={`Add an effect after ${node.label}`}
-            aria-haspopup="dialog"
-            aria-expanded={!!picking}
-            disabled={!editable}
-            onClick={(e) => {
-              const button = e.currentTarget;
-              setPicking((p) => (p ? null : button));
-            }}
-          >
-            <Plus size={14} />
-          </button>
-        )}
+        <CardTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={!!mixing} />
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
-      {presets && (
-        <PresetPopover
-          node={node.id}
-          title={titled}
-          session={session}
-          revision={revision}
-          anchor={presets}
-          locked={why ?? (editable ? null : "This song can't be edited here")}
-          onClose={() => setPresets(null)}
-        />
-      )}
-      {menu && node.menu && (
-        <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
-      )}
-      {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
-      {picking &&
-        createPortal(
-          <EffectBrowser
-            effects={effects}
-            after={node.label}
-            named={titled}
-            anchor={picking}
-            onClose={closePicker}
-            onPick={(effect) => {
-              setPicking(null);
-              void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
-            }}
-          />,
-          picking.closest("section[data-module]") ?? document.body,
-        )}
       {small && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
       {mixing && (
         <div className="py-1.5">
@@ -1144,10 +1014,189 @@ function NodeCard({
 }
 
 /**
+ * A card's tools, in its header: Presets (FMT-22), Make it a kit (KIT-24), the effect's ⋯ menu,
+ * remove and + (add an effect after it), each with its popover. The patch's card and the chain's
+ * frame (CARD-43) share them.
+ */
+export function CardTools({
+  node,
+  module,
+  titled,
+  session,
+  revision,
+  editable,
+  effects,
+  mixing,
+}: {
+  node: ViewNode;
+  module: string;
+  titled: string;
+  session: number;
+  revision: number;
+  editable: boolean;
+  effects: Effect[];
+  /** The Song's compact mixer card (MX-6), which has no Presets. */
+  mixing: boolean;
+}) {
+  const toast = useStore((s) => s.toast);
+  const [picking, setPicking] = useState<HTMLElement | null>(null);
+  const closePicker = useCallback(() => setPicking(null), []);
+  // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
+  // another call now: its menu closes then.
+  const [menu, setMenu] = useState<HTMLElement | null>(null);
+  // Its Presets popover (FMT-22), open from the header's Presets button.
+  const [presets, setPresets] = useState<HTMLElement | null>(null);
+  const call = `${node.id} ${node.label}`;
+  useEffect(() => {
+    setMenu(null);
+    setPresets(null);
+  }, [call]);
+  const why = useContext(Locked);
+  /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
+  const edited = (p: Promise<{ revision?: number; step?: number }>, words: string) =>
+    p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
+  // The drum machine's card offers Make it a kit (KIT-24), on a track that plays it.
+  const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
+  // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
+  const sound =
+    node.kind === "call" &&
+    !mixing &&
+    (!!node.plugin || (!!node.component && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component))));
+  return (
+    <>
+          {sound && (
+            <button
+              className={clsx(
+                "shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
+                presets && "bg-accent-soft text-accent-strong",
+              )}
+              data-presets={node.id}
+              title={`Presets for ${titled}: load one, or save these settings`}
+              aria-haspopup="dialog"
+              aria-expanded={!!presets}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                const button = e.currentTarget;
+                setPresets((p) => (p ? null : button));
+              }}
+            >
+              Presets
+            </button>
+          )}
+          {machine && (
+            <button
+              className="shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
+              data-make-kit={module}
+              title={why ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
+              disabled={!editable}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => void makeKit(module)}
+            >
+              Make it a kit
+            </button>
+          )}
+          {node.effect && node.menu && (
+            <button
+              className={clsx(
+                "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-[opacity,color,background-color] duration-80 ease-linear",
+                menu ? "opacity-100 bg-accent-soft text-accent-strong" : "opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100",
+              )}
+              data-effect-menu={node.id}
+              title={`More for ${titled}`}
+              aria-label={`${node.effect} menu`}
+              aria-haspopup="menu"
+              aria-expanded={!!menu}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={(e) => {
+                const button = e.currentTarget;
+                setMenu((m) => (m ? null : button));
+              }}
+            >
+              <Ellipsis size={14} />
+            </button>
+          )}
+          {node.effect && (
+            <button
+              className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
+              title={why ?? `Remove ${titled}, keeping what it was applied to`}
+              aria-label={`Remove ${node.effect}`}
+              disabled={!editable}
+              onClick={() => void edited(graphApi.removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true }), `Removed ${titled}`)}
+            >
+              <Trash2 size={14} />
+            </button>
+          )}
+          {node.audio && effects.length > 0 && (
+            <button
+              className={clsx(
+                "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear",
+                picking && "bg-accent-soft text-accent-strong",
+              )}
+              title={why ?? "Add an effect after this"}
+              aria-label={`Add an effect after ${node.label}`}
+              aria-haspopup="dialog"
+              aria-expanded={!!picking}
+              disabled={!editable}
+              onClick={(e) => {
+                const button = e.currentTarget;
+                setPicking((p) => (p ? null : button));
+              }}
+            >
+              <Plus size={14} />
+            </button>
+          )}
+        {presets && (
+          <PresetPopover
+            node={node.id}
+            title={titled}
+            session={session}
+            revision={revision}
+            anchor={presets}
+            locked={why ?? (editable ? null : "This song can't be edited here")}
+            onClose={() => setPresets(null)}
+          />
+        )}
+        {menu && node.menu && (
+          <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
+        )}
+        {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
+        {picking &&
+          createPortal(
+            <EffectBrowser
+              effects={effects}
+              after={node.label}
+              named={titled}
+              anchor={picking}
+              onClose={closePicker}
+              onPick={(effect) => {
+                setPicking(null);
+                void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
+              }}
+            />,
+            picking.closest("section[data-module]") ?? document.body,
+          )}
+    </>
+  );
+}
+
+/**
+ * What a card is called: a call by its component's label ("LFO", "Reverb"); a track's signal by the
+ * track; a lane or an output by the rule controls follow (`cutoff` → Cutoff).
+ */
+export function titleOf(node: ViewNode, effects: Effect[]) {
+  return node.kind === "import"
+    ? importTitle(node.label)
+    : node.kind === "lane" || node.kind === "export"
+      ? controlLabel({ label: node.label })
+      : (node.effect ?? node.title ?? effects.find((e) => e.component === node.component)?.label ?? node.label);
+}
+
+/**
  * How an instrument plays its notes (RENDER-16), under its name: its first sentence ("Plays one
  * note at a time."), and all of it in the tooltip. Read-only: its code sets it.
  */
-function VoicesLine({ words }: { words: string }) {
+export function VoicesLine({ words }: { words: string }) {
   const first = words.split(/(?<=\.) /)[0];
   return (
     <div data-testid="voices" className="h-6 shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" title={words} aria-label={words}>
@@ -1161,7 +1210,7 @@ function VoicesLine({ words }: { words: string }) {
  * window or Close window, and what a gesture there latched, with Re-enable, which gives it back
  * to its lane or cable.
  */
-function PluginRow({ node, title, session }: { node: string; title: string; session: number }) {
+export function PluginRow({ node, title, session }: { node: string; title: string; session: number }) {
   const toast = useStore((s) => s.toast);
   const box = useStore((s) => s.graph?.plugins?.[node]);
   const [busy, setBusy] = useState(false);
@@ -1321,7 +1370,7 @@ function OutputPortView({
   );
 }
 
-function InputRow({
+export function InputRow({
   nodeKey,
   knobKey,
   node,
@@ -1331,6 +1380,8 @@ function InputRow({
   session,
   revision,
   editable,
+  cell,
+  ided,
 }: {
   nodeKey: string;
   knobKey: (id: string) => string;
@@ -1342,10 +1393,17 @@ function InputRow({
   session: number;
   revision: number;
   editable: boolean;
+  /** In a chain card's grid (CARD-45): a knob's size there; anything else takes a row across it. */
+  cell?: number;
+  /** In All's list (CARD-43): its id for `m2 set` in its tooltip. */
+  ided?: boolean;
 }) {
   const toast = useStore((s) => s.toast);
   const tracks = useContext(Tracks);
   const why = useContext(Locked);
+  const fed = useContext(Fed).get(`${node.id}<${input.id}`);
+  /** A row across a chain card's grid, else as it is. */
+  const wide = (row: React.ReactElement) => (cell ? <div className="col-span-full min-w-0">{row}</div> : row);
   // The menu of an input an automation lane drives (KN-2): Show lane, Remove automation.
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const knob = input.knob ? node.knobs.find((k) => k.id === input.knob) : undefined;
@@ -1355,9 +1413,23 @@ function InputRow({
   if (knob) {
     const key = knobKey(knob.id);
     // A menu or a switch (CARD-20, CARD-6): one click, one edit; never dragged.
-    if (picks(knob)) return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />;
+    if (picks(knob))
+      return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} cell={cell} ided={ided} />;
     return (
-      <KnobControl key={key} mountKey={key} nodeKey={nodeKey} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />
+      <KnobControl
+        key={key}
+        mountKey={key}
+        nodeKey={nodeKey}
+        knob={knob}
+        port={input.id}
+        label={controlLabel(input, tracks)}
+        owner={owner}
+        session={session}
+        revision={revision}
+        editable={editable}
+        cell={cell}
+        ided={ided}
+      />
     );
   }
 
@@ -1366,7 +1438,7 @@ function InputRow({
     // The knob comes back in its place: that says it, so no toast does.
     const disconnect = () =>
       graphApi.disconnect(session, revision, inlet.id, { name: `disconnecting ${inlet.name}` }).catch((error) => toast(error instanceof Error ? error.message : String(error)));
-    return (
+    return wide(
       <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
         <Dot id={input.id} kind={input.kind} filled />
         <span className="text-fg-muted truncate">{controlLabel(inlet, tracks)}</span>
@@ -1387,7 +1459,7 @@ function InputRow({
 
   const source = input.readonly != null ? node.readonly[input.readonly] : undefined;
   if (source) {
-    return (
+    return wide(
       <div
         className="relative h-[48px] pl-4 pr-3 py-1.5 min-w-0 flex flex-col justify-center"
         data-expression={source.label}
@@ -1404,7 +1476,7 @@ function InputRow({
   }
 
   // An input that listens (a duck's side, a key): what it hears, and a list of the tracks it could (CARD-35).
-  if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
+  if (node.listens && node.listens.port === input.id) return wide(<ListensRow node={node} input={input} filled={filled} editable={editable} />);
 
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
   // takes the automation out (KN-2).
@@ -1412,7 +1484,7 @@ function InputRow({
   const label = controlLabel(input, tracks);
   const lane = driven && useStore.getState().graph ? findLane(useStore.getState().graph!.timeline, driven.module, driven.lane) : undefined;
   const laneName = lane ? laneTitle(lane) : label;
-  return (
+  return wide(
     <div
       className="relative h-[28px] pl-4 pr-3 flex items-center gap-2 text-xs min-w-0"
       data-input={input.label}
@@ -1430,6 +1502,12 @@ function InputRow({
     >
       <Dot id={input.id} kind={input.kind} filled={filled} />
       <span className="text-fg-muted truncate">{label}</span>
+      {/* No cable is drawn in the chain: what drives it says so in words (CARD-42). */}
+      {fed && !driven && (
+        <span className="ml-auto text-fg-muted truncate" title={`Driven by ${fed}. Patch shows it.`}>
+          ← {fed}
+        </span>
+      )}
       {driven && <span aria-hidden className="ml-auto shrink-0 size-[5px] rounded-full bg-accent" />}
       {menu && driven && (
         <PointMenu
@@ -1453,7 +1531,7 @@ function InputRow({
  * input left out the row has no port and says None. Where it can't change (an effect in a track's
  * file), the button is greyed and its tooltip says why.
  */
-function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?: InputPort; filled: boolean; editable: boolean }) {
+export function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?: InputPort; filled: boolean; editable: boolean }) {
   const tracks = useContext(Tracks);
   const why = useContext(Locked);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -1531,6 +1609,15 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
 
 // ---------------------------------------------------------------- knobs
 
+/**
+ * The knob whose own keys or menu just wrote it while it had the keyboard's focus: the first write of
+ * a value the code left out gives its knob a new id, so it mounts again, and only that remount takes
+ * the focus back (CARD-46). Kept for the write's round trip, and dropped when the knob is left (review F1).
+ */
+let focused: { knob: string; el: Element; at: number } | null = null;
+/** How long a write's remount may take to take the focus back. */
+const REFOCUS_MS = 4000;
+
 /** A knob over an owned source value, as one input row: drag to hear it, release to write it. */
 function KnobControl({
   mountKey,
@@ -1542,6 +1629,8 @@ function KnobControl({
   session,
   revision,
   editable,
+  cell,
+  ided,
 }: {
   /** The React keys it and its node are mounted with, kept while it is dragged (see `held`). */
   mountKey: string;
@@ -1555,6 +1644,10 @@ function KnobControl({
   session: number;
   revision: number;
   editable: boolean;
+  /** In a chain card's grid (CARD-45): the knob over its label and its value, this many px. */
+  cell?: number;
+  /** Its id for `m2 set` in its tooltip (All's list, CARD-43). */
+  ided?: boolean;
 }) {
   const why = useContext(Locked);
   // Its drag and lease (Knob.tsx). A save that renumbers it mid-drag doesn't remount it (see `held`).
@@ -1580,8 +1673,30 @@ function KnobControl({
   const [typing, setTyping] = useState<{ text: string; width: number; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
 
+  // Its focus kept across the remount its own first write makes (see `focused`): by its card's key,
+  // its control and where it is drawn, so no other knob, nor another copy of it, takes it (review F9).
+  const self = `${nodeKey}|${knob.slot ?? knob.label}|${cell ?? "row"}${ided ? "|all" : ""}`;
+  useEffect(() => {
+    const el = svg.current;
+    const was = focused;
+    if (el && was?.knob === self && was.el !== el && !was.el.isConnected && Date.now() - was.at < REFOCUS_MS && (!document.activeElement || document.activeElement === document.body)) {
+      focused = null;
+      el.focus({ preventScroll: true });
+    }
+    // Left for something else (not taken away by its remount): nothing to take back.
+    const left = () => queueMicrotask(() => el?.isConnected && focused?.el === el && (focused = null));
+    el?.addEventListener("blur", left);
+    return () => el?.removeEventListener("blur", left);
+  }, [self]);
+  /** This knob writes while it has the focus: its remount may take the focus back. */
+  const mine = () => {
+    if (svg.current && svg.current === document.activeElement) focused = { knob: self, el: svg.current, at: Date.now() };
+  };
   /** A move of the knob to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
-  const change = (u: number) => g.change(fromUnit(g.descriptor, u));
+  const change = (u: number) => {
+    mine();
+    g.change(fromUnit(g.descriptor, u));
+  };
 
   const automate = () => {
     setMenu(null);
@@ -1589,7 +1704,10 @@ function KnobControl({
   };
 
   /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
-  const step = (n: number) => g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
+  const step = (n: number) => {
+    mine();
+    g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
+  };
   /** Type a value: the readout turns into a field of its size, its text selected. */
   const type = () => {
     // Steps just made are written first.
@@ -1623,12 +1741,93 @@ function KnobControl({
   const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
   const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: () => g.start(), onEnd: g.end, onCancel: g.abandon, focus: () => svg.current?.focus({ preventScroll: true }) });
 
+  const typingField = typing && (
+    <span className="relative shrink-0">
+      <input
+        autoFocus
+        data-testid="knob-type-in"
+        aria-label={`${label}: type a value`}
+        aria-invalid={typing.bad || undefined}
+        value={typing.text}
+        spellCheck={false}
+        style={{ width: typing.width }}
+        onFocus={(e) => e.currentTarget.select()}
+        onChange={(e) => setTyping({ ...typing, text: e.target.value, bad: false })}
+        onKeyDown={(e) => {
+          e.stopPropagation();
+          if (e.key === "Enter") {
+            if (!typed(typing.text)) setTyping({ ...typing, bad: true });
+          } else if (e.key === "Escape") closeTyping();
+          else if (e.key === "Tab") {
+            // On to the next control (or back, with ⇧), as a form's fields go.
+            e.preventDefault();
+            if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
+            focusNext(svg.current, e.shiftKey);
+          }
+        }}
+        // A click away writes what reads as a value, and drops what doesn't.
+        onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
+        onPointerDown={(e) => e.stopPropagation()}
+        className={clsx(
+          "h-5 -my-0.5 px-1 rounded-sm bg-raised border text-right text-xs text-fg outline-none",
+          typing.bad ? "border-danger" : "border-accent",
+        )}
+      />
+      {typing.bad && (
+        <span role="alert" className="absolute right-0 top-full mt-0.5 z-10 whitespace-nowrap text-xs text-danger">
+          Type a value, like −6, 2k or 120 ms
+        </span>
+      )}
+    </span>
+  );
+  // Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full.
+  const readoutText = (
+    <span
+      ref={readout}
+      className={clsx("shrink-0 text-xs tabular-nums", knob.written ? "text-fg" : "text-fg-muted")}
+      title={knob.written ? undefined : "Default. Not written in your code yet: changing it writes it in."}
+    >
+      {display(descriptor, value)}
+    </span>
+  );
+  // Inert only while it can't be edited: a save between steps mustn't take the focus from it.
+  const dial = (
+    <div inert={!editable && !g.dragging()} className={clsx("shrink-0", disabled && "pointer-events-none")}>
+      <MiniKnob
+        value={unit}
+        bipolar={bipolar}
+        disabled={disabled}
+        readout={display(descriptor, value)}
+        label={label}
+        reset={reset}
+        size={cell}
+        svg={svg}
+        pointer={grip.pointer}
+        onChange={change}
+        onStep={step}
+        onType={type}
+      />
+    </div>
+  );
+  const knobMenu = menu && (
+    <KnobMenu
+      knob={knob}
+      label={label}
+      value={value}
+      at={menu}
+      editable={editable}
+      locked={why}
+      onAutomate={automate}
+      onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
+      onClose={() => setMenu(null)}
+    />
+  );
   return (
     <div
       onContextMenu={(e) => {
@@ -1642,6 +1841,7 @@ function KnobControl({
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
+      data-cell={cell || undefined}
       aria-disabled={disabled}
       title={title}
       data-kind="number"
@@ -1649,7 +1849,9 @@ function KnobControl({
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
       onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
       className={clsx(
-        "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
+        "group/knob relative min-w-0 transition-colors duration-80",
+        // In a chain card's grid: a 64px column, the knob over its label and its value (CARD-45).
+        cell ? "w-16 py-1 flex flex-col items-center gap-0.5 rounded-sm" : "h-10 pl-4 pr-4 flex items-center gap-2",
         !disabled && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
         "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
@@ -1661,88 +1863,27 @@ function KnobControl({
         filled={false}
         className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-fg-muted truncate">{label}</div>
-        {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
-      </div>
-      {/* Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full. */}
-      {typing ? (
-        <span className="relative shrink-0">
-          <input
-            autoFocus
-            data-testid="knob-type-in"
-            aria-label={`${label}: type a value`}
-            aria-invalid={typing.bad || undefined}
-            value={typing.text}
-            spellCheck={false}
-            style={{ width: typing.width }}
-            onFocus={(e) => e.currentTarget.select()}
-            onChange={(e) => setTyping({ ...typing, text: e.target.value, bad: false })}
-            onKeyDown={(e) => {
-              e.stopPropagation();
-              if (e.key === "Enter") {
-                if (!typed(typing.text)) setTyping({ ...typing, bad: true });
-              } else if (e.key === "Escape") closeTyping();
-              else if (e.key === "Tab") {
-                // On to the next control (or back, with ⇧), as a form's fields go.
-                e.preventDefault();
-                if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
-                focusNext(svg.current, e.shiftKey);
-              }
-            }}
-            // A click away writes what reads as a value, and drops what doesn't.
-            onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
-            onPointerDown={(e) => e.stopPropagation()}
-            className={clsx(
-              "h-5 -my-0.5 px-1 rounded-sm bg-raised border text-right text-xs text-fg outline-none",
-              typing.bad ? "border-danger" : "border-accent",
-            )}
-          />
-          {typing.bad && (
-            <span role="alert" className="absolute right-0 top-full mt-0.5 z-10 whitespace-nowrap text-xs text-danger">
-              Type a value, like −6, 2k or 120 ms
-            </span>
-          )}
-        </span>
+      {cell ? (
+        <>
+          {dial}
+          <div className="w-full text-center text-xs text-fg-muted truncate">{label}</div>
+          <div className="max-w-full flex items-center justify-center gap-1">
+            {typingField || readoutText}
+            <HomeMarker home={knob.home} label={label} />
+          </div>
+        </>
       ) : (
-        <span
-          ref={readout}
-          className={clsx("shrink-0 text-xs tabular-nums", knob.written ? "text-fg" : "text-fg-muted")}
-          title={knob.written ? undefined : "Default. Not written in your code yet: changing it writes it in."}
-        >
-          {display(descriptor, value)}
-        </span>
+        <>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs text-fg-muted truncate">{label}</div>
+            {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
+          </div>
+          {typingField || readoutText}
+          <HomeMarker home={knob.home} label={label} />
+          {dial}
+        </>
       )}
-      <HomeMarker home={knob.home} label={label} />
-      {/* Inert only while it can't be edited: a save between steps mustn't take the focus from it. */}
-      <div inert={!editable && !g.dragging()} className={clsx("shrink-0", disabled && "pointer-events-none")}>
-        <MiniKnob
-          value={unit}
-          bipolar={bipolar}
-          disabled={disabled}
-          readout={display(descriptor, value)}
-          label={label}
-          reset={reset}
-          svg={svg}
-          pointer={grip.pointer}
-          onChange={change}
-          onStep={step}
-          onType={type}
-        />
-      </div>
-      {menu && (
-        <KnobMenu
-          knob={knob}
-          label={label}
-          value={value}
-          at={menu}
-          editable={editable}
-          locked={why}
-          onAutomate={automate}
-          onReset={descriptor.default != null ? () => change(Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default!)))) : undefined}
-          onClose={() => setMenu(null)}
-        />
-      )}
+      {knobMenu}
     </div>
   );
 }
@@ -1774,6 +1915,8 @@ function PickControl({
   session,
   revision,
   editable,
+  cell,
+  ided,
 }: {
   knob: PickKnob;
   port: string;
@@ -1782,6 +1925,13 @@ function PickControl({
   session: number;
   revision: number;
   editable: boolean;
+  /**
+   * In a chain card's grid (CARD-45), its knobs this many px: a switch is a cell, as a knob is, its
+   * switch over its label; a choice a row across the grid, a segmented control when it has five or fewer.
+   */
+  cell?: number;
+  /** Its id for `m2 set` in its tooltip (All's list, CARD-43). */
+  ided?: boolean;
 }) {
   const toast = useStore((s) => s.toast);
   const why = useContext(Locked);
@@ -1791,7 +1941,7 @@ function PickControl({
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, picking one writes it in";
   const how = `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`;
-  const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})`;
+  const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
   /**
    * A pick: its option's value written into the code, one undo step named "Wobble shape". Picked
    * while the window doesn't show its own last edit yet, it goes once it does (the gate).
@@ -1812,10 +1962,12 @@ function PickControl({
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
       data-kind={knob.kind}
+      data-cell={(knob.kind === "switch" && cell) || undefined}
       aria-disabled={!!off}
       title={title}
       className={clsx(
-        "group/knob relative h-10 pl-4 pr-4 flex items-center gap-2 min-w-0 transition-colors duration-80",
+        "group/knob relative min-w-0 transition-colors duration-80",
+        !cell ? "h-10 pl-4 pr-4 flex items-center gap-2" : knob.kind === "switch" ? "w-16 py-1 flex flex-col items-center gap-0.5" : "col-span-full h-7 px-1 flex items-center gap-2",
         "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
       )}
     >
@@ -1825,12 +1977,23 @@ function PickControl({
         filled={false}
         className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-fg-muted truncate">{label}</div>
-        {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
-      </div>
-      {knob.kind === "switch" ? (
+      {cell && knob.kind === "switch" ? (
+        <>
+          <div className="grid place-items-center" style={{ height: cell }}>
+            <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
+          </div>
+          <div className="w-full text-center text-xs text-fg-muted truncate">{label}</div>
+        </>
+      ) : (
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-fg-muted truncate">{label}</div>
+          {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
+        </div>
+      )}
+      {cell && knob.kind === "switch" ? null : knob.kind === "switch" ? (
         <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
+      ) : cell && (knob.options?.length ?? 0) <= 5 ? (
+        <Segmented value={knob} label={label} off={off} title={title} onPick={pick} />
       ) : (
         <MenuValue value={knob} label={label} off={off} title={title} onPick={pick} />
       )}

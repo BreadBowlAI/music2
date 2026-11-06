@@ -58,6 +58,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | nothing added since 2.0 | `"2"` | a later minor, `"2.3"`, would shut out the music2 versions between 2.0 and 2.3 |
 | a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` and `@m2/wavetable` do | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
 | the song's key, `time.key` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than play it without the key |
+| a card's face, `editor.face` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than stop at a field it doesn't know |
 
 ### music2's promise to your pack
 
@@ -174,7 +175,19 @@ export const wobble = component(
 );
 ```
 
-A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu and a switch a switch, the views are pictures whose corners move their knobs, and the groups are titles over their rows (see [The window](window.md)).
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu (buttons side by side, in Device's chain, when it has five options or fewer) and a switch a switch, the views are pictures whose corners move their knobs, and the groups are the card's tabs in the chain, and titles over their rows in Patch (see [The window](window.md)).
+
+**The face** is what the card draws big, above its tabs: the few values and pictures a beginner needs first. Name them in `editor.face`, each once, two pictures and six values at most:
+
+```ts
+editor: {
+  views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
+  face: ["filter", "shape", "cutoff", "attack", "release"],
+  groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Loudness: ["amp"] },
+},
+```
+
+A value on the face may be in a group too. With no face, the card's first group is its face. A name the sound doesn't have, or one named twice, is a red line under `face`; too many is refused by the build, in words. A face needs `@m2/core` 2.4: say `"@m2/core" = "2.4"` in `m2pkg.toml` (the table above).
 
 **Labels.** A card names each value by its name in the code, as words: `cutoff` is Cutoff. Where a name doesn't read as words (`subOctave`, `tableA`), give it a label, a control's or a setting's alike:
 

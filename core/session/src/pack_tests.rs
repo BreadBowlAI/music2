@@ -161,7 +161,7 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
 // 2.0, the frozen contract, builds, its descriptors as they were; one made for 2.1 may label a
 // setting (CARD-34), and the label reaches its descriptor; one made for 2.2 may name kits on a drum
 // (KIT-3), which reach its descriptor, every other byte of it as it was but its category. A descriptor that names none has
-// no `kits` at all, so a 2.1 pack's keeps its bytes.
+// no `kits` at all, so a 2.1 pack's keeps its bytes. One made for 2.4 may read the song's key and name a face (CARD-40).
 #[test]
 fn a_pack_made_for_an_older_minor_of_core_still_builds() {
     let mut first: Option<String> = None;
@@ -183,9 +183,11 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
                 "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
                 "editor: { category: \"Drums\", description: \"A soft pluck, built from std's blocks\", kits: { Pair: { db: -3, tracks: [{ name: \"Dark\", brightness: 400 }, { name: \"Bright\" }] } } },",
             ),
-            // The song's key as a signal (VOX-12), read where a sound is built.
-            "2.4" => code.replace("import { component, control,", "import { component, control, time,")
-                + "\n/** The song's key, for a kernel that follows it. */\nexport const songKey = () => time.key;\n",
+            // The song's key as a signal (VOX-12), read where a sound is built; and a card's face (CARD-40).
+            "2.4" => code.replace("import { component, control,", "import { component, control, time,").replace(
+                "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
+                "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\", face: [\"brightness\"] },",
+            ) + "\n/** The song's key, for a kernel that follows it. */\nexport const songKey = () => time.key;\n",
             _ => code,
         };
         std::fs::write(&index, code).unwrap();
@@ -197,8 +199,10 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
         assert_eq!(labels, if asks == "2.1" { vec![Some("notes at once")] } else { vec![] }, "{asks}");
         let kits: Vec<(&str, usize)> = keys.editor.kits.iter().map(|k| (k.name.as_str(), k.tracks.len())).collect();
         assert_eq!(kits, if asks == "2.2" { vec![("Pair", 2)] } else { vec![] }, "{asks}");
+        assert_eq!(keys.editor.face, if asks == "2.4" { vec!["brightness".to_string()] } else { vec![] }, "{asks}");
         let mut without = keys.as_ref().clone();
         without.editor.kits.clear();
+        without.editor.face.clear();
         if asks == "2.2" {
             without.editor.category = Some("Keys".into());
         }

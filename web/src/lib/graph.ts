@@ -135,6 +135,10 @@ export interface ViewNode {
   groups?: CardGroup[];
   /** Its card's views, resolved for the call (CARD-26). */
   views?: CardView[];
+  /** Its card's face, when its sound names one (CARD-41): rows as a group's are. */
+  face?: CardRow[];
+  /** A call's code as its file writes it, on one line; an effect's sound written `…` (CARD-41). */
+  code?: string;
 }
 
 /** A row of a card (CARD-25): an input of its call (`InputPort.id`), a setting (its id), or a view (its name). */

@@ -139,8 +139,10 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 graph <project> [--json]",
         words: "the graph the canvas shows: calls, their knobs and settings, connections",
-        more: "A card whose sound puts its values in groups prints each group as a heading over its rows, with More \
-               last; its views (an envelope, a filter's curve, a key map, a scope) are rows too.",
+        more: "Each call prints its code on one line (`code:`), as the card's code line shows it. A card whose sound \
+               names a face prints it as a heading, Face, over its rows; one whose sound puts its values in groups \
+               prints each group as a heading over its rows, with More last; its views (an envelope, a filter's \
+               curve, a key map, a scope) are rows too.",
     },
     Command {
         name: "controls",

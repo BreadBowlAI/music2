@@ -7,7 +7,10 @@
 // On first-song (the `fix` kind), its bass made a steady tone first (its lanes kept, unplayed), so
 // its meter shows only what the Duck does, and its Duck taken out of song.ts.
 //
-//   node e2e/sidechain.mjs <root> <home> <project>
+// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (CARD-42) whole: the + after a
+// track's sound in the song is its row's there, and every check holds.
+//
+//   node e2e/sidechain.mjs <root> <home> <project>     (the `fix` or `chain` kind)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
@@ -36,6 +39,8 @@ await until(async () => !!(await page.$('[data-module="song"]')), 9000);
 await show("song");
 const bass = '[data-module="song"] [data-node="Bass.out"]';
 check(await until(async () => !!(await page.$(`${bass} button[aria-label="Add an effect after Bass.out"]`)), 9000), "the bass's sound in the song has a + (CARD-36)");
+// On the chain run, that + is the Bass row's, beside the mix (CARD-42).
+if (process.env.E2E_DEVICE === "chain") check(!!(await page.$(`[data-testid=chain] [data-branch="Bass"] ${bass.replace('[data-module="song"] ', "")}`)), "on the chain, it is the Bass row's");
 
 // ---------------------------------------------------------------- add a Duck from +
 await page.click(`${bass} button[aria-label="Add an effect after Bass.out"]`);
