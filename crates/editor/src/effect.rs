@@ -1201,7 +1201,7 @@ fn line_end(text: &str, i: usize) -> usize {
 /// one before (its line's end too, when the comma ends its line) through the comma that ends it
 /// (likewise), so each keeps its own comments. Else from that comma through its own comments.
 /// None when a comma isn't where it should be.
-fn taken_out(text: &str, before: u32, end: u32, more: bool) -> Option<(u32, u32)> {
+pub(crate) fn taken_out(text: &str, before: u32, end: u32, more: bool) -> Option<(u32, u32)> {
     let first = past_trivia(text, before as usize);
     (text.as_bytes().get(first) == Some(&b',')).then_some(())?;
     if !more {

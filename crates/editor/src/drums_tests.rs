@@ -519,3 +519,20 @@ fn the_808_kits_hats_choke() {
     assert_eq!(both[..at], ringing[..at], "the open hat as it was, up to the closed one");
     assert_eq!(both[at + 193..], closed[at + 193..], "after 4 ms, the closed hat alone");
 }
+
+// KIT-27 (review C3): deleting the Hats of an 808 kit, whose hits cut its Open hat, asks first, the
+// Open hat's Drum named as a read it can lose; with cascade the cut goes with the Hats (the
+// argument and its import), as a Duck's side does, and the Open hat plays on, uncut.
+#[test]
+fn deleting_the_track_that_cuts_takes_the_cut_out() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    add_kit(&mut s, DRUM, "808 kit", None).unwrap();
+    let crate::Deleted::Asks(deps) = s.delete_track("hats", false).unwrap() else { panic!("it asks first") };
+    let said: Vec<(String, String, bool)> = deps.iter().map(|d| (d.label.clone(), d.component.clone(), d.removable)).collect();
+    assert_eq!(said, [("Open hat".to_string(), "Drum".to_string(), true)]);
+    let crate::Deleted::Done { .. } = s.delete_track("hats", true).unwrap() else { panic!("deleted") };
+    let open = f.read("tracks/open-hat.ts");
+    assert!(open.contains("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })") && !open.contains("hats"), "{open}");
+    assert!(s.draft_errors.is_empty() && s.problems().iter().all(|p| p.severity != m2_song::Severity::Error), "{:?}", s.problems());
+}

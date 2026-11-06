@@ -120,6 +120,9 @@ pub struct Dependent {
     /// For a send to a bus or an output to it, in the mixer's file: the deletions taking it out.
     #[serde(skip)]
     cut: Vec<(u32, u32, String)>,
+    /// The bytes those deletions may change, when not the mixer's call: an optional input's call.
+    #[serde(skip)]
+    within: Option<(u32, u32)>,
 }
 
 /// What a delete did, or why it waits.
@@ -993,6 +996,33 @@ fn call_of<'a>(rev: &'a Revision, m: &Module, doing: &str) -> Result<(&'a Site, 
 }
 
 /// The innermost call of the project at byte `at` of `file`.
+/// When the read of a track at byte `at` of `file` is all an optional input's argument of call `c`
+/// says (PKG-18, `hats.hits`): the call, what it is called (its component's label), and the bytes
+/// that take the argument out with its comma, as None takes it out (CARD-35).
+fn optional_read<'a>(rev: &'a Revision, c: &'a Site, file: &str, at: u32) -> Option<(&'a Site, String, (u32, u32))> {
+    let text = rev.snapshot.files.get(Path::new(file))?;
+    let m = rev.compiled.ir.modules.iter().find(|m| m.frames.iter().any(|f| f.site == c.id && f.component.is_some()))?;
+    let id = m.frames.iter().find(|f| f.site == c.id)?.component.as_deref()?;
+    let d = rev.compiled.components.get(id)?;
+    let i = c.args.iter().position(|a| a.span().0 == at).filter(|i| *i > 0)?;
+    let (a, b) = c.args[i].span();
+    // The read alone: a name and an export, `hats.hits`.
+    let read = &text[a as usize..b as usize];
+    if !read.split('.').all(sites::identifier) || read.split('.').count() != 2 {
+        return None;
+    }
+    let lead = d.inputs.iter().map(|x| x.name.as_str()).filter(|n| !d.positional.iter().any(|p| p == n));
+    let name = lead.chain(d.positional.iter().map(String::as_str)).nth(i)?;
+    d.inputs.iter().find(|x| x.name == name && x.optional)?;
+    // An argument after it would move into its place, unless it is the call's options.
+    let options = crate::controls::options_of(m, c.id).ok().flatten();
+    if c.args.len() > i + 1 && options != Some(i + 1) {
+        return None;
+    }
+    let cut = crate::effect::taken_out(text, c.args[i - 1].span().1, b, c.args.len() > i + 1)?;
+    Some((c, d.label.clone(), cut))
+}
+
 fn call_around<'a>(rev: &'a Revision, file: &str, at: u32) -> Option<&'a Site> {
     rev.compiled.sites.iter().filter(|x| x.in_project && x.file == file && x.start <= at && at < x.end).min_by_key(|x| x.end - x.start)
 }
@@ -1125,6 +1155,10 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         let call = call_around(rev, &file, at);
         let line = rev.snapshot.files.get(Path::new(&file)).map_or(0, |t| t[..at as usize].matches('\n').count() as u32 + 1);
         let effect = call.and_then(|c| passes_audio(s, c).map(|d| (c, d)));
+        // An input a call may leave out that reads it alone (PKG-18, KIT-27: a Drum's cut): the
+        // argument goes with it, as None takes it out. An effect that hears it (a Duck's side) comes
+        // off whole, as before.
+        let optional = call.and_then(|c| optional_read(rev, c, &file, at));
         // The track a read in the song's own code feeds: the channel it sits in.
         let fed = match (reader == ROOT, &mixer) {
             (true, Some(mx)) => mx
@@ -1136,8 +1170,8 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         };
         let fed = fed.unwrap_or_else(|| reader.to_string());
         let fed_label = rev.compiled.ir.modules.iter().find(|x| x.key == fed).map_or(fed.clone(), |x| x.label().to_string());
-        let dep = match effect {
-            Some((c, d)) if c.args.first().is_some_and(|a| !(a.span().0 <= at && at < a.span().1)) => {
+        let dep = match (effect, optional) {
+            (Some((c, d)), _) if c.args.first().is_some_and(|a| !(a.span().0 <= at && at < a.span().1)) => {
                 let input = c.args[0].span();
                 Dependent {
                     module: fed,
@@ -1148,8 +1182,20 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                     removable: true,
                     site: Some((c.start, input.0, input.1, c.end)),
                     cut: vec![],
+                    within: None,
                 }
             }
+            (_, Some((c, d, cut))) => Dependent {
+                module: fed,
+                label: fed_label,
+                component: d,
+                file,
+                line,
+                removable: true,
+                site: None,
+                cut: vec![(cut.0, cut.1, String::new())],
+                within: Some((c.start, c.end)),
+            },
             _ => Dependent {
                 module: fed,
                 label: fed_label,
@@ -1159,6 +1205,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                 removable: false,
                 site: None,
                 cut: vec![],
+                within: None,
             },
         };
         if !dependents.iter().any(|d| d.site.is_some() && d.site == dep.site && d.file == dep.file) {
@@ -1181,6 +1228,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
                 removable: true,
                 site: None,
                 cut,
+                within: None,
             });
         }
     }
@@ -1227,7 +1275,7 @@ pub fn delete(s: &mut Session, module: &str, cascade: bool) -> Result<Deleted, E
         add(&mut edits, &mut ranges, &mx.file, removed, mx.call);
     }
     for d in dependents.iter().filter(|d| !d.cut.is_empty()) {
-        let call = mixer.as_ref().map_or((0, 0), |mx| mx.call);
+        let call = d.within.or(mixer.as_ref().map(|mx| mx.call)).unwrap_or((0, 0));
         edits.entry(d.file.clone()).or_default().extend(d.cut.iter().cloned());
         ranges.entry(d.file.clone()).or_default().push(Range::bytes(call.0, call.1));
     }
