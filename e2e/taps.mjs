@@ -10,7 +10,7 @@ import { ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
 const { page, errors, api, state, key, box } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
-// The page's meters and scopes messages, as they arrive (CDP), and the window's client id, from
+// The page's meters and looks messages, as they arrive (CDP), and the window's client id, from
 // its socket's address.
 const heard = [];
 const scoped = [];
@@ -24,7 +24,7 @@ cdp.on("Network.webSocketFrameReceived", ({ response }) => {
   try {
     const m = JSON.parse(response.payloadData);
     if (m.t === "meters") heard.push({ at: Date.now(), m });
-    if (m.t === "scopes") scoped.push({ at: Date.now(), m });
+    if (m.t === "looks") scoped.push({ at: Date.now(), m });
   } catch {}
 });
 await page.reload({ waitUntil: "domcontentloaded" });
@@ -108,26 +108,26 @@ await page.screenshot({ path: `${ROOT}/taps-playing.png` });
 const view = (await state()).view;
 const bass = view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "bass" && n.audio);
 check(!!bass, `the Bass track's instrument is a box in the view (${bass?.id})`);
-const asked = await post("/scope", { session, client, module: "bass", node: bass?.id, on: true });
-check(asked.status === 200 && asked.body.scope?.channels >= 1, `asked for by this window, its scope answers with its channels (${JSON.stringify(asked.body).slice(0, 120)})`);
+const asked = await post("/look", { session, client, module: "bass", node: bass?.id, on: true });
+check(asked.status === 200 && asked.body.look?.channels >= 1, `asked for by this window, its scope answers with its channels (${JSON.stringify(asked.body).slice(0, 120)})`);
 // The next ten scope messages, however fast they come: the meters' thread sends them, and its
 // 33 ms sleep lasts about 120 ms on GitHub's Mac (about 8 a second there, not 30). Each check of
 // this suite counts messages, never a rate.
 let from = scoped.length;
 let met = heard.length;
-const ours = () => scoped.slice(from).filter((h) => h.m.scopes?.some((s) => s.module === "bass" && s.node === bass?.id));
+const ours = () => scoped.slice(from).filter((h) => h.m.looks?.some((s) => s.module === "bass" && s.node === bass?.id));
 const t1 = Date.now();
 await until(() => ours().length >= 10, 8000);
 const shown = ours();
-const frames = shown.at(-1)?.m.scopes.find((s) => s.node === bass?.id)?.frames;
+const frames = shown.at(-1)?.m.looks.find((s) => s.node === bass?.id)?.frames;
 check(
-  shown.length >= 10 && heard.slice(met).every((h) => !h.m.scopes),
+  shown.length >= 10 && heard.slice(met).every((h) => !h.m.looks),
   `its frames come to this window's socket alone, beside the meters (${shown.length} messages in ${((Date.now() - t1) / 1000).toFixed(1)} s)`,
 );
-check(frames?.length === asked.body.scope?.channels && frames.every((c) => c.length === 1024), `the last 1,024 frames, a list per channel (${frames?.map((c) => c.length)})`);
-const refused = await post("/scope", { session, client, module: "bass", node: view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "lfo")?.id, on: true });
+check(frames?.length === asked.body.look?.channels && frames.every((c) => c.length === 1024), `the last 1,024 frames, a list per channel (${frames?.map((c) => c.length)})`);
+const refused = await post("/look", { session, client, module: "bass", node: view.modules.find((m) => m.key === "bass")?.nodes.find((n) => n.label === "lfo")?.id, on: true });
 check(refused.status >= 400 && /a scope shows sound/.test(refused.body.error ?? ""), `a box that isn't sound is refused in words: "${refused.body.error}"`);
-await post("/scope", { session, client, module: "bass", node: bass?.id, on: false });
+await post("/look", { session, client, module: "bass", node: bass?.id, on: false });
 await sleep(300);
 from = scoped.length;
 met = heard.length;

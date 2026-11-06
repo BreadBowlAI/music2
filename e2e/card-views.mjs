@@ -256,7 +256,7 @@ const frames = () => page.$eval(`${card} [data-scope]`, (e) => Number(e.dataset.
 check(await until(async () => (await frames()) >= 5, 10000), `while the song plays, the scope draws the sound's frames (${await frames()} drawings)`);
 await page.keyboard.press("Space");
 // Out of sight, the card stops asking (TAP-4): scrolled out of the Device view, or the view left.
-const scopeAsks = () => posts.filter((p) => p.url === "/api/graph/scope").map((p) => JSON.parse(p.body).on);
+const scopeAsks = () => posts.filter((p) => p.url === "/api/graph/look").map((p) => JSON.parse(p.body).on);
 await page.$eval("[data-testid=graph]", (e) => e.scrollTo({ top: 0, left: 0 }));
 await page.$eval(`${card} [data-scope]`, (e) => {
   const g = document.querySelector("[data-testid=graph]");

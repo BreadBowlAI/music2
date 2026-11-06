@@ -1,5 +1,5 @@
 //! What windows and agents ask to look at (TAP-4, TAP-6, TAP-8 to TAP-15): a look at a box, its
-//! scope, its spectrum, its level or one of its sound's meters (`POST /api/graph/scope`), or the
+//! scope, its spectrum, its level or one of its sound's meters (`POST /api/graph/look`), or the
 //! song's loudness (`POST /api/graph/loudness`, the Mix view's). One mechanism: an ask points a ring
 //! (a meter slot, for a meter) of the plan that plays, lasts while its client asks, and its place
 //! points nowhere once no ask uses it.
@@ -29,9 +29,11 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use m2_editor::scope::At;
+use m2_editor::spectrum::Spectrum;
 use m2_ir::Kernels;
 use m2_runtime::{METERS, RING, RINGS, Reading, TapAt, TapSlots};
 use m2_session::Revision;
+use parking_lot::Mutex;
 use serde_json::{Value, json};
 
 use super::actor::Actor;
@@ -105,6 +107,7 @@ impl Look {
     pub fn check(&self) -> Result<()> {
         match (self.kind, &self.at) {
             (Kind::Meter, At::Out | At::In) => bail!("A meter look names the meter it shows, such as at: \"reduction\"."),
+            (Kind::Meter, At::Meter(m)) if m.is_empty() => bail!("A meter look names the meter it shows, such as at: \"reduction\"."),
             (Kind::Meter, At::Meter(_)) | (_, At::Out | At::In) => Ok(()),
             (kind, At::Meter(_)) => {
                 bail!("A {} shows sound at a call's out or in; a meter is a look of its own, kind: \"meter\".", kind.name())
@@ -143,8 +146,8 @@ pub(super) struct Asks {
 struct Ask {
     what: What,
     place: Place,
-    /// Each client asking, and when it last asked.
-    clients: Vec<(String, Instant)>,
+    /// Each client asking, when it last asked, and where it last read.
+    clients: Vec<Client>,
     /// A box's channels while its place points at it.
     channels: Option<u8>,
     /// A meter's unit.
@@ -155,15 +158,38 @@ struct Ask {
     gone: bool,
     /// Why it shows nothing, while it waits for what plays to be the song as shown.
     why: Option<&'static str>,
-    /// A level's next frame to read: the plan (by its id, never reused) and the frame in its ring.
+    /// A spectrum's lows and buffers between reads, worked out off the control plane's lock.
+    spectrum: Arc<Mutex<Spectrum>>,
+}
+
+/// A client of a look: who, when it last asked, and its own reads (TAP-14, TAP-15): a level's next
+/// frame (the plan, by its id, never reused, and the frame in its ring), and a meter's last number
+/// and the most since its last read.
+struct Client {
+    name: String,
+    asked: Instant,
     from: (u64, u64),
+    now: Option<f32>,
+    most: Option<f32>,
+}
+
+impl Client {
+    fn new(name: &str, asked: Instant) -> Client {
+        Client { name: name.to_string(), asked, from: (0, 0), now: None, most: None }
+    }
+
+    /// What its meter says since its last read, the most never under now; and from here, again.
+    fn take(&mut self) -> Option<Reading> {
+        let now = self.now?;
+        Some(Reading { now, most: self.most.take().map_or(now, |m| m.max(now)) })
+    }
 }
 
 /// What a look saw at a read, as a window's message carries it.
 enum Seen {
     Frames(Vec<[f32; 2]>),
-    /// The frames a spectrum is worked out from, at the song's rate.
-    Spectrum(Vec<[f32; 2]>, u32),
+    /// The frames a spectrum is worked out from, at the song's rate, and its look's own.
+    Spectrum(Vec<[f32; 2]>, u32, Arc<Mutex<Spectrum>>),
     Level(Vec<[f32; 2]>),
     Meter(Reading),
 }
@@ -200,7 +226,7 @@ impl Seen {
     fn put(&self, v: &mut Value, channels: u8) {
         match self {
             Seen::Frames(frames) => v["frames"] = json!(sides(frames, channels)),
-            Seen::Spectrum(frames, rate) => v["bins"] = json!(m2_editor::spectrum::bands(frames, channels, *rate)),
+            Seen::Spectrum(frames, rate, look) => v["bins"] = json!(look.lock().bands(frames, channels, *rate)),
             Seen::Level(frames) => {
                 let n = (channels as usize).clamp(1, 2);
                 let peak = |c: usize| frames.iter().fold(0.0f32, |m, f| m.max(f[c].abs())) as f64;
@@ -223,9 +249,10 @@ fn sides(frames: &[[f32; 2]], channels: u8) -> Vec<Vec<f64>> {
     (0..(channels as usize).clamp(1, 2)).map(side).collect()
 }
 
-/// What `a`, a look, saw in `taps`, a plan with id `plan` at `rate`: a level, and a meter's most,
-/// read from where they last read when `advance`, else peek there. None when there is nothing yet.
-fn see(a: &mut Ask, taps: &TapSlots, plan: u64, rate: u32, advance: bool) -> Option<Seen> {
+/// What `a`, a look, saw in `taps`, a plan with id `plan` at `rate`, for its client `client`: a
+/// level from where that client last read, its meter since its last read (folded in already,
+/// [`Asks::fold`]). None when there is nothing yet.
+fn see(a: &mut Ask, client: usize, taps: &TapSlots, plan: u64, rate: u32) -> Option<Seen> {
     let What::Box(look) = &a.what else { return None };
     let mut frames = vec![];
     match (look.kind, a.place) {
@@ -235,25 +262,33 @@ fn see(a: &mut Ask, taps: &TapSlots, plan: u64, rate: u32, advance: bool) -> Opt
         }
         (Kind::Spectrum, Place::Ring(r)) => {
             taps.frames(r, 0, RING, &mut frames)?;
-            (frames.len() >= m2_editor::spectrum::HIGHS).then_some(Seen::Spectrum(frames, rate))
+            (frames.len() >= m2_editor::spectrum::HIGHS).then(|| Seen::Spectrum(frames, rate, a.spectrum.clone()))
         }
         (Kind::Level, Place::Ring(r)) => {
-            let from = if a.from.0 == plan { a.from.1 } else { 0 };
+            let c = a.clients.get_mut(client)?;
+            let from = if c.from.0 == plan { c.from.1 } else { 0 };
             let first = taps.frames(r, from, RING, &mut frames)?;
-            if advance {
-                a.from = (plan, first + frames.len() as u64);
-            }
+            c.from = (plan, first + frames.len() as u64);
             (!frames.is_empty()).then_some(Seen::Level(frames))
         }
-        // An agent's answer peeks, so the window's next read still has the most since its last.
-        (Kind::Meter, Place::Meter(m)) => if advance { taps.meter(m) } else { taps.peek_meter(m) }.map(Seen::Meter),
+        (Kind::Meter, Place::Meter(_)) => a.clients.get_mut(client)?.take().map(Seen::Meter),
         _ => None,
     }
 }
 
 impl Ask {
     fn asked_by(&self, client: &str) -> bool {
-        self.clients.iter().any(|c| c.0 == client)
+        self.clients.iter().any(|c| c.name == client)
+    }
+
+    /// Its meter's read since the last, into each client's own (TAP-15).
+    fn fold(&mut self, taps: &TapSlots) {
+        let (Place::Meter(m), What::Box(_), false) = (self.place, &self.what, self.gone) else { return };
+        let Some(r) = taps.meter(m) else { return };
+        for c in &mut self.clients {
+            c.now = Some(r.now);
+            c.most = Some(c.most.map_or(r.most, |x| x.max(r.most)));
+        }
     }
 
     /// Point its place in `taps` at `at`, or nowhere.
@@ -275,9 +310,9 @@ impl Asks {
     /// from now. None when no one asked for it yet.
     fn renew(&mut self, client: &str, what: &What, now: Instant) -> Option<&mut Ask> {
         let a = self.find(what)?;
-        match a.clients.iter_mut().find(|c| c.0 == client) {
-            Some(c) => c.1 = now,
-            None => a.clients.push((client.to_string(), now)),
+        match a.clients.iter_mut().find(|c| c.name == client) {
+            Some(c) => c.asked = now,
+            None => a.clients.push(Client::new(client, now)),
         }
         Some(a)
     }
@@ -305,8 +340,9 @@ impl Asks {
                 }
             }
         };
-        let clients = vec![(client.to_string(), now)];
-        self.asked.push(Ask { what, place, clients, channels: None, unit: None, found: None, gone: false, why: None, from: (0, 0) });
+        let clients = vec![Client::new(client, now)];
+        let spectrum = Arc::default();
+        self.asked.push(Ask { what, place, clients, channels: None, unit: None, found: None, gone: false, why: None, spectrum });
         Ok(self.asked.last_mut().expect("just pushed"))
     }
 
@@ -324,20 +360,20 @@ impl Asks {
     /// `client` stops asking for `what`, a box gone from the song by that id too.
     fn stop(&mut self, client: &str, what: &What, taps: Option<&TapSlots>) {
         for a in self.asked.iter_mut().filter(|a| a.what == *what) {
-            a.clients.retain(|c| c.0 != client);
+            a.clients.retain(|c| c.name != client);
         }
         self.prune(taps);
     }
 
     /// `client` is gone (its window closed): it asks for nothing now.
     fn gone(&mut self, client: &str, taps: Option<&TapSlots>) {
-        self.asked.iter_mut().for_each(|a| a.clients.retain(|c| c.0 != client));
+        self.asked.iter_mut().for_each(|a| a.clients.retain(|c| c.name != client));
         self.prune(taps);
     }
 
     /// Each client that hasn't asked again for [`KEEP`] stops asking.
     pub(super) fn expire(&mut self, now: Instant, taps: Option<&TapSlots>) {
-        self.asked.iter_mut().for_each(|a| a.clients.retain(|c| now.duration_since(c.1) < KEEP));
+        self.asked.iter_mut().for_each(|a| a.clients.retain(|c| now.duration_since(c.asked) < KEEP));
         self.prune(taps);
     }
 
@@ -412,47 +448,87 @@ impl Asks {
         }
     }
 
+    /// Each meter's read since the last, into each of its clients' own: at every read of the
+    /// meters, whoever listens, so an agent with no window open gets the most since its last ask.
+    pub(super) fn fold(&mut self, taps: &TapSlots) {
+        self.asked.iter_mut().for_each(|a| a.fold(taps));
+    }
+
     /// What each look saw in `taps`, a plan with id `plan` at `rate`, or why it saw nothing, with
-    /// the clients it goes to; a gone box, or one whose place has nothing yet, sends nothing.
+    /// the windows it goes to: a scope or a spectrum once for all its clients, a level or a meter
+    /// for each client its own. An agent's is in its answer. A gone box, or one whose place has
+    /// nothing yet, sends nothing.
     pub(super) fn looks(&mut self, taps: &TapSlots, plan: u64, rate: u32) -> Vec<Shown> {
         let mut out = vec![];
         for a in &mut self.asked {
             let What::Box(look) = &a.what else { continue };
-            let (look, clients) = (look.clone(), a.clients.iter().map(|c| c.0.clone()).collect());
+            let look = look.clone();
+            let windows: Vec<usize> = (0..a.clients.len()).filter(|&c| !a.clients[c].name.starts_with("agent:")).collect();
+            if windows.is_empty() {
+                continue;
+            }
             if let Some(why) = a.why.filter(|_| !a.gone) {
+                let clients = windows.iter().map(|&c| a.clients[c].name.clone()).collect();
                 out.push(Shown { look, channels: 0, seen: None, why: Some(why), clients });
                 continue;
             }
             let (Some(channels), false) = (a.channels, a.gone) else { continue };
-            if let Some(seen) = see(a, taps, plan, rate, true) {
-                out.push(Shown { look, channels, seen: Some(seen), why: None, clients });
+            let each = matches!(look.kind, Kind::Level | Kind::Meter);
+            for (i, &c) in windows.iter().enumerate() {
+                if !each && i > 0 {
+                    break;
+                }
+                let clients =
+                    if each { vec![a.clients[c].name.clone()] } else { windows.iter().map(|&w| a.clients[w].name.clone()).collect() };
+                if let Some(seen) = see(a, c, taps, plan, rate) {
+                    out.push(Shown { look: look.clone(), channels, seen: Some(seen), why: None, clients });
+                }
             }
         }
         out
     }
 }
 
-/// What an ask for a look answers: its kind and point, its channels (a meter's unit), why it waits,
-/// a spectrum's bands' centres, and what it saw last when its place has something.
-fn answer(a: &mut Ask, taps: Option<(&TapSlots, u64, u32)>) -> Value {
-    let What::Box(look) = &a.what else { return json!({}) };
-    let mut v = json!({"module": look.module, "node": look.node, "kind": look.kind.name(), "at": look.at.name()});
+/// What an ask for a look answers, made under the control plane's lock and said after it: its kind
+/// and point, its channels (a meter's unit), why it waits, a spectrum's bands' centres, and what it
+/// saw for its client since that client's last ask, when its place has something.
+struct Answer {
+    head: Value,
+    channels: u8,
+    seen: Option<Seen>,
+}
+
+impl Answer {
+    /// `{look: {…}}`: a spectrum is worked out here, off the lock.
+    fn json(self) -> Value {
+        let mut v = self.head;
+        if let Some(seen) = &self.seen {
+            seen.put(&mut v, self.channels);
+        }
+        json!({"look": v})
+    }
+}
+
+/// The answer to `client`'s ask for `a`, taking what it saw since its last ask.
+fn answer(a: &mut Ask, client: &str, taps: Option<(&TapSlots, u64, u32)>) -> Answer {
+    let What::Box(look) = &a.what else { return Answer { head: json!({}), channels: 0, seen: None } };
+    let mut head = json!({"module": look.module, "node": look.node, "kind": look.kind.name(), "at": look.at.name()});
     match look.kind {
-        Kind::Meter => v["unit"] = json!(a.unit),
-        _ => v["channels"] = json!(a.channels),
+        Kind::Meter => head["unit"] = json!(a.unit),
+        _ => head["channels"] = json!(a.channels),
     }
     if let (Kind::Spectrum, Some((_, _, rate))) = (look.kind, taps) {
-        v["hz"] = json!(m2_editor::spectrum::centres(rate));
+        head["hz"] = json!(m2_editor::spectrum::centres(rate));
     }
     if let Some(why) = a.why {
-        v["why"] = json!(why);
+        head["why"] = json!(why);
     }
-    if let (Some(c), Some((t, plan, rate))) = (a.channels, taps)
-        && let Some(seen) = see(a, t, plan, rate, false)
-    {
-        seen.put(&mut v, c);
+    let mut seen = None;
+    if let (Some(_), Some((t, plan, rate)), Some(c)) = (a.channels, taps, a.clients.iter().position(|c| c.name == client)) {
+        a.fold(t);
+        seen = see(a, c, t, plan, rate);
     }
-    json!({"scope": v})
+    Answer { head, channels: a.channels.unwrap_or(0), seen }
 }
 
 impl Graph {
@@ -462,10 +538,10 @@ impl Graph {
         self.look(token, client, &Look::scope(module, node), on)
     }
 
-    /// Start, keep or stop `look` for `client` (`POST /api/graph/scope`, TAP-8, TAP-12). Not a write:
+    /// Start, keep or stop `look` for `client` (`POST /api/graph/look`, TAP-8, TAP-12). Not a write:
     /// it works read-only too. A look asked for already is kept on the control plane alone; a new
     /// one is found in the accepted revision, on the session's actor, and pointed in what plays.
-    /// Answers `{scope: {module, node, kind, at, channels (a meter's unit), …}}`: `channels` null and
+    /// Answers `{look: {module, node, kind, at, channels (a meter's unit), …}}`: `channels` null and
     /// `why` while it can't show, what it saw last when it has something (an agent's way to see
     /// it); `{}` for a stop. What doesn't fit is refused in words.
     pub fn look(&self, token: u64, client: &str, look: &Look, on: bool) -> Result<Value> {
@@ -480,7 +556,9 @@ impl Graph {
                 return Ok(json!({}));
             }
             if let Some(a) = cp.asks.renew(client, &what, Instant::now()) {
-                return Ok(answer(a, plays.as_ref().map(|p| (&*p.0, p.1, p.2))));
+                let said = answer(a, client, plays.as_ref().map(|p| (&*p.0, p.1, p.2)));
+                drop(cp);
+                return Ok(said.json());
             }
         }
         let (client, look) = (client.to_string(), look.clone());
@@ -539,7 +617,9 @@ impl Actor {
         if !a.asked_by(client) {
             bail!("the look ended as it was asked for");
         }
-        Ok(answer(a, plays.as_ref().map(|p| (&*p.0, p.2, p.3))))
+        let said = answer(a, client, plays.as_ref().map(|p| (&*p.0, p.2, p.3)));
+        drop(cp);
+        Ok(said.json())
     }
 }
 

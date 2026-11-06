@@ -986,8 +986,8 @@ export const graphApi = {
       within,
     ),
   /** Ask for a look at box `node` of `module` (TAP-8, TAP-12): its scope (the default), spectrum, level or a meter, at `out`, `in` or the meter's name; again within 10 s to keep it, or stop. What it sees comes on this window's socket (`useLook` in `taps.ts`). */
-  scope: (session: number, module: string, node: string, on: boolean, kind = "scope", at = "out") =>
-    call<{ scope?: { module: string; node: string; kind: string; at: string; channels?: number | null; unit?: string | null; frames?: number[][] } }>("/scope", {
+  look: (session: number, module: string, node: string, on: boolean, kind = "scope", at = "out") =>
+    call<{ look?: { module: string; node: string; kind: string; at: string; channels?: number | null; unit?: string | null; frames?: number[][] } }>("/look", {
       session,
       client: clientId,
       module,

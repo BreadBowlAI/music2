@@ -2,7 +2,8 @@
 // spectrum, level or one of its sound's meters, at its output (`out`), its input (`in`), or a meter
 // by its name. One mechanism for every look: it asks only while what shows it is on screen in a
 // window that shows, asks again every few seconds (the server keeps an ask 10 s), and stops when it
-// goes. What it sees comes in this window's `scopes` message, beside the meters.
+// goes. Parts of the window that show the same look share one ask: it starts with the first and
+// stops with the last. What it sees comes in this window's `looks` message, beside the meters.
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { on } from "./events";
@@ -39,11 +40,11 @@ export interface Seen {
   why?: string;
 }
 
-/** A scopes message: each look this window asked for, what it saw. */
-interface ScopesIn {
-  t: "scopes";
+/** A looks message: each look this window asked for, what it saw. */
+interface LooksIn {
+  t: "looks";
   session?: number;
-  scopes: Seen[];
+  looks: Seen[];
 }
 
 /** How often a look asks again: the server keeps an ask 10 s (TAP-8). */
@@ -71,10 +72,63 @@ export function useLooking(el: RefObject<Element | null>): boolean {
   return onScreen && shown;
 }
 
+/** One look this window asks for, shared by every part that shows it (TAP-16). */
+interface Shared {
+  seen: Set<(s: Seen) => void>;
+  why: Set<(words: string | null) => void>;
+  stop: () => void;
+}
+
+const shared = new Map<string, Shared>();
+
+/** Show `look` to `seen` and `why` until the function it gives back is called: the first to show it asks, the last to go stops. */
+function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) => void): () => void {
+  const { session, module, node, kind, at } = look;
+  const key = JSON.stringify([session, module, node, kind, at]);
+  let s = shared.get(key);
+  if (!s) {
+    const one: Shared = { seen: new Set(), why: new Set(), stop: () => {} };
+    let alive = true;
+    const tell = (words: string | null) => one.why.forEach((w) => w(words));
+    const ask = (on: boolean) =>
+      graphApi.look(session, module, node, on, kind, at).then(
+        () => alive && on && tell(null),
+        (e) => alive && on && tell(said(e)),
+      );
+    void ask(true);
+    const again = setInterval(() => void ask(true), ASK_MS);
+    const off = on<LooksIn>("looks", (msg) => {
+      const mine = msg.looks.find((x) => x.module === module && x.node === node && x.kind === kind && x.at === at);
+      if (!mine) return;
+      if (mine.why) return tell(mine.why);
+      one.seen.forEach((f) => f(mine));
+    });
+    one.stop = () => {
+      alive = false;
+      clearInterval(again);
+      off();
+      void ask(false).catch(() => {});
+    };
+    shared.set(key, one);
+    s = one;
+  }
+  const mine = s;
+  mine.seen.add(seen);
+  mine.why.add(why);
+  return () => {
+    mine.seen.delete(seen);
+    mine.why.delete(why);
+    if (mine.seen.size === 0) {
+      shared.delete(key);
+      mine.stop();
+    }
+  };
+}
+
 /**
- * Ask for `look` while `looking` (TAP-16): again every few seconds, and a stop when it goes. Each
- * read it sees goes to `seen`; why it can't show (the ask refused, or the message's `why`) goes to
- * `why`, and null once it shows again.
+ * Ask for `look` while `looking` (TAP-16): again every few seconds, and a stop when it goes, once
+ * no other part of this window shows it. Each read it sees goes to `seen`; why it can't show (the
+ * ask refused, or the message's `why`) goes to `why`, and null once it shows again.
  */
 export function useLook(look: Look, looking: boolean, seen: (s: Seen) => void, why: (words: string | null) => void): void {
   const to = useRef({ seen, why });
@@ -82,25 +136,10 @@ export function useLook(look: Look, looking: boolean, seen: (s: Seen) => void, w
   const { session, module, node, kind, at } = look;
   useEffect(() => {
     if (!looking) return;
-    let alive = true;
-    const ask = (on: boolean) =>
-      graphApi.scope(session, module, node, on, kind, at).then(
-        () => alive && on && to.current.why(null),
-        (e) => alive && on && to.current.why(said(e)),
-      );
-    void ask(true);
-    const again = setInterval(() => void ask(true), ASK_MS);
-    const off = on<ScopesIn>("scopes", (msg) => {
-      const mine = msg.scopes.find((s) => s.module === module && s.node === node && (s.kind ?? "scope") === kind && (s.at ?? "out") === at);
-      if (!mine) return;
-      if (mine.why) return to.current.why(mine.why);
-      to.current.seen(mine);
-    });
-    return () => {
-      alive = false;
-      clearInterval(again);
-      off();
-      void ask(false).catch(() => {});
-    };
+    return join(
+      { session, module, node, kind, at },
+      (s) => to.current.seen(s),
+      (w) => to.current.why(w),
+    );
   }, [session, module, node, kind, at, looking]);
 }

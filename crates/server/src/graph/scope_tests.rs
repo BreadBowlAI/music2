@@ -73,12 +73,12 @@ impl Rig {
 
 /// What `m` sends window `client` of its scopes, as it is sent: each scope's entry.
 fn sent_to(m: &MetersOut, client: &str) -> Vec<Value> {
-    let mine: Vec<&Value> = m.scopes.iter().filter(|(c, _)| c == client).map(|(_, v)| v).collect();
+    let mine: Vec<&Value> = m.looks.iter().filter(|(c, _)| c == client).map(|(_, v)| v).collect();
     assert!(mine.len() <= 1, "one message a window");
-    assert!(m.all.get("scopes").is_none(), "no scope goes to every window (TAP-8)");
+    assert!(m.all.get("looks").is_none(), "no look goes to every window (TAP-8)");
     mine.first().map_or(vec![], |v| {
-        assert_eq!(v["t"], "scopes");
-        v["scopes"].as_array().unwrap().clone()
+        assert_eq!(v["t"], "looks");
+        v["looks"].as_array().unwrap().clone()
     })
 }
 
@@ -110,12 +110,12 @@ fn a_scopes_frames_arrive_while_asked() {
     let mut rig = Rig::new(SONG);
     let saw = rig.id("osc.saw");
     let asked = rig.graph.scope(rig.token(), "w1", "bass", &saw, true).unwrap();
-    assert_eq!(asked, json!({"scope": {"module": "bass", "node": saw, "kind": "scope", "at": "out", "channels": 1}}));
+    assert_eq!(asked, json!({"look": {"module": "bass", "node": saw, "kind": "scope", "at": "out", "channels": 1}}));
     rig.graph.transport("play").unwrap();
     rig.read(16);
     let m = rig.read(16);
     let got = scopes(&m);
-    assert_eq!(got.len(), 1, "{:?}", m.scopes);
+    assert_eq!(got.len(), 1, "{:?}", m.looks);
     assert!(scopes_of(&m, "w2").is_empty(), "only to the window that asked");
     let (module, node, frames) = &got[0];
     assert_eq!((module.as_str(), node.as_str(), frames.len(), frames[0].len()), ("bass", saw.as_str(), 1, SCOPE));
@@ -125,9 +125,9 @@ fn a_scopes_frames_arrive_while_asked() {
     assert!((top - m.all["tracks"]["bass"][0].as_f64().unwrap()).abs() < 0.05, "as loud as its meter: {top} {}", m.all);
     // Asked again: the same scope, kept, and the answer has its last frames (an agent's way to see).
     let again = rig.graph.scope(rig.token(), "w1", "bass", &saw, true).unwrap();
-    assert_eq!((&again["scope"]["node"], &again["scope"]["channels"]), (&json!(saw), &json!(1)));
-    let answered = again["scope"]["frames"].as_array().map(|c| c.len());
-    assert!(answered == Some(1) && again["scope"]["frames"][0].as_array().unwrap().len() == SCOPE, "{answered:?}");
+    assert_eq!((&again["look"]["node"], &again["look"]["channels"]), (&json!(saw), &json!(1)));
+    let answered = again["look"]["frames"].as_array().map(|c| c.len());
+    assert!(answered == Some(1) && again["look"]["frames"][0].as_array().unwrap().len() == SCOPE, "{answered:?}");
     assert_eq!(rig.graph.scope(rig.token(), "w1", "bass", &saw, false).unwrap(), json!({}));
     rig.read(4);
     assert!(scopes(&rig.read(4)).is_empty(), "stopped");
@@ -155,7 +155,7 @@ fn a_scope_follows_its_box_into_each_new_plan() {
     assert_ne!(moved, saw, "the edit gave the saw's box another id");
     assert_eq!(got[0].1, moved, "the scope follows its call, under the id the view gives it now");
     assert_eq!(
-        rig.graph.scope(rig.token(), "w1", "bass", &moved, true).unwrap()["scope"]["channels"],
+        rig.graph.scope(rig.token(), "w1", "bass", &moved, true).unwrap()["look"]["channels"],
         1,
         "asked by it, it is the same scope"
     );
@@ -260,7 +260,7 @@ fn while_what_plays_isnt_the_view_a_scope_waits_and_says_why() {
     assert_eq!((&list[0]["node"], list[0].get("frames")), (&json!(moved), None), "the view's id, and no frames: {}", list[0]);
     assert!(list[0]["why"].as_str().is_some_and(|w| w.contains("isn't ready to play")), "{}", list[0]);
     let asked = rig.graph.scope(rig.token(), "w1", "bass", &moved, true).unwrap();
-    assert_eq!(asked["scope"]["channels"], Value::Null, "asked again by the view's id, it waits: {asked}");
+    assert_eq!(asked["look"]["channels"], Value::Null, "asked again by the view's id, it waits: {asked}");
     rig.graph.inspect(|a| a.fail_builds = false);
     rig.graph.write_file(Some(rig.token()), "song.ts", &more, &more.replace("osc.sine(880)", "osc.sine(440)")).unwrap();
     rig.read(16);
@@ -301,7 +301,7 @@ fn looks_of_each_kind_arrive_while_asked() {
     let token = rig.token();
     let (comp, sine) = (rig.id("compress"), rig.id("scale"));
     let spectrum = rig.graph.look(token, "w1", &look("pad", &sine, "spectrum", "out"), true).unwrap();
-    let hz = numbers(&spectrum["scope"]["hz"]);
+    let hz = numbers(&spectrum["look"]["hz"]);
     assert_eq!(hz.len(), 120, "a band each twelfth of an octave, from 20 Hz to under 20 kHz");
     assert!((hz[0] - 20.0).abs() < 1e-9 && (hz[12] - 40.0).abs() < 1e-9 && hz[119] < 20_000.0, "{:?}", &hz[..13]);
     for (kind, at) in [("scope", "out"), ("level", "in"), ("level", "out")] {
@@ -309,7 +309,7 @@ fn looks_of_each_kind_arrive_while_asked() {
     }
     let meter = rig.graph.look(token, "w1", &look("bass", &comp, "meter", "reduction"), true).unwrap();
     assert_eq!(
-        (&meter["scope"]["kind"], &meter["scope"]["at"], &meter["scope"]["unit"]),
+        (&meter["look"]["kind"], &meter["look"]["at"], &meter["look"]["unit"]),
         (&json!("meter"), &json!("reduction"), &json!("db"))
     );
     rig.graph.transport("play").unwrap();
@@ -365,7 +365,7 @@ fn a_look_past_the_rings_is_refused_in_words() {
         rig.graph.look(token, "w1", &look(module, node, "spectrum", "out"), true).unwrap();
     }
     let (module, node) = &sines[31];
-    let no = rig.graph.look(token, "w1", &look(module, node, "level", "out"), true).unwrap_err();
+    let no = rig.graph.look(token, "w2", &look(module, node, "level", "out"), true).unwrap_err();
     assert_eq!(format!("{no:#}"), "No room to show this: 31 sounds are shown already. Fold a card or scroll one away, then try again.");
     rig.graph.look(token, "w1", &look(&sines[0].0, &sines[0].1, "scope", "out"), true).expect("a point shown already has room");
     // A meter's slots, as many as a plan has, and one more.
@@ -380,9 +380,54 @@ fn a_look_past_the_rings_is_refused_in_words() {
     for (kind, at, says) in [
         ("meter", "out", "A meter look names the meter it shows, such as at: \"reduction\"."),
         ("scope", "reduction", "A scope shows sound at a call's out or in; a meter is a look of its own, kind: \"meter\"."),
+        ("meter", "", "A meter look names the meter it shows, such as at: \"reduction\"."),
     ] {
         let e = rig.graph.look(token, "w1", &look(&sines[0].0, &sines[0].1, kind, at), true).unwrap_err();
         assert_eq!(format!("{e:#}"), says);
     }
     assert_eq!("picture".parse::<Kind>().unwrap_err(), "A look is a scope, a spectrum, a level or a meter, not picture.");
+}
+
+/// A saw whose loudness an LFO swings, through a compressor, so how far it turns down rises and
+/// falls.
+const SWING: &str = "import { song, track } from '@m2/core';\nimport { lfo } from 'std/control';\nimport { osc } from 'std/dsp';\n\
+                     import { compress } from 'std/fx';\nimport { scale } from 'std/math';\nimport { mixer } from 'std/mix';\n\
+                     const bass = track('bass', ({ time }) => compress(scale(osc.saw(110), lfo(time.beats, { period: 0.5 })), { threshold: -30, ratio: 8 }));\n\
+                     export default song(() => mixer({ bass: bass.out }));\n";
+
+// TAP-14, TAP-15 (review T2): each client keeps its own most and its own level, an agent's too,
+// with no window listening: one asking at every read sees its most rise and fall back, never under
+// its now; one asking once more at the end gets the most and the loudest of the whole while.
+#[test]
+fn each_client_keeps_its_own_most_and_level() {
+    let mut rig = Rig::new(SWING);
+    rig.graph.watch_meters(false);
+    let (token, comp) = (rig.token(), rig.id("compress"));
+    let (meter, level) = (look("bass", &comp, "meter", "reduction"), look("bass", &comp, "level", "in"));
+    for who in ["agent:a", "agent:b"] {
+        rig.graph.look(token, who, &meter, true).unwrap();
+        rig.graph.look(token, who, &level, true).unwrap();
+    }
+    rig.graph.transport("play").unwrap();
+    rig.fill(8);
+    rig.graph.meters();
+    rig.graph.look(token, "agent:b", &meter, true).unwrap();
+    rig.graph.look(token, "agent:b", &level, true).unwrap();
+    let (mut mosts, mut peaks) = (vec![], vec![]);
+    for _ in 0..60 {
+        rig.fill(4);
+        rig.graph.meters();
+        let m = &rig.graph.look(token, "agent:a", &meter, true).unwrap()["look"];
+        let (now, most) = (m["now"].as_f64().unwrap(), m["most"].as_f64().unwrap());
+        assert!(most >= now, "most {most} under now {now}");
+        mosts.push(most);
+        peaks.push(numbers(&rig.graph.look(token, "agent:a", &level, true).unwrap()["look"]["peak"])[0]);
+    }
+    let (lo, hi) = (mosts.iter().copied().fold(f64::MAX, f64::min), mosts.iter().copied().fold(0.0, f64::max));
+    assert!(hi > lo + 3.0, "a's most falls back between its asks: from {hi} to {lo}");
+    let b = &rig.graph.look(token, "agent:b", &meter, true).unwrap()["look"];
+    assert!((b["most"].as_f64().unwrap() - hi).abs() < 0.01, "b's most is of the whole while: {} against {hi}", b["most"]);
+    let b = numbers(&rig.graph.look(token, "agent:b", &level, true).unwrap()["look"]["peak"])[0];
+    let top = peaks.iter().copied().fold(0.0, f64::max);
+    assert!(b >= top - 0.02, "b's level is of all the ring holds since its last ask: {b} against {top}");
 }

@@ -13,7 +13,7 @@
 //!   records on an audio lane, `"input": [x]` is the sound input's loudest sample since the last
 //!   message, both sides (the io plan's slice 3: the take's level bar), read from the take's ring
 //!   at a place of its own.
-//! - **Each window's looks:** `{"t": "scopes", "scopes": [{"module", "node", "kind", "at",
+//! - **Each window's looks:** `{"t": "looks", "looks": [{"module", "node", "kind", "at",
 //!   "frames": [[…], …]}]}`, what each look it asked for saw (TAP-8, TAP-12): a scope's last
 //!   [`super::scope::SCOPE`] frames, a list per channel; a spectrum's `bins`; a level's `peak` and
 //!   `rms`; a meter's `now` and `most` (`why` in place of them while it can't show), to that
@@ -256,12 +256,12 @@ impl Meters {
     }
 }
 
-/// What a meters read sends (TAP-4, TAP-8): the message every listener gets, and each window's
-/// own, `{"t": "scopes", "scopes": […]}`, for the windows that asked for scopes.
+/// What a meters read sends (TAP-4, TAP-8, TAP-12): the message every listener gets, and each
+/// window's own, `{"t": "looks", "looks": […]}`, for the windows that asked for looks.
 #[derive(Debug)]
 pub struct MetersOut {
     pub all: Value,
-    pub scopes: Vec<(String, Value)>,
+    pub looks: Vec<(String, Value)>,
 }
 
 /// Watch `taps`'s meters as they are watched: their peaks are raised only then (TAP-4). What every
@@ -311,6 +311,11 @@ impl Graph {
             meters.read(device.epoch, player.load());
             let plays = open.engine.plays.as_ref().filter(|p| p.epoch == device.epoch);
             asks.expire(std::time::Instant::now(), plays.and_then(|p| p.info.taps.as_deref()));
+            // Each meter look's read, into its clients' own, whoever listens (TAP-15): an agent
+            // with no window open gets the most since its last ask.
+            if let Some(t) = plays.filter(|p| player.status().generation == p.generation).and_then(|p| p.info.taps.as_deref()) {
+                asks.fold(t);
+            }
             let idle = player.idle();
             // The loudness, while asked for, whoever listens (TAP-6): from the plan the engine plays;
             // while it idles, nothing (it starts again with the next sound).
@@ -358,7 +363,7 @@ impl Graph {
         if let Some(x) = input {
             all["input"] = json!([short(x)]);
         }
-        // Each window's scopes, to it alone.
+        // Each window's looks, to it alone.
         let mut windows: Vec<(String, Vec<Value>)> = vec![];
         for s in &shown {
             let v = s.json();
@@ -369,8 +374,8 @@ impl Graph {
                 }
             }
         }
-        let scopes = windows.into_iter().map(|(c, list)| (c, json!({"t": "scopes", "session": token, "scopes": list}))).collect();
-        Some(MetersOut { all, scopes })
+        let looks = windows.into_iter().map(|(c, list)| (c, json!({"t": "looks", "session": token, "looks": list}))).collect();
+        Some(MetersOut { all, looks })
     }
 }
 
