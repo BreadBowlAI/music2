@@ -214,12 +214,21 @@ pub(crate) fn kit_bus(db: Option<Spelled>) -> NewTrack {
 /// they use, by [`split`], named as the table words it and
 /// going to the bus, with one clip of that sound's notes (`clip` makes it); the notes no sound
 /// answers to on Percussion, which plays the tom, each at its own pitch.
+/// With `open_own` (the file plays its open hats on a part of their own, as music2 writes an Open
+/// hat track, KIT-28), the open hats (46) come in on an Open hat track after the Hats, cut by them.
 pub(crate) fn kit_of(
     notes: &[Note],
     bus: usize,
+    open_own: bool,
     clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
 ) -> Result<Vec<NewTrack>, EditError> {
-    let Split { lanes, left } = split(notes);
+    let Split { mut lanes, left } = split(notes);
+    if open_own && let Some(i) = lanes.iter().position(|(sound, _)| *sound == "hats") {
+        let (open, closed): (Vec<Note>, Vec<Note>) = lanes[i].1.drain(..).partition(|n| key_of(n) == 46);
+        lanes[i].1 = closed;
+        lanes.insert(i + 1, ("open hat", open));
+        lanes.retain(|(_, mine)| !mine.is_empty());
+    }
     let mut out = vec![kit_bus(None)];
     let named = |sound: &'static str| GM.iter().find(|g| g.sound == sound).map_or(sound, |g| g.name);
     let lanes = lanes.into_iter().map(|(sound, mut mine)| {
@@ -232,15 +241,25 @@ pub(crate) fn kit_of(
         (named(sound), sound, mine)
     });
     let left = (!left.is_empty()).then_some(("Percussion", "tom", left));
+    let mut hats = None;
     for (label, sound, mine) in lanes.chain(left) {
         let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table") as f64;
         let menu = Insert { slot: "drum".into(), value: Spelled { value: place, spelled: None, written: place } };
+        let index = bus + out.len();
+        let hits_of = match (sound, hats) {
+            ("open hat", Some(h)) => vec![("cutBy".to_string(), h)],
+            _ => vec![],
+        };
+        if sound == "hats" {
+            hats = Some(index);
+        }
         out.push(NewTrack {
             play: Play::Instrument(DRUM.into()),
             label: Some(label.to_string()),
             clips: vec![clip(mine)?],
             values: vec![menu],
             to: Some(Goes::New(bus)),
+            hits_of,
             ..NewTrack::default()
         });
     }

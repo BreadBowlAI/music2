@@ -875,3 +875,30 @@ fn a_refused_file_writes_nothing() {
     assert!(e.ends_with("The code doesn't compile, so no track can be added now. Fix the code first."), "{e}");
     assert_eq!(s.accepted().number, number);
 }
+
+// KIT-8, KIT-28 (review C7): an 808 kit written as a MIDI file comes back as the same kit: its Open
+// hat part, the open hats alone, comes in on an Open hat track cut by the Hats, so the cut and the
+// beat grid's row survive the round trip. A file whose hats share one part keeps one Hats track.
+#[test]
+fn an_open_hat_part_round_trips_with_its_cut() {
+    let f = fixture("templates/empty");
+    let mut s = f.open();
+    let hats = file(1, vec![(Some("Hats"), played(9, 42, 0, 12)), (Some("Open hat"), played(9, 46, 48, 12))]);
+    let t = made(import_tracks(&mut s, &hats, "hats.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Hats", "Open hat"]);
+    let open = f.read(&format!("tracks/{}.ts", t.tracks[2].0));
+    assert!(
+        open.contains(&format!("drums.drum(lane.notes(\"hits\"), {}.hits, {{ drum: \"open hat\" }})", crate::sites::camel(&t.tracks[1].0))),
+        "{open}"
+    );
+    let g = fixture("templates/empty");
+    let mut back = g.open();
+    let again = smf::read(&export_song(&s).unwrap()).unwrap();
+    let t = made(import_tracks(&mut back, &again, "again.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Hats", "Open hat"], "the same kit");
+    let h = fixture("templates/empty");
+    let mut one = h.open();
+    let shared = file(1, vec![(Some("Kit"), [played(9, 42, 0, 12), played(9, 46, 48, 12)].concat())]);
+    let t = made(import_tracks(&mut one, &shared, "kit.mid", &at(None, 0.0), None).unwrap());
+    assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Hats"], "one part: one Hats track");
+}

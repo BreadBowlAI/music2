@@ -680,7 +680,11 @@ pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, cho
         if p.drums {
             if !brought.parts[..i].iter().any(|q| q.drums) {
                 let first = new.len();
-                new.extend(crate::drums::kit_of(&drums, first, |notes| clip_of(notes, drums_end))?);
+                // Open hats on a part of their own (an Open hat track music2 wrote) keep a track of
+                // their own, cut by the Hats (KIT-28).
+                let open_own =
+                    brought.parts.iter().any(|q| q.drums && !q.notes.is_empty() && q.notes.iter().all(|n| n.pitch.round() == 46.0));
+                new.extend(crate::drums::kit_of(&drums, first, open_own, |notes| clip_of(notes, drums_end))?);
             }
             continue;
         }
