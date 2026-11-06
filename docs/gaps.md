@@ -45,7 +45,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | 9 | **The rest of clip editing**: a box drag that scrolls at the timeline's edge; copied clips in the system's clipboard, to paste into another window; a flag on the ruler where the song ends (taste.md TL-12). | Pop songs are built by copying parts. | Yes | small |
 | 61 | **A clip launcher** (optional), as Ableton's Session view: a grid of clips to start and stop live, in time, to jam ideas before arranging them. | Many producers sketch a song by jamming loops. Optional: the timeline does the same job. | No | large |
 
-- **Built for these rows**: overdub, a clip for each time round a loop and the keyboard piano's velocity (#24, MON-11, MON-12, MON-15); Follow tempo, fades, reverse and clip volume (#18, [Audio](guide/audio.md)); export of the song, stems and MIDI (#36); tempo and time signature changes on the ruler (#58); the stream a scope or spectrum would draw, `POST /api/graph/scope`, and since track `taps2` the spectrum, levels and a sound's meters themselves (#59, [TAP-1 to TAP-16](architecture.md#taps)); bars selected on every track and copied, cut, pasted, duplicated, emptied, inserted or deleted (#23, [ARR-1 to ARR-9](architecture.md#sections), [Sections](guide/sections.md)).
+- **Built for these rows**: overdub, a clip for each time round a loop and the keyboard piano's velocity (#24, MON-11, MON-12, MON-15); Follow tempo, fades, reverse and clip volume (#18, [Audio](guide/audio.md)); export of the song, stems and MIDI (#36); tempo and time signature changes on the ruler (#58); the stream a scope or spectrum would draw, `POST /api/graph/look` (`/api/graph/scope` before track `taps2`), and since track `taps2` the spectrum, levels and a sound's meters themselves (#59, [TAP-1 to TAP-16](architecture.md#taps)); bars selected on every track and copied, cut, pasted, duplicated, emptied, inserted or deleted (#23, [ARR-1 to ARR-9](architecture.md#sections), [Sections](guide/sections.md)).
 
 ## Getting it to people
 
@@ -218,7 +218,7 @@ Each line is one small gap, without a number.
 ### Mixing
 
 - **A meter inside an instrument's voices can't be looked at yet** (TAP-11): a look at a call inside `poly` is refused in words, as a scope is. The Wavetable's LFO, read as the largest across the voices, waits for its card (track `dress`). So does a capture from a call's next note (the Drum's last hit).
-- **A spectrum isn't smoothed over time** (TAP-13): each message is the ring's latest frames, so a window that wants it calmer eases it as it draws.
+- **A spectrum isn't smoothed over time** (TAP-13): each message is the ring's latest frames, so a window that wants it calmer eases it as it draws. Below about 100 Hz two notes a semitone apart run together, and below about 150 Hz noise reads loud (up to 9 dB at 20 Hz): a band there is narrower than the FFT's bins.
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
 - **No solo-safe buses**, and no "solo in place" choice.

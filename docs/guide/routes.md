@@ -244,6 +244,16 @@ An example body:
 
 The drags in progress: knobs, clips and the tempo.
 
+### `POST /api/graph/look`
+
+Look at a box as it plays: its sound's last frames (kind scope), its spectrum, its level, or a meter its sound gives (kind meter, at its name); at its output (at out) or its input (at in); in the asking window's looks message, and in each answer (what it saw since your last ask), while you ask again within 10 s; or stop.
+
+An example body:
+
+```json
+{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "kind": "spectrum", "at": "in", "on": true}
+```
+
 ### `POST /api/graph/loudness`
 
 Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop.
@@ -382,16 +392,6 @@ An example body:
 
 ```json
 {"session": 7, "at": 42, "call": "tracks/drums.ts#2", "file": "/Users/you/Samples/kick.wav"}
-```
-
-### `POST /api/graph/scope`
-
-Look at a box as it plays: its sound's last frames (kind scope), its spectrum, its level, or a meter its sound gives (kind meter, at its name); at its output (at out) or its input (at in); to the window that asks (and in each answer), while you ask again within 10 s; or stop.
-
-An example body:
-
-```json
-{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "kind": "spectrum", "at": "in", "on": true}
 ```
 
 ### `POST /api/graph/sections`
