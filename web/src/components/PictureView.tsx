@@ -9,8 +9,10 @@ import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
+import { beatNow } from "../lib/clock";
 import { useCards } from "../lib/folded";
-import { controlLabel, graphApi, inSentence, picks, type CardView, type Knob, type NumberKnob } from "../lib/graph";
+import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
+import { barAt, controlLabel, graphApi, inSentence, picks, type CardView, type Knob, type NumberKnob } from "../lib/graph";
 import { useStore } from "../lib/store";
 import { useViewDrag, type ViewProps } from "./CardViews";
 import { words as said } from "./Settings";
@@ -123,22 +125,8 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const { session, module } = p;
   const node = p.node.id;
   const name = view.name;
-  // Looked at: the card on screen, in a window that shows (CARD-69, as a scope, CARD-29).
-  const [onScreen, setOnScreen] = useState(false);
-  const [shown, setShown] = useState(() => document.visibilityState === "visible");
-  useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const io = new IntersectionObserver((seen) => setOnScreen(seen.some((s) => s.isIntersecting)));
-    io.observe(el);
-    const vis = () => setShown(document.visibilityState === "visible");
-    document.addEventListener("visibilitychange", vis);
-    return () => {
-      io.disconnect();
-      document.removeEventListener("visibilitychange", vis);
-    };
-  }, []);
-  const looking = onScreen && shown;
+  // Looked at: the card on screen, in a window that shows (CARD-69, as a look, TAP-16).
+  const looking = useLooking(box);
   // The view's values as it is drawn: a new view asks again at once.
   const values = JSON.stringify(view.values);
   useEffect(() => {
@@ -178,6 +166,7 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
         aria-label={why ?? drawn?.words ?? `${p.owner}'s picture`}
         title={why ?? drawn?.words}
       >
+        {drawn?.shapes && !why && view.live?.length ? <Live view={view} shapes={drawn.shapes} looking={looking} {...p} /> : null}
         {drawn?.shapes && !why && <Shapes svg={svg} view={view} shapes={drawn.shapes} {...p} />}
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </div>
@@ -444,4 +433,176 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
       })}
     </svg>
   );
+}
+
+// ---------------------------------------------------------------- live layers (CARD-73)
+
+type LiveLayer = NonNullable<PictureView["live"]>[number];
+
+/** What a live layer looks at (TAP-12), when it looks at the sound: its kind and its point. */
+function lookOf(l: LiveLayer): { kind: LookKind; at: string } | null {
+  if (l.kind === "spectrum" || l.kind === "level" || l.kind === "scope") return { kind: l.kind, at: l.at ?? "out" };
+  if (l.kind === "meter") return { kind: "meter", at: l.name ?? "" };
+  if (l.kind === "history") return lookOf(l.of as LiveLayer);
+  if (l.kind === "playhead" && l.from && l.from !== "beat") return { kind: "meter", at: l.from };
+  return null;
+}
+
+/** How many reads a history keeps: about 3 s at 30 a second. */
+const HISTORY = 90;
+/** A spectrum's and a level's dB, from the foot of the picture to its top. */
+const DB_FOOT = -90;
+
+/**
+ * A picture's live layers, on a canvas under its shapes (CARD-73): each looks at what plays while
+ * the picture shows (`useLook`, one ask for each look in this window), and is drawn as its reads
+ * come. A layer that can't come says why, small, in the corner; the shapes stay.
+ */
+function Live({ view, shapes, looking, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean }) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const seen = useRef(new Map<number, Seen[]>());
+  const [why, setWhy] = useState<string | null>(null);
+  const reads = useRef(0);
+  const layers = view.live ?? [];
+  const frame = useRef(0);
+  const paint = () => {
+    cancelAnimationFrame(frame.current);
+    frame.current = requestAnimationFrame(() => draw());
+  };
+  // The playhead moves with the song's beat, read from the clock, at the screen's rate.
+  const playhead = layers.some((l) => l.kind === "playhead" && (l.from ?? "beat") === "beat");
+  useEffect(() => {
+    if (!playhead || !looking) return;
+    let alive = true;
+    const tick = () => {
+      if (!alive) return;
+      draw();
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+    return () => {
+      alive = false;
+    };
+  }, [playhead, looking]);
+  const draw = () => {
+    const c = canvas.current;
+    const g = c?.getContext("2d");
+    if (!c || !g) return;
+    const r = c.getBoundingClientRect();
+    if (c.width !== Math.round(r.width * 2) || c.height !== Math.round(r.height * 2)) [c.width, c.height] = [Math.round(r.width * 2), Math.round(r.height * 2)];
+    const css = getComputedStyle(c);
+    const grey = (t?: string) => css.getPropertyValue(t === "faint" ? "--color-fg-faint" : t === "soft" ? "--color-fg-muted" : "--color-fg-muted").trim() || "#8a8f96";
+    const plot = c.height * ((PICTURE_H - 8 - FOOT) / (PICTURE_H - 8));
+    const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
+    const dbY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
+    g.clearRect(0, 0, c.width, c.height);
+    layers.forEach((l, i) => {
+      const all = seen.current.get(i) ?? [];
+      const last = all[all.length - 1];
+      g.strokeStyle = g.fillStyle = grey((l as { tone?: string }).tone);
+      g.lineWidth = 2;
+      if (l.kind === "spectrum" && last?.bins && view.x.unit === "hz") {
+        // A twelfth of an octave each, from 20 Hz: a faint fill from the foot.
+        g.globalAlpha = 0.35;
+        g.beginPath();
+        g.moveTo(0, plot);
+        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, dbY(db)));
+        g.lineTo(c.width, plot);
+        g.closePath();
+        g.fill();
+        g.globalAlpha = 1;
+      } else if (l.kind === "level" && last?.peak) {
+        const db = 20 * Math.log10(Math.max(1e-6, Math.max(...last.peak)));
+        const on = l.on ? (flatShapes(shapes).find((s) => s.kind === "line" && s.name === l.on) as { points: number[] } | undefined) : undefined;
+        if (on && view.x.unit === "db") {
+          // A dot riding its line: x the level, y the line there (CARD-73).
+          const x = px(db, view.x) * c.width;
+          const y = (1 - px(onLine(on.points, db), view.y)) * plot;
+          g.beginPath();
+          g.arc(x, y, 6, 0, 2 * Math.PI);
+          g.fill();
+        } else g.fillRect(0, plot - 4, ((db - DB_FOOT) / -DB_FOOT) * c.width, 4);
+      } else if (l.kind === "meter" && last?.now !== undefined) {
+        // A bar at the right edge, from the axis's 0 to the meter's number, in the y axis's unit.
+        const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(last.now, view.y)) * plot;
+        g.fillRect(c.width - 10, Math.min(y0, y1), 8, Math.abs(y1 - y0));
+      } else if (l.kind === "history" && all.length > 1) {
+        g.beginPath();
+        all.forEach((s, j) => {
+          const v = s.peak ? 20 * Math.log10(Math.max(1e-6, Math.max(...s.peak))) : (s.now ?? 0);
+          const y = s.peak ? dbY(v) : (1 - px(v, view.y)) * plot;
+          const x = ((j + HISTORY - all.length) / (HISTORY - 1)) * c.width;
+          if (j) g.lineTo(x, y);
+          else g.moveTo(x, y);
+        });
+        g.stroke();
+      } else if (l.kind === "playhead") {
+        const graph = useStore.getState().graph;
+        let t: number | null = null;
+        if ((l.from ?? "beat") === "beat" && graph) {
+          const beat = beatNow();
+          const bar = barAt(graph.timeline.meter, Math.max(0, beat));
+          t = (beat - bar.start) / bar.length;
+        } else if (last?.now !== undefined) t = px(last.now, view.x);
+        if (t !== null) g.fillRect(t * c.width - 1, 0, 2, plot);
+      } else if (l.kind === "scope" && last?.frames?.length) {
+        const f = last.frames;
+        g.beginPath();
+        for (let j = 0; j < f[0].length; j++) {
+          let v = 0;
+          for (const ch of f) v += ch[j] ?? 0;
+          const x = (j / Math.max(1, f[0].length - 1)) * c.width, y = (1 - (Math.max(-1, Math.min(1, v / f.length)) + 1) / 2) * plot;
+          if (j) g.lineTo(x, y);
+          else g.moveTo(x, y);
+        }
+        g.stroke();
+      }
+    });
+    c.dataset.reads = String(reads.current);
+  };
+  return (
+    <>
+      <canvas ref={canvas} data-live={layers.length} className="absolute inset-0 w-full h-full pointer-events-none" />
+      {layers.map((l, i) => {
+        const look = lookOf(l);
+        return look ? (
+          <LayerLook
+            key={i}
+            look={{ session, module, node: node.id, ...look }}
+            looking={looking}
+            seen={(s) => {
+              const kept = seen.current.get(i) ?? [];
+              kept.push(s);
+              if (kept.length > HISTORY) kept.shift();
+              seen.current.set(i, kept);
+              reads.current += 1;
+              paint();
+            }}
+            why={setWhy}
+          />
+        ) : null;
+      })}
+      {why && <span className="absolute right-1 bottom-0.5 max-w-[70%] truncate text-xs text-fg-faint" title={why} data-live-why>{why}</span>}
+    </>
+  );
+}
+
+/** One live layer's look (TAP-16): a component, so each layer's ask is its own hook. */
+function LayerLook({ look, looking, seen, why }: { look: { session: number; module: string; node: string; kind: LookKind; at: string }; looking: boolean; seen: (s: Seen) => void; why: (w: string | null) => void }) {
+  useLook(look, looking, seen, why);
+  return null;
+}
+
+/** Every shape of `shapes`, those in its parts too. */
+function flatShapes(shapes: Shape[]): Shape[] {
+  return shapes.flatMap((s) => (s.kind === "part" ? flatShapes(s.shapes) : [s]));
+}
+
+/** A line's y at `x`, between its points. */
+function onLine(points: number[], x: number) {
+  for (let i = 2; i + 1 < points.length; i += 2) {
+    const [x0, y0, x1, y1] = [points[i - 2], points[i - 1], points[i], points[i + 1]];
+    if (x <= x1) return x1 === x0 ? y1 : y0 + ((x - x0) / (x1 - x0)) * (y1 - y0);
+  }
+  return points[points.length - 1] ?? 0;
 }

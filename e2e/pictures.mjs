@@ -13,7 +13,7 @@ import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, view, box } = await open(1440, 900, { device: "chain" });
+const { page, errors, api, view, box, posts } = await open(1440, 900, { device: "chain" });
 
 /** A request from outside the page: an agent's. */
 const agent = (path, body) =>
@@ -40,7 +40,7 @@ fs.writeFileSync(
 );
 fs.writeFileSync(
   path.join(PACK, "src/index.ts"),
-  `import { axis, component, control, port, view } from "@m2/core";
+  `import { axis, component, control, live, port, view } from "@m2/core";
 import { lowpass } from "std/filter";
 
 const BANDS = [1, 2] as const;
@@ -66,6 +66,7 @@ export const curve = component(
         curve: view.picture({
           x: axis.log("hz", 20, 20000),
           y: axis.lin("db", -24, 24),
+          live: [live.spectrum("out", { tone: "faint" }), live.playhead("beat")],
           draw: (v, p) => {
             const points: number[] = [];
             for (let i = 0; i < 180; i++) {
@@ -183,5 +184,16 @@ await page.keyboard.press("ArrowUp");
 check(await until(async () => /gain2: 3\.1\b/.test(read("tracks/eq.ts")), 8000), `↑ on band 2's dot moves its gain one step: ${/gain2: [^,}]*/.exec(read("tracks/eq.ts"))?.[0]}`);
 check(await until(async () => (await undoTitle()) === "Undo Curve EQ gain2 (⌘Z)"), `one undo step: ${await undoTitle()}`);
 await linted(card, "the card after its gestures");
+
+// ---------------------------------------------------------------- live layers (CARD-73)
+
+await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 4, on: true }) });
+await page.mouse.click(10, 10);
+await page.keyboard.press("Space");
+const liveReads = () => page.$eval(`${pic} canvas[data-live]`, (e) => Number(e.dataset.reads ?? 0)).catch(() => 0);
+check(await until(async () => (await liveReads()) >= 5, 10000), `while the song plays, the curve's sound's spectrum is drawn under it (${await liveReads()} reads)`);
+const looks = posts.filter((p) => p.url === "/api/graph/look").map((p) => JSON.parse(p.body));
+check(looks.some((l) => l.kind === "spectrum" && l.at === "out" && l.on), `asked for as a look at the call's output: ${JSON.stringify(looks.slice(0, 2))}`);
+await page.keyboard.press("Space");
 
 done(errors);
