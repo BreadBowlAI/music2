@@ -415,7 +415,9 @@ pub fn picture_said(runner: &Runner, rev: &m2_session::Revision, node: &ViewNode
         m2_script::pictures::Drawn::Shapes(json) => {
             serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|d| d["words"].as_str().map(String::from)).unwrap_or_default()
         }
-        m2_script::pictures::Drawn::Cant(why) => format!("{}'s picture {}.", node.title.as_deref().unwrap_or(&node.label), why.trim_end_matches('.')),
+        m2_script::pictures::Drawn::Cant(why) => {
+            format!("{}'s picture {}.", node.title.as_deref().unwrap_or(&node.label), why.trim_end_matches('.'))
+        }
     })
 }
 

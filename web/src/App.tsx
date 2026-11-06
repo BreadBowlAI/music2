@@ -224,6 +224,8 @@ export default function App() {
     const offMenu = onMenu(appCommand);
     const offGrid = followGridView();
     if (native) nativeAction("ready");
+    // The pictures' latency, measured in this window when asked (CARD-75, `lib/bench.ts`).
+    if (new URLSearchParams(location.search).get("bench") === "pictures") void import("./lib/bench").then((b) => b.pictures());
     document.documentElement.classList.toggle("native", native);
     document.documentElement.classList.toggle("mac", isMac);
     return () => {

@@ -264,6 +264,8 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
             }
         }
         "ready" => println!("music2: UI connected to the native shell"),
+        // What the window measured when asked (`?bench=pictures`, CARD-75): to the log.
+        id if id.starts_with("bench ") => println!("music2: {id}"),
         "quit" => {
             if keep_export(app)? && keep_code(app)? {
                 // A stopped export removes its unfinished file; give it a moment to.

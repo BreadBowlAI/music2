@@ -506,6 +506,8 @@ struct Inner {
     offered: Mutex<HashMap<String, Result<Vec<m2_plugins::Offered>, String>>>,
     /// The picture runner (CARD-64): every picture of this server is drawn on its thread.
     pictures: std::sync::OnceLock<m2_script::pictures::Runner>,
+    /// Rung when a lease's value moves: a picture may draw again now (CARD-68).
+    picture_wake: pictures::Wake,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -677,6 +679,7 @@ impl Inner {
             plugins_changed: AtomicBool::new(false),
             offered: Mutex::new(HashMap::new()),
             pictures: std::sync::OnceLock::new(),
+            picture_wake: pictures::Wake::default(),
         }
     }
 
@@ -1389,6 +1392,8 @@ impl Graph {
             }
         };
         (l.seq, l.playing, l.touched) = (seq, v, Instant::now());
+        // A picture that reads it draws again now, not at its next look (CARD-68).
+        self.inner.picture_wake.ring();
         Ok(match (&l.engine, &device) {
             (Some(t), Some(d)) if t.epoch == d.epoch => Some(d.player.set_cells(&t.cells, v)),
             _ => None,

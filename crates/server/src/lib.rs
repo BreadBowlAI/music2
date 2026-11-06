@@ -475,21 +475,24 @@ fn spawn_meters(state: &Arc<AppState>) {
         .expect("spawn the meters");
 }
 
-/// `music2-pictures` (CARD-68): every frame, each picture a window or an agent asks for whose
-/// values or code changed is drawn again ([`graph::Graph::pictures_frame`]), and the windows that
-/// asked are sent it, on a channel of their own, never the event broadcast. Ends once the state is
-/// dropped.
+/// `music2-pictures` (CARD-68): as soon as a lease's value moves (or every 100 ms), and at most once
+/// a frame, each picture a window or an agent asks for whose values or code changed is drawn again
+/// ([`graph::Graph::pictures_frame`]), and the windows that asked are sent it, on a channel of their
+/// own, never the event broadcast. Ends once the state is dropped.
 fn spawn_pictures(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     std::thread::Builder::new()
         .name("music2-pictures".into())
         .spawn(move || {
             loop {
-                std::thread::sleep(graph::pictures::FRAME);
                 let Some(state) = weak.upgrade() else { return };
+                state.graph.pictures_wait(graph::pictures::LOOK);
+                let began = std::time::Instant::now();
                 if let Some(out) = state.graph.pictures_frame() {
                     state.pictures.send_replace(Arc::new(out));
                 }
+                // One frame at most for each draw: a drag's moves in it wait for the next.
+                std::thread::sleep(graph::pictures::FRAME.saturating_sub(began.elapsed()));
             }
         })
         .expect("spawn the pictures");

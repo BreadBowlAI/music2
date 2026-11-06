@@ -6,9 +6,10 @@
 //!   lease's on the card. An ask lasts as a scope's does ([`super::scope::KEEP`]): while its client
 //!   asks again, until it stops, or its window's socket closes.
 //! - **Drawn again once a frame.** The server's `music2-pictures` thread calls
-//!   [`Graph::pictures_frame`] every [`FRAME`]: each picture asked for whose values or code changed
-//!   since it was drawn is drawn again, once for all its card's leases, and each window that asked
-//!   gets it in its own `pictures` message. Nothing changed, nothing is drawn.
+//!   [`Graph::pictures_frame`] as soon as a lease's value moves, or every [`LOOK`], and at most once
+//!   every [`FRAME`]: each picture asked for whose values or code changed since it was drawn is drawn
+//!   again, once for all its card's leases, and each window that asked gets it in its own
+//!   `pictures` message. Nothing changed, nothing is drawn.
 //! - **Each dot's knobs.** The runner names the values a dot moves; the answer adds the knob that
 //!   moves each, from the view, or why the card can't (CARD-66), so an agent writes it as a knob.
 
@@ -21,8 +22,25 @@ use serde_json::{Map, Value, json};
 
 use super::{ControlPlane, Graph};
 
-/// How often pictures asked for are looked at, and drawn again at most: one screen frame.
+/// How often a picture is drawn again at most: one screen frame.
 pub const FRAME: Duration = Duration::from_millis(16);
+/// How long the pictures' thread waits for a lease to move before it looks anyway: for a write, an
+/// agent's change, a new code revision and asks that end.
+pub const LOOK: Duration = Duration::from_millis(100);
+
+/// What wakes the pictures' thread: a lease's value moved, so a picture may draw again now.
+#[derive(Default)]
+pub(super) struct Wake {
+    due: parking_lot::Mutex<bool>,
+    rung: parking_lot::Condvar,
+}
+
+impl Wake {
+    pub(super) fn ring(&self) {
+        *self.due.lock() = true;
+        self.rung.notify_one();
+    }
+}
 
 /// The pictures windows and agents ask for, on the control plane.
 #[derive(Default)]
@@ -312,6 +330,16 @@ impl Graph {
             }
         }
         Some(PicturesOut { session: token, clients })
+    }
+
+    /// Wait until a lease's value moves, or `most` (the pictures' thread, CARD-68).
+    pub fn pictures_wait(&self, most: Duration) {
+        let w = &self.inner.picture_wake;
+        let mut due = w.due.lock();
+        if !*due {
+            w.rung.wait_for(&mut due, most);
+        }
+        *due = false;
     }
 
     /// `client`'s window closed: the pictures it asked for end (CARD-67).
