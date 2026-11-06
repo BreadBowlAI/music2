@@ -94,6 +94,9 @@ pub struct AppState {
     /// an agent's when it asks, TAP-4): only the latest is kept, so one that falls behind skips to
     /// it (empty until the first). Each window's own looks ride with them (TAP-8, TAP-12).
     pub meters: watch::Sender<Arc<Meters>>,
+    /// The latest pictures each window asked for (CARD-68), by its client id: a socket sends only
+    /// those newer than what it sent, so one that falls behind skips to each picture's newest.
+    pub pictures: watch::Sender<Arc<graph::pictures::PicturesOut>>,
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
@@ -134,6 +137,7 @@ impl AppState {
             exports: Default::default(),
             unheard: Arc::default(),
             meters: watch::channel(Arc::default()).0,
+            pictures: watch::channel(Arc::new(graph::pictures::PicturesOut { session: 0, clients: vec![] })).0,
             recent: OnceLock::new(),
             settings: OnceLock::new(),
             midi: OnceLock::new(),
@@ -352,6 +356,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     let state = Arc::new(state);
     spawn_graph_watch(&state);
     spawn_meters(&state);
+    spawn_pictures(&state);
     spawn_midi(&state);
     spawn_takes(&state);
 
@@ -362,7 +367,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     std::thread::Builder::new().name("music2-http".into()).spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
-            let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+            let listener = listening(tokio::net::TcpListener::from_std(listener).expect("listener"));
             if let Err(e) = axum::serve(listener, app).await {
                 eprintln!("music2: server stopped: {e}");
             }
@@ -437,6 +442,15 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
         .expect("spawn the server's notices");
 }
 
+/// What the server accepts its connections from: each socket writing at once (TCP_NODELAY), so a
+/// window's small messages one after another (its meters, then its pictures) never wait for the
+/// reader's delayed ACK, which held a picture about 23 ms behind a meters message (CARD-68).
+pub(crate) fn listening(l: tokio::net::TcpListener) -> impl axum::serve::Listener<Io = tokio::net::TcpStream, Addr = SocketAddr> {
+    axum::serve::ListenerExt::tap_io(l, |s: &mut tokio::net::TcpStream| {
+        let _ = s.set_nodelay(true);
+    })
+}
+
 /// The meters as the sockets get them (TAP-4, TAP-8, TAP-12): what every listener gets, and each
 /// window's own looks, by its client id; both as the JSON text sent.
 #[derive(Debug, Default)]
@@ -468,6 +482,31 @@ fn spawn_meters(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the meters");
+}
+
+/// `music2-pictures` (CARD-63, CARD-68): as soon as a lease's value moves (or every 100 ms), each
+/// picture a window or an agent asks for whose values or code changed is drawn again
+/// ([`graph::Graph::pictures_frame`]), and the windows that asked are sent it, on a channel of their
+/// own, never the event broadcast; then a new view's words. Ends once the state is dropped.
+fn spawn_pictures(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-pictures".into())
+        .spawn(move || {
+            loop {
+                let Some(state) = weak.upgrade() else { return };
+                state.graph.pictures_wait(graph::pictures::LOOK);
+                // Drawn at once; moves that come meanwhile are drawn together after (CARD-68).
+                if let Some(out) = state.graph.pictures_frame() {
+                    state.pictures.send_replace(Arc::new(out));
+                }
+                // Each picture's words in a new view (CARD-63): windows read it again.
+                if state.graph.pictures_words() {
+                    state.graph_changed();
+                }
+            }
+        })
+        .expect("spawn the pictures");
 }
 
 /// How often a take is looked at (lane B): its count, its loop's end, and a take to write.

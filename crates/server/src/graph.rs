@@ -58,6 +58,7 @@ pub mod meters;
 pub mod midi;
 pub mod output;
 pub mod overlay;
+pub mod pictures;
 pub(crate) mod plugin_window;
 mod presets;
 mod preview;
@@ -267,6 +268,8 @@ struct EngineView {
 struct Shown {
     /// The accepted revision the view shows.
     revision: u64,
+    /// The view itself, as the state's `view` is: what the pictures are drawn from (CARD-63, CARD-67).
+    view: Arc<m2_editor::GraphView>,
     /// The state without the transport and the gestures, which [`Graph::state`] adds as they are
     /// now, nor the timeline.
     state: Value,
@@ -368,6 +371,8 @@ struct ControlPlane {
     record: record::Recorder,
     /// What windows and agents ask to look at: looks and the loudness (TAP-6, TAP-8, TAP-12).
     asks: scope::Asks,
+    /// The pictures windows and agents ask for (CARD-67).
+    pictures: pictures::Pictures,
 }
 
 /// How a control named at a revision is found without the session.
@@ -501,6 +506,10 @@ struct Inner {
     /// The presets each plugin offers itself, by its id, as its host found them (HOST-8): kept for
     /// the app run.
     offered: Mutex<HashMap<String, Result<Vec<m2_plugins::Offered>, String>>>,
+    /// The picture runner (CARD-64): every picture of this server is drawn on its thread.
+    pictures: std::sync::OnceLock<m2_script::pictures::Runner>,
+    /// Rung when a lease's value moves: a picture may draw again now (CARD-68).
+    picture_wake: pictures::Wake,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -624,6 +633,11 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 }
 
 impl Inner {
+    /// The picture runner, started at the first picture asked for (CARD-64).
+    fn runner(&self) -> &m2_script::pictures::Runner {
+        self.pictures.get_or_init(m2_script::pictures::Runner::new)
+    }
+
     fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Inner {
         let faults: Arc<m2_runtime::fault::Faults> = Arc::default();
         if let Some(d) = &device {
@@ -666,6 +680,8 @@ impl Inner {
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
             offered: Mutex::new(HashMap::new()),
+            pictures: std::sync::OnceLock::new(),
+            picture_wake: pictures::Wake::default(),
         }
     }
 
@@ -830,6 +846,8 @@ impl Inner {
         };
         let status = self.status();
         let mut state = shown.state.clone();
+        // Each picture's words, once the runner worked them out for this view (CARD-63).
+        pictures::put_words(&self.control.lock().pictures, shown.revision, &mut state["view"]);
         faults::listed(self, token, &mut state["problems"]);
         state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);
@@ -1378,6 +1396,8 @@ impl Graph {
             }
         };
         (l.seq, l.playing, l.touched) = (seq, v, Instant::now());
+        // A picture that reads it draws again now, not at its next look (CARD-68).
+        self.inner.picture_wake.ring();
         Ok(match (&l.engine, &device) {
             (Some(t), Some(d)) if t.epoch == d.epoch => Some(d.player.set_cells(&t.cells, v)),
             _ => None,
@@ -1528,6 +1548,7 @@ impl Graph {
     pub fn client_gone(&self, client: &str) {
         self.audition_gone(client);
         self.asks_gone(client);
+        self.pictures_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;

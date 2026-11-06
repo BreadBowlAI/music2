@@ -69,6 +69,32 @@ pub enum Drawn {
     },
     /// The call's sound as it plays (TAP-8).
     Scope {},
+    /// A picture its pack or song draws (CARD-63): its axes, its live layers, and every value its
+    /// draw reads. Its shapes and words are asked for (CARD-67), never carried here.
+    Picture {
+        x: m2_script::component::Axis,
+        y: m2_script::component::Axis,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        live: Vec<serde_json::Value>,
+        values: Vec<PictureValue>,
+        /// Its words at these values, or why it can't be drawn: worked out by the picture runner
+        /// after the view is made, never by the settle that makes it, so null here (CARD-63).
+        words: Option<String>,
+    },
+}
+
+/// A value a picture reads, by its name in the descriptor (CARD-63): what plays, the knob that
+/// moves it when the card can, and why not when it can't.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PictureValue {
+    pub name: String,
+    /// A number in its declared unit, a choice's name, a switch's true or false, a setting's value;
+    /// null where a cable or the code works it out.
+    pub value: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knob: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// A value a view draws and moves: its control's slot, its knob when the card can move it, and
@@ -312,10 +338,110 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
                     Drawn::Keys { setting, regions, lane: notes.cloned(), why }
                 }
                 ViewOf::Scope => Drawn::Scope {},
+                ViewOf::Picture { x, y, live } => {
+                    Drawn::Picture { x: x.clone(), y: y.clone(), live: live.clone(), values: picture_values(m, desc, node), words: None }
+                }
             };
             CardView { name: v.name.clone(), of }
         })
         .collect()
+}
+
+/// What card `node`'s picture reads (CARD-63), of a call of `desc` in module `m`: each of its
+/// controls but a dictionary, then each setting, by name.
+fn picture_values(m: &Module, desc: &Descriptor, node: &ViewNode) -> Vec<PictureValue> {
+    let mut out = vec![];
+    for c in desc.controls.iter().filter(|c| c.each.is_none()) {
+        let none = PictureValue { name: c.name.clone(), value: serde_json::Value::Null, knob: None, why: None };
+        let declared = c.unit.map(m2_ir::Unit::name);
+        let v = match node.knobs.iter().find(|k| k.slot.as_deref() == Some(c.name.as_str())) {
+            // A number written in another unit than its declared one isn't drawn in it (review V2).
+            Some(k) if k.kind == crate::kind::Kind::Number && k.unit != declared => {
+                PictureValue { why: Some(format!("it is written in {}, which this picture doesn't draw", unit_words(k.unit))), ..none }
+            }
+            Some(k) => PictureValue { value: k.value.clone(), knob: Some(k.id.clone()), ..none },
+            None => {
+                let input = node.inputs.iter().find(|p| p.slot.as_deref() == Some(c.name.as_str()));
+                let lane = input.and_then(|p| p.lane.as_ref()).and_then(|l| m.lanes.iter().find(|x| x.key == l.lane));
+                let held = lane.and_then(|l| l.default).map(|d| serde_json::json!(d));
+                PictureValue { value: held.unwrap_or_default(), why: Some(why_not(m, input)), ..none }
+            }
+        };
+        out.push(v);
+    }
+    for x in &node.settings {
+        // A setting's value as a picture reads it: a number, a name, true or false. Regions and the
+        // like are no picture's to read, and stay null.
+        let plain = x.value.is_number() || x.value.is_string() || x.value.is_boolean();
+        if plain && desc.settings.iter().any(|d| d.name == x.slot) {
+            out.push(PictureValue { name: x.slot.clone(), value: x.value.clone(), knob: None, why: None });
+        }
+    }
+    out
+}
+
+/// A picture to draw (CARD-64): what the runner is asked, with the view's values as they play,
+/// each with its knob, for the server to put a lease's value on (CARD-68), and the card's label,
+/// which names a picture that can't be drawn (CARD-65).
+pub struct PictureCall {
+    pub ask: m2_script::pictures::Ask,
+    pub values: Vec<PictureValue>,
+    pub label: String,
+}
+
+impl PictureCall {
+    /// The ask at the view's values, with `playing` (a knob's id to the value a lease plays) on top.
+    pub fn at(&self, playing: impl Fn(&str) -> Option<f64>) -> m2_script::pictures::Ask {
+        let values: serde_json::Map<String, serde_json::Value> = self
+            .values
+            .iter()
+            .map(|v| (v.name.clone(), v.knob.as_deref().and_then(&playing).map_or_else(|| v.value.clone(), |x| serde_json::json!(x))))
+            .collect();
+        m2_script::pictures::Ask { values: serde_json::Value::Object(values).to_string(), ..self.ask.clone() }
+    }
+}
+
+/// What picture `view` of card `node` is drawn from as revision `rev` plays it: None when the card
+/// has no such picture. Its runtime's key is what the code is (CARD-64): the hashes of every package
+/// file the build read, and for a sound of the song's own, the song's code revision too; so an
+/// edited folder dependency, or `m2 upgrade`, makes a new runtime (review G3).
+pub fn picture_call(rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<PictureCall> {
+    let Drawn::Picture { values, .. } = &node.views.iter().find(|v| v.name == view)?.of else { return None };
+    let cid = node.component.clone()?;
+    let code = rev.compiled.code();
+    let desc = code.components.get(&cid)?.clone();
+    let own = !cid.contains(':');
+    let song = own.then(|| {
+        std::sync::Arc::new(m2_script::pictures::Song {
+            key: rev.code_rev,
+            code: rev.project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect(),
+            dependencies: rev.project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect(),
+        })
+    });
+    let packages: Vec<(String, std::path::PathBuf)> = code.decls.packages.iter().map(|(n, d)| (n.clone(), d.clone())).collect();
+    let mut key = <sha2::Sha256 as sha2::Digest>::new();
+    for (n, d) in &packages {
+        sha2::Digest::update(&mut key, format!("{n}\0{}\0", d.display()));
+    }
+    for f in &code.package_files {
+        sha2::Digest::update(&mut key, format!("{}\0{}\0", f.path, f.sha256));
+    }
+    if own {
+        sha2::Digest::update(&mut key, format!("song {}", rev.code_rev));
+    }
+    let key: String = sha2::Digest::finalize(key).iter().map(|b| format!("{b:02x}")).collect();
+    let ask = m2_script::pictures::Ask {
+        key,
+        packages,
+        song,
+        module: desc.module.clone(),
+        descriptor: desc,
+        view: view.to_string(),
+        values: String::new(),
+        memo: format!("{}\u{0}{view}", node.id),
+    };
+    let label = node.title.clone().unwrap_or_else(|| node.label.clone());
+    Some(PictureCall { ask, values: values.clone(), label })
 }
 
 /// A unit in words, as a beginner reads it.

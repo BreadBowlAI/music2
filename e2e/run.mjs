@@ -199,6 +199,7 @@ export const SUITES = [
   // On Device's chain (CARD-42): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
   ["frame", "fix", { expect: 77, s: 14 }],
+  ["pictures", "fix", { expect: 37, s: 10 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],

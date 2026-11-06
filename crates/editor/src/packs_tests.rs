@@ -558,3 +558,39 @@ fn a_packs_words_hold_no_control_characters() {
         assert!(problems.contains(want), "says `{want}`:\n{problems}");
     }
 }
+
+// CARD-64, CARD-65 (review G16): `m2 pack check` draws each picture at its defaults, so a picture
+// that keeps something between its draws, or names a value its sound doesn't have, is said before
+// the pack is installed; a good one says nothing.
+#[test]
+fn a_pack_check_draws_each_picture_at_its_defaults() {
+    let f = Fixture::new();
+    let dir = f.0.join("tiny");
+    copy(&tiny(), &dir);
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let index = std::fs::read_to_string(dir.join("src/index.ts")).unwrap();
+    let eq = |draw: &str| {
+        format!(
+            "{index}\nimport {{ axis, view as views }} from \"@m2/core\";\nlet drawn = 0;\n\
+             /** A filter with a picture. */\nexport const tinyEq = component(\n  {{ id: \"tiny-eq\", label: \"Tiny EQ\", inputs: {{ x: port.audio() }}, \
+             controls: {{ cutoff: control.hz(1000).range(20, 20000).log() }}, output: port.audio(),\n    \
+             editor: {{ category: \"EQ\", views: {{ curve: views.picture({{ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24) }}) }} }} }},\n  \
+             (x: Audio, {{ cutoff }}: Params) => svf.lowpass(x, cutoff, 0.7),\n  \
+             {{ curve: {{ draw: (v: any, p: any) => [{draw}], words: (v: any) => `cut at ${{v.cutoff}} Hz` }} }},\n);\n"
+        )
+    };
+    std::fs::write(dir.join("src/index.ts"), eq("p.handle(v.cutoff, 0, { x: \"cutoff\" })")).unwrap();
+    assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "a good picture says nothing");
+    std::fs::write(dir.join("src/index.ts"), eq("p.label(100, 0, `draw ${++drawn}`)")).unwrap();
+    let problems = check(&dir, &std_dir);
+    assert!(
+        problems.iter().any(|p| p.starts_with("@test/tiny:tiny-eq's picture curve draws differently each time for the same values")),
+        "{problems:?}"
+    );
+    std::fs::write(dir.join("src/index.ts"), eq("p.handle(1, 1, { x: \"cut\" })")).unwrap();
+    let problems = check(&dir, &std_dir);
+    assert!(
+        problems.iter().any(|p| p.starts_with("@test/tiny:tiny-eq's picture curve names cut, which this sound doesn't have")),
+        "{problems:?}"
+    );
+}

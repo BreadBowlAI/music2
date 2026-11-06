@@ -20,9 +20,10 @@ import { useStore } from "../lib/store";
 import { useLook, useLooking } from "../lib/taps";
 import { editing, fileOf, gate } from "../lib/history";
 import { words } from "./Settings";
+import { PICTURE_H, PictureView } from "./PictureView";
 
 /** How tall each view is on its card, in px. */
-export const VIEW_H: Record<CardView["kind"], number> = { envelope: 88, filter: 88, keys: 72, scope: 64 };
+export const VIEW_H: Record<CardView["kind"], number> = { envelope: 88, filter: 88, keys: 72, scope: 64, picture: PICTURE_H };
 
 /** The inner width a view draws in: a card's, less its sides. */
 const W = 184;
@@ -51,6 +52,8 @@ export function ViewRow({ view, ...p }: ViewProps & { view: CardView }) {
         <FilterView view={view} {...p} />
       ) : view.kind === "keys" ? (
         <KeysView view={view} {...p} />
+      ) : view.kind === "picture" ? (
+        <PictureView view={view} {...p} />
       ) : (
         <ScopeView {...p} />
       )}
@@ -100,7 +103,7 @@ const stepName = (owner: string, moved: Drawn[]) => `${owner} ${moved.map((d) =>
  * window's own edits that moved no ids came since; else from the revision it was drawn at, which the
  * server carries or refuses; after an edit of its own that moved ids, it isn't sent.
  */
-function useViewDrag(p: ViewProps) {
+export function useViewDrag(p: ViewProps) {
   const toast = useStore((s) => s.toast);
   type Live = {
     token: string;
