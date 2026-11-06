@@ -30,7 +30,7 @@ This is the most important difference in music software.
 | Can you change it? | Completely: any note, or the whole instrument | Mostly as a whole: cut, move, stretch |
 | Makes sound by | Being played by an **instrument** | Just playing back |
 
-**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. Stacked takes and punch in are still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#recording-and-playing-live)).
+**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. You can keep a take each time round a loop, punch in, and record several tracks at once. Comping (one take built from the best parts of several) is still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 
 ## Time: tempo, beats, bars and the grid
 
@@ -70,7 +70,7 @@ The words a chord stamp uses:
 
 In a pentatonic or blues key (5 or 6 notes), only the chords whose notes are all in the key are placed, so there are fewer: the pointer says why one isn't. A chromatic key (all 12 notes) has no chords to stamp.
 
-An arpeggiator (a chord played one note at a time) is still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#notes)).
+An arpeggiator (a chord played one note at a time) is still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 
 ## The parts of a pop song
 
@@ -111,7 +111,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Compressor** | Turns loud moments down, so everything is more even and punchy | `compress` |
 | **Limiter** | A very strict compressor at the end that stops anything getting too loud | `limit` |
 
-**In music2:** add an effect with **+** on a box in the Device view (⌥1), or drag one from the side browser onto a track. Its **⋯** menu turns it off and on, or moves it before or after its neighbour. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#effects)).
+**In music2:** add an effect with **+** on a box in the Device view (⌥1), or drag one from the side browser onto a track. Its **⋯** menu turns it off and on, or moves it before or after its neighbour. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 
 ## Mixing: making the parts fit together
 
@@ -134,7 +134,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 - Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
 - A sidechain is written in code: `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
-- Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#automation)).
+- Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).
 
 ## Production terms
 
