@@ -37,10 +37,7 @@ pub fn pieces(clips: &[&AudioClip], named: usize, tempo: &TempoMap) -> Vec<usize
     order.sort_by(|a, b| clips[*a].start.total_cmp(&clips[*b].start).then(a.cmp(b)));
     let links = |a: &AudioClip, b: &AudioClip| {
         let (a_end, b_end) = (a.start + a.length, b.start + b.length);
-        b.start > a.start
-            && b_end > a_end
-            && b.start <= a_end + SAME
-            && tempo.seconds_at(a_end) - tempo.seconds_at(b.start) <= REACH + SAME
+        b.start > a.start && b_end > a_end && b.start <= a_end + SAME && tempo.seconds_at(a_end) - tempo.seconds_at(b.start) <= REACH + SAME
     };
     let Some(at) = order.iter().position(|i| *i == named) else { return vec![] };
     let (mut lo, mut hi) = (at, at);

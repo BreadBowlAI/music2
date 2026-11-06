@@ -210,7 +210,8 @@ fn a_comp_refuses_what_it_cant_cut() {
 // beats 2 to 4 plays there.
 #[test]
 fn a_comp_that_follows_the_tempo_moves_its_markers() {
-    let warped = "{\"id\": \"vox00001\", \"start\": 0, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 8, \"warp\": [[8, 0], [12, 8]]}";
+    let warped =
+        "{\"id\": \"vox00001\", \"start\": 0, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 8, \"warp\": [[8, 0], [12, 8]]}";
     let f = song(warped, levels);
     let mut s = f.open();
     go(&mut s, comp("vox00001", 1, 2.0, 4.0));
