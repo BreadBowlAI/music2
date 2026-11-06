@@ -246,6 +246,27 @@ The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1,
 
 A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a colour. Lengths count characters, and no text may hold a control character or a line break.
 
+**Measured from the sound.** Two more words draw what your sound really does, not your own maths. music2 makes a copy of the call at the card's values (a knob being dragged too), plays it on its own, away from what you hear, and fills the shape in for you:
+
+| Word | Draws | Axes |
+|---|---|---|
+| `p.response({ tone, name })` | the curve of an EQ or a filter: a click played through the copy, and how loud each frequency comes out | `x` in `hz`, `y` in `db` |
+| `p.hit({ note, seconds, tone })` | one note of an instrument: `note` (60 if left out) held for `seconds` (1 at most, and no longer than the x axis; left out, the axis's end or 1), drawn as its wave | `x` in `seconds` (`axis.time`), `y` in `bipolar` (−1 to 1) |
+
+Each may be in a picture once. They follow every drag at once, and the same values are measured only once. A measure has 20 ms (more at a higher rate); past that the picture greys, and it is tried again 10 s later.
+
+music2 draws a response only where it is exact. It checks that when no knob is being dragged: while you drag, only the curve is measured, so it keeps up, and a picture greyed before the drag stays greyed. Where it isn't exact, the picture greys and says why, and your pack draws that curve from its own maths:
+
+| The picture greys when the sound | For example | Draw instead |
+|---|---|---|
+| changes with how loud it is | a compressor, drive, a gate | its transfer curve, from your maths |
+| changes over time | a chorus, a phaser, a filter an LFO moves | its curve at the knobs' values, from your maths |
+| rings longer than 2 s, or echoes after more than half a second of quiet | a long delay, a big reverb | its echoes as bars, its tail as a line |
+| has a value a lane or a cable moves | an automated cutoff | (the curve has no one shape) |
+| takes no sound in (response), or plays no notes (hit) | an instrument's response, an effect's hit | the other word |
+
+For an EQ or a filter, use it: `draw: (v, p) => [p.response(), p.handle(v.freq, v.gain, { x: "freq", y: "gain" })]`. Its curve can't be wrong about the sound.
+
 **A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. The wheel and the arrow keys step a value as its knob's do, and a run of steps is one undo step. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
 
 ```ts

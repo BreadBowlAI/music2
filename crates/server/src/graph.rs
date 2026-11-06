@@ -510,6 +510,8 @@ struct Inner {
     pictures: std::sync::OnceLock<m2_script::pictures::Runner>,
     /// Rung when a lease's value moves: a picture may draw again now (CARD-68).
     picture_wake: pictures::Wake,
+    /// The measured layers kept by what each was made from (CARD-84).
+    measures: pictures::Measures,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -682,6 +684,7 @@ impl Inner {
             offered: Mutex::new(HashMap::new()),
             pictures: std::sync::OnceLock::new(),
             picture_wake: pictures::Wake::default(),
+            measures: pictures::Measures::default(),
         }
     }
 

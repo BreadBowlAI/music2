@@ -1,0 +1,27 @@
+[package]
+name = "@test/spin"
+version = "0.1.0"
+license = "CC0-1.0"
+description = "A pack for music2's tests: a kernel that never returns once it hears sound, and one that is slow"
+authors = ["music2"]
+tags = ["test"]
+wasm = "k.wasm"
+
+[dependencies]
+"@m2/core" = "2"
+std = "0.9"
+
+# Each kernel plays its input while it is under 0.001; past it, `spin` never returns from the call
+# and `slow` spins 30,000,000 turns at its call's first frame. Their module is made from text by
+# `the_spin_pack_fixture_holds_this_module` (core/runtime/src/tests/kinds.rs).
+[[kernel]]
+name = "spin"
+description = "Plays its input, and never returns once it is over 0.001"
+inputs = ["in: audio<1>"]
+outputs = ["out: audio<1>"]
+
+[[kernel]]
+name = "slow"
+description = "Plays its input, and works a long time at each call once it is over 0.001"
+inputs = ["in: audio<1>"]
+outputs = ["out: audio<1>"]

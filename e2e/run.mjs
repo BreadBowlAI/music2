@@ -200,6 +200,7 @@ export const SUITES = [
   ["card-views", "chain", { expect: 41, s: 12 }],
   ["frame", "fix", { expect: 77, s: 14 }],
   ["pictures", "fix", { expect: 37, s: 10 }],
+  ["measure", "fix", { expect: 20, s: 8 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],

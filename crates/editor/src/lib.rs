@@ -39,6 +39,7 @@ pub mod library;
 pub mod listen;
 pub mod machine;
 pub mod markers;
+pub mod measure;
 pub mod midifile;
 pub mod mix;
 pub mod mute;

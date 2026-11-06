@@ -383,6 +383,84 @@ fn the_runner_checks_each_draw_in_words() {
     assert!(cant(runner.draw(pack.ask_as("checks", Arc::new(other), "curve", at_defaults()))).contains("@test/curve:nothing"));
 }
 
+// CARD-80, CARD-65: the layers music2 measures are given with no points, each at most once, on the
+// axes it draws them on, and counted as the points they are filled with; each mistake greys the
+// picture in words, as the runner finds it and again in Rust.
+#[test]
+fn a_measured_layer_is_checked_in_words() {
+    let hz = "x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24)";
+    let time = "x: axis.time(0.5), y: axis.lin(\"bipolar\", -1, 1)";
+    let long = "x: axis.time(8), y: axis.lin(\"bipolar\", -1, 1)";
+    let draws = [
+        (hz, "p.response({ name: \"measured\", tone: \"soft\" })", Ok(json!([{"kind": "response", "name": "measured", "tone": "soft"}]))),
+        (time, "p.hit({ note: 36 })", Ok(json!([{"kind": "hit", "note": 36, "seconds": 0.5}]))),
+        (
+            time,
+            "p.part(\"a\", () => [p.hit({ seconds: 0.25, tone: \"faint\" })])",
+            Ok(json!([{"kind": "part", "name": "a", "shapes": [{"kind": "hit", "note": 60, "seconds": 0.25, "tone": "faint"}]}])),
+        ),
+        (
+            time,
+            "p.response()",
+            Err("gives p.response an x axis in seconds and a y axis in bipolar: a response is drawn across hz and up db"),
+        ),
+        (hz, "p.hit()", Err("gives p.hit an x axis in hz and a y axis in db: a hit is drawn across seconds and up bipolar")),
+        (hz, "p.response(), p.response()", Err("gives p.response twice: a picture holds one at most")),
+        (time, "p.hit({ note: 128 })", Err("gives p.hit the note 128: a note is a whole number 0 to 127")),
+        (time, "p.hit({ seconds: 0 })", Err("gives p.hit 0 seconds: a hit lasts more than 0 and at most 1 second")),
+        (long, "p.hit({ seconds: 2 })", Err("gives p.hit 2 seconds: a hit lasts more than 0 and at most 1 second")),
+        (time, "p.hit({ seconds: 0.75 })", Err("gives p.hit 0.75 seconds, past its x axis's end at 0.5 s")),
+        // Left out, a hit lasts its axis, or a second at most (review M4, M10).
+        (long, "p.hit()", Ok(json!([{"kind": "hit", "note": 60, "seconds": 1.0}]))),
+        (hz, "p.response({ tone: \"red\" })", Err("gives p.response the tone \"red\": a tone is main, soft or faint, never a colour")),
+        (
+            hz,
+            "p.response({ name: \"a b\" })",
+            Err("gives p.response the name \"a b\": a line's name is a plain name of up to 32 characters"),
+        ),
+        (hz, "p.response(), p.line(new Array(19490).fill(1))", Err("draws more than 20,000 numbers")),
+    ];
+    let views: Vec<String> =
+        draws.iter().enumerate().map(|(i, (axes, ..))| format!("        m{i}: view.picture({{ {axes} }}),\n")).collect();
+    let code: Vec<String> = draws
+        .iter()
+        .enumerate()
+        .map(|(i, (_, d, _))| format!("    m{i}: {{ draw: (v: any, p: any) => [{d}], words: () => \"x\" }},\n"))
+        .collect();
+    let index = CURVE
+        .replacen("      views: {\n", &format!("      views: {{\n{}", views.concat()), 1)
+        .replacen("  {\n    curve: {\n      draw:", &format!("  {{\n{}    curve: {{\n      draw:", code.concat()), 1)
+        .replace("export const curve = component(", "export const curve = (component as any)(");
+    let pack = Pack::new("measured", &index);
+    let runner = Runner::new();
+    let desc = pack.descriptor("curve");
+    for (i, (_, draw, says)) in draws.iter().enumerate() {
+        let drawn = runner.draw(pack.ask_as("measured", desc.clone(), &format!("m{i}"), at_defaults()));
+        match says {
+            Ok(want) => assert_eq!(shapes(drawn)["shapes"], *want, "{draw}"),
+            Err(says) => {
+                let why = cant(drawn);
+                assert!(why.contains(says), "{draw}: {says}\n{why}");
+            }
+        }
+    }
+    // Rust refuses the same, and points a draw forged: they are the server's to fill.
+    let forged = |view: &str, shapes: &str| super::pictures::checked(&format!("{{\"shapes\":{shapes},\"words\":\"x\"}}"), &desc, view);
+    assert!(forged("m0", "[{\"kind\":\"response\",\"points\":[20,0]}]").unwrap_err().contains("can't read as shapes"));
+    assert_eq!(
+        forged("m0", "[{\"kind\":\"response\"},{\"kind\":\"response\"}]").unwrap_err(),
+        "gives p.response twice: a picture holds one at most"
+    );
+    assert!(forged("m1", "[{\"kind\":\"response\"}]").unwrap_err().contains("a response is drawn across hz and up db"));
+    assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":2}]").unwrap_err().contains("at most 1 second"));
+    assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":0.75}]").unwrap_err().contains("past its x axis's end at 0.5 s"));
+    assert!(
+        forged("m0", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":1}]")
+            .unwrap_err()
+            .contains("a hit is drawn across seconds and up bipolar")
+    );
+}
+
 // CARD-61, CARD-65: words are one line of 1 to 400 characters, counted as characters, with no
 // control character: 400 é is drawn, 401 isn't, nor words with an escape or U+2028 (review G2, G10).
 #[test]

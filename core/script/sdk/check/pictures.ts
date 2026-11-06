@@ -105,3 +105,32 @@ export const inline = component(
     },
   },
 );
+
+/** The layers music2 measures (CARD-80), each only on the axes it draws them on. */
+export const measured = component(
+  {
+    id: "measured",
+    inputs: { notes: port.notes() },
+    controls: { decay: control.scalar(1) },
+    output: port.audio(),
+    editor: {
+      views: {
+        curve: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }),
+        hit: view.picture({ x: axis.time(0.5), y: axis.lin("bipolar", -1, 1) }),
+      },
+    },
+  },
+  () => kernel<Audio>("test:measured", {}),
+  {
+    curve: {
+      // @ts-expect-error a hit is drawn across seconds and up bipolar, not across hz
+      draw: (_v, p) => [p.response({ name: "curve", tone: "soft" }), p.hit({ note: 36 })],
+      words: () => "its curve",
+    },
+    hit: {
+      // @ts-expect-error a response is drawn across hz and up db, not across seconds
+      draw: (_v, p) => [p.hit({ note: 36, seconds: 0.5, tone: "faint" }), p.response()],
+      words: () => "its hit",
+    },
+  },
+);

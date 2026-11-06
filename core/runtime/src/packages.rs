@@ -281,6 +281,13 @@ impl PackageSet {
         self
     }
 
+    /// Give each call into its kernels, but a live plan's, `offline` at most (ABI-6): what a measure of
+    /// a picture's sound runs with (CARD-85), whose whole budget is shorter than the default's 5 s.
+    pub fn with_offline_limit(mut self, offline: std::time::Duration) -> PackageSet {
+        self.limits.offline = offline;
+        self
+    }
+
     /// Give each call into its kernels `limits` instead of the default (ABI-6): tests shorten them.
     #[cfg(test)]
     pub(crate) fn with_limits(mut self, limits: Limits) -> PackageSet {
