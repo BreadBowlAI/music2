@@ -246,6 +246,8 @@ struct Shared {
     seconds: AtomicU64,
     playing: AtomicBool,
     generation: AtomicU64,
+    /// The playing renderer's latency `L`, in frames (RENDER-19).
+    latency: AtomicU32,
     /// When the last callback began, on [`now_ns`]'s clock, and the engine clock after it: one
     /// pair, so an input's callback places its stamps by one callback, never by two.
     pair_ns: AtomicU64,
@@ -741,6 +743,7 @@ impl Callback {
         s.seconds.store(st.seconds.to_bits(), Ordering::Relaxed);
         s.playing.store(st.playing, Ordering::Relaxed);
         s.generation.store(st.generation, Ordering::Relaxed);
+        s.latency.store(self.live.as_ref().and_then(|l| l.engine.current()).map_or(0, |r| r.latency()), Ordering::Relaxed);
         s.pair_ns.store(ns, Ordering::Relaxed);
         s.pair_clock.store(self.live.as_ref().map_or(0, |l| l.engine.clock()), Ordering::Relaxed);
         if let Some(l) = &self.live {
@@ -1413,6 +1416,24 @@ impl Player {
     /// The last whole publication of the audio thread.
     fn published(&self) -> Status {
         self.shared.published()
+    }
+
+    /// The song's latency as it plays, in frames: what its output is late by (RENDER-19), as of
+    /// the last callback. 0 before a song plays.
+    pub fn latency(&self) -> u32 {
+        let s = &self.shared;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let l = s.latency.load(Ordering::Relaxed);
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return l;
+            }
+        }
     }
 
     /// Where playback is. Never waits for anything: a project loaded, or a seek, a play or a stop
