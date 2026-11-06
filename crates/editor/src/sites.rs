@@ -63,7 +63,7 @@ pub fn default_track(source: &str) -> Option<String> {
             Statement::VariableDeclaration(v) if v.kind.is_const() => {
                 for d in &v.declarations {
                     if let BindingPattern::BindingIdentifier(id) = &d.id {
-                        consts.push((id.name.to_string(), d.init.as_ref().and_then(|e| key_of(e))));
+                        consts.push((id.name.to_string(), d.init.as_ref().and_then(key_of)));
                     }
                 }
             }
@@ -72,7 +72,7 @@ pub fn default_track(source: &str) -> Option<String> {
                     ExportDefaultDeclarationKind::Identifier(id) => {
                         consts.iter().rev().find(|(n, _)| n.as_str() == id.name.as_str()).and_then(|(_, k)| k.clone())
                     }
-                    d => d.as_expression().and_then(|x| key_of(x)),
+                    d => d.as_expression().and_then(key_of),
                 };
             }
             _ => {}
