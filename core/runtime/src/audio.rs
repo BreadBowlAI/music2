@@ -285,6 +285,14 @@ impl Makers<'_> {
     }
 }
 
+/// What names a clip across builds: its file's bytes and its id (the review's S4).
+fn same_clip(asset: Sha, id: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (asset, id).hash(&mut h);
+    h.finish()
+}
+
 /// What a warped clip's stretch depends on: everything its kernel is given (D8). The source's
 /// bytes, the kernel's module, the time map, the pitch, the rate and the length; never the clip's
 /// gain, fades or reverse, which are worked out as it is read.
@@ -842,7 +850,7 @@ impl AudioLane {
         channels: usize,
         makers: Makers,
         tell: &Tell,
-        was: Option<&AudioLane>,
+        was: Option<&Arc<AudioLane>>,
     ) -> Result<Arc<AudioLane>> {
         AudioLane::make(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, makers, tell, was)
     }
@@ -874,7 +882,7 @@ impl AudioLane {
         sample_rate: f64,
         channels: usize,
         makers: Makers,
-        was: Option<&AudioLane>,
+        was: Option<&Arc<AudioLane>>,
     ) -> Result<Arc<AudioLane>> {
         let tell = Tell { report: Reporter::new(cache.faults().clone(), 0), lane: 0 };
         AudioLane::make(clips, asset_path, cache, tempo, sample_rate, channels, makers, &tell, was)
@@ -890,7 +898,7 @@ impl AudioLane {
         channels: usize,
         makers: Makers,
         tell: &Tell,
-        was: Option<&AudioLane>,
+        was: Option<&Arc<AudioLane>>,
     ) -> Result<Arc<AudioLane>> {
         let stretch = makers.stretch;
         let mut found = vec![];
@@ -941,6 +949,16 @@ impl AudioLane {
             };
             let mut clip = Clip::new(at, src, stream::clip_len(c, tempo, sample_rate), i);
             clip.normal = k.normal();
+            clip.same = c.id.as_ref().map(|id| same_clip(k.asset, id));
+            // A stretch not made yet plays what the same clip of the lane this replaces played,
+            // till it has made the frames a chunk reads (the review's S4): a timing edit while the
+            // song plays never goes silent.
+            if let (Source::Render(raw, _), Some(same), Some(was)) = (&clip.src, clip.same, was)
+                && !raw.whole()
+                && let Some(o) = was.clips.iter().position(|o| o.same == Some(same))
+            {
+                *clip.old.lock().unwrap_or_else(|e| e.into_inner()) = Some((Arc::clone(was), o));
+            }
             // Until a phrase's render is whole, the same clip's phrases on the lane this replaces
             // play over it: each whole one that reaches it, or what played over one that isn't.
             let old: Vec<&Arc<Phrase>> =

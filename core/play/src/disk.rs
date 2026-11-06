@@ -118,7 +118,8 @@ impl Disk {
             let (lanes, at) = self.snapshot();
             let urgent = (!self.paused.load(Ordering::Relaxed)).then(|| most_urgent(&lanes, &at)).flatten();
             match urgent {
-                Some((lane, k, _, true)) => lane.refresh(k),
+                // Asked again as it is stored, where playback is then (the review's S5).
+                Some((lane, k, _, true)) => lane.refresh_unless(k, &|k| soon(&lane, &self.at()).contains(&k)),
                 Some((lane, k, wanted, false)) => {
                     lane.fill_chunk(k, &|x| wanted.contains(&x));
                 }
@@ -129,6 +130,15 @@ impl Disk {
                 }
             }
         }
+    }
+
+    /// Where playback goes, as it is now.
+    fn at(&self) -> At {
+        let mut st = self.state();
+        let (heading, now) = (self.heading)();
+        st.left.retain(|l| l.0.elapsed() < FADING);
+        let left = st.left.iter().map(|l| l.1).collect();
+        At { beat: st.hint.unwrap_or(heading), now, looping: st.looping, left }
     }
 
     /// Every lane alive, those of the plan sent last first; and where playback goes.
@@ -369,4 +379,38 @@ fn most_urgent(lanes: &[Arc<AudioLane>], at: &At) -> Option<(Arc<AudioLane>, u64
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use m2_runtime::audio::AudioLane;
+
+    use super::{At, soon};
+
+    /// A lane of 10 s of audio at 48 kHz in a song at 120 bpm: a chunk is 0.25 s, half a beat.
+    fn lane() -> AudioLane {
+        AudioLane::of_renders(vec![(0, Arc::new(vec![vec![0.1f32; 480_000]]))], 1, 48_000.0)
+    }
+
+    // RENDER-30b (the review's S5): the chunks never worked out again are those the sound thread may
+    // read within 50 ms along the transport's path: from where it plays, where it is about to be,
+    // and where recent seeks left from; through a loop's wrap to the loop's start.
+    #[test]
+    fn soon_is_the_next_50_ms_along_the_path() {
+        let l = lane();
+        let at = |beat, now, looping, left: Vec<f64>| At { beat, now, looping, left };
+        // Beat 1.92 is 0.96 s: chunk 3, and 50 ms on reaches chunk 4.
+        assert_eq!(soon(&l, &at(1.92, 1.92, None, vec![])), [3, 4, 3, 4]);
+        // Mid-chunk: only that chunk.
+        assert_eq!(soon(&l, &at(1.25, 1.25, None, vec![])), [2, 2]);
+        // A seek's target and where a seek left from.
+        let s = soon(&l, &at(8.0, 1.25, None, vec![5.0]));
+        assert!(s.contains(&16) && s.contains(&2) && s.contains(&10), "{s:?}");
+        // 20 ms before a loop's end at beat 4 (chunk 8 starts there): the loop's start, beat 1, is
+        // reached within the 50 ms.
+        let s = soon(&l, &at(3.96, 3.96, Some((1.0, 4.0)), vec![]));
+        assert!(s.contains(&7) && s.contains(&2) && !s.contains(&8), "{s:?}");
+    }
 }

@@ -586,7 +586,7 @@ impl LanePlan {
                 (Kind::Audio(ch), from) => {
                     let tell = audio::Tell { report: report.clone(), lane: s as u32 };
                     let was = from.and_then(|(k, o)| k.info.lanes[o].audio.clone());
-                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, makers, &tell, was.as_deref())?;
+                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, makers, &tell, was.as_ref())?;
                     match from.map(|(k, o)| (o, k.info.lanes[o].audio.clone())) {
                         Some((o, Some(was))) if was.same(&lane) => {
                             audio = Some(was);

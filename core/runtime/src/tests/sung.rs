@@ -272,7 +272,7 @@ fn an_edited_note_sung_legato_joins_without_a_dip() {
 }
 
 // RENDER-30b: live, after any order of edits, once their renders are made, the lane plays the bits
-// an export plays. While a phrase's render is held, the lane plays what it played there before (for
+// an export plays, for a plain clip and a warped one (the review's S12). While a phrase's render is held, the lane plays what it played there before (for
 // a first edit, the clip with no render), with every chunk there and no miss; once whole, the disk
 // thread's work again puts the new phrase in, a chunk after an old one fading in first.
 #[test]
@@ -285,71 +285,83 @@ fn after_any_order_of_edits_the_live_lane_plays_the_exports_bits() {
     let tempo = m2_song::TempoMap::constant(120.0);
     let len = 3 * RATE as usize;
     let path = |a: &str| Some(dir.join(a));
-    let plain = {
-        let mut cache = audio::Cache::with_renders_in(None);
-        played(
-            &audio::AudioLane::build_in(&[the_clip(json!([]), None)], &path, &mut cache, &tempo, RATE as f64, 1, makers, None).unwrap(),
-            len,
-        )
-    };
-    let (a, b, c) = (notes(0.0, 1.0), notes(0.5, 2.0), notes(0.0, -1.5));
-    for (n, order) in [vec![&a, &b], vec![&b, &a, &c], vec![&a, &c, &a]].into_iter().enumerate() {
-        let mut live = audio::Cache::live_in(dir.join(format!("renders-{n}")));
-        let (mut was, mut before): (Option<Arc<audio::AudioLane>>, Vec<f32>) = (None, plain.clone());
-        let mut faded = false;
-        for (e, sung) in order.iter().enumerate() {
-            live.hold_renders(Some(0));
-            let clips = [the_clip(json!([]), Some((*sung).clone()))];
-            let lane = audio::AudioLane::build_in(&clips, &path, &mut live, &tempo, RATE as f64, 1, makers, was.as_deref()).unwrap();
-            live.prune();
+    for (w, warp) in [json!([]), json!([[0, 0], [3, BEATS]])].into_iter().enumerate() {
+        let plain = {
+            let mut cache = audio::Cache::with_renders_in(None);
+            played(
+                &audio::AudioLane::build_in(&[the_clip(warp.clone(), None)], &path, &mut cache, &tempo, RATE as f64, 1, makers, None)
+                    .unwrap(),
+                len,
+            )
+        };
+        let (a, b, c) = (notes(0.0, 1.0), notes(0.5, 2.0), notes(0.0, -1.5));
+        for (n, order) in [vec![&a, &b], vec![&b, &a, &c], vec![&a, &c, &a]].into_iter().enumerate() {
+            let mut live = audio::Cache::live_in(dir.join(format!("renders-{w}-{n}")));
+            // The clip as it was, made whole first: a warped one's stretch too.
+            let base = audio::AudioLane::build_in(&[the_clip(warp.clone(), None)], &path, &mut live, &tempo, RATE as f64, 1, makers, None)
+                .unwrap();
             assert!(live.settle_renders(std::time::Duration::from_secs(20)));
-            let now = copied(&lane, len);
-            assert_eq!(lane.misses(), 0, "order {n}, edit {e}: every chunk there while its render is made");
-            let phrases = audio::phrases_of(&clips[0], &tempo, RATE as f64);
-            // An edit back to one made before finds its renders whole in the cache folder: it plays
-            // them at once.
-            if order[..e].contains(sung) {
-                let mut export = audio::Cache::with_renders_in(None);
-                let lane = audio::AudioLane::build_in(&clips, &path, &mut export, &tempo, RATE as f64, 1, makers, None).unwrap();
-                assert!(differ(&now, &played(&lane, len)).is_empty(), "order {n}, edit {e}: made before, it plays at once");
+            for k in 0..(len as u64).div_ceil(base.chunk()) {
+                base.fill_chunk(k, &|_| true);
             }
-            for (i, (x, y)) in now.iter().zip(&before).enumerate().filter(|_| !order[..e].contains(sung)) {
-                let inside = phrases.iter().any(|p| (p.from..p.to).contains(&i));
-                let want = if inside { *y } else { plain[i] };
-                assert_eq!(
-                    x.to_bits(),
-                    want.to_bits(),
-                    "order {n}, edit {e}: frame {i} ({} s) plays what it played before (inside {inside}; plain {}, before {y}, now {x})",
-                    secs(i),
-                    plain[i]
-                );
-            }
-            // Made, then worked out again from the last chunk back: each new chunk after an old one
-            // fades in, and is worked out once more when the old one before it is gone.
-            live.hold_renders(None);
-            assert!(live.settle_renders(std::time::Duration::from_secs(20)));
-            let chunks = (len as u64).div_ceil(lane.chunk());
-            for round in 0..4 {
-                let stale: Vec<u64> = (0..chunks).rev().filter(|&k| lane.stale(k)).collect();
-                if round > 0 && !stale.is_empty() {
-                    faded = true;
+            assert!(differ(&copied(&base, len), &plain).is_empty(), "warp {w}: the clip as it was plays its export's bits");
+            let (mut was, mut before): (Option<Arc<audio::AudioLane>>, Vec<f32>) = (Some(base), plain.clone());
+            let mut faded = false;
+            for (e, sung) in order.iter().enumerate() {
+                live.hold_renders(Some(0));
+                let clips = [the_clip(warp.clone(), Some((*sung).clone()))];
+                let lane = audio::AudioLane::build_in(&clips, &path, &mut live, &tempo, RATE as f64, 1, makers, was.as_ref()).unwrap();
+                live.prune();
+                assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+                let now = copied(&lane, len);
+                assert_eq!(lane.misses(), 0, "order {n}, edit {e}: every chunk there while its render is made");
+                let phrases = audio::phrases_of(&clips[0], &tempo, RATE as f64);
+                // An edit back to one made before finds its renders whole in the cache folder: it plays
+                // them at once.
+                if order[..e].contains(sung) {
+                    let mut export = audio::Cache::with_renders_in(None);
+                    let lane = audio::AudioLane::build_in(&clips, &path, &mut export, &tempo, RATE as f64, 1, makers, None).unwrap();
+                    assert!(differ(&now, &played(&lane, len)).is_empty(), "order {n}, edit {e}: made before, it plays at once");
                 }
-                for k in stale {
-                    lane.refresh(k);
+                for (i, (x, y)) in now.iter().zip(&before).enumerate().filter(|_| !order[..e].contains(sung)) {
+                    let inside = phrases.iter().any(|p| (p.from..p.to).contains(&i));
+                    let want = if inside { *y } else { plain[i] };
+                    assert_eq!(
+                        x.to_bits(),
+                        want.to_bits(),
+                        "order {n}, edit {e}: frame {i} ({} s) plays what it played before (inside {inside}; plain {}, before {y}, now {x})",
+                        secs(i),
+                        plain[i]
+                    );
                 }
+                // Made, then worked out again from the last chunk back: each new chunk after an old one
+                // fades in, and is worked out once more when the old one before it is gone.
+                live.hold_renders(None);
+                assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+                let chunks = (len as u64).div_ceil(lane.chunk());
+                for round in 0..4 {
+                    let stale: Vec<u64> = (0..chunks).rev().filter(|&k| lane.stale(k)).collect();
+                    if round > 0 && !stale.is_empty() {
+                        faded = true;
+                    }
+                    for k in stale {
+                        lane.refresh(k);
+                    }
+                }
+                assert!((0..chunks).all(|k| !lane.stale(k)), "order {n}, edit {e}: nothing left to work out");
+                before = copied(&lane, len);
+                assert_eq!(lane.misses(), 0);
+                was = Some(lane);
             }
-            assert!((0..chunks).all(|k| !lane.stale(k)), "order {n}, edit {e}: nothing left to work out");
-            before = copied(&lane, len);
-            assert_eq!(lane.misses(), 0);
-            was = Some(lane);
+            let mut export = audio::Cache::with_renders_in(None);
+            let last = [the_clip(warp.clone(), Some((*order.last().unwrap()).clone()))];
+            let exported =
+                played(&audio::AudioLane::build_in(&last, &path, &mut export, &tempo, RATE as f64, 1, makers, None).unwrap(), len);
+            let d = differ(&before, &exported);
+            assert!(d.is_empty(), "order {n}: the live lane plays the export's bits but at {} frames, from {} s", d.len(), secs(d[0]));
+            assert!(differ(&exported, &plain).len() > RATE as usize / 4, "order {n}: the edits are heard");
+            assert!(faded, "order {n}: a chunk after an old one faded in, and was worked out again");
         }
-        let mut export = audio::Cache::with_renders_in(None);
-        let last = [the_clip(json!([]), Some((*order.last().unwrap()).clone()))];
-        let exported = played(&audio::AudioLane::build_in(&last, &path, &mut export, &tempo, RATE as f64, 1, makers, None).unwrap(), len);
-        let d = differ(&before, &exported);
-        assert!(d.is_empty(), "order {n}: the live lane plays the export's bits but at {} frames, from {} s", d.len(), secs(d[0]));
-        assert!(differ(&exported, &plain).len() > RATE as usize / 4, "order {n}: the edits are heard");
-        assert!(faded, "order {n}: a chunk after an old one faded in, and was worked out again");
     }
 }
 
@@ -407,4 +419,85 @@ fn a_timing_drag_stretches_only_its_gaps() {
     let ((s0, e0), (s1, e1)) = (edges(&before), edges(&after));
     assert!((s1 - s0 - 0.1).abs() < 0.012, "it starts 0.1 s later: {s0:.3} then {s1:.3}");
     assert!((e1 - e0 - 0.1).abs() < 0.012, "it ends 0.1 s later: {e0:.3} then {e1:.3}");
+}
+
+// RENDER-30b (the review's S4): live, a timing edit while the song plays never goes silent. Its
+// new stretch is made from the clip's start; till it has made a chunk's frames, the lane plays what
+// the clip it replaces played there (the same clip: its file and id), with no miss; once made, the
+// disk thread's work again puts the new timing in, and the lane plays the export's bits.
+#[test]
+fn a_timing_edit_plays_the_old_stretch_till_the_new_one_is_made() {
+    let dir = project(&[]);
+    sung_file(&dir);
+    let pk = own_packages();
+    let k = offline::Kernel::of(&pk, offline::STRETCH).unwrap();
+    let makers = audio::Makers { stretch: Some(&k), packages: Some(&pk) };
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let len = 3 * RATE as usize;
+    let path = |a: &str| Some(dir.join(a));
+    let (before, after) = (json!([[0, 0], [3, BEATS]]), json!([[0, 0], [0.8, 1.6], [1.0, 2.2], [1.5, 3.2], [1.8, 3.6], [3, BEATS]]));
+    let mut live = audio::Cache::live_in(dir.join("renders"));
+    let first = audio::AudioLane::build_in(&[the_clip(before, None)], &path, &mut live, &tempo, RATE as f64, 1, makers, None).unwrap();
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    let chunks = (len as u64).div_ceil(first.chunk());
+    for k in 0..chunks {
+        first.fill_chunk(k, &|_| true);
+    }
+    let was = copied(&first, len);
+    assert!(was.iter().any(|v| v.abs() > 0.01) && first.misses() == 0);
+    live.hold_renders(Some(0));
+    let clips = [the_clip(after.clone(), None)];
+    let lane = audio::AudioLane::build_in(&clips, &path, &mut live, &tempo, RATE as f64, 1, makers, Some(&first)).unwrap();
+    live.prune();
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    let held = copied(&lane, len);
+    assert_eq!(lane.misses(), 0, "held back, the new stretch's chunks are all there");
+    assert!(differ(&held, &was).is_empty(), "and play what the old timing played");
+    live.hold_renders(None);
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    for _ in 0..3 {
+        for k in (0..chunks).rev().filter(|&k| lane.stale(k)) {
+            lane.refresh(k);
+        }
+    }
+    let now = copied(&lane, len);
+    let mut export = audio::Cache::with_renders_in(None);
+    let exported = played(&audio::AudioLane::build_in(&clips, &path, &mut export, &tempo, RATE as f64, 1, makers, None).unwrap(), len);
+    assert!(differ(&now, &exported).is_empty(), "made, the lane plays the export's bits");
+    assert_eq!(lane.misses(), 0);
+}
+
+// RENDER-30b (the review's S5): the disk thread's work again checks, as it stores the chunk, that
+// the transport isn't about to read it: one it is about to read is left as it was, old, to be
+// worked out again when it may.
+#[test]
+fn a_chunk_the_transport_reaches_is_left_as_it_was() {
+    let dir = project(&[]);
+    sung_file(&dir);
+    let pk = own_packages();
+    let k = offline::Kernel::of(&pk, offline::STRETCH).unwrap();
+    let makers = audio::Makers { stretch: Some(&k), packages: Some(&pk) };
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let len = 3 * RATE as usize;
+    let path = |a: &str| Some(dir.join(a));
+    let mut live = audio::Cache::live_in(dir.join("renders"));
+    live.hold_renders(Some(0));
+    let lane =
+        audio::AudioLane::build_in(&[the_clip(json!([]), Some(notes(0.0, 1.0)))], &path, &mut live, &tempo, RATE as f64, 1, makers, None)
+            .unwrap();
+    let before = copied(&lane, len);
+    live.hold_renders(None);
+    assert!(live.settle_renders(std::time::Duration::from_secs(20)));
+    let chunks = (len as u64).div_ceil(lane.chunk());
+    let stale: Vec<u64> = (0..chunks).filter(|&k| lane.stale(k)).collect();
+    assert!(!stale.is_empty());
+    for &k in &stale {
+        lane.refresh_unless(k, &|_| true);
+    }
+    assert!(differ(&copied(&lane, len), &before).is_empty(), "each chunk the transport reaches is left as it was");
+    assert!(stale.iter().all(|&k| lane.stale(k)), "and stays old");
+    for &k in &stale {
+        lane.refresh_unless(k, &|_| false);
+    }
+    assert!(stale.iter().all(|&k| !lane.stale(k)) && !differ(&copied(&lane, len), &before).is_empty());
 }

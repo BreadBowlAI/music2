@@ -61,24 +61,24 @@ fn voice(seconds: f64) -> Vec<f32> {
 }
 
 /// The clip over the file, its voice's one note from 0.5 to 3.5 s moved by `by` semitones.
-fn clip(by: f64) -> Value {
-    json!({"start": 0, "length": 16, "asset": "long.wav", "render": "@m2/vocals:voice",
+fn clip(by: f64, warp: Value) -> Value {
+    json!({"id": "vox00001", "start": 0, "length": 16, "asset": "long.wav", "render": "@m2/vocals:voice", "warp": warp,
            "sung": [{"at": 0.5, "length": 3.0, "pitch": 57, "move": by, "straighten": 0}]})
 }
 
 /// The song's data with its clip moved by `by`.
-fn data_of(song: &Song, by: f64) -> DataSet {
-    let text = json!({"clips": [clip(by)]}).to_string();
+fn data_of(song: &Song, by: f64, warp: Value) -> DataSet {
+    let text = json!({"clips": [clip(by, warp)]}).to_string();
     let lane = LaneData::read(&text, &LaneKind::Audio).unwrap();
     song.data.seeded(&addr("clips"), &LaneKind::Audio, text.into(), std::sync::Arc::new(lane))
 }
 
 // RENDER-30b: a pitch edit while the song plays over the note counts no miss: held back, its phrase
 // plays the clip as it was; made, it plays the edit, and still no miss; then another edit, the
-// same.
+// same; then a timing edit (the review's S4): held back, the old stretch plays on, no miss.
 #[test]
 fn an_edit_while_playing_counts_no_miss() {
-    let song = long_audio_clip(8.0, 120.0, clip(0.0));
+    let song = long_audio_clip(8.0, 120.0, clip(0.0, json!([])));
     let v = voice(8.0);
     m2_runtime::audio::write_wav(&song.dir.join("assets/long.wav"), &[v.clone(), v], SR).unwrap();
     let mut cache = Cache::live_in(song.dir.join("renders"));
@@ -93,8 +93,11 @@ fn an_edit_while_playing_counts_no_miss() {
     real_time(&mut d, 128, 0.4);
     let mut old = song.data.clone();
     let mut was = 220.0;
-    for (n, by) in [2.0, -3.0].into_iter().enumerate() {
-        let data = data_of(&song, by);
+    // Two pitch edits, then a timing edit (the review's S4): its new stretch is made from the
+    // clip's start while the old one plays on.
+    let timed = json!([[0, 0], [3.5, 7], [4.5, 8.5], [8, 16]]);
+    for (n, (by, warp)) in [(2.0, json!([])), (-3.0, json!([])), (-3.0, timed)].into_iter().enumerate() {
+        let data = data_of(&song, by, warp);
         cache.hold_renders(Some(0));
         let (restarts, cont) = (HashSet::new(), Continues::named(&song.flat, &song.flat));
         let keep = Keep { old: &song.flat, old_data: &old, info: &info, cont: &cont, restarts: &restarts };

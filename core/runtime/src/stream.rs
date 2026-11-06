@@ -651,6 +651,11 @@ pub(crate) struct Clip {
     /// What names its normal path: a clip of the lane a build replaces with the same one is the
     /// same clip, whose phrases play over a new one's until its renders are whole.
     pub(crate) normal: u64,
+    /// What names it across builds: its file and its id, when it has one.
+    pub(crate) same: Option<u64>,
+    /// While its stretch hasn't made the frames a chunk reads: the same clip of the lane this one
+    /// replaced, which plays there instead (the review's S4). Let go once the stretch is whole.
+    pub(crate) old: Mutex<Option<(Arc<AudioLane>, usize)>>,
 }
 
 /// An edited phrase of a clip (RENDER-30b): its frames in the clip's output, `from..to`, its
@@ -721,7 +726,7 @@ impl Clip {
             Source::Render(r, _) => r.channels,
             Source::Mem(m, _) => m.len(),
         };
-        Clip { at, len: len as u64, channels, src, index, phrases: vec![], normal: 0 }
+        Clip { at, len: len as u64, channels, src, index, phrases: vec![], normal: 0, same: None, old: Mutex::new(None) }
     }
 
     /// Whether it plays a stretch, or a phrase's render, that failed.
@@ -729,16 +734,32 @@ impl Clip {
         matches!(&self.src, Source::Render(r, _) if r.failed()) || self.phrases.iter().any(|p| p.render.failed())
     }
 
-    /// Whether every phrase over its samples `i0..i1` has its render whole, or never will.
+    /// Whether every phrase over its samples `i0..i1` has its render whole, or never will, and its
+    /// stretch has made the frames they read: what it plays there is its own.
     fn phrases_done(&self, i0: usize, i1: usize) -> bool {
-        self.phrases.iter().filter(|p| p.from < i1 && p.to > i0).all(|p| p.whole() || p.render.failed())
+        let stretched = match &self.src {
+            Source::Render(r, sh) => r.has(sh.span(i0, i1).1),
+            _ => true,
+        };
+        stretched && self.phrases.iter().filter(|p| p.from < i1 && p.to > i0).all(|p| p.whole() || p.render.failed())
+    }
+
+    /// The clip it replaced, while its stretch hasn't made frames `i0..i1`: what plays there.
+    fn standing_in(&self, i0: usize, i1: usize) -> Option<(Arc<AudioLane>, usize)> {
+        let Source::Render(r, sh) = &self.src else { return None };
+        let mut old = self.old.lock().unwrap_or_else(|e| e.into_inner());
+        if r.whole() {
+            *old = None;
+            return None;
+        }
+        if r.has(sh.span(i0, i1).1) { None } else { old.clone() }
     }
 
     /// Whether its samples `i0..i1` can be worked out now: a render being made has made every
     /// frame they read.
     fn has(&self, i0: usize, i1: usize) -> bool {
         match &self.src {
-            Source::Render(r, sh) => r.has(sh.span(i0, i1).1),
+            Source::Render(r, sh) => r.has(sh.span(i0, i1).1) || self.old.lock().unwrap_or_else(|e| e.into_inner()).is_some(),
             Source::Wav(..) | Source::Mem(..) => true,
         }
     }
@@ -747,6 +768,10 @@ impl Clip {
     /// render has them, its phrases laid over the normal path before its gain and fades
     /// (RENDER-30b). True when a phrase played what it played before, its render not whole yet.
     fn piece(&self, i0: usize, i1: usize, s: &mut Scratch) -> Result<bool> {
+        if let Some((lane, o)) = self.standing_in(i0, i1) {
+            self.as_before(&lane.clips[o], i0, i1, s)?;
+            return Ok(true);
+        }
         if self.phrases.iter().all(|p| p.to <= i0 || p.from >= i1) {
             self.plain(i0, i1, s)?;
             return Ok(false);
@@ -769,6 +794,27 @@ impl Clip {
             }
         }
         Ok(fell)
+    }
+
+    /// Its samples `i0..i1` as `old`, the clip it replaced, played them, by where they are on the
+    /// lane; silence where `old` doesn't reach.
+    fn as_before(&self, old: &Clip, i0: usize, i1: usize, s: &mut Scratch) -> Result<()> {
+        let (a, z) = (self.at + i0 as u64, self.at + i1 as u64);
+        let (oa, oz) = (a.max(old.at), z.min(old.at + old.len));
+        let mut vals = std::mem::take(&mut s.vals);
+        for v in vals.iter_mut().take(self.channels) {
+            v.clear();
+            v.resize(i1 - i0, 0.0);
+        }
+        let got = if oa < oz { old.piece((oa - old.at) as usize, (oz - old.at) as usize, s).map(drop) } else { Ok(()) };
+        if oa < oz && got.is_ok() {
+            for c in 0..self.channels {
+                let from = &s.vals[c.min(old.channels - 1)];
+                vals[c][(oa - a) as usize..(oz - a) as usize].copy_from_slice(&from[..(oz - oa) as usize]);
+            }
+        }
+        s.vals = vals;
+        got
     }
 
     /// [`Self::piece`] with no phrase: the normal path.
@@ -1093,10 +1139,20 @@ impl AudioLane {
     /// the chunk before it is old no more. Off the sound thread only, and never for a chunk the
     /// transport is about to read: the sound thread reading it meanwhile would miss.
     pub fn refresh(&self, k: u64) {
+        self.refresh_unless(k, &|_| false);
+    }
+
+    /// [`Self::refresh`], unless `near(k)` says, as it is stored, that the transport is about to read
+    /// chunk `k` (the review's S5): asked after the work, so a seek sent meanwhile, or a slow
+    /// work out, never has a chunk changed under the playhead. Such a chunk stays old.
+    pub fn refresh_unless(&self, k: u64, near: &dyn Fn(u64) -> bool) {
         let r = &self.ring;
         let mut s = r.fill.lock().unwrap_or_else(|e| e.into_inner());
         let Some(i) = r.slots.iter().position(|sl| sl.tag.load(Ordering::Acquire) == k) else { return };
         let fell = self.work_out(k, &mut s);
+        if near(k) || r.slots[i].tag.load(Ordering::Acquire) != k {
+            return;
+        }
         let after_old = k > 0 && r.kind_of(k - 1) == Some(OLD);
         let kind = if fell {
             OLD
