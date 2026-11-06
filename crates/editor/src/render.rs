@@ -45,7 +45,7 @@ pub const TAIL_SILENCE: f64 = 0.5;
 /// …or for this long at most.
 pub const TAIL_MAX: f64 = 10.0;
 /// Silent: quieter than -90 dBFS, about the quietest step a 16-bit file can hold.
-const SILENT: f32 = 3.2e-5;
+pub(crate) const SILENT: f32 = 3.2e-5;
 /// Frames rendered between progress reports.
 const CHUNK: usize = 4096;
 /// Of the progress bar, the share the song takes before its tail.
@@ -163,6 +163,9 @@ pub struct Rendered {
     /// Plugins whose latency changed while it rendered: it kept what each had at its start, so
     /// they played misaligned from then on (RENDER-17, `latency.changed`).
     pub latency_changed: usize,
+    /// How many frames it sounds for: up to and including its last frame louder than −90 dBFS, as
+    /// the file holds it (0: all silent). Where a bounce's clip ends (RENDER-40).
+    pub sounding: u64,
 }
 
 impl Rendered {
@@ -507,7 +510,7 @@ impl Render {
         // No block follows soon: the workers sleep now.
         self.runner.rest();
         let lufs = out.meter.as_ref().and_then(|m| m.measures().lufs);
-        let Out { wav, frames, peak, .. } = out;
+        let Out { wav, frames, peak, sounding, .. } = out;
         wav.finalize()?;
         progress(1.0);
         let rendered = Rendered {
@@ -521,6 +524,7 @@ impl Render {
             reproducible: self.reproducible,
             threads: self.runner.threads(),
             hosts_plugins: self.renderer.hosts_plugins(),
+            sounding,
         };
         Ok((lock, rendered))
     }
@@ -551,6 +555,8 @@ struct Out {
     wav: hound::WavWriter<BufWriter<File>>,
     frames: u64,
     peak: f32,
+    /// Frames up to and including the last one that isn't silent, as written.
+    sounding: u64,
     /// 32-bit float as rendered; else 24-bit, clipped at 0 dBFS.
     float: bool,
     /// The file's loudness, measured as it is written when asked (TAP-7), and each side of the
@@ -562,7 +568,7 @@ struct Out {
 impl Out {
     fn new(wav: hound::WavWriter<BufWriter<File>>, float: bool, rate: u32, measure: bool) -> Out {
         let meter = measure.then(|| crate::listen::Meter::new(rate, crate::listen::Wants::default()));
-        Out { wav, frames: 0, peak: 0.0, float, meter, sides: [vec![], vec![]] }
+        Out { wav, frames: 0, peak: 0.0, sounding: 0, float, meter, sides: [vec![], vec![]] }
     }
 
     fn push(&mut self, frames: &[[f32; 2]]) -> Result<()> {
@@ -586,6 +592,11 @@ impl Out {
         }
         if let Some(m) = &mut self.meter {
             m.push(l, r);
+        }
+        // As the file holds it: clipped at 0 dBFS unless it is float, which never makes a loud
+        // sample silent.
+        if let Some(last) = frames.iter().rposition(|f| f[0].abs() > SILENT || f[1].abs() > SILENT) {
+            self.sounding = self.frames + last as u64 + 1;
         }
         self.frames += frames.len() as u64;
         Ok(())

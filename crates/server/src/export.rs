@@ -45,11 +45,13 @@ pub const EXPORTS: &str = "Exports";
 pub struct Exports {
     running: AtomicBool,
     /// Set to stop it (the app is quitting).
-    stop: Arc<AtomicBool>,
+    pub(crate) stop: Arc<AtomicBool>,
     /// The song being exported.
     song: Mutex<Option<String>>,
     /// How the last export that borrowed live instances went.
     borrowed: Mutex<Option<Borrowing>>,
+    /// The job in the slot is a bounce (RENDER-40), which its Stop may stop.
+    pub(crate) bouncing: AtomicBool,
 }
 
 /// How an export that borrowed the live plugin instances went, its times on the player's clock

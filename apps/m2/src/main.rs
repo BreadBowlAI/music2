@@ -7,7 +7,7 @@ use std::time::Instant;
 use anyhow::{Context, Result, anyhow, bail};
 use m2_editor::{Gestures, render};
 use m2_ir::{Diagnostic, FOp, Flat, Ir};
-use m2_runtime::{PackageSet, Renderer};
+use m2_runtime::PackageSet;
 use m2_session::{Compiled, Session};
 use m2_song::{AudioClip, DataPath, Key, LaneAddr, LaneData, LaneKind, Project, TxOp};
 
@@ -507,17 +507,16 @@ fn run(args: Vec<String>) -> Result<()> {
             }
         }
         Some("bounce") => {
+            // RENDER-40: the track rendered, then put in place in the song, as the app's Bounce to audio.
+            if on(&args, "--in-place") {
+                return bounce_in_place(Path::new(&arg(1)?), &args);
+            }
             let mut pk = packages()?;
             let (project, c) = compile(Path::new(&arg(1)?), &mut pk)?;
-            let (mut ir, data) = (c.ir.clone(), c.data.clone());
-            let name = arg(2)?;
-            let file = if name.ends_with(".wav") { name.clone() } else { format!("{name}.wav") };
-            let asset = m2_song::AssetName::new(&file).map_err(|e| anyhow!("{e}: name it like `keys-bounce`"))?;
-            // Its provenance is an asset too, beside it (FMT-14).
-            let record = m2_song::AssetName::new(&format!("{file}.json")).map_err(|e| anyhow!("{e}"))?;
+            let asset = asset_named(&arg(2)?)?;
             // Everything --place needs is checked before anything is written, so a mistake there
             // leaves no asset behind to block the retry (FMT-14: assets are never replaced).
-            let place = flag(&args, "--place").map(|p| Place::parse(&p, &ir, &project)).transpose()?;
+            let place = flag(&args, "--place").map(|p| Place::parse(&p, &c.ir, &project)).transpose()?;
             // Its threads are chosen before --place takes the lock: after, `lock::taken` would see
             // this bounce's own lock as the app's, and render beside it.
             let threads = threads(&args, &project.dir, false)?;
@@ -538,110 +537,19 @@ fn run(args: Vec<String>) -> Result<()> {
                 }
                 (None, _) => None,
             };
-            let mut bounced = ir.root.clone();
-            if let Some(track) = flag(&args, "--track") {
-                // A track is named by its key, never its label (ID-11).
-                if !ir.modules.iter().any(|m| m.key == track) {
-                    bail!("--track takes a track's key, and there's no track `{track}`: the tracks are {}", tracks(&ir));
-                }
-                let export = flag(&args, "--export").unwrap_or_else(|| "out".into());
-                bounced = m2_ir::Root { module: track.clone(), export: export.clone() };
-                // Played through an export of the root module, which stays `song` (ID-3): as a stem is.
-                ir = render::rooted(&ir, &track, &export)?;
-            }
-            let stem = std::sync::Arc::new(render::Parts::of(&c, ir, &pk).map_err(report)?);
-            let flat = &stem.flat;
-            let impure = flat.order.iter().any(|&i| matches!(flat.nodes[i].op, FOp::Plugin { .. }));
+            let track = flag(&args, "--track");
+            let export = flag(&args, "--export").unwrap_or_else(|| "out".into());
             let sr = render_rate(&args, &project)?;
-            let tempo = data.tempo().clone();
+            let tempo = c.data.tempo().clone();
             let from: f64 = flag(&args, "--from").map(|v| v.parse()).transpose().context("--from")?.unwrap_or(0.0);
-            let seconds: f64 = match flag(&args, "--seconds") {
-                Some(v) => v.parse().context("--seconds")?,
-                None => render::bounce_seconds(&data) - from,
-            };
-            let path = project.dir.join(DataPath::Asset(asset.clone()).path());
-            let record = project.dir.join(DataPath::Asset(record).path());
+            let seconds: Option<f64> = flag(&args, "--seconds").map(|v| v.parse()).transpose().context("--seconds")?;
+            let b = m2_editor::bounce::Bounce::plan(&c, &pk, track.as_deref().map(|t| (t, export.as_str())), from, seconds, sr)?;
             // An asset is never overwritten (FMT-14): a new version gets a new name. Nor is a
-            // provenance, even one whose asset is gone.
-            for p in [&path, &record] {
-                if std::fs::symlink_metadata(p).is_ok() {
-                    bail!("{} exists, and assets are never replaced: bounce to a new name", p.display());
-                }
-            }
+            // provenance, even one whose asset is gone. Refused before anything is rendered.
+            m2_editor::bounce::Bounce::free(&project.dir, &asset)?;
             // A fault that changes its sound stops it, named (RENDER-1).
-            // With the packages it was built with (PACK-9), as every render of a song is.
-            let seen = render::seen(&*stem, &pk);
-            let namer = m2_editor::faults::Namer::new(0, stem.clone(), &seen);
-            let mut r = Renderer::new(flat, &data, &seen, sr).map_err(|e| namer.faulted(e))?;
-            let (mut runner, _pool) = render::threads_for(&r, threads);
-            r.seek_on((from * sr as f64).round() as u64, &mut runner).map_err(|e| namer.faulted(e))?;
-            let frames = r.render_on(seconds, &mut runner).map_err(|e| namer.faulted(e))?;
-            let folder = path.parent().expect("inside assets/");
-            // `assets/`, and `vox/` in it for `vox/keys`, each synced in the one above as it is made.
-            m2_os::fs::make_dirs(folder)?;
-            let channels = vec![frames.iter().map(|f| f[0]).collect::<Vec<f32>>(), frames.iter().map(|f| f[1]).collect()];
-            m2_runtime::audio::write_new_wav(&path, &channels, sr)?;
-            // Where it came from, so a bounce of open kernels can always be reproduced: the module
-            // by its key (ID-11), and every package file the build and the runtime read, by
-            // content (RENDER-2): its code, its manifest and wasm, the files its kernels read (a
-            // pack's recordings, PACK-5), and a pack's version hash (PACK-6).
-            let read: Vec<(String, String)> = c
-                .data
-                .kernel_assets()
-                .iter()
-                .filter_map(|(name, sha)| m2_song::pack::split_id(name).map(|(pkg, path)| (format!("{pkg}/{path}"), sha.hex())))
-                .collect();
-            let packages: std::collections::BTreeMap<&str, serde_json::Value> = pk
-                .packages()
-                .map(|p| {
-                    // A scoped name has a `/` of its own (PACK-1): the file is the package's when its path starts with it.
-                    let ours = |path: &str| path.strip_prefix(p.name.as_str()).is_some_and(|rest| rest.starts_with('/'));
-                    let files: std::collections::BTreeMap<&str, &str> = c
-                        .package_files
-                        .iter()
-                        .filter(|f| ours(&f.path))
-                        .map(|f| (f.path.as_str(), f.sha256.as_str()))
-                        .chain(p.files.iter().map(|(path, sha)| (path.as_str(), sha.as_str())))
-                        .chain(read.iter().filter(|(path, _)| ours(path)).map(|(path, sha)| (path.as_str(), sha.as_str())))
-                        .collect();
-                    let mut entry = serde_json::json!({"version": p.version, "files": files});
-                    if let Some(hash) = c.packs.iter().find(|r| r.name.as_str() == p.name).and_then(|r| r.hash) {
-                        entry["hash"] = serde_json::json!(hash.prefixed());
-                    }
-                    (p.name.as_str(), entry)
-                })
-                .collect();
-            let provenance = serde_json::json!({
-                "bounced_from": {"module": bounced.module, "export": bounced.export},
-                "from_seconds": from, "seconds": seconds, "sample_rate": sr,
-                "reproducible": !impure,
-                "packages": packages,
-            });
-            // Created only if it isn't there, as the asset is. An asset without its provenance
-            // isn't kept, nor is a provenance this run made but couldn't finish, so the name
-            // stays free for a retry. Its bytes are pushed, and its folder synced, before --place
-            // names the asset (WRITE-1).
-            let written = serde_json::to_string_pretty(&provenance).map_err(anyhow::Error::from).and_then(|text| {
-                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&record)?;
-                std::io::Write::write_all(&mut f, (text + "\n").as_bytes())
-                    .and_then(|()| m2_os::fs::push(&f))
-                    .and_then(|()| m2_os::fs::sync_dir(folder))
-                    .inspect_err(|_| drop(std::fs::remove_file(&record)))?;
-                Ok(())
-            });
-            if let Err(e) = written {
-                let _ = std::fs::remove_file(&path);
-                return Err(e.context(format!("writing {}", record.display())));
-            }
-            let impure = if impure { " (includes plugins: not reproducible)" } else { "" };
-            let n = runner.threads();
-            println!(
-                "bounced {}/{} ({seconds:.2}s) to {} on {n} thread{}{impure}",
-                bounced.module,
-                bounced.export,
-                path.display(),
-                if n == 1 { "" } else { "s" }
-            );
+            let done = b.write(b.render(&pk, threads)?, &project.dir, &asset, |_| {})?;
+            said_bounced(&b, &done);
             if let Some(place) = place {
                 let (place, mut session) = match placer.take() {
                     Some(s) => (place, s),
@@ -652,9 +560,8 @@ fn run(args: Vec<String>) -> Result<()> {
                         (again, s)
                     }
                 };
-                let length = tempo.beat_at(tempo.seconds_at(place.beat) + seconds) - place.beat;
-                let hash = m2_song::Sha::of_file(&path)?.pin();
-                place.put(&mut session, &asset, hash, length)?;
+                let length = tempo.beat_at(tempo.seconds_at(place.beat) + done.seconds) - place.beat;
+                place.put(&mut session, &asset, done.hash.pin(), length)?;
             }
         }
         Some("graph") => {
@@ -1718,10 +1625,86 @@ fn said_added(v: &serde_json::Value, target: &m2_editor::import::Target) {
     }
 }
 
+/// `m2 bounce`'s asset name, `keys-bounce` or `keys-bounce.wav`: `assets/keys-bounce.wav`.
+fn asset_named(name: &str) -> Result<m2_song::AssetName> {
+    let file = if name.ends_with(".wav") { name.to_string() } else { format!("{name}.wav") };
+    m2_song::AssetName::new(&file).map_err(|e| anyhow!("{e}: name it like `keys-bounce`"))
+}
+
+/// What a bounce prints once its file is written: what it played, how long, where, on how many
+/// threads, and the samples it silenced.
+fn said_bounced(b: &m2_editor::bounce::Bounce, done: &m2_editor::bounce::Bounced) {
+    let r = &done.rendered;
+    if r.non_finite > 0 {
+        eprintln!("warning: {} samples were not numbers (NaN or infinite) and were silenced, as the app plays them", r.non_finite);
+    }
+    if r.latency_changed > 0 {
+        eprintln!("warning: {}", m2_editor::render::LATENCY_CHANGED);
+    }
+    let impure = if b.reproducible() { "" } else { " (includes plugins: not reproducible)" };
+    println!(
+        "bounced {}/{} ({:.2}s) to {} on {} thread{}{impure}",
+        b.bounced.module,
+        b.bounced.export,
+        done.seconds,
+        done.path.display(),
+        r.threads,
+        if r.threads == 1 { "" } else { "s" }
+    );
+}
+
+/// `m2 bounce <project> <asset-name> --track KEY --in-place` (RENDER-40): what the app's Bounce to
+/// audio does. While the app has the song open, the app does it (AGENT-1), as this agent's step;
+/// else `m2` renders, then adds the track and mutes this one as one Tx, which a refusal leaves
+/// without the files it wrote.
+fn bounce_in_place(dir: &Path, args: &[String]) -> Result<()> {
+    let track = flag(args, "--track").context("--in-place bounces a track: name it with --track KEY")?;
+    for f in ["--place", "--from", "--seconds", "--export"] {
+        if on(args, f) {
+            bail!("--in-place bounces the whole of the track's sound, so it takes no {f}");
+        }
+    }
+    let name = args.get(2).context("m2 bounce <project> <asset-name> --track KEY --in-place")?;
+    let asset = asset_named(name)?;
+    let said = |v: &serde_json::Value, label: &str| {
+        println!(
+            "bounced {label} to assets/{} and added it as {} (ID {}) after it; {label} is muted in the song (revision {})",
+            v["asset"].as_str().unwrap_or("?"),
+            v["label"].as_str().unwrap_or("?"),
+            v["module"].as_str().unwrap_or("?"),
+            v["revision"].as_u64().unwrap_or(0)
+        );
+    };
+    let label =
+        |s: &Session| s.accepted().compiled.ir.modules.iter().find(|m| m.key == track).map_or(track.clone(), |m| m.label().to_string());
+    if let Some(holder) = app::holder(dir) {
+        let mut app = app::reach(dir, &holder, "")?;
+        let v = app.bounce(serde_json::json!({"track": track, "name": asset.as_str()}))?;
+        said(&v, &label(&reader(dir)?));
+        return Ok(());
+    }
+    // Chosen before the lock is taken, as a plain bounce's.
+    let threads = threads(args, dir, false)?;
+    let mut s = session(dir)?;
+    let words = |e: m2_editor::EditError| anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
+    let b = m2_editor::bounce::Bounce::in_place_of(s.accepted(), &s.packages, &track).map_err(words)?;
+    m2_editor::bounce::Bounce::free(dir, &asset)?;
+    let done = b.write(b.render(&s.packages, threads)?, dir, &asset, |_| {})?;
+    let shown = label(&s);
+    let placed = m2_editor::bounce::in_place(&mut s, &track, &done).map_err(|e| {
+        done.remove();
+        words(e)
+    })?;
+    let v = serde_json::json!({
+        "asset": asset.as_str(), "label": placed.made.label, "module": placed.made.module, "revision": placed.edited.revision,
+    });
+    said(&v, &shown);
+    Ok(())
+}
+
 /// The tracks, by key, with their labels where they differ: `kick, chops (Chops)`.
 fn tracks(ir: &Ir) -> String {
-    let named = |m: &m2_ir::Module| if m.label() == m.key { m.key.clone() } else { format!("{} ({})", m.key, m.label()) };
-    ir.modules.iter().filter(|m| m.track).map(named).collect::<Vec<_>>().join(", ")
+    m2_editor::bounce::tracks(ir)
 }
 
 /// Where `m2 bounce --place track.lane@beat` puts the bounce: an audio lane, by keys (ID-11),

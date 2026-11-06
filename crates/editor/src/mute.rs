@@ -55,17 +55,19 @@ fn option_edit(text: &str, site: &m2_script::sites::Site, m: &Module, muted: boo
     })
 }
 
-/// Mute `modules` in the song, or unmute them: one `Confined` Tx on their `track()` calls'
-/// options, one undo step, named "Kick → Kick, muted in song". A track already so is left alone;
-/// with none left, nothing is written.
-pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<Edited, EditError> {
-    ready(s)?;
-    if modules.is_empty() {
-        return Err(EditError::Rejected("Name a track to mute in the song.".into()));
-    }
-    let rev = s.accepted();
+/// The edits that mute `modules` in the song, or unmute them, in `rev`'s files: by file, each
+/// module's declared change, and the file of the first. A track already so has none.
+pub(crate) struct Muting {
+    pub edits: BTreeMap<String, Vec<(u32, u32, String)>>,
+    pub changes: Vec<ModuleChange>,
+    pub first: Option<String>,
+}
+
+/// [`Muting`] for `modules` of `rev`: refused in words for the song itself, a module that isn't
+/// there or isn't a track, and a `track()` call that isn't written with its key and options.
+pub(crate) fn muting(rev: &Revision, modules: &[String], muted: bool) -> Result<Muting, EditError> {
     let mut edits: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
-    let (mut labels, mut changes, mut first) = (vec![], vec![], None);
+    let (mut changes, mut first) = (vec![], None);
     for key in modules.iter().collect::<BTreeSet<_>>() {
         if key == ROOT {
             return Err(EditError::Rejected("The song itself can't be muted: mute its tracks.".into()));
@@ -94,6 +96,20 @@ pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<
             changes.push(ModuleChange::Muted { module: m2_song::Key::new(key).map_err(EditError::Rejected)?, muted });
         }
     }
+    Ok(Muting { edits, changes, first })
+}
+
+/// Mute `modules` in the song, or unmute them: one `Confined` Tx on their `track()` calls'
+/// options, one undo step, named "Kick → Kick, muted in song". A track already so is left alone;
+/// with none left, nothing is written.
+pub fn mute_in_song(s: &mut Session, modules: &[String], muted: bool) -> Result<Edited, EditError> {
+    ready(s)?;
+    if modules.is_empty() {
+        return Err(EditError::Rejected("Name a track to mute in the song.".into()));
+    }
+    let rev = s.accepted();
+    let Muting { edits, changes, first } = muting(rev, modules, muted)?;
+    let mut labels = vec![];
     // Labels in the order asked.
     for key in modules {
         if let Some(m) = rev.compiled.ir.modules.iter().find(|m| &m.key == key)

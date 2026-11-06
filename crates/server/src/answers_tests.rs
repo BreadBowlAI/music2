@@ -440,6 +440,8 @@ fn every_change_answers_its_revision_step_and_moved() {
         Made::Revision(Some(true)),
     );
     r.change("POST", "/api/graph/audio/track", PAGE, json!({"label": "Vox"}), Made::Revision(Some(true)));
+    // RENDER-40: a bounce in place, its render done before it answers.
+    r.change("POST", "/api/graph/bounce", PAGE, json!({"track": "bass"}), Made::Revision(Some(true)));
     r.change(
         "POST",
         "/api/graph/midifile/import",
