@@ -6,7 +6,7 @@ import { create } from "zustand";
 import type { AudioClip, TimelineLane } from "./graph";
 import { secondsAt, type Tempo } from "./peaks";
 
-/** The most two clips of a comp overlap, in seconds (VOX-2). */
+/** The most two clips of a comp overlap, and the most their places in a pass differ, in seconds (VOX-2). */
 const REACH = 0.05;
 
 /** One piece of a comp: the beats it plays alone (from the middle of one join to the next), its take (from 0), and its clip's index in the lane. */
@@ -47,11 +47,18 @@ export function takeAt(takes: readonly number[], at: number): number {
   return k;
 }
 
+/** Where in its pass clip `c` plays at song beat `beat`, in seconds. */
+const placeIn = (c: AudioClip, beat: number, takes: readonly number[], tempo: Tempo) => {
+  const at = reads(c, beat, tempo);
+  return at - takes[takeAt(takes, at)];
+};
+
 /**
- * The comps of audio lane `lane`: its clips of each file whose note lists two takes or more, in rows
- * of clips that each start after the one before starts, end after it ends, and start no later than
- * it ends, overlapping it by 50 ms at most. Reversed and pitched clips are left out: a comp can't
- * cut them (VOX-6).
+ * The comps of audio lane `lane`, as the server works them out (`pieces` in comp.rs, VOX-2): its
+ * clips of each file whose note lists two takes or more, in rows keeping one pass's timeline: each
+ * starts after the one before starts, ends after it ends, starts no later than it ends (overlapping
+ * it by 50 ms at most), and plays the same place in its pass as the one before there, within 50 ms.
+ * Reversed and pitched clips are no pieces (VOX-6).
  */
 export function compsOf(lane: TimelineLane, tempo: Tempo): Comp[] {
   if (lane.kind !== "audio") return [];
@@ -66,7 +73,11 @@ export function compsOf(lane: TimelineLane, tempo: Tempo): Comp[] {
     const takes = lane.takes?.[asset] ?? [];
     const order = [...all].sort((a, b) => lane.clips[a].start - lane.clips[b].start || a - b);
     const links = (a: AudioClip, b: AudioClip) =>
-      b.start > a.start && b.start + b.length > a.start + a.length && b.start <= a.start + a.length + 1e-9 && secondsAt(tempo, a.start + a.length) - secondsAt(tempo, b.start) <= REACH + 1e-9;
+      b.start > a.start &&
+      b.start + b.length > a.start + a.length &&
+      b.start <= a.start + a.length + 1e-9 &&
+      secondsAt(tempo, a.start + a.length) - secondsAt(tempo, b.start) <= REACH + 1e-9 &&
+      Math.abs(placeIn(a, b.start, takes, tempo) - placeIn(b, b.start, takes, tempo)) <= REACH + 1e-9;
     let row: number[] = [];
     const flush = () => {
       if (!row.length) return;
@@ -92,7 +103,7 @@ export function compsOf(lane: TimelineLane, tempo: Tempo): Comp[] {
   return out.sort((a, b) => a.start - b.start);
 }
 
-/** The clip a take's row draws over comp `comp`: its first piece, pointed at take `take` and stretched over the comp, as the whole take would play there. */
+/** The clip a take's row draws over comp `comp`: its first piece, pointed at take `take` and stretched over the comp, as the whole take would play there (a comp keeps one pass's timeline). */
 export function takeClip(lane: TimelineLane, comp: Comp, take: number): AudioClip {
   const first = lane.clips[comp.parts[0].index] as AudioClip;
   const by = comp.takes[take] - comp.takes[comp.parts[0].take];

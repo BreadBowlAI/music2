@@ -6,7 +6,7 @@
 //     10 ms of overlap with 10 ms fades, one undo step ("Undo Comp on Vox"); Take 2's row lit there;
 //   - a click on a faint part of Take 1 plays it over the piece there;
 //   - a swipe along Take 3 over the whole loop makes it one clip again, as it was (VOX-5); ⌘Z takes
-//     that back;
+//     that back, the lane file byte for byte;
 //   - Takes again closes the rows; each state linted.
 //
 //   node e2e/comp.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -139,12 +139,13 @@ check(clips().length === 3 && near(clips()[1].offset, TAKES[1] + BEAT - 0.005), 
 
 // ---------------------------------------------------------------- Take 3 over all of it: one clip again (VOX-5)
 
+const comped = read("data/vox/clips.json");
 await swipe(3, 0.05, 3.95);
 check(await until(() => clips().length === 1, 5000), `one clip again: ${JSON.stringify(clips())}`);
 c = clips()[0];
 check(c && c.id === "voxclip1" && c.start === 0 && near(c.length, 4) && near(c.offset, TAKES[2]) && !c.fade_in && !c.fade_out, `as it was: ${JSON.stringify(c)}`);
 await key("Meta+z");
-check(await until(() => clips().length === 3, 3000), "⌘Z: the comp again");
+check(await until(() => read("data/vox/clips.json") === comped, 3000), "⌘Z: the comp again, byte for byte");
 
 // ---------------------------------------------------------------- Takes closes the rows
 

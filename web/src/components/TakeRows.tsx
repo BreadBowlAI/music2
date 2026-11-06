@@ -12,7 +12,6 @@ import { serverRef } from "../lib/clips";
 import { clipRef, findLane, type TimelineLane } from "../lib/graph";
 import { skipsSnap, snapSong } from "../lib/grid";
 import { editing, goesFrom, lanesOf } from "../lib/history";
-import { ROW_H } from "../lib/layout";
 import type { TrackColor } from "../lib/palette";
 import { request } from "../lib/projects";
 import { useStore } from "../lib/store";
@@ -20,8 +19,6 @@ import { compsOf, takeClip, type Comp } from "../lib/takes";
 import { useZoom } from "../lib/zoom";
 import { Wave } from "./Wave";
 
-/** A row's height, in px: a track's, so each take's waveform has room under its name. */
-export const TAKE_ROW_H = ROW_H;
 /** A press that moves less than this, in px, is a click. */
 const CLICK_PX = 4;
 const NO_TEMPO: never[] = [];
@@ -52,6 +49,7 @@ export function TakeRows({
   selected,
   headerW,
   width,
+  height,
   editable,
 }: {
   module: string;
@@ -60,6 +58,8 @@ export function TakeRows({
   selected: boolean;
   headerW: number;
   width: number;
+  /** Each row's height: the track's (taste.md §3.2). */
+  height: number;
   editable: boolean;
 }) {
   const tempo = useStore((s) => s.graph?.timeline.tempo) ?? NO_TEMPO;
@@ -68,7 +68,7 @@ export function TakeRows({
   return (
     <>
       {Array.from({ length: count }, (_, take) => (
-        <TakeRow key={take} module={module} lane={lane} comps={comps} take={take} color={color} selected={selected} headerW={headerW} width={width} editable={editable} />
+        <TakeRow key={take} module={module} lane={lane} comps={comps} take={take} color={color} selected={selected} headerW={headerW} width={width} height={height} editable={editable} />
       ))}
     </>
   );
@@ -83,6 +83,7 @@ function TakeRow({
   selected,
   headerW,
   width,
+  height,
   editable,
 }: {
   module: string;
@@ -93,6 +94,7 @@ function TakeRow({
   selected: boolean;
   headerW: number;
   width: number;
+  height: number;
   editable: boolean;
 }) {
   const ppb = useZoom();
@@ -134,7 +136,9 @@ function TakeRow({
         return;
       }
       const [from, to] = [Math.min(b0, b1), Math.max(b0, b1)];
-      const comp = comps.find((c) => c.start < to && from < c.end && take < c.takes.length);
+      // Across two comps, the one it starts in (VOX-7).
+      const mine = (c: Comp) => take < c.takes.length;
+      const comp = comps.find((c) => mine(c) && c.start <= b0 && b0 < c.end) ?? comps.find((c) => mine(c) && c.start < to && from < c.end);
       if (comp && to > from) void compTake(module, lane, comp.parts[0].index, take, from, to);
     };
     const cancel = (ev: PointerEvent) => {
@@ -151,7 +155,7 @@ function TakeRow({
 
   const name = `Take ${take + 1}`;
   return (
-    <div data-testid="take-row" data-lane={`${module}.${lane.key}`} data-take={take + 1} className="flex" style={{ height: TAKE_ROW_H }}>
+    <div data-testid="take-row" data-lane={`${module}.${lane.key}`} data-take={take + 1} className="flex" style={{ height }}>
       <div
         className={clsx("sticky left-0 z-20 shrink-0 flex items-center border-r border-line text-xs text-fg-muted", selected ? "bg-accent-soft" : "bg-chrome")}
         style={{ width: headerW }}
@@ -184,7 +188,7 @@ function TakeRow({
                     style={{ left: (p.lo - c.start) * ppb, width: (p.hi - p.lo) * ppb, background: color.tint }}
                   />
                 ))}
-              <Wave clip={takeClip(lane, c, take)} color={color} />
+              <Wave clip={takeClip(lane, c, take)} color={color} bare />
               {/* The parts another take plays: faint. */}
               {c.parts
                 .filter((p) => p.take !== take)

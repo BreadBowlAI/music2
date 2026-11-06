@@ -4,7 +4,8 @@ import { moduleName, type Diagnostic, type TimelineTrack } from "../lib/graph";
 import { useHeard } from "../lib/graph8b";
 import { ROW_H } from "../lib/layout";
 import { useShell } from "../lib/shell";
-import { useTakesOpen } from "../lib/takes";
+import { useStore } from "../lib/store";
+import { compsOf, useTakesOpen } from "../lib/takes";
 import Arm from "./Arm";
 import MuteSolo from "./MuteSolo";
 import TrackMeter from "./TrackMeter";
@@ -47,8 +48,9 @@ export default function TrackHeader({
   // M, S, the ⋯ and a meter: a track's. The Song row has the meter only.
   const mine = track.track && !song;
   const heard = useHeard(module);
-  // A lane whose clips play a loop's takes: Takes opens its rows (VOX-7).
-  const hasTakes = track.lanes.some((l) => l.kind === "audio" && l.clips.some((c) => (l.takes?.[c.asset]?.length ?? 0) >= 2));
+  // A lane that holds a comp: Takes opens its rows (VOX-7).
+  const tempo = useStore((s) => s.graph?.timeline.tempo);
+  const hasTakes = !!tempo && track.lanes.some((l) => compsOf(l, tempo).length > 0);
   // Muted in the song: struck through; muted while listening: muted; off by another's solo: fainter.
   const tone =
     heard === "muted-in-song" ? "text-fg-muted line-through" : heard === "muted" ? "text-fg-muted" : heard === "silenced" ? "text-fg-faint" : selected ? "text-fg-strong" : "text-fg";

@@ -2596,7 +2596,7 @@ const TrackRows = memo(function TrackRows({
   const takesOpen = useTakesOpen((s) => s.open.has(module)) && !last;
   const takes = (lane: TimelineLane) =>
     lane.kind === "audio" && (
-      <TakeRows key={`takes:${lane.key}`} module={module} lane={lane} color={color} selected={selected} headerW={headerW} width={width} editable={!locked && !waiting} />
+      <TakeRows key={`takes:${lane.key}`} module={module} lane={lane} color={color} selected={selected} headerW={headerW} width={width} height={h} editable={!locked && !waiting} />
     );
 
   // Dragged to a new place: it follows the pointer, lifted (taste.md §3.4).
