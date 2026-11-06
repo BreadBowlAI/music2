@@ -152,19 +152,25 @@ pub(crate) fn face(desc: &Descriptor, node: &ViewNode) -> Vec<Row> {
     desc.editor.face.iter().flat_map(|name| rows_named(desc, node, name)).collect()
 }
 
-/// A call's code (CARD-41): `site`'s text in `text`, its file, on one line (`one_line`). An effect's first argument, the sound it works on (its descriptor's
-/// first slot an audio input), is written `…`.
+/// A call's code (CARD-41): `site`'s text in `text`, its file, on one line (`one_line`). An
+/// effect's first argument, the sound it works on (its descriptor's first slot an audio input), is
+/// written `…` when it is a call.
 pub(crate) fn code(site: &m2_script::sites::Site, text: &str, desc: Option<&Descriptor>) -> Option<String> {
     let whole = text.get(site.start as usize..site.end as usize)?;
     let effect = desc.is_some_and(|d| {
         let first = lens::params(d).first().copied();
         d.inputs.iter().find(|i| Some(i.name.as_str()) == first).is_some_and(|i| i.kind == m2_script::component::PortKind::Audio)
     });
+    // Only a call is `…`: the card before it shows it. A name (`w`, `bass.out`) is said as written,
+    // since it says which sound, another track's in a song's mix (review F5).
     let shown = match site.args.first().filter(|_| effect) {
         Some(a) => {
             let (s, e) = a.span();
             let (s, e) = ((s - site.start) as usize, (e - site.start) as usize);
-            format!("{}…{}", whole.get(..s)?, whole.get(e..)?)
+            match whole.get(s..e)?.contains('(') {
+                true => format!("{}…{}", whole.get(..s)?, whole.get(e..)?),
+                false => whole.to_string(),
+            }
         }
         None => whole.to_string(),
     };
@@ -173,10 +179,16 @@ pub(crate) fn code(site: &m2_script::sites::Site, text: &str, desc: Option<&Desc
 
 /// Code on one line: its comments left out, and each line break, with the indents around it, made
 /// one space, or nothing after an opening bracket and before a closing one (whose trailing comma
-/// goes too).
-fn one_line(code: &str) -> String {
+/// goes too). Code it can't read safely, a regex, a division or a template string (review F7), is
+/// left as written: its first line, then `…` when it has more.
+pub(crate) fn one_line(code: &str) -> String {
+    let Some(clean) = uncommented(code) else {
+        let mut lines = code.lines();
+        let first = lines.next().unwrap_or_default().trim_end();
+        return if lines.next().is_some() { format!("{first} …") } else { first.to_string() };
+    };
     let mut out = String::new();
-    for line in uncommented(code).lines().map(str::trim).filter(|l| !l.is_empty()) {
+    for line in clean.lines().map(str::trim).filter(|l| !l.is_empty()) {
         if out.is_empty() {
             out.push_str(line);
             continue;
@@ -194,8 +206,10 @@ fn one_line(code: &str) -> String {
     out
 }
 
-/// `code` with its comments (`// …` to the line's end, `/* … */`) taken out, never inside a string.
-fn uncommented(code: &str) -> String {
+/// `code` with its comments (`// …` to the line's end, `/* … */`) taken out, never inside a
+/// string; None when it has a `/` that starts no comment (a regex, a division) or a template
+/// string, which this reading can't tell apart safely.
+fn uncommented(code: &str) -> Option<String> {
     let (mut out, mut chars) = (String::new(), code.chars().peekable());
     let mut quote: Option<char> = None;
     while let Some(c) = chars.next() {
@@ -222,17 +236,27 @@ fn uncommented(code: &str) -> String {
                     }
                     last = n;
                 }
-                out.push(' ');
+                // The comment and the spaces around it are one space, or none before a line's end or a comma.
+                while out.ends_with([' ', '\t']) {
+                    out.pop();
+                }
+                while chars.peek().is_some_and(|&n| n == ' ' || n == '\t') {
+                    chars.next();
+                }
+                if !out.is_empty() && !out.ends_with('\n') && chars.peek().is_some_and(|&n| n != '\n' && n != ',') {
+                    out.push(' ');
+                }
             }
+            None if c == '/' || c == '`' => return None,
             None => {
-                if matches!(c, '"' | '\'' | '`') {
+                if matches!(c, '"' | '\'') {
                     quote = Some(c);
                 }
                 out.push(c);
             }
         }
     }
-    out
+    Some(out)
 }
 
 /// Card `node`'s views (CARD-26), of call `site` of `desc`, made in module `m`; `notes` is the

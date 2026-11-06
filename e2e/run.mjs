@@ -188,7 +188,7 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 36, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
-  ["frame", "fix", { expect: 57, s: 12 }],
+  ["frame", "fix", { expect: 77, s: 14 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],

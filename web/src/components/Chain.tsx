@@ -4,10 +4,10 @@
 // and the code it writes. The sizes, the tabs and the Chain · Patch choice are the window's own.
 
 import clsx from "clsx";
-import { Maximize2, Minus, Square } from "lucide-react";
+import { ChevronRight, Maximize2, Minus, Square } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
-import { ALL, chainOf, frameOf, knobsOf, packOf, type FrameTab } from "../lib/frame";
+import { ALL, chainOf, frameOf, knobsOf, packOf, type Branch, type FrameTab } from "../lib/frame";
 import { useCards, type CardSize } from "../lib/folded";
 import { useNotice } from "../lib/notice";
 import { opt } from "../lib/native";
@@ -27,17 +27,21 @@ const PICTURE_W = 460;
 /** A knob's size on the face, and on a tab (CARD-45). */
 const FACE_KNOB = 36;
 const TAB_KNOB = 28;
+/** Expanded draws its face bigger (CARD-44): its knobs this size. */
+const BIG_KNOB = 44;
 
 /**
  * Device: the chain where the sound is one and the window wants it, else the patch (CARD-42). The
- * Chain · Patch switch is always in its tools; Chain is greyed, saying why, where the sound isn't a chain.
+ * Chain · Patch switch is always in its tools; Chain is greyed, saying why, where the sound isn't a
+ * chain. The patch of a sound that is a chain says Chain is there (review F15).
  */
 export function Device({ graph, module }: { graph: GraphState; module: string }) {
   const found = graph.view.modules.find((m) => m.key === module);
-  const chain = useMemo(() => (found ? chainOf(found) : null), [found]);
+  const of = useMemo(() => (found ? chainOf(found) : null), [found]);
+  const chain = of && "line" in of ? of : null;
   const want = useShell((s) => s.device);
-  const parts = !chain && !!found?.nodes.some((n) => n.kind === "call");
-  const why = "This sound is built from parts. Showing its patch.";
+  const why = of && "why" in of ? `${of.why} Showing its patch.` : null;
+  const hint = chain && want === "patch" ? "This sound is a chain: Chain shows it as cards." : null;
   return (
     <>
       {found && (
@@ -51,7 +55,7 @@ export function Device({ graph, module }: { graph: GraphState; module: string })
                 data-device={d}
                 on={(chain ? want : "patch") === d}
                 disabled={d === "chain" && !chain}
-                title={d === "chain" ? (chain ? "The sound's cards, left to right" : why) : "The sound's patch: its parts and their cables"}
+                title={d === "chain" ? (chain ? "The sound's cards, left to right" : (why ?? "This sound has no chain")) : "The sound's patch: its parts and their cables"}
                 onClick={() => useShell.getState().setDevice(d)}
               >
                 {d === "chain" ? "Chain" : "Patch"}
@@ -60,18 +64,21 @@ export function Device({ graph, module }: { graph: GraphState; module: string })
           </div>
         </DockSlot>
       )}
-      {parts && (
+      {(why || hint) && (
         <DockSlot at="title">
-          <span data-testid="device-parts">{why}</span>
+          <span data-testid={why ? "device-parts" : "device-chain-hint"}>{why ?? hint}</span>
         </DockSlot>
       )}
-      {chain && found && want === "chain" ? <Chain graph={graph} module={found} cards={chain} /> : <NodeGraph graph={graph} module={module} />}
+      {chain && found && want === "chain" ? <Chain graph={graph} module={found} chain={chain} /> : <NodeGraph graph={graph} module={module} />}
     </>
   );
 }
 
-/** The chain: its cards left to right, at full size, scrolling sideways (taste.md §3.5). */
-function Chain({ graph, module, cards }: { graph: GraphState; module: ModuleView; cards: ViewNode[] }) {
+/**
+ * The chain: its cards left to right, at full size, scrolling sideways (taste.md §3.5). A mix (the
+ * Song) has a row for each track's sound it reads, that sound's effects after it, then its line.
+ */
+function Chain({ graph, module, chain }: { graph: GraphState; module: ModuleView; chain: { line: ViewNode[]; branches: Branch[] } }) {
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -89,30 +96,41 @@ function Chain({ graph, module, cards }: { graph: GraphState; module: ModuleView
   // The Song's mixer is one compact card (MX-6), its levels and pans the Mix view's.
   const mixer = useMemo(() => {
     if (module.key !== "song" || graph.mix.mixer !== "ok") return null;
-    const node = cards.find((n) => n.component === "std:mixer");
+    const node = chain.line.find((n) => n.component === "std:mixer");
     return node ? { id: node.id, channels: new Set(graph.mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size } : null;
-  }, [module.key, cards, graph.mix]);
+  }, [module.key, chain, graph.mix]);
   const keys = useMemo(() => stableKeys(module.nodes, graph.leases), [module, graph.leases]);
+  const frame = (n: ViewNode) => (
+    <Frame
+      key={keys.node(n.id)}
+      graph={graph}
+      module={module.key}
+      node={n}
+      nodeKey={keys.node(n.id)}
+      knobKey={keys.knob}
+      editable={!locked}
+      mixer={mixer?.id === n.id ? mixer.channels : null}
+    />
+  );
   return (
     <Locked.Provider value={locked}>
       <Tracks.Provider value={tracks}>
         <MixerCard.Provider value={mixer}>
           <Ports.Provider value={false}>
             <Fed.Provider value={fed}>
-              <div className="flex-1 min-h-0 overflow-auto p-4" data-testid="chain">
+              <div className="flex-1 min-h-0 overflow-auto p-3" data-testid="chain">
                 <section className="w-max flex items-start gap-3" data-module={module.key}>
-                  {cards.map((n) => (
-                    <Frame
-                      key={keys.node(n.id)}
-                      graph={graph}
-                      module={module.key}
-                      node={n}
-                      nodeKey={keys.node(n.id)}
-                      knobKey={keys.knob}
-                      editable={!locked}
-                      mixer={mixer?.id === n.id ? mixer.channels : null}
-                    />
-                  ))}
+                  {chain.branches.length > 0 && (
+                    <div className="flex flex-col gap-2" data-branches>
+                      {chain.branches.map((b) => (
+                        <div key={b.from.id} className="flex items-start gap-3" data-branch={titleOf(b.from, graph.effects)}>
+                          <TrackSound node={b.from} module={module.key} graph={graph} editable={!locked} />
+                          {b.cards.map(frame)}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {chain.line.map(frame)}
                 </section>
               </div>
             </Fed.Provider>
@@ -120,6 +138,30 @@ function Chain({ graph, module, cards }: { graph: GraphState; module: ModuleView
         </MixerCard.Provider>
       </Tracks.Provider>
     </Locked.Provider>
+  );
+}
+
+/**
+ * A track's sound where a mix reads it (`Bass.out` in the song): its name, with its colour, and the +
+ * that adds an effect after it there (CARD-36), so its row reads "Bass, then its effects".
+ */
+function TrackSound({ node, module, graph, editable }: { node: ViewNode; module: string; graph: GraphState; editable: boolean }) {
+  const titled = titleOf(node, graph.effects);
+  const track = graph.view.modules.find((m) => m.track && moduleName(m) === titled)?.key;
+  const colour = track ? trackColors(graph.timeline, track) : null;
+  return (
+    <div
+      className="shrink-0 w-[152px] h-9 pl-3 pr-1.5 rounded-md bg-raised ring-1 ring-line flex items-center gap-2 min-w-0"
+      data-node={node.label}
+      data-node-id={node.id}
+      title={`${titled}'s sound, as ${module === "song" ? "the song" : "this sound"} reads it`}
+    >
+      {colour && <span aria-hidden className="size-2 shrink-0 rounded-xs" style={{ background: colour.bar }} />}
+      <span data-sound-title className="min-w-0 flex-1 text-sm font-semibold text-fg truncate">
+        {titled}
+      </span>
+      <CardTools node={node} module={module} titled={titled} session={graph.session} revision={graph.view.revision} editable={editable} effects={graph.effects} mixing={false} />
+    </div>
   );
 }
 
@@ -165,7 +207,25 @@ function Frame({
   const row = (r: CardRow, cell: number | undefined, ided = false) => (
     <RowOf key={key(r)} row={r} node={node} module={module} titled={titled} nodeKey={nodeKey} knobKey={knobKey} graph={graph} editable={editable} cell={cell} ided={ided} />
   );
-  const grid = (rows: CardRow[], cell: number) => <div className="grid grid-cols-[repeat(auto-fill,64px)] justify-between gap-y-1 px-3 py-2">{rows.map((r) => row(r, cell))}</div>;
+  const grid = (rows: CardRow[], cell: number) => <div className="grid grid-cols-[repeat(auto-fill,64px)] justify-between gap-y-1 px-3 py-1">{rows.map((r) => row(r, cell))}</div>;
+  // The face: its pictures beside its values, so a Normal card fits the dock's first height (review
+  // F12); Expanded draws its values bigger, under its pictures (CARD-44).
+  const pictures = frame.face.filter((r) => "view" in r);
+  const values = frame.face.filter((r) => !("view" in r));
+  const face =
+    size === "expanded" ? (
+      <div data-face>
+        {pictures.map((r) => row(r, undefined))}
+        {grid(values, BIG_KNOB)}
+      </div>
+    ) : pictures.length && values.length ? (
+      <div data-face className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
+        <div className="pt-1">{pictures.map((r) => row(r, undefined))}</div>
+        {grid(values, FACE_KNOB)}
+      </div>
+    ) : (
+      <div data-face>{grid(frame.face, FACE_KNOB)}</div>
+    );
   // All: every value in one list, as the patch's card shows it, each with its id in its tooltip.
   const list = (rows: CardRow[]) => <div className="py-1">{rows.map((r) => row(r, undefined, true))}</div>;
   const body = (t: FrameTab) => (t.name === ALL ? list(t.rows) : grid(t.rows, TAB_KNOB));
@@ -186,9 +246,9 @@ function Frame({
       data-recording-title={recordings.length === 1 ? titled : undefined}
       title={node.file ? `${node.file}:${node.line}` : undefined}
     >
-      {colour && <div className="h-[3px] shrink-0" style={{ background: colour.bar }} />}
-      <div className="h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0 border-b border-line">
-        <div className="min-w-0 flex-1 flex items-baseline gap-1.5">
+      {colour && <div data-colour-bar className="h-[3px] shrink-0" style={{ background: colour.bar }} />}
+      <div className="h-9 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0 border-b border-line">
+        <div className="min-w-[64px] flex-1 flex items-baseline gap-1.5">
           <span data-node-title className={clsx("text-sm font-semibold truncate", off ? "text-fg-muted" : "text-fg")} title={titled !== node.label ? node.label : undefined}>
             {off ? `${titled} · Off` : titled}
           </span>
@@ -217,7 +277,10 @@ function Frame({
             </button>
           ))}
         </div>
-        <CardTools node={node} module={module} titled={titled} session={graph.session} revision={graph.view.revision} editable={editable} effects={graph.effects} mixing={mixer != null} />
+        {/* Folded, its header is its name and its sizes only, so the name always shows (review F3). */}
+        {size !== "folded" && (
+          <CardTools node={node} module={module} titled={titled} session={graph.session} revision={graph.view.revision} editable={editable} effects={graph.effects} mixing={mixer != null} />
+        )}
       </div>
       {node.voices && size !== "folded" && <VoicesLine words={node.voices} />}
       {node.plugin && size !== "folded" && <PluginRow node={node.plugin} title={titled} session={graph.session} />}
@@ -240,12 +303,12 @@ function Frame({
           <Sentence node={node} rows={frame.face} />
         ) : (
           <>
-            {grid(frame.face, FACE_KNOB)}
+            {face}
             {listens}
             {size === "normal" && tab && (
               <>
-                <TabBar node={node} titled={titled} tabs={frame.tabs} shown={tab.name} />
-                <div role="tabpanel" data-tab-panel={tab.name} aria-label={tab.name} className="border-t border-line">
+                <TabBar node={node} titled={titled} tabs={frame.tabs} shown={tab.name} drawn={[...knobsOf(node, frame.face), ...knobsOf(node, tab.rows)]} />
+                <div role="tabpanel" data-tab-panel={tab.name} aria-label={tab.name}>
                   {body(tab)}
                 </div>
               </>
@@ -264,8 +327,9 @@ function Frame({
                 </div>
                 {/* All, behind a disclosure; open when it is the only tab. */}
                 <details data-all className="group/all border-t border-line" open={frame.tabs.length === 1 || undefined}>
-                  <summary className="h-7 px-3 flex items-center text-xs font-semibold text-fg-muted cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:text-fg">
-                    {ALL}
+                  <summary className="h-7 px-3 flex items-center gap-1 text-xs font-semibold text-fg-muted cursor-pointer list-none [&::-webkit-details-marker]:hidden hover:text-fg">
+                    <ChevronRight size={12} className="shrink-0 transition-transform duration-140 ease-out group-open/all:rotate-90" />
+                    All values
                   </summary>
                   {list(frame.tabs.find((t) => t.name === ALL)!.rows)}
                 </details>
@@ -275,7 +339,8 @@ function Frame({
         )}
       </div>
       {node.code && size !== "folded" && (
-        <div data-code-line data-code className="mt-auto px-3 py-2 border-t border-line font-mono text-xs text-fg-muted truncate" title={node.code}>
+        // The whole call, wrapped as the mockup draws it; past three lines the rest is in its tooltip (review F10).
+        <div data-code-line data-code className="mt-auto px-3 py-1.5 border-t border-line font-mono text-xs text-fg-muted whitespace-pre-wrap break-words line-clamp-3" title={node.code}>
           {node.code}
         </div>
       )}
@@ -392,7 +457,7 @@ function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
  * not shown (CARD-47). ← → pick the previous and the next (CARD-46). Too wide, it scrolls, faded at
  * an edge that hides tabs.
  */
-function TabBar({ node, titled, tabs, shown }: { node: ViewNode; titled: string; tabs: FrameTab[]; shown: string }) {
+function TabBar({ node, titled, tabs, shown, drawn }: { node: ViewNode; titled: string; tabs: FrameTab[]; shown: string; drawn: string[] }) {
   const bar = useRef<HTMLDivElement>(null);
   const [fade, setFade] = useState({ left: false, right: false });
   const measure = () => {
@@ -424,7 +489,8 @@ function TabBar({ node, titled, tabs, shown }: { node: ViewNode; titled: string;
       aria-label={`${titled}'s tabs`}
       data-tabs={node.id}
       data-fade={[fade.left && "left", fade.right && "right"].filter(Boolean).join(" ") || undefined}
-      className="px-2 py-1 flex items-center gap-0.5 overflow-x-auto [scrollbar-width:none] border-t border-line"
+      // A track of tabs, the one shown raised, as the mockup and a segmented control draw it (taste.md §2.9).
+      className="mx-3 my-1 p-0.5 rounded-sm bg-hover flex items-center gap-0.5 overflow-x-auto [scrollbar-width:none]"
       style={{ maskImage: mask, WebkitMaskImage: mask }}
       onScroll={measure}
     >
@@ -433,6 +499,7 @@ function TabBar({ node, titled, tabs, shown }: { node: ViewNode; titled: string;
           key={t.name}
           node={node}
           tab={t}
+          drawn={drawn}
           on={t.name === shown}
           onPick={() => pick(t.name, false)}
           onKeyDown={(e) => {
@@ -447,9 +514,10 @@ function TabBar({ node, titled, tabs, shown }: { node: ViewNode; titled: string;
   );
 }
 
-function Tab({ node, tab, on, onPick, onKeyDown }: { node: ViewNode; tab: FrameTab; on: boolean; onPick: () => void; onKeyDown: (e: React.KeyboardEvent) => void }) {
-  // The knobs only this tab draws, while it isn't shown: it stands for them (CARD-47).
-  const hides = on ? [] : knobsOf(node, tab.rows);
+function Tab({ node, tab, drawn, on, onPick, onKeyDown }: { node: ViewNode; tab: FrameTab; drawn: string[]; on: boolean; onPick: () => void; onKeyDown: (e: React.KeyboardEvent) => void }) {
+  // The knobs only this tab draws, while it isn't shown: it stands for them (CARD-47), but not for
+  // one drawn in sight now, on the face or the tab shown (review F8).
+  const hides = on ? [] : knobsOf(node, tab.rows).filter((id) => !drawn.includes(id));
   const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
   // A switch named on… among its values: a dot on the tab, filled when on (the EQ's bands).
   const power = tab.name === ALL ? undefined : tab.rows.flatMap((r) => ("input" in r ? [node.inputs.find((p) => p.id === r.input)] : [])).find((p) => p?.slot && /^on($|[A-Z0-9_])/.test(p.slot.split(".").pop()!));
@@ -469,8 +537,8 @@ function Tab({ node, tab, on, onPick, onKeyDown }: { node: ViewNode; tab: FrameT
       onClick={onPick}
       onKeyDown={onKeyDown}
       className={clsx(
-        "shrink-0 h-6 px-2 flex items-center gap-1.5 rounded-sm text-xs font-medium cursor-pointer transition-colors duration-80 ease-linear",
-        on ? "bg-hover text-fg" : "text-fg-muted hover:text-fg",
+        "shrink-0 h-5 px-2 flex items-center gap-1.5 rounded-sm text-xs font-medium cursor-pointer transition-colors duration-80 ease-linear",
+        on ? "bg-raised text-fg shadow-chip" : "text-fg-muted hover:text-fg",
       )}
     >
       {dot !== undefined && <span aria-hidden className={clsx("size-1.5 rounded-full", dot ? "bg-fg" : "ring-1 ring-inset ring-fg-faint")} />}

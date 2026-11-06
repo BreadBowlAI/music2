@@ -1414,7 +1414,7 @@ export function InputRow({
     const key = knobKey(knob.id);
     // A menu or a switch (CARD-20, CARD-6): one click, one edit; never dragged.
     if (picks(knob))
-      return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} cell={!!cell} ided={ided} />;
+      return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} cell={cell} ided={ided} />;
     return (
       <KnobControl
         key={key}
@@ -1610,11 +1610,13 @@ export function ListensRow({ node, input, filled, editable }: { node: ViewNode; 
 // ---------------------------------------------------------------- knobs
 
 /**
- * The knob that had the keyboard's focus last, by its card and its control: the first write
- * of a value the code left out gives its knob a new id, so it mounts again, and takes the focus back
- * (CARD-46), as a keyboard user expects of one knob.
+ * The knob whose own keys or menu just wrote it while it had the keyboard's focus: the first write of
+ * a value the code left out gives its knob a new id, so it mounts again, and only that remount takes
+ * the focus back (CARD-46). Kept for the write's round trip, and dropped when the knob is left (review F1).
  */
-let focused: { knob: string; el: Element } | null = null;
+let focused: { knob: string; el: Element; at: number } | null = null;
+/** How long a write's remount may take to take the focus back. */
+const REFOCUS_MS = 4000;
 
 /** A knob over an owned source value, as one input row: drag to hear it, release to write it. */
 function KnobControl({
@@ -1671,17 +1673,30 @@ function KnobControl({
   const [typing, setTyping] = useState<{ text: string; width: number; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
 
-  // Its focus kept across the remount a first write makes (see `focused`): taken back when the
-  // knob that had it is gone and nothing else has taken it.
-  const self = `${owner}|${knob.slot ?? knob.label}`;
+  // Its focus kept across the remount its own first write makes (see `focused`): by its card's key,
+  // its control and where it is drawn, so no other knob, nor another copy of it, takes it (review F9).
+  const self = `${nodeKey}|${knob.slot ?? knob.label}|${cell ?? "row"}${ided ? "|all" : ""}`;
   useEffect(() => {
+    const el = svg.current;
     const was = focused;
-    if (svg.current && was?.knob === self && !was.el.isConnected && (!document.activeElement || document.activeElement === document.body)) {
-      svg.current.focus({ preventScroll: true });
+    if (el && was?.knob === self && was.el !== el && !was.el.isConnected && Date.now() - was.at < REFOCUS_MS && (!document.activeElement || document.activeElement === document.body)) {
+      focused = null;
+      el.focus({ preventScroll: true });
     }
+    // Left for something else (not taken away by its remount): nothing to take back.
+    const left = () => queueMicrotask(() => el?.isConnected && focused?.el === el && (focused = null));
+    el?.addEventListener("blur", left);
+    return () => el?.removeEventListener("blur", left);
   }, [self]);
+  /** This knob writes while it has the focus: its remount may take the focus back. */
+  const mine = () => {
+    if (svg.current && svg.current === document.activeElement) focused = { knob: self, el: svg.current, at: Date.now() };
+  };
   /** A move of the knob to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
-  const change = (u: number) => g.change(fromUnit(g.descriptor, u));
+  const change = (u: number) => {
+    mine();
+    g.change(fromUnit(g.descriptor, u));
+  };
 
   const automate = () => {
     setMenu(null);
@@ -1689,7 +1704,10 @@ function KnobControl({
   };
 
   /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
-  const step = (n: number) => g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
+  const step = (n: number) => {
+    mine();
+    g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
+  };
   /** Type a value: the readout turns into a field of its size, its text selected. */
   const type = () => {
     // Steps just made are written first.
@@ -1827,7 +1845,6 @@ function KnobControl({
       aria-disabled={disabled}
       title={title}
       data-kind="number"
-      onFocus={(e) => svg.current && (e.target as Element) === svg.current && (focused = { knob: self, el: svg.current })}
       {...grip.handlers}
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
       onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
@@ -1908,8 +1925,11 @@ function PickControl({
   session: number;
   revision: number;
   editable: boolean;
-  /** In a chain card's grid (CARD-45): a row across it, a choice of five or fewer a segmented control. */
-  cell?: boolean;
+  /**
+   * In a chain card's grid (CARD-45), its knobs this many px: a switch is a cell, as a knob is, its
+   * switch over its label; a choice a row across the grid, a segmented control when it has five or fewer.
+   */
+  cell?: number;
   /** Its id for `m2 set` in its tooltip (All's list, CARD-43). */
   ided?: boolean;
 }) {
@@ -1942,12 +1962,12 @@ function PickControl({
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
       data-kind={knob.kind}
-      data-cell={cell || undefined}
+      data-cell={(knob.kind === "switch" && cell) || undefined}
       aria-disabled={!!off}
       title={title}
       className={clsx(
-        "group/knob relative flex items-center gap-2 min-w-0 transition-colors duration-80",
-        cell ? "col-span-full h-8 px-1" : "h-10 pl-4 pr-4",
+        "group/knob relative min-w-0 transition-colors duration-80",
+        !cell ? "h-10 pl-4 pr-4 flex items-center gap-2" : knob.kind === "switch" ? "w-16 py-1 flex flex-col items-center gap-0.5" : "col-span-full h-7 px-1 flex items-center gap-2",
         "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
       )}
     >
@@ -1957,11 +1977,20 @@ function PickControl({
         filled={false}
         className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
-      <div className="flex-1 min-w-0">
-        <div className="text-xs text-fg-muted truncate">{label}</div>
-        {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
-      </div>
-      {knob.kind === "switch" ? (
+      {cell && knob.kind === "switch" ? (
+        <>
+          <div className="grid place-items-center" style={{ height: cell }}>
+            <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
+          </div>
+          <div className="w-full text-center text-xs text-fg-muted truncate">{label}</div>
+        </>
+      ) : (
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-fg-muted truncate">{label}</div>
+          {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
+        </div>
+      )}
+      {cell && knob.kind === "switch" ? null : knob.kind === "switch" ? (
         <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
       ) : cell && (knob.options?.length ?? 0) <= 5 ? (
         <Segmented value={knob} label={label} off={off} title={title} onPick={pick} />

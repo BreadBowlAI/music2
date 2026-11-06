@@ -545,6 +545,40 @@ fn a_cards_face_and_code_are_in_the_view() {
     assert_eq!(serde_json::to_value(&wobble).unwrap()["face"][0], json!({"view": "amp"}));
 }
 
+// CARD-41 (review F5, F7): an effect's sound written by its name is shown as written (`lowpass(w,
+// …)`, `duck(bass.out, …)`): only a call, which the card before it shows, is `…`. The code line takes
+// out comments, never a string's `//`, and leaves what it can't read safely as written: a call with a
+// regex or a template string shows its first line.
+#[test]
+fn the_code_line_keeps_a_named_sound_and_reads_code_safely() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write("lib/wobble.ts", WOBBLE);
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { wobble } from \"./lib/wobble\";\n\
+         const lead = track(\"lead\", ({ lane }) => {\n  const w = wobble(lane.notes(\"notes\"));\n  return lowpass(w, { cutoff: 900 });\n});\n\
+         export default song(() => lead.out);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let v = s.view();
+    let lowpass = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Lowpass")).expect("the lowpass card");
+    assert_eq!(lowpass.code.as_deref(), Some("lowpass(w, { cutoff: 900 })"));
+    use super::one_line;
+    for (code, line) in [
+        ("f(x, {\n  url: \"http://a\", // where\n  cutoff: 1,\n})", "f(x, { url: \"http://a\", cutoff: 1 })"),
+        ("f(x, { cutoff: 900 /* warm */ })", "f(x, { cutoff: 900 })"),
+        ("f(x, { s: 'it\\'s' })", "f(x, { s: 'it\\'s' })"),
+        ("f(x, { re: /\\/*x/, cutoff: 1 })", "f(x, { re: /\\/*x/, cutoff: 1 })"),
+        ("f(x, {\n  re: /\"/, // why\n  cutoff: 1,\n})", "f(x, { …"),
+        ("f(x, {\n  name: `a\nb`,\n})", "f(x, { …"),
+        ("f(x, { period: 1 / 4 })", "f(x, { period: 1 / 4 })"),
+    ] {
+        assert_eq!(one_line(code), line, "{code}");
+    }
+}
+
 // CARD-31: every sound music2's own packs list is dressed, and its card shows it: the groups its
 // descriptor declares, in their order (More last, for what no group names), and its views. Every
 // instrument of @m2/synths and @m2/drums has groups; every polysynth sound with a wave to pick has

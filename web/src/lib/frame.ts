@@ -18,7 +18,8 @@ export const ALL = "All";
  * so is what a "Listens to" row stands for (CARD-35).
  */
 function isValue(n: ViewNode, p: ViewNode["inputs"][number]) {
-  if (n.listens?.port === p.id) return false;
+  // Sound and notes coming in are connections, however they are written: by a const's name too (review F2).
+  if (p.kind === "audio" || p.kind === "notes" || n.listens?.port === p.id) return false;
   return p.slot != null || p.knob != null || p.inlet != null || p.readonly != null || p.lane != null || p.kind === "control";
 }
 
@@ -56,29 +57,80 @@ export function knobsOf(n: ViewNode, rows: CardRow[]): string[] {
   return rows.flatMap((r) => ("input" in r ? (n.inputs.find((p) => p.id === r.input)?.knob ?? []) : []));
 }
 
+/** A row of a mix's chain (CARD-42): a track's sound the module reads, then its effects in order. */
+export interface Branch { from: ViewNode; cards: ViewNode[] }
+
 /**
- * The calls of sound `m` that Device's chain shows (CARD-42), in the order its sound flows: the
- * calls that make audio, when they form one line, each feeding the next. Null when they don't (two
- * sounds mixed, a sound built from parts), or when it has none.
+ * What Device's chain shows of sound `m` (CARD-42): `line`, its calls that make audio, in the order
+ * the sound flows; and for a mix, `branches`, a row for each track's sound it reads before the line,
+ * with that sound's effects (a song: each channel's, then its mixer and master). `why` says, in a
+ * beginner's words, why there is no chain. Null when it has no calls that make audio, heard or not.
  */
-export function chainOf(m: ModuleView): ViewNode[] | null {
-  const cards = m.nodes.filter((n) => n.kind === "call" && n.audio);
+export type ChainOf = { line: ViewNode[]; branches: Branch[] } | { why: string };
+
+export function chainOf(m: ModuleView): ChainOf | null {
+  const byId = new Map(m.nodes.map((n) => [n.id, n]));
+  const audio = m.port_edges.filter((e) => e.kind === "audio" && e.from !== e.to);
+  // A call whose sound reaches no output isn't heard: it is no part of the sound, and no card (review F15).
+  const heard = new Set<string>();
+  const reaches = (id: string, seen = new Set<string>()): boolean => {
+    if (byId.get(id)?.kind === "export") return true;
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return audio.some((e) => e.from === id && reaches(e.to, seen));
+  };
+  const all = m.nodes.filter((n) => n.kind === "call" && n.audio);
+  if (!all.length) return null;
+  for (const n of all) if (reaches(n.id)) heard.add(n.id);
+  const cards = all.filter((n) => heard.has(n.id));
   if (!cards.length) return null;
-  const ids = new Set(cards.map((n) => n.id));
-  const links = new Set(m.port_edges.filter((e) => e.kind === "audio" && e.from !== e.to && ids.has(e.from) && ids.has(e.to)).map((e) => `${e.from}>${e.to}`));
+  const title = (n: ViewNode) => n.title ?? n.label;
+  const parts = { why: "This sound is built from parts." };
+  // What feeds each card's sound: its audio coming in, but what a "Listens to" row stands for.
+  const feeds = (n: ViewNode) => [...new Set(audio.filter((e) => e.to === n.id && e.to_port !== n.listens?.port).map((e) => e.from))].flatMap((id) => byId.get(id) ?? []);
   const next = new Map<string, string>();
-  const fed = new Set<string>();
-  for (const l of links) {
-    const [from, to] = l.split(">");
-    if (next.has(from) || fed.has(to)) return null;
-    next.set(from, to);
-    fed.add(to);
+  for (const n of cards) {
+    const to = [...new Set(audio.filter((e) => e.from === n.id && heard.has(e.to)).map((e) => e.to))];
+    if (to.length > 1) return parts;
+    if (to.length) next.set(n.id, to[0]);
   }
-  if (links.size !== cards.length - 1) return null;
-  const first = cards.find((n) => !fed.has(n.id));
-  const line: ViewNode[] = [];
-  for (let at = first?.id; at != null && line.length <= cards.length; at = next.get(at)) line.push(cards.find((n) => n.id === at)!);
-  return line.length === cards.length ? line : null;
+  const merges = cards.filter((n) => feeds(n).length > 1);
+  if (merges.length > 1) return { why: "This sound mixes sounds in more than one place." };
+  // The line: from where the sounds meet (or the first card) on to the output.
+  const lineFrom = (first: ViewNode) => {
+    const line: ViewNode[] = [];
+    for (let at: string | undefined = first.id; at != null && line.length <= cards.length; at = next.get(at)) line.push(byId.get(at)!);
+    return line;
+  };
+  const isCard = (n: ViewNode) => heard.has(n.id);
+  let start: ViewNode;
+  const branches: Branch[] = [];
+  if (merges.length === 1) {
+    start = merges[0];
+    for (const f of feeds(start)) {
+      const before: ViewNode[] = [];
+      let at = f;
+      while (isCard(at)) {
+        before.unshift(at);
+        const up = feeds(at);
+        if (up.length > 1) return parts;
+        if (!up.length) break;
+        at = up[0];
+      }
+      // Only tracks' sounds meet in a chain (a song's mix); two sounds made here are mixed.
+      if (at.kind !== "import") return { why: `${feeds(start).map(title).join(" and ")} are mixed here.` };
+      branches.push({ from: at, cards: before });
+    }
+  } else {
+    const firsts = cards.filter((n) => !cards.some((c) => next.get(c.id) === n.id));
+    if (firsts.length !== 1) return parts;
+    start = firsts[0];
+    // A track's sound read here, before the line, is a row too: its + adds an effect after it (CARD-36).
+    for (const f of feeds(start)) if (f.kind === "import") branches.push({ from: f, cards: [] });
+  }
+  const line = lineFrom(start);
+  if (line.length + branches.reduce((a, b) => a + b.cards.length, 0) !== cards.length) return parts;
+  return { line, branches };
 }
 
 /** The package a card's sound is from (CARD-43): `@m2/mixing`, `std`, or none for the song's own and a plugin. */
