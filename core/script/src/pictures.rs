@@ -520,7 +520,25 @@ pub enum Shape {
         name: String,
         shapes: Vec<Shape>,
     },
+    /// The curve music2 measures from the call's own sound (CARD-80): its points are the server's
+    /// to fill, never the draw's.
+    Response {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+    },
+    /// One note's sound, as a copy of the call plays it (CARD-80): its points are the server's.
+    Hit {
+        note: u8,
+        seconds: f64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        tone: Option<Tone>,
+    },
 }
+
+/// The points a measured layer is filled with (CARD-80): a response's, and a hit's columns.
+pub const MEASURED: (usize, usize) = (256, 256);
 
 /// A draw, as checked (CARD-65): its shapes and its words.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -556,6 +574,7 @@ pub fn checked(json: &str, desc: &Descriptor, view: &str) -> Result<String, Stri
     };
     let mut numbers = 0;
     check(&d.shapes, desc, (x.unit, y.unit), &mut numbers, false)?;
+    measured_once(&d.shapes, &mut vec![])?;
     if !fits(&d.words, 1, 400) || d.words.trim().is_empty() {
         return Err(format!("its words must be one line of 1 to 400 characters, not {:?}", cut(&d.words)));
     }
@@ -633,6 +652,37 @@ fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit), numbers: &mut 
                     return Err(format!("gives p.play the note {note}: a note is a whole number 0 to 127"));
                 }
             }
+            Shape::Response { name, .. } => {
+                if (axes.0, axes.1) != (Unit::Hz, Unit::Db) {
+                    return Err(format!(
+                        "gives p.response an x axis in {} and a y axis in {}: a response is drawn across hz and up db",
+                        axes.0.name(),
+                        axes.1.name()
+                    ));
+                }
+                if let Some(n) = name
+                    && !(fits(n, 1, 32) && plain(n))
+                {
+                    return Err(format!("gives p.response the name {:?}: a line's name is a plain name of up to 32 characters", cut(n)));
+                }
+                count(numbers, 2 * MEASURED.0)?;
+            }
+            Shape::Hit { note, seconds, .. } => {
+                if (axes.0, axes.1) != (Unit::Seconds, Unit::Bipolar) {
+                    return Err(format!(
+                        "gives p.hit an x axis in {} and a y axis in {}: a hit is drawn across seconds and up bipolar",
+                        axes.0.name(),
+                        axes.1.name()
+                    ));
+                }
+                if *note > 127 {
+                    return Err(format!("gives p.hit the note {note}: a note is a whole number 0 to 127"));
+                }
+                if !(*seconds > 0.0 && *seconds <= 4.0) {
+                    return Err(format!("gives p.hit {seconds} seconds: a hit lasts more than 0 and at most 4 seconds"));
+                }
+                count(numbers, 4 * MEASURED.1)?;
+            }
             Shape::Part { name, shapes } => {
                 if inside {
                     return Err("makes a part inside a part: parts don't nest".into());
@@ -643,6 +693,26 @@ fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit), numbers: &mut 
                 check(shapes, desc, axes, numbers, true)?;
             }
         }
+    }
+    Ok(())
+}
+
+/// Each measured layer of `shapes` (a part's too) at most once (CARD-80).
+fn measured_once(shapes: &[Shape], seen: &mut Vec<&'static str>) -> Result<(), String> {
+    for s in shapes {
+        let word = match s {
+            Shape::Response { .. } => "p.response",
+            Shape::Hit { .. } => "p.hit",
+            Shape::Part { shapes, .. } => {
+                measured_once(shapes, seen)?;
+                continue;
+            }
+            _ => continue,
+        };
+        if seen.contains(&word) {
+            return Err(format!("gives {word} twice: a picture holds one at most"));
+        }
+        seen.push(word);
     }
     Ok(())
 }
