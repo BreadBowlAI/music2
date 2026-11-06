@@ -1486,29 +1486,35 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   const target: Record<string, unknown> = {};
   for (const n of [...c.controls.filter((x) => !x.each).map((x) => x.name), ...c.settings.map((x) => x.name)]) target[n] = given[n] ?? null;
   Object.freeze(target);
-  // Who reads: the draw, and each part being made inside it.
+  // Who reads: each part being made, which is made again only when what it read changes.
   const readers: Set<string>[] = [];
   let missed: string | undefined;
-  const v = new Proxy(target, {
-    get(t, k) {
-      if (typeof k !== "string") return undefined;
-      if (!Object.prototype.hasOwnProperty.call(t, k)) {
-        missed ??= `reads ${k}, which this sound doesn't have`;
-        throw new PictureError(missed);
-      }
-      for (const r of readers) r.add(k);
-      return t[k];
+  // Each value an accessor that says who read it; a name the sound doesn't have reaches the
+  // prototype, which refuses it; nothing can be changed. Faster than a proxy over every read.
+  const refused = (k: string | symbol): never => {
+    throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
+  };
+  const miss = new Proxy(Object.create(null), {
+    get(_t, k) {
+      if (typeof k !== "string" || k === "then" || k === "toJSON") return undefined;
+      missed ??= `reads ${k}, which this sound doesn't have`;
+      throw new PictureError(missed);
     },
-    set(_t, k) {
-      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
-    },
-    defineProperty(_t, k) {
-      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
-    },
-    deleteProperty(_t, k) {
-      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
-    },
-  }) as Played;
+    set: (_t, k) => refused(k),
+  });
+  const v = Object.create(miss) as Record<string, unknown>;
+  for (const k of Object.keys(target)) {
+    const x = target[k];
+    Object.defineProperty(v, k, {
+      enumerable: true,
+      get() {
+        if (readers.length) for (const r of readers) r.add(k);
+        return x;
+      },
+      set: () => refused(k),
+    });
+  }
+  Object.preventExtensions(v);
   let numbers = 0;
   const bad = (m: string): never => {
     throw new PictureError(m);
@@ -1617,11 +1623,10 @@ export function __picture(cid: string, name: string, values: string, memo: strin
     return out as object[];
   };
   try {
-    readers.push(new Set());
-    const shapes = shapesOf(draw(v, p), "its draw");
-    const words = said(v);
+    const shapes = shapesOf(draw(v as Played, p), "its draw");
+    const words = said(v as Played);
     if (missed) bad(missed);
-    if (typeof words !== "string" || !words.trim() || [...words].length > 200 || /[\r\n]/.test(words)) bad(`its words must be one line of 1 to 200 characters, not ${shown(words)}`);
+    if (typeof words !== "string" || !words.trim() || [...words].length > 400 || /[\r\n]/.test(words)) bad(`its words must be one line of 1 to 400 characters, not ${shown(words)}`);
     return JSON.stringify({ shapes, words });
   } catch (e) {
     if (e instanceof PictureError) return JSON.stringify({ why: missed ?? e.message });

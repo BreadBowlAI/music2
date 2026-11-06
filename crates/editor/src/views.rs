@@ -377,6 +377,48 @@ fn picture_values(m: &Module, desc: &Descriptor, node: &ViewNode) -> Vec<Picture
     out
 }
 
+/// What the picture runner is asked to draw picture `view` of card `node` as revision `rev` plays
+/// it (CARD-64, CARD-74): the packages its build resolved, the song's code for a sound of its own,
+/// and the values the view gives. None when the card has no such picture.
+pub fn picture_ask(rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<m2_script::pictures::Ask> {
+    let Drawn::Picture { values, .. } = &node.views.iter().find(|v| v.name == view)?.of else { return None };
+    let cid = node.component.clone()?;
+    let code = rev.compiled.code();
+    let desc = code.components.get(&cid)?;
+    let song = (!cid.contains(':')).then(|| {
+        std::sync::Arc::new(m2_script::pictures::Song {
+            key: rev.code_rev,
+            code: rev.project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect(),
+            dependencies: rev.project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect(),
+        })
+    });
+    let values: serde_json::Map<String, serde_json::Value> = values.iter().map(|v| (v.name.clone(), v.value.clone())).collect();
+    Some(m2_script::pictures::Ask {
+        packages: code.decls.packages.iter().map(|(n, d)| (n.clone(), d.clone())).collect(),
+        song,
+        module: desc.module.clone(),
+        component: cid,
+        view: view.to_string(),
+        values: serde_json::Value::Object(values).to_string(),
+        memo: format!("{}\u{0}{view}", node.id),
+    })
+}
+
+/// The picture runner (CARD-64), for a reader of the view that draws pictures itself (`m2 graph`).
+pub use m2_script::pictures::Runner;
+
+/// Picture `view` of card `node` in words (CARD-74), drawn by `runner` as revision `rev` plays:
+/// its words, or why it can't be drawn, named by its card. None when the card has no such picture.
+pub fn picture_said(runner: &Runner, rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<String> {
+    let ask = picture_ask(rev, node, view)?;
+    Some(match runner.draw(ask) {
+        m2_script::pictures::Drawn::Shapes(json) => {
+            serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|d| d["words"].as_str().map(String::from)).unwrap_or_default()
+        }
+        m2_script::pictures::Drawn::Cant(why) => format!("{}'s picture {}.", node.title.as_deref().unwrap_or(&node.label), why.trim_end_matches('.')),
+    })
+}
+
 /// A unit in words, as a beginner reads it.
 fn unit_words(u: Option<&str>) -> &'static str {
     match u {

@@ -202,3 +202,32 @@ fn m2_graph_prints_a_face_and_the_code() {
     assert!(at("Face") < line("amp") && line("amp") < line("release") && line("release") < at("Sound"), "{out}");
     assert!(line("code: tone({ shape: \"saw\" })") < at("Face"), "{out}");
 }
+
+// CARD-74: `m2 graph` prints each picture's words, drawn from what plays, or why it can't be drawn.
+#[test]
+fn m2_graph_prints_a_pictures_words() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-picture-cli-{}", std::process::id())));
+    let song = temp.0.join("song");
+    put(
+        &song,
+        "music2.toml",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+    );
+    put(
+        &song,
+        "song.ts",
+        "import { axis, component, control, port, song, track, view } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+         const tone = component({ id: \"tone\", label: \"Tone\", controls: { cutoff: control.hz(1000) }, output: port.audio(),\n\
+           editor: { views: {\n\
+             curve: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24), draw: (v, p) => [p.handle(v.cutoff, 0, { x: \"cutoff\" })], words: (v) => `cuts at ${v.cutoff} Hz` }),\n\
+             broken: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24), draw: (v, p) => [v.nope], words: () => \"x\" }),\n\
+           } } },\n\
+           ({ cutoff }) => lowpass(osc.saw(110), { cutoff }));\n\
+         const lead = track(\"lead\", () => tone({ cutoff: 2400 }));\nexport default song(() => lead.out);\n",
+    );
+    let o = m2(&["graph", song.to_str().unwrap()]);
+    let out = said(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.lines().any(|l| l.trim() == "curve          picture: cuts at 2400 Hz"), "{out}");
+    assert!(out.lines().any(|l| l.trim() == "broken         picture: Tone's picture reads nope, which this sound doesn't have."), "{out}");
+}
