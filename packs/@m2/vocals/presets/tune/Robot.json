@@ -1,0 +1,9 @@
+{
+  "m2preset": 1,
+  "name": "Robot",
+  "sound": "@m2/vocals:tune",
+  "values": {
+    "amount": 1,
+    "glide": 0
+  }
+}

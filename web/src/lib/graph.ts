@@ -127,6 +127,8 @@ export interface ViewNode {
   outputs: OutputPort[];
   /** An instrument's card: how it plays its notes, in plain words ("Plays one note at a time. …"). Read-only. */
   voices?: string;
+  /** Its sound reads the song's key (`time.key`): its card says the key, or that none is set (VOX-26). */
+  reads_key?: boolean;
   /** A hosted plugin's call: its node in the graph, the key of the state's `plugins` (HOST-7). */
   plugin?: string;
   /** Its component's settings, in its descriptor's order (CARD-1). */

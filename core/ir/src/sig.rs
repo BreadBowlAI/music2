@@ -82,9 +82,25 @@ pub struct KernelSig {
     pub meters: Vec<PortSig>,
     /// Samples of delay the kernel adds.
     pub latency: u32,
+    /// Seconds of delay it adds, its manifest's `latency_s`, counted in frames at the song's rate by
+    /// `m2_kernel::latency_frames` (VOX-24). A kernel gives one of the two; the other is 0.
+    pub latency_s: f64,
 }
 
 impl KernelSig {
+    /// Whether it adds latency, in frames or in seconds.
+    pub fn late(&self) -> bool {
+        self.latency > 0 || self.latency_s > 0.0
+    }
+
+    /// How late it is, in words: "64 samples", "15 ms".
+    pub fn lateness(&self) -> String {
+        match self.latency_s > 0.0 {
+            true => format!("{} ms", (self.latency_s * 1e4).round() / 10.0),
+            false => format!("{} samples", self.latency),
+        }
+    }
+
     pub fn parse(id: &str, description: &str, inputs: &[String], outputs: &[String], latency: u32) -> Result<KernelSig, String> {
         let parse_all = |v: &[String]| v.iter().map(|s| PortSig::parse(s)).collect::<Result<Vec<_>, _>>();
         let sig = KernelSig {
@@ -94,6 +110,7 @@ impl KernelSig {
             outputs: parse_all(outputs).map_err(|e| format!("kernel `{id}`: {e}"))?,
             meters: vec![],
             latency,
+            latency_s: 0.0,
         };
         if sig.outputs.is_empty() {
             return Err(format!("kernel `{id}`: needs at least one output"));

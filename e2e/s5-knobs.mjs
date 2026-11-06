@@ -214,7 +214,7 @@ check(
   groups.length === categories.length && categories.every((c) => groups.includes(c)),
   `the browser's groups are the descriptors' categories: ${groups.join(", ")}`,
 );
-check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Utility"]), "in the browser's own order");
+check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Voice", "Utility"]), "in the browser's own order");
 for (const e of effects) {
   const where = await page.$eval(`[data-effect-browser] [data-component="${e.component}"]`, (el) => el.closest("[data-category]")?.dataset.category).catch(() => null);
   check(where === e.category, `${e.component} (${e.label}) is under ${e.category}`);

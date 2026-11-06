@@ -1695,7 +1695,7 @@ fn make_plugin(
     PluginInstance::create(packages.host(), found, blob, owner, rate, shape, mode).with_context(|| n.name.clone())
 }
 
-/// Each checked node's latency (RENDER-17): a kernel's as its package declares it, a plugin's as its
+/// Each checked node's latency at `rate` (RENDER-17): a kernel's as its package declares it, a plugin's as its
 /// instance last measured it: the one it keeps, the one lent to it, or a new one made here, into
 /// `made`, for its node to play.
 #[allow(clippy::too_many_arguments)]
@@ -1704,6 +1704,7 @@ fn latencies(
     packages: &PackageSet,
     data: &DataSet,
     assets: &audio::KernelAssets,
+    rate: u32,
     keep: Option<&Keep>,
     lent: Option<&HashMap<usize, Arc<PluginInstance>>>,
     made: &mut HashMap<usize, Arc<PluginInstance>>,
@@ -1720,7 +1721,10 @@ fn latencies(
     for &i in &flat.order {
         let n = &flat.nodes[i];
         lat[i] = match &n.op {
-            FOp::Kernel { kernel, .. } => m2_ir::Kernels::kernel(packages, kernel).map_or(0, |s| s.latency),
+            // A latency in seconds in frames at this rate, by the kit's one rule (VOX-24).
+            FOp::Kernel { kernel, .. } => {
+                m2_ir::Kernels::kernel(packages, kernel).map_or(0, |s| s.latency + m2_kernel::latency_frames(s.latency_s, rate as f64))
+            }
             FOp::Plugin { plugin, .. } if !packages.plugin_missing(plugin) => {
                 let had = match &kept {
                     Some((k, (kept, same))) if kept[i] => same[i].and_then(|j| k.info.plugin(j)).and_then(|p| p.inst.upgrade()),
@@ -2877,7 +2881,7 @@ impl Renderer {
         let id = GENERATION.fetch_add(1, Ordering::Relaxed);
         let report = Reporter::new(cache.faults().clone(), id);
         let assets = audio::KernelAssets::of(checked, data, cache, &report);
-        let lat = latencies(checked, packages, data, &assets, keep, lent, &mut made, mk)?;
+        let lat = latencies(checked, packages, data, &assets, sample_rate, keep, lent, &mut made, mk)?;
         let l = latency::plan(checked, &lat);
         let played = (!l.delays.is_empty()).then(|| Arc::new(latency::insert(checked, &l)));
         let flat: &Flat = played.as_deref().unwrap_or(checked);

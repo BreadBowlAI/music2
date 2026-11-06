@@ -855,9 +855,31 @@ impl Io<'_> {
     }
 }
 
+/// A latency a manifest gives in seconds (`latency_s`), in whole frames at `sample_rate`: rounded
+/// up, so a kernel is never later than the host makes up for (VOX-24). The one rule: the host calls
+/// it for the delays it inserts (RENDER-18), and a kernel for its own look-ahead, so both agree at
+/// every rate. A product a hair over a whole number (0.015 × 48,000 in floats) is that number.
+pub fn latency_frames(seconds: f64, sample_rate: f64) -> u32 {
+    let frames = seconds * sample_rate;
+    if !frames.is_finite() || frames <= 0.0 {
+        return 0;
+    }
+    (frames - 1e-6).ceil().min(u32::MAX as f64) as u32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // VOX-24: a latency in seconds is whole frames, rounded up, at every rate; 0 and nonsense are 0.
+    #[test]
+    fn a_latency_in_seconds_is_frames_rounded_up() {
+        assert_eq!([44_100.0, 48_000.0, 96_000.0].map(|sr| latency_frames(0.015, sr)), [662, 720, 1440]);
+        assert_eq!(latency_frames(0.001, 44_100.0), 45, "44.1 frames is 45");
+        for nothing in [0.0, -1.0, f64::NAN, f64::INFINITY] {
+            assert_eq!(latency_frames(nothing, 48_000.0), 0, "{nothing}");
+        }
+    }
 
     /// A kernel whose input 0 is `events<note>`: it keeps every event it reads, by call.
     struct Heard {

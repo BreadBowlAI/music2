@@ -459,6 +459,12 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
         nodes.push(json!({"id": id, "op": "kernel", "kernel": sig.id, "inputs": inputs}));
         let first = format!("{id}.{}", sig.outputs[0].name);
         let audio = match sig.outputs[0].kind {
+            // Semitones are a pitch: a sine of it.
+            PortKind::Control(Some(Unit::Semitones)) => {
+                nodes.push(json!({"id": format!("{id}m"), "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": first}}));
+                nodes.push(json!({"id": format!("{id}s"), "op": "kernel", "kernel": "std:sine", "inputs": {"freq": format!("{id}m")}}));
+                format!("{id}s")
+            }
             PortKind::Control(Some(Unit::Hz)) => {
                 nodes.push(json!({"id": format!("{id}s"), "op": "kernel", "kernel": "std:sine", "inputs": {"freq": first}}));
                 format!("{id}s")
@@ -508,7 +514,9 @@ fn every_std_kernel_keeps_its_inputs() {
         json!({"id": "vst", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "vo"}}),
     ];
     let voice = Sources { audio: "vo", stereo: "vst", unit01: "lf", gate: "vg", beats: "t", pitch: Some("vp") };
-    let voice_sum = every_kernel(&sigs, "vk", &voice, &mut site, &mut body);
+    // A latent kernel (Tune's shift, VOX-24) can't be in a voice (RENDER-18): every other one is.
+    let voiced: Vec<&KernelSig> = sigs.iter().copied().filter(|s| !s.late()).collect();
+    let voice_sum = every_kernel(&voiced, "vk", &voice, &mut site, &mut body);
     nodes.push(json!({"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": voice_sum, "nodes": body}}));
     nodes.push(json!({"id": "out", "op": "kernel", "kernel": "std:add", "inputs": {"a": top_sum, "b": "v"}}));
     let ir = framed(song(Value::Array(nodes), "out", json!([{"key": "notes", "kind": "events<note>"}])));
@@ -518,8 +526,10 @@ fn every_std_kernel_keeps_its_inputs() {
         nodes.iter().filter_map(|n| if let FOp::Kernel { kernel, .. } = &n.op { Some(kernel.clone()) } else { None }).collect()
     };
     let all: BTreeSet<String> = sigs.iter().map(|s| s.id.clone()).collect();
+    let in_voice: BTreeSet<String> = voiced.iter().map(|s| s.id.clone()).collect();
+    assert_eq!(all.difference(&in_voice).collect::<Vec<_>>(), ["@m2/vocals:shift"], "only the latent one is left out of the voice");
     let FOp::Poly { voice, .. } = &flat.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };
-    assert_eq!((kernels(&flat.nodes), kernels(&voice.nodes)), (all.clone(), all), "every std kernel, both places");
+    assert_eq!((kernels(&flat.nodes), kernels(&voice.nodes)), (all, in_voice), "every std kernel, both places");
     // Three overlapping notes on two voices, starting inside blocks.
     let data = live::with_notes(
         json!({"clips": [{"start": 0, "length": 8, "notes": [
