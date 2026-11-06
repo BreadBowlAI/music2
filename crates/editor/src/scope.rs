@@ -80,7 +80,10 @@ pub fn look(rev: &Revision, kernels: &dyn Kernels, module: &str, node: &str, at:
     }
     let callee = &site.callee;
     let m = compiled.ir.modules.iter().find(|m| m.key == output.module).ok_or_else(gone)?;
+    // A call turned off passes its input on (Next D1): what plays through it is its input.
+    let off = Inside::of(m, site.id).is_some_and(|i| i.bypassed(m));
     match at {
+        At::Out if off => look(rev, kernels, module, node, &At::In),
         At::Out => {
             let (at, channels, index) = resolve(rev, kernels, &output.module, &output.port).ok_or_else(gone)?;
             match (index, at) {
@@ -105,18 +108,20 @@ pub fn look(rev: &Revision, kernels: &dyn Kernels, module: &str, node: &str, at:
                     if from.is_none_or(|x| inside.has(m, x)) {
                         continue;
                     }
-                    if let Some(p) = port_of(rev, kernels, &m.key, r).filter(|p| !side.contains(p) && !feeds.contains(p)) {
+                    if let Some(p) = port_of(rev, kernels, &m.key, r).filter(|p| !feeds.contains(p)) {
                         feeds.push(p);
                     }
                 }
             }
-            let sound: Vec<(usize, usize, u8)> = feeds
-                .into_iter()
-                .filter_map(|(n, p)| match compiled.flat.nodes[n].outputs.get(p) {
-                    Some(&Kind::Audio(c)) => Some((n, p, c)),
-                    _ => None,
-                })
-                .collect();
+            let audio = |&(n, p): &(usize, usize)| match compiled.flat.nodes[n].outputs.get(p) {
+                Some(&Kind::Audio(c)) => Some((n, p, c)),
+                _ => None,
+            };
+            let all: Vec<(usize, usize, u8)> = feeds.iter().filter_map(audio).collect();
+            // A sound its sidechain alone hears isn't its input; one it is keyed by and plays (a
+            // compressor keyed by its own input) still is.
+            let mine: Vec<(usize, usize, u8)> = all.iter().copied().filter(|&(n, p, _)| !side.contains(&(n, p))).collect();
+            let sound = if mine.is_empty() { all } else { mine };
             match sound[..] {
                 [] => Err(format!("{callee} takes no sound in, so it has no input to show.")),
                 [(n, p, channels)] => Ok(Point { at: TapAt::Port(n, p), channels, unit: None }),
@@ -169,6 +174,11 @@ impl Inside {
             [f] => Some(Inside::Frame(f as u32)),
             _ => None,
         }
+    }
+
+    /// Whether the call is turned off, `bypass: true` (Next D1).
+    fn bypassed(&self, m: &Module) -> bool {
+        matches!(*self, Inside::Frame(f) if m.frames.get(f as usize).is_some_and(|x| x.bypass))
     }
 
     /// Whether frame `frame` is the call's, or inside it.
@@ -271,7 +281,7 @@ fn resolve(rev: &Revision, kernels: &dyn Kernels, module: &str, r: &str) -> Opti
         let at = compiled.flat.nodes.iter().position(|n| n.name == name)?;
         let flat = &compiled.flat.nodes[at];
         return Some(match flat.outputs.get(index) {
-            Some(&Kind::Audio(c)) if !matches!(flat.op, FOp::Const(_)) => (Some(TapAt::Node(at)), c, index),
+            Some(&Kind::Audio(c)) if !matches!(flat.op, FOp::Const(_)) => (Some(TapAt::Port(at, 0)), c, index),
             _ => (None, 0, index),
         });
     }

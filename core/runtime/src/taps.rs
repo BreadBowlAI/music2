@@ -252,7 +252,6 @@ impl TapSlots {
                 Some(&(node, c)) => return Ok((code(node, 0), c as usize)),
                 None => bail!("there's no overlay site {k}"),
             },
-            TapAt::Node(i) => (i, 0),
             TapAt::Port(i, p) => (i, p),
         };
         match self.port(node, port)? {
@@ -365,7 +364,8 @@ impl TapSlots {
         }
         let now = f32::from_bits(s.now.load(Ordering::Relaxed));
         let most = if take { s.most.swap(0, Ordering::Relaxed) } else { s.most.load(Ordering::Relaxed) };
-        Some(Reading { now, most: if most == 0 { now } else { unkey(most) } })
+        // A read between the store of `now` and the raise of `most` would find `most` under it.
+        Some(Reading { now, most: if most == 0 { now } else { unkey(most).max(now) } })
     }
 
     /// Ring `ring`'s frames from frame `from` of it on, the last `most` at most, into `out`, which
@@ -490,13 +490,12 @@ fn peak(x: impl Iterator<Item = f32>) -> f32 {
 }
 
 /// Where a tap reads (TAP-1), live or a copy tap's (AGENT-7): the song's output, a checked node's
-/// first output (`Node`) or any output by its place (`Port`: a sound, or for a meter slot a
-/// kernel's meter, TAP-11), or an overlay site's (a track where its audio enters another module,
-/// MON-1), by its place in `Flat::overlays`.
+/// output by its place (`Port(node, 0)` is its first: a sound, or for a meter slot a kernel's meter,
+/// TAP-11), or an overlay site's (a track where its audio enters another module, MON-1), by its
+/// place in `Flat::overlays`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapAt {
     Out,
-    Node(usize),
     Port(usize, usize),
     Site(usize),
 }
@@ -614,6 +613,22 @@ impl Copying {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // TAP-15 (review T6): a read between the audio thread's store of `now` and its raise of `most`
+    // still says a `most` no less than `now`.
+    #[test]
+    fn a_meters_most_is_never_under_its_now() {
+        let slots = TapSlots::new(Box::new([Box::new([1, METER])]), Box::new([]));
+        let s = &slots.slots[0];
+        s.asked.store(code(0, 1), Ordering::Relaxed);
+        s.take(code(0, 1));
+        s.most.store(key(3.0), Ordering::Relaxed);
+        s.now.store(5.0f32.to_bits(), Ordering::Relaxed);
+        s.blocks.store(1, Ordering::Relaxed);
+        assert_eq!(slots.meter(0), Some(Reading { now: 5.0, most: 5.0 }));
+    }
+
     // `Peaks` says it: a NaN is passed over, and an infinity reads as `f32::MAX`.
     #[test]
     fn a_nan_is_passed_over_and_an_infinity_reads_as_max() {

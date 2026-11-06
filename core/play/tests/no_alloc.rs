@@ -550,7 +550,7 @@ fn taps_and_the_load_never_allocate() {
     let site = |k: &str| TapAt::Site(song.flat.overlays.iter().position(|o| o.module == k).unwrap());
     let sound: Vec<TapAt> = (0..song.flat.nodes.len())
         .filter(|&i| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_))))
-        .map(TapAt::Node)
+        .map(|i| TapAt::Port(i, 0))
         .collect();
     // Each kernel's meters (ABI-13): the master's limit gives one.
     let meters: Vec<TapAt> = (0..song.flat.nodes.len())

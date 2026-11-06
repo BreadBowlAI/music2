@@ -86,12 +86,12 @@ fn layout(rev: &Revision, faders: bool) -> (Vec<Vec<TapAt>>, Layout) {
         for c in &mx.channels {
             if let Some(fader) = mix::fader(rev, mx, &c.key) {
                 layout.channels.push((c.key.clone(), taps.len()));
-                taps.push(vec![TapAt::Node(fader)]);
+                taps.push(vec![TapAt::Port(fader, 0)]);
             }
         }
         #[cfg(test)]
         if BREAK.lock().iter().any(|d| d.canonicalize().is_ok_and(|d| d == rev.project.dir)) {
-            taps.push(vec![TapAt::Node(usize::MAX)]);
+            taps.push(vec![TapAt::Port(usize::MAX, 0)]);
         }
     }
     for m in rev.compiled.ir.modules.iter().filter(|m| m.track && m.key != ROOT) {

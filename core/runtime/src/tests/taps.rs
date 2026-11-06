@@ -88,12 +88,12 @@ fn taps_change_no_bit() {
     assert!(off.tap(&[vec![TapAt::Out]]).is_err(), "and take none");
     let f = flat(&ir);
     let mut meters: Vec<Vec<TapAt>> = (0..f.overlays.len()).map(|s| vec![TapAt::Site(s)]).collect();
-    meters.extend(sounding(&ir).into_iter().map(|i| vec![TapAt::Node(i)]));
+    meters.extend(sounding(&ir).into_iter().map(|i| vec![TapAt::Port(i, 0)]));
     live.tap(&meters).unwrap();
     let taps = live.info().taps.clone().expect("a live plan has taps");
     taps.watch(true);
     let mut points = vec![TapAt::Out];
-    points.extend(sounding(&ir).into_iter().map(TapAt::Node));
+    points.extend(sounding(&ir).into_iter().map(|i| TapAt::Port(i, 0)));
     for (ring, &at) in points.iter().cycle().take(RINGS).enumerate() {
         taps.point(ring, Some(at)).unwrap();
     }
@@ -179,7 +179,7 @@ fn a_fader_at_minus_12_db_moves_its_meter_by_12_db() {
     let f = flat(&ir);
     let fader = f.nodes.iter().position(|n| n.name == "song/g").unwrap();
     let mut r = prepared(&ir);
-    r.tap(&[vec![TapAt::Node(fader)], vec![TapAt::Site(0)]]).unwrap();
+    r.tap(&[vec![TapAt::Port(fader, 0)], vec![TapAt::Site(0)]]).unwrap();
     let taps = r.info().taps.clone().unwrap();
     taps.watch(true);
     let db = |x: f32| 20.0 * (x as f64).log10();
@@ -208,9 +208,9 @@ fn a_rings_frames_equal_the_nodes_output() {
     let f = flat(&ir);
     let node = |name: &str| f.nodes.iter().position(|n| n.name == name).unwrap();
     let (mut r, taps) = metered(&ir);
-    assert_eq!(taps.point(1, Some(TapAt::Node(node("bass/o")))).unwrap(), 1, "the bass is mono");
+    assert_eq!(taps.point(1, Some(TapAt::Port(node("bass/o"), 0))).unwrap(), 1, "the bass is mono");
     assert_eq!(taps.point(0, Some(TapAt::Out)).unwrap(), 2);
-    assert!(taps.point(2, Some(TapAt::Node(node("bass/t")))).is_err(), "a constant makes no sound");
+    assert!(taps.point(2, Some(TapAt::Port(node("bass/t"), 0))).is_err(), "a constant makes no sound");
     assert!(taps.point(RINGS, Some(TapAt::Out)).is_err(), "no such ring");
     let mut frames = vec![];
     assert_eq!(taps.frames(1, 0, 1024, &mut frames), None, "not taken until the next block");
@@ -227,7 +227,7 @@ fn a_rings_frames_equal_the_nodes_output() {
     assert_eq!(taps.frames(0, 1000, 1 << 20, &mut frames), Some(1000), "from a frame on");
     assert_eq!(frames.len(), 10 * BLOCK - 1000);
     // Pointed at the kick: only its frames, from the block after.
-    taps.point(1, Some(TapAt::Node(node("kick/o")))).unwrap();
+    taps.point(1, Some(TapAt::Port(node("kick/o"), 0))).unwrap();
     let k2 = blocks(&mut kick, 3);
     blocks(&mut r, 3);
     assert_eq!(taps.frames(1, 0, 1 << 20, &mut frames), Some(10 * BLOCK as u64), "from its point on");
@@ -266,7 +266,7 @@ fn a_ring_read_while_written_is_never_torn() {
     let place = |f: usize| (f % (1 << 24)) as f32;
     let mut taps = crate::taps::Taps::new(TapSlots::new(Box::new([Box::new([2])]), Box::new([])));
     let slots = taps.slots().clone();
-    slots.point(0, Some(TapAt::Node(0))).unwrap();
+    slots.point(0, Some(TapAt::Port(0, 0))).unwrap();
     let stop = Arc::new(AtomicBool::new(false));
     let reader = {
         let (slots, stop) = (slots.clone(), stop.clone());
@@ -319,7 +319,7 @@ fn copy_taps_copy_each_block_from_the_frame_asked() {
     let f = flat(&ir);
     let kick = f.overlays.iter().position(|s| s.module == "kick").unwrap();
     let bass = f.nodes.iter().position(|n| n.name == "bass/o").unwrap();
-    let mut r = Copying::new(offline(&ir), &[TapAt::Site(kick), TapAt::Node(bass), TapAt::Out], 3 * BLOCK as u64 + 5).unwrap();
+    let mut r = Copying::new(offline(&ir), &[TapAt::Site(kick), TapAt::Port(bass, 0), TapAt::Out], 3 * BLOCK as u64 + 5).unwrap();
     let mut out = vec![[0.0f32; 2]; 6 * BLOCK];
     r.process_on(&mut out, &mut Runner::one()).unwrap();
     let (k, b) = (blocks(&mut offline(&two(false, Some("kick"))), 6), blocks(&mut offline(&two(false, Some("bass"))), 6));
@@ -349,9 +349,9 @@ fn copy_taps_are_offline_only() {
     assert!(Copying::new(prepared(&ir), &[TapAt::Out], 0).is_err(), "a live plan");
     let f = flat(&ir);
     let constant = f.nodes.iter().position(|n| n.name == "bass/t").unwrap();
-    assert!(Copying::new(offline(&ir), &[TapAt::Node(constant)], 0).is_err(), "a constant is no sound");
+    assert!(Copying::new(offline(&ir), &[TapAt::Port(constant, 0)], 0).is_err(), "a constant is no sound");
     assert!(Copying::new(offline(&ir), &[TapAt::Site(f.overlays.len())], 0).is_err(), "no such site");
-    assert!(Copying::new(offline(&ir), &[TapAt::Node(f.nodes.len())], 0).is_err(), "no such node");
+    assert!(Copying::new(offline(&ir), &[TapAt::Port(f.nodes.len(), 0)], 0).is_err(), "no such node");
 }
 
 /// A 110 Hz saw through `std:compress` (threshold −30 dB, ratio 8), keyed by itself, then through

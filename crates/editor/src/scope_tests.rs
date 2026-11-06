@@ -36,11 +36,11 @@ fn a_scope_reads_a_calls_own_output() {
     let rev = s.accepted();
     let flat = &rev.compiled.flat;
     let (at, channels) = point(rev, &s.packages, "a", &id(&s, "osc.sine")).unwrap();
-    let TapAt::Node(i) = at else { panic!("{at:?}") };
+    let TapAt::Port(i, 0) = at else { panic!("{at:?}") };
     assert!(matches!(&flat.nodes[i].op, FOp::Kernel { kernel, .. } if kernel == "std:sine"), "{:?}", flat.nodes[i]);
     assert_eq!((flat.nodes[i].module.as_str(), channels), ("a", 1));
     let (at, _) = point(rev, &s.packages, "a", &id(&s, "scale")).unwrap();
-    assert!(matches!(at, TapAt::Node(j) if flat.nodes[j].module == "a" && j != i), "the call around it is another box: {at:?}");
+    assert!(matches!(at, TapAt::Port(j, 0) if flat.nodes[j].module == "a" && j != i), "the call around it is another box: {at:?}");
     assert!(view_has(&s, "a", &id(&s, "osc.sine")), "the id is the view's");
 }
 
@@ -105,7 +105,10 @@ const LOOKS: &str = "import { component, port, song, track, type Audio } from '@
                      const a = track('a', () => compress(osc.saw(110), { threshold: -30 }));\n\
                      const b = track('b', () => squash(osc.square(55)));\n\
                      const c = track('c', () => sum(osc.sine(220), osc.saw(330)));\n\
-                     export default song(() => master(sum(a.out, b.out, c.out)));\n";
+                     const d = track('d', () => { const s = osc.saw(220); return compress(s, s, { threshold: -30 }); });\n\
+                     const e = track('e', () => compress(osc.square(110), a.out, { threshold: -30 }));\n\
+                     const f = track('f', () => compress(osc.tri(55), { threshold: -30, bypass: true }));\n\
+                     export default song(() => master(sum(a.out, b.out, c.out, d.out, e.out, f.out)));\n";
 
 fn looks() -> (Fixture, Session) {
     let f = Fixture::new();
@@ -147,7 +150,7 @@ fn a_look_reads_a_calls_input_its_output_or_a_meter() {
     let reduction = At::Meter("reduction".into());
     assert_eq!(at("a", "compress", reduction.clone()), Point { at: TapAt::Port(comp, 1), channels: 1, unit: Some("db".into()) });
     let out = at("a", "compress", At::Out);
-    assert_eq!(out.at, TapAt::Node(comp), "its own output, as a scope's");
+    assert_eq!(out.at, TapAt::Port(comp, 0), "its own output, as a scope's");
     assert_eq!(out.channels, 1);
     let square = kernel_node(rev, "b", "std:square", 0);
     assert_eq!(at("b", "squash", At::In).at, TapAt::Port(square, 0), "a component's input: what its first part reads from outside");
@@ -155,6 +158,24 @@ fn a_look_reads_a_calls_input_its_output_or_a_meter() {
     assert_eq!(at(ROOT, "master", reduction).at, TapAt::Port(limit, 1), "the master's ceiling, inside its call");
     let add = at(ROOT, "master", At::In).at;
     assert!(matches!(add, TapAt::Port(i, 0) if rev.compiled.flat.nodes[i].module == ROOT), "the sum comes in: {add:?}");
+}
+
+// TAP-11 (review T4, T11): a compressor keyed by its own input still has that input; one keyed by
+// another track has its own sound as its input, not the key; and a call turned off shows at `out`
+// what plays through it, its input.
+#[test]
+fn a_look_at_a_keyed_or_turned_off_call_reads_what_plays() {
+    let (_f, s) = looks();
+    let rev = s.accepted();
+    let at = |module: &str, line: u32, at: At| look(rev, &s.packages, module, &on_line(&s, "compress", line), &at);
+    let saw = kernel_node(rev, "d", "std:saw", 0);
+    assert_eq!(at("d", 10, At::In).map(|p| p.at), Ok(TapAt::Port(saw, 0)), "keyed by its own input");
+    let square = kernel_node(rev, "e", "std:square", 0);
+    assert_eq!(at("e", 11, At::In).map(|p| p.at), Ok(TapAt::Port(square, 0)), "keyed by another track: its own sound comes in");
+    let tri = kernel_node(rev, "f", "std:tri", 0);
+    assert_eq!(at("f", 12, At::In).map(|p| p.at), Ok(TapAt::Port(tri, 0)));
+    assert_eq!(at("f", 12, At::Out).map(|p| p.at), Ok(TapAt::Port(tri, 0)), "turned off, what plays through it");
+    assert_eq!(point(rev, &s.packages, "f", &on_line(&s, "compress", 12)).map(|p| p.0), Ok(TapAt::Port(tri, 0)), "a scope's too");
 }
 
 // TAP-11: what doesn't fit is refused in words: no sound in, or more than one; a meter the call

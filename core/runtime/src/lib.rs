@@ -3265,8 +3265,7 @@ impl Renderer {
         for &a in at {
             let (node, channels, late) = match a {
                 TapAt::Out => (None, 2, self.latency),
-                TapAt::Node(i) | TapAt::Port(i, _) => {
-                    let p = if let TapAt::Port(_, p) = a { p } else { 0 };
+                TapAt::Port(i, p) => {
                     match self.plan.sound.get(i).map(|(ports, late)| (ports.get(p), *late)) {
                         // A meter is one channel (ABI-13).
                         Some((Some(&taps::METER_PORT), late)) => (Some((i, p)), 1, late),
