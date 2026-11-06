@@ -11,7 +11,7 @@ import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
-const { browser, page, errors, api, state, caughtUp, box, key } = await open(1440, 900);
+const { browser, page, errors, api, state, caughtUp, box, key, status } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 
 const FILE = "data/bass/notes.json";
@@ -544,6 +544,22 @@ await key("Meta+z");
 await until(async () => (await page.$eval("[data-testid=bar-song-name]", (e) => e.textContent).catch(() => "")) !== longName);
 write(ARRANGEMENT, arrangementWas);
 check(await until(async () => (await field())?.text === "Key"), "the arrangement as it was: no key");
+
+// A key an older music2 left in layout.json (VOX-14, AGENT-14): the song builds, but the status offers
+// Upgrade it, which moves the key into data/arrangement.json.
+const layoutWas = fs.existsSync(`${PROJ}/layout.json`) ? JSON.parse(read("layout.json")) : { order: [], tracks: {} };
+write("layout.json", JSON.stringify({ ...layoutWas, key: { root: "D", scale: "dorian" } }, null, 2));
+check(await until(async () => (await state()).upgrade === true, 15000) && (await field())?.text === "Key", "a key left in layout.json shows no key, and the state says the song waits for an upgrade");
+await status();
+await page.waitForSelector("[data-testid=upgrade-run]", { timeout: 5000 });
+await page.click("[data-testid=upgrade-run]");
+check(
+  await until(async () => (await field())?.text === "D Dorian" && JSON.stringify(songKey()) === JSON.stringify({ root: "D", scale: "dorian" }) && !layoutHasKey() && (await state()).upgrade === false),
+  `Upgrade it moves it into data/arrangement.json, and the field says ${(await field())?.text}`,
+);
+await page.keyboard.press("Escape");
+write(ARRANGEMENT, arrangementWas);
+await until(async () => (await field())?.text === "Key");
 
 // ---------------------------------------------------------------- a PC page
 

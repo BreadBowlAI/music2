@@ -748,7 +748,8 @@ fn the_key_moves_from_the_layout_into_the_arrangement() {
     f.write("layout.json", layout);
     let before = bytes(&f);
     let mut s = f.open();
-    assert!(!needed(&s), "it builds: the status offers nothing");
+    let rev = s.accepted().number;
+    assert!(needed(&s), "the layout holds the key: the status offers Upgrade it, though it builds");
     assert_eq!(s.accepted().project.arrangement.key(), None, "the layout's key is no key");
     let up = upgrade(&mut s, false, None).unwrap();
     assert!(up.left.is_empty() && up.refused.is_empty(), "{:?} {:?}", up.left, up.refused);
@@ -767,6 +768,8 @@ fn the_key_moves_from_the_layout_into_the_arrangement() {
     );
     assert_eq!(f.read("layout.json"), "{\n  \"order\": [\"bass\"],\n  \"tracks\": {},\n  \"zoom\": 3\n}\n");
     assert_eq!(s.accepted().project.arrangement.key().map(|k| k.name()), Some("F♯ minor".to_string()));
+    assert!(!needed(&s), "upgraded, it needs nothing");
+    assert_eq!(s.beats_moved_since(rev), None, "a key moves nothing in time (AGENT-2)");
     s.undo().unwrap();
     assert_eq!(bytes(&f), before, "both files as they were");
     // Upgraded again, it is made for this music2.
@@ -775,7 +778,12 @@ fn the_key_moves_from_the_layout_into_the_arrangement() {
     // The arrangement's own key wins, and the layout's stays as it is, no key.
     s.undo().unwrap();
     crate::songkey::set(&mut s, Some(crate::songkey::SongKey::new("C", "major").unwrap())).unwrap();
+    assert!(!needed(&s), "the arrangement's own key: nothing to move");
     assert!(upgrade(&mut s, false, None).unwrap().current());
     assert_eq!(f.read("layout.json"), layout);
     assert_eq!(s.accepted().project.arrangement.key().map(|k| k.name()), Some("C major".to_string()));
+    // A key in the layout that doesn't read is no key to move.
+    crate::songkey::set(&mut s, None).unwrap();
+    f.write("layout.json", "{\"key\": {\"root\": \"H\", \"scale\": \"minor\"}}");
+    assert!(!needed(&s));
 }

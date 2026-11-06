@@ -103,8 +103,7 @@ fn keep_bars(a: &mut Arrangement, bars: &[u64], from: usize) {
 /// Whether two arrangements count bars and beats the same and say the same key: no meter written is
 /// 4/4 from the start.
 fn plays_same(a: &Arrangement, b: &Arrangement) -> bool {
-    let meters = |x: &Arrangement| if x.meter.is_empty() { vec![Meter::COMMON] } else { x.meter.clone() };
-    a.tempo == b.tempo && meters(a) == meters(b) && a.key == b.key
+    a.same_time(b) && a.key == b.key
 }
 
 /// Write `after` over the accepted arrangement, as one `Confined {}` Tx labelled `label`, and assert

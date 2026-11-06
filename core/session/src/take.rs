@@ -573,6 +573,7 @@ impl Session {
         }
         // The revision it makes is by who saved it (AGENT-2).
         self.accepting = Some(self.by.clone());
+        let was = self.accepted.project.arrangement.clone();
         let taken = match settled {
             Some(settled) => self.take_in_settled(draft, settled),
             None => TakenIn::default(),
@@ -582,7 +583,8 @@ impl Session {
         // (an outside change that waited for the code) is outside the app's.
         if let Some(accepted) = &taken.accepted {
             let wrote: BTreeSet<String> = written.iter().map(|(_, p, _)| p.to_string()).collect();
-            let beats = wrote.iter().any(|p| p == "data/arrangement.json");
+            // Music moved in time only when the tempo or the meter did, not the key (VOX-10).
+            let beats = !was.same_time(&self.accepted.project.arrangement);
             self.authored_as(accepted.number, &wrote, &step.moved, beats);
         }
         // Taken into the revision that plays as written: one step, whatever the draft's errors (a

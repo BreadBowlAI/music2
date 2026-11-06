@@ -170,6 +170,13 @@ impl Arrangement {
         ]
     }
 
+    /// Whether `other` puts music at the same times: the same tempo, and the same meter, no meter
+    /// written being 4/4 from the start. The key isn't time.
+    pub fn same_time(&self, other: &Arrangement) -> bool {
+        let meters = |x: &Arrangement| if x.meter.is_empty() { vec![Meter::COMMON] } else { x.meter.clone() };
+        self.tempo == other.tempo && meters(self) == meters(other)
+    }
+
     /// The tempo map. The arrangement must have been read (checked).
     pub fn tempo_map(&self) -> TempoMap {
         TempoMap::new(&self.tempo)
