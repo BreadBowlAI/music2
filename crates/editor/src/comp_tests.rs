@@ -225,3 +225,208 @@ fn a_comp_that_follows_the_tempo_moves_its_markers() {
     assert!((level(&out, 1.1, 1.9) - 0.2).abs() < 1e-3, "Take 2 plays there: {}", level(&out, 1.1, 1.9));
     assert!((level(&out, 2.1, 3.9) - 0.3).abs() < 1e-3, "the third after it: {}", level(&out, 2.1, 3.9));
 }
+
+/// The lines of the lane file, one per clip.
+fn lines(f: &Fixture) -> Vec<String> {
+    f.read("data/vox/clips.json").lines().filter(|l| l.contains("\"asset\"")).map(|l| l.trim().trim_end_matches(',').to_string()).collect()
+}
+
+/// Clip `id` of the lane, as it reads.
+fn by(s: &Session, id: &str) -> AudioClip {
+    clips(s).into_iter().find(|c| c.id.as_deref() == Some(id)).unwrap_or_else(|| panic!("no clip {id}"))
+}
+
+/// The line of clip `id` in the lane file.
+fn line(f: &Fixture, id: &str) -> String {
+    lines(f).into_iter().find(|l| l.contains(&format!("\"id\": \"{id}\""))).unwrap_or_else(|| panic!("no clip {id}: {:?}", lines(f)))
+}
+
+// VOX-5 (review P1): two pieces that follow the tempo at different speeds, meeting at beat 4. A
+// comp over beats 0 to 1 changes nothing from beat 1 on: what beat 3 and beat 6 read stays, and
+// the second piece keeps its line byte for byte.
+#[test]
+fn a_comp_leaves_what_its_range_doesnt_reach() {
+    let a = "{\"id\": \"vox00001\", \"start\": 0, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 8, \"warp\": [[8, 0], [9, 2]]}";
+    let b =
+        "{\"id\": \"vox00002\", \"start\": 4, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 10, \"warp\": [[10.5, 2], [11, 4]]}";
+    let f = song(&format!("{a}, {b}"), levels);
+    let mut s = f.open();
+    let t = s.accepted().compiled.data.tempo().clone();
+    let b = by(&s, "vox00002");
+    let was = clips(&s);
+    let read = |c: &[AudioClip], beat: f64| {
+        let c = c.iter().rev().find(|c| c.start <= beat && beat < c.start + c.length).unwrap();
+        super::reads(c, beat, &t)
+    };
+    let (r3, r6) = (read(&was, 3.0), read(&was, 6.0));
+    go(&mut s, comp("vox00001", 0, 0.0, 1.0));
+    let now = clips(&s);
+    assert!((read(&now, 3.0) - r3).abs() < 1e-9, "beat 3 reads {} s, as before {r3}", read(&now, 3.0));
+    assert!((read(&now, 6.0) - r6).abs() < 1e-9, "beat 6 reads {} s, as before {r6}", read(&now, 6.0));
+    assert_eq!(by(&s, "vox00002"), b, "the second piece as it was");
+}
+
+// VOX-4, VOX-5 (review P3): a split the musician made, with fades for a breath at the cut, or
+// nudged 30 ms earlier, is left as it is by a comp away from it: its pieces keep their lines.
+#[test]
+fn a_comp_never_merges_or_remakes_the_musicians_split() {
+    let a = "{\"id\": \"vox00001\", \"start\": 0, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 8, \"fade_out\": 0.3}";
+    let b = "{\"id\": \"vox00002\", \"start\": 4, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 10, \"fade_in\": 0.3}";
+    let f = song(&format!("{a}, {b}"), levels);
+    let mut s = f.open();
+    go(&mut s, comp("vox00001", 1, 7.0, 8.0));
+    let first = line(&f, "vox00001");
+    let plain = render(&s, 4.0);
+    go(&mut s, comp("vox00001", 0, 6.0, 7.0));
+    assert_eq!(line(&f, "vox00001"), first, "the piece before the split, byte for byte");
+    assert!(
+        clips(&s).iter().any(|c| c.id.as_deref() == Some("vox00002") && c.fade_in == 0.3),
+        "the breath's fade in stays: {:?}",
+        spans(&s)
+    );
+    let comped = render(&s, 4.0);
+    assert!((comped[96_000 - 10] - plain[96_000 - 10]).abs() < 1e-6, "the dip at 2 s stays");
+    // Nudged: the second half 30 ms earlier, its audio kept.
+    let b = "{\"id\": \"vox00002\", \"start\": 3.94, \"length\": 4.06, \"asset\": \"vox take.wav\", \"offset\": 10}";
+    f.write("data/vox/clips.json", format!("{{\"clips\": [{ONE}, {b}]}}\n").replace("\"length\": 8", "\"length\": 4"));
+    drop(s);
+    let mut s = f.open();
+    go(&mut s, comp("vox00001", 1, 6.0, 7.0));
+    let first = line(&f, "vox00001");
+    go(&mut s, comp("vox00001", 0, 5.0, 6.0));
+    assert_eq!(line(&f, "vox00001"), first, "the nudged split stays as it was");
+}
+
+// VOX-4 (review P3): a cut inside a piece's own fade is refused in words.
+#[test]
+fn a_comp_never_cuts_inside_a_fade() {
+    let one = "{\"id\": \"vox00001\", \"start\": 0, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 8, \"fade_in\": 2}";
+    let f = song(one, levels);
+    let mut s = f.open();
+    let why = refused(&mut s, comp("vox00001", 0, 1.0, 2.0));
+    assert!(why.contains("fade"), "{why}");
+    go(&mut s, comp("vox00001", 0, 5.0, 6.0));
+    assert_eq!(clips(&s)[0].fade_in, 2.0, "outside the fade, the fade stays");
+}
+
+// VOX-2 (review P2, P14): a copy of the loop straight after the first is another comp: a swipe in
+// the first leaves it as it is, and Take 1 plays at its start. A clip 40 ms over the one before, at
+// the same place in its pass, is in the comp; one 60 ms over isn't.
+#[test]
+fn a_comp_keeps_one_passs_timeline() {
+    let copy = "{\"id\": \"vox00002\", \"start\": 8, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 8}";
+    let f = song(&format!("{ONE}, {copy}"), levels);
+    let mut s = f.open();
+    let second = by(&s, "vox00002");
+    go(&mut s, comp("vox00001", 1, 2.0, 3.0));
+    assert_eq!(by(&s, "vox00002"), second, "the copy as it was");
+    go(&mut s, comp("vox00002", 0, 8.0, 12.0));
+    let c = clips(&s).into_iter().find(|c| c.id.as_deref() == Some("vox00002")).unwrap();
+    assert_eq!((c.start, c.offset), (8.0, 0.0), "Take 1 from the copy's start");
+    drop(s);
+    for (over, same) in [(0.04, true), (0.06, false)] {
+        // `over` seconds over the clip before (2 beats a second), reading the same place in its pass.
+        let a = "{\"id\": \"vox00001\", \"start\": 0, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 8}";
+        let b = format!(
+            "{{\"id\": \"vox00002\", \"start\": {}, \"length\": {}, \"asset\": \"vox take.wav\", \"offset\": {}}}",
+            4.0 - 2.0 * over,
+            4.0 + 2.0 * over,
+            10.0 - over
+        );
+        f.write("data/vox/clips.json", format!("{{\"clips\": [{a}, {b}]}}\n"));
+        let mut s = f.open();
+        let second = by(&s, "vox00002");
+        go(&mut s, comp("vox00001", 0, 0.0, 8.0));
+        assert_eq!(by(&s, "vox00002") != second, same, "{over} s over: in the comp {same}");
+    }
+}
+
+// VOX-3 (review P5): the last pass, cut short by the stop, has no sound over beats 4 to 8: Take 3
+// there is refused, saying where it stops.
+#[test]
+fn a_take_with_no_sound_there_is_refused() {
+    let f = song(ONE, levels);
+    let spec = hound::WavSpec { channels: 1, sample_rate: RATE, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+    let mut w = hound::WavWriter::create(f.0.join("assets/vox take.wav"), spec).unwrap();
+    for (pass, n) in [(0, 4 * RATE as usize), (1, 4 * RATE as usize), (2, 2 * RATE as usize)] {
+        for i in 0..n {
+            w.write_sample(levels(pass, i)).unwrap();
+        }
+    }
+    w.finalize().unwrap();
+    f.write(
+        "data/vox/clips.json",
+        "{\"clips\": [{\"id\": \"vox00001\", \"start\": 0, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 4}]}\n",
+    );
+    let mut s = f.open();
+    let why = refused(&mut s, comp("vox00001", 2, 6.0, 8.0));
+    assert!(why.contains("Take 3 stops at bar 2"), "{why}");
+    go(&mut s, comp("vox00001", 2, 1.0, 3.0));
+    assert_eq!(clips(&s).len(), 3, "where it has sound, it plays");
+}
+
+// VOX-2 (review P7, P11, P14): a range under 10 ms is refused; so is one outside the comp, in
+// bars as the window shows them; and a file with fewer than two takes.
+#[test]
+fn a_range_too_short_or_outside_is_refused_in_bars() {
+    let f = song(ONE, levels);
+    let mut s = f.open();
+    let why = refused(&mut s, comp("vox00001", 0, 2.0, 2.004));
+    assert!(why.contains("too short"), "{why}");
+    let why = refused(&mut s, comp("vox00001", 0, 9.0, 12.0));
+    assert!(why.contains("bar 3"), "{why}");
+    let clip = ClipRef { lane: vox(), id: Some("vox00001".into()), at: None, sha: None };
+    let why = refused(&mut s, Gesture::Comp { clip, takes: vec![0.0], take: 0, from: 2.0, to: 4.0 });
+    assert!(why.contains("no takes"), "{why}");
+    assert_eq!(clips(&s).len(), 1, "nothing changed");
+}
+
+// VOX-2, VOX-6 (review P6): a reversed swell made from the take, ending where the vocal starts, is
+// no piece of its comp: the vocal is comped, the swell left as it is.
+#[test]
+fn a_reversed_clip_beside_a_comp_isnt_part_of_it() {
+    let swell = "{\"id\": \"vox00009\", \"start\": 0, \"length\": 4, \"asset\": \"vox take.wav\", \"offset\": 8, \"reverse\": true}";
+    let main = "{\"id\": \"vox00001\", \"start\": 4, \"length\": 8, \"asset\": \"vox take.wav\", \"offset\": 8}";
+    let f = song(&format!("{swell}, {main}"), levels);
+    let mut s = f.open();
+    let why = refused(&mut s, comp("vox00009", 2, 1.0, 2.0));
+    assert!(why.contains("backwards"), "the swell itself isn't comped: {why}");
+    let swell = by(&s, "vox00009");
+    go(&mut s, comp("vox00001", 1, 6.0, 8.0));
+    assert_eq!(by(&s, "vox00009"), swell, "the swell as it was");
+    assert_eq!(clips(&s).len(), 4, "{:?}", spans(&s));
+}
+
+// VOX-1 (review P4): a comp goes from a revision; another writer's change to the lane after it
+// refuses it, though the clip it names didn't change.
+#[test]
+fn a_comp_from_before_anothers_change_is_refused() {
+    let f = song(ONE, levels);
+    let mut s = f.open();
+    go(&mut s, comp("vox00001", 1, 2.0, 4.0));
+    let base = s.accepted().number;
+    go(&mut s, comp("vox00001", 0, 6.0, 7.0));
+    let late = crate::clips::edit_since(&mut s, &comp("vox00001", 0, 5.0, 8.0), "tx-late", Some(base));
+    assert!(matches!(late, Err(crate::EditError::Changed(_))), "{:?}", late.map(|d| d.edited));
+}
+
+// Review P13: the lane file has no float noise: 2.01, not 2.0099999999999998.
+#[test]
+fn a_comps_numbers_are_written_clean() {
+    let f = song(ONE, levels);
+    let mut s = f.open();
+    go(&mut s, comp("vox00001", 1, 2.0, 4.0));
+    let text = f.read("data/vox/clips.json");
+    assert!(!text.contains("9999") && !text.contains("0000000"), "{text}");
+}
+
+// VOX-3: a pass is a whole number of samples, so the loop's beats may reach a fraction of a sample
+// past it: a take there still plays.
+#[test]
+fn a_take_a_sample_short_of_the_loop_still_plays() {
+    let f = song(ONE, levels);
+    let mut s = f.open();
+    let clip = ClipRef { lane: vox(), id: Some("vox00001".into()), at: None, sha: None };
+    go(&mut s, Gesture::Comp { clip, takes: vec![0.0, 3.99999, 7.99998], take: 0, from: 6.0, to: 8.0 });
+    assert_eq!(clips(&s).len(), 2, "{:?}", spans(&s));
+}
