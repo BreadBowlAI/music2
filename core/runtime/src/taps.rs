@@ -1,6 +1,7 @@
-//! Taps (TAP-1 to TAP-4, TAP-8): looking at a live plan without touching it. A tap is a point of
-//! the plan ([`TapAt`]: the song's output, a top-level node's first output, or an overlay site)
-//! whose block is read after the graph ran, never by the graph. A tap gives one of two things:
+//! Taps (TAP-1 to TAP-4, TAP-8, TAP-10, TAP-15): looking at a live plan without touching it. A tap
+//! is a point of the plan ([`TapAt`]: the song's output, a top-level node's output, or an overlay
+//! site) whose block is read after the graph ran, never by the graph. A tap gives one of three
+//! things:
 //!
 //! - **Peaks**: each channel's largest `|x|` since the server last took them, raised with
 //!   `fetch_max` into an atomic slot (a non-negative `f32` orders as its bits do). The meters: the
@@ -11,6 +12,10 @@
 //!   the server points it somewhere ([`TapSlots::point`]), and the audio thread takes a new point
 //!   at its next block. Before a block is written, the frames it may overwrite are marked; after,
 //!   its head moves: so a reader ([`TapSlots::frames`]) drops what was overwritten while it read.
+//! - **Meters** of a sound (ABI-13): a kernel's meter output, read once a block from its last frame
+//!   into one of the plan's [`METERS`] slots, while the server points the slot at it
+//!   ([`TapSlots::point_meter`]): what it says now and the most since the last read
+//!   ([`TapSlots::meter`]). While no slot points anywhere they cost one atomic load a block.
 //!
 //! No lock, no allocation and no wait on the audio thread (RENDER-28, TAP-3). Taps read buffers
 //! only, so no render changes. Offline renders have none (TAP-2).
@@ -29,16 +34,33 @@ use anyhow::{Result, bail};
 
 use crate::{BLOCK, Renderer, Runner};
 
-/// The frame rings of a live plan: one for the master's loudness and four for scopes (TAP-8).
-pub const RINGS: usize = 5;
+/// The frame rings of a live plan: one for the master's loudness and 31 for looks (TAP-10).
+pub const RINGS: usize = 32;
+/// The meter slots of a live plan (TAP-10): one number for each block, pointed like rings.
+pub const METERS: usize = 256;
 /// The frames a ring holds: 341 ms at 48 kHz, 85 ms at 192 kHz, so a reader every 33 ms keeps up.
 pub const RING: usize = 1 << 14;
 /// A ring's channels: a wider point gives its first two, a mono one the same on both.
 const SIDES: usize = 2;
 /// A ring that points nowhere, and one that points at the song's output; any other point is an exec
-/// node.
+/// node's output, [`code`]d.
 const OFF: u64 = u64::MAX;
 const OUT: u64 = u64::MAX - 1;
+/// What a node's output is, for a tap: its channels of sound (1 or 2), a meter, or neither.
+const NONE: u8 = 0;
+const METER: u8 = METER_PORT;
+/// A node's output that is a kernel's meter (ABI-13), as the plan's ports say it.
+pub(crate) const METER_PORT: u8 = u8::MAX;
+
+/// Exec node `node`'s output `port`, as a ring or a slot holds it.
+fn code(node: usize, port: usize) -> u64 {
+    ((node as u64) << 16) | port as u64
+}
+
+/// The exec node and the output a [`code`] names.
+fn decode(c: u64) -> (usize, usize) {
+    ((c >> 16) as usize, (c & 0xffff) as usize)
+}
 
 /// A live plan's taps, as the server reads them: the peaks since they were last taken, the frame
 /// rings, and whether anyone looks (TAP-4).
@@ -51,10 +73,46 @@ pub struct TapSlots {
     /// Each meter: its first slot and its channels.
     meters: Vec<(usize, usize)>,
     rings: Box<[Ring]>,
-    /// What a point may be: each top-level node's first output's audio channels (0: no sound), and
-    /// each overlay site's exec node and channels.
-    sound: Box<[u8]>,
+    /// What a point may be: each top-level node's outputs, each its audio channels, [`NONE`] or
+    /// [`METER`]; and each overlay site's exec node and channels.
+    ports: Box<[Box<[u8]>]>,
     sites: Box<[(usize, u8)]>,
+    /// The meter slots, and how often one was pointed: the audio thread looks at the slots again
+    /// only when this moved.
+    slots: Box<[Slot]>,
+    pointed: AtomicU64,
+}
+
+/// One meter slot (TAP-15): what it points at, what the audio thread took, and since then, how many
+/// blocks it read, the last block's number and the most since the last read ([`key`]ed; 0 for
+/// none).
+#[derive(Debug)]
+struct Slot {
+    asked: AtomicU64,
+    took: AtomicU64,
+    blocks: AtomicU64,
+    now: AtomicU32,
+    most: AtomicU32,
+}
+
+/// What a meter slot read ([`TapSlots::meter`]): its meter's last number, and the most since the
+/// last read (`now` when no block came since).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reading {
+    pub now: f32,
+    pub most: f32,
+}
+
+/// `v` as a number that orders as `v` does, above 0 for every `v` but a NaN, so `fetch_max` keeps
+/// the most of any numbers, negative ones too.
+fn key(v: f32) -> u32 {
+    let b = v.to_bits();
+    if b & 0x8000_0000 != 0 { !b } else { b | 0x8000_0000 }
+}
+
+/// The number a [`key`] is.
+fn unkey(k: u32) -> f32 {
+    f32::from_bits(if k & 0x8000_0000 != 0 { k & 0x7fff_ffff } else { !k })
 }
 
 /// What [`TapSlots::take`] read: each channel's largest `|x|`, linear (1.0 is 0 dBFS). A meter's
@@ -104,7 +162,7 @@ impl Ring {
             self.took.store(asked, Ordering::Release);
         }
         // A point is checked when it is asked for; a node index past this plan's is never read.
-        if asked == OFF || (asked != OUT && bufs.get(asked as usize).and_then(|b| b.first()).is_none_or(|x| x.len() < BLOCK)) {
+        if asked == OFF || (asked != OUT && output(bufs, asked).is_none()) {
             return;
         }
         // What this block overwrites is marked before any of it is written.
@@ -115,13 +173,42 @@ impl Ring {
             let to = &self.frames[c * RING + at..c * RING + at + BLOCK];
             match asked {
                 OUT => to.iter().zip(out).for_each(|(t, f)| t.store(f[c].to_bits(), Ordering::Relaxed)),
-                node => {
-                    let x = side(&bufs[node as usize][0], c);
+                at => {
+                    let x = side(output(bufs, at).expect("checked above"), c);
                     to.iter().zip(x).for_each(|(t, v)| t.store(v.to_bits(), Ordering::Relaxed));
                 }
             }
         }
         self.head.store(head + BLOCK as u64, Ordering::Release);
+    }
+}
+
+/// The block of the output a [`code`] names, when this plan has it whole.
+fn output(bufs: &[Vec<Vec<f32>>], at: u64) -> Option<&[f32]> {
+    let (node, port) = decode(at);
+    bufs.get(node).and_then(|b| b.get(port)).map(Vec::as_slice).filter(|x| x.len() >= BLOCK)
+}
+
+impl Slot {
+    fn new() -> Slot {
+        let zero = || AtomicU32::new(0);
+        Slot { asked: AtomicU64::new(OFF), took: AtomicU64::new(OFF), blocks: AtomicU64::new(0), now: zero(), most: zero() }
+    }
+
+    /// After a block: read its meter's last frame. `took` is the audio thread's own copy of
+    /// [`Slot::took`]. A NaN is passed over.
+    fn write(&self, took: u64, bufs: &[Vec<Vec<f32>>]) {
+        let Some(v) = output(bufs, took).map(|b| b[BLOCK - 1]).filter(|v| !v.is_nan()) else { return };
+        self.now.store(v.to_bits(), Ordering::Relaxed);
+        self.most.fetch_max(key(v), Ordering::Relaxed);
+        self.blocks.fetch_add(1, Ordering::Release);
+    }
+
+    /// Take a new point: what it read of the last one goes first.
+    fn take(&self, asked: u64) {
+        self.blocks.store(0, Ordering::Relaxed);
+        self.most.store(0, Ordering::Relaxed);
+        self.took.store(asked, Ordering::Release);
     }
 }
 
@@ -134,38 +221,50 @@ fn side(b: &[f32], c: usize) -> &[f32] {
 }
 
 impl TapSlots {
-    /// A live plan's taps, with no meter yet: what may be a point, by node and by site.
-    pub(crate) fn new(sound: Box<[u8]>, sites: Box<[(usize, u8)]>) -> TapSlots {
+    /// A live plan's taps, with no meter yet: what may be a point, by node and by site. `ports`
+    /// gives each node's outputs, each its channels of sound, or 0, or [`METER`] for a kernel's
+    /// meter (ABI-13).
+    pub(crate) fn new(ports: Box<[Box<[u8]>]>, sites: Box<[(usize, u8)]>) -> TapSlots {
         TapSlots {
             watched: AtomicBool::new(false),
             peaks: (0..2).map(|_| AtomicU32::new(0)).collect(),
             meters: vec![],
             rings: (0..RINGS).map(|_| Ring::new()).collect(),
-            sound,
+            ports,
             sites,
+            slots: (0..METERS).map(|_| Slot::new()).collect(),
+            pointed: AtomicU64::new(0),
         }
     }
 
-    /// The exec node and channels of `at`; [`OUT`] for the output.
+    /// What output `port` of node `node` is: its channels of sound, [`NONE`] or [`METER`].
+    fn port(&self, node: usize, port: usize) -> Result<u8> {
+        let Some(outs) = self.ports.get(node) else { bail!("there's no node {node}") };
+        let Some(&p) = outs.get(port) else { bail!("node {node} has no output {port}: it has {}", outs.len()) };
+        Ok(p)
+    }
+
+    /// The point and channels of `at` as sound; [`OUT`] for the output.
     fn resolve(&self, at: TapAt) -> Result<(u64, usize)> {
-        Ok(match at {
-            TapAt::Out => (OUT, 2),
-            TapAt::Node(i) => match self.sound.get(i) {
-                Some(&c) if c > 0 => (i as u64, c as usize),
-                Some(_) => bail!("node {i} makes no sound to tap"),
-                None => bail!("there's no node {i}"),
-            },
+        let (node, port) = match at {
+            TapAt::Out => return Ok((OUT, 2)),
             TapAt::Site(k) => match self.sites.get(k) {
-                Some(&(node, c)) => (node as u64, c as usize),
+                Some(&(node, c)) => return Ok((code(node, 0), c as usize)),
                 None => bail!("there's no overlay site {k}"),
             },
-        })
+            TapAt::Port(i, p) => (i, p),
+        };
+        match self.port(node, port)? {
+            METER => bail!("output {port} of node {node} is a meter, not sound: a meter slot reads it (TAP-15)"),
+            NONE => bail!("output {port} of node {node} makes no sound to tap"),
+            c => Ok((code(node, port), c as usize)),
+        }
     }
 
     /// Lay out `meters`, each the louder of its points channel by channel, its channels its widest
     /// point's: their slots, and each point's (exec node, first slot, channels) for the audio
     /// thread. The output is [`Peaks::out`] already, so it is no meter's point.
-    pub(crate) fn lay_out(&mut self, meters: &[Vec<TapAt>]) -> Result<Vec<(usize, usize, usize)>> {
+    pub(crate) fn lay_out(&mut self, meters: &[Vec<TapAt>]) -> Result<Vec<(u64, usize, usize)>> {
         let mut points = vec![];
         let mut layout = vec![];
         let mut next = 2;
@@ -178,7 +277,7 @@ impl TapSlots {
                     bail!("the song's output is metered already: it is no meter's point");
                 }
                 channels = channels.max(c);
-                nodes.push(node as usize);
+                nodes.push(node);
             }
             points.extend(nodes.into_iter().map(|node| (node, next, channels)));
             layout.push((next, channels));
@@ -227,6 +326,48 @@ impl TapSlots {
         Ok(channels)
     }
 
+    /// Point meter slot `slot` at `at`, a kernel's meter (ABI-13), or nowhere (None): the audio
+    /// thread takes it at its next block, as a ring's point (TAP-15).
+    pub fn point_meter(&self, slot: usize, at: Option<TapAt>) -> Result<()> {
+        let Some(s) = self.slots.get(slot) else { bail!("there's no meter slot {slot}: a plan has {METERS}") };
+        let code = match at {
+            None => OFF,
+            Some(TapAt::Port(node, port)) => match self.port(node, port)? {
+                METER => code(node, port),
+                _ => bail!("output {port} of node {node} is sound, not a meter: a ring reads it (TAP-1)"),
+            },
+            Some(other) => bail!("{other:?} is sound, not a meter: a ring reads it (TAP-1)"),
+        };
+        s.asked.store(code, Ordering::Release);
+        self.pointed.fetch_add(1, Ordering::Release);
+        Ok(())
+    }
+
+    /// What meter slot `slot` read since the last read: its meter's last number and the most since
+    /// (TAP-15), which starts again from here. None while it points nowhere, or the audio thread
+    /// hasn't read a block of its point.
+    pub fn meter(&self, slot: usize) -> Option<Reading> {
+        self.read_meter(slot, true)
+    }
+
+    /// What [`TapSlots::meter`] would say, leaving the most where it is: an agent's answer, which
+    /// mustn't take it from the window's next read.
+    pub fn peek_meter(&self, slot: usize) -> Option<Reading> {
+        self.read_meter(slot, false)
+    }
+
+    fn read_meter(&self, slot: usize, take: bool) -> Option<Reading> {
+        let s = self.slots.get(slot)?;
+        let asked = s.asked.load(Ordering::Acquire);
+        if asked == OFF || s.took.load(Ordering::Acquire) != asked || s.blocks.load(Ordering::Acquire) == 0 {
+            return None;
+        }
+        let now = f32::from_bits(s.now.load(Ordering::Relaxed));
+        let most = if take { s.most.swap(0, Ordering::Relaxed) } else { s.most.load(Ordering::Relaxed) };
+        // A read between the store of `now` and the raise of `most` would find `most` under it.
+        Some(Reading { now, most: if most == 0 { now } else { unkey(most).max(now) } })
+    }
+
     /// Ring `ring`'s frames from frame `from` of it on, the last `most` at most, into `out`, which
     /// is cleared first: both sides of each. Where the first frame is, by the ring's count, never
     /// past its head: a `from` past the head is a place in another ring, so it reads from where
@@ -270,15 +411,22 @@ impl TapSlots {
 /// each ring copies.
 pub(crate) struct Taps {
     slots: Arc<TapSlots>,
-    /// Each meter's points: exec node, its meter's first slot, and its meter's channels.
-    points: Vec<(usize, usize, usize)>,
+    /// Each meter's points: an exec node's output ([`code`]d), its meter's first slot, and its
+    /// meter's channels.
+    points: Vec<(u64, usize, usize)>,
     /// Each ring's point as the audio thread took it.
     took: [u64; RINGS],
+    /// Each meter slot's point as the audio thread took it, the slots that point somewhere (room
+    /// for all, taken here), and [`TapSlots::pointed`] as it last looked.
+    meter_took: Box<[u64]>,
+    reading: Vec<u16>,
+    pointed: u64,
 }
 
 impl Taps {
     pub(crate) fn new(slots: TapSlots) -> Taps {
-        Taps { slots: Arc::new(slots), points: vec![], took: [OFF; RINGS] }
+        let (meter_took, reading) = (vec![OFF; METERS].into_boxed_slice(), Vec::with_capacity(METERS));
+        Taps { slots: Arc::new(slots), points: vec![], took: [OFF; RINGS], meter_took, reading, pointed: 0 }
     }
 
     pub(crate) fn slots(&self) -> &Arc<TapSlots> {
@@ -304,14 +452,34 @@ impl Taps {
             for c in 0..2 {
                 s.raise(c, peak(out.iter().map(|f| f[c])));
             }
-            for &(node, at, channels) in &self.points {
+            for &(point, at, channels) in &self.points {
+                let Some(b) = output(bufs, point) else { continue };
                 for c in 0..channels {
-                    s.raise(at + c, peak(side(&bufs[node][0], c).iter().copied()));
+                    s.raise(at + c, peak(side(b, c).iter().copied()));
                 }
             }
         }
         for (r, took) in s.rings.iter().zip(&mut self.took) {
             r.write(took, bufs, out);
+        }
+        // The meter slots: looked at again only when one was pointed, so one load while none moves.
+        let pointed = s.pointed.load(Ordering::Acquire);
+        if pointed != self.pointed {
+            self.pointed = pointed;
+            self.reading.clear();
+            for (k, (slot, took)) in s.slots.iter().zip(self.meter_took.iter_mut()).enumerate() {
+                let asked = slot.asked.load(Ordering::Acquire);
+                if asked != *took {
+                    *took = asked;
+                    slot.take(asked);
+                }
+                if asked != OFF {
+                    self.reading.push(k as u16);
+                }
+            }
+        }
+        for &k in &self.reading {
+            s.slots[k as usize].write(self.meter_took[k as usize], bufs);
         }
     }
 }
@@ -322,12 +490,13 @@ fn peak(x: impl Iterator<Item = f32>) -> f32 {
 }
 
 /// Where a tap reads (TAP-1), live or a copy tap's (AGENT-7): the song's output, a checked node's
-/// first output, or an overlay site's (a track where its audio enters another module, MON-1), by
-/// its place in `Flat::overlays`.
+/// output by its place (`Port(node, 0)` is its first: a sound, or for a meter slot a kernel's meter,
+/// TAP-11), or an overlay site's (a track where its audio enters another module, MON-1), by its
+/// place in `Flat::overlays`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TapAt {
     Out,
-    Node(usize),
+    Port(usize, usize),
     Site(usize),
 }
 
@@ -344,11 +513,11 @@ pub struct Copies {
     data: Vec<Vec<f32>>,
 }
 
-/// One copy tap: the exec node whose first output it reads (None: the song's output), its
-/// channels, and the frames its samples come after the song time they carry.
+/// One copy tap: the exec node and the output it reads (None: the song's output), its channels,
+/// and the frames its samples come after the song time they carry.
 #[derive(Clone, Copy, Debug)]
 pub(crate) struct Copied {
-    pub(crate) node: Option<usize>,
+    pub(crate) node: Option<(usize, usize)>,
     pub(crate) channels: usize,
     pub(crate) late: u32,
 }
@@ -403,7 +572,7 @@ impl Copies {
         for (t, d) in self.taps.iter().zip(&mut self.data) {
             match t.node {
                 None => (0..2).for_each(|c| d.extend(out.iter().map(|f| f[c]))),
-                Some(node) => (0..t.channels).for_each(|c| d.extend_from_slice(side(&bufs[node][0], c))),
+                Some((node, port)) => (0..t.channels).for_each(|c| d.extend_from_slice(side(&bufs[node][port], c))),
             }
         }
     }
@@ -444,6 +613,22 @@ impl Copying {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    // TAP-15 (review T6): a read between the audio thread's store of `now` and its raise of `most`
+    // still says a `most` no less than `now`.
+    #[test]
+    fn a_meters_most_is_never_under_its_now() {
+        let slots = TapSlots::new(Box::new([Box::new([1, METER])]), Box::new([]));
+        let s = &slots.slots[0];
+        s.asked.store(code(0, 1), Ordering::Relaxed);
+        s.take(code(0, 1));
+        s.most.store(key(3.0), Ordering::Relaxed);
+        s.now.store(5.0f32.to_bits(), Ordering::Relaxed);
+        s.blocks.store(1, Ordering::Relaxed);
+        assert_eq!(slots.meter(0), Some(Reading { now: 5.0, most: 5.0 }));
+    }
+
     // `Peaks` says it: a NaN is passed over, and an infinity reads as `f32::MAX`.
     #[test]
     fn a_nan_is_passed_over_and_an_infinity_reads_as_max() {

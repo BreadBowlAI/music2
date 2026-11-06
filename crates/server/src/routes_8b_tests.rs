@@ -651,7 +651,7 @@ fn an_agents_socket_hears_meters_only_when_it_asks() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-// TAP-8 (the review's P7 and P9): a scope's frames go only to the socket of the window that asked
+// TAP-8, TAP-12 (the review's P7 and P9): a look's frames go only to the socket of the window that asked
 // for it. An agent's client is its own: naming a window's, it neither stops nor keeps that window's
 // scope; and its own scope's last frames come in each answer to its ask.
 #[test]
@@ -661,19 +661,19 @@ fn a_scopes_frames_go_only_to_the_window_that_asked() {
     let session = running.state.graph.session().unwrap();
     let (mut w1, mut w2) = (Ws::connect(url, "client=w1&token=t0k"), Ws::connect(url, "client=w2&token=t0k"));
     let ask = |client: &str, on: bool| json!({"session": session, "client": client, "module": "lead", "node": saw, "on": on});
-    assert_eq!(post(url, "/api/graph/scope", Some("t0k"), &ask("w1", true)).0, 200);
-    let s = w1.next("scopes");
-    assert_eq!(s["scopes"][0]["frames"][0].as_array().map(Vec::len), Some(1024), "{}", s["scopes"][0]["node"]);
-    assert!(!w2.kinds(10).iter().any(|t| t == "scopes"), "nothing for a window that didn't ask");
+    assert_eq!(post(url, "/api/graph/look", Some("t0k"), &ask("w1", true)).0, 200);
+    let s = w1.next("looks");
+    assert_eq!(s["looks"][0]["frames"][0].as_array().map(Vec::len), Some(1024), "{}", s["looks"][0]["node"]);
+    assert!(!w2.kinds(10).iter().any(|t| t == "looks"), "nothing for a window that didn't ask");
     // An agent naming w1 asks for a scope of its own, and its stop ends only that one.
-    let (status, mine) = post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", true));
-    assert_eq!((status, &mine["scope"]["channels"]), (200, &json!(1)), "{mine}");
+    let (status, mine) = post(url, "/api/graph/look", Some("t00ls"), &ask("w1", true));
+    assert_eq!((status, &mine["look"]["channels"]), (200, &json!(1)), "{mine}");
     std::thread::sleep(Duration::from_millis(200));
-    let (_, again) = post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", true));
-    assert_eq!(again["scope"]["frames"][0].as_array().map(Vec::len), Some(1024), "an agent sees its frames in the answer");
-    assert_eq!(post(url, "/api/graph/scope", Some("t00ls"), &ask("w1", false)), (200, json!({})));
+    let (_, again) = post(url, "/api/graph/look", Some("t00ls"), &ask("w1", true));
+    assert_eq!(again["look"]["frames"][0].as_array().map(Vec::len), Some(1024), "an agent sees its frames in the answer");
+    assert_eq!(post(url, "/api/graph/look", Some("t00ls"), &ask("w1", false)), (200, json!({})));
     w1.kinds(3);
-    assert!(w1.kinds(10).iter().any(|t| t == "scopes"), "the window's scope goes on");
+    assert!(w1.kinds(10).iter().any(|t| t == "looks"), "the window's scope goes on");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

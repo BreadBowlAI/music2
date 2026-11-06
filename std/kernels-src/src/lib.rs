@@ -585,12 +585,13 @@ impl Kernel for Drive {
 
 export!(drive, Drive);
 
-/// Sidechain ducking. Inputs: in, side (0..1, e.g. a follower), depth (dB at side = 1).
+/// Sidechain ducking. Inputs: in, side (0..1, e.g. a follower), depth (dB at side = 1). Its meter
+/// `reduction` (ABI-14): how far it turns down, in dB, the most of the call's frames.
 pub struct Duck(Smooth);
 
 impl Kernel for Duck {
     const INPUTS: usize = 3;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 2;
 
     fn new(cfg: &Cfg) -> Self {
         let sample_rate = cfg.sample_rate;
@@ -600,17 +601,26 @@ impl Kernel for Duck {
     fn process(&mut self, io: &mut Io) {
         let stereo = io.channels > 1;
         let ([l, r, side, depth], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0)], [(0, 0), (0, 1)]);
+        let mut least = 1.0f32;
         for i in 0..ol.len() {
             let g = self.0.next(db_to_gain(depth[i].min(0.0) * side[i].clamp(0.0, 1.0)));
             ol[i] = l[i] * g;
             or[i] = if stereo { r[i] * g } else { 0.0 };
+            least = least.min(g);
         }
+        io.meter(1, reduction(least));
     }
+}
+
+/// How far a gain of `g` (1 or less) turns a sound down, in dB: 0 for 1, never −0.
+fn reduction(g: f32) -> f32 {
+    if g >= 1.0 { 0.0 } else { -20.0 * g.max(1e-6).log10() }
 }
 
 export!(duck, Duck);
 
-/// Peak limiter with instant attack and a hard ceiling. Inputs: in, ceiling (dB).
+/// Peak limiter with instant attack and a hard ceiling. Inputs: in, ceiling (dB). Its meter
+/// `reduction` (ABI-14): how far it turns down, in dB, the most of the call's frames.
 pub struct Limit {
     sr: f32,
     env: f32,
@@ -618,7 +628,7 @@ pub struct Limit {
 
 impl Kernel for Limit {
     const INPUTS: usize = 2;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 2;
 
     fn new(cfg: &Cfg) -> Self {
         let sample_rate = cfg.sample_rate;
@@ -630,13 +640,16 @@ impl Kernel for Limit {
         let stereo = io.channels > 1;
         let ceiling = db_to_gain(io.first(1).min(0.0));
         let ([l, r], [ol, or]) = io.ports([(0, 0), (0, 1)], [(0, 0), (0, 1)]);
+        let mut least = 1.0f32;
         for i in 0..ol.len() {
             let peak = if stereo { l[i].abs().max(r[i].abs()) } else { l[i].abs() };
             self.env = if peak > self.env { peak } else { peak + (self.env - peak) * release };
             let g = if self.env > ceiling { ceiling / self.env } else { 1.0 };
             ol[i] = (l[i] * g).clamp(-ceiling, ceiling);
             or[i] = if stereo { (r[i] * g).clamp(-ceiling, ceiling) } else { 0.0 };
+            least = least.min(g);
         }
+        io.meter(1, reduction(least));
     }
 }
 

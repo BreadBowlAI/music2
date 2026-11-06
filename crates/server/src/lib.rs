@@ -92,7 +92,7 @@ pub struct AppState {
     unheard: Arc<Mutex<Unheard>>,
     /// The latest meters (8b.8), for every socket that listens for them (a window's always does,
     /// an agent's when it asks, TAP-4): only the latest is kept, so one that falls behind skips to
-    /// it (empty until the first). Each window's own scopes ride with them (TAP-8).
+    /// it (empty until the first). Each window's own looks ride with them (TAP-8, TAP-12).
     pub meters: watch::Sender<Arc<Meters>>,
     /// The latest pictures each window asked for (CARD-68), by its client id: a socket sends only
     /// those newer than what it sent, so one that falls behind skips to each picture's newest.
@@ -442,12 +442,12 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
         .expect("spawn the server's notices");
 }
 
-/// The meters as the sockets get them (TAP-4, TAP-8): what every listener gets, and each window's
-/// own scopes, by its client id; both as the JSON text sent.
+/// The meters as the sockets get them (TAP-4, TAP-8, TAP-12): what every listener gets, and each
+/// window's own looks, by its client id; both as the JSON text sent.
 #[derive(Debug, Default)]
 pub struct Meters {
     pub all: String,
-    pub scopes: Vec<(String, String)>,
+    pub looks: Vec<(String, String)>,
 }
 
 /// How often the meters are read and sent: about 30 times a second.
@@ -467,8 +467,8 @@ fn spawn_meters(state: &Arc<AppState>) {
                 let Some(state) = weak.upgrade() else { return };
                 state.graph.watch_meters(state.meters.receiver_count() > 0);
                 if let Some(m) = state.graph.meters() {
-                    let scopes = m.scopes.into_iter().map(|(c, v)| (c, v.to_string())).collect();
-                    state.meters.send_replace(Arc::new(Meters { all: m.all.to_string(), scopes }));
+                    let looks = m.looks.into_iter().map(|(c, v)| (c, v.to_string())).collect();
+                    state.meters.send_replace(Arc::new(Meters { all: m.all.to_string(), looks }));
                 }
             }
         })

@@ -16,7 +16,7 @@ use std::sync::Arc;
 
 use common::*;
 use m2_play::Player;
-use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, PlanInfo, Pool, RINGS, Renderer, Runner, Stats, TapAt, notes_data};
+use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, METERS, PlanInfo, Pool, RINGS, Renderer, Runner, Stats, TapAt, notes_data};
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
@@ -89,7 +89,7 @@ fn copy_taps_change_no_bit() {
         let mut at = vec![TapAt::Out];
         at.extend((0..song.flat.overlays.len()).map(TapAt::Site));
         let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
-        at.extend((0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node));
+        at.extend((0..song.flat.nodes.len()).filter(|&i| audio(i)).map(|i| TapAt::Port(i, 0)));
         let mut r = Copying::new(song.renderer(), &at, 0).unwrap();
         let (mut tapped, mut copied) = (vec![[0.0f32; 2]; frames], vec![]);
         for chunk in tapped.chunks_mut(4096) {
@@ -112,12 +112,30 @@ fn copy_taps_change_no_bit() {
     }
 }
 
-// TAP-2, RENDER-33: with every tap on, every pure fixture plays the export's bits, the whole song:
-// a live plan with a meter at every overlay site and at every node with sound, watched, and every
-// ring pointed at the output or a node with sound, moved on to the next ones before every buffer,
-// while the meters are taken and the rings read as the server reads them.
+/// Every output with sound of `song`'s nodes, by its place (TAP-11), and every kernel's meter, its
+/// last outputs (ABI-13).
+fn ports(song: &Song) -> (Vec<TapAt>, Vec<TapAt>) {
+    let (mut sound, mut meters) = (vec![], vec![]);
+    for (i, n) in song.flat.nodes.iter().enumerate() {
+        let m = match &n.op {
+            m2_ir::FOp::Kernel { kernel, .. } => m2_ir::Kernels::kernel(&song.packages, kernel).map_or(0, |k| k.meters.len()),
+            _ => 0,
+        };
+        let first = n.outputs.len() - m;
+        sound.extend((0..first).filter(|&p| matches!(n.outputs[p], m2_ir::Kind::Audio(_))).map(|p| TapAt::Port(i, p)));
+        meters.extend((first..n.outputs.len()).map(|p| TapAt::Port(i, p)));
+    }
+    (sound, meters)
+}
+
+// TAP-2, TAP-15, RENDER-33: with every tap on, every pure fixture plays the export's bits, the whole
+// song: a live plan with a meter at every overlay site and at every output with sound, watched,
+// every ring pointed at the output or an output with sound, and every meter slot at a kernel's
+// meter, moved on to the next ones before every buffer, while the meters are taken, the rings read
+// and the slots read as the server reads them.
 #[test]
 fn every_tap_on_changes_no_bit() {
+    let mut metered = 0;
     for name in PURE {
         let song = fixture(name);
         let frames = (song.seconds() * song.rate as f64) as usize;
@@ -133,8 +151,7 @@ fn every_tap_on_changes_no_bit() {
         )
         .unwrap();
         r.set_strict(false);
-        let audio = |i: usize| matches!(song.flat.nodes[i].outputs.first(), Some(m2_ir::Kind::Audio(_)));
-        let sound: Vec<TapAt> = (0..song.flat.nodes.len()).filter(|&i| audio(i)).map(TapAt::Node).collect();
+        let (sound, of_sounds) = ports(&song);
         let mut meters: Vec<Vec<TapAt>> = (0..song.flat.overlays.len()).map(|k| vec![TapAt::Site(k)]).collect();
         meters.extend(sound.iter().map(|&a| vec![a]));
         r.tap(&meters).unwrap();
@@ -150,6 +167,10 @@ fn every_tap_on_changes_no_bit() {
                 }
                 taps.point(ring, Some(points[(turn + ring) % points.len()])).unwrap();
             }
+            for slot in 0..of_sounds.len().min(METERS) {
+                metered += usize::from(taps.meter(slot).is_some_and(|m| m.most > 0.0));
+                taps.point_meter(slot, Some(of_sounds[(turn + slot) % of_sounds.len()])).unwrap();
+            }
             drop(taps.take());
             turn += 1;
         });
@@ -157,6 +178,7 @@ fn every_tap_on_changes_no_bit() {
         assert!(framed > 0, "{name}: the rings were read");
         assert_eq!(first_diff(&heard, &export), None, "{name}: a tap changed what plays");
     }
+    assert!(metered > 0, "some meter said a kernel turned a sound down");
 }
 
 // RENDER-26, RENDER-26a: a swap of the same data, while notes sound, changes nothing at all.

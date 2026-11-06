@@ -307,7 +307,7 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
 }
 
 /// Forward every event (toasts, `graph`) and, when it listens for them (`listens`), the latest
-/// meters to one client until it goes away, with its window's own scopes after them (TAP-4,
+/// meters to one client until it goes away, with its window's own looks after them (TAP-4,
 /// TAP-8); and take what a page's socket sends: audition, whose answers go to this socket only, and
 /// the MIDI keyboard's target (`routes_8b::ws_text`). What an agent's socket sends is ignored: those
 /// are the musician's (AGENT-11). A socket that falls behind is told how many events it missed
@@ -331,7 +331,7 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
                 if socket.send(Message::Text(sent.all.clone().into())).await.is_err() {
                     break;
                 }
-                let mine = client.as_ref().and_then(|c| sent.scopes.iter().find(|(w, _)| w == c));
+                let mine = client.as_ref().and_then(|c| sent.looks.iter().find(|(w, _)| w == c));
                 if let Some((_, text)) = mine
                     && socket.send(Message::Text(text.clone().into())).await.is_err()
                 {

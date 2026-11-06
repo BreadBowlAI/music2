@@ -367,7 +367,7 @@ struct ControlPlane {
     tempo: tempo_lease::TempoLeases,
     /// The take recording, and the takes waiting to be written (lane B).
     record: record::Recorder,
-    /// What windows and agents ask to look at: scopes and the loudness (TAP-6, TAP-8).
+    /// What windows and agents ask to look at: looks and the loudness (TAP-6, TAP-8, TAP-12).
     asks: scope::Asks,
     /// The pictures windows and agents ask for (CARD-67).
     pictures: pictures::Pictures,

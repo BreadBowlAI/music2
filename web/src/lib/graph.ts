@@ -1006,9 +1006,17 @@ export const graphApi = {
       }),
       within,
     ),
-  /** Ask for the scope of box `node` of `module` (TAP-8), again within 10 s to keep it, or stop: its frames come on this window's socket. */
-  scope: (session: number, module: string, node: string, on: boolean) =>
-    call<{ scope?: { module: string; node: string; channels: number; frames: number[][] } }>("/scope", { session, client: clientId, module, node, on }),
+  /** Ask for a look at box `node` of `module` (TAP-8, TAP-12): its scope (the default), spectrum, level or a meter, at `out`, `in` or the meter's name; again within 10 s to keep it, or stop. What it sees comes on this window's socket (`useLook` in `taps.ts`). */
+  look: (session: number, module: string, node: string, on: boolean, kind = "scope", at = "out") =>
+    call<{ look?: { module: string; node: string; kind: string; at: string; channels?: number | null; unit?: string | null; frames?: number[][] } }>("/look", {
+      session,
+      client: clientId,
+      module,
+      node,
+      kind,
+      at,
+      on,
+    }),
   /** Ask for a card's picture (CARD-67), again within 10 s to keep it, or stop: it comes again on this window's socket as its values change. */
   picture: (session: number, module: string, node: string, view: string, on: boolean) =>
     call<{ picture?: import("../components/PictureView").Drawn }>("/picture", { session, client: clientId, module, node, view, on }),

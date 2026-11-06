@@ -7,7 +7,7 @@
 //   of the sound: drawn at 12 dB per octave whatever the filter's own slope (a view doesn't say it),
 //   so its words name no slope. Its peak moves cutoff (across, on a log scale) and q (up).
 // - Keys: which recording plays on which keys and how hard; a click plays the key, as hard as high.
-// - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8).
+// - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8, TAP-16).
 //
 // A drag holds a lease on each control it moves (WRITE-22), heard as it goes, and is written at
 // release as one edit, one undo step (CARD-22).
@@ -15,9 +15,9 @@
 import clsx from "clsx";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { attach, release, strike, useAudition } from "../lib/audition";
-import { on } from "../lib/events";
 import { controlLabel, graphApi, inSentence, picks, type CardView, type KeyRegion, type NumberKnob, type ViewNode, type ViewPart } from "../lib/graph";
 import { useStore } from "../lib/store";
+import { useLook, useLooking } from "../lib/taps";
 import { editing, fileOf, gate } from "../lib/history";
 import { words } from "./Settings";
 import { PICTURE_H, PictureView } from "./PictureView";
@@ -529,16 +529,6 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
 
 // ---------------------------------------------------------------- scope (CARD-29)
 
-/** How often a scope asks again: the server keeps an ask 10 s (TAP-8). */
-const ASK_MS = 4000;
-
-/** A scopes message (TAP-8): each scope asked by this window, its last frames per channel or why none. */
-interface ScopesIn {
-  t: "scopes";
-  session?: number;
-  scopes: { module: string; node: string; frames?: number[][]; why?: string }[];
-}
-
 function ScopeView(p: ViewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const [why, setWhy] = useState<string | null>(null);
@@ -546,51 +536,17 @@ function ScopeView(p: ViewProps) {
   const box = useRef<HTMLDivElement>(null);
   const { session, module } = p;
   const node = p.node.id;
-  // Looked at: the card on screen, in a window that shows (TAP-4: looking costs nothing otherwise).
-  const [onScreen, setOnScreen] = useState(false);
-  const [shown, setShown] = useState(() => document.visibilityState === "visible");
-  useEffect(() => {
-    const el = box.current;
-    if (!el) return;
-    const io = new IntersectionObserver((seen) => setOnScreen(seen.some((s) => s.isIntersecting)));
-    io.observe(el);
-    const vis = () => setShown(document.visibilityState === "visible");
-    document.addEventListener("visibilitychange", vis);
-    return () => {
-      io.disconnect();
-      document.removeEventListener("visibilitychange", vis);
-    };
-  }, []);
-  const looking = onScreen && shown;
-  useEffect(() => {
-    if (!looking) return;
-    let alive = true;
-    const ask = (on: boolean) =>
-      graphApi.scope(session, module, node, on).then(
-        () => alive && on && setWhy(null),
-        (e) => alive && on && setWhy(words(e)),
-      );
-    void ask(true);
-    const again = setInterval(() => void ask(true), ASK_MS);
-    const off = on<ScopesIn>("scopes", (msg) => {
-      const mine = msg.scopes.find((s) => s.module === module && s.node === node);
-      if (!mine) return;
-      if (mine.why) return setWhy(mine.why);
-      const frames = mine.frames ?? [];
-      const c = canvas.current;
-      if (!c || !frames.length || !frames[0].length) return;
-      setWhy(null);
-      draw(c, frames);
-      count.current += 1;
-      box.current?.setAttribute("data-frames", String(count.current));
-    });
-    return () => {
-      alive = false;
-      clearInterval(again);
-      off();
-      void ask(false).catch(() => {});
-    };
-  }, [session, module, node, looking]);
+  // Looked at: the card on screen, in a window that shows (TAP-16; TAP-4: looking costs nothing otherwise).
+  const looking = useLooking(box);
+  useLook({ session, module, node, kind: "scope", at: "out" }, looking, (seen) => {
+    const frames = seen.frames ?? [];
+    const c = canvas.current;
+    if (!c || !frames.length || !frames[0].length) return;
+    setWhy(null);
+    draw(c, frames);
+    count.current += 1;
+    box.current?.setAttribute("data-frames", String(count.current));
+  }, setWhy);
   return (
     <div ref={box} className="h-full" data-scope={node} data-asking={looking || undefined}>
       <Picture title={why ?? "The sound's wave, as it plays"}>

@@ -77,6 +77,9 @@ pub struct KernelSig {
     pub description: String,
     pub inputs: Vec<PortSig>,
     pub outputs: Vec<PortSig>,
+    /// Its meters (ABI-13): numbers for the window to show, after its outputs in its node's
+    /// buffers and its port table, which no wire may read.
+    pub meters: Vec<PortSig>,
     /// Samples of delay the kernel adds.
     pub latency: u32,
 }
@@ -89,6 +92,7 @@ impl KernelSig {
             description: description.to_string(),
             inputs: parse_all(inputs).map_err(|e| format!("kernel `{id}`: {e}"))?,
             outputs: parse_all(outputs).map_err(|e| format!("kernel `{id}`: {e}"))?,
+            meters: vec![],
             latency,
         };
         if sig.outputs.is_empty() {
@@ -120,6 +124,32 @@ impl KernelSig {
 
     pub fn output_index(&self, name: &str) -> Option<usize> {
         self.outputs.iter().position(|p| p.name == name)
+    }
+
+    /// The kernel with `meters` (ABI-13), each `"name: control<unit>"`: a control of a unit, with
+    /// no default and no range, named apart from its ports.
+    pub fn with_meters(mut self, meters: &[String]) -> Result<KernelSig, String> {
+        let id = &self.id;
+        for spec in meters {
+            let m = PortSig::parse(spec).map_err(|e| format!("kernel `{id}`: meter {e}"))?;
+            if !matches!(m.kind, PortKind::Control(Some(_))) {
+                return Err(format!("kernel `{id}`: meter `{spec}`: a meter is a control of a unit, such as `control<db>`"));
+            }
+            if m.default.is_some() || m.range.is_some() {
+                return Err(format!("kernel `{id}`: meter `{spec}`: a meter has no default and no range: the kernel says it"));
+            }
+            if self.inputs.iter().chain(&self.outputs).chain(&self.meters).any(|p| p.name == m.name) {
+                return Err(format!("kernel `{id}`: port `{}` declared twice", m.name));
+            }
+            self.meters.push(m);
+        }
+        Ok(self)
+    }
+
+    /// Meter `name`'s place among its meters (ABI-13): its node's buffer is the one at
+    /// `outputs.len()` plus this.
+    pub fn meter_index(&self, name: &str) -> Option<usize> {
+        self.meters.iter().position(|p| p.name == name)
     }
 }
 
@@ -219,6 +249,34 @@ mod tests {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         assert!(KernelSig::parse("p:k", "", &s(&["a: control<hz>"]), &s(&["out: *"]), 0).is_err());
         assert!(KernelSig::parse("p:k", "", &s(&["a: *"]), &s(&["out: *"]), 0).is_ok());
+    }
+
+    // ABI-13: a kernel's meters are controls of a unit, after its outputs, with no default or
+    // range, named apart from its ports.
+    #[test]
+    fn a_kernel_gives_meters_of_a_unit() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let k = KernelSig::parse("p:k", "", &s(&["in: audio<*>"]), &s(&["out: audio<*>"]), 0).unwrap();
+        assert!(k.meters.is_empty(), "none unless it says");
+        let k = k.with_meters(&s(&["reduction: control<db>", "open: control<switch>"])).unwrap();
+        assert_eq!(
+            k.meters.iter().map(|m| (m.name.as_str(), m.kind)).collect::<Vec<_>>(),
+            [("reduction", PortKind::Control(Some(Unit::Db))), ("open", PortKind::Control(Some(Unit::Switch)))]
+        );
+        assert_eq!(k.meter_index("open"), Some(1));
+        assert_eq!(k.output_index("reduction"), None, "a meter is no output a wire can name");
+        for (bad, says) in [
+            ("reduction: audio<1>", "a meter is a control of a unit, such as `control<db>`"),
+            ("reduction: control<*>", "a meter is a control of a unit, such as `control<db>`"),
+            ("reduction: *", "a meter is a control of a unit, such as `control<db>`"),
+            ("reduction: control<db> = 0", "a meter has no default"),
+            ("reduction: control<db> in 0..24", "a meter has no default"),
+            ("out: control<db>", "port `out` declared twice"),
+        ] {
+            let k = KernelSig::parse("p:k", "", &s(&["in: audio<*>"]), &s(&["out: audio<*>"]), 0).unwrap();
+            let e = k.with_meters(&s(&[bad])).unwrap_err();
+            assert!(e.contains(says), "{bad}: {e}");
+        }
     }
 
     // ABI-8: a kernel takes notes through an `events<note>` input; an events output's shape is
