@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { AudioWaveform, ChartSpline, CornerDownLeft, Flame, Gauge, Orbit, Plug, Search, Sparkles, Waves, Wrench } from "lucide-react";
+import { AudioWaveform, ChartSpline, CornerDownLeft, Flame, Gauge, Mic, Orbit, Plug, Search, Sparkles, Waves, Wrench } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Effect } from "../lib/graph";
 import { isPlugin, pluginEffects, PLUGINS, usePluginList, wantPlugins } from "../lib/plugins";
@@ -19,6 +19,8 @@ export const CATEGORIES: { name: string; Icon: typeof Waves }[] = [
   { name: "Distortion", Icon: Flame },
   { name: "Delay & Reverb", Icon: Waves },
   { name: "Modulation", Icon: Orbit },
+  // A sung voice's tools: Tune (VOX-20).
+  { name: "Voice", Icon: Mic },
   { name: "Utility", Icon: Wrench },
   // The installed plugins (gaps #32), last.
   { name: PLUGINS, Icon: Plug },

@@ -1,0 +1,55 @@
+[package]
+name = "@m2/vocals"
+version = "1.0.0"
+license = "MIT OR Apache-2.0"
+description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key"]
+# Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
+# part of the pack (PACK-20).
+wasm = "kernels/vocals.wasm"
+
+[dependencies]
+# @m2/core 2.4, which gives the song's key to sound as `time.key` (VOX-12); a change to @m2/core
+# that would break it is a 3.0.0. It plays none of std's kernels; the pack is one module, so it
+# loads only where std's modules do.
+"@m2/core" = "2.4"
+std = "0.9"
+
+# ---------------------------------------------------------------- its own kernels
+# Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/vocals:pitch", …)`.
+# Tune joins them in a row (VOX-20): pitch finds the voice's pitch, snap works out how far to move
+# it, shift moves it. Each is useful alone: pitch for a tuner, shift for a harmony. Each is safe
+# with any input or setting: no NaN, nothing louder than what comes in.
+
+[[kernel]]
+name = "pitch"
+description = "Finds a voice's pitch every 256 samples from the mono sum of its channels (YIN, through an FFT): hz between 70 and 1200 (0 with no pitch), how sure it is (clarity, 0 to 1) and its level. It looks only at the past, so it adds no latency (VOX-21)"
+inputs = ["in: audio<*>"]
+outputs = ["hz: control<hz>", "clarity: control<unit01>", "level: control<gain>"]
+
+[[kernel]]
+name = "snap"
+description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22)"
+inputs = [
+  "hz: control<hz>",
+  "clarity: control<unit01>",
+  "key: control<keyset> = 4095",
+  "glide: control<seconds> = 0.1 in 0..0.4",
+  "amount: control<unit01> = 1",
+]
+outputs = ["out: control<semitones>"]
+
+[[kernel]]
+name = "shift"
+description = "Moves a voice by semitones and keeps its vowel colour (TD-PSOLA: a grain around each vocal pulse, laid out again at the new spacing); formant moves the colour on its own. With no clear pitch the sound passes through. Both channels use the same pulses. 15 ms late (VOX-23)"
+inputs = [
+  "in: audio<*>",
+  "semitones: control<semitones> = 0 in -12..12",
+  "hz: control<hz> = 0",
+  "clarity: control<unit01> = 0",
+  "formant: control<semitones> = 0 in -12..12",
+]
+outputs = ["out: audio<*>"]
+latency_s = 0.015

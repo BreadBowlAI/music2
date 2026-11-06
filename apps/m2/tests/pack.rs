@@ -936,6 +936,8 @@ fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
         "@m2/effects:delay",
         "@m2/effects:bitcrush",
         "@m2/mixing:eq",
+        "@m2/vocals:pitch",
+        "@m2/vocals:shift",
         "@m2/wavetable:voice",
     ] {
         assert!(
