@@ -1646,6 +1646,8 @@ function definedAt(): string | undefined {
 type Home = { package: string | null; module: string; file: string };
 
 const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar"];
+/** The words for a knob, an input or a lane of the unit `keyset`, which none can be (VOX-12). */
+const NO_KEY_KNOB = "the song's key is no knob or lane: read it with time.key";
 const NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 
 function declared(desc: Descriptor, body: (...args: any[]) => unknown, site: number | undefined): unknown {
@@ -1695,6 +1697,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   const input = (name: string, d: unknown, where: string): In => {
     if (!(d instanceof PortDecl)) fail(`${where} "${name}" must be declared with port.audio(), port.control(), port.notes() or port.any()`);
     const spec = specOf<PortSpec>(d as object);
+    if ((spec.unit as string) === "keyset") fail(`${where} "${name}": ${NO_KEY_KNOB}`);
     if (spec.unit !== undefined && !UNIT_NAMES.includes(spec.unit)) fail(`${where} "${name}" names no unit "${String(spec.unit)}" (units: ${UNIT_NAMES.join(", ")})`);
     if (spec.optional && spec.many) fail(`${where} "${name}" takes many signals, so a call may give none already: it isn't .optional() too`);
     return { name, spec };
@@ -1724,6 +1727,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     } else if (s.log) fail(`${what}: .log() needs a range`);
     else if (s.strict) fail(`${what}: .strict() needs a range`);
     for (const a of s.accepts) {
+      if ((a.unit as string) === "keyset") fail(`${what}: ${NO_KEY_KNOB}`);
       if (!UNIT_NAMES.includes(a.unit)) fail(`${what}: accepts names no unit "${String(a.unit)}" (units: ${UNIT_NAMES.join(", ")})`);
       if (a.unit === s.unit) fail(`${what}: accepts its own unit, ${a.unit}; give the range with .range()`);
       if (a.range) {
@@ -2751,6 +2755,7 @@ function ctxFor(m: ModuleBuild): Ctx {
           stepsOf.set(s, unit === "switch" ? { kind: "switch" } : { kind: "choice", lane: rec, key, module: m.key });
           return produced(site, s);
         }
+        if (unit === "keyset") throw new Error(`lane "${key}": ${NO_KEY_KNOB}`);
         if (!UNIT_NAMES.includes(unit as Unit)) throw new Error(`lane "${key}": no unit ${shown(unit)} (units: ${UNIT_NAMES.join(", ")}; or "choice" or "switch")`);
         const v = fallback instanceof Quantity ? amounts.get(fallback)! : fallback;
         if (v !== undefined && (typeof v !== "number" || !Number.isFinite(v))) throw new Error(`lane "${key}": its fallback must be a number, as ${unit === "hz" ? "hz(500)" : "0.5"}, not ${shown(v)}`);

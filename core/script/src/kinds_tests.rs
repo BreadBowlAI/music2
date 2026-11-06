@@ -535,3 +535,21 @@ export default song((ctx) => kernel("test:tune", { in: kernel("std:saw"), key: t
         assert_eq!(split_ref(&inputs[port]).0, keys[0].id, "{port}");
     }
 }
+
+// VOX-12: the song's key is no knob and no lane: a control, an input or a lane of the unit keyset is
+// refused in words that say where the key is read, even past the types.
+#[test]
+fn a_keyset_is_no_knob_and_no_lane() {
+    let says = "the song's key is no knob or lane: read it with time.key";
+    let lib = |decl: &str| {
+        format!(
+            "import {{ component, control, kernel, port, type Audio }} from \"@m2/core\";\nexport const k = component({{ id: \"k\", {decl}, output: port.audio() }}, () => kernel<Audio>(\"std:saw\"));\n"
+        )
+    };
+    for decl in ["controls: { key: control.hz(800).accepts(\"keyset\" as any) }", "inputs: { key: port.control(\"keyset\" as any) }"] {
+        let song = "import { song } from \"@m2/core\";\nimport { k } from \"./lib/k\";\nexport default song(() => k());\n";
+        let e = build_of(&[("lib/k.ts", &lib(decl)), ("song.ts", song)]).err().unwrap_or_else(|| panic!("{decl} builds"));
+        assert!(e.iter().any(|d| d.message.contains(says)), "{decl}: {e:?}");
+    }
+    refused("return lane.control(\"key\", \"keyset\" as any);", says);
+}
