@@ -32,6 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::EditError;
 use crate::sites::{Property, bound_names, properties, references};
+use crate::songkey::SongKey;
 
 /// What an upgrade's undo step is called.
 pub const NAME: &str = "Upgrade";
@@ -292,12 +293,54 @@ fn plan(s: &Session, presets: Option<&Path>) -> Result<Plan, EditError> {
         let line = if lock_text.is_none() { format!("new: {what}") } else { what };
         out.push(Planned { change: Change { file: m2_song::path::LOCK.into(), lines: vec![line] }, before: lock_text, after: canonical });
     }
+    out.extend(layout_key(s, files)?);
     out.extend(code_files);
     out.extend(data);
     if let Some(dir) = presets {
         notes.extend(preset_notes(dir, s.catalog()));
     }
     Ok(Plan { files: out, left, notes, choose })
+}
+
+/// The song's key, moved out of `layout.json`, where music2 kept it before track `key`, into
+/// `data/arrangement.json` (VOX-14): the arrangement with the key, written with the table's names,
+/// and the layout without it, every other key as read. Nothing when the layout holds no key that
+/// reads, or doesn't read, or when the arrangement has a key of its own.
+fn layout_key(s: &Session, files: &BTreeMap<PathBuf, Arc<str>>) -> Result<Vec<Planned>, EditError> {
+    let layout = match files.get(Path::new(m2_song::path::LAYOUT)) {
+        Some(t) => t.to_string(),
+        None => match std::fs::read_to_string(s.accepted().project.dir.join(m2_song::path::LAYOUT)) {
+            Ok(t) => t,
+            Err(_) => return Ok(vec![]),
+        },
+    };
+    let Ok(mut l) = crate::layout::Layout::read(&layout) else { return Ok(vec![]) };
+    let Some(at) = l.other.iter().position(|(k, _)| k == "key") else { return Ok(vec![]) };
+    let (_, written) = l.other.remove(at);
+    let field = |j: &crate::layout::J, name: &str| match j {
+        crate::layout::J::Obj(fields) => fields.iter().find_map(|(k, v)| match v {
+            crate::layout::J::Str(s) if k == name => Some(s.clone()),
+            _ => None,
+        }),
+        _ => None,
+    };
+    let key = field(&written, "root").zip(field(&written, "scale")).and_then(|(r, sc)| SongKey::new(&r, &sc).ok());
+    let mut out = vec![];
+    let arrangement = DataPath::Arrangement.to_string();
+    let text = files.get(Path::new(&arrangement)).map(|t| t.to_string());
+    let mut a = match &text {
+        Some(t) => m2_song::Arrangement::read(t).map_err(|d| EditError::Rejected(d.message))?,
+        None => m2_song::Arrangement::default(),
+    };
+    // The arrangement's own key stays, and the layout's is left as it is, a key FMT-19 ignores: a
+    // save of the layout alone would change no revision, so it couldn't be one undo step.
+    let Some(k) = key.filter(|_| a.key.is_none()) else { return Ok(vec![]) };
+    a.key = Some(k.written());
+    let lines = vec![format!("the song's key, {}, moved here from {}", k.name(), m2_song::path::LAYOUT)];
+    out.push(Planned { change: Change { file: arrangement.clone(), lines }, before: text, after: a.canonical() });
+    let lines = vec![format!("the song's key moved to {arrangement}")];
+    out.push(Planned { change: Change { file: m2_song::path::LAYOUT.into(), lines }, before: Some(layout), after: l.canonical() });
+    Ok(out)
 }
 
 /// Refused, saying so, for a song made for a newer music2 than this: it can't be moved back.

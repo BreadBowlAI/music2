@@ -85,13 +85,11 @@ fn a_key_that_doesnt_read_is_refused_in_words() {
     );
     let (status, answer) = post(json!({"root": "H", "scale": "minor"}));
     assert!(status == 400 && answer["error"].as_str().unwrap().contains("H isn't a key's root"), "{answer}");
-    assert!(!dir.join("layout.json").exists(), "nothing written");
+    let arrangement = || std::fs::read_to_string(dir.join("data/arrangement.json")).unwrap_or_default();
+    let was = arrangement();
+    assert!(!was.contains("key"), "nothing written: {was}");
     let (status, answer) = post(json!({"root": "d♭", "scale": "Major Pentatonic"}));
     assert_eq!((status, &answer["after"]), (200, &json!("C♯ major pentatonic")), "{answer}");
-    assert!(
-        std::fs::read_to_string(dir.join("layout.json"))
-            .unwrap()
-            .contains("\"key\": { \"root\": \"C#\", \"scale\": \"major-pentatonic\" }")
-    );
+    assert!(arrangement().contains("\"key\": {\"root\": \"C#\", \"scale\": \"major-pentatonic\"}"), "{}", arrangement());
     let _ = std::fs::remove_dir_all(&dir);
 }

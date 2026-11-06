@@ -147,7 +147,7 @@ pub fn timeline(s: &Session) -> TimelineView {
     let a = &rev.project.arrangement;
     let bar = a.meter_at(0.0).bar();
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
+    let key = a.key().map(|k| k.view());
     TimelineView { tempo: a.tempo.clone(), meter: a.meter.clone(), home: Home::Arrangement, end: data.end().max(bar), tracks, markers, key }
 }
 
@@ -174,7 +174,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     let Ok(project) = Project::from_snapshot(&rev.snapshot) else {
         let a = &rev.project.arrangement;
         let markers = crate::markers::on_disk(&rev.project.dir);
-        let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
+        let key = a.key().map(|k| k.view());
         return TimelineView {
             tempo: a.tempo.clone(),
             meter: a.meter.clone(),
@@ -219,7 +219,7 @@ fn last_known(rev: &Revision) -> TimelineView {
     in_order(&mut tracks, &layout);
     let a = &project.arrangement;
     let markers = crate::markers::on_disk(&rev.project.dir);
-    let key = crate::songkey::of(&rev.project.dir).map(|k| k.view());
+    let key = a.key().map(|k| k.view());
     TimelineView {
         tempo: a.tempo.clone(),
         meter: a.meter.clone(),

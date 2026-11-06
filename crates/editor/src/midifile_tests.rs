@@ -506,24 +506,24 @@ fn an_exported_song_imports_as_the_same_notes() {
 #[test]
 fn an_empty_song_takes_the_files_tempo() {
     let song = Arrangement::default();
-    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }] };
+    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }], key: None };
     assert_eq!(tempo_plan(true, &song, &file, 0.0, None), Ok(Some(file.clone())), "tempo and meter, with no question");
     assert_eq!(tempo_plan(true, &song, &song, 0.0, None), Ok(None), "the same: nothing to write");
 }
 
 #[test]
 fn a_song_with_clips_asks_then_keeps_or_takes_the_tempo() {
-    let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![Meter { beat: 0.0, beats: 6, unit: 8 }] };
-    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }, Tempo { beat: 64.0, bpm: 140.0 }], meter: vec![] };
+    let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![Meter { beat: 0.0, beats: 6, unit: 8 }], key: None };
+    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }, Tempo { beat: 64.0, bpm: 140.0 }], meter: vec![], key: None };
     assert_eq!(tempo_plan(false, &song, &file, 0.0, None), Err(Asks { file_bpm: 128.0, song_bpm: 120.0 }));
     assert_eq!(tempo_plan(false, &song, &file, 0.0, Some(TempoChoice::Keep)), Ok(None));
     // Use: the file's tempo map; the song's time signatures stay.
     assert_eq!(
         tempo_plan(false, &song, &file, 0.0, Some(TempoChoice::Use)),
-        Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone() }))
+        Ok(Some(Arrangement { tempo: file.tempo.clone(), meter: song.meter.clone(), key: None }))
     );
     // The same tempos: no question.
-    let same = Arrangement { tempo: song.tempo.clone(), meter: vec![] };
+    let same = Arrangement { tempo: song.tempo.clone(), meter: vec![], key: None };
     assert_eq!(tempo_plan(false, &song, &same, 0.0, None), Ok(None));
 }
 
@@ -688,17 +688,18 @@ fn use_at_a_later_bar_keeps_the_songs_tempo_before_it() {
     let m2_song::LaneData::Notes(clips) = &*lane else { panic!("notes") };
     assert_eq!(clips[0].start, 16.0);
     // The question at a later bar names the song's tempo there.
-    let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 8.0, bpm: 90.0 }], meter: vec![] };
-    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }] };
+    let song = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 8.0, bpm: 90.0 }], meter: vec![], key: None };
+    let file = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 128.0 }], meter: vec![Meter { beat: 0.0, beats: 3, unit: 4 }], key: None };
     assert_eq!(tempo_plan(false, &song, &file, 16.0, None), Err(Asks { file_bpm: 128.0, song_bpm: 90.0 }));
     // The file's tempo where the song already has it: no question.
-    let same = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 90.0 }], meter: vec![] };
+    let same = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 90.0 }], meter: vec![], key: None };
     assert_eq!(tempo_plan(false, &song, &same, 16.0, None), Ok(None));
     // An empty song: the song's before the bar, the file's tempo and meter from it.
     let plain = Arrangement::default();
     let want = Arrangement {
         tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }, Tempo { beat: 8.0, bpm: 128.0 }],
         meter: vec![Meter::COMMON, Meter { beat: 8.0, beats: 3, unit: 4 }],
+        key: None,
     };
     assert_eq!(tempo_plan(true, &plain, &file, 8.0, None), Ok(Some(want.clone())));
     assert_eq!(Arrangement::read(&want.canonical()).unwrap(), want, "one music2 can hold");

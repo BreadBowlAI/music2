@@ -401,7 +401,8 @@ fn arrangement_of(file: &Smf) -> Arrangement {
     if meter.len() == 1 && meter[0] == Meter::COMMON {
         meter.clear();
     }
-    Arrangement { tempo, meter }
+    // A MIDI file's key signature isn't read (gaps #16): the song keeps its own.
+    Arrangement { tempo, meter, key: None }
 }
 
 /// Bring `file`, called `name` ("groove.mid"), in as parts (Q32–Q34, D10): every pair of a track
@@ -534,7 +535,7 @@ fn from_beat(song: &Arrangement, file: &Arrangement, at: f64, meters: bool) -> A
     }
     let on_line = song.bar_at(at).1.abs() < 1e-9;
     if !meters || !on_line {
-        return Arrangement { tempo, meter: song.meter.clone() };
+        return Arrangement { tempo, meter: song.meter.clone(), key: song.key.clone() };
     }
     let mut meter: Vec<Meter> = song.meter.iter().filter(|m| m.beat < at).copied().collect();
     let theirs = if file.meter.is_empty() { vec![Meter::COMMON] } else { file.meter.clone() };
@@ -552,7 +553,7 @@ fn from_beat(song: &Arrangement, file: &Arrangement, at: f64, meters: bool) -> A
     if meter == [Meter::COMMON] {
         meter.clear();
     }
-    Arrangement { tempo, meter }
+    Arrangement { tempo, meter, key: song.key.clone() }
 }
 
 /// The sounds' labels, as + Track lists them, by component.

@@ -684,6 +684,7 @@ fn arrangement(tempo: &[(f64, f64)], meter: &[(f64, u32, u32)]) -> String {
     let a = m2_song::Arrangement {
         tempo: tempo.iter().map(|&(beat, bpm)| m2_song::Tempo { beat, bpm }).collect(),
         meter: meter.iter().map(|&(beat, beats, unit)| m2_song::Meter { beat, beats, unit }).collect(),
+        key: None,
     };
     a.canonical()
 }

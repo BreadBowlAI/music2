@@ -1389,7 +1389,11 @@ fn type_kernel(
                     None => errs.push(format!(
                         "{}: only {}, or a number written there that is one of its places, reaches it",
                         mismatch(),
-                        if want == Unit::Switch { "a switch" } else { "a choice of these options" }
+                        match want {
+                            Unit::Switch => "a switch",
+                            Unit::Keyset => "a set of notes (`time.key`)",
+                            _ => "a choice of these options",
+                        }
                     )),
                 },
                 Kind::Control(None) => {}
@@ -1471,6 +1475,7 @@ mod tests {
             ("t:follow", &["in: audio<*>"], &["out: control<unit01>"]),
             ("t:vca", &["in: audio<*>", "g: control<gain> = 1"], &["out: audio<*>"]),
             ("t:wobble", &["in: audio<*>", "playing: control<unit01> = 1"], &["out: audio<*>"]),
+            ("t:tune", &["in: audio<*>", "key: control<keyset> = 4095"], &["out: audio<*>"]),
         ] {
             m.insert(id.to_string(), KernelSig::parse(id, "", &s(i), &s(o), 0).unwrap());
         }
@@ -2132,6 +2137,54 @@ mod tests {
             .unwrap_err();
             assert!(e[0].message.contains(&format!("expects control<unit01>, got control<{unit}>")), "{}", e[0]);
         }
+    }
+
+    // VOX-12: `time.key` is a keyset, at the top level and in a voice. A keyset fits only a keyset:
+    // no number's port takes it, and a keyset's port takes no number.
+    #[test]
+    fn a_keyset_fits_only_a_keyset() {
+        let p = ir(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [
+            {"key": "song",
+             "lanes": [{"key": "notes", "kind": "events<note>"}],
+             "nodes": [
+                {"id": "n", "op": "lane", "lane": "notes"},
+                {"id": "k", "op": "time", "of": "key"},
+                {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                {"id": "w", "op": "kernel", "kernel": "t:tune", "inputs": {"in": "o", "key": "k"}},
+                {"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": "vw", "nodes": [
+                    {"id": "vk", "op": "time", "of": "key"},
+                    {"id": "vo", "op": "kernel", "kernel": "t:saw"},
+                    {"id": "vw", "op": "kernel", "kernel": "t:tune", "inputs": {"in": "vo", "key": "vk"}}]}},
+                {"id": "a", "op": "kernel", "kernel": "t:add", "inputs": {"a": "w", "b": "v"}}],
+             "exports": {"out": "a"}}]}));
+        let f = check(&p, &kernels()).unwrap_or_else(|e| panic!("{e:?}"));
+        let key = |n: &FNode| n.op == FOp::Time(TimeOf::Key) && n.outputs == [Kind::Control(Some(Unit::Keyset))];
+        assert!(f.nodes.iter().any(|n| n.name == "song/k" && key(n)), "at the top level");
+        let FOp::Poly { voice, .. } = &f.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };
+        assert!(voice.nodes.iter().any(key), "in a voice");
+        assert_eq!(serde_json::to_value(TimeOf::Key).unwrap(), json!("key"));
+        assert_eq!("keyset".parse::<Unit>(), Ok(Unit::Keyset));
+        assert!(!Unit::Keyset.is_number());
+        assert_eq!(Unit::Keyset.holds(2741.0), Ok(()));
+        for bad in [-1.0, 4096.0, 0.5] {
+            assert!(Unit::Keyset.holds(bad).unwrap_err().contains("0 to 4095"), "{bad}");
+        }
+        let wired = |src: serde_json::Value, port: &str| {
+            let mut nodes = vec![src, json!({"id": "o", "op": "kernel", "kernel": "t:saw"})];
+            nodes.push(match port {
+                "key" => json!({"id": "w", "op": "kernel", "kernel": "t:tune", "inputs": {"in": "o", "key": "x"}}),
+                _ => json!({"id": "w", "op": "kernel", "kernel": "t:vca", "inputs": {"in": "o", "g": "x"}}),
+            });
+            check(&song(serde_json::Value::Array(nodes), "w"), &kernels())
+        };
+        let e = wired(json!({"id": "x", "op": "time", "of": "key"}), "g").unwrap_err();
+        assert!(e[0].message.contains("expects control<gain>, got control<keyset>"), "{}", e[0]);
+        let e = wired(json!({"id": "x", "op": "time", "of": "playing"}), "key").unwrap_err();
+        assert!(e[0].message.contains("expects control<keyset>, got control<unit01>"), "{}", e[0]);
+        // A number written there is a set of notes fixed in the code, as a switch takes a written 0 or 1.
+        assert!(wired(json!({"id": "x", "op": "const", "value": 2741}), "key").is_ok(), "C major, written");
+        let e = wired(json!({"id": "x", "op": "const", "value": 5000}), "key").unwrap_err();
+        assert!(e[0].message.contains("must be a set of notes, a whole number from 0 to 4095, not 5000"), "{}", e[0]);
     }
 
     /// A song with frames: `o` made in a component frame 0 inside the `key()` frame 1's parent.

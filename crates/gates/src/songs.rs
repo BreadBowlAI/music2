@@ -23,7 +23,7 @@ fn project(name: &str, song: &str, lanes: &[(&str, Vec<NoteClip>)]) -> Files {
                 "[project]\nname = \"{name}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n"
             ),
         ),
-        ("data/arrangement.json".into(), Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: BPM }], meter: vec![] }.canonical()),
+        ("data/arrangement.json".into(), Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: BPM }], meter: vec![], key: None }.canonical()),
         ("song.ts".into(), song.to_string()),
     ];
     for (path, clips) in lanes {
@@ -150,7 +150,7 @@ pub fn pad(how: Pad) -> Files {
 pub fn with_tempo(mut files: Files, bpm: f64) -> Files {
     for (path, text) in &mut files {
         if path == "data/arrangement.json" {
-            *text = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm }], meter: vec![] }.canonical();
+            *text = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm }], meter: vec![], key: None }.canonical();
         }
     }
     files

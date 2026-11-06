@@ -28,6 +28,8 @@ pub mod manifest;
 pub mod pack;
 pub mod path;
 pub mod registry;
+pub mod scales;
+pub mod songkey;
 pub mod tx;
 
 use std::collections::{BTreeMap, BTreeSet};

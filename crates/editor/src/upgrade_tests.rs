@@ -736,3 +736,46 @@ fn a_drum_machine_track_is_named_and_never_made_a_kit() {
     assert_eq!(again.choose, up.choose);
     assert_eq!(bytes(&f), before);
 }
+
+// VOX-14: an older song's key moves from `layout.json` into `data/arrangement.json`, written by the
+// table's names, in the one step, though the song builds; the layout keeps everything else. One
+// undo puts both files back. A key the arrangement has already stays, and so does the layout.
+#[test]
+fn the_key_moves_from_the_layout_into_the_arrangement() {
+    let f = fixture("examples/first-song");
+    let layout =
+        "{\n  \"order\": [\"bass\"],\n  \"tracks\": {},\n  \"key\": { \"root\": \"F♯\", \"scale\": \"Minor\" },\n  \"zoom\": 3\n}\n";
+    f.write("layout.json", layout);
+    let before = bytes(&f);
+    let mut s = f.open();
+    assert!(!needed(&s), "it builds: the status offers nothing");
+    assert_eq!(s.accepted().project.arrangement.key(), None, "the layout's key is no key");
+    let up = upgrade(&mut s, false, None).unwrap();
+    assert!(up.left.is_empty() && up.refused.is_empty(), "{:?} {:?}", up.left, up.refused);
+    assert!(up.written.is_some(), "written");
+    let said: Vec<(&str, &[String])> = up.changes.iter().map(|c| (c.file.as_str(), &c.lines[..])).collect();
+    assert_eq!(
+        said,
+        [
+            ("data/arrangement.json", &["the song's key, F♯ minor, moved here from layout.json".to_string()][..]),
+            ("layout.json", &["the song's key moved to data/arrangement.json".to_string()][..])
+        ]
+    );
+    assert_eq!(
+        f.read("data/arrangement.json"),
+        "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 124}\n  ],\n  \"meter\": [],\n  \"key\": {\"root\": \"F#\", \"scale\": \"minor\"}\n}\n"
+    );
+    assert_eq!(f.read("layout.json"), "{\n  \"order\": [\"bass\"],\n  \"tracks\": {},\n  \"zoom\": 3\n}\n");
+    assert_eq!(s.accepted().project.arrangement.key().map(|k| k.name()), Some("F♯ minor".to_string()));
+    s.undo().unwrap();
+    assert_eq!(bytes(&f), before, "both files as they were");
+    // Upgraded again, it is made for this music2.
+    s.redo().unwrap();
+    assert!(upgrade(&mut s, false, None).unwrap().current());
+    // The arrangement's own key wins, and the layout's stays as it is, no key.
+    s.undo().unwrap();
+    crate::songkey::set(&mut s, Some(crate::songkey::SongKey::new("C", "major").unwrap())).unwrap();
+    assert!(upgrade(&mut s, false, None).unwrap().current());
+    assert_eq!(f.read("layout.json"), layout);
+    assert_eq!(s.accepted().project.arrangement.key().map(|k| k.name()), Some("C major".to_string()));
+}

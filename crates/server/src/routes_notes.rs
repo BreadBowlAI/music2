@@ -55,8 +55,8 @@ struct SongKeyReq {
     key: Option<Written>,
 }
 
-/// The song's key (D2, Q22): `{session, key: {root, scale} | null}`, written into `layout.json` as
-/// one undo step with no revision. Named `song-key`, apart from a track's ID (taste.md:71). A
+/// The song's key (VOX-10): `{session, key: {root, scale} | null}`, written into
+/// `data/arrangement.json` as one undo step in a revision. Named `song-key`, apart from a track's ID (taste.md:71). A
 /// write. Answers `{file, before, after, revision}`.
 async fn song_key(State(s): S, Json(r): Json<SongKeyReq>) -> ApiResult {
     let state = s.clone();

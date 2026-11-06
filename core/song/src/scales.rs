@@ -451,7 +451,7 @@ impl SongKey {
     pub fn stamp(&self, root: f64, chord: Chord, inversion: usize) -> Result<Vec<f64>, String> {
         let p = root.round() as i32;
         if !(0..=TOP).contains(&p) {
-            return Err(format!("A chord's root is a pitch from 0 (C-1) to 127 (G9), not {}", m2_song::lane::number(root)));
+            return Err(format!("A chord's root is a pitch from 0 (C-1) to 127 (G9), not {}", crate::lane::number(root)));
         }
         let pc = p.rem_euclid(12) as u8;
         let Some(d) = self.chords().into_iter().find(|d| d.root == pc) else {
@@ -470,7 +470,7 @@ impl SongKey {
         })?;
         let notes: Vec<f64> = shape.iter().map(|o| (p + *o as i32) as f64).collect();
         if notes.iter().any(|n| *n > TOP as f64) {
-            let from = m2_song::lane::pitch_name(p as f64).unwrap_or_else(|| p.to_string());
+            let from = crate::lane::pitch_name(p as f64).unwrap_or_else(|| p.to_string());
             return Err(format!("{} from {from} goes above the highest note, G9", stamp.name));
         }
         Ok(notes)

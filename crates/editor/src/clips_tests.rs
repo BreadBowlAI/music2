@@ -424,6 +424,7 @@ fn places_are_bar_beat_and_sixteenth() {
     let mixed = m2_song::Arrangement {
         tempo: vec![m2_song::Tempo { beat: 0.0, bpm: 120.0 }],
         meter: vec![m2_song::Meter { beat: 0.0, beats: 3, unit: 4 }, m2_song::Meter { beat: 6.0, beats: 4, unit: 4 }],
+        key: None,
     };
     assert_eq!(position(&mixed, "2.3"), Ok(5.0));
     assert_eq!(position(&mixed, "4.4"), Ok(13.0));

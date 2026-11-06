@@ -124,11 +124,11 @@ fn a_step_made_elsewhere_gets_a_plain_name() {
     assert_eq!(names(&graph).1, "Bass notes");
     // The plain names of other files, by the timeline published.
     let t = graph.inner.control.lock().open.as_ref().unwrap().shown.timeline.clone();
-    assert_eq!(plain("data/arrangement.json", &t), "the tempo or time signature");
+    assert_eq!(plain("data/arrangement.json", &t), "the tempo, time signature or key");
     assert_eq!(plain("data/bass/cutoff.json", &t), "Bass cutoff automation");
     assert_eq!(plain("tracks/bass.ts", &t), "the code in tracks/bass.ts");
     // The review of ag-routes' F10: the song's key lives there too.
-    assert_eq!(plain("layout.json", &t), "the track order, colours, markers or the song's key");
+    assert_eq!(plain("layout.json", &t), "the track order, colours or markers");
 }
 
 // WRITE-21: an undo refused (what it would take back changed since) keeps both names as they were.

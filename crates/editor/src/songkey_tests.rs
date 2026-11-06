@@ -1,6 +1,5 @@
-//! The song's key (the polish plan's D2): written into `layout.json` by a Tx of that file alone,
-//! read back into the timeline, keeping what else the file says, never over a file that doesn't
-//! read.
+//! The song's key (VOX-10): written into `data/arrangement.json` with the tempo and the meter, one
+//! undo step in a revision, read back into the timeline from the revision that plays.
 
 use super::*;
 use crate::Gestures;
@@ -15,27 +14,35 @@ fn shown(s: &m2_session::Session) -> Option<SongKey> {
     s.timeline().key.map(|k| k.key)
 }
 
-// Q22: `key: {"root": "A", "scale": "minor"}`, one undo step with no revision (PLANE-3); the
-// timeline shows it.
+const TEMPO: &str = "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 124}\n  ],\n  \"meter\": []";
+
+// VOX-10: `"key": {"root": "A", "scale": "minor"}` in the arrangement, after the meter: one undo
+// step with a revision; the timeline shows it, and nothing else is written.
 #[test]
-fn a_key_is_written_into_layout_json() {
+fn a_key_is_written_into_the_arrangement() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     let (rev, song) = (s.accepted().number, f.read("song.ts"));
     let done = set(&mut s, key("A", "minor")).unwrap();
-    assert_eq!((done.revision, done.file.as_str(), done.before.as_str(), done.after.as_str()), (rev, "layout.json", "", "A minor"));
-    assert_eq!(f.read("layout.json"), "{\n  \"order\": [],\n  \"tracks\": {},\n  \"key\": { \"root\": \"A\", \"scale\": \"minor\" }\n}\n");
+    assert_eq!((done.file.as_str(), done.before.as_str(), done.after.as_str()), ("data/arrangement.json", "", "A minor"));
+    assert!(done.revision > rev, "a revision");
+    assert_eq!(f.read("data/arrangement.json"), format!("{TEMPO},\n  \"key\": {{\"root\": \"A\", \"scale\": \"minor\"}}\n}}\n"));
+    assert_eq!(s.accepted().project.arrangement.key(), key("A", "minor"));
     assert_eq!(shown(&s), key("A", "minor"));
     assert_eq!(f.read("song.ts"), song);
+    assert!(!f.0.join("layout.json").exists(), "the layout holds no key");
     // A root by another name is kept in the file's spelling; the label in the app's.
     let done = set(&mut s, key("D♯", "Major")).unwrap();
     assert_eq!((done.before.as_str(), done.after.as_str()), ("A minor", "E♭ major"));
     assert_eq!(shown(&s), key("Eb", "major"));
     // The same key again writes nothing.
-    let text = f.read("layout.json");
+    let (text, rev) = (f.read("data/arrangement.json"), s.accepted().number);
     let same = set(&mut s, key("Eb", "major")).unwrap();
-    assert_eq!((same.before.as_str(), same.after.as_str()), ("no change", "no change"));
-    assert_eq!(f.read("layout.json"), text);
+    assert_eq!((same.before.as_str(), same.after.as_str(), same.revision), ("no change", "no change", rev));
+    assert_eq!(f.read("data/arrangement.json"), text);
+    // The tempo and the meter stay as they are.
+    crate::song::tempo(&mut s, 0.0, 90.0).unwrap();
+    assert_eq!(shown(&s), key("Eb", "major"));
 }
 
 #[test]
@@ -45,31 +52,22 @@ fn no_key_removes_it() {
     set(&mut s, key("C", "major")).unwrap();
     let done = set(&mut s, None).unwrap();
     assert_eq!((done.before.as_str(), done.after.as_str()), ("C major", ""));
-    assert!(!f.read("layout.json").contains("\"key\""), "{}", f.read("layout.json"));
+    assert_eq!(f.read("data/arrangement.json"), format!("{TEMPO}\n}}\n"));
     assert_eq!(shown(&s), None);
 }
 
-// FMT-19: the order, the colours, the markers and keys this version doesn't know stay as read;
-// the key goes after the markers, in place when it is there already.
+// FMT-19, VOX-10: setting the key never touches `layout.json`, which holds no key: one there from
+// before (an older song's, VOX-14) is no key, and stays as it is.
 #[test]
-fn markers_and_unknown_keys_stay() {
+fn the_layout_is_left_alone() {
     let f = fixture("examples/first-song");
-    f.write(
-        "layout.json",
-        "{\"order\": [\"bass\", \"kick\", \"hats\", \"keys\"], \"tracks\": {\"kick\": {\"colour\": \"cyan\"}}, \
-         \"zoom\": 3, \"markers\": [{\"beat\": 16, \"name\": \"Chorus\"}]}",
-    );
+    let layout = "{\"order\": [\"bass\", \"kick\"], \"key\": {\"root\": \"E\", \"scale\": \"minor\"}, \"zoom\": 3}";
+    f.write("layout.json", layout);
     let mut s = f.open();
+    assert_eq!(shown(&s), None);
     set(&mut s, key("F#", "minor")).unwrap();
-    assert_eq!(
-        f.read("layout.json"),
-        "{\n  \"order\": [\"bass\", \"kick\", \"hats\", \"keys\"],\n  \"tracks\": {\n    \"kick\": { \"colour\": \"cyan\" }\n  },\n  \
-         \"markers\": [\n    { \"beat\": 16, \"name\": \"Chorus\" }\n  ],\n  \"key\": { \"root\": \"F#\", \"scale\": \"minor\" },\n  \"zoom\": 3\n}\n"
-    );
-    set(&mut s, key("G", "major")).unwrap();
-    let text = f.read("layout.json");
-    assert!(text.contains("\"key\": { \"root\": \"G\", \"scale\": \"major\" },\n  \"zoom\": 3"), "in its place: {text}");
-    assert_eq!(s.timeline().tracks.iter().find(|t| t.module == "kick").unwrap().colour, "cyan");
+    assert_eq!(f.read("layout.json"), layout);
+    assert_eq!(shown(&s), key("F#", "minor"));
 }
 
 // NOTE-1: a scale that isn't in the table, or a root that isn't one, is no key: a key as a request
@@ -86,32 +84,41 @@ fn a_scale_that_isnt_in_the_table_is_refused() {
     );
     let e = set_written(&mut s, written("H", "minor")).unwrap_err().to_string();
     assert!(e.contains("H isn't a key's root"), "{e}");
-    assert!(!f.0.join("layout.json").exists());
+    assert_eq!(f.read("data/arrangement.json"), format!("{TEMPO}\n}}\n"));
     let done = set_written(&mut s, written("d♭", "Major Pentatonic")).unwrap();
     assert_eq!(done.after, "C♯ major pentatonic");
-    // A key written by hand that doesn't read is no key.
-    f.write("layout.json", "{\"key\": {\"root\": \"A\", \"scale\": \"bebop\"}}");
+}
+
+// VOX-11: a key written by hand that music2 doesn't know is no key, with a Warning; setting the key
+// writes over it.
+#[test]
+fn a_key_music2_doesnt_know_is_no_key() {
+    let f = fixture("examples/first-song");
+    f.write("data/arrangement.json", format!("{TEMPO},\n  \"key\": {{\"root\": \"A\", \"scale\": \"bebop\"}}\n}}\n"));
+    let mut s = f.open();
     assert_eq!(shown(&s), None);
+    assert!(s.problems().iter().any(|d| d.code == "arrangement.key-unknown"), "{:?}", s.problems());
+    let done = set(&mut s, key("A", "minor")).unwrap();
+    assert_eq!((done.before.as_str(), done.after.as_str()), ("", "A minor"));
+    assert_eq!(shown(&s), key("A", "minor"));
+    assert!(!s.problems().iter().any(|d| d.code == "arrangement.key-unknown"));
 }
 
 // NOTE-1, FMT-19: a key in any scale of the table is written by the scale's name, however the
 // request spelled it, and reads back.
 #[test]
-fn a_key_in_any_scale_is_written_into_layout_json() {
+fn a_key_in_any_scale_is_written_into_the_arrangement() {
     let f = fixture("examples/first-song");
     let mut s = f.open();
     for row in crate::scales::TABLE.iter() {
         let done = set(&mut s, key("D", &row.label.to_uppercase())).unwrap();
         let k = SongKey::new("D", row.name).unwrap();
         assert_eq!(done.after, k.name());
-        let text = f.read("layout.json");
-        assert!(text.contains(&format!("\"key\": {{ \"root\": \"D\", \"scale\": \"{}\" }}", row.name)), "{text}");
+        let text = f.read("data/arrangement.json");
+        assert!(text.contains(&format!("\"key\": {{\"root\": \"D\", \"scale\": \"{}\"}}", row.name)), "{text}");
         assert_eq!(shown(&s), Some(k));
     }
-    assert_eq!(f.read("layout.json").matches("\"key\"").count(), 1);
-    // A key file written before this table still reads.
-    f.write("layout.json", "{\"key\": {\"root\": \"A\", \"scale\": \"minor\"}}");
-    assert_eq!(shown(&s), key("A", "minor"));
+    assert_eq!(f.read("data/arrangement.json").matches("\"key\"").count(), 1);
 }
 
 // NOTE-2: the timeline publishes the key with what it means: its notes, the snap table and its
@@ -151,19 +158,21 @@ fn undo_puts_it_back() {
     s.undo().unwrap();
     assert_eq!(shown(&s), key("E", "minor"));
     s.undo().unwrap();
-    assert!(!f.0.join("layout.json").exists());
-    assert_eq!((shown(&s), s.accepted().number), (None, rev));
+    assert_eq!(f.read("data/arrangement.json"), format!("{TEMPO}\n}}\n"));
+    assert_eq!(shown(&s), None);
+    assert!(s.accepted().number > rev, "an undo is a revision of its own");
+    s.redo().unwrap();
+    assert_eq!(shown(&s), key("E", "minor"));
 }
 
-// R15: a layout.json that doesn't read is never overwritten: the key is refused, saying so.
+// VOX-10: a layout.json that doesn't read costs the key nothing: the key isn't there.
 #[test]
-fn an_unreadable_layout_refuses() {
+fn an_unreadable_layout_doesnt_matter() {
     let f = fixture("examples/first-song");
     let broken = "{\n<<<<<<< HEAD\n  \"order\": [\"kick\"]\n=======\n}\n";
     f.write("layout.json", broken);
     let mut s = f.open();
-    let e = set(&mut s, key("A", "minor")).unwrap_err().to_string();
-    assert!(e.contains("layout.json doesn't read: fix it, or reset the layout"), "{e}");
+    set(&mut s, key("A", "minor")).unwrap();
     assert_eq!(f.read("layout.json"), broken);
-    assert_eq!(shown(&s), None);
+    assert_eq!(shown(&s), key("A", "minor"));
 }

@@ -517,7 +517,11 @@ impl Session {
             let batch = changed_paths(&self.draft, &draft);
             self.settling(&draft, &batch)
         });
-        let as_written = |s: &Snapshot| files.iter().all(|(f, _, t)| s.files.get(f).map(|x| &**x) == Some(t.as_str()));
+        // `layout.json`, which no revision holds (FMT-19), is written as given and not looked for in
+        // one: an upgrade moves the song's key out of it (VOX-14).
+        let held = |f: &Path| DataPath::parse(f).class() != m2_song::path::Class::Presentation;
+        let as_written =
+            |s: &Snapshot| files.iter().filter(|(f, ..)| held(f)).all(|(f, _, t)| s.files.get(f).map(|x| &**x) == Some(t.as_str()));
         let lands = match &settled {
             Some(Settle::Accept { built, .. }) => as_written(&built.0),
             // The files are the revision that plays, so it builds as it is: a save that must go in
