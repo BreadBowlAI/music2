@@ -1281,7 +1281,9 @@ export type Descriptor = {
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
    * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
    * `groups` put its card in order: `{ Filter: ["filter", "cutoff", "q"] }`, each entry one of its
-   * values or views, each named once (CARD-17). `unlisted: true` says on purpose that code plays
+   * values or views, each named once (CARD-17). `face` names the few values and views its card
+   * draws big, above its tabs: each once, two views and six values at most (CARD-40), as
+   * `["amp", "cutoff", "attack", "release"]`. `unlisted: true` says on purpose that code plays
    * it and no list offers it: such a component has no category (PKG-7, PACK-12). A drum's (category
    * "Drums") `kits` are what + Track's Drum kit makes (KIT-3): each by its name, the tracks a new
    * one makes, each a `name` and values of this instrument's own controls, taken as a call takes
@@ -1295,6 +1297,7 @@ export type Descriptor = {
     notes?: Record<number, string>;
     views?: Record<string, ViewDecl<any>>;
     groups?: Record<string, readonly string[]>;
+    face?: readonly string[];
     unlisted?: true;
     kits?: Record<string, Kit>;
   };
@@ -1511,6 +1514,18 @@ type GroupsProblems<D, Gs = GroupsOf<D>> = { [G in keyof Gs]: GroupProblems<D, G
 // The groups themselves become what is wrong: a string, which no object of groups is.
 type GroupsFit<D> = [GroupsProblems<D>] extends [never] ? unknown : { editor: { groups: GroupsProblems<D> } };
 
+// The face (CARD-40), checked against this very descriptor: each entry one of its values or views,
+// named once. The counts (two views, six values) are the build's to say, in words.
+type FaceOf<D> = D extends { editor: { face: infer F extends readonly unknown[] } } ? F : readonly [];
+type FaceEntryProblem<D, F extends readonly unknown[], I, E> = E extends Values<D> | keyof ViewsOf<D>
+  ? E extends Without<F, I>
+    ? `"${E & string}" is named twice on the face: each value or view goes on it once`
+    : never
+  : `"${E & string}" isn't a value or a view of this sound`;
+type FaceProblems<D, F extends readonly unknown[] = FaceOf<D>> = { [I in keyof F]: FaceEntryProblem<D, F, I, F[I]> }[number];
+// The face itself becomes what is wrong: a string, which no list is.
+type FaceFit<D> = [FaceProblems<D>] extends [never] ? unknown : { editor: { face: FaceProblems<D> } };
+
 // Kits (KIT-3), checked against this very descriptor: a drum's only, each track's values its
 // controls', as a call takes them. A track with a mistake becomes what is wrong with it, a string no
 // track is, so the editor marks it where it is written and says what is wrong.
@@ -1573,7 +1588,7 @@ type Old<D> = D extends { readonly id: unknown } ? false : D extends PathsDesc ?
  * where it is written, by every TypeScript the editor may run (CARD-13).
  */
 export function component<const D extends Descriptor | PathsDesc, F extends (...args: any[]) => any>(
-  desc: Old<D> extends true ? D : D & SignatureFits<D> & ViewsFit<D> & GroupsFit<D> & KitsFit<D>,
+  desc: Old<D> extends true ? D : D & SignatureFits<D> & ViewsFit<D> & GroupsFit<D> & FaceFit<D> & KitsFit<D>,
   body: Old<D> extends true ? F : Body<D>,
 ): Old<D> extends true ? F : Call<D>;
 export function component(desc: any, fn: any): any {
@@ -1847,7 +1862,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // Editor metadata.
   const editor = desc.editor ?? {};
   if (typeof editor !== "object" || editor === null) fail("editor must be an object");
-  const fields = ["category", "description", "insert", "notes", "views", "groups", "unlisted", "kits"];
+  const fields = ["category", "description", "insert", "notes", "views", "groups", "face", "unlisted", "kits"];
   for (const k of Object.keys(editor)) if (!fields.includes(k)) fail(`editor has no field "${k}" (fields: ${fields.join(", ")})`);
   if (editor.category !== undefined && (typeof editor.category !== "string" || !editor.category)) fail("editor.category must be a non-empty string");
   if (editor.unlisted !== undefined && editor.unlisted !== true) fail("editor.unlisted is true, or left out");
@@ -1915,6 +1930,22 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     }
     return { name: group, items: [...(items as string[])] };
   });
+  // The face (CARD-40): this sound's values and views, each once, two views and six values at most.
+  const face: string[] = [];
+  if (editor.face !== undefined) {
+    if (!Array.isArray(editor.face)) fail("editor.face must be a list of this sound's values and views, as [\"cutoff\", \"attack\"]");
+    for (const it of editor.face as unknown[]) {
+      if (typeof it !== "string" || !(values.includes(it) || views.some((v) => v.name === it))) {
+        fail(`editor.face names ${shown(it)}, which isn't a value or a view of this sound (${[...values, ...views.map((v) => v.name)].join(", ")})`);
+      }
+      if (face.includes(it as string)) fail(`editor.face names "${it}" twice: each value or view goes on the face once`);
+      face.push(it as string);
+    }
+    const pictures = face.filter((n) => views.some((v) => v.name === n));
+    if (pictures.length > 2) fail(`editor.face names ${pictures.length} views (${pictures.join(", ")}): a face has two pictures at most`);
+    const knobs = face.filter((n) => values.includes(n));
+    if (knobs.length > 6) fail(`editor.face names ${knobs.length} values (${knobs.join(", ")}): a face has six at most`);
+  }
 
   // A category on a component that takes notes and makes audio lists it as an instrument, which
   // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
@@ -2069,7 +2100,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     settings: settings.map(setJson),
     output: output ? portJson(output) : null,
     positional: [...positional],
-    // `views`, `groups`, `unlisted` and `kits` written only when there are some, so every other
+    // `views`, `groups`, `face`, `unlisted` and `kits` written only when there are some, so every other
     // descriptor keeps its bytes.
     editor: {
       category: editor.category ?? null,
@@ -2078,6 +2109,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
       notes,
       ...(views.length ? { views } : {}),
       ...(groups.length ? { groups } : {}),
+      ...(face.length ? { face } : {}),
       ...(editor.unlisted ? { unlisted: true } : {}),
       ...(kits.length ? { kits } : {}),
     },

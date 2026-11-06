@@ -22,6 +22,7 @@ const OPEN_KEY = "m2.dock.open";
 /** Kept under the name the graph panel had, so a height set before stays. */
 const HEIGHT_KEY = "m2.graph.panel";
 const BROWSER_KEY = "m2.browser.open";
+const DEVICE_KEY = "m2.dock.device";
 
 const load = (key: string) => {
   try {
@@ -45,6 +46,8 @@ interface Shell {
   dock: boolean;
   /** The dock body's height, as set by its splitter. */
   height: number;
+  /** What Device shows where the chain can show the sound: its chain, or its patch (CARD-42). The window's own, kept. */
+  device: "chain" | "patch";
   browser: boolean;
   /** The selected track (a module key), or null after Esc: the dock then keeps showing `module`. */
   selected: string | null;
@@ -71,6 +74,7 @@ interface Shell {
   codeAt: { file: string; line: number } | null;
 
   setView: (view: DockView) => void;
+  setDevice: (device: "chain" | "patch") => void;
   setDock: (open: boolean) => void;
   setHeight: (h: number, keep?: boolean) => void;
   setBrowser: (open: boolean) => void;
@@ -104,6 +108,7 @@ export const useShell = create<Shell>((set, get) => ({
     const saved = load(BROWSER_KEY);
     return saved === null ? window.innerWidth >= WIDE : saved === "true";
   })(),
+  device: load(DEVICE_KEY) === "patch" ? "patch" : "chain",
   selected: null,
   module: null,
   auto: true,
@@ -115,6 +120,10 @@ export const useShell = create<Shell>((set, get) => ({
   chord: null,
   codeAt: null,
 
+  setDevice: (device) => {
+    save(DEVICE_KEY, device);
+    set({ device });
+  },
   setView: (view) => {
     save(VIEW_KEY, view);
     // Choosing a view shows the dock.

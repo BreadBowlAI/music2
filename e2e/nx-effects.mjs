@@ -2,11 +2,16 @@
 // after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo step,
 // written in the effects' own calls; the cards say so at once, so no toast does.
 //
-//   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
+// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (CARD-42), which draws no cables,
+// so the dashed line out of a card turned off is the patch run's alone.
+//
+//   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` or `chain` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, toasts, show, view, key, box, caughtUp } = await open(1440, 900);
+/** Run on Device's chain (the `chain` kind), else on the patch. */
+const CHAIN = process.env.E2E_DEVICE === "chain";
 const orig = { keys: read("tracks/keys.ts"), song: read("song.ts") };
 
 /** The lint over what is inside `sel`. */
@@ -75,8 +80,10 @@ check(look.opacity === "0.5", `its body is half seen: ${look.opacity}`);
 const after = await box(card("keys", "reverb"));
 check(!!before && !!after && Math.abs(before.x - after.x) < 1 && Math.abs(before.y - after.y) < 1, `the card keeps its place: ${JSON.stringify([before?.x, before?.y])} → ${JSON.stringify([after?.x, after?.y])}`);
 const reverbId = await page.$eval(card("keys", "reverb"), (e) => e.dataset.nodeId);
-const dashed = await page.$$eval(`[data-module="keys"] path[data-from="${reverbId}"]`, (ps) => ps.map((p) => [p.dataset.bypassed, p.getAttribute("stroke-dasharray")].join()));
-check(dashed.length === 1 && dashed[0] === "true,6 5", `the line out of it is dashed: ${dashed}`);
+if (!CHAIN) {
+  const dashed = await page.$$eval(`[data-module="keys"] path[data-from="${reverbId}"]`, (ps) => ps.map((p) => [p.dataset.bypassed, p.getAttribute("stroke-dasharray")].join()));
+  check(dashed.length === 1 && dashed[0] === "true,6 5", `the line out of it is dashed: ${dashed}`);
+}
 check((await toasts()).length === 0, `no toast: the card says it (${(await toasts()).join(" | ")})`);
 check(/^Undo turning Reverb off \(/.test(await undoTitle()), `Undo says what it undoes: ${await undoTitle()}`);
 await linted(card("keys", "reverb"), "the card turned off");

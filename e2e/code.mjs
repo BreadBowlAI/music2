@@ -17,7 +17,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && !/status of (400|409)/.test(m.text()) && errors.push(m.text()));
 page.on("pageerror", (e) => { console.log("PAGEERROR", String(e), e.stack?.slice(0, 300)); errors.push(String(e)); });
 // The dock as tall as the panel it replaced was at this size (45%): the editor shows the whole of bass.ts.
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };

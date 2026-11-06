@@ -24,7 +24,7 @@ page.on("response", (r) => {
   const what = `${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`;
   if (r.status() >= 400 && r.status() !== 423 && what !== "400 GET /api/graph") consoleErrors.push(what);
 });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);
 const headers = { "x-m2-token": sess.page_token, "content-type": "application/json" };
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers })).json();
 const post = async (path, body) => {

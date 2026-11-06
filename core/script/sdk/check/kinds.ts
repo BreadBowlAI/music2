@@ -229,6 +229,32 @@ export const groups = [
   }, () => x),
 ];
 
+// A face names this descriptor's values and views, each once (CARD-40). A mistake is marked on `face`.
+export const faces = [
+  component({
+    id: "face-ok",
+    controls: { a: control.secs(0.01), s: control.frac(0.5), b: control.hz(1) },
+    settings: { c: setting.int(1) },
+    editor: { views: { amp: view.envelope("a", "a", "s", "a") }, groups: { One: ["a", "b"] }, face: ["amp", "a", "c"] },
+  }, () => x),
+  component({
+    id: "face-unknown",
+    controls: { a: control.hz(1) },
+    editor: {
+      // @ts-expect-error a face naming a key this descriptor doesn't have
+      face: ["a", "b"],
+    },
+  }, () => x),
+  component({
+    id: "face-twice",
+    controls: { a: control.hz(1) },
+    editor: {
+      // @ts-expect-error a value twice on the face
+      face: ["a", "a"],
+    },
+  }, () => x),
+];
+
 // A body may type its knobs by their units, as the descriptor declares them.
 export const annotated = component(
   { id: "annotated", inputs: { in: port.audio() }, controls: { cutoff: control.hz(800), q: control.scalar(0.7).optional() }, output: port.audio() },
