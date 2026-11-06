@@ -954,6 +954,94 @@ mod sung {
         }
     }
 
+    /// A singer as pop sings (the review's S2, S3, S11): a breath, C4 scooped up from B3, a glide to
+    /// E4 over 120 ms, an "s", G4 held with a vibrato that grows to `vib` semitones (and a tremolo
+    /// with it), a legato step to F4, a breath, and D4 with a soft 40 ms attack.
+    fn pop_singer(sr: f64, vib: f64) -> Vec<f32> {
+        let n = (5.0 * sr) as usize;
+        let width = 0.0004;
+        let pulse = |tau: f64| if (0.0..width).contains(&tau) { 0.5 - 0.5 * (std::f64::consts::TAU * tau / width).cos() } else { 0.0 };
+        let mut filters = AH.map(|(f, bw)| Formant::new(sr, f, bw));
+        let (mut phase, mut pulses, mut last) = (0.0f64, [f64::NEG_INFINITY; 2], 0.0f64);
+        let mut noise = Lcg(5);
+        let mut nl = 0.0;
+        let ramp = |t: f64, a: f64, b: f64, d: f64| ((t - a).min(b - t) / d).clamp(0.0, 1.0);
+        let swell = |t: f64| ((t - 2.1) / 0.4).clamp(0.0, 1.0) * (std::f64::consts::TAU * 5.5 * t).sin();
+        let midi = |t: f64| -> f64 {
+            if t < 0.61 {
+                59.0 + (t - 0.55).max(0.0) / 0.06
+            } else if t < 1.0 {
+                60.0
+            } else if t < 1.12 {
+                60.0 + 4.0 * (t - 1.0) / 0.12
+            } else if t < 1.7 {
+                64.0
+            } else if t < 3.5 {
+                67.0 + vib * swell(t)
+            } else if t < 4.2 {
+                65.0
+            } else {
+                62.0
+            }
+        };
+        let voiced = |t: f64| ramp(t, 0.55, 1.6, 0.02) + ramp(t, 1.75, 4.0, 0.03) + ramp(t, 4.45, 4.8, 0.04);
+        let breath = |t: f64| ramp(t, 0.3, 0.5, 0.05) + ramp(t, 4.05, 4.35, 0.05);
+        let ess = |t: f64| ramp(t, 1.6, 1.75, 0.005);
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f64 / sr;
+            let f = hz_of(midi(t));
+            phase += f / sr;
+            if phase >= 1.0 {
+                phase -= 1.0;
+                pulses = [pulses[1], t - phase / f];
+            }
+            let g = pulses.iter().map(|&p| pulse(t - p)).sum::<f64>();
+            let mut v = g - last;
+            last = g;
+            for fl in &mut filters {
+                v = fl.tick(v);
+            }
+            let trem = 1.0 + 0.17 * vib * swell(t);
+            let w = noise.next() as f64 / 32_768.0 - 1.0;
+            let h = w - nl;
+            nl = w;
+            out.push((voiced(t) * trem * v * 6.0 + ess(t) * h * 0.15 + breath(t) * w * 0.03) as f32);
+        }
+        out
+    }
+
+    // VOX-42 (the review's S2, S3, S11): the pop singer's five notes at every rate, whatever the
+    // held note's vibrato up to a semitone each way: breaths and the "s" are no note, the held G4
+    // with its wide vibrato stays one, the glide is cut at the same moment at every rate (within a
+    // hop, 6 ms at 44.1 kHz), each start sung after silence or a breath is found within 8 ms (a
+    // legato step within 10 ms; after the "s", within 11 ms: two hops), and each centre within 15
+    // cents.
+    #[test]
+    fn notes_hears_a_pop_singer_at_every_rate() {
+        let mut glide_cuts = vec![];
+        for sr in RATES {
+            for vib in [0.3, 0.5, 0.7, 1.0] {
+                let found = runs(&measured(sr, pop_singer(sr as f64, vib)), sr);
+                let said: Vec<String> = found.iter().map(|(a, b, c)| format!("{a:.4}-{b:.4}@{c:.2}")).collect();
+                assert_eq!(found.len(), 5, "{sr} Hz, vibrato ±{vib}: five notes, not {}", said.join("  "));
+                // After the "s", a reading's window holds the hiss up to 11 ms into the note; across a
+                // legato step it holds both notes, up to 10 ms.
+                let sung = [(0.55, 60.0, 0.008), (f64::NAN, 64.0, 0.0), (1.75, 67.0, 0.011), (3.5, 65.0, 0.010), (4.45, 62.0, 0.008)];
+                for ((at, _, centre), (when, midi, within)) in found.iter().zip(sung) {
+                    assert!((centre - midi).abs() < 0.15, "{sr} Hz, ±{vib}: a centre {centre:.3} for {midi}: {}", said.join("  "));
+                    if when.is_finite() {
+                        assert!((at - when).abs() < within, "{sr} Hz, ±{vib}: a start at {at:.4}, sung at {when}: {}", said.join("  "));
+                    }
+                }
+                assert!((1.0..1.12).contains(&found[1].0), "{sr} Hz: the glide is cut inside it: {}", found[1].0);
+                glide_cuts.push(found[1].0);
+            }
+        }
+        let (lo, hi) = glide_cuts.iter().fold((f64::MAX, f64::MIN), |(a, b), &c| (a.min(c), b.max(c)));
+        assert!(hi - lo < 0.006, "the glide is cut at one moment at every rate, within a hop: from {lo:.4} to {hi:.4} s");
+    }
+
     // VOX-42: `hz`, `clarity` and `level` are `pitch`'s reading of the window centred on each hop,
     // the same numbers; and the same bits however the host splits the calls.
     #[test]
@@ -1077,6 +1165,45 @@ mod sung {
                 let (mean, wobble) = heard_in(&out);
                 assert!((mean - want).abs() < 0.05, "{sr}: moved {moved}: plays at {mean:.3}, not {want}");
                 assert!(wobble < 0.15, "{sr}: moved {moved}: straight, but wobbles by {wobble:.3}");
+            }
+        }
+    }
+
+    // VOX-45, RENDER-30b (the review's S1): a note edited in a line sung legato, its neighbours
+    // touching it: past the note, where nothing moves, the grains line up with the file again, so
+    // each end of the phrase, where it is crossfaded into the clip's normal path, is the file within
+    // a thousandth of its peak, at every rate and for a move up, a small one and one down.
+    #[test]
+    fn a_phrase_sung_legato_ends_on_the_file() {
+        for sr in RATES {
+            let song = Song {
+                secs: 2.6,
+                midi: &|t| {
+                    if t < 1.0 {
+                        52.0
+                    } else if t < 1.5 {
+                        55.0
+                    } else {
+                        57.0
+                    }
+                },
+                vibrato: 0.3,
+                formants: AH,
+                s: None,
+            };
+            let x = between(song.sing(sr), sr, 0.3, 2.4);
+            for by in [2.0, 0.5, -3.0] {
+                let notes = [[0.3, 0.7, 52.0, 0.0, 0.0], [1.0, 0.5, 55.0, by, 0.0], [1.5, 0.9, 57.0, 0.0, 0.0]];
+                let out = voiced(sr, &x, &[[0.0, 0.0]], (0.95, 1.55), &notes);
+                let f0 = (0.95 * sr as f64).round() as usize;
+                let worst = |a: f64, b: f64| {
+                    let (a, b) = ((a * sr as f64) as usize - f0, (b * sr as f64) as usize - f0);
+                    (a..b.min(out.len())).map(|i| (out[i] - cubic(&x, (f0 + i) as f64)).abs()).fold(0.0f32, f32::max)
+                };
+                let peak = x.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+                let (start, end) = (worst(0.95, 0.96) / peak, worst(1.54, 1.55) / peak);
+                assert!(start < 1e-3 && end < 1e-3, "{sr} Hz, moved {by}: its ends are the file: start {start}, end {end} of its peak");
+                assert!(worst(1.1, 1.4) > 0.05 * peak, "{sr} Hz, moved {by}: and the note is moved");
             }
         }
     }

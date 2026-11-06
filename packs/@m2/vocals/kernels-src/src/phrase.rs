@@ -27,8 +27,10 @@
 //! period each side and at most 10 ms; the next is laid that pulse's period over `2^(shift/12)`
 //! later along the output, so a higher voice lays them closer. A voiced run starts on a pulse, laid
 //! where the time map puts it. Where no pulse is near, grains of 10 ms each side are read where the
-//! time map puts them. Each sample out is the sum of the grains over it divided by the sum of their
-//! windows. Grain centres aren't rounded to a frame: each frame of a grain reads the file at the
+//! time map puts them, and so they are where nothing moves the voice and the map reads at speed 1:
+//! past an edited note the voice lines up with the file again, so a phrase's ends join the clip's
+//! normal path exactly, its neighbours sung legato or not. Each sample out is the sum of the grains
+//! over it divided by the sum of their windows. Grain centres aren't rounded to a frame: each frame of a grain reads the file at the
 //! grain's source point plus its distance from the centre, so with no shift and the map at speed 1
 //! every grain reads the very point the normal path reads, and the voice gives back the file.
 //!
@@ -217,6 +219,23 @@ impl Voice {
         (n.by + pull).clamp(DOWN, UP)
     }
 
+    /// Whether the sound plays as it is at file frame `f`: nothing moves it, and the time map reads
+    /// the file there at speed 1. There grains are read where the map puts them (as where no pulse
+    /// is), so the voice lines up with the file again past an edited note, and a phrase's ends
+    /// join the clip's normal path with no dip, its neighbours sung legato or not (the review's S1).
+    fn as_is(&mut self, f: f64) -> bool {
+        let s = f / self.src_rate;
+        let speed = match self.map.len() {
+            0 | 1 => 1.0,
+            n => {
+                let i = self.map.partition_point(|p| p[0] <= s).clamp(1, n - 1);
+                let (a, b) = (self.map[i - 1], self.map[i]);
+                (b[0] - a[0]) / (b[1] - a[1])
+            }
+        };
+        (speed - 1.0).abs() < 1e-9 && self.shift(f) == 0.0
+    }
+
     fn mark(&self, j: usize) -> Option<Mark> {
         (j < self.count && j + MARKS > self.count).then(|| self.marks[j % MARKS])
     }
@@ -345,6 +364,7 @@ impl Voice {
                 self.look(ahead);
                 if let Some((j, m, z)) = self.first_between(at, next)
                     && self.sung_at(m.at as f64).is_some()
+                    && !self.as_is(m.at as f64)
                 {
                     return self.voiced(z, j, m);
                 }
@@ -356,6 +376,9 @@ impl Voice {
                 let next = at + (period / 2f64.powf(semis as f64 / 12.0)).max(1.0);
                 let f = self.src(next);
                 self.look(f.ceil() as i64 + 2 * self.longest as i64);
+                if self.as_is(f) {
+                    return (Grain { at: next, half: self.pass, read: f }, Last::Pass { at: next, half: self.pass });
+                }
                 match self.nearest(f) {
                     Some((j, m)) if self.sung_at(f).is_some() && (m.at as f64 - f).abs() <= 0.5 * m.period as f64 + 1.0 => {
                         self.voiced(next, j, m)

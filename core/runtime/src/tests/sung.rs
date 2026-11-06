@@ -213,6 +213,64 @@ fn an_unedited_phrase_plays_the_bits_of_the_clip_with_no_render() {
     }
 }
 
+/// A legato file (the review's S1): one voice from 0.3 to 2.4 s, E3, G3 from 1.0, A3 from 1.5, no
+/// silence between the notes.
+fn legato_file(dir: &Path) {
+    let midi = |t: f64| {
+        (if t < 1.0 {
+            52.0
+        } else if t < 1.5 {
+            55.0
+        } else {
+            57.0
+        }) + 0.3 * (std::f64::consts::TAU * 5.5 * t).sin()
+    };
+    audio::write_wav(&dir.join("a.wav"), &[singer(RATE, 3.0, &midi, &sung_between(0.3, 2.4))], RATE).unwrap();
+}
+
+fn legato_notes(second: f64) -> Value {
+    json!([
+        {"at": 0.3, "length": 0.7, "pitch": 52, "move": 0, "straighten": 0},
+        {"at": 1.0, "length": 0.5, "pitch": 55, "move": second, "straighten": 0},
+        {"at": 1.5, "length": 0.9, "pitch": 57, "move": 0, "straighten": 0}
+    ])
+}
+
+// RENDER-30b, VOX-45 (the review's S1): a note edited in a line sung legato, its neighbours
+// touching it, joins the clip's normal path with no dip: over each of the phrase's 10 ms
+// crossfades the lane plays the clip as it was within a thousandth of the voice's peak, for a move
+// up, a small one and one down; and its bits are the clip's everywhere but its phrase.
+#[test]
+fn an_edited_note_sung_legato_joins_without_a_dip() {
+    let dir = project(&[]);
+    legato_file(&dir);
+    let pk = own_packages();
+    let k = offline::Kernel::of(&pk, offline::STRETCH).unwrap();
+    let makers = audio::Makers { stretch: Some(&k), packages: Some(&pk) };
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let len = 3 * RATE as usize;
+    let lane = |c: m2_song::AudioClip| {
+        let mut cache = audio::Cache::with_renders_in(None);
+        played(&audio::AudioLane::build_in(&[c], &|a| Some(dir.join(a)), &mut cache, &tempo, RATE as f64, 1, makers, None).unwrap(), len)
+    };
+    let plain = lane(the_clip(json!([]), None));
+    let peak = plain.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    let fade = (0.01 * RATE as f64) as usize;
+    for by in [2.0, 0.5, -3.0] {
+        let c = the_clip(json!([]), Some(legato_notes(by)));
+        let edited = lane(c.clone());
+        let ph = audio::phrases_of(&c, &tempo, RATE as f64);
+        assert_eq!(ph.len(), 1);
+        let p = &ph[0];
+        for (edge, a, b) in [("start", p.from, p.from + fade), ("end", p.to - fade, p.to)] {
+            let worst = (a..b).map(|i| (edited[i] - plain[i]).abs()).fold(0.0f32, f32::max) / peak;
+            assert!(worst < 1e-3, "moved {by}: the phrase's {edge} crossfade is the clip as it was, but for {worst} of its peak");
+        }
+        let d = differ(&plain, &edited);
+        assert!(d[0] >= p.from && *d.last().unwrap() < p.to, "moved {by}: only the phrase changed");
+    }
+}
+
 // RENDER-30b: live, after any order of edits, once their renders are made, the lane plays the bits
 // an export plays. While a phrase's render is held, the lane plays what it played there before (for
 // a first edit, the clip with no render), with every chunk there and no miss; once whole, the disk
