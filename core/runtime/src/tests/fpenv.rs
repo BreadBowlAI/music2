@@ -75,7 +75,7 @@ fn long_tail() -> (Ir, DataSet) {
         fx("chorus", "std:chorus", json!({"in": "s"})),
         fx("phaser", "@m2/effects:phaser", json!({"in": "s", "feedback": "hi"})),
         fx("tremolo", "@m2/effects:tremolo", json!({"in": "s"})),
-        fx("compress", "std:compress", json!({"in": "s", "threshold": "deep", "ratio": "ratio"})),
+        fx("compress", "std:compress", json!({"in": "s", "threshold": "deep", "ratio": "ratio", "key": "s"})),
         fx("eq3", "std:eq3", json!({"in": "s"})),
         fx("bitcrush", "@m2/effects:bitcrush", json!({"in": "s"})),
         fx("limit", "std:limit", json!({"in": "s"})),

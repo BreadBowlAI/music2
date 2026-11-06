@@ -12,9 +12,18 @@ use super::*;
 /// (`packs/@m2/effects/kernels-src`), tested there by the same harness.
 const ALL: [Fx; 3] = [
     Fx { name: "chorus", run: run::<Chorus>, controls: &[0.8, 0.5, 0.5, 1.0] },
-    Fx { name: "compress", run: run::<Compress>, controls: &[-18.0, 3.0, 0.01, 0.15, 4.0] },
+    Fx { name: "compress", run: self_keyed, controls: &[-18.0, 3.0, 0.01, 0.15, 4.0] },
     Fx { name: "eq3", run: run::<Eq3>, controls: &[4.0, -3.0, 5.0, 200.0, 1000.0, 4000.0] },
 ];
+
+/// The compressor as a call with no key plays it (PKG-19): its key, the last input, is its own
+/// audio, a mono sound's copied to both sides as the host copies it into an `audio<2>` port.
+fn self_keyed(channels: usize, frames: usize, split: usize, input: Input<'_>) -> Vec<[f32; 2]> {
+    run::<Compress>(channels, frames, split, &|p, c, t| match p {
+        6 => input(0, if channels == 1 { 0 } else { c }, t),
+        _ => input(p, c, t),
+    })
+}
 
 // ---------------------------------------------------------------- every effect
 
@@ -87,6 +96,33 @@ fn compressor_follows_its_curve() {
     assert!((made_up + 34.0).abs() < 0.05, "makeup: {made_up:.2} dB");
     let off = at(1.0, 0.0, 1.0);
     assert!(off.abs() < 0.05, "ratio 1 still compresses: {off:.2} dB");
+}
+
+// PKG-19: keyed from another sound, the compressor's detector hears only the key: a quiet sine
+// under a loud key is turned down as a loud sine would be, and a loud one under a silent key not
+// at all, bit for bit.
+#[test]
+fn a_keyed_compressor_hears_its_key() {
+    let controls = [-20.0, 4.0, 0.001, 0.05, 0.0];
+    let sine =
+        |amp: f32| move |c: usize, t: usize| if c == 0 { amp * (std::f32::consts::TAU * 1_000.0 * t as f32 / SR).sin() } else { 0.0 };
+    let keyed = |amp: f32, key: f32| {
+        let x = sine(amp);
+        let k = sine(key);
+        run::<Compress>(1, 48_000, BLOCK, &|p, c, t| match p {
+            0 => x(c, t),
+            6 => k(0, t),
+            _ => controls[p - 1],
+        })
+    };
+    let settled = |out: &[[f32; 2]]| rms(&out[24_000..], 0);
+    // A loud key (0 dB) turns a quiet sine (-40 dB) down by what it turns a 0 dB one down: 15 dB.
+    let ducked = db(settled(&keyed(0.01, 1.0))) - db(settled(&keyed(0.01, 0.0)));
+    assert!((ducked + 15.0).abs() < 0.5, "a loud key turns it down {ducked:.2} dB, not 15");
+    // A silent key leaves a loud sine as it is.
+    let x = sine(1.0);
+    let out = keyed(1.0, 0.0);
+    assert!(out.iter().enumerate().all(|(t, f)| f[0] == x(0, t)), "a silent key still compresses");
 }
 
 #[test]

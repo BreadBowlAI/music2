@@ -235,8 +235,11 @@ fn a_broken_package_module_still_opens() {
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
-    assert_eq!(invalid.len(), 2, "{invalid:?}");
+    // @m2/mixing's Pump is built on std/control (PACK-28), so the pack's module doesn't load either,
+    // and says why.
+    assert_eq!(invalid.len(), 3, "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/control") && m.contains("broken on purpose")), "{invalid:?}");
+    assert!(invalid.iter().any(|m| m.contains("`@m2/mixing`") && m.contains("broken on purpose")), "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
     assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
@@ -396,7 +399,9 @@ fn planned_call_forms_are_current() {
         crate::plugins::track_call_text("clap:m2.probe", "m2-probe", "m2 probe")
     ));
     // An audio track (studio lane A's Q8).
-    forms.push(format!("    // an audio track added\n    {},\n", crate::tracks::audio_call_text("audio", "Audio")));
+    forms.push(format!("    // an audio track added\n    {},\n", crate::tracks::audio_call_text("audio", "Audio", false)));
+    // A mono track's bounce, on a mono lane (RENDER-40).
+    forms.push(format!("    // a mono track bounced\n    {},\n", crate::tracks::audio_call_text("keys-audio", "Keys audio", true)));
     // A bus of each kind the Add bus menu makes (RENDER-34).
     for kind in crate::bus::BusKind::ALL {
         let name = crate::bus::bus_import(kind);

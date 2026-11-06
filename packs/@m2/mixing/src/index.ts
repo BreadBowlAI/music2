@@ -1,13 +1,16 @@
 // @m2/mixing: the tools a mix needs (PACK-26): an eight-band parametric EQ, a gate, a transient
-// shaper, a de-esser and a multiband compressor. std keeps the four every mix starts with (eq3,
-// compress, limit, duck, in std/fx).
+// shaper, a de-esser, a multiband compressor, and Pump (PACK-28). std keeps the four every mix
+// starts with (eq3, compress, limit, duck, in std/fx).
 //
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
-// `insert` when it is added. Each plays the pack's own kernel (`@m2/mixing:eq` …, built from
-// kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
-// `.smooth()`. The pack uses none of std's code.
+// `insert` when it is added. The first five play the pack's own kernel (`@m2/mixing:eq` …, built
+// from kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
+// `.smooth()`; they use none of std's code. Pump is std's blocks alone, in TypeScript.
 
-import { component, control, kernel, port, signature, type Audio, type Params } from "@m2/core";
+import { component, control, kernel, port, setting, signature, time, type Audio, type Params } from "@m2/core";
+import { lfo, range } from "std/control";
+import { duck } from "std/fx";
+import { blend, scale } from "std/math";
 
 // ---------------------------------------------------------------- the parametric EQ
 
@@ -81,10 +84,9 @@ export const gate = component(
     id: "gate",
     label: "Gate",
     signature: signature<(x: Audio, key?: Audio) => Audio>(),
-    // `key` only listens (PKG-13): muting the track it comes from must not shut the gate. It is
-    // `many()` only because core has no input that may be left out yet (gaps.md): TypeScript allows
-    // one, the body refuses more, and the descriptor says `many`.
-    inputs: { in: port.audio(), key: port.audio({ sidechain: true }).many() },
+    // `key` only listens (PKG-13): muting the track it comes from must not shut the gate. A call
+    // may leave it out (PKG-18), and its card's Listens to picks it (CARD-35).
+    inputs: { in: port.audio(), key: port.audio({ sidechain: true }).optional() },
     controls: {
       threshold: control.db(-40).range(-80, 0),
       attack: control.ms(1).range(0.1, 100).log(),
@@ -95,10 +97,8 @@ export const gate = component(
     output: port.audio(),
     editor: { category: "Dynamics", description: "Silences a track between its sounds", insert: { threshold: -40 } },
   },
-  (x: Audio, key: Audio[], { threshold, attack, hold, release, range }: Params) => {
-    if (key.length > 1) throw new Error(`gate() listens to one key, not ${key.length}: gate(x, kick.out)`);
-    return kernel("@m2/mixing:gate", { in: x, key: key[0] ?? x, threshold, attack, hold, release, range });
-  },
+  (x: Audio, key: Audio | undefined, { threshold, attack, hold, release, range }: Params) =>
+    kernel("@m2/mixing:gate", { in: x, key: key ?? x, threshold, attack, hold, release, range }),
 );
 
 /**
@@ -206,4 +206,46 @@ export const multiband = component(
       high_release: c.highRelease,
       high_gain: c.highGain,
     }),
+);
+
+// ---------------------------------------------------------------- the beat
+
+/** How often Pump dips, by a note's length, and how many beats that is. */
+const RATES = { "1/2": 2, "1/4": 1, "1/8": 0.5, "1/16": 0.25 } as const;
+
+/**
+ * Pump: the sound dips on every beat and swells back, in time with the song, with no sidechain
+ * (the pop "pump"). `depth` (dB) is how far it dips at the start of each step, `shape` (0 to 1)
+ * how fast it comes back (0: slowly, in a straight line over the whole step; 1: most of the way in
+ * its first third), and `rate` how often: every `1/4` note (a beat), `1/8`, `1/16` or `1/2`. At
+ * depth 0 it plays the sound as it is (PACK-28).
+ */
+export const pump = component(
+  {
+    id: "pump",
+    label: "Pump",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    controls: {
+      depth: control.db(-8).range(-24, 0),
+      // Read every sample (a blend), so a step would click (PKG-14).
+      shape: control.frac(0.5).range(0, 1).smooth(),
+    },
+    // A menu: how often it dips. Fixed when the song builds, as an LFO's period is.
+    settings: { rate: setting.choice(["1/2", "1/4", "1/8", "1/16"], "1/4") },
+    output: port.audio(),
+    editor: {
+      category: "Dynamics",
+      description: "Makes the sound dip on every beat and swell back, in time with the song",
+      insert: { depth: -8, shape: 0.5 },
+    },
+  },
+  (x: Audio, { depth, shape, rate }: Params) => {
+    // How far through the step the song is, 0 to 1, and what is left of it.
+    const p = lfo(time.beats, { period: RATES[rate as keyof typeof RATES], shape: "saw" });
+    const left = range(p, 1, 0);
+    const squared = scale(left, left);
+    // What is left in a straight line at shape 0, its fourth power at 1: the dip in dB, times depth.
+    return duck(x, blend(left, scale(squared, squared), shape), { depth });
+  },
 );

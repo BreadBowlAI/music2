@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { stopBounce, useBounce } from "../lib/bouncing";
 import { useExport } from "../lib/exporting";
 import { graphApi } from "../lib/graph";
 import { acted, dismissNotice, noticeText, refused, stepped, useNotice, type Notice } from "../lib/notice";
@@ -39,6 +40,7 @@ export default function Toasts() {
       style={at ? { left: at.x, bottom: at.bottom } : { left: "50%", bottom: 24 }}
     >
       <OtherExport />
+      <Bouncing />
       <NoticeView />
       {toasts.map((t) => (
         <ToastView key={t.id} toast={t} />
@@ -146,6 +148,36 @@ function NoticeCard({ notice }: { notice: Notice }) {
           Undo
         </button>
       )}
+    </div>
+  );
+}
+
+/** A track being bounced to audio (RENDER-40): how far it is, and Stop, which adds nothing. */
+function Bouncing() {
+  const { label, progress, stopping } = useBounce();
+  if (progress === null) return null;
+  const percent = Math.round(progress * 100);
+  return (
+    <div data-testid="bouncing" className="w-72 px-3 py-2 rounded-md bg-raised shadow-pop text-base text-fg pointer-events-auto animate-rise">
+      <div className="flex items-baseline gap-2">
+        <span className="min-w-0 truncate">
+          Bouncing <span className="font-medium">{label}</span> to audio
+        </span>
+        <span className="ml-auto text-xs text-fg-muted">{percent}%</span>
+        <button
+          // A click never moves the keyboard's focus here: Space stays the transport (taste.md §2.11).
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void stopBounce()}
+          disabled={stopping}
+          data-testid="bounce-stop"
+          className="shrink-0 text-accent hover:text-accent-strong font-medium cursor-pointer disabled:text-fg-muted disabled:cursor-default transition-colors duration-80 ease-linear"
+        >
+          {stopping ? "Stopping…" : "Stop"}
+        </button>
+      </div>
+      <div role="progressbar" aria-label={`Bouncing ${label}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="mt-2 h-1 rounded-full bg-line overflow-hidden">
+        <div className="h-full rounded-full bg-accent transition-[width] duration-140" style={{ width: `${Math.max(progress, 0.02) * 100}%` }} />
+      </div>
     </div>
   );
 }

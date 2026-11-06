@@ -80,6 +80,12 @@ export const duck = component(
   (x: Audio) => x,
 );
 
+/** A key a call may leave out (PKG-18): the audio, then the key or nothing. Two inputs lead, so a signature says their order. */
+export const keyed = component(
+  { id: "keyed", signature: signature<(x: Audio, key?: Audio) => Audio>(), inputs: { in: port.audio(), key: port.audio({ sidechain: true }).optional() }, controls: { depth: control.db(-8) }, output: port.audio() },
+  (x: Audio, key: Audio | undefined) => key ?? x,
+);
+
 /** One positional control after the audio: the options form only for `bypass` (Next D1). */
 export const gain = component(
   { id: "gain", inputs: { in: port.audio() }, controls: { db: control.db(0) }, output: port.audio(), positional: ["db"] },
@@ -139,6 +145,16 @@ export const ok = [
   gain(x, -3),
   gain(x, -3, { bypass: true }),
   gain(x, { bypass: false }),
+  // A key a call may leave out (PKG-18): left out, given, or `undefined` in its place.
+  keyed(x),
+  keyed(x, x),
+  keyed(x, { depth: -6 }),
+  keyed(x, x, { depth: -6 }),
+  keyed(x, undefined, { depth: -6 }),
+  // @ts-expect-error one key, not two
+  keyed(x, x, x),
+  // @ts-expect-error a key is a sound, not a number
+  keyed(x, 0.5),
 ];
 
 // The generic helpers' results keep their kind.

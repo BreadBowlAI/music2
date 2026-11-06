@@ -1,8 +1,8 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser and a multiband compressor).
-- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 22 effects in seven groups.
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump).
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 24 effects in seven groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
@@ -117,18 +117,18 @@ A song made before std 0.8 is told, in words, what to change: first its std line
   - A mistake is said in words when the song builds: "regions: region 3: keys 70 to 60: the lowest is above the highest".
   - Regions can come from a helper function or a `const`, as a list of many files is easiest to write. A `trigger` kept in a `const` needs the const's type, or the code editor reads it as any text: `const keyUps: Region[] = [{ file: "key-up.wav", trigger: "release" }]`, with `import { type Region } from "@m2/core"`.
 
-  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#sounds)).
+  The Sampler's card in Device says what it plays ("5 recordings, 2 layers, round robin of 2, release sounds, loops"). Its regions are changed in code: a WAV dropped on it is refused. A MIDI keyboard's sustain pedal holds its notes, as it holds every instrument's ([The window](window.md)). Not yet: choke groups (an open hat cut by a closed one), blends between velocity layers, and instruments too big for memory ([gap #22](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 - **The first instruments** (`@m2/synths`): `bass`, `pluck` and `pad`, simple versions built from std's building blocks below, short enough to read and copy. Code plays them; the lists leave them out. For a song, the ones above sound fuller: `synth.bass` or `synth.sub`, `synth.pluck` and `synth.pad`. The drums are the Drum's (`drums.drum`), alone or in a [drum kit](#drum-kits); the starter song plays its kick and hats on the Drum.
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
-**Effects**, as the effect browser groups them. Eight are `@m2/effects`', five `@m2/mixing`'s; the filters, `eq3`, `compress`, `limit`, `gain` and `pan` are std's, since every mix needs them:
+**Effects**, as the effect browser groups them. Eight are `@m2/effects`', six `@m2/mixing`'s; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
 
 | Group | Effects |
 |---|---|
 | Filter | `lowpass`, `highpass`, `bandpass`, `notch` (std, `std/filter`) |
 | EQ | `eq3` (std, `std/fx`), `eq` (`@m2/mixing`) |
-| Dynamics | `compress`, `limit` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband` (`@m2/mixing`) |
+| Dynamics | `compress`, `limit`, `duck` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband`, `pump` (`@m2/mixing`) |
 | Distortion | `drive`, `bitcrush` (`@m2/effects`) |
 | Delay & Reverb | `delay`, `reverb` (`@m2/effects`) |
 | Modulation | `chorus`, `phaser`, `tremolo` (`@m2/effects`) |
@@ -136,7 +136,9 @@ A song made before std 0.8 is told, in words, what to change: first its std line
 
 Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
-**`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays. It needs a second signal, so it's written in code rather than added from the browser.
+**`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from + Effect like any effect, then pick the track in its card's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
+
+**`compress`** (`std/fx`) hears its own sound, or another track's: `compress(bass.out, kick.out)` squeezes the bass only while the kick is loud. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 
 **Mixing tools** (`@m2/mixing`: `import { eq, gate } from "@m2/mixing"`). Each is an effect: add it after any sound from + Effect, or write it in code.
 
@@ -147,6 +149,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | `transient`, Transient shaper | making each hit punchier or softer, and its ring longer or shorter | `attack`, `sustain` |
 | `deesser`, De-esser | taming the hiss of S and T sounds in a voice | `freq`, `threshold`, `amount` |
 | `multiband`, Multiband compressor | compressing the lows, mids and highs each on its own, so a booming bass doesn't squeeze the voice | `lowMid`, `midHigh`, then for each band (`low`, `mid`, `high`) its threshold, ratio, attack, release and gain: `lowRatio`, `midGain` … |
+| `pump`, Pump | the pop "pump": the sound dips on every beat and swells back, with no other track needed | `depth`, `shape`, `rate` (a menu) |
 
 | Word | Meaning |
 |---|---|
@@ -161,13 +164,39 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | **sidechain** | a sound that only steers a tool, and isn't heard through it |
 | **transient** | the very start of a hit: its crack, click or thump |
 | **sustain** | the rest of a hit, as it rings and fades |
+| **depth** | how far down a duck or a pump turns the sound, in dB |
+| **rate** | how often Pump dips: every `1/4` note (each beat), `1/8`, `1/16` or `1/2` |
 
 - **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs). A band moved while it plays crossfades to its new setting, so a change never clicks or booms; a big change on a very resonant band (a high Q, a low frequency) waits up to a second for the new filter to settle before you hear it. A small move, a knob's drag or a lane's line, is heard at once. The card draws no curve yet.
-- **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its key is written in code for now.
+- **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 - **The transient shaper** turns a hit's start by up to `attack` dB, and its tail by up to `sustain` dB. The faster a tail fades, the more of `sustain` it gets: a snare's short ring all of it, a piano's long fade a quarter or so in its first half second, more as it goes on. A steady sound passes as it is.
 - **The de-esser** turns down the band around `freq` (5 to 8 kHz for most voices), a bell about an octave and a half wide, deepest at `freq`, and only while that band is louder than `threshold`, by at most `amount` dB. While it works, a loud tone an octave away loses a dB or so; a voice's body, two octaves and more below, is left alone.
 - **The multiband compressor** splits the sound where `lowMid` and `midHigh` say, with the crossovers most multiband compressors use (Linkwitz-Riley's); if they cross, the lower one splits the lows from the mids. At ratio 1, with every band's `gain` at 0, it changes no level at any frequency; like every crossover of its kind, it turns the phase a little.
-- Each has a few presets on its card's **Presets** (`Tight drums`, `Punchy drums`, `Bright voice`, `Gentle glue` …).
+- **Pump** dips the sound at the start of every step, by `depth` dB (0 is no dip at all), and brings it back over the step: `shape` 0 swells back slowly, in a straight line, `shape` 1 comes back fast, most of the way in the first third. `rate` is how long a step is, by a note's length: `1/4` (every beat, the default), `1/8`, `1/16` or `1/2`. It is a menu that rebuilds the sound when you pick, so it can't be automated. It follows the song's beats, so it stays in time at any tempo, and plays the same in the export.
+- Each but Pump has a few presets on its card's **Presets** (`Tight drums`, `Punchy drums`, `Bright voice`, `Gentle glue` …).
+
+### Sidechain
+
+A **sidechain** is one track's sound steering an effect on another. The famous one: every time the kick hits, the bass dips, then swells back. The kick punches through, and the mix breathes.
+
+To make the bass duck under the kick:
+
+1. In the Device view (⌥1), open the **song** tab: the boxes there are how the tracks are mixed.
+2. On the box **Bass.out** (the bass's sound, where the song mixes it), click **+**, and pick **Duck** (Dynamics).
+3. On the Duck's card, click **Listens to: None** and pick **Kick**.
+4. Play. The bass dips on each kick. Turn **depth** for more or less (−8 dB is a good start).
+
+That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step one undo step (⌘Z). Picking **None** takes the kick out again. A track that has no `env` export is heard through `follow(<track>.out)`, which music2 imports for you.
+
+| Effect | What its **Listens to** does |
+|---|---|
+| `duck` | turns the sound down while the track it listens to plays |
+| `compress` | squeezes the sound while the track it listens to is loud (**No other track**: its own sound) |
+| `gate` | opens only while the track it listens to plays (**No other track**: its own sound) |
+
+- Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
+- Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.
+- An effect written in a track's own file can't listen to other tracks: its card says so. Move it to `song.ts`, where every track is.
 
 **`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 

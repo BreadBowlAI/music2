@@ -1,5 +1,5 @@
 // An effect card's ⋯ menu (lane D of next): turn an effect off and on again (D1), move it before
-// or after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo
+// or after the effect written next to it (D2); and what an effect listens to (CARD-35). Each is one undo
 // step on the server, a `TextEdit` of the effects' own calls; a refusal says why in words. What
 // the view says of an effect card is added to graph.ts's types from here, as graph8b.ts adds its
 // own.
@@ -26,14 +26,27 @@ export interface MoveRow {
   refused?: string;
 }
 
-/** A Duck's "Listens to" row: the track it hears now, the ones it could, or why it can't change here. */
+/**
+ * A card's "Listens to" row (CARD-35): the track its sidechain input hears now, the ones it could,
+ * or why it can't change here.
+ */
 export interface Listens {
-  /** The card's input row it is (the Duck's side input). */
-  port: string;
-  /** The track whose sound it ducks, by name. */
-  ducks?: string;
+  /** The card's input row it is; none when the call leaves the input out (the row stands alone). */
+  port?: string;
+  /** The input, by its name in the descriptor (`side`, `key`). */
+  input: string;
+  /** The track whose sound the effect works on, by name. */
+  of?: string;
   /** The track it listens to now, by key. */
   track?: string;
+  /** Whether the call gives the input: when not, it listens to nothing (None). */
+  given: boolean;
+  /** Whether None can be picked: the call may leave the input out. */
+  optional: boolean;
+  /** Whether it hears a signal at all (a side that gives `undefined` hears nothing). */
+  heard: boolean;
+  /** What its None is called: "No other track" for a key (it hears its own sound), "None" for a Duck's side. */
+  nothing: string;
   /** The tracks it can listen to: key and name. */
   choices: [string, string][];
   refused?: string;
@@ -41,7 +54,7 @@ export interface Listens {
 
 declare module "./graph" {
   interface ViewNode {
-    /** A Duck's "Listens to" row. */
+    /** Its "Listens to" row (CARD-35). */
     listens?: Listens;
     /** An effect turned off: `bypass: true` in its call. Its sound goes on without it. */
     bypassed?: boolean;
@@ -114,10 +127,11 @@ export function moveEffect(node: ViewNode, title: string, other: string, earlier
 }
 
 /**
- * Make Duck card `node` listen to track `key` (called `name`). The row says so at once, so there is
- * no toast: one undo step, "Bass's duck listens to Hats".
+ * Make effect card `node` listen to track `key` (called `name`), or to nothing (`null`, "nothing").
+ * The row says so at once, so there is no toast: one undo step, "Bass's duck listens to Hats".
  */
-export function listenTo(node: ViewNode, key: string, name: string) {
-  const whose = node.listens?.ducks ? `${node.listens.ducks}'s duck` : "the duck";
+export function listenTo(node: ViewNode, key: string | null, name: string) {
+  const what = (node.title ?? "effect").toLowerCase();
+  const whose = node.listens?.of ? `${node.listens.of}'s ${what}` : `the ${what}`;
   return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: `${whose} listens to ${name}` });
 }

@@ -5,6 +5,7 @@
 //! key that `~/.music2/session.json` publishes; the page has a key of its own (AGENT-10).
 
 pub mod api;
+pub mod bounce;
 pub mod caller;
 pub mod export;
 mod files;

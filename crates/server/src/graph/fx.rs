@@ -1,4 +1,4 @@
-//! Lane D (next): turn an effect off and on, move it, and choose what a Duck listens to, through
+//! Lane D (next): turn an effect off and on, move it, and choose what a call listens to, through
 //! `m2_editor::effect` on the actor, as every builder runs.
 
 use anyhow::Result;
@@ -22,10 +22,11 @@ impl Graph {
         self.edit(token, move |s| m2_editor::effect::reorder(s, revision, &call, earlier))
     }
 
-    /// Make Duck call `call` listen to track `track` (by key). One Tx and one undo step; refused
-    /// in words when it can't hear that track from where it is written.
-    pub fn listen_to(&self, token: u64, revision: u64, call: &str, track: &str) -> Result<Value> {
-        let (call, track) = (call.to_string(), track.to_string());
-        self.edit(token, move |s| m2_editor::effect::sidechain(s, revision, &call, &track))
+    /// Make call `call` listen to track `track` (by key), or to nothing (`None`), through its
+    /// sidechain input (CARD-35). One Tx and one undo step; refused in words when it can't hear
+    /// that track from where it is written.
+    pub fn listen_to(&self, token: u64, revision: u64, call: &str, track: Option<&str>) -> Result<Value> {
+        let (call, track) = (call.to_string(), track.map(str::to_string));
+        self.edit(token, move |s| m2_editor::effect::sidechain(s, revision, &call, track.as_deref()))
     }
 }
