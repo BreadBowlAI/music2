@@ -676,3 +676,56 @@ fn a_scopes_frames_go_only_to_the_window_that_asked() {
     assert!(w1.kinds(10).iter().any(|t| t == "scopes"), "the window's scope goes on");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// CARD-67, CARD-68: `POST /api/graph/picture` answers a card's picture; a preview on a value it reads
+// draws it again, sent in the `pictures` message to the window that asked, and to no other.
+#[test]
+fn a_pictures_shapes_go_to_the_window_that_asked_as_a_knob_moves() {
+    let dir = std::env::temp_dir().join(format!("m2-routes-8b-picture-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("lib")).unwrap();
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n";
+    std::fs::write(dir.join("music2.toml"), manifest).unwrap();
+    std::fs::write(
+        dir.join("lib/tone.ts"),
+        "import { axis, component, control, port, view } from '@m2/core';\nimport { lowpass } from 'std/filter';\nimport { osc } from 'std/dsp';\n\
+         export const tone = component({ id: 'tone', label: 'Tone', controls: { cutoff: control.hz(1000) }, output: port.audio(),\n\
+         editor: { views: { curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24),\n\
+         draw: (v, p) => [p.handle(v.cutoff, 0, { x: 'cutoff' })], words: (v) => `cut at ${v.cutoff} Hz` }) } } },\n\
+         ({ cutoff }) => lowpass(osc.saw(110), { cutoff }));\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("song.ts"),
+        "import { song, track } from '@m2/core';\nimport { tone } from './lib/tone';\nconst lead = track('lead', () => tone({ cutoff: 800 }));\nexport default song(() => lead.out);\n",
+    )
+    .unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    running.state.graph.open(&dir).unwrap();
+    let state = running.state.graph.state().unwrap();
+    let (session, revision) = (state["session"].as_u64().unwrap(), state["view"]["revision"].as_u64().unwrap());
+    let nodes: Vec<Value> =
+        state["view"]["modules"].as_array().unwrap().iter().flat_map(|m| m["nodes"].as_array().unwrap().clone()).collect();
+    let card = nodes.iter().find(|n| n["title"] == "Tone").unwrap();
+    let (node, knob) = (card["id"].as_str().unwrap().to_string(), card["knobs"][0]["id"].as_str().unwrap().to_string());
+    let url = &running.url;
+    let (mut w1, mut w2) = (Ws::connect(url, "client=w1&token=t0k"), Ws::connect(url, "client=w2&token=t0k"));
+    let ask = json!({"session": session, "client": "w1", "module": "lead", "node": node, "view": "curve", "on": true});
+    let (status, answer) = post(url, "/api/graph/picture", Some("t0k"), &ask);
+    assert_eq!((status, &answer["picture"]["words"]), (200, &json!("cut at 800 Hz")), "{answer}");
+    assert_eq!(answer["picture"]["shapes"][0]["moves"]["x"], json!({"name": "cutoff", "knob": knob}));
+    let preview = json!({"session": session, "revision": revision, "id": knob, "gesture": "g1", "value": 1200, "client": "w1"});
+    assert_eq!(post(url, "/api/graph/preview", Some("t0k"), &preview).0, 200);
+    // The frame that drew it as asked may come first: the answer again, which a window draws once more.
+    let mut p = w1.next("pictures");
+    if p["pictures"][0]["words"] == "cut at 800 Hz" {
+        p = w1.next("pictures");
+    }
+    assert_eq!((&p["session"], &p["pictures"][0]["words"]), (&json!(session), &json!("cut at 1200 Hz")), "{p}");
+    assert!(!w2.kinds(10).iter().any(|t| t == "pictures"), "nothing for a window that didn't ask");
+    let _ = std::fs::remove_dir_all(&dir);
+}

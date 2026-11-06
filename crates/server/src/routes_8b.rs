@@ -53,6 +53,9 @@ crate::api::routes! {
     POST "/api/graph/scope" => graph_scope; reads, agents,
         "Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop",
         r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}"#;
+    POST "/api/graph/picture" => graph_picture; reads, agents,
+        "Show a card's picture: its shapes in its axes' units, each dot's values with the knobs that move them, and its words, drawn from what plays; its window's socket gets it again as its values change, while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "module": "keys", "node": "tracks/keys.ts#2", "view": "curve", "on": true}"#;
     POST "/api/graph/loudness" => graph_loudness; reads, agents,
         "Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop",
         r#"{"session": 7, "client": "w1", "on": true}"#;
@@ -256,6 +259,28 @@ struct ScopeReq {
 async fn graph_scope(State(s): S, Json(r): Json<ScopeReq>) -> ApiResult {
     let client = own(&r.client);
     Ok(Json(blocking(move || s.graph.scope(r.session, &client, &r.module, &r.node, r.on)).await?))
+}
+
+#[derive(Deserialize)]
+struct PictureReq {
+    session: u64,
+    /// The window, or the agent, asking: the picture is drawn again while one asks.
+    client: String,
+    /// The card, by its module's key and its id in the graph view, and the picture by its name.
+    module: String,
+    node: String,
+    view: String,
+    on: bool,
+}
+
+/// Start, keep or stop a card's picture (CARD-67): `{session, client, module, node, view, on}`.
+/// While a client asks (again within 10 s), its window's socket gets the picture again in its
+/// `pictures` message whenever what it is drawn from changes (CARD-68). Not a write: it works
+/// read-only. Answers `{picture: {module, node, view, words, shapes}}`, `{picture: {…, why}}` when
+/// it can't be drawn, or `{}` for a stop.
+async fn graph_picture(State(s): S, Json(r): Json<PictureReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.picture(r.session, &client, &r.module, &r.node, &r.view, r.on)).await?))
 }
 
 /// The client an ask is filed under: an agent's own name after `agent:`, so an agent never stops

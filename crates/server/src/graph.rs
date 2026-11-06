@@ -58,6 +58,7 @@ pub mod meters;
 pub mod midi;
 pub mod output;
 pub mod overlay;
+pub mod pictures;
 pub(crate) mod plugin_window;
 mod presets;
 mod preview;
@@ -368,6 +369,8 @@ struct ControlPlane {
     record: record::Recorder,
     /// What windows and agents ask to look at: scopes and the loudness (TAP-6, TAP-8).
     asks: scope::Asks,
+    /// The pictures windows and agents ask for (CARD-67).
+    pictures: pictures::Pictures,
 }
 
 /// How a control named at a revision is found without the session.
@@ -501,6 +504,8 @@ struct Inner {
     /// The presets each plugin offers itself, by its id, as its host found them (HOST-8): kept for
     /// the app run.
     offered: Mutex<HashMap<String, Result<Vec<m2_plugins::Offered>, String>>>,
+    /// The picture runner (CARD-64): every picture of this server is drawn on its thread.
+    pictures: std::sync::OnceLock<m2_script::pictures::Runner>,
 }
 
 /// A delete that waits: whether it is blocked, and the code that reads the track.
@@ -624,6 +629,11 @@ fn put_back(l: &Lease, device: Option<&Device>) {
 }
 
 impl Inner {
+    /// The picture runner, started at the first picture asked for (CARD-64).
+    fn runner(&self) -> &m2_script::pictures::Runner {
+        self.pictures.get_or_init(m2_script::pictures::Runner::new)
+    }
+
     fn new(device: Option<Device>, owner: m2_plugins::Owner, output: output::Outputs, host: Arc<dyn m2_plugins::PluginHost>) -> Inner {
         let faults: Arc<m2_runtime::fault::Faults> = Arc::default();
         if let Some(d) = &device {
@@ -666,6 +676,7 @@ impl Inner {
             open_windows: Mutex::default(),
             plugins_changed: AtomicBool::new(false),
             offered: Mutex::new(HashMap::new()),
+            pictures: std::sync::OnceLock::new(),
         }
     }
 
@@ -1528,6 +1539,7 @@ impl Graph {
     pub fn client_gone(&self, client: &str) {
         self.audition_gone(client);
         self.asks_gone(client);
+        self.pictures_gone(client);
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
         let mut i = 0;

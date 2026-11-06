@@ -94,6 +94,9 @@ pub struct AppState {
     /// an agent's when it asks, TAP-4): only the latest is kept, so one that falls behind skips to
     /// it (empty until the first). Each window's own scopes ride with them (TAP-8).
     pub meters: watch::Sender<Arc<Meters>>,
+    /// The latest pictures each window asked for (CARD-68), by its client id: a socket sends only
+    /// those newer than what it sent, so one that falls behind skips to each picture's newest.
+    pub pictures: watch::Sender<Arc<graph::pictures::PicturesOut>>,
     /// The recent songs list (polish C2), when this server keeps one ([`AppState::keep_recent`]):
     /// the app and the headless server do; tests don't, so none writes the real `~/.music2`.
     recent: OnceLock<recent::Recent>,
@@ -134,6 +137,7 @@ impl AppState {
             exports: Default::default(),
             unheard: Arc::default(),
             meters: watch::channel(Arc::default()).0,
+            pictures: watch::channel(Arc::new(graph::pictures::PicturesOut { session: 0, clients: vec![] })).0,
             recent: OnceLock::new(),
             settings: OnceLock::new(),
             midi: OnceLock::new(),
@@ -352,6 +356,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     let state = Arc::new(state);
     spawn_graph_watch(&state);
     spawn_meters(&state);
+    spawn_pictures(&state);
     spawn_midi(&state);
     spawn_takes(&state);
 
@@ -468,6 +473,26 @@ fn spawn_meters(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the meters");
+}
+
+/// `music2-pictures` (CARD-68): every frame, each picture a window or an agent asks for whose
+/// values or code changed is drawn again ([`graph::Graph::pictures_frame`]), and the windows that
+/// asked are sent it, on a channel of their own, never the event broadcast. Ends once the state is
+/// dropped.
+fn spawn_pictures(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-pictures".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(graph::pictures::FRAME);
+                let Some(state) = weak.upgrade() else { return };
+                if let Some(out) = state.graph.pictures_frame() {
+                    state.pictures.send_replace(Arc::new(out));
+                }
+            }
+        })
+        .expect("spawn the pictures");
 }
 
 /// How often a take is looked at (lane B): its count, its loop's end, and a take to write.
