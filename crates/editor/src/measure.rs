@@ -19,9 +19,10 @@
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 
 use m2_ir::{Body, EventType, Ir, Kind, LaneDecl, Module, Node, Op, Root, split_ref};
-use m2_runtime::{PackageSet, Renderer};
+use m2_runtime::{BLOCK, PackageSet, Renderer};
 use m2_session::Revision;
 use m2_song::lane::{LaneData, LaneKind, Note, NoteClip, VELOCITY};
 use m2_song::{LaneAddr, ROOT};
@@ -29,15 +30,52 @@ use serde_json::{Map, Value};
 
 use crate::scope::{Inside, port_of};
 
-/// The frames a response plays: 16,384, 0.34 s at 48 kHz.
-pub const FRAMES: usize = 1 << 14;
+/// The step's level: 0.1 (−20 dBFS), quiet enough to keep most sounds in their straight-line range;
+/// and the quieter one it is checked against, 32 times quieter (−50 dBFS).
+pub const LEVEL: f64 = 0.1;
+const SOFT: f64 = LEVEL / 32.0;
+/// How long the click must stay quiet, in seconds, for the copy to stop listening; and the longest
+/// it may ring before it falls quiet.
+pub const QUIET: f64 = 0.5;
+pub const LISTEN: f64 = 2.0;
+/// Quiet: a ten-thousandth of the click's loudest and a little more (−90 dB), or a millionth of the
+/// step (the floats' own floor).
+const QUIETER: f64 = 3.162_277_660_168_379_4e-5;
+const FLOATS: f64 = 1e-6;
+/// The stretch of the click compared at the two levels and the two start times, and how much later
+/// the second start is, in seconds; and how far apart, in dB, they may be at a point.
+const CHECK: f64 = 0.05;
+const LATER: f64 = 0.1;
+const APART: f64 = 0.5;
 /// The points a response gives across its axis, and the columns a hit's sound is drawn in.
 pub const POINTS: usize = 256;
 pub const COLUMNS: usize = 256;
-/// The longest hit, in seconds.
-pub const LONGEST: f64 = 4.0;
+/// The longest hit, in seconds (CARD-80).
+pub const LONGEST: f64 = 1.0;
+/// What a whole measure may take at 48 kHz (CARD-85), and each call into a pack's kernel in it.
+pub const BUDGET: Duration = Duration::from_millis(20);
+
+/// A measure's budget at `rate`: [`BUDGET`], more as the rate is higher than 48 kHz, whose
+/// renders have that many more frames.
+pub fn budget(rate: u32) -> Duration {
+    BUDGET.mul_f64((rate as f64 / 48_000.0).max(1.0))
+}
+/// The frames played between looks at the clock.
+const CHUNK: usize = 1024;
+/// A click longer than this is worked out by an FFT; a shorter one point by point.
+const SHORT: usize = 1 << 14;
 /// What a response says of no sound: −120 dB.
 const FLOOR: f64 = -120.0;
+
+/// Why a measure gave no points (CARD-81, CARD-85).
+#[derive(Clone, Debug, PartialEq)]
+pub enum Failed {
+    /// It can't be measured, in words that follow "can't measure its sound: ": the same each time
+    /// for the same copy.
+    Cant(String),
+    /// It took longer than its budget, or a call into a kernel did: it may be a busy computer.
+    Slow,
+}
 
 /// Which layer is measured.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -59,9 +97,12 @@ pub struct Span {
 /// A call's offline copy (CARD-81): its graph and the data it plays, at the song's rate.
 pub struct Copy {
     ir: Ir,
+    /// What it plays: the hit's note on its lane; a response's click is put in as it is played.
     data: m2_song::DataSet,
     rate: u32,
-    frames: usize,
+    layer: Layer,
+    module: String,
+    tempo: m2_song::TempoMap,
     /// What it was made from (CARD-84).
     pub key: String,
 }
@@ -70,6 +111,9 @@ pub struct Copy {
 const NOTE: &str = "m2-note";
 const CLICK: &str = "m2-click";
 const NONE: &str = "m2-none";
+/// The node that plays the step, and the one inside it that is its level.
+const STEP: &str = "m2_in";
+const LEVEL_NODE: &str = "l";
 
 /// What a reference from outside the call becomes in the copy.
 #[derive(Clone, Copy, PartialEq)]
@@ -87,20 +131,37 @@ enum Put {
 impl Put {
     /// The node of the copy that stands in for it, and how it is made.
     fn node(self) -> (&'static str, Op) {
-        let step = |events: &str| Op::Poly {
+        let node = |id: &str, op: Op| Node { id: id.into(), op, src: None, origin: None, frame: None };
+        let step = |events: &str, level: bool| Op::Poly {
             events: events.into(),
             voices: 1,
             alloc: m2_ir::Alloc::default(),
             glide: None,
-            // A note's key count is 1 on each of its samples, from its first (RENDER-39): a step.
-            body: Body {
-                nodes: vec![Node { id: "k".into(), op: Op::Lane { lane: "keyCount".into() }, src: None, origin: None, frame: None }],
-                out: "k".into(),
+            // A note's key count is 1 on each of its samples, from its first (RENDER-39): a step, at
+            // the level the measure plays it (std's scale, whose `by` the measure sets).
+            body: match level {
+                true => Body {
+                    nodes: vec![
+                        node("k", Op::Lane { lane: "keyCount".into() }),
+                        node(LEVEL_NODE, Op::Const { value: LEVEL, unit: None }),
+                        node(
+                            "g",
+                            Op::Kernel {
+                                kernel: "std:scale".into(),
+                                inputs: [("in".into(), "k".into()), ("by".into(), LEVEL_NODE.into())].into(),
+                                assets: vec![],
+                                values: vec![],
+                            },
+                        ),
+                    ],
+                    out: "g".into(),
+                },
+                false => Body { nodes: vec![node("k", Op::Lane { lane: "keyCount".into() })], out: "k".into() },
             },
         };
         match self {
-            Put::Sound => ("m2_in", step("m2_click")),
-            Put::Quiet => ("m2_quiet", step("m2_none")),
+            Put::Sound => (STEP, step("m2_click", true)),
+            Put::Quiet => ("m2_quiet", step("m2_none", false)),
             Put::Notes => ("m2_note", Op::Lane { lane: NOTE.into() }),
             Put::NoNotes => ("m2_none", Op::Lane { lane: NONE.into() }),
         }
@@ -184,8 +245,17 @@ pub fn copy(
         [] => return Err("it gives no sound".into()),
         _ => return Err("it is called more than once".into()),
     };
+    // What it gives must be sound: a control or notes has no curve (review M5).
+    let gives = port_of(rev, kernels, module, &output.port).and_then(|(i, p)| compiled.flat.nodes.get(i)?.outputs.get(p).copied());
+    if gives.is_some_and(|k| !matches!(k, Kind::Audio(_))) {
+        return Err("it gives no sound".into());
+    }
     let m = compiled.ir.modules.iter().find(|x| x.key == module).ok_or_else(gone)?;
-    let Some(Inside::Frame(frame)) = Inside::of(m, site.id) else { return Err("it is called more than once".into()) };
+    let frame = match Inside::of(m, site.id) {
+        Some(Inside::Frame(f)) => f,
+        Some(Inside::Site(_)) => return Err("it is no sound's own call (a component's)".into()),
+        None => return Err("it is called more than once".into()),
+    };
     let inside = Inside::Frame(frame);
     let by_id: BTreeMap<&str, &Node> = m.nodes.iter().map(|n| (n.id.as_str(), n)).collect();
 
@@ -204,9 +274,15 @@ pub fn copy(
     let mut outside: Vec<(String, Kind, bool)> = vec![];
     let mut fallbacks: BTreeMap<String, (f64, Kind)> = BTreeMap::new();
     let mut refused: Option<String> = None;
+    // Whether a value of it moves as the song plays: a lane drives it, or its track works it out from
+    // the song's beat or from a sound (review M2). A response has no one curve then.
+    let mut moves = false;
     while let Some((n, own)) = todo.pop() {
         if matches!(n.op, Op::Plugin { .. }) {
             return Err("it hosts a plugin, which music2 can't measure yet".into());
+        }
+        if matches!(n.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds }) {
+            moves = true;
         }
         let mut found = vec![];
         reads(n, &mut |r, body| {
@@ -229,13 +305,18 @@ pub fn copy(
             };
             match (&x.op, kind) {
                 (Op::Const { .. } | Op::Time { .. }, _) => {
+                    moves |= matches!(x.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds });
                     keep.insert(id);
                 }
                 (Op::Lane { .. }, Some((k @ Kind::Control(_), default))) => {
+                    moves = true;
                     fallbacks.insert(id.to_string(), (default.unwrap_or(0.0), k));
                     keep.insert(id);
                 }
-                (_, Some((k @ (Kind::Audio(_) | Kind::Events(_)), _))) => outside.push((whole(&r), k, own)),
+                (_, Some((k @ (Kind::Audio(_) | Kind::Events(_)), _))) => {
+                    moves |= !own;
+                    outside.push((whole(&r), k, own))
+                }
                 (Op::Import { .. }, Some(_)) => {
                     refused.get_or_insert_with(|| "one of its values comes from another track".to_string());
                 }
@@ -249,6 +330,11 @@ pub fn copy(
     }
     if let Some(why) = refused {
         return Err(why);
+    }
+    if moves && layer == Layer::Response {
+        return Err(
+            "one of its values moves as the song plays (a lane, a cable or the song's beat drives it), so it has no one curve".into()
+        );
     }
 
     // The sound and the notes it takes in: what the call reads that its sidechains alone don't.
@@ -395,41 +481,62 @@ pub fn copy(
     }
     let ir = Ir { ir: m2_ir::IR_VERSION, modules, root: Root { module: ROOT.into(), export: "out".into() } };
 
-    // Its notes: the hit's one note, or the click's, each from sample 0.
+    // A hit's note, from sample 0; a response's click is put in as it is played.
     let rate = rev.project.sample_rate();
     let tempo = rev.tempo();
-    let (frames, beats, note) = match layer {
-        Layer::Response => (FRAMES, tempo.beat_at((FRAMES + 1) as f64 / rate as f64 + 1.0), None),
-        Layer::Hit { note, seconds } => {
-            let frames = (seconds.clamp(0.0, LONGEST) * rate as f64).round() as usize;
-            (frames, tempo.beat_at(seconds.clamp(0.0, LONGEST)), Some(note))
-        }
-    };
-    let clip = |pitch: f64| {
-        LaneData::Notes(vec![NoteClip {
-            id: None,
-            other_id: None,
-            start: 0.0,
-            length: beats,
-            notes: vec![Note { pitch, start: 0.0, length: beats, velocity: VELOCITY }],
-        }])
-    };
     let mut data = compiled.data.clone();
-    for (lane, d) in [(NOTE, note.map(|n| clip(n as f64))), (CLICK, (layer == Layer::Response).then(|| clip(60.0)))] {
-        let (Some(d), Ok(addr)) = (d, LaneAddr::new(module, lane)) else { continue };
-        data = data.seeded(&addr, &LaneKind::Notes, Arc::from(""), Arc::new(d));
+    if let Layer::Hit { note, seconds } = layer
+        && let Ok(addr) = LaneAddr::new(module, NOTE)
+    {
+        data = data.seeded(
+            &addr,
+            &LaneKind::Notes,
+            Arc::from(""),
+            Arc::new(one_note(note as f64, 0.0, tempo.beat_at(seconds.clamp(0.0, LONGEST)))),
+        );
     }
 
-    // What it is made from (CARD-84): the copy, its kernels' code, the recordings they read, the
-    // rate, the tempo and the layer.
+    // What it is made from (CARD-84): what the copy plays, its kernels' code, the recordings they
+    // read, the rate, the tempo and the layer. Where it is written isn't: a line added above it
+    // moves its nodes' places in the code, not its sound (review M7).
+    let mut plain = ir.clone();
+    for m in &mut plain.modules {
+        (m.label, m.src) = (None, None);
+        unwritten(&mut m.nodes);
+        for f in &mut m.frames {
+            (f.site, f.occurrence, f.options) = (0, 0, None);
+        }
+    }
     let mut key = <sha2::Sha256 as sha2::Digest>::new();
-    let text = serde_json::to_string(&ir).map_err(|e| e.to_string())?;
+    let text = serde_json::to_string(&plain).map_err(|e| e.to_string())?;
     sha2::Digest::update(&mut key, format!("{text}\0{rate}\0{layer:?}\0{:?}\0", tempo.segments()));
     for m in &ir.modules {
         made_of(&m.nodes, &mut key, kernels, &compiled.data);
     }
     let key: String = sha2::Digest::finalize(key).iter().map(|b| format!("{b:02x}")).collect();
-    Ok(Copy { ir, data, rate, frames, key })
+    Ok(Copy { ir, data, rate, layer, module: module.to_string(), tempo, key })
+}
+
+/// One note of `pitch` from beat `from` to `to`, at the default velocity: a lane's notes.
+fn one_note(pitch: f64, from: f64, to: f64) -> LaneData {
+    LaneData::Notes(vec![NoteClip {
+        id: None,
+        other_id: None,
+        start: 0.0,
+        length: to,
+        notes: vec![Note { pitch, start: from, length: to - from, velocity: VELOCITY }],
+    }])
+}
+
+/// `nodes` (their voices' too) with no word of where they are written: their source places and
+/// origins, which only name the code, never change the sound.
+fn unwritten(nodes: &mut [Node]) {
+    for n in nodes {
+        (n.src, n.origin) = (None, None);
+        if let Op::Poly { body, .. } = &mut n.op {
+            unwritten(&mut body.nodes);
+        }
+    }
 }
 
 /// Into `key`, each kernel of `nodes` (its voices' too) by the hash of its code as `kernels` loaded
@@ -477,40 +584,202 @@ fn set_values(n: &mut Node, frame: u32, values: &Map<String, Value>) {
     }
 }
 
-impl Copy {
-    /// Its sound, both sides, `frames` frames from sample 0, in a renderer of its own, its kernels
-    /// the revision's (`packages` seeing them). Refused in words.
-    pub fn frames(&self, packages: &PackageSet) -> Result<Vec<[f32; 2]>, String> {
-        let flat = m2_ir::check(&self.ir, packages).map_err(|d| {
-            let first = d.first().map(|x| x.message.clone()).unwrap_or_default();
-            format!("its copy doesn't build ({first})")
-        })?;
-        let mut r = Renderer::new(&flat, &self.data, packages, self.rate).map_err(|e| format!("its copy doesn't play ({e:#})"))?;
-        let mut out = vec![[0.0f32; 2]; self.frames];
-        r.process(&mut out).map_err(|e| format!("its copy stopped ({e:#})"))?;
-        Ok(out)
+/// What a measure has spent of its budget: the CPU time of the thread it runs on, so a busy computer
+/// that gives it the CPU late never stops it (CARD-85).
+struct Spent {
+    from: Duration,
+    most: Duration,
+}
+
+impl Spent {
+    fn new(most: Duration) -> Spent {
+        Spent { from: m2_os::thread::cpu_time(), most }
     }
 
-    /// Its sound as a layer reads it: each frame the mean of its two sides.
-    pub fn render(&self, packages: &PackageSet) -> Result<Vec<f64>, String> {
-        Ok(self.frames(packages)?.iter().map(|[l, r]| 0.5 * (*l as f64 + *r as f64)).collect())
-    }
-
-    pub fn rate(&self) -> u32 {
-        self.rate
+    fn over(&self) -> bool {
+        m2_os::thread::cpu_time().saturating_sub(self.from) > self.most
     }
 }
 
-/// The response (CARD-82): the click's spectrum at [`POINTS`] points across `x` (evenly on its
-/// scale), each in dB, `[hz, db, …]`, from `step`, the copy's sound after a step from sample 0.
-/// Points at or above half the rate are left out.
-pub fn response(step: &[f64], rate: u32, x: Span) -> Vec<f64> {
-    // The click's sound: the step's first difference.
-    let mut h: Vec<f64> = step.iter().scan(0.0, |was, &y| Some(y - std::mem::replace(was, y))).collect();
-    // Past its last sample a millionth of its loudest, it adds nothing a picture shows.
-    let peak = h.iter().fold(0.0f64, |a, &x| a.max(x.abs()));
-    let last = h.iter().rposition(|&x| x.abs() > peak * 1e-7).map_or(0, |i| i + 1);
-    h.truncate(last);
+/// What hears each chunk a copy plays, and says whether it has heard enough.
+type Heard<'a> = dyn FnMut(&[[f32; 2]]) -> Result<bool, Failed> + 'a;
+
+impl Copy {
+    pub fn rate(&self) -> u32 {
+        self.rate
+    }
+
+    /// Frames in `seconds` at its rate.
+    fn frames_in(&self, seconds: f64) -> usize {
+        (seconds * self.rate as f64).round() as usize
+    }
+
+    /// Its graph with the step at `level`, and its data with the click's note from frame `start`
+    /// (a response's), held past anything it plays.
+    fn click(&self, level: f64, start: usize) -> (Ir, m2_song::DataSet) {
+        let mut ir = self.ir.clone();
+        for m in &mut ir.modules {
+            for n in m.nodes.iter_mut().filter(|n| n.id == STEP) {
+                if let Op::Poly { body, .. } = &mut n.op {
+                    for b in body.nodes.iter_mut().filter(|b| b.id == LEVEL_NODE) {
+                        b.op = Op::Const { value: level, unit: None };
+                    }
+                }
+            }
+        }
+        let from = self.tempo.beat_at(start as f64 / self.rate as f64);
+        let to = self.tempo.beat_at(start as f64 / self.rate as f64 + LISTEN + QUIET + 1.0);
+        let data = match LaneAddr::new(&self.module, CLICK) {
+            Ok(addr) => self.data.seeded(&addr, &LaneKind::Notes, Arc::from(""), Arc::new(one_note(60.0, from, to))),
+            Err(_) => self.data.clone(),
+        };
+        (ir, data)
+    }
+
+    /// Play `ir` over `data` from sample 0 in a renderer of its own, its kernels the revision's
+    /// (`packages` seeing them), [`CHUNK`] frames at a time, each chunk's frames given to `heard`
+    /// until it says it has heard enough, or `most` frames. Stopped past `until` (CARD-85).
+    fn play(
+        &self,
+        packages: &PackageSet,
+        (ir, data): (Ir, m2_song::DataSet),
+        most: usize,
+        until: &Spent,
+        heard: &mut Heard,
+    ) -> Result<(), Failed> {
+        let flat = m2_ir::check(&ir, packages).map_err(|d| {
+            let first = d.first().map(|x| x.message.clone()).unwrap_or_default();
+            Failed::Cant(format!("its copy doesn't build ({first})"))
+        })?;
+        let ran = |e: anyhow::Error| match format!("{e:#}").contains("took too long") {
+            true => Failed::Slow,
+            false => Failed::Cant("it stopped as it played: one of its kernels failed".into()),
+        };
+        let mut r = Renderer::new(&flat, &data, packages, self.rate).map_err(ran)?;
+        let mut out = vec![[0.0f32; 2]; CHUNK];
+        let mut done = 0;
+        while done < most {
+            if until.over() {
+                return Err(Failed::Slow);
+            }
+            let n = CHUNK.min(most - done);
+            r.process(&mut out[..n]).map_err(ran)?;
+            done += n;
+            if heard(&out[..n])? {
+                break;
+            }
+        }
+        if until.over() {
+            return Err(Failed::Slow);
+        }
+        Ok(())
+    }
+
+    /// A hit's sound, both sides: its note's `seconds` (CARD-83), stopped past `budget`.
+    pub fn frames(&self, packages: &PackageSet, budget: Duration) -> Result<Vec<[f32; 2]>, Failed> {
+        let Layer::Hit { seconds, .. } = self.layer else { return Err(Failed::Cant("it is a response's copy, not a hit's".into())) };
+        let frames = self.frames_in(seconds.clamp(0.0, LONGEST));
+        let mut got = Vec::with_capacity(frames);
+        self.play(packages, (self.ir.clone(), self.data.clone()), frames, &Spent::new(budget), &mut |f| {
+            got.extend_from_slice(f);
+            Ok(false)
+        })?;
+        Ok(got)
+    }
+
+    /// The click's sound, `frames` of it, as a step at [`LEVEL`] from sample 0 gives it: each
+    /// sample the step's first difference, the mean of its two sides, over the level.
+    pub fn step(&self, packages: &PackageSet, frames: usize) -> Result<Vec<f64>, Failed> {
+        self.clicked(packages, LEVEL, 0, frames, &Spent::new(Duration::from_secs(600)), &mut |_| Ok(false))
+    }
+
+    /// The click's sound from a step at `level` from frame `start`, from that frame on, `frames` at
+    /// most, until `enough` says so of what it has.
+    fn clicked(
+        &self,
+        packages: &PackageSet,
+        level: f64,
+        start: usize,
+        frames: usize,
+        until: &Spent,
+        enough: &mut dyn FnMut(&[f64]) -> Result<bool, Failed>,
+    ) -> Result<Vec<f64>, Failed> {
+        let (mut h, mut was, mut at) = (Vec::with_capacity(frames.min(1 << 20)), 0.0, 0usize);
+        self.play(packages, self.click(level, start), start + frames, until, &mut |f| {
+            for [l, r] in f {
+                let y = 0.5 * (*l as f64 + *r as f64);
+                if at >= start {
+                    h.push((y - was) / level);
+                }
+                (was, at) = (y, at + 1);
+            }
+            if h.is_empty() { Ok(false) } else { enough(&h) }
+        })?;
+        Ok(h)
+    }
+
+    /// Its layer's points (CARD-82, CARD-83): a response across `x`, or a hit's columns. Refused in
+    /// words, or stopped past `budget` (CARD-85).
+    pub fn measure(&self, packages: &PackageSet, x: Span, budget: Duration) -> Result<Vec<f64>, Failed> {
+        let until = &Spent::new(budget);
+        if let Layer::Hit { seconds, .. } = self.layer {
+            let sound: Vec<f64> = self.frames(packages, budget)?.iter().map(|[l, r]| 0.5 * (*l as f64 + *r as f64)).collect();
+            return Ok(hit(&sound, seconds.clamp(0.0, LONGEST)));
+        }
+        // Listen until the click has stayed quiet for QUIET, as long as it rings up to LISTEN.
+        let (quiet, cap) = (self.frames_in(QUIET), self.frames_in(LISTEN));
+        let mut end = 0;
+        let mut h = self.clicked(packages, LEVEL, 0, cap + quiet, until, &mut |h| {
+            let peak = h.iter().fold(0.0f64, |a, x| a.max(x.abs()));
+            let floor = (peak * QUIETER).max(FLOATS);
+            end = h.iter().rposition(|x| x.abs() > floor).map_or(0, |i| i + 1);
+            if end > cap {
+                return Err(Failed::Cant(format!(
+                    "it rings longer than music2 listens ({} s), so music2 can't measure its curve: its pack must draw it",
+                    LISTEN
+                )));
+            }
+            Ok(h.len() - end >= quiet)
+        })?;
+        if h.len() - end < quiet {
+            return Err(Failed::Cant(format!(
+                "it rings longer than music2 listens ({LISTEN} s), so music2 can't measure its curve: its pack must draw it"
+            )));
+        }
+        h.truncate(end.max(1));
+        // The same at a 32nd of the level, and from a later start: a sound that stays the same at
+        // every level and every time gives the same click (review M2).
+        let check = self.frames_in(CHECK);
+        let later = self.frames_in(LATER).div_ceil(BLOCK) * BLOCK;
+        let soft = self.clicked(packages, SOFT, 0, check, until, &mut |_| Ok(false))?;
+        let moved = self.clicked(packages, LEVEL, later, check, until, &mut |_| Ok(false))?;
+        let mut own = h.clone();
+        own.resize(check, 0.0);
+        let at = |v: &[f64]| response(v, self.rate, x);
+        let (own, soft, moved) = (at(&own), at(&soft), at(&moved));
+        let apart =
+            |other: &[f64]| own.chunks(2).zip(other.chunks(2)).filter(|(a, _)| a[1] > -60.0).any(|(a, b)| (a[1] - b[1]).abs() > APART);
+        if apart(&soft) {
+            return Err(Failed::Cant(
+                "its sound changes with how loud it is, so music2 can't measure its curve: its pack must draw it".into(),
+            ));
+        }
+        if apart(&moved) {
+            return Err(Failed::Cant("its sound changes over time, so music2 can't measure its curve: its pack must draw it".into()));
+        }
+        let points = response(&h, self.rate, x);
+        if until.over() {
+            return Err(Failed::Slow);
+        }
+        Ok(points)
+    }
+}
+
+/// The response (CARD-82): the click's sound `h`'s spectrum at [`POINTS`] points across `x` (evenly
+/// on its scale), each in dB, `[hz, db, …]`. Points at or above half the rate are left out. A
+/// click up to [`SHORT`] frames is worked out at each point's own frequency (a Goertzel filter); a
+/// longer one by an FFT of twice its length or more, between its two nearest bins.
+pub fn response(h: &[f64], rate: u32, x: Span) -> Vec<f64> {
     let nyquist = rate as f64 / 2.0;
     let hz: Vec<f64> = (0..POINTS)
         .map(|i| {
@@ -523,17 +792,83 @@ pub fn response(step: &[f64], rate: u32, x: Span) -> Vec<f64> {
         .filter(|f| *f > 0.0 && *f < nyquist)
         .collect();
     let mut out = Vec::with_capacity(2 * hz.len());
+    if h.len() > SHORT {
+        let n = (2 * h.len()).next_power_of_two();
+        let bins = spectrum(h, n);
+        for f in hz {
+            let b = f * n as f64 / rate as f64;
+            let (k, t) = (b.floor() as usize, b - b.floor());
+            let (a, c) = (bins[k.min(n / 2)], bins[(k + 1).min(n / 2)]);
+            let (re, im) = (a.0 + (c.0 - a.0) * t, a.1 + (c.1 - a.1) * t);
+            out.extend([f, db(re * re + im * im)]);
+        }
+        return out;
+    }
     for group in hz.chunks(WIDE) {
         let mut w = [0.0; WIDE];
         for (w, f) in w.iter_mut().zip(group) {
             *w = std::f64::consts::TAU * f / rate as f64;
         }
-        let power = goertzel(&h, &w);
+        let power = goertzel(h, &w);
         for (f, p) in group.iter().zip(power) {
             out.extend([*f, db(p)]);
         }
     }
     out
+}
+
+/// The spectrum of real `h`, silence after it to `n` frames (a power of two), bins 0 to `n / 2`:
+/// an FFT of half the length, of pairs of frames, its halves taken apart after.
+fn spectrum(h: &[f64], n: usize) -> Vec<(f64, f64)> {
+    let m = n / 2;
+    let (mut re, mut im) = (vec![0.0; m], vec![0.0; m]);
+    for (i, &v) in h.iter().enumerate() {
+        match i % 2 {
+            0 => re[i / 2] = v,
+            _ => im[i / 2] = v,
+        }
+    }
+    fft(&mut re, &mut im);
+    (0..=m)
+        .map(|k| {
+            let (a, j) = (k % m, (m - k % m) % m);
+            let (zr, zi, cr, ci) = (re[a], im[a], re[j], -im[j]);
+            let (er, ei) = ((zr + cr) / 2.0, (zi + ci) / 2.0);
+            let (or, oi) = ((zi - ci) / 2.0, (cr - zr) / 2.0);
+            let w = -std::f64::consts::TAU * k as f64 / n as f64;
+            let (c, s) = (w.cos(), w.sin());
+            (er + or * c - oi * s, ei + or * s + oi * c)
+        })
+        .collect()
+}
+
+/// An FFT in place, of a power of two, in f64.
+fn fft(re: &mut [f64], im: &mut [f64]) {
+    let n = re.len();
+    let bits = n.trailing_zeros();
+    for i in 0..n {
+        let j = i.reverse_bits() >> (usize::BITS - bits);
+        if i < j {
+            re.swap(i, j);
+            im.swap(i, j);
+        }
+    }
+    let mut len = 2;
+    while len <= n {
+        let half = len / 2;
+        let turns: Vec<(f64, f64)> =
+            (0..half).map(|k| (-std::f64::consts::TAU * k as f64 / len as f64).sin_cos()).map(|(s, c)| (c, s)).collect();
+        for start in (0..n).step_by(len) {
+            for (k, &(wr, wi)) in turns.iter().enumerate() {
+                let (x, y) = (start + k, start + k + half);
+                let (tr, ti) = (re[y] * wr - im[y] * wi, re[y] * wi + im[y] * wr);
+                (re[y], im[y]) = (re[x] - tr, im[x] - ti);
+                re[x] += tr;
+                im[x] += ti;
+            }
+        }
+        len <<= 1;
+    }
 }
 
 /// The frequencies worked out together in one pass over the click's sound: eight independent sums
