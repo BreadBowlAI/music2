@@ -220,31 +220,33 @@ A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the R
 
 **In short:** a picture is TypeScript that turns your card's values into shapes. music2 draws the shapes in its own style, and does every drag, write and undo. Your code never writes anything.
 
-A picture is a view (above) with its own code: `view.picture({ x, y, live, draw, words })`.
+A picture has two parts:
+- **Its declaration**, a view (above): `view.picture({ x, y, live })`, in `editor.views`.
+- **Its code**, `component()`'s third argument, after the body, by the picture's name: `{ curve: { draw, words } }`. It comes after the descriptor so TypeScript knows your sound's values as you write it, as it does for the body.
 
 | Field | What it is |
 |---|---|
 | `x`, `y` | The axes: `axis.log("hz", 20, 20000)` (a log scale starts above 0), `axis.lin("db", -24, 24)`, `axis.time(2)` (0 to 2 seconds). music2 draws the grid and its labels. |
-| `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`, or `null` where a cable or the code works it out. `p` makes the shapes. |
-| `words` | Required: a function of `v` that says the picture in one sentence (1 to 400 characters). `m2 graph`, agents and screen readers read it. |
 | `live` | Optional: layers that move with the sound (below). |
+| `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`; each may be `null` (a cable or the code works it out), so write `v.freq1 ?? 1000` where you need a number. `p` makes the shapes. |
+| `words` | Required: a function of `v` that says the picture in one sentence, 1 to 400 characters, one line. The card, agents (`GET /api/graph`) and screen readers read it. |
 
 The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1, …]`.
 
 | Word | Draws |
 |---|---|
-| `p.line(points, { tone, name })` | a line; `name` lets a live layer ride it |
+| `p.line(points, { tone, name })` | a line; `name` (a plain name, up to 32 characters) lets a live layer ride it |
 | `p.fill(points, { base, tone })` | a filled shape, closed or down to `base` |
 | `p.bars(points, { base, tone })` | a bar at each point, from `base` (0) |
 | `p.handle(x, y, moves)` | a dot the musician drags |
-| `p.mark("x", at, words)` | a thin guide line (a threshold) |
-| `p.label(x, y, words)` | a few words, 40 characters at most |
+| `p.mark("x", at, words)` | a thin guide line (a threshold); its words up to 80 characters |
+| `p.label(x, y, words)` | a few words, 1 to 40 characters |
 | `p.play([x0, y0, x1, y1], { note })` | a place that plays a note when clicked (audition must be on) |
-| `p.part(name, () => shapes)` | shapes made again only when a value they read changes: for a big picture |
+| `p.part(name, () => shapes)` | shapes made again only when a value they read changes: for a big picture (a part can't hold a part) |
 
-A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a colour.
+A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a colour. Lengths count characters, and no text may hold a control character or a line break.
 
-**A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
+**A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. The wheel and the arrow keys step a value as its knob's do, and a run of steps is one undo step. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
 
 ```ts
 import { axis, component, control, live, port, view } from "@m2/core";
@@ -265,40 +267,38 @@ export const curve = component(
     output: port.audio(),
     editor: {
       category: "EQ",
-      views: {
-        curve: view.picture({
-          x: axis.log("hz", 20, 20000),
-          y: axis.lin("db", -24, 24),
-          live: [live.spectrum("out", { tone: "faint" })],
-          draw: (v, p) => {
-            const points: number[] = [];
-            for (let i = 0; i < 180; i++) {
-              const f = 20 * 1000 ** (i / 179);
-              let db = 0;
-              for (const b of BANDS) if (v[`on${b}`]) db += bell(f, v[`freq${b}`], v[`gain${b}`], v[`q${b}`]);
-              points.push(f, db);
-            }
-            return [
-              p.line(points),
-              ...BANDS.map((b) => p.handle(v[`freq${b}`], v[`gain${b}`], { x: `freq${b}`, y: `gain${b}`, wheel: `q${b}`, toggles: `on${b}`, opens: `Band ${b}`, mark: `${b}` })),
-            ];
-          },
-          words: (v) => BANDS.map((b) => `Band ${b}: ${v[`gain${b}`]} dB at ${v[`freq${b}`]} Hz`).join("; "),
-        }),
-      },
+      views: { curve: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), live: [live.spectrum("out", { tone: "faint" })] }) },
       groups: { "Band 1": ["on1", "freq1", "gain1", "q1"], "Band 2": ["on2", "freq2", "gain2", "q2"] },
       face: ["curve"],
     },
   },
   (x, { freq2, q2 }) => lowpass(x, { cutoff: freq2, q: q2 }),
+  {
+    curve: {
+      draw: (v, p) => {
+        const points: number[] = [];
+        for (let i = 0; i < 180; i++) {
+          const f = 20 * 1000 ** (i / 179);
+          let db = 0;
+          for (const b of BANDS) if (v[`on${b}`]) db += bell(f, v[`freq${b}`] ?? 1000, v[`gain${b}`] ?? 0, v[`q${b}`] ?? 1);
+          points.push(f, db);
+        }
+        return [
+          p.line(points),
+          ...BANDS.map((b) => p.handle(v[`freq${b}`], v[`gain${b}`], { x: `freq${b}`, y: `gain${b}`, wheel: `q${b}`, toggles: `on${b}`, opens: `Band ${b}`, mark: `${b}` })),
+        ];
+      },
+      words: (v) => BANDS.map((b) => `Band ${b}: ${v[`gain${b}`]} dB at ${v[`freq${b}`]} Hz`).join("; "),
+    },
+  },
 );
 ```
 
-**Live layers** move with the sound while the card shows: `live.spectrum("in")` or `("out")` (its frequencies, at the call's input or output), `live.level("in", { on: "curve" })` (a dot at the level, riding the line named `curve`), `live.meter("reduction")` (a meter your kernel gives), `live.history(live.meter("reduction"))` (its last seconds), `live.playhead("beat")` (the song's beat in the bar) and `live.scope("out")` (the wave).
+**Live layers** move with the sound while the card shows: `live.spectrum("in")` or `("out")` (its frequencies, at the call's input or output), `live.level("in", { on: "curve" })` (a dot at the level, riding the line named `curve`), `live.meter("reduction")` (a meter your kernel gives), `live.history(live.meter("reduction"))` (its last seconds), `live.playhead("beat")` (the song's beat in the bar, while it plays) and `live.scope("out")` (the wave).
 
-**What is checked.** As you type, a dot's names must be the sound's controls, of the right kind: a red line under the picture says which one isn't. A name you work out (`` `freq${b}` ``) is checked as it can be, and again each time the picture draws. Anything wrong (a name the sound doesn't have, a point that isn't a number, an odd count of numbers, more than 20,000 numbers, words over one line) greys the picture with words that say why ("Curve EQ's picture names freq9, which this sound doesn't have."). So does a draw that takes over 20 ms: keep it well under 8 ms. The knobs still work.
+**What is checked.** As you type, `v.freq9` (a value your sound doesn't have), a switch used as a number, and a dot's name that isn't a control of the right kind are red lines where you wrote them. A name you work out (`` `freq${b}` ``) is checked when TypeScript can tell its values, as from `[1, 2] as const`. music2 checks everything again each time the picture draws, in Rust, whatever your code did: a name the sound doesn't have, a point that isn't a number, an odd count of numbers, more than 20,000 numbers or 256 KB, text too long, words over one line. Each greys the picture with words that say why ("Curve EQ's picture names freq9, which this sound doesn't have."). The knobs still work.
 
-**Where it runs.** On music2's server, in the same sandbox as your pack's code at build time: no `Date`, no `Math.random`, no `eval`. `v` can't be changed. What your module keeps between draws may be lost. A picture needs `@m2/core` 2.4.
+**Where it runs, and its limits.** On music2's server, in the same sandbox as your pack's code at build time: no `Date`, no `Math.random`, no `eval`. Your module's top level may take 1 s to load; each draw 20 ms (keep it well under 8 ms). A draw past its limit, or past 64 MB, and a module that doesn't load in time, is stopped, and refused at once after, until your pack's files change. A picture is pure: it draws the same shapes for the same values. music2 draws each one twice, and refuses one that keeps something between draws (a count). `v` can't be changed. A picture needs `@m2/core` 2.4.
 
 ## Kernels of its own
 
