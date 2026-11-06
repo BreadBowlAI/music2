@@ -21,6 +21,11 @@ version = "2.0.0"
 hash = "sha256:04470bf491b3f5fb1a50de2534e438c0cebd78fcb64a61d04956d3db7bd557ac"
 
 [[pack]]
+name = "@m2/vocals"
+version = "1.0.0"
+hash = "sha256:f3543599a8a2f5634ba07aa2c5f202dacdaddfd8eaad58241e932807a407f02b"
+
+[[pack]]
 name = "@m2/wavetable"
 version = "1.0.0"
 hash = "sha256:4ebe170580d1c6fc791c29edd164b784ba990bb9350468285143ffb518ca0720"

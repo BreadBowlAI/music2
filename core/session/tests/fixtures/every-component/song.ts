@@ -12,6 +12,7 @@ import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
 import { sampler } from "std/sampler";
+import { tune } from "@m2/vocals";
 import { wavetable } from "@m2/wavetable";
 
 export default song(({ lane, time }) => {
@@ -68,5 +69,6 @@ export default song(({ lane, time }) => {
     { depth: -6, rate: "1/8" },
   );
   const tables = wavetable(lane.notes("tables"), { tableA: "vowels", positionA: level, filter: "bandpass", unison: 3 });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables }));
+  const voice = tune(lowpass(buzz, 1500), { glide: 0, amount: 0.8 });
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice }));
 });
