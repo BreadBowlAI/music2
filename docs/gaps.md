@@ -204,7 +204,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 21 | **The rest of the effect comforts**: the old Pump (ducking in time with the beat, with no sidechain), a compressor keyed from another track, and moving effects that aren't written one inside the other, or across files (refused in words today). | Pump is a pop staple. | Yes | medium |
+| 21 | **The rest of the effect comforts**: moving effects that aren't written one inside the other, or across files (refused in words today); and **+** on a track's sound the song reads in more than one place (CARD-36 takes one read only). Built since track sidechain: Pump (`@m2/mixing`, PACK-28), a compressor keyed from another track (PKG-19), and **Listens to** on the card of any effect that listens, with None (CARD-35), added from + Effect. | A musician expects to move any effect. | Yes | small |
 
 - **Built since track effects2**: `@m2/mixing`, a pack music2 ships ([PACK-26](architecture.md#packs)): an eight-band parametric EQ, a gate that another track can key, a transient shaper, a de-esser and a multiband compressor, each with its own kernel and presets.
 - **The EQ's card draws no curve**: no view draws an EQ's whole curve, every band's shape and gain together (that is a new view, a change to the card's closed vocabulary, CARD-16), and the filter view draws a low-pass, which no band is at the EQ's start.

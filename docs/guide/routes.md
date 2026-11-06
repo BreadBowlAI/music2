@@ -114,7 +114,7 @@ An example body:
 
 ### `POST /api/graph/effect/add`
 
-Put an effect after a call's sound, by its component id as the state's effects list it. It writes the song: one undo step.
+Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`), by its component id as the state's effects list it. It writes the song: one undo step.
 
 An example body:
 
@@ -154,7 +154,7 @@ An example body:
 
 ### `POST /api/graph/effect/sidechain`
 
-Make a Duck listen to another track. It writes the song: one undo step.
+Make an effect that listens (a duck's side, a compressor's or a gate's key) listen to another track, or to nothing (track: null). It writes the song: one undo step.
 
 An example body:
 
