@@ -1,7 +1,8 @@
 //! `@m2/mixing`'s descriptors (PACK-26): each tool is an effect in its category, and what a call
 //! that leaves a value out gets is its kernel's port default (PKG-4), so the kernels' own tests,
 //! which play their manifest's defaults, test what songs play. The gate's key only listens, and may
-//! be left out; the EQ's card has a group for each band and no picture.
+//! be left out; the EQ's card has a group for each band and no picture. Pump (PACK-28) plays no
+//! kernel of its own.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -52,7 +53,7 @@ fn the_mixing_tools_are_effects_that_start_where_their_kernels_do() {
         ("multiband", "Dynamics", 17),
     ];
     let ids: Vec<&str> = catalog.components.keys().filter_map(|k| k.strip_prefix("@m2/mixing:")).collect();
-    let mut want: Vec<&str> = tools.iter().map(|t| t.0).collect();
+    let mut want: Vec<&str> = tools.iter().map(|t| t.0).chain(["pump"]).collect();
     want.sort();
     assert_eq!(ids, want, "the pack's tools");
     let ports = port_defaults();
@@ -68,8 +69,17 @@ fn the_mixing_tools_are_effects_that_start_where_their_kernels_do() {
     }
     let gate = &catalog.components["@m2/mixing:gate"];
     let key = gate.inputs.iter().find(|i| i.name == "key").expect("the gate's key");
-    // `many` only because core has no input that may be left out yet (gaps.md); one at most.
-    assert!(key.sidechain && key.many, "the gate's key only listens, and may be left out: {key:?}");
+    // One signal or none (PKG-18), so its card's Listens to picks it (CARD-35).
+    assert!(key.sidechain && key.optional && !key.many, "the gate's key only listens, and may be left out: {key:?}");
+    // PACK-28: Pump is an effect in Dynamics, its depth and shape knobs and its rate a menu of
+    // note lengths, with no kernel of its own in the pack's manifest.
+    let pump = &catalog.components["@m2/mixing:pump"];
+    assert_eq!((pump.editor.category.as_deref(), pump.is_effect()), (Some("Dynamics"), true));
+    let knobs: Vec<&str> = pump.controls.iter().map(|c| c.name.as_str()).collect();
+    assert_eq!(knobs, ["depth", "shape"]);
+    let rate = pump.settings.iter().find(|x| x.name == "rate").expect("Pump's rate");
+    assert_eq!(rate.options.as_deref(), Some(&["1/2", "1/4", "1/8", "1/16"].map(String::from)[..]));
+    assert!(!ports.keys().any(|(k, _)| k == "@m2/mixing:pump"), "Pump plays std's blocks, not a kernel of its own");
     let eq = &catalog.components["@m2/mixing:eq"];
     let groups: Vec<&str> = eq.editor.groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(groups, (1..=8).map(|b| format!("Band {b}")).collect::<Vec<_>>(), "the EQ's groups");

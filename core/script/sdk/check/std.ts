@@ -132,6 +132,11 @@ export const effects = [
   widen(x, { width: 1.5 }),
   ...[lowpass(x), highpass(x), bandpass(x), notch(x), limit(x), drive(x), delay(x), gain(x), pan(x)],
   ...[reverb(x), chorus(x), phaser(x), tremolo(x), compress(x), eq3(x), bitcrush(x), widen(x)],
+  // What listens, as + Effect adds it, with nothing to listen to yet (PKG-19), and keyed.
+  duck(x, { depth: -8 }),
+  duck(x),
+  compress(x, x),
+  compress(x, x, { threshold: -30, ratio: 4 }),
 ];
 
 // Every effect turned off (Next D1): `bypass` in its options, a new options object when it had none.
@@ -189,8 +194,10 @@ mixer({ hats: { in: x, gain: -6 } });
 gain(x, "-6");
 // @ts-expect-error a signal for a setting, which shapes the graph
 bass(notes, { voices: l });
-// @ts-expect-error duck's side input left out
-duck(x, { depth: -6 });
+// @ts-expect-error duck listens to one side
+duck(x, l, l);
+// @ts-expect-error compress listens to one key
+compress(x, x, x);
 // @ts-expect-error mtof's pitch left out
 mtof();
 // @ts-expect-error glide belongs to the instruments that can play one note at a time

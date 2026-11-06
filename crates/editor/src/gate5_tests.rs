@@ -235,8 +235,11 @@ fn a_broken_package_module_still_opens() {
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
-    assert_eq!(invalid.len(), 2, "{invalid:?}");
+    // @m2/mixing's Pump is built on std/control (PACK-28), so the pack's module doesn't load either,
+    // and says why.
+    assert_eq!(invalid.len(), 3, "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/control") && m.contains("broken on purpose")), "{invalid:?}");
+    assert!(invalid.iter().any(|m| m.contains("`@m2/mixing`") && m.contains("broken on purpose")), "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
     assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));

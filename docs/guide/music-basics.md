@@ -132,7 +132,8 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 
 **In music2:**
 - Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
-- A sidechain is written in code: `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this.
+- A sidechain is a Duck: add it after the bass's sound in the song (the **song** tab's **Bass.out**, **+**, **Duck**), then pick **Kick** in its card's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
+- For the pump with no kick at all, add **Pump** (Dynamics): it dips the sound on every beat by itself.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
 - Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).
 
