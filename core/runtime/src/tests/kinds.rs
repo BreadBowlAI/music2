@@ -113,3 +113,28 @@ fn the_kinds_pack_fixture_holds_this_module() {
     let at = Path::new(env!("CARGO_MANIFEST_DIR")).join("../session/tests/fixtures/packs/kinds/k.wasm");
     assert_eq!(std::fs::read(&at).ok(), Some(wasm(&kinds_module())), "{} is wasm(kinds_module())", at.display());
 }
+
+/// The module of the pack fixture `core/session/tests/fixtures/packs/spin`, as text: each kernel plays
+/// its input while it is under 0.001; past it, `spin` never returns from the call, and `slow` spins
+/// 30,000,000 turns at its call's first frame (about 6 ms).
+fn spin_module() -> String {
+    let loud = "(f32.gt (f32.abs (local.get $x)) (f32.const 0.001))";
+    let spin = kernel_v1("spin", &format!("(if {loud} (then (loop $forever (br $forever)))) {}", out_v1("(local.get $x)")));
+    let slow = kernel_v1(
+        "slow",
+        &format!(
+            "(if (i32.and (i32.eqz (local.get $i)) {loud}) (then (local.set $s (i32.const 30000000)) \
+             (loop $l (local.set $s (i32.sub (local.get $s) (i32.const 1))) (br_if $l (i32.gt_s (local.get $s) (i32.const 0)))))) {}",
+            out_v1("(local.get $x)")
+        ),
+    );
+    module_v1(&format!("{spin}\n{slow}"))
+}
+
+// CARD-85: `m2_editor`'s and the server's measure tests stop a kernel that never returns, and one
+// that is slow, through this pack; the fixture's bytes are this text's.
+#[test]
+fn the_spin_pack_fixture_holds_this_module() {
+    let at = Path::new(env!("CARGO_MANIFEST_DIR")).join("../session/tests/fixtures/packs/spin/k.wasm");
+    assert_eq!(std::fs::read(&at).ok(), Some(wasm(&spin_module())), "{} is wasm(spin_module())", at.display());
+}
