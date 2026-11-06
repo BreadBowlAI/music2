@@ -1,21 +1,101 @@
 # What music2 can't do yet
 
 **In short**
-- This page lists only what is missing. What the app does today is in the guide: [What you can do](guide/what-you-can-do.md).
-- The gaps are grouped by area. The areas you notice first when making a song are at the top.
-- Each line is one gap. The big ones have a number (#18, #24, …), which stays the same everywhere. Small loose ends are listed under them, without numbers.
+- This page lists what music2 still needs to be a studio a pop producer would love, as full as Logic or Ableton, while it stays small. What it does today is in the guide: [What you can do](guide/what-you-can-do.md).
+- The big gaps come in four tiers, the most needed first: [Must have for a pop producer](#must-have-for-a-pop-producer), [What Ableton and Logic users expect](#what-ableton-and-logic-users-expect), [Getting it to people](#getting-it-to-people) and [Polish](#polish). Small loose ends come after them, by area.
+- Each big gap has a number (#18, #24, …), which stays the same everywhere and is never used again. New gaps take the next free number (50 and up).
 - Size: **small** is one focused change; **medium** touches the window, the server and the core; **large** is new engine work.
 - "Old app?" says whether the old version of music2 had it: **Yes**, **No** or **Partly**.
 
+**How a gap gets built** (the owner's rule, "RISC"): a song is TypeScript. The core gives a few small, general parts, and a feature is TypeScript made from them: in a pack (`packs/@m2/…`) or in the song's own code. What a click does is written into the song's files. A gap that needs a new part in the core says why.
+
 The old engine, with its own song files and screens, was removed in October 2026 (git commit `650f842` still has it). Its `.m2song` files can't be opened. Nor can song folders in the first folder format (`timeline/`, tracks named by their display name): the format changed once, in October 2026, to `data/` and keys ([Project format v1](architecture.md#project-format-v1)).
 
-## Recording and playing live
+## Must have for a pop producer
 
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
-| 24 | **The rest of recording notes**: recording the pitch and mod wheels and the sustain pedal into a clip (it needs controller data in a notes lane, a format bump: left for later on purpose; today the pedal plays live only, and a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key, RENDER-36); the computer keyboard's sustain. Overdub, a clip for each time round a loop and the keyboard piano's velocity are built (track `recording`, MON-11, MON-12, MON-15). | Expressive parts use the wheels and the pedal. | No | medium |
-| 25 | **The rest of recording audio**: a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers); comping (a clip plays one whole take, not parts of several). Arm, takes for each time round a loop, punch in and out, and inputs 3 and 4 are built (track `recording`, MON-9 to MON-14). | A singer builds the best take from the best lines. | No | medium |
+| 50 | **Pitch correction** (as Auto-Tune does): an effect that pulls a voice to the nearest note of the song's key, from a gentle touch to the hard robotic snap, live while you sing and on a recorded vocal. A pack's effect; it needs the song's key in code (#16). | The tuned vocal is the sound of today's pop: most vocals get some. | No | large |
+| 51 | **Editing a vocal's notes** (as Melodyne and Logic's Flex Pitch do): each sung note of an audio clip shown as a bar, like a note in the piano roll, to move its pitch, its timing and its length, or calm its wobble. | Fix one flat note, or move a word onto the beat, without singing it again. | No | large |
+| 25 | **Comping**: one take built from the best parts of several (today a clip plays one whole take). Also a recording offset for a device that reports its latency wrongly (the output's is taken as two buffers). | A singer's best take is made from their best lines. | No | medium |
+| 52 | **Slicing**: cut a vocal or a loop at its hits (or into equal parts) and put each slice on a key or a pad, to play the pieces in a new order. | Vocal chops and flipped loops are pop staples. | No | medium |
+| 22 | **The rest of the Sampler**: choke groups (a closed hat cutting an open one: a voice can't hear the others yet), a sample's end point, playing a sample backwards, crossfades between velocity layers, high notes without harshness (band-limited playback), instruments bigger than memory (streaming), and one made by dropping several WAVs (code only today). More under [Sounds](#sounds) below. | Sampled drums, pianos and vocal chops are pop staples. | Yes | medium |
+| 21 | **Sidechain and Pump, what's left**: **+** on a track's sound that the song reads in more than one place (CARD-36 takes a sound read once), and moving effects that aren't written one inside the other (under [Effects](#effects) below). Built: a Duck, a compressor and a gate keyed from their cards' **Listens to** (CARD-35), each added from + Effect, and Pump (`@m2/mixing`, PACK-28). | The pumping, breathing mix is the sound of dance-pop. | Yes | small |
+| 53 | **Bounce and resample in the app**: a menu row that records a track (or a selection) into a new audio clip, ready to cut up, reverse or pitch. `m2 bounce` does it from the command line today ([examples/resample](../examples/resample)). | Resampling your own sounds is how producers make new ones. | No | small |
+| 54 | **Vocal sounds**: a vocoder (a synth that talks with your voice), formant shift (a voice made deeper or higher, chipmunk-like, without changing its notes), and a hard clipper. Saturation is built: `drive`. | Pop vocals are often shaped hard: vocoded, pitched, crushed. | No | medium |
+| 55 | **More effects**: a flanger, a convolution reverb (the sound of a real room or plate, from a recording of it) and granular (a sound broken into tiny grains, to stretch and smear it). | Everyday colours in pop and electronic songs. | No | medium |
+| 16 | **An arpeggiator, and scales in code.** An arpeggiator (a held chord played one note at a time, in a pattern) belongs in a pack, and needs kernels that make events, which the kernel ABI reserves but doesn't build ([ABI-2](architecture.md#kernel-abi-reservations)). `std/theory` (keys and scales for song code) and `std/gen` (generators) are designed ([song-as-program.md](song-as-program.md)) but not built; the song's key lives in `layout.json`, which code doesn't read. | An arpeggio is how a held chord becomes a part. | Partly (a key and scale, only in-key notes shown) | medium |
 
+- **Built for these rows**: arm, a take for each time round a loop, punch in and out, and inputs 3 and 4 (#25, [Audio](guide/audio.md)); the Sampler's regions, velocity layers, round robin, release sounds, loops and the sustain pedal (#22, [Sounds](guide/sounds.md)); the Duck, a keyed compressor and gate picked on their cards, and Pump (#21, [Sidechain](guide/sounds.md#sidechain)); `m2 bounce` (#53); `drive` and `bitcrush` (#54); scales, Lock to key, chord stamps and grooves (#16, [NOTE-1 to NOTE-9](architecture.md#notes-and-scales)).
+
+## What Ableton and Logic users expect
+
+| # | What's missing | Why it matters | Old app? | Size |
+|---|---|---|---|---|
+| 24 | **Recording the wheels and the pedal**: the pitch and mod wheels and the sustain pedal into a clip (it needs controller data in a notes lane, a format bump, left for later on purpose; today the pedal plays live only, RENDER-36), and a sustain for the computer keyboard. | Expressive parts use the wheels and the pedal. | No | medium |
+| 56 | **MIDI learn**: touch a knob in the app, turn one on your controller, and they are tied. The tie is written into the song's files. | Producers play their sounds from a controller's knobs and faders. | No | medium |
+| 57 | **Macro knobs**: one knob that turns several others at once (a filter's cutoff, a reverb's mix, a drive), each by its own amount, written in the song's code as one control. | One "build" knob that opens up a whole sound is how a drop is made. | Partly (m2plug's 0–1 macro knobs) | medium |
+| 14 | **Automation curves and comforts**: curves between points (an ⌥-drag; it needs a field in the lane's file and new interpolation in the engine), a log scale for units other than Hz, and typing a point's value. | Sweeps and risers sound smoother on a curve. | Partly (drawing points) | medium |
+| 18 | **The rest of audio clips**: warp markers placed by hand (Follow tempo is the only way), a clip's own tempo found from its file, a clip's pitch set in the app (JSON only), joining audio clips, clearing out audio files no clip uses, and MP3 or AIFF (only WAV and FLAC come in). More under [Bringing in audio and MIDI files](#bringing-in-audio-and-midi-files) below. | Loops and samples come at every tempo and in every format. | Yes | medium |
+| 36 | **The rest of export**: MP3 or AAC, stems of a song that plays plugins, a range (the loop, a selection), bit depth and normalize. | Sending a mix to a phone, a singer or a label. | No | medium |
+| 58 | **Tempo ramps**: a tempo that speeds up or slows down smoothly over some bars (today each tempo change is a step). | A build that speeds into a drop, or a slow ending. | No | medium |
+| 59 | **A spectrum view and the EQ's curve**: the sound's frequencies drawn as it plays, and the EQ's card showing its whole curve (every band's shape and gain together) over them. Today no view draws an EQ's curve (a new view is a change to the card's closed list of views, CARD-16), and the filter view draws a low-pass, which no band is at the EQ's start. | Seeing where the mud and the harshness are is how a beginner learns to EQ. | No | medium |
+| 60 | **A reference track**: a finished song you like, loaded beside yours to compare: out of the mix and the export, matched in loudness, with one key to switch between them. | Mixing against a hit you love is how producers check their sound. | No | medium |
+| 23 | **The rest of sections**: dragging selected bars to move them (today: cut and paste, or `m2 sections move`); reordering sections by dragging a marker, the rest making room, as Logic's arrangement track does; a paste or a duplicate that makes room rather than replacing what is there (today: insert bars first); bars in the system's clipboard, to paste into another window. Bars that would end inside a bar are refused rather than fitted. | Pop songs are arranged in sections; moving one by dragging is how other DAWs do it. | No | small |
+| 9 | **The rest of clip editing**: a box drag that scrolls at the timeline's edge; copied clips in the system's clipboard, to paste into another window; a flag on the ruler where the song ends (taste.md TL-12). | Pop songs are built by copying parts. | Yes | small |
+| 61 | **A clip launcher** (optional), as Ableton's Session view: a grid of clips to start and stop live, in time, to jam ideas before arranging them. | Many producers sketch a song by jamming loops. Optional: the timeline does the same job. | No | large |
+
+- **Built for these rows**: overdub, a clip for each time round a loop and the keyboard piano's velocity (#24, MON-11, MON-12, MON-15); Follow tempo, fades, reverse and clip volume (#18, [Audio](guide/audio.md)); export of the song, stems and MIDI (#36); tempo and time signature changes on the ruler (#58); the stream a scope or spectrum would draw, `POST /api/graph/scope` (#59, [TAP-1 to TAP-9](architecture.md#taps)); bars selected on every track and copied, cut, pasted, duplicated, emptied, inserted or deleted (#23, [ARR-1 to ARR-9](architecture.md#sections), [Sections](guide/sections.md)).
+
+## Getting it to people
+
+| # | What's missing | Why it matters | Old app? | Size |
+|---|---|---|---|---|
+| 39 | **Shared sound packages, from the registry**: the registry repo itself and its bucket (the owner's: D10, the bucket's address, which `DEFAULT_REGISTRY` waits for: until then the library is only where `M2_REGISTRY` or the settings' `registry` say, and no window sets it); `m2 pack publish` (today an author packs up the `.tar.gz` and makes the release by hand, then `m2 registry add`); a later version of a pack merging by itself once the robot passes (today a person merges every pull request: it needs a check the pull request can't change). More under [Packages](#packages) below. | Sounds other people make should reach every musician in a click. | Partly (single sounds from GitHub) | large |
+| 43 | **A Mac app signed with a Developer ID and notarized by Apple.** 0.1.0 is signed ad hoc, so macOS asks for Open Anyway once. The switch is built (the repo's Apple secrets; `ci/release.sh`, PLAT-8): it turns the hardened runtime on with `apps/music2-desktop/entitlements.plist`, which has never been tried on a Mac. What to do before the secrets go in: under [Releases and installing](#releases-and-installing) below. | A first launch with no trip to System Settings; some schools and companies allow only notarized apps. | No | small |
+| 45 | **Updates**: the app doesn't say when a newer release is out, nor update itself. | Bugs fixed in a release reach only people who look. | No | medium |
+| 44 | **More downloads**: Intel Macs (a universal or x86_64 build), Linux on ARM, an `.rpm`, Windows. | People on those computers can only build from source, or not at all. | No | medium |
+| 33 | **VST3 and AU plugins: not planned.** The owner chose CLAP only (2026-10-19), as the open format. As far as we know, Auto-Tune, Melodyne and Serum don't ship as CLAP plugins: that is why pitch correction (#50) and editing a vocal's notes (#51) are to be music2's own, as its wavetable synth is. | Many popular synths, vocal tools and mastering plugins come only as AU or VST3 on the Mac. | No | large |
+| 40 | **The guide from inside the app**: Help ▸ music2 Guide, opening the guide's website (it is public once the repo is), the site in the app's look (one CSS file for mdBook), and a copy of the site for each release once there are releases (today it follows `main`, and `m2 docs` its own version). | A musician looks for help in the Help menu, not on GitHub. | No | small |
+| 42 | **`m2` on your PATH on a Mac**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. The Linux `.deb` installs `/usr/bin/m2` since 0.1.0. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
+
+- **Built for these rows**: the registry's format, its robot and `m2 registry check`, `add`, `pending` and `build` ([REG-1 to REG-10](architecture.md#registry), the repo's template in `registry/`); packs from a folder, `m2 pack install`, `music2.lock` and scoped names ([Packs](guide/packs.md)); the library in the app, with previews, Get, Cancel and `m2 pack get` ([REG-11 to REG-17](architecture.md#registry), [Getting packs from the library](guide/library.md)); the downloads ([NET-1](architecture.md#network) to NET-6); a time limit on every call into a pack's kernel ([ABI-6, ABI-7](architecture.md#kernel-abi-reservations)).
+
+## Polish
+
+| # | What's missing | Why it matters | Old app? | Size |
+|---|---|---|---|---|
+| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or changing a track's instrument to a CLAP plugin, still needs code (+ Track can add a plugin track). | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
+| 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). | A rename shouldn't cut a sound that is playing. | Yes | small |
+| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](guide/music-basics.md) and the guide's manual part are technical. | Many people who open music2 are new to making music. | Yes | small |
+| 12 | **A picture of each song in the recent list** (taste.md SS-2). | A small picture of each arrangement helps find the right song. | Yes (the Song Library) | small |
+| 19 | **The click's level and sound.** | Some songs need a quieter or a different click. | No | small |
+| 20 | **The rest of meters and loudness**: a track that shares a mixer channel with another track, or goes into two, has no fader of its own (its header shows its own sound, before any fader; its strip reads after the channel's); the song's whole loudness is known only once it is exported (the Export dialog says it then); a card can't show its sound's scope yet (`view.scope()`, [Typed sounds](designs/cards/design.md) §3.2: the stream it will draw is built). | A beginner mixes by the meters, and a shared channel's fader can't say what one of its tracks does. | Partly (a meter on each track) | small |
+| 28 | **Open a song by dropping its folder** on the window or the Dock. | Finding a song in the Finder is how many people open it. | Yes | small |
+| 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids, the audition toggle and the metronome are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
+| 34 | **Create, rename and delete files** in the code editor (today it opens existing `.ts` files only), and edit the data JSON and `music2.toml` there. | Giving a track a file of its own still needs another editor. | No | small |
+| 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**, and so does a setting held in one. | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
+| 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, `m2 clips <song> json` takes that Follow tempo gesture too; the others need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
+| 38 | **A schema for the API**: `m2 routes --json` lists every route with its words and an example body (AGENT-8), but no JSON Schema of what each takes and answers; and a short summary of the song, and MCP. | An agent learns a body from one example, not every field it may give. | Yes | medium |
+| 41 | **More of the guide made from code**: the shortcuts page from the web app's own table, the WebSocket events (in [The local API](guide/api.md)) from the server's, and std's sounds and their knobs from std's descriptors. Today these are written by hand; `commands.md` and `routes.md` are made by `m2 docs` and a test keeps them fresh (AGENT-12). | A page written twice drifts from what the app does. | No | medium |
+| 46 | **The rest of packs from a folder**: the lists (the browser, + Track, presets) and the code editor's types are made as a song opens and when its packs change, so a pack installed while it is open (by `m2 pack install`) shows when it opens again or its packs change (a Get in the app makes them again at once); a path pack's files aren't watched, so an edit to one (its TypeScript, its `m2pkg.toml`, its wasm) reaches the song with the song's next build; the store keeps each version whole, not each file once by its hash (design §11); `m2 pack check` loads each kernel as a song does rather than in a sealed sandbox of its own, takes any licence named rather than the design's list (D6), checks a preset against its sound's controls rather than loading it onto a call, and checks no tags (P7). | A pack's author and a musician who installs while a song is open both have to open it again. | No | small |
+| 47 | **The rest of ⌘F** ([LIB-1](architecture.md#library)): a sound (a preset) that makes a track of its own in one step (today Enter loads it onto the selected track's instrument it is for, and a drop onto a track onto that track's, and each says so when there is none); previews of plugins and of a plugin's presets; the kind filters to click as well as type (Loops, One-shots and Fits my song are buttons). A sound from the library adds a track of its instrument, then loads the sound: two undo steps. | Finding a sound and hearing it before adding it is how a beginner builds a song. | Partly (a browser with previews) | medium |
+| 48 | **The rest of samples** ([LIB-4](architecture.md#library) to [LIB-8](architecture.md#library)): AIFF and MP3 samples (WAV and FLAC only, #18); a Samples group in the side browser, with Add a Folder… and Remove there too (today in ⌘F's panel); your folders watched, so a file added shows at once (today a folder is looked through again a minute after its last look, at the next search); `m2 search --fits` and Fits my song by the playhead as it moves (today the beat when the button was pressed); half and double time in Fits my song (a 60 bpm loop in a 120 bpm song); `m2 credits`, listing every sample's note in a song; and a waveform in a sample's row. | A musician's own sample folders are where most of their sounds are. | Partly (a browser of files) | medium |
+| 49 | **The rest of instruments as data, and of SFZ import**: a data instrument's `tags` reach no list, search or registry catalog yet (the robot's facts, REG-4, carry the library's tags, which don't include them); only std's Sampler plays data (`engine = "std:sampler"`); `m2 pack import-sfz` leaves out what the Sampler doesn't play (#22) and says so; it reads only the SFZ's own folder, and no Decent Sampler (`.dspreset`). More under [Packages](#packages) below. | Most free sample instruments are SFZ, and a musician should never have to write code for a recorded instrument. | No | medium |
+
+- **Built for these rows**: meters after the fader on each strip, and the song's loudness and true peak on Master's strip (#20, [TAP-1 to TAP-9](architecture.md#taps)); What you have and From the library in ⌘F (#47, [REG-13](architecture.md#registry)); samples from your folders and from packs ([Samples](guide/samples.md), #48); `commands.md` and `routes.md` made from code (#41).
+- **Quick gestures right after your own change** (AGENT-2), small bugs left by track `own-edits`:
+  - **A clip refused because it changed since names who last changed its lane** after the gesture's base (an agent by its name, outside the app, or in the app), which may not be who changed that clip: an agent's change to one clip, then another program's to another clip of the lane, names the program.
+  - **Bars inserted, deleted, duplicated or pasted right after any change of your own** (before the window shows it) do nothing, and say "The song changed while you pressed. Try again.": the bars were drawn by their beats, which your change may have moved. Pressed again, they go.
+  - **A track's first fader move writes a new `db()` call** into `song.ts` (its level wasn't written before), and a new call moves the file's ids: so a quick second gesture in `song.ts` (a pan turned at once) isn't sent, and says "The song changed while you pressed. Try again."
+
+## Small loose ends, by area
+
+Each line is one small gap, without a number.
+
+### Recording and playing live
+
+- **The pedal isn't recorded** (#24): a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key (RENDER-36).
 - **Arms and each track's input channels last only while the song is open**: they aren't kept with it, and every window shares them.
 - **One notes track records at a time**: the keyboards play one track, so arming a second notes track disarms the first. Audio tracks, any number.
 - **A key held over a loop's wrap** ends at the loop's end, and isn't carried into the next pass.
@@ -42,11 +122,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The pitch wheel picks a different drum on the drum machine**: a kick (36) bent 2 up plays the snare (38) (the pm review's 2).
 - **A plugin that takes only CLAP's own note events** may not hear the wheels: they are sent to every plugin as MIDI messages.
 
-## Bringing in audio and MIDI files
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 18 | **The rest of audio clips**: place a clip's warp markers by hand (Follow tempo is the only way), find a clip's own tempo from its file, set a clip's pitch in the app (JSON only), join audio clips, clear out audio files no clip uses, and import MP3 or AIFF (FLAC comes in as a WAV of its samples, [FMT-24](architecture.md#assets-and-hashes); not yet a FLAC of 12 or 20 bits, which claxon reads and which would come in as a 16- or 24-bit WAV of the same sound, with the same `f32` bits, but that isn't written yet; nor a FLAC of 32 bits, nor one that uses a part of FLAC claxon 0.4.3 doesn't decode: a partition whose numbers are written plainly ("escaped"), or a frame that takes its bits from the header. Both are rare; they are told so in words. music2 doesn't patch claxon, so they wait for a decoder that reads them). | Every file stays in `assets/` until you delete it, and only WAV and FLAC come in. | Yes | medium |
+### Bringing in audio and MIDI files
 
 - **After a tempo change, a followed clip is silent until its new stretch reaches the playhead**: up to half a second near its start, longer deep in a long clip or with several followed clips, as stretches are made one at a time, in build order, each from its clip's start. Later: the one under the playhead first.
 - **A quarter second that holds a plain clip and a stretch being made** is silent, the plain clip too; the status may say "The disk was too slow" meanwhile.
@@ -63,12 +139,10 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A MIDI file's controllers, pitch bends and later program changes** are skipped when it comes in: only notes, the first program, tempos and time signatures.
 - **One MIDI file at a time**: dropping several says so, and brings none in.
 - **The drop hint on a notes track says "Into Bass"** before it knows the file's parts; a file of several parts makes new tracks after Bass instead (the toast names them).
+- **A FLAC of 12 or 20 bits doesn't come in yet** (#18): claxon reads it, and it would come in as a 16- or 24-bit WAV of the same sound, with the same `f32` bits, but that isn't written yet ([FMT-24](architecture.md#assets-and-hashes)).
+- **A FLAC of 32 bits, or one that uses a part of FLAC claxon 0.4.3 doesn't decode**, doesn't come in: a partition whose numbers are written plainly ("escaped"), or a frame that takes its bits from the header. Both are rare; they are told so in words. music2 doesn't patch claxon, so they wait for a decoder that reads them.
 
-## Plugins
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 33 | **VST3 and AU** plugins: **not planned.** The owner chose CLAP only (2026-10-19), as the open format. | Many popular synths and mastering plugins come only as AU or VST3 on the Mac. | No | large |
+### Plugins
 
 - **A plugin effect can't be removed, turned off or moved from its card**: only in code (Undo works right after adding it) (#32's leftover).
 - **A plugin installed while the app is open shows only after Look again** in a Plugins list.
@@ -100,13 +174,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A poly's glide isn't delayed with its notes** behind a late plugin: a glide read from such a path is a few ms early.
 - **A plugin given back by an export** starts its held notes again from its lane's notes, not the delayed ones.
 
-## Sounds
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 22 | **The rest of the Sampler**. Since std 0.5.0 it plays `regions` (PKG-15, PKG-16): velocity layers, round robin, release sounds, loops, and each region's tune, volume, pan and offset. Since std 0.6.0 a turn for each key (`turns: "key"`, as SFZ counts) and the sustain pedal (the voices hold every instrument's notes, RENDER-38) are built. Still missing: choke groups (a closed hat cutting an open one: a voice can't hear the others yet); crossfades between velocity layers; a turn counted for each region alone (SFZ counts a region's `seq_position` from the notes that match it; music2 counts each key's); band-limited playback (a sample played far up aliases); streaming, for instruments bigger than memory (every file is decoded whole, so a file may hold at most 2^27 samples and a pack 2^28 in all, [FMT-24](architecture.md#assets-and-hashes): the full Salamander grand, four times the lite one, waits for it); from SFZ, an envelope and a velocity amount for each region (the Sampler's `attack`, `release`, `mode` and `velocity` are for all its regions), a loop that goes on after the note ends (`loop_continuous`), and a release sound that gets quieter the longer the note was held (`rt_decay`); end points and reverse; zones or regions made by dropping several WAVs (code only today); a waveform and a root picker on its card; files other than WAV and FLAC. | Sampled drums, pianos and vocal chops are pop staples. | Yes | medium |
-| 47 | **The rest of ⌘F** ([LIB-1](architecture.md#library)): a sound (a preset) that makes a track of its own in one step (today Enter loads it onto the selected track's instrument it is for, and a drop onto a track onto that track's, and each says so when there is none); previews of plugins and of a plugin's presets; the kind filters to click as well as type (Loops, One-shots and Fits my song are buttons since track samples); (**What you have** and **From the library** with Get are built since track library-get, [REG-13](architecture.md#registry); a sound from the library adds a track of its instrument, then loads the sound: two undo steps.) Samples are built since track samples ([Samples](guide/samples.md)): see #48 for their rest. | Finding a sound and hearing it before adding it is how a beginner builds a song. | Partly (a browser with previews) | medium |
-| 48 | **The rest of samples** ([LIB-4](architecture.md#library) to [LIB-8](architecture.md#library)): AIFF and MP3 samples (WAV and FLAC only for now, #18; FLAC since track flac, [FMT-24](architecture.md#assets-and-hashes)); a Samples group in the side browser, with Add a Folder… and Remove there too (today in ⌘F's panel); your folders watched, so a file added shows at once (today a folder is looked through again a minute after its last look, at the next search); `m2 search --fits` and Fits my song by the playhead as it moves (today the beat when the button was pressed); half and double time in Fits my song (a 60 bpm loop in a 120 bpm song); `m2 credits`, listing every sample's note in a song; and a waveform in a sample's row. (A pack's samples from the registry's catalog, with their measures, are in ⌘F since track library-get.) A sample dropped on a Sampler that refuses it (one playing `zones` or `regions`, found only once the file is in) leaves its copy and note in `assets/`, as a WAV dropped there leaves its copy. | A musician's own sample folders are where most of their sounds are. | Partly (a browser of files) | medium |
+### Sounds
 
 - **Your presets can't be renamed or deleted** in the app, and there is no Show in Finder: tidy the Presets folder by hand.
 - **A card doesn't say which preset it came from**, or that its knobs changed since.
@@ -125,8 +193,8 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A plugin whose own preset loads only once it plays** would give its old state (Surge XT's load at once).
 - **No `m2 preset` commands** (save, load, list) for agents (#37). With the song open in the app, `m2 call` lists and loads presets (`/api/graph/presets`, `/api/graph/preset/load`); saving one is the musician's.
 - **A Sampler played far above its root sounds harsh**: it isn't band-limited, so high notes alias, and past 6 octaves up it plays no faster.
-- **A Sampler's files are held in memory**, decoded whole (clips stream from disk). The kernel ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)).
-- **A WAV dropped on a Sampler that then refuses it** (one with `zones` in its code) is still copied into `assets/`, though the page says "Nothing was changed" (the ab review's 3).
+- **A Sampler's files are held in memory**, decoded whole (clips stream from disk), so a file may hold at most 2^27 samples and a pack 2^28 in all ([FMT-24](architecture.md#assets-and-hashes)): the full Salamander grand, four times the lite one, waits for streaming (#22). The kernel ABI allows streaming them ([kernel-abi.md](kernel-abi.md#the-asset-import)).
+- **A WAV or a sample dropped on a Sampler that then refuses it** (one playing `zones` or `regions`, found only once the file is in) is still copied into `assets/`, a sample with its note, though the page says "Nothing was changed" (the ab review's 3).
 - **An audio file a kernel reads that changes on disk** is heard at the next build, not at once. Its name in the code has no hash pin, and when it is missing no near name is offered.
 - **Glide in `"poly"` mode** isn't built: `glide` does nothing there.
 - **The wavetable synth's tables are its five and a WAV** ([PACK-27](architecture.md#packs)): no drawing or editing a table, frames of 2048 samples only (a file of other frames is cut wrongly), at most 64 frames, a frame's harmonics up to the 512th only (a note below 39 Hz has nothing above 512 times its pitch: A0's stops at 14 kHz), and position only crossfades between two frames (no spectral morph, no warp, sync or FM between the oscillators). Its LFO counts in Hz from each note's start, never in beats; nothing else modulates (no matrix); there is no noise or sub oscillator.
@@ -142,12 +210,11 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **The Sampler has no preview**, nor any instrument that plays a file you give it: a preview has no file to give it. It could play a sample music2 or a pack ships.
 - **No check counts dropouts while a preview renders beside playback**: a preview renders at background priority, as an export's workers do, but no gate measures it, as G13 does for `m2 listen` (LIB-3).
 - **A sound for a plugin, on Enter**, looks for the selected track's call of that plugin by its component, which a plugin's call may not give: it may say the track has none.
+- **The Sampler counts a turn for each key** (`turns: "key"`), not for each region alone: SFZ counts a region's `seq_position` from the notes that match it (#22).
+- **The Sampler's `attack`, `release`, `mode` and `velocity` are for all its regions** (#22): from SFZ, an envelope and a velocity amount for each region aren't played, nor a loop that goes on after the note ends (`loop_continuous`), nor a release sound that gets quieter the longer the note was held (`rt_decay`).
+- **The Sampler's card has no waveform and no root picker**, and it plays only WAV and FLAC files (#22).
 
-## Mixing
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 20 | **The rest of meters and loudness.** A track that shares a mixer channel with another track, or goes into two, has no fader of its own: its header shows its own sound, before any fader (its strip reads after the channel's). The song's whole loudness is known only once it is exported: the Export dialog says it then, not before. A card can't show its sound's scope yet (`view.scope()`, [Typed sounds](designs/cards/design.md) §3.2, track `views`): the stream it will draw is built. Built since track `taps` ([TAP-1 to TAP-9](architecture.md#taps)): meters after the fader, on each strip and each track with a channel of its own; the song's loudness over the last 3 s and its true peak on Master's strip while the Mix view shows, measured as `m2 listen` measures them; the export's loudness in the Export dialog; and a scope's stream, `POST /api/graph/scope`. | A beginner mixes by the meters, and a shared channel's fader can't say what one of its tracks does. | Partly (a meter on each track) | small |
+### Mixing
 
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
@@ -167,68 +234,35 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **Change ID on a bus breaks its routes**: the other channels' `sends` and `to` keep the old key, so the edit is refused with std's message, which names keys, not tracks.
 - **An automated send shows "—" in the Mix view, with no menu**: remove it, or change its before or after, in the code.
 
-## Timeline and clips
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 23 | **The rest of sections**: dragging selected bars to move them (today: cut and paste, or `m2 sections move`); reordering sections by dragging a marker, the rest making room, as Logic's arrangement track does; a paste or a duplicate that makes room rather than replacing what is there (today: insert bars first); a copy of bars in the system's clipboard, to paste into another window. Built since track `sections` ([ARR-1 to ARR-9](architecture.md#sections), [Sections](guide/sections.md)): bars selected along the ruler's top band or by a marker's Select to next marker, on every track, lanes of names included; copy (the server's), cut, paste at the playhead's bar, duplicate, empty, insert bars and delete bars, each one undo step, with markers and tempo and time signature changes moving with insert and delete bars; `m2 sections`, `POST /api/graph/sections` and `/api/graph/sections/copy`. Bars put where the time signature makes them end inside a bar are refused rather than fitted. | Pop songs are arranged in sections; moving one by dragging is how other DAWs do it. | No | small |
-| 9 | **The rest of clip editing**: a box drag that scrolls at the timeline's edge; copied clips in the system's clipboard, to paste into another window; a flag on the ruler where the song ends (taste.md TL-12). | Pop songs are built by copying parts. | Yes | small |
+### Timeline and clips
 
 - **A nudged clip is heard once it lands** (← →), and so is a dragged audio clip; a dragged notes or automation clip is heard while it moves.
 - **A tempo drag in a song with an audio clip** is heard only when you let go. Its tooltip says so.
 - **A clip dragged right after your own edit to it, when an agent's change came between your press and that edit**, goes from the clip as it was drawn when you pressed (AGENT-2): it is refused if your own edit changed that clip, saying it was changed in the app. A change made elsewhere after your edit doesn't do this: the gesture goes from your edit.
-- **A clip refused because it changed since names who last changed its lane** after the gesture's base (an agent by its name, outside the app, or in the app), which may not be who changed that clip: an agent's change to one clip, then another program's to another clip of the lane, names the program.
-- **Bars inserted, deleted, duplicated or pasted right after any change of your own** (before the window shows it) do nothing, and say "The song changed while you pressed. Try again.": the bars were drawn by their beats, which your change may have moved. Pressed again, they go.
 - **A gesture refused over a revision that took in a file saved outside the app with your own change** (`mixed`) names outside the app, even when it was your part that changed its target.
 - **A clip dragged while the song plays, right after your own edit to it**, is heard from once the window shows that edit (a moment later): its lease names the clip as the state has it. Let go before then, it is heard when it lands.
 - **A gesture that waits 2 s with nothing moving** (none of your changes before it answered, the window showing nothing new: the app is stuck) does nothing and says so; a long import (a big file) makes the gestures after it wait too, and give up after 2 s of it.
 
-## Notes
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 16 | **The rest of scale help: an arpeggiator, and scales in code.** An arpeggiator waits: with std kept small ([Typed sounds](designs/cards/design.md) §7) it belongs in a pack, and it needs kernels that make events, which the kernel ABI reserves but doesn't build ([ABI-2](architecture.md#kernel-abi-reservations)). `std/theory` (keys and scales for song code) and `std/gen` (generators) are designed ([song-as-program.md](song-as-program.md)) but not built; the song's key lives in `layout.json`, which code doesn't read. Built since track `notes` ([NOTE-1 to NOTE-9](architecture.md#notes-and-scales)): thirteen scales (#6), Lock to key and chord stamps (#16), copy and paste of notes between clips, ⌘ to place a note off the grid, more swing and grooves (#15), folded drum rows and taller rows (#3). | Beginners write better melodies and chords with a scale guide; an arpeggio is how a held chord becomes a part. | Partly (a key and scale, only in-key notes shown) | medium |
+### Notes
 
 - **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
 - **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
 - **A note dragged in Notes right after your own edit changed that very note** (an undo a moment before, the roll not showing it yet) is refused, with words that say the clip changed. A drag that adds notes, or moves notes your edit left alone, goes from your edit (AGENT-2); a key, a tool or the menu is made from the notes as your edit left them.
 - **The beat grid ([KIT-10](architecture.md#drum-kits)) is a first cut**: a click on a step doesn't sound the drum (Notes' audition does); a row's sound is changed on its Drum's card, not in the grid; the velocity lane shows one row at a time; nothing in the grid copies, repeats or shifts a pattern (the timeline's clip gestures do it to the clips); and its rows can't be dragged into another order (the timeline's order is theirs). Choking across tracks waits too (the design's D3).
 
-## Automation
+### Effects
 
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 14 | **Automation comforts**: curves between points (an ⌥-drag; it needs a field in the lane's file and new interpolation in the engine), a log scale for units other than Hz, and typing a point's value. | Sweeps sound smoother on a curve. | Partly (drawing points) | medium |
-
-## Effects
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 21 | **The rest of the effect comforts**: moving effects that aren't written one inside the other, or across files (refused in words today); and **+** on a track's sound the song reads in more than one place (CARD-36 takes one read only). Built since track sidechain: Pump (`@m2/mixing`, PACK-28), a compressor keyed from another track (PKG-19), and **Listens to** on the card of any effect that listens, with None (CARD-35), added from + Effect. | A musician expects to move any effect. | Yes | small |
-
-- **Built since track effects2**: `@m2/mixing`, a pack music2 ships ([PACK-26](architecture.md#packs)): an eight-band parametric EQ, a gate that another track can key, a transient shaper, a de-esser and a multiband compressor, each with its own kernel and presets.
-- **The EQ's card draws no curve**: no view draws an EQ's whole curve, every band's shape and gain together (that is a new view, a change to the card's closed vocabulary, CARD-16), and the filter view draws a low-pass, which no band is at the EQ's start.
-- **The gate's key is declared `many()`** (`gate(pad.out, kick.out)`): core has no input a call may leave out, so the gate's descriptor says it takes any number of keys. TypeScript allows one, and the build refuses more. An input that may be left out (`port.audio().optional()`) is a minor of `@m2/core`, a change of its own.
+- **Effects that aren't written one inside the other, or that are in other files, can't be moved** past each other: it is refused in words (#21's leftover).
+- **The starter's glue compressor shows Listens to: No other track**: every call with a key a call may leave out gets the row, a master's compressor too, though keying the whole mix is rare (CARD-35).
 - **A big change on a very resonant EQ band arrives late**: a new shape, or a jump of gain, Q or frequency, settles on a second filter before it is crossfaded in, so it never booms; at a high Q and a low frequency that takes up to a second.
-- **A gate's key is written in code** (`gate(pad.out, kick.out)`): its card has no picker of tracks for it; the Device view's picker is the Duck's own.
 - **A preset of the EQ holds its numbers only**: it can't turn a band on or change its shape, since a preset's values are numbers (FMT-22). CARD-10 promises a choice's name in a preset too; that isn't built yet.
 - **The EQ's cuts are 12 dB per octave**, with no steeper slope to pick; the multiband compressor has three bands, and no way to hear one band alone; the de-esser has no way to hear only what it takes out.
 
-## Export
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 36 | **The rest of export**: MP3 or AAC, stems of a song that plays plugins, and a range (the loop, a selection), bit depth and normalize. | Sharing ideas with other apps and people. | No | medium |
+### Export
 
 - **An export whose sound had NaN or infinite samples** silences them, and the app doesn't say so (`m2 render` warns).
 
-## Tracks, knobs and the Device view
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 35 | **Knobs for more numbers**: a number held in a variable (`const cutoff = 800`) or worked out from others (`2 * 440`) shows **edit in code**, and so does a setting held in one (a card shows its settings since track `cards`, CARD-1). | A beginner who gives a number a name, as tutorials teach, loses its knob. | No | medium |
-| 1 | **The rest of changing an instrument**: a track whose instrument is built from parts, has two instruments or a plugin, or whose settings code works out, is refused in words. Adding a track to a song that mixes its own way, or changing a track's instrument to a CLAP plugin, still needs code (+ Track can add a plugin track). | Changing your mind about a sound shouldn't mean a new track. | Yes | small |
-| 10 | **The rest of changing a track's ID**: a track with a new ID restarts its sounds (its plugins' and instruments' state isn't carried over, design-8b §11.3), and the status popover has no Restore for a rename done by hand in code (DIAG-6). | A rename shouldn't cut a sound that is playing. | Yes | small |
+### Tracks, knobs and the Device view
 
 - **Disconnecting a lane of names from the only choice it feeds is refused**, as the lane would have no names: take its automation out instead. A lane of names' header shows no value at the playhead, and Draw mode (B) paints only number lanes.
 - **A view's drag of two knobs isn't kept while the code doesn't compile**: it is refused, said in words (one knob's drag waits, C5; CARD-22).
@@ -255,13 +289,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **Settings have no glow and no pointer**: an agent's change to a setting doesn't light it, and `m2 point` can't point at one (AGENT-5 and AGENT-6 name knobs).
 - **A change named by a track's key goes at once, without the gate** (AGENT-2): adding, deleting, duplicating or re-keying a track, its instrument, label, colour or mute in song, a bus, a send or a route, Make it a kit, the tempo, the meter, the title, markers, the song's key, and a file brought in. None names an id your own change can move, so none can land on another call; but one pressed right after you re-keyed a track names it by its old key, and is refused: there is no such track. The track order goes one move after another, each from the one before (a quick second move keeps the first).
 
-## Problems and help
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 40 | **The guide from inside the app**: Help ▸ music2 Guide, opening the guide's website (it is public once the repo is), the site in the app's look (one CSS file for mdBook), and a copy of the site for each release once there are releases (today it follows `main`, and `m2 docs` its own version). | A musician looks for help in the Help menu, not on GitHub. | No | small |
-| 41 | **More of the guide made from code**: the shortcuts page from the web app's own table, the WebSocket events (in [The local API](guide/api.md)) from the server's, and std's sounds and their knobs from std's descriptors. Today these are written by hand; `commands.md` and `routes.md` are made by `m2 docs` and a test keeps them fresh (AGENT-12). | A page written twice drifts from what the app does. | No | medium |
-| 11 | **The rest of plain-language help**: a missing plugin reads technically (``no CLAP plugin `org.surge-synth-team.surge-xt` is installed (looked in [...])``; the start screen's Examples names it plainly), and the docs past [Music basics](guide/music-basics.md) and the guide's manual part is technical. | Many people who open music2 are new to making music. | Yes | small |
+### Problems and help
 
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
@@ -272,11 +300,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **`m2 check` doesn't find a file in `assets/` that won't decode**; only a build does, as `asset.unreadable`.
 - **A file added to a renamed track's folder afterwards** (a Finder copy) isn't noticed until something else changes: "Move all" is then refused, naming the file.
 
-## Playback
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 19 | **The click's level and sound.** | Some songs need a quieter or a different click. | No | small |
+### Playback
 
 - **Going back after Stop is a jump** (Space then Space, or Return then Space): std's chorus, phaser and tremolo, and the drums' noise, carry on from where they were, so that play may differ a little from the export. The export is always right. An open question for the owner (HANDOFF).
 - **An oscillator or noise written straight into a track's code**, outside a voice, or a plugin, runs on while the song is stopped, so it may start from another place than in the export.
@@ -284,34 +308,27 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A song near the 3,999 sound parts limit** has no cheaper way to run yet (a `sum` kernel, a checked engine).
 - **An output chosen in Settings that comes back** after it was unplugged isn't taken again by itself; choose another output, then it.
 
-## Settings and projects
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 31 | **The rest of Settings**: view settings that hold for every song (zoom, grids, the audition toggle and the metronome are kept per song). The sample rate stays the song's ([RENDER-31](architecture.md#sample-rate)). | Most people want one zoom for every song. | Partly (it showed the device and the folders) | small |
-| 12 | **A picture of each song in the recent list** (taste.md SS-2). | A small picture of each arrangement helps find the right song. | Yes (the Song Library) | small |
-| 28 | **Open a song by dropping its folder** on the window or the Dock. | Finding a song in the Finder is how many people open it. | Yes | small |
+### Settings and projects
 
 - **The dock and the browser panel start over at each launch** (which view the dock shows, and its height): the browser's storage starts empty, as the page gets a new address each time.
 - **A song asking for std "0.2" to "0.8"** gets `pkg.unsatisfied` in this app (std 0.9.0); its message names the line to write (`std = "0.9"`). A "0.2" song may sound a little different (one-note sounds now keep each note's own velocity); a "0.3" to "0.8" song sounds the same, though the message says it may not.
 - **A song's std line names no patch version** (`std = "0.9"`), so a song that needs a later patch gets a missing import in an app with an earlier one, not `pkg.unsatisfied`.
 
-## Code editor
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 34 | **Create, rename and delete files** in the code editor (today it opens existing `.ts` files only), and edit the data JSON and `music2.toml` there. | Giving a track a file of its own still needs another editor. | No | small |
+### Code editor
 
 - **The code editor reloads a file an edit changed** rather than following the edit in place; unsaved text in it is kept, with the "changed on disk" choice.
 
-## Packages
+### Packages
 
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 39 | **Shared sound packages, from the registry**: the registry repo itself and its bucket (the owner's: D10, the bucket's address, which `DEFAULT_REGISTRY` waits for: until then the library is only where `M2_REGISTRY` or the settings' `registry` say, and no window sets it); in the app, the cache's previews and blobs pruned (they stay until the cache is cleared), the catalog signed (today it is checked by its hash against `catalog.json` from the same host, and an older one refused, so the registry's address is trusted for what it lists, `@m2/` packs too), the downloads search ranks by (design §9.2: the catalog counts none), an effect's sound from the library added as a new effect with its sound (today it loads as an installed one does, onto the selected track's effect), Get from the side browser (⌘F's only), and a browser suite for the status popover's Get of a song's missing pack (the route and `m2 pack get` are tested); and `m2 pack publish` (today an author packs up the `.tar.gz` and makes the release by hand, then `m2 registry add`); a later version of a pack merging by itself once the robot passes (today a person merges every pull request: it needs a check the pull request can't change); and a take-down's purge from Cloudflare's cache (by hand today). Built since track registry: the registry's format and its robot, `m2 registry check`, `add`, `pending` and `build` ([REG-1 to REG-10](architecture.md#registry)), with the registry repo's template in `registry/`. Built since packs: packs from a folder, `m2 pack install` into the store (`~/Music/music2/Packs`), `music2.lock`, scoped names (`@owner/name`), a pack's own recordings, and the browser and + Track offering what is installed ([Packs](guide/packs.md)). Since track `library-get`, the registry in the app ([REG-11 to REG-17](architecture.md#registry), [Getting packs from the library](guide/library.md)): the catalog fetched and kept, ⌘F's From the library with its previews, Get (a pack's whole version, or one sample) with progress and Cancel, Get for a song missing a locked pack, `m2 pack get`, and the library in `m2 search`. Since track `fetch`, the downloads (`m2_editor::fetch`, [NET-1](architecture.md#network) to NET-6), which the robot and the app's Get use; they use no proxy (no `HTTPS_PROXY`, no system proxy), so a network that needs one can't download, and a `.part` file a crash left stays until whoever owns its folder removes it. Since track `limits`, a time limit on every call into a pack's kernel ([ABI-6, ABI-7](architecture.md#kernel-abi-reservations); std's, music2's own, have none): a pack's sound that never returns is stopped after 100 ms while the song plays, and stays silent until the song is built again; an export, a render or a preview stops it after 5 s and fails, naming it; one that never gets ready is refused once, then at once; the registry's robot refuses a version whose preview it stopped. The checks cost a pack's kernel's call about a fifth more. | A pack has to be passed around as a folder. | Partly (single sounds from GitHub) | large |
-| 46 | **The rest of packs from a folder**: the lists (the browser, + Track, presets) and the code editor's types are made as a song opens and when its packs change, so a pack installed while it is open (by `m2 pack install`) shows when it opens again or its packs change (a Get in the app makes them again at once); a path pack's files aren't watched, so an edit to one (its TypeScript, its `m2pkg.toml`, its wasm) reaches the song with the song's next build; the store keeps each version whole, not each file once by its hash (design §11); `m2 pack check` loads each kernel as a song does rather than in a sealed sandbox of its own, takes any licence named rather than the design's list (D6), checks a preset against its sound's controls rather than loading it onto a call, and checks no tags (P7). | A pack's author and a musician who installs while a song is open both have to open it again. | No | small |
-| 49 | **The rest of instruments as data, and of SFZ import**: a data instrument's `tags` reach no list, search or registry catalog yet (the robot's facts, REG-4, carry the library's tags, which don't include them); only std's Sampler plays data (`engine = "std:sampler"`), and its `attack`, `release`, `mode` and `velocity` are for all its regions; `m2 pack import-sfz` leaves out what the Sampler doesn't play (regions that play with a controller, such as the pedal's `locc64`, regions chosen at random, crossfades between layers, an envelope and a velocity amount for each region, `loop_continuous` after the note ends, a loop the WAV itself holds: gap #22) and says so; the Sampler's `velocity` follows a straight line where SFZ's `amp_veltrack` follows the velocity squared (at the piano's 73 %, soft notes are up to 3.3 dB louder), and the import says so; a region whose root is the WAV's own (`pitch_keycenter=sample`) or whose value has a unit (`tune=+5c`) is left out; an incomplete round robin (a take missing, silent in SFZ) stops the import; the import reads only the SFZ's own folder, so a library whose SFZ sits beside its samples' folder (`default_path=../Samples/`) must have the SFZ moved up first; it reads no Decent Sampler (`.dspreset`). The first pack made this way, the Salamander grand (lite: 4 of its 16 velocity layers, 208 WAVs, 300 MB), takes about 430 MB of memory while it plays, every recording decoded whole (streaming, #22). | Most free sample instruments are SFZ, and a musician should never have to write code for a recorded instrument. | No | medium |
-
+- **The library's cache of previews and blobs is never pruned** (#39): they stay until the cache is cleared.
+- **The registry's catalog isn't signed** (#39): it is checked by its hash against `catalog.json` from the same host, and an older one refused, so the registry's address is trusted for what it lists, `@m2/` packs too.
+- **Search doesn't rank by downloads** (#39; design §9.2): the catalog counts none.
+- **An effect's sound from the library loads onto the selected track's effect**, as an installed one does, rather than adding a new effect with its sound (#39).
+- **Get is in ⌘F only**, not in the side browser (#39).
+- **No browser suite tests the status popover's Get** of a song's missing pack; the route and `m2 pack get` are tested (#39).
+- **A take-down's purge from Cloudflare's cache** is done by hand (#39).
+- **Downloads use no proxy** (no `HTTPS_PROXY`, no system proxy), so a network that needs one can't download; and a `.part` file a crash left stays until whoever owns its folder removes it ([NET-1](architecture.md#network) to NET-6).
+- **A pack's kernel's calls cost about a fifth more** for their time limit's checks ([ABI-6, ABI-7](architecture.md#kernel-abi-reservations)); std's kernels, music2's own, have none.
 - **The packs music2 ships (`@m2/synths`, `@m2/drums`, `@m2/effects`, `@m2/mixing`, [PACK-15](architecture.md#packs)) aren't in the registry yet**: they are published like any pack ([PACK-19](architecture.md#packs)) once its bucket is there (#39). Until then they come only with the app and with `m2`, which install them into your store when they start.
 - **Your presets saved before std 0.7 for std's sounds** (a folder such as `Presets/std/synth-pluck`) are for ids no sound has now (`std:synth-pluck` is `@m2/synths:synth-pluck`), so they are left out of the lists. Move one by changing its `sound` line and moving it to `Presets/_m2_synths/synth-pluck`.
 - **A store that holds another copy of a bundled pack's version** (a pack someone installed under `@m2/` before music2's came) keeps it: music2 leaves it as it is, and a song locked to music2's copy says `pkg.changed` until you run `m2 pack remove <pack> <version>` and start music2 again ([PACK-17](architecture.md#packs)). The app says so only in the song's problems and its log: no window offers to do it for you. A bundled pack never changes under one version: `packs/versions.toml` records each version's hash, and `every_bundled_pack_is_the_version_its_record_names` fails before one ships.
@@ -320,14 +337,13 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **A pack that calls a std kernel by its id, which later moves into one of music2's packs**, fails in the song that plays it, with the moved-kernel message (PACK-21): a pack's `std = "0.7"` admits every later std, so nothing warns before. Wave 3 moved `std:synth`, `std:fm`, `std:drum`, `std:delay`, reverb, phaser, tremolo and widen; the repo's own stand-ins for such packs (`e2e/fixtures/library/keys` and `pad`, `core/session/tests/fixtures/packs/tiny`) build their sound from std's blocks now.
 - **Only music2's own packs are proved to be their source's build** ([ABI-10](architecture.md#kernel-abi-reservations)): the registry's robot doesn't rebuild anyone else's wasm, nor ask for its source. The app's bundle and `m2`'s `.tar.gz` carry music2's own packs' kernel sources beside them (a few hundred kilobytes), which no install copies.
 - **Kernel ABI v1's reserved parts aren't built**: event outputs (a kernel takes notes since track events, ABI-8, but makes none), `k_save`/`k_load` and `k_latency`/`k_tail` ([kernel-abi.md](kernel-abi.md#reserved-shapes)). Each comes with the first kernel that needs it.
+- **SFZ import leaves out what the Sampler doesn't play**, and says so (#49): regions that play with a controller (such as the pedal's `locc64`), regions chosen at random, crossfades between layers, an envelope and a velocity amount for each region, `loop_continuous` after the note ends, a loop the WAV itself holds, and a region whose root is the WAV's own (`pitch_keycenter=sample`) or whose value has a unit (`tune=+5c`).
+- **The Sampler's `velocity` follows a straight line** where SFZ's `amp_veltrack` follows the velocity squared: at the piano's 73 %, soft notes are up to 3.3 dB louder. The import says so (#49).
+- **An incomplete round robin in an SFZ** (a take missing, silent in SFZ) stops the import (#49).
+- **SFZ import reads only the SFZ's own folder**, so a library whose SFZ sits beside its samples' folder (`default_path=../Samples/`) must have the SFZ moved up first (#49).
+- **The Salamander grand** (lite: 4 of its 16 velocity layers, 208 WAVs, 300 MB), the first pack made by SFZ import, takes about 430 MB of memory while it plays, every recording decoded whole (streaming, #22).
 
-## Scripts, agents and the command line
-
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 37 | **`m2` commands** for change instrument, markers, the song's key, a track's ID, Save As and Follow tempo, with the app closed. With the song open in the app, `m2 call` reaches each but Save As, which is the musician's (AGENT-11): `/api/graph/track/instrument`, `/api/graph/markers`, `/api/graph/song-key`, `/api/graph/track/rekey`, and Follow tempo as `/api/graph/clips` with `{"op": "audio", "follow": true}`. With it closed, `m2 clips <song> json` takes that Follow tempo gesture too; the others need a Tx or the files. | Scripts and agents need the same basics as the app. | Yes (in `music2-cli`) | small |
-| 42 | **`m2` on your PATH on a Mac**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. The Linux `.deb` installs `/usr/bin/m2` since 0.1.0. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
-| 38 | **A schema for the API**: `m2 routes --json` lists every route with its words and an example body (AGENT-8), but no JSON Schema of what each takes and answers; and a short summary of the song, and MCP. | An agent learns a body from one example, not every field it may give. | Yes | medium |
+### Scripts, agents and the command line
 
 - **A song's `AGENTS.md` names the `m2` it was made with, by its path then** (FMT-23): moving `music2.app`, or a first launch macOS ran from a copy it moved aside (App Translocation: an app downloaded and not yet moved to Applications), leaves it naming an old path. `m2 docs agents > AGENTS.md` writes it again, as does a song made before 2026-10-25, which has none.
 - **`m2 listen` reads its words twice** (AGENT-13; the review of `flags`, W8): `words.rs` takes them by its usage, then `listen::args` parses them again, for its own tests' sake. Every other command reads its flags through `words::value` and `words::on`; handing each command a typed result of the one reading would make that one place.
@@ -367,14 +383,9 @@ The old engine, with its own song files and screens, was removed in October 2026
 - **`m2 listen` stops at the song's last clip**: bars past it are refused, so a song with no clips (a drone in code) can't be listened to by bars.
 - **G13 measures the gate's own player, not the app's**: the app in its process takes the forwarded edits and compiles them beside the live run, but what plays is G12's player (G12 through the app's server, `--server`, isn't built). Its listens of `examples/with-plugins` run their plugin host beside it only when the test plugins are installed.
 
-## Releases and installing
+### Releases and installing
 
-| # | What's missing | Why it matters | Old app? | Size |
-|---|---|---|---|---|
-| 43 | **A Mac app signed with a Developer ID and notarized by Apple.** 0.1.0 is signed ad hoc, so macOS asks for Open Anyway once. The switch is built (the repo's Apple secrets; `ci/release.sh`, PLAT-8): it turns the hardened runtime on with `apps/music2-desktop/entitlements.plist`, which has never been tried on a Mac. Before the secrets go in: keep them in a GitHub environment `release` that only `v*` tags may use, with the owner as required reviewer, not in the repo's secrets; give the signing its own job with `environment: release`; and add a ruleset that lets only the owner create `v*` tags (the release review's L5; `release.yml`'s head says the same). | A first launch with no trip to System Settings; some schools and companies allow only notarized apps. | No | small |
-| 44 | **More downloads**: Intel Macs (a universal or x86_64 build), Linux on ARM, an `.rpm`, Windows. | People on those computers can only build from source, or not at all. | No | medium |
-| 45 | **Updates**: the app doesn't say when a newer release is out, nor update itself. | Bugs fixed in a release reach only people who look. | No | medium |
-
+- **Before the Apple secrets go in** (#43): keep them in a GitHub environment `release` that only `v*` tags may use, with the owner as required reviewer, not in the repo's secrets; give the signing its own job with `environment: release`; and add a ruleset that lets only the owner create `v*` tags (the release review's L5; `release.yml`'s head says the same).
 - **The first Mac build of the release workflow hasn't run yet**: what it must show is in [the release build notes](designs/release/build-notes.md#what-the-first-mac-run-must-show).
 - **Gatekeeper and the `m2` inside the app**: whether Open Anyway on `music2.app` also lets Terminal run `music2.app/Contents/MacOS/m2` from a download is untried; `xattr -dr com.apple.quarantine` on the app clears both.
 - **The AppImage can't put `m2` on your shell**: `m2` comes in its own `.tar.gz`. A song made in the AppImage's app keeps the general `m2` line in its `AGENTS.md` (the AppImage's own folder goes away when it quits).
@@ -414,6 +425,7 @@ Every row marked **No** was missing from the old app too. Of the rows marked **P
 | Settings | view settings for every song (#31) |
 | The Sounds panel, and m2plug's sampler | the rest of the Sampler (#22) |
 | m2plug's Pump | #21 |
+| m2plug's macro knobs | macro knobs for a song (#57) |
 | Drawing automation | curves (#14) |
 | The key and scale picker | an arpeggiator (#16) |
 | The command API, `music2-cli` | a schema for each route (#38), the missing commands with the app closed (#37) |
