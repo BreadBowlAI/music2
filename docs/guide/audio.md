@@ -84,7 +84,7 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 
 | To do this | Do this | What happens |
 |---|---|---|
-| Add Tune to a vocal | In the Song's Device view, click **+** on the vocal track's card (Vox), then **Tune** (under Voice) | `tune(vox.out, { glide: 0.1, amount: 1 })` is written into `song.ts`. It starts on **Natural**. |
+| Add Tune to a vocal | Select the vocal track (Vox), and in its Device view click **+** on its lane's card, then **Tune** (under Voice) | `tune(lane.audio("clips"), { glide: 0.1, amount: 1 })` is written into the track's own file, so everything that hears the track hears it tuned. It starts on **Natural**. |
 | Set the notes it moves to | Click **Key** in the top bar, or **Set the key** on Tune's card | Tune's card says the key, such as "Key: A minor". |
 | The hard, stepped pop sound | Load the **Robot** preset (Presets on its card), or turn **Glide** to 0 | Each note jumps to its pitch at once. |
 | A gentle fix | Turn **Glide** up to about 0.1 s (Natural) or more | Each note slides to its pitch, and the singer's wobble (vibrato) stays. |
@@ -96,5 +96,6 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 - **A breath or an "s"** has no pitch, so Tune lets it through as it is.
 - **The whole song plays 15 ms later** (15 thousandths of a second) while Tune is on any track, so every track stays in time with the tuned voice. You won't hear the delay, but a singer listening to themselves may feel it. A take you record still lands where you heard it.
 - **An export sounds the same as playback.**
+- **Tune works from about D2 (73 Hz) up to about D6 (1,200 Hz).** A lower note, such as a bass singer's low C, comes through untuned.
 - **It works best on one voice at a time.** A choir, or a voice with a loud band behind it, confuses it.
 - **Agents:** `tune(x, { glide, amount })` from `"@m2/vocals"` in any track's code; `m2 listen` measures the result ([listening](listening.md)).
