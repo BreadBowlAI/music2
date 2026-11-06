@@ -1800,6 +1800,8 @@ impl Place {
             reverse: false,
             pitch: 0.0,
             warp: vec![],
+            render: None,
+            sung: vec![],
         };
         let put = serde_json::to_value(&clip)?;
         m2_editor::data::place_clip(s, &self.addr, self.was.as_deref(), clip).map_err(|e| {

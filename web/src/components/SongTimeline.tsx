@@ -1248,7 +1248,9 @@ export default function SongTimeline({
         else if (!toggle && !isPicked(sel.picked, ref)) sel.only([ref]);
         // The track follows the click, and Notes the notes clip. The timeline keeps the keyboard (⌫,
         // Q, the arrows): a roll that opens on the clip opens now, so the focus it takes comes back.
-        flushSync(() => useShell.getState().select(ref.module, lane.kind === "notes" ? ref : undefined));
+        // An audio clip with a voice's notes shows them in Notes too (VOX-46).
+        const shows = lane.kind === "notes" || (lane.kind === "audio" && !!(lane.clips[i] as AudioClip).sung?.length);
+        flushSync(() => useShell.getState().select(ref.module, shows ? ref : undefined));
         scroller.current?.focus({ preventScroll: true });
         const el = e.currentTarget, pointer = e.pointerId, x0 = e.clientX, y0 = e.clientY;
         const edge = (e.target as HTMLElement).closest<HTMLElement>("[data-edge]")?.dataset.edge as "left" | "right" | undefined;

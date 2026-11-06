@@ -888,6 +888,6 @@ fn tune_goes_into_an_audio_tracks_own_code() {
         f.read("tracks/vox.ts")
     );
     assert!(f.read("tracks/vox.ts").contains("import { tune } from \"@m2/vocals\";"));
-    assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.0\""), "{}", f.read("music2.toml"));
+    assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.1\""), "{}", f.read("music2.toml"));
     assert!(f.read("song.ts").contains("vox: vox.out"), "the song reads the track as it did");
 }

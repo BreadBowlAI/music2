@@ -133,6 +133,8 @@ pub fn write(dir: &Path, r: &Reference) -> Result<()> {
                 pitch: 0.0,
                 // Every second stem is stretched a little, so opening it warps (RENDER-27).
                 warp: if i % 2 == 1 { vec![(0.0, 0.0), (54.0, STEM_BEATS)] } else { vec![] },
+                render: None,
+                sung: vec![],
             })
             .collect();
         put(&format!("data/{key}/clips.json"), lane::canonical(&LaneData::Audio(clips)).as_bytes())?;

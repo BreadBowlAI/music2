@@ -16,6 +16,7 @@ import { beatAt, clipSeconds, MISSING, secondsAt, usePeaks, type Peaks, type Tem
 import { request } from "../lib/projects";
 import { editing, goesFrom, lanesOf } from "../lib/history";
 import { useStore } from "../lib/store";
+import { findNotes } from "../lib/sung";
 import { useZoom } from "../lib/zoom";
 import type { MenuItem } from "./ClipMenu";
 import { Popover } from "./ui";
@@ -422,8 +423,23 @@ export function audioRows(picked: { ref: ClipRef; lane: TimelineLane; clip: unkn
       run: () => void sendAudio(lane, ref, { fade_in: 0, fade_out: 0 }, (t) => `removing the ${t} clip's fades`),
     },
     ...takeRows(lane, ref, c, off),
+    "line",
+    {
+      id: "find-notes",
+      label: "Find notes",
+      detail: "Find the notes this voice sings, to fix their pitch and timing.",
+      off: off ?? sungOff(c),
+      run: () => {
+        const { graph } = useStore.getState();
+        if (graph) void findNotes(graph, lane, ref, trackName(ref.module));
+      },
+    },
   ];
 }
+
+/** Why Find notes can't hear clip `c` (VOX-43), in the server's words: none when it can. */
+const sungOff = (c: AudioClip) =>
+  c.reverse ? "Find notes hears a voice played forwards: turn Reverse off first." : c.pitch ? "Find notes hears a voice at its own pitch: set the clip's pitch back to 0 first." : null;
 
 /**
  * The Takes menu (MON-11): a clip over a loop whose file holds a take for each time round lists

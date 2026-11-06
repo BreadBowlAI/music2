@@ -35,9 +35,15 @@ pub(crate) struct Job {
     pub(crate) out: Making,
 }
 
+/// A job in the queue: an edited phrase's goes ahead of every stretch (RENDER-30b).
+struct Queued {
+    job: Job,
+    first: bool,
+}
+
 #[derive(Default)]
 struct Queue {
-    jobs: VecDeque<Job>,
+    jobs: VecDeque<Queued>,
     /// A job is being made.
     busy: bool,
     /// The test seam: how many frames a render may make before it waits; none, all it needs.
@@ -77,6 +83,16 @@ pub(crate) struct Stretcher {
 impl Stretcher {
     /// Make `job` after those asked before it.
     pub(crate) fn push(&mut self, job: Job) {
+        self.queue(job, false);
+    }
+
+    /// Make `job`, an edited phrase's render, ahead of every stretch, after the phrases asked
+    /// before it (RENDER-30b).
+    pub(crate) fn push_first(&mut self, job: Job) {
+        self.queue(job, true);
+    }
+
+    fn queue(&mut self, job: Job, first: bool) {
         if self.thread.is_none() {
             let shared = self.shared.clone();
             match std::thread::Builder::new().name("m2-stretch".into()).spawn(move || work(&shared)) {
@@ -88,21 +104,25 @@ impl Stretcher {
                 }
             }
         }
-        self.shared.queue().jobs.push_back(job);
+        {
+            let mut q = self.shared.queue();
+            let at = if first { q.jobs.iter().position(|j| !j.first).unwrap_or(q.jobs.len()) } else { q.jobs.len() };
+            q.jobs.insert(at, Queued { job, first });
+        }
         self.nudge();
     }
 
     /// Drop the jobs asked to stop that haven't started, and their part files; the one being made
     /// stops at its next block.
     pub(crate) fn forget_stopped(&self) {
-        let dropped: Vec<Job> = {
+        let dropped: Vec<Queued> = {
             let mut q = self.shared.queue();
-            let (stopped, kept): (Vec<Job>, Vec<Job>) = q.jobs.drain(..).partition(|j| j.out.raw().stopped());
+            let (stopped, kept): (Vec<Queued>, Vec<Queued>) = q.jobs.drain(..).partition(|j| j.job.out.raw().stopped());
             q.jobs = kept.into();
             stopped
         };
         for j in dropped {
-            j.out.raw().end();
+            j.job.out.raw().end();
         }
         self.nudge();
     }
@@ -138,9 +158,9 @@ impl Stretcher {
 impl Drop for Stretcher {
     fn drop(&mut self) {
         self.shared.closing.store(true, Ordering::Release);
-        let jobs: Vec<Job> = self.shared.queue().jobs.drain(..).collect();
+        let jobs: Vec<Queued> = self.shared.queue().jobs.drain(..).collect();
         for j in jobs {
-            j.out.raw().end();
+            j.job.out.raw().end();
         }
         self.shared.wake.notify_all();
         if let Some(t) = self.thread.take() {
@@ -160,7 +180,7 @@ fn work(shared: &Shared) {
                 }
                 if let Some(j) = q.jobs.pop_front() {
                     q.busy = true;
-                    break j;
+                    break j.job;
                 }
                 q = shared.wait(q);
             }
@@ -188,7 +208,7 @@ fn make(shared: &Shared, job: Job) -> Result<()> {
     let raw = out.raw().clone();
     let (channels, frames) = raw.size();
     let stopped = || raw.stopped() || shared.closing.load(Ordering::Acquire);
-    let run = offline::Run { source, values: &values, map: &map, rate, channels, frames };
+    let run = offline::Run { source, values: &values, map: &map, rate, channels, frames, measure: false };
     let mut sink = |b: &[&[f32]]| -> Result<()> {
         if shared.held.load(Ordering::Acquire) {
             held(shared, &raw, &mut out, &stopped)?;

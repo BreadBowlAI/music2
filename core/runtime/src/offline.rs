@@ -44,7 +44,8 @@ impl Kernel {
 }
 
 /// One run of an offline kernel: its source, its values and time map, and the output it makes:
-/// `frames` frames of `channels` (1 or 2) at `rate`.
+/// `frames` frames of `channels` (1 or 2) at `rate`; a measure's, of its `channels` controls, one
+/// frame a hop (VOX-41).
 pub(crate) struct Run<'a> {
     pub(crate) source: Held,
     pub(crate) values: &'a [f64],
@@ -52,6 +53,7 @@ pub(crate) struct Run<'a> {
     pub(crate) rate: f64,
     pub(crate) channels: usize,
     pub(crate) frames: usize,
+    pub(crate) measure: bool,
 }
 
 /// Run `k` as `r` says, each block of its output in turn into `sink`, a slice a channel, each of the
@@ -59,15 +61,19 @@ pub(crate) struct Run<'a> {
 /// file that can't be read and a sink that fails each stop it, with why.
 pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result<()>) -> Result<()> {
     let _mode = fpenv::Canon::enter();
-    let ch = r.channels.clamp(1, 2);
+    // A measure's outputs are controls, a channel each; any other's one audio port.
+    let (ch, ports, channels) = match r.measure {
+        true => (r.channels.max(1), r.channels.max(1), vec![1; r.channels.max(1)]),
+        false => (r.channels.clamp(1, 2), 1, vec![r.channels.clamp(1, 2) as u32]),
+    };
     let name = &k.prefix;
     let mut sb = Sandbox::new(&k.module, k.deadline).with_context(|| format!("`{name}`"))?;
     let assets = [Some(r.source.clone())];
     let spec = Spec {
         inputs: 0,
-        outputs: 1,
-        channels: &[ch as u32],
-        audio: ch as u8,
+        outputs: ports,
+        channels: &channels,
+        audio: if r.measure { 1 } else { ch as u8 },
         sample_rate: r.rate,
         values: r.values,
         assets: &assets,
@@ -82,20 +88,23 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     // The prewarm: a reset that would take memory fails here.
     state.reset(&mut sb).map_err(|e| sb.ran_out(name, e)).with_context(|| format!("`{name}`'s reset"))?;
     sb.play();
-    let out = state.outs[0];
-    let mut block = [[0.0f32; BLOCK]; 2];
+    // Where each channel of the output is: the audio port's channels, or each control's own port.
+    let from: Vec<usize> = match r.measure {
+        true => state.outs[..ch].to_vec(),
+        false => (0..ch).map(|c| state.outs[0] + 4 * c * BLOCK).collect(),
+    };
+    let mut block = vec![[0.0f32; BLOCK]; ch];
     let mut done = 0;
     while done < r.frames {
         let n = (r.frames - done).min(BLOCK);
         let made = state.process(&mut sb, n).wctx(|| format!("`{name}` crashed at frame {done}"));
         made.map_err(|e| sb.ran_out(name, e))?;
         let data = sb.data();
-        for (c, b) in block[..ch].iter_mut().enumerate() {
-            let at = out + 4 * c * BLOCK;
+        for (b, &at) in block.iter_mut().zip(&from) {
             b[..n].copy_from_slice(bytemuck::cast_slice(&data[at..at + 4 * n]));
         }
-        let [a, b] = &block;
-        sink(&[&a[..n], &b[..n]][..ch])?;
+        let parts: Vec<&[f32]> = block.iter().map(|b| &b[..n]).collect();
+        sink(&parts)?;
         done += n;
     }
     Ok(())

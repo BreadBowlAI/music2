@@ -19,6 +19,7 @@ mod overlay;
 mod parts;
 mod poly;
 mod stream;
+mod sung;
 mod taps;
 mod vocals;
 mod wavetable;

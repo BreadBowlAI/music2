@@ -211,6 +211,21 @@ impl Namer {
                 };
                 (message, self.module(s))
             }
+            Code::NotesUnheard => {
+                let s = *parts.first()?;
+                let ((file, place), c) = (self.clip(s)?, self.audio_clip(s)?);
+                let render = c.render.clone().unwrap_or_default();
+                let why = if c.reverse {
+                    "it plays backwards: turn Reverse off to hear them".to_string()
+                } else if c.pitch != 0.0 {
+                    "its pitch is changed: set it back to 0 to hear them".to_string()
+                } else {
+                    let pack = m2_song::pack::split_id(&render).map_or(render.as_str(), |(p, _)| p);
+                    format!("the song has no `{render}` to play them: update {pack} (`m2 pack update {pack}`), or run Find notes again")
+                };
+                let message = format!("The edited notes of {file} {place} can't play, so they play as sung: {why}.");
+                return Some(Diagnostic { module: self.module(s), ..Diagnostic::warning(code.diag(), message) });
+            }
             _ => self.nodes_problem(code, parts)?,
         };
         Some(Diagnostic { module, ..Diagnostic::error(code.diag(), message) })
@@ -278,6 +293,8 @@ impl Namer {
             (Code::OutOfMemory, _) => format!("{part} ran out of memory (a sound may use up to {} MB), {not}", m2_runtime::SOUND_MEMORY_MB),
             (Code::PluginFailed, _) => format!("{part} stopped working, {not} Try again. If it stops again, the plugin may be broken."),
             (Code::PluginCrashed | Code::PluginHung, _) => format!("The plugin host crashed while {part} played, {not} Try again."),
+            // Never what stops a render: the render goes on and says it.
+            (Code::NotesUnheard, _) => format!("{part}'s edited notes can't play, so they play as sung."),
             (Code::StretchFailed, s) => match self.clip(s) {
                 Some((file, place)) => format!("The warped clip of {file} {place} can't be stretched, {not}{detail}"),
                 None => format!("A warped clip can't be stretched, {not}{detail}"),
@@ -420,6 +437,14 @@ impl Namer {
         let r = slots.get(lane as usize)?;
         let file = self.song.data().audio(&r.module, &r.lane).get(clip as usize)?.asset.clone();
         Some((file, self.place_of(&r.module)))
+    }
+
+    /// The audio clip `s` names.
+    fn audio_clip(&self, s: Subject) -> Option<m2_song::AudioClip> {
+        let Subject::Clip { lane, clip } = s else { return None };
+        let slots = m2_runtime::lane_slots(self.song.flat());
+        let r = slots.get(lane as usize)?;
+        self.song.data().audio(&r.module, &r.lane).get(clip as usize).cloned()
     }
 
     /// The file `s`, one a kernel reads, names.

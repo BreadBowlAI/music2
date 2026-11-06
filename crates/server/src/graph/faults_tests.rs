@@ -103,6 +103,7 @@ pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>,
         "plugin.crashed",
         "asset.unreadable",
         "stretch.failed",
+        "sung.unheard",
         "input.missing",
         "input.lost",
         "input.refused",
@@ -640,4 +641,30 @@ fn another_song_lists_none_of_the_last_songs_problems() {
     assert_eq!(told.problems(token).len(), 1, "listed in its song");
     told.sent(token + 1, next);
     assert!(told.problems(token + 1).is_empty(), "none in the next song");
+}
+
+// RENDER-30b (the review's S8): a clip whose edited notes can't play is told so, in words that
+// name the clip, why and what to do, one problem `sung.unheard` of its track, a Warning. Here the
+// clip plays backwards (written so by hand, past the Audio gesture's refusal), and then one that
+// names a renderer the song doesn't have.
+#[test]
+fn edits_that_cant_play_are_told_in_words() {
+    let sung = r#""render": "@m2/vocals:voice", "sung": [{"at": 0.5, "length": 1, "pitch": 57, "move": 2, "straighten": 0}]"#;
+    let (song, clips) = drums(&format!(r#"{{"id": "w", "start": 0, "length": 6, "asset": "a.wav", "reverse": true, {sung}}}"#));
+    let mut rig = Rig::with(song, |f| {
+        wav(f, "a.wav", 3.0);
+        f.put("data/drums/loops.json", &clips);
+    });
+    let said = "The edited notes of a.wav on Drums can't play, so they play as sung: it plays backwards: turn Reverse off to hear them.";
+    assert_eq!(rig.told_soon(), [said]);
+    assert_eq!(rig.problems(), [("sung.unheard".into(), Some("drums".into()), said.into())]);
+    let sung = sung.replace("@m2/vocals:voice", "@nobody/none:voice");
+    let (song, clips) = drums(&format!(r#"{{"id": "w", "start": 0, "length": 6, "asset": "a.wav", {sung}}}"#));
+    let mut rig = Rig::with(song, |f| {
+        wav(f, "a.wav", 3.0);
+        f.put("data/drums/loops.json", &clips);
+    });
+    let said = "The edited notes of a.wav on Drums can't play, so they play as sung: the song has no `@nobody/none:voice` to play them: \
+                update @nobody/none (`m2 pack update @nobody/none`), or run Find notes again.";
+    assert_eq!(rig.told_soon(), [said]);
 }

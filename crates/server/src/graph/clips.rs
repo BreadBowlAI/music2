@@ -29,11 +29,75 @@ impl Graph {
     /// [`Graph::clips`] for a gesture that goes from revision `since` (AGENT-2): a clip it names, or
     /// the Beat grid's lane, changed after it is refused, saying who changed it.
     pub fn clips_since(&self, token: u64, gesture: Gesture, since: Option<u64>) -> Result<Answer> {
-        match self.clips_why_since(token, gesture, None, since) {
-            (Ok(v), _) => Ok(Answer::Done(v)),
-            (Err(e), Some(Refused::Changed)) => Ok(Answer::Changed(format!("{e:#}"))),
-            (Err(e), _) => Err(e),
+        let (gesture, name) = self.measured(token, gesture)?;
+        let answer = match self.clips_why_since(token, gesture, None, since) {
+            (Ok(v), _) => Answer::Done(v),
+            (Err(e), Some(Refused::Changed)) => return Ok(Answer::Changed(format!("{e:#}"))),
+            (Err(e), _) => return Err(e),
+        };
+        // Find notes' step is named for what it did, as a comp's is (VOX-43).
+        if let (Answer::Done(v), Some(name)) = (&answer, name)
+            && let Some(step) = v["step"].as_u64()
+            && let Err(err) = self.name_step_by(token, None, Some(step), name, false)
+        {
+            eprintln!("music2: couldn't name Find notes' undo step: {err:#}");
         }
+        Ok(answer)
+    }
+
+    /// What measure `measure` finds in the open song's asset `asset` (VOX-41), as bytes (the
+    /// review's S10): a little-endian u32, the length of the JSON header after it, `{measure, asset,
+    /// hop, rate, hops, outputs}`; then each output of `outputs` (all, when none is asked) in turn,
+    /// its numbers one a hop, little-endian f32. Measured off the session's lock, and kept in the
+    /// cache folder.
+    pub fn measure(&self, token: u64, asset: String, measure: String, only: Option<Vec<String>>) -> Result<Vec<u8>> {
+        let file = self.asset_file(token, &asset)?;
+        let plain = |e: EditError| anyhow::anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
+        let m = measure.clone();
+        let packages = self.call(move |a| {
+            let o = a.open.as_ref().ok_or_else(|| anyhow::anyhow!("no project is open"))?;
+            o.check_token(token)?;
+            m2_editor::sung::packages_measuring(&o.session, &m).map_err(plain)
+        })?;
+        let found = m2_runtime::measure::measure(&packages, &measure, &file, &[])?;
+        let outputs = only.unwrap_or_else(|| found.outputs.clone());
+        let mut body = vec![];
+        for name in &outputs {
+            let Some(values) = found.output(name) else {
+                anyhow::bail!("`{measure}` has no output `{name}`: it has {}", found.outputs.join(", "))
+            };
+            body.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let head =
+            json!({"measure": measure, "asset": asset, "hop": found.hop, "rate": found.rate, "hops": found.hops(), "outputs": outputs})
+                .to_string()
+                .into_bytes();
+        let mut out = (head.len() as u32).to_le_bytes().to_vec();
+        out.extend(head);
+        out.extend(body);
+        Ok(out)
+    }
+
+    /// `gesture`, a Find notes (VOX-43) given what its measure found in the clip's file, and its
+    /// step's name ("Find notes on Vox"); any other as it is. The measure runs here, off the
+    /// session's lock: the session lends the packages it runs from and the file, then is free.
+    fn measured(&self, token: u64, gesture: Gesture) -> Result<(Gesture, Option<String>)> {
+        let Gesture::FindNotes { clip, measure, render, found: None } = gesture else { return Ok((gesture, None)) };
+        let plain = |e: EditError| anyhow::anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
+        let (m, r, c) = (measure.clone(), render.clone(), clip.clone());
+        let (packages, file) = self.call(move |a| {
+            let o = a.open.as_ref().ok_or_else(|| anyhow::anyhow!("no project is open"))?;
+            o.check_token(token)?;
+            let s = &o.session;
+            let packages = m2_editor::sung::packages_for(s, &m, &r).map_err(plain)?;
+            Ok((packages, m2_editor::sung::file_of(s, &c).map_err(plain)?))
+        })?;
+        let found = m2_runtime::measure::measure(&packages, &measure, &file, &[])?;
+        let name = {
+            let cp = self.inner.control.lock();
+            format!("Find notes on {}", super::record::label_of(&cp, clip.lane.module.as_str()))
+        };
+        Ok((Gesture::FindNotes { clip, measure, render, found: Some(Arc::new(found)) }, Some(name)))
     }
 
     /// [`Graph::clips`] as the Tx with id `tx_id` when given: a lane lease's commit, whose new

@@ -1,8 +1,8 @@
 [package]
 name = "@m2/vocals"
-version = "1.0.0"
+version = "1.1.0"
 license = "MIT OR Apache-2.0"
-description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key"
+description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key, and a voice's notes, found and edited"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
 tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key"]
@@ -53,3 +53,27 @@ inputs = [
 ]
 outputs = ["out: audio<*>"]
 latency_s = 0.015
+
+# ---------------------------------------------------------------- a voice's notes (VOX-40 to VOX-47)
+# Two offline kernels the host runs, never song code: `notes` measures a recorded voice's file, and
+# `voice` plays a clip's edited notes, phrase by phrase (RENDER-30b). They read the pitch line by
+# the same code, at the same hops, so the line `voice` moves is the line the window draws.
+
+[[kernel]]
+name = "notes"
+description = "The sung notes of a file, a measure (VOX-41, VOX-42): every 256 frames of the file, the voice's hz, clarity and level (pitch's reading of the window centred there), note (0 between notes, then 1, 2, 3...) and centre (that note's sung pitch, a MIDI number). A note starts where the voice starts, where its pitch moves more than 0.7 semitones and stays, or where it gets 6 dB louder, and ends where the voice stops; one under 60 ms joins the note it touches"
+offline = true
+hop = 256
+outputs = [
+  "hz: control<hz>",
+  "clarity: control<unit01>",
+  "level: control<gain>",
+  "note: control<scalar>",
+  "centre: control<semitones>",
+]
+
+[[kernel]]
+name = "voice"
+description = "Plays a clip's edited notes (VOX-45, RENDER-30b): one phrase of the clip, its file laid out by the time map, each moment of a note moved by move plus straighten times (pitch less the pitch line), from -7 to 12 semitones, by TD-PSOLA, so the voice keeps its colour. values: the phrase's first and last frame in the clip, the lead-in in seconds, then five numbers a note (at, length, pitch, move, straighten)"
+offline = true
+outputs = ["out: audio<*>"]
