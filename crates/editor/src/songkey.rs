@@ -3,7 +3,8 @@
 //! so sound reads it as `time.key` (VOX-12); Notes shades the rows out of the key, can lock notes to
 //! it and stamps its chords. What a key is lives with the arrangement (`m2_song::songkey`).
 
-use m2_session::Session;
+use m2_ir::{Node, Op, TimeOf};
+use m2_session::{Compiled, Session};
 
 pub use m2_song::songkey::{ROOTS, SongKey, Written};
 
@@ -32,6 +33,20 @@ pub fn set(s: &mut Session, key: Option<SongKey>) -> Result<Edited, EditError> {
     }
     a.key = key;
     crate::song::write(s, a, label, false)
+}
+
+/// Whether call `site` of `compiled` reads the song's key: a `time.key` its body made, as Tune's
+/// does, so its card says the key (VOX-26). Worked out from the graph: no descriptor says so.
+pub fn read_by(compiled: &Compiled, site: u32) -> bool {
+    let mut found = false;
+    for m in &compiled.ir.modules {
+        crate::controls::walk(&m.nodes, &mut |n: &Node| {
+            if matches!(n.op, Op::Time { of: TimeOf::Key }) && crate::effect::calls_of(m, n).any(|s| s == site) {
+                found = true;
+            }
+        });
+    }
+    found
 }
 
 #[cfg(test)]

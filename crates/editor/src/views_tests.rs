@@ -628,7 +628,7 @@ fn music2s_own_sounds_show_their_groups_and_views() {
 fn music2s_own_values_read_as_words() {
     let f = Fixture::new();
     // Every bundled pack (PACK-15), the song needing each so the catalog holds them all.
-    f.write("music2.toml", format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n\"@m2/vocals\" = \"1\"\n\"@m2/wavetable\" = \"1\"\n"));
     f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nexport default song(() => mixer({}));\n");
     let s = f.open();
     let catalog = s.catalog();
@@ -644,7 +644,7 @@ fn music2s_own_values_read_as_words() {
         }
     }
     assert!(seen > 200, "{seen} values");
-    for pack in ["@m2/drums", "@m2/effects", "@m2/mixing", "@m2/synths", "@m2/wavetable"] {
+    for pack in ["@m2/drums", "@m2/effects", "@m2/mixing", "@m2/synths", "@m2/vocals", "@m2/wavetable"] {
         assert!(catalog.components.keys().any(|id| id.starts_with(&format!("{pack}:"))), "{pack} is in the catalog");
     }
     assert!(wrong.is_empty(), "shown by a name in camelCase, so it wants a label (CARD-34): {wrong:?}");
@@ -686,4 +686,35 @@ export default song(({ time }) => {
     assert_eq!(row("highFreq").0, "high frequency", "fed by a signal written in the call");
     assert_eq!(card.readonly.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["low frequency"]);
     assert_eq!(card.inlets.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["mid frequency"]);
+}
+
+// VOX-26: a call whose sound reads the song's key (`time.key`) says so on its card: Tune, and a
+// component of the song's own that reads it. A call that doesn't (a reverb) says nothing, and nor
+// does a track that reads it outside any call.
+#[test]
+fn a_call_that_reads_the_key_says_so() {
+    let f = Fixture::new();
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/vocals\" = \"1\"\n"));
+    f.write(
+        "song.ts",
+        "import { component, control, kernel, port, signature, song, time, track, type Audio, type Params } from \"@m2/core\";\n\
+         import { osc } from \"std/dsp\";\nimport { reverb } from \"@m2/effects\";\nimport { mixer } from \"std/mix\";\nimport { tune } from \"@m2/vocals\";\n\
+         const keyed = component({ id: \"keyed\", label: \"Keyed\", signature: signature<(x: Audio) => Audio>(), inputs: { in: port.audio() }, controls: {}, output: port.audio() },\n\
+           (x: Audio, _: Params) => kernel(\"@m2/vocals:shift\", { in: x, semitones: kernel(\"@m2/vocals:snap\", { hz: 220, clarity: 1, key: time.key }) }));\n\
+         const vox = track(\"vox\", () => reverb(tune(osc.saw(220))));\n\
+         const own = track(\"own\", () => keyed(osc.saw(110)));\n\
+         const bare = track(\"bare\", () => kernel(\"@m2/vocals:shift\", { in: osc.saw(330), semitones: kernel(\"@m2/vocals:snap\", { hz: 330, clarity: 1, key: time.key }) }));\n\
+         export default song(() => mixer({ vox: vox.out, own: own.out, bare: bare.out }));\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let reads = |module: &str| -> Vec<(String, bool)> {
+        let v = s.view();
+        let m = v.modules.iter().find(|m| m.key == module).unwrap();
+        m.nodes.iter().filter(|n| n.kind == "call").map(|n| (n.label.clone(), n.reads_key)).collect()
+    };
+    assert_eq!(reads("vox").iter().filter(|(_, r)| *r).map(|(l, _)| l.as_str()).collect::<Vec<_>>(), ["tune"], "{:?}", reads("vox"));
+    assert!(reads("vox").iter().any(|(l, r)| l == "reverb" && !r), "{:?}", reads("vox"));
+    assert!(reads("own").iter().any(|(l, r)| l == "keyed" && *r), "{:?}", reads("own"));
+    assert!(reads("bare").iter().all(|(_, r)| !r), "no call there reads it: {:?}", reads("bare"));
 }

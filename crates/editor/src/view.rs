@@ -181,6 +181,10 @@ pub struct ViewNode {
     /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<String>,
+    /// Its sound reads the song's key (`time.key`): its card says the key, or that none is set
+    /// (VOX-26). The page reads the key itself from the timeline (NOTE-2).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reads_key: bool,
     /// Its component's settings, in its descriptor's order (CARD-1).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub settings: Vec<Setting>,
@@ -900,6 +904,7 @@ pub fn view(session: &Session) -> GraphView {
                 listens,
                 plugin: plugins.get(g).cloned(),
                 voices,
+                reads_key: matches!(g, Group::Site(s) if kind == "call" && crate::songkey::read_by(&rev.compiled, *s)),
                 settings,
                 groups: vec![],
                 views: vec![],
@@ -1011,6 +1016,7 @@ pub fn view(session: &Session) -> GraphView {
                 listens: None,
                 plugin: None,
                 voices: None,
+                reads_key: false,
                 settings: vec![],
                 groups: vec![],
                 views: vec![],
