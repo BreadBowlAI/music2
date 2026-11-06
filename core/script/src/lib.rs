@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 pub mod component;
+pub mod pictures;
 pub mod sites;
 
 pub use component::{Catalog, Descriptor, UnitCtor};
@@ -1459,6 +1460,8 @@ mod mute_tests;
 mod optional_input_tests;
 #[cfg(test)]
 mod optional_tests;
+#[cfg(test)]
+mod pictures_tests;
 #[cfg(test)]
 mod poly_tests;
 #[cfg(test)]

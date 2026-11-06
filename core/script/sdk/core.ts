@@ -1216,7 +1216,7 @@ const WANTS = {
 } as const satisfies Record<string, readonly Unit[]>;
 
 /** What a view declaration holds: its kind, and the name it draws for each role. */
-type ViewSpec = { kind: "envelope" | "filter" | "keys" | "scope"; names: Record<string, [unknown, Want]> };
+type ViewSpec = { kind: "envelope" | "filter" | "keys" | "scope" | "picture"; names: Record<string, [unknown, Want]>; picture?: PictureSpec };
 
 /**
  * A view (CARD-16): a picture over values the sound declares, which holds none of its own. `V`
@@ -1254,7 +1254,380 @@ export const view = {
   scope(): ViewDecl<{}> {
     return new ViewDecl({ kind: "scope", names: {} });
   },
+  /**
+   * A picture this sound draws (CARD-60): its axes, its live layers, `draw`, which turns the card's
+   * values `v` into shapes made with `p`, and `words`, which says it in one sentence. Each dot's
+   * names are checked against the descriptor as you type (CARD-62).
+   */
+  picture<X extends Unit, Y extends Unit, const R extends readonly Shape<any>[]>(spec: {
+    x: Axis<X>;
+    y: Axis<Y>;
+    live?: readonly Live[];
+    draw: (v: Played, p: Painter<X, Y>) => R;
+    words: (v: Played) => string;
+  }): PictureDecl<NeedsOf<R>> {
+    return new PictureDecl({ kind: "picture", names: {}, picture: { ...spec } });
+  },
 };
+
+// ------------------------------------------------ pictures (CARD-60 to CARD-66)
+
+/** How a picture's axis is laid out: its scale, its unit, and where it starts and ends. */
+type AxisSpec = { scale: "lin" | "log" | "time"; unit: Unit; lo: number; hi: number };
+
+/** A picture's axis (CARD-60). `U` is its unit, for types only. */
+export class Axis<U extends Unit = Unit> {
+  declare readonly [PHANTOM]?: U;
+  /** @internal */
+  constructor(spec: AxisSpec) {
+    specs.set(this, spec);
+  }
+}
+
+/**
+ * A picture's axes (CARD-60): music2 draws each one's grid and labels. `axis.lin("db", -24, 24)`,
+ * `axis.log("hz", 20, 20000)` (it starts above 0), `axis.time(2)` (0 to 2 seconds).
+ */
+export const axis = {
+  lin<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
+    return new Axis({ scale: "lin", unit, lo, hi });
+  },
+  log<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
+    return new Axis({ scale: "log", unit, lo, hi });
+  },
+  time(seconds: number): Axis<"seconds"> {
+    return new Axis({ scale: "time", unit: "seconds", lo: 0, hi: seconds });
+  },
+};
+
+/** How strongly a shape is drawn, in music2's greys: never a colour (CARD-61). */
+export type Tone = "main" | "soft" | "faint";
+const TONES: readonly Tone[] = ["main", "soft", "faint"];
+
+/** A live layer (CARD-73): what moves with the sound, which music2 draws under the shapes. */
+export class Live {
+  /** @internal */
+  constructor(spec: Record<string, unknown>) {
+    specs.set(this, spec);
+  }
+}
+
+/**
+ * A picture's live layers (CARD-73), at the call's input (`"in"`) or output (`"out"`):
+ * `live.spectrum("in", { tone: "faint" })`, `live.level("in", { on: "curve" })` (a dot riding the
+ * line named `curve`), `live.meter("reduction")`, `live.history(live.meter("reduction"))`,
+ * `live.playhead("beat")`, `live.scope("out")`.
+ */
+export const live = {
+  spectrum(at: "in" | "out", o?: { tone?: Tone }): Live {
+    return new Live({ kind: "spectrum", at, ...(o?.tone !== undefined ? { tone: o.tone } : {}) });
+  },
+  level(at: "in" | "out", o?: { on?: string }): Live {
+    return new Live({ kind: "level", at, ...(o?.on !== undefined ? { on: o.on } : {}) });
+  },
+  meter(name: string): Live {
+    return new Live({ kind: "meter", name });
+  },
+  history(of: Live): Live {
+    return new Live({ kind: "history", of });
+  },
+  playhead(from: string): Live {
+    return new Live({ kind: "playhead", from });
+  },
+  scope(at: "in" | "out"): Live {
+    return new Live({ kind: "scope", at });
+  },
+};
+
+declare const NEEDS: unique symbol;
+/** What a dot asks of its descriptor, for types only: the value it names, and what it must be. */
+type Need<N, W> = { name: N; want: W };
+/** A shape `p` made (CARD-61). `N` says, for types only, what its dots name. */
+export type Shape<N = never> = { readonly kind: string; readonly [NEEDS]?: N };
+
+/** A `moves` entry that moves its value as its knob's drag does, not on the axis (CARD-61). */
+export class KnobMove<N extends string = string> {
+  declare readonly [PHANTOM]?: N;
+  /** @internal */
+  constructor(readonly name: N) {}
+}
+
+/** For a dot's `moves`: `{ y: knob("ratio") }` moves the ratio as its knob's drag does (CARD-61). */
+export function knob<const N extends string>(name: N): KnobMove<N> {
+  return new KnobMove(name);
+}
+
+/** What a dot moves (CARD-61, CARD-70): its values by name, the tab it opens, its mark. */
+export type Moves = {
+  readonly x?: string | KnobMove;
+  readonly y?: string | KnobMove;
+  readonly wheel?: string;
+  readonly toggles?: string;
+  readonly opens?: string;
+  readonly mark?: string;
+  readonly off?: boolean;
+};
+type AxisNeed<M, U> = M extends KnobMove<infer N> ? Need<N, "number"> : M extends string ? Need<M, U> : never;
+type HandleNeeds<M, X, Y> =
+  | (M extends { readonly x: infer A } ? AxisNeed<A, X> : never)
+  | (M extends { readonly y: infer A } ? AxisNeed<A, Y> : never)
+  | (M extends { readonly wheel: infer W extends string } ? Need<W, "number"> : never)
+  | (M extends { readonly toggles: infer T extends string } ? Need<T, "switch"> : never);
+type NeedsOf<S> = S extends readonly (infer E)[] ? (E extends Shape<infer N> ? N : never) : never;
+
+/**
+ * What `draw` draws with (CARD-61), typed by the picture's axes: every point in their units, as one
+ * flat list `[x0, y0, x1, y1, …]`.
+ */
+export interface Painter<X extends Unit = Unit, Y extends Unit = Unit> {
+  /** A line through the points; `name` lets a live layer ride it. */
+  line(points: readonly number[], o?: { tone?: Tone; name?: string }): Shape;
+  /** The shape the points close, or down to `base` on y. */
+  fill(points: readonly number[], o?: { base?: number; tone?: Tone }): Shape;
+  /** A bar at each point, from `base` (0) to its y. */
+  bars(points: readonly number[], o?: { base?: number; tone?: Tone }): Shape;
+  /** A dot the musician drags: `moves` names the values it moves (CARD-70). */
+  handle<const M extends Moves>(x: number | null, y: number | null, moves: M): Shape<HandleNeeds<M, X, Y>>;
+  /** A thin guide line across the picture at `at` on one axis. */
+  mark(axis: "x" | "y", at: number, words?: string): Shape;
+  /** A few words at a point. */
+  label(x: number, y: number, words: string): Shape;
+  /** A place, `[x0, y0, x1, y1]`, that plays `note` through audition when clicked (CARD-72). */
+  play(box: readonly [number, number, number, number], o: { note: number }): Shape;
+  /** The shapes `make` draws, made again only when a value it read changed (CARD-64). */
+  part<const S extends readonly Shape<any>[]>(name: string, make: () => S): Shape<NeedsOf<S>>;
+}
+
+/**
+ * What plays, by the name of each of the card's values (CARD-63): a number in its base unit, a
+ * choice's name, a switch's true or false, or null under a cable or where the code works it out.
+ * Read only. Its names aren't typed: the runner checks each as it is read (CARD-65).
+ */
+export type Played = { readonly [name: string]: any };
+
+/** What a picture declaration holds (CARD-60). */
+type PictureSpec = { x: unknown; y: unknown; live?: unknown; draw: unknown; words: unknown };
+
+declare const PICTURE: unique symbol;
+/** A picture (CARD-60). `N` says, for types only, what its dots name: checked against the descriptor. */
+export class PictureDecl<N = never> extends ViewDecl<{}> {
+  declare readonly [PICTURE]: { needs: N };
+}
+
+/** A picture's declaration checked (CARD-60): its axes and live layers as the descriptor carries them, or `fail`s in words. */
+function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never): { x: AxisSpec; y: AxisSpec; live?: unknown[] } {
+  const fields = ["x", "y", "live", "draw", "words"];
+  for (const k of Object.keys(pic)) if (!fields.includes(k)) fail(`${at}: a picture has no field "${k}" (fields: ${fields.join(", ")})`);
+  const axisOf = (which: "x" | "y", a: unknown): AxisSpec => {
+    if (!(a instanceof Axis)) fail(`${at}: its ${which} must be made with axis.lin(), axis.log() or axis.time()`);
+    const s = specOf<AxisSpec>(a as object);
+    if (!UNIT_NAMES.includes(s.unit)) fail(`${at}: its ${which} axis's unit is ${shown(s.unit)}, which isn't a unit (units: ${UNIT_NAMES.join(", ")})`);
+    if (typeof s.lo !== "number" || typeof s.hi !== "number" || !Number.isFinite(s.lo) || !Number.isFinite(s.hi)) {
+      fail(`${at}: its ${which} axis starts and ends at finite numbers, not ${shown(s.lo)} and ${shown(s.hi)}`);
+    }
+    if (s.scale === "time" && !(s.hi > 0)) fail(`${at}: its ${which} axis, axis.time(), lasts more than 0 seconds, not ${s.hi}`);
+    if (!(s.lo < s.hi)) fail(`${at}: its ${which} axis must go from a lower number to a higher one, not from ${s.lo} to ${s.hi}`);
+    if (s.scale === "log" && !(s.lo > 0)) fail(`${at}: its ${which} axis is on a log scale, so it starts above 0, not at ${s.lo}`);
+    return { scale: s.scale, unit: s.unit, lo: s.lo, hi: s.hi };
+  };
+  const x = axisOf("x", pic.x);
+  const y = axisOf("y", pic.y);
+  if (typeof pic.draw !== "function") fail(`${at}: its draw must be a function of its values and the builder p, as (v, p) => [p.line(points)]`);
+  if (pic.words === undefined) fail(`${at}: a picture says itself in words: give it words, a function of its values that returns one sentence`);
+  if (typeof pic.words !== "function") fail(`${at}: its words must be a function of its values that returns one sentence`);
+  if (pic.live !== undefined && !Array.isArray(pic.live)) fail(`${at}: its live must be a list of live layers, as [live.spectrum("out")]`);
+  const layer = (l: unknown, n: string): Record<string, unknown> => {
+    if (!(l instanceof Live)) fail(`${at}: its live layer ${n} must be made with live.spectrum(), live.level(), live.meter(), live.history(), live.playhead() or live.scope()`);
+    const s = { ...specOf<Record<string, unknown>>(l as object) };
+    const kind = s.kind as string;
+    if ("at" in s && s.at !== "in" && s.at !== "out") fail(`${at}: its live layer ${n}, live.${kind}, looks at ${shown(s.at)}: a ${kind} looks at "in" or "out"`);
+    if ("tone" in s && !TONES.includes(s.tone as Tone)) fail(`${at}: its live layer ${n}'s tone is ${shown(s.tone)}: a tone is main, soft or faint, never a colour`);
+    if ("on" in s && (typeof s.on !== "string" || !NAME.test(s.on))) fail(`${at}: its live layer ${n}, live.level, rides the line its on names, a plain name, not ${shown(s.on)}`);
+    if (kind === "meter" && (typeof s.name !== "string" || !NAME.test(s.name))) fail(`${at}: its live layer ${n}, live.meter, names a meter of the sound by a plain name, not ${shown(s.name)}`);
+    if (kind === "playhead" && (typeof s.from !== "string" || !NAME.test(s.from))) fail(`${at}: its live layer ${n}, live.playhead, follows "beat" or a meter's name, not ${shown(s.from)}`);
+    if (kind === "history") {
+      const of = s.of instanceof Live ? specOf<Record<string, unknown>>(s.of).kind : undefined;
+      if (of !== "level" && of !== "meter") fail(`${at}: its live layer ${n}, live.history, shows a level or a meter over time: give it live.level() or live.meter()`);
+      s.of = layer(s.of, n);
+    }
+    return s;
+  };
+  const layers = ((pic.live as unknown[] | undefined) ?? []).map((l, i) => layer(l, `${i + 1}`));
+  return { x, y, ...(layers.length ? { live: layers } : {}) };
+}
+
+// ------------------------------------------------ the picture runner's side (CARD-64, CARD-65)
+
+/** Why a draw can't be drawn, in words: a mistake the runner found, said as the picture's. */
+class PictureError extends Error {}
+
+/** Every shape `p` made: a draw gives back only these. */
+const made = new WeakSet<object>();
+/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, and what it drew. */
+const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number }>();
+/** The parts kept at most: the oldest goes first. */
+const KEPT = 512;
+/** The numbers a draw may give in all (CARD-65). */
+const NUMBERS = 20000;
+
+/**
+ * Draw picture `name` of the component `cid` at `values` (the JSON of what plays, by name), for
+ * the picture runner: `{shapes, words}`, or `{why}` when it can't be drawn. `memo` names the
+ * picture asked for, which its parts are kept by.
+ */
+export function __picture(cid: string, name: string, values: string, memo: string): string {
+  const c = registry.get(cid);
+  const pic = c?.pictures.get(name);
+  if (!c || !pic) return JSON.stringify({ why: `can't be drawn: no picture "${name}" of ${cid} was loaded` });
+  const draw = pic.draw as (v: Played, p: Painter) => unknown;
+  const said = pic.words as (v: Played) => unknown;
+  const ax = { x: specOf<AxisSpec>(pic.x as object), y: specOf<AxisSpec>(pic.y as object) };
+  const given = JSON.parse(values) as Record<string, unknown>;
+  const target: Record<string, unknown> = {};
+  for (const n of [...c.controls.filter((x) => !x.each).map((x) => x.name), ...c.settings.map((x) => x.name)]) target[n] = given[n] ?? null;
+  Object.freeze(target);
+  // Who reads: the draw, and each part being made inside it.
+  const readers: Set<string>[] = [];
+  let missed: string | undefined;
+  const v = new Proxy(target, {
+    get(t, k) {
+      if (typeof k !== "string") return undefined;
+      if (!Object.prototype.hasOwnProperty.call(t, k)) {
+        missed ??= `reads ${k}, which this sound doesn't have`;
+        throw new PictureError(missed);
+      }
+      for (const r of readers) r.add(k);
+      return t[k];
+    },
+    set(_t, k) {
+      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
+    },
+    defineProperty(_t, k) {
+      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
+    },
+    deleteProperty(_t, k) {
+      throw new PictureError(`can't change ${String(k)}: a picture reads what plays, and changes nothing`);
+    },
+  }) as Played;
+  let numbers = 0;
+  const bad = (m: string): never => {
+    throw new PictureError(m);
+  };
+  const shape = <T extends object>(s: T): Shape => {
+    Object.freeze(s);
+    made.add(s);
+    return s as unknown as Shape;
+  };
+  const finite = (word: string, x: unknown) => (typeof x === "number" && Number.isFinite(x) ? x : bad(`gives ${word} a point that isn't a finite number`));
+  const pointsOf = (word: string, pts: unknown): number[] => {
+    if (!Array.isArray(pts) && !ArrayBuffer.isView(pts)) bad(`gives ${word} its points as ${shown(pts)}: points are one list of numbers, x, y, x, y`);
+    const out = Array.from(pts as ArrayLike<unknown>, (x) => finite(word, x));
+    if (out.length % 2) bad(`gives ${word} an odd count of numbers (${out.length}): points are x, y pairs`);
+    numbers += out.length;
+    if (numbers > NUMBERS) bad(`draws more than 20,000 numbers: draw fewer points`);
+    return out;
+  };
+  const tone = (word: string, t: unknown) => (t === undefined || TONES.includes(t as Tone) ? t : bad(`gives ${word} the tone ${shown(t)}: a tone is main, soft or faint, never a colour`));
+  const base = (word: string, b: unknown) => (b === undefined ? undefined : finite(word, b));
+  const groups = (c.groups ?? []) as string[];
+  // A value a dot moves, checked against the descriptor (CARD-62, CARD-65).
+  const moved = (n: unknown, as: "x" | "y" | "wheel" | "toggles", knobbed: boolean) => {
+    if (typeof n !== "string") bad(`gives a dot's ${as} ${shown(n)}: it names one of the sound's values`);
+    const ctl = c.controls.find((x) => x.name === n && !x.each);
+    if (!ctl) bad(`names ${n}, which this sound doesn't have`);
+    const s = ctl!.spec;
+    const is = s.kind === "number" ? `a control in ${s.unit ?? "no unit"}` : `a ${s.kind}`;
+    if (as === "toggles") return s.kind === "switch" ? { name: n } : bad(`flips ${n}, ${is}, but only a switch flips`);
+    if (knobbed) return s.kind === "number" ? { name: n, by: "knob" } : bad(`moves ${n} as its knob, ${is}, but a knob's drag moves a number`);
+    if (as === "wheel") return s.kind === "number" ? { name: n } : bad(`moves ${n} with the wheel, ${is}, but the wheel moves a number`);
+    const unit = ax[as].unit;
+    const way = as === "x" ? "across" : "up and down";
+    return s.kind === "number" && s.unit === unit ? { name: n } : bad(`moves ${n} ${way}, ${is}, but its ${as} axis is in ${unit}`);
+  };
+  const p: Painter = {
+    line: (pts, o) => shape({ kind: "line", points: pointsOf("p.line", pts), tone: tone("p.line", o?.tone), name: o?.name }),
+    fill: (pts, o) => shape({ kind: "fill", points: pointsOf("p.fill", pts), base: base("p.fill", o?.base), tone: tone("p.fill", o?.tone) }),
+    bars: (pts, o) => shape({ kind: "bars", points: pointsOf("p.bars", pts), base: base("p.bars", o?.base), tone: tone("p.bars", o?.tone) }),
+    handle: (x, y, moves) => {
+      const m = (moves ?? {}) as Moves;
+      const fields = ["x", "y", "wheel", "toggles", "opens", "mark", "off"];
+      for (const k of Object.keys(m)) if (!fields.includes(k)) bad(`a dot's moves have no field "${k}" (fields: ${fields.join(", ")})`);
+      const out: Record<string, unknown> = {};
+      for (const k of ["x", "y", "wheel", "toggles"] as const) {
+        const n = m[k];
+        if (n !== undefined) out[k] = n instanceof KnobMove ? moved(n.name, k, true) : moved(n, k, false);
+      }
+      if (m.opens !== undefined && !groups.includes(m.opens as string)) bad(`a dot opens ${shown(m.opens)}, which isn't a group of this card (groups: ${groups.join(", ") || "none"})`);
+      if (m.mark !== undefined && (typeof m.mark !== "string" || [...m.mark].length < 1 || [...m.mark].length > 3)) bad(`a dot's mark is 1 to 3 characters, not ${shown(m.mark)}`);
+      numbers += 2;
+      return shape({
+        kind: "handle",
+        x: x === null ? null : finite("p.handle", x),
+        y: y === null ? null : finite("p.handle", y),
+        moves: out,
+        opens: m.opens,
+        mark: m.mark,
+        off: m.off === true,
+      });
+    },
+    mark: (axisName, at, words) => {
+      if (axisName !== "x" && axisName !== "y") bad(`gives p.mark the axis ${shown(axisName)}: it is "x" or "y"`);
+      if (words !== undefined && (typeof words !== "string" || words.length > 80)) bad(`gives p.mark words of 80 characters at most, not ${shown(words)}`);
+      return shape({ kind: "mark", axis: axisName, at: finite("p.mark", at), words });
+    },
+    label: (x, y, words) => {
+      if (typeof words !== "string" || !words || words.length > 40 || /[\r\n]/.test(words)) bad(`gives p.label one line of 1 to 40 characters, not ${shown(words)}`);
+      return shape({ kind: "label", x: finite("p.label", x), y: finite("p.label", y), words });
+    },
+    play: (box, o) => {
+      const b = pointsOf("p.play", box);
+      if (b.length !== 4) bad(`gives p.play a place of four numbers, x0, y0, x1, y1, not ${b.length}`);
+      const note = o?.note;
+      if (typeof note !== "number" || !Number.isInteger(note) || note < 0 || note > 127) bad(`gives p.play the note ${shown(note)}: a note is a whole number 0 to 127`);
+      return shape({ kind: "play", box: b, note });
+    },
+    part: (partName, make) => {
+      if (typeof partName !== "string" || !partName) bad(`gives p.part a name, as "grid", not ${shown(partName)}`);
+      if (typeof make !== "function") bad(`gives p.part a function that makes its shapes, as () => [p.line(points)]`);
+      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}`;
+      const was = kept.get(key);
+      if (was && [...was.read].every(([k, x]) => Object.is(target[k], x))) {
+        numbers += was.numbers;
+        if (numbers > NUMBERS) bad(`draws more than 20,000 numbers: draw fewer points`);
+        return shape({ kind: "part", name: partName, shapes: was.shapes });
+      }
+      const read = new Set<string>();
+      const before = numbers;
+      readers.push(read);
+      let shapes: readonly object[];
+      try {
+        shapes = shapesOf(make(), `p.part("${partName}")'s function`);
+      } finally {
+        readers.pop();
+      }
+      kept.delete(key);
+      if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
+      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before });
+      return shape({ kind: "part", name: partName, shapes });
+    },
+  };
+  const shapesOf = (out: unknown, what: string): readonly object[] => {
+    if (!Array.isArray(out)) bad(`${what} returns ${shown(out)}: it returns a list of shapes, made with p`);
+    for (const s of out as unknown[]) if (s === null || typeof s !== "object" || !made.has(s)) bad(`returns something p didn't make: make each shape with p.line(), p.handle() and the rest`);
+    return out as object[];
+  };
+  try {
+    readers.push(new Set());
+    const shapes = shapesOf(draw(v, p), "its draw");
+    const words = said(v);
+    if (missed) bad(missed);
+    if (typeof words !== "string" || !words.trim() || [...words].length > 200 || /[\r\n]/.test(words)) bad(`its words must be one line of 1 to 200 characters, not ${shown(words)}`);
+    return JSON.stringify({ shapes, words });
+  } catch (e) {
+    if (e instanceof PictureError) return JSON.stringify({ why: missed ?? e.message });
+    return JSON.stringify({ why: `couldn't be drawn: ${e instanceof Error ? e.message : String(e)}` });
+  }
+}
 
 /** A component's descriptor. */
 export type Descriptor = {
@@ -1489,9 +1862,25 @@ type RoleProblem<D, Role extends string, N, W> = W extends "regions"
     : `its ${Role} names "${N & string}", which isn't a control of this sound`;
 type ViewProblem<D, Name, V> = Name extends keyof Ins<D> | Values<D>
   ? `"${Name & string}" is a value of this sound: give the view a name of its own`
+  : V extends PictureDecl<infer N>
+    ? PictureProblem<D, N>
   : V extends ViewDecl<infer Needs>
     ? { [R in keyof Needs]: RoleProblem<D, R & string, Needs[R][0], Needs[R][1]> }[keyof Needs]
     : never;
+// A picture's dots (CARD-62): each name a control of this sound, of the kind its move needs. A name
+// worked out as the code runs (`freq${number}`) must match a control, and each it matches must fit.
+type PictureProblem<D, N> = N extends Need<infer Name extends string, infer W> ? NeedProblem<D, Name, W> : never;
+type Matched<D, Name extends string> = Extract<keyof Ctls<D> & string, Name>;
+type NeedProblem<D, Name extends string, W> = string extends Name
+  ? never
+  : [Matched<D, Name>] extends [never]
+    ? `its picture's dot names "${Name}", which isn't a control of this sound`
+    : { [K in Matched<D, Name>]: FitProblem<K, Ctls<D>[K] extends ControlDecl<any, infer K2> ? K2 : "dictionary", W> }[Matched<D, Name>];
+type FitProblem<K extends string, C, W> = W extends "switch"
+  ? [NonNullable<C>] extends [SwitchKind] ? never : `its picture's dot flips "${K}", which isn't a switch`
+  : W extends "number"
+    ? [NonNullable<C>] extends [Unit] ? never : `its picture's dot moves "${K}" as a number, which it isn't`
+    : [NonNullable<C>] extends [W] ? never : `its picture's dot moves "${K}" on an axis in ${W & string}, and "${K}" isn't in ${W & string}`;
 type ViewsFit<D> = [{ [K in keyof ViewsOf<D>]: ViewProblem<D, K, ViewsOf<D>[K]> }[keyof ViewsOf<D>]] extends [never]
   ? unknown
   : { editor: { views: { [K in keyof ViewsOf<D>]: [ViewProblem<D, K, ViewsOf<D>[K]>] extends [never] ? unknown : ViewProblem<D, K, ViewsOf<D>[K]> } } };
@@ -1670,6 +2059,10 @@ type Component = {
   /** Where `component()` was called, as `file:line:col`. */
   at: string;
   json: string;
+  /** Its card's groups, by name: what a picture's dot may open (CARD-61). */
+  groups: string[];
+  /** Its pictures, by name, with their code: what the picture runner draws (CARD-64). */
+  pictures: Map<string, PictureSpec>;
 };
 
 /** Every component registered while this build or describe run loaded its modules, by ComponentId. */
@@ -1886,12 +2279,20 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   }
   // Views (CARD-16): each by a name of its own, over this very descriptor's controls in a unit that
   // fits, or for keys its regions or keymap setting.
-  const views = record("editor.views", editor.views).map(([name, v]): Record<string, string> => {
+  const pictures = new Map<string, PictureSpec>();
+  const views = record("editor.views", editor.views).map(([name, v]): Record<string, unknown> => {
     const at = `editor.views' "${name}"`;
     if (!NAME.test(name)) fail(`${at}: a view's name is a plain name, such as amp`);
     if (names.has(name)) fail(`${at}: "${name}" is a value of this sound; give the view a name of its own`);
-    if (!(v instanceof ViewDecl)) fail(`${at} must be made with view.envelope(), view.filter(), view.keys() or view.scope()`);
+    if (!(v instanceof ViewDecl)) fail(`${at} must be made with view.envelope(), view.filter(), view.keys(), view.scope() or view.picture()`);
     const spec = specOf<ViewSpec>(v as object);
+    // A picture (CARD-60): its axes and live layers; its code stays here, for the runner.
+    if (spec.kind === "picture") {
+      const pic = spec.picture!;
+      const out = { name, kind: "picture", ...checkPicture(at, pic, fail) };
+      pictures.set(name, pic);
+      return out;
+    }
     const out: Record<string, string> = { name, kind: spec.kind };
     for (const [role, [n, want]] of Object.entries(spec.names)) {
       const says = want === "regions" ? `${at}: the key map's setting` : `${at}: the ${spec.kind}'s ${role}`;
@@ -2116,7 +2517,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
   const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
-  return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json };
+  return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json, groups: groups.map((g) => g.name), pictures };
 }
 
 /**

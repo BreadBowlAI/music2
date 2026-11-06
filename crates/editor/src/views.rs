@@ -69,6 +69,29 @@ pub enum Drawn {
     },
     /// The call's sound as it plays (TAP-8).
     Scope {},
+    /// A picture its pack or song draws (CARD-63): its axes, its live layers, and every value its
+    /// draw reads. Its shapes and words are asked for (CARD-67), never carried here.
+    Picture {
+        x: m2_script::component::Axis,
+        y: m2_script::component::Axis,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        live: Vec<serde_json::Value>,
+        values: Vec<PictureValue>,
+    },
+}
+
+/// A value a picture reads, by its name in the descriptor (CARD-63): what plays, the knob that
+/// moves it when the card can, and why not when it can't.
+#[derive(Clone, Debug, Serialize, PartialEq)]
+pub struct PictureValue {
+    pub name: String,
+    /// A number in its declared unit, a choice's name, a switch's true or false, a setting's value;
+    /// null where a cable or the code works it out.
+    pub value: serde_json::Value,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub knob: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<String>,
 }
 
 /// A value a view draws and moves: its control's slot, its knob when the card can move it, and
@@ -312,10 +335,46 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
                     Drawn::Keys { setting, regions, lane: notes.cloned(), why }
                 }
                 ViewOf::Scope => Drawn::Scope {},
+                ViewOf::Picture { x, y, live } => {
+                    Drawn::Picture { x: x.clone(), y: y.clone(), live: live.clone(), values: picture_values(m, desc, node) }
+                }
             };
             CardView { name: v.name.clone(), of }
         })
         .collect()
+}
+
+/// What card `node`'s picture reads (CARD-63), of a call of `desc` in module `m`: each of its
+/// controls but a dictionary, then each setting, by name.
+fn picture_values(m: &Module, desc: &Descriptor, node: &ViewNode) -> Vec<PictureValue> {
+    let mut out = vec![];
+    for c in desc.controls.iter().filter(|c| c.each.is_none()) {
+        let none = PictureValue { name: c.name.clone(), value: serde_json::Value::Null, knob: None, why: None };
+        let declared = c.unit.map(m2_ir::Unit::name);
+        let v = match node.knobs.iter().find(|k| k.slot.as_deref() == Some(c.name.as_str())) {
+            // A number written in another unit than its declared one isn't drawn in it (review V2).
+            Some(k) if k.kind == crate::kind::Kind::Number && k.unit != declared => {
+                PictureValue { why: Some(format!("it is written in {}, which this picture doesn't draw", unit_words(k.unit))), ..none }
+            }
+            Some(k) => PictureValue { value: k.value.clone(), knob: Some(k.id.clone()), ..none },
+            None => {
+                let input = node.inputs.iter().find(|p| p.slot.as_deref() == Some(c.name.as_str()));
+                let lane = input.and_then(|p| p.lane.as_ref()).and_then(|l| m.lanes.iter().find(|x| x.key == l.lane));
+                let held = lane.and_then(|l| l.default).map(|d| serde_json::json!(d));
+                PictureValue { value: held.unwrap_or_default(), why: Some(why_not(m, input)), ..none }
+            }
+        };
+        out.push(v);
+    }
+    for x in &node.settings {
+        // A setting's value as a picture reads it: a number, a name, true or false. Regions and the
+        // like are no picture's to read, and stay null.
+        let plain = x.value.is_number() || x.value.is_string() || x.value.is_boolean();
+        if plain && desc.settings.iter().any(|d| d.name == x.slot) {
+            out.push(PictureValue { name: x.slot.clone(), value: x.value.clone(), knob: None, why: None });
+        }
+    }
+    out
 }
 
 /// A unit in words, as a beginner reads it.

@@ -755,3 +755,76 @@ export default song(({ time }) => {
     assert_eq!(card.readonly.iter().map(|r| r.label.as_str()).collect::<Vec<_>>(), ["low frequency"]);
     assert_eq!(card.inlets.iter().map(|i| i.label.as_str()).collect::<Vec<_>>(), ["mid frequency"]);
 }
+
+/// A sound whose card draws a picture over its values (CARD-60): `tone` in `lib/tone.ts`.
+const PICTURED: &str = "import { axis, component, control, port, setting, view } from \"@m2/core\";
+import { lowpass } from \"std/filter\";
+import { osc } from \"std/dsp\";
+export const tone = component(
+  {
+    id: \"tone\", label: \"Tone\",
+    controls: { cutoff: control.hz(1000).range(20, 20000).log().accepts(\"semitones\", 0, 127), q: control.scalar(0.7), boost: control.db(0), shape: control.choice([\"soft\", \"hard\"], \"soft\"), on: control.bool(true) },
+    settings: { voices: setting.int(4) },
+    output: port.audio(),
+    editor: {
+      views: {
+        curve: view.picture({
+          x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24),
+          draw: (v, p) => [p.handle(v.cutoff, v.boost, { x: \"cutoff\", y: \"boost\" })],
+          words: (v) => `cut at ${v.cutoff} Hz`,
+        }),
+      },
+      face: [\"curve\", \"cutoff\"],
+    },
+  },
+  ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),
+);
+";
+
+// CARD-63: a picture's view part carries its axes and, by name, every value its draw reads: what
+// plays (written, the default, a lane's fallback; null in a unit it doesn't draw), the knob that moves it,
+// and why the card can't, never its shapes or its words.
+#[test]
+fn a_pictures_values_are_in_the_view() {
+    use crate::views::Drawn;
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write("lib/tone.ts", PICTURED);
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { tone } from \"./lib/tone\";\n\
+         const lead = track(\"lead\", () => tone({ cutoff: 2400, shape: \"hard\", q: 2 }));\nexport default song(() => lead.out);\n",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let tone = |s: &m2_session::Session| {
+        let v = s.view();
+        let m = v.modules.into_iter().find(|m| m.key == "lead").unwrap();
+        m.nodes.into_iter().find(|n| n.title.as_deref() == Some("Tone")).expect("Tone's card")
+    };
+    let card = tone(&s);
+    let id = |slot: &str| card.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)).map(|k| k.id.clone()).unwrap();
+    let sent = serde_json::to_value(&card).unwrap();
+    assert_eq!(
+        sent["views"][0],
+        json!({
+            "name": "curve", "kind": "picture",
+            "x": {"scale": "log", "unit": "hz", "lo": 20.0, "hi": 20000.0},
+            "y": {"scale": "lin", "unit": "db", "lo": -24.0, "hi": 24.0},
+            "values": [
+                {"name": "cutoff", "value": 2400, "knob": id("cutoff")},
+                {"name": "q", "value": 2, "knob": id("q")},
+                {"name": "boost", "value": 0, "knob": id("boost")},
+                {"name": "shape", "value": "hard", "knob": id("shape")},
+                {"name": "on", "value": true, "knob": id("on")},
+                {"name": "voices", "value": 4},
+            ],
+        })
+    );
+    // Automated, a value plays its lane's fallback, which the card can't move, and says why.
+    let q = id("q");
+    s.automate(s.accepted().number, &q).unwrap();
+    let Drawn::Picture { values, .. } = &tone(&s).views[0].of else { panic!("a picture") };
+    let q = values.iter().find(|v| v.name == "q").unwrap();
+    assert_eq!((&q.value, &q.knob, q.why.as_deref()), (&json!(2.0), &None, Some("it follows the q lane")));
+}
