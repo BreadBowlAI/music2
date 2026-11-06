@@ -138,7 +138,7 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from + Effect like any effect, then pick the track in its card's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
 
-**`compress`** (`std/fx`) hears its own sound, or another track's: `compress(bass.out, kick.out)` squeezes the bass only while the kick is loud. Its card's **Listens to** picks the track, or None for its own sound.
+**`compress`** (`std/fx`) hears its own sound, or another track's: `compress(bass.out, kick.out)` squeezes the bass only while the kick is loud. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 
 **Mixing tools** (`@m2/mixing`: `import { eq, gate } from "@m2/mixing"`). Each is an effect: add it after any sound from + Effect, or write it in code.
 
@@ -168,11 +168,11 @@ Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, a
 | **rate** | how often Pump dips: every `1/4` note (each beat), `1/8`, `1/16` or `1/2` |
 
 - **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs). A band moved while it plays crossfades to its new setting, so a change never clicks or booms; a big change on a very resonant band (a high Q, a low frequency) waits up to a second for the new filter to settle before you hear it. A small move, a knob's drag or a lane's line, is heard at once. The card draws no curve yet.
-- **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its card's **Listens to** picks the track, or None for its own sound.
+- **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 - **The transient shaper** turns a hit's start by up to `attack` dB, and its tail by up to `sustain` dB. The faster a tail fades, the more of `sustain` it gets: a snare's short ring all of it, a piano's long fade a quarter or so in its first half second, more as it goes on. A steady sound passes as it is.
 - **The de-esser** turns down the band around `freq` (5 to 8 kHz for most voices), a bell about an octave and a half wide, deepest at `freq`, and only while that band is louder than `threshold`, by at most `amount` dB. While it works, a loud tone an octave away loses a dB or so; a voice's body, two octaves and more below, is left alone.
 - **The multiband compressor** splits the sound where `lowMid` and `midHigh` say, with the crossovers most multiband compressors use (Linkwitz-Riley's); if they cross, the lower one splits the lows from the mids. At ratio 1, with every band's `gain` at 0, it changes no level at any frequency; like every crossover of its kind, it turns the phase a little.
-- **Pump** dips the sound at the start of every step, by `depth` dB (0 is no dip at all), and brings it back over the step: `shape` 0 swells back slowly, in a straight line, `shape` 1 comes back fast, most of the way in the first third. `rate` is how long a step is, by a note's length: `1/4` (every beat, the default), `1/8`, `1/16` or `1/2`. It follows the song's beats, so it stays in time at any tempo, and plays the same in the export.
+- **Pump** dips the sound at the start of every step, by `depth` dB (0 is no dip at all), and brings it back over the step: `shape` 0 swells back slowly, in a straight line, `shape` 1 comes back fast, most of the way in the first third. `rate` is how long a step is, by a note's length: `1/4` (every beat, the default), `1/8`, `1/16` or `1/2`. It is a menu that rebuilds the sound when you pick, so it can't be automated. It follows the song's beats, so it stays in time at any tempo, and plays the same in the export.
 - Each but Pump has a few presets on its card's **Presets** (`Tight drums`, `Punchy drums`, `Bright voice`, `Gentle glue` …).
 
 ### Sidechain
@@ -191,8 +191,8 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 | Effect | What its **Listens to** does |
 |---|---|
 | `duck` | turns the sound down while the track it listens to plays |
-| `compress` | squeezes the sound while the track it listens to is loud (None: its own sound) |
-| `gate` | opens only while the track it listens to plays (None: its own sound) |
+| `compress` | squeezes the sound while the track it listens to is loud (**No other track**: its own sound) |
+| `gate` | opens only while the track it listens to plays (**No other track**: its own sound) |
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.

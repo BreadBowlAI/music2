@@ -12,9 +12,9 @@ wasm = "kernels/mixing.wasm"
 
 [dependencies]
 # @m2/core 2, the pack contract (PACK-22), from 2.3, whose inputs a call may leave out (the gate's
-# key, PKG-18); a change to @m2/core that would break it is a 3.0.0. Pump is std's blocks (an LFO
-# of the song's beats, its math and duck, PACK-28), whose duck may be called with no side since std
-# 0.9's track sidechain; the rest uses none of std's code.
+# key, PKG-18); a change to @m2/core that would break it is a 3.0.0. Pump is std's blocks (lfo,
+# range, scale, blend and duck, PACK-28), all in std 0.9; the rest uses none of std's code. The
+# pack is one module, so it loads only where std's modules do.
 "@m2/core" = "2.3"
 std = "0.9"
 
