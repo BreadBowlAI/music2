@@ -118,7 +118,7 @@ fn a_drum_machine_track_is_made_a_kit_from_the_terminal() {
     };
     write(
         "music2.toml",
-        "[project]\nname = \"beat\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n",
+        "[project]\nname = \"beat\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n",
     );
     write("data/arrangement.json", "{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"meter\": []}\n");
     write(

@@ -41,7 +41,7 @@
 
 | Was | Is now |
 |---|---|
-| `"@m2/core" = "1"`, `std = "0.4"` to `"0.8"` | `"@m2/core" = "2"`, `std = "0.9"`, a line for each pack the song plays, and `music2.lock` (the exact versions) |
+| `"@m2/core" = "1"`, `std = "0.4"` to `"0.8"` | `"@m2/core" = "2"`, `std = "0.10"`, a line for each pack the song plays, and `music2.lock` (the exact versions) |
 | `import { synth } from "std/synth"` | `import { synth } from "@m2/synths"` (a pack: a set of sounds) |
 | `kick(notes)`, `drums.snare(notes)` | the Drum: `drums.drum(notes)`, `drums.drum(notes, { drum: "snare", voices: 4 })` (`voices`: how many hits ring at once) |
 | a drum's `tune: hz(50)` (in Hz, how many times a second it shakes) | `tune` in semitones (one piano key each) from the drum's own pitch |

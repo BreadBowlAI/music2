@@ -579,11 +579,11 @@ fn a_version_this_app_cant_run_is_never_chosen() {
     let song = t.0.join("packs/song-store");
     let s = song.to_str().unwrap();
     ok(t.m2(&["pack", "install", t.0.join("packs/tiny").to_str().unwrap()]));
-    // 0.1.1 needs std 0.10: install refuses it here, so it is put in the store as a newer app would.
+    // 0.1.1 needs std 0.11: install refuses it here, so it is put in the store as a newer app would.
     let later = tiny_at(&t, "0.1.1");
     let toml = std::fs::read_to_string(later.join("m2pkg.toml")).unwrap();
     assert!(toml.contains("std = \"0.4\""), "{toml}");
-    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.10\"")).unwrap();
+    std::fs::write(later.join("m2pkg.toml"), toml.replace("std = \"0.4\"", "std = \"0.11\"")).unwrap();
     ok(t.m2(&["pack", "build", later.to_str().unwrap()]));
     copy(&later, &t.store().join("@test/tiny/0.1.1"));
 
@@ -597,7 +597,7 @@ fn a_version_this_app_cant_run_is_never_chosen() {
     ok(t.m2(&["pack", "remove", "@test/tiny", "0.1.0"]));
     std::fs::remove_file(song.join("music2.lock")).unwrap();
     let text = failed(t.m2(&["check", s]));
-    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.10\""] {
+    for want in ["pkg.unsatisfied", "0.1.1", "std \"0.11\""] {
         assert!(text.contains(want), "says {want}: {text}");
     }
 }
@@ -662,7 +662,7 @@ fn sfz_fixture() -> PathBuf {
 fn tiny_keys_song(dir: &Path, pack: &Path) {
     std::fs::create_dir_all(dir.join("data/keys")).unwrap();
     let manifest = format!(
-        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n\
+        "[project]\nname = \"Tiny keys\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n\
          \"@test/tiny-keys\" = {{ path = {:?} }}\n",
         pack.to_str().unwrap()
     );
@@ -1047,7 +1047,7 @@ fn an_sfz_with_off_by_imports_and_chokes() {
         let song = t.0.join(name);
         std::fs::create_dir_all(song.join("data/hats")).unwrap();
         let manifest = format!(
-            "[project]\nname = \"Hats\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@test/hats\" = {{ path = {:?} }}\n",
+            "[project]\nname = \"Hats\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@test/hats\" = {{ path = {:?} }}\n",
             pack.to_str().unwrap()
         );
         std::fs::write(song.join("music2.toml"), manifest).unwrap();

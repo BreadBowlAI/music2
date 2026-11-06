@@ -145,7 +145,7 @@ fn check_writes_nothing_and_a_current_song_is_left_alone() {
     assert!(o.status.success(), "{}", said(&o));
     let out = said(&o);
     for line in
-        ["- std = \"0.4\"", "+ std = \"0.9\"", "- import { kick } from \"std/instruments\";", "+ import { drums } from \"@m2/drums\";"]
+        ["- std = \"0.4\"", "+ std = \"0.10\"", "- import { kick } from \"std/instruments\";", "+ import { drums } from \"@m2/drums\";"]
     {
         assert!(out.contains(line), "says {line}: {out}");
     }

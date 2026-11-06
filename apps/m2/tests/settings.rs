@@ -60,7 +60,7 @@ fn m2_set_reads_a_word_as_its_setting_takes_it() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n",
     );
     put(&song, "song.ts", SONG);
     let dir = song.to_str().unwrap();
@@ -135,7 +135,7 @@ fn m2_set_writes_a_choice_by_its_name() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n",
     );
     put(&song, "song.ts", TONE);
     let dir = song.to_str().unwrap();
@@ -188,7 +188,7 @@ fn m2_graph_prints_a_face_and_the_code() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n",
     );
     let text = TONE
         .replace("groups: { Sound:", "face: [\"amp\", \"release\"], groups: { Sound:")
@@ -212,7 +212,7 @@ fn m2_graph_prints_a_picture_and_runs_no_code() {
     put(
         &song,
         "music2.toml",
-        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n",
     );
     put(
         &song,

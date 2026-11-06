@@ -1061,7 +1061,7 @@ fn mixing_song(mix: &str) -> Song {
         &[
             (
                 "music2.toml",
-                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\
+                "[project]\nname = \"mixing\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\
                  \"@m2/drums\" = \"2\"\n\"@m2/mixing\" = \"1\"\n\"@m2/synths\" = \"2\"\n",
             ),
             ("song.ts", &song),
@@ -1131,7 +1131,7 @@ fn the_mixing_tools_give_the_same_bits_on_1_and_4_threads() {
 // beats (`time.beats`, which the live engine and an export count alike), here on a saw.
 #[test]
 fn pump_plays_live_as_in_the_export() {
-    let manifest = "[project]\nname = \"pump\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/mixing\" = \"1\"\n";
+    let manifest = "[project]\nname = \"pump\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/mixing\" = \"1\"\n";
     let song = "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { scale } from \"std/math\";\nimport { pump } from \"@m2/mixing\";\n\n\
                 export default song(() => pump(scale(osc.saw(110), 0.5), { depth: -12, shape: 0.7, rate: \"1/8\" }));\n";
     let s = project("pump", &[("music2.toml", manifest), ("song.ts", song)]);

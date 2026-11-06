@@ -36,7 +36,7 @@ const PACK = path.join(ROOT, "curvepack");
 fs.mkdirSync(path.join(PACK, "src"), { recursive: true });
 fs.writeFileSync(
   path.join(PACK, "m2pkg.toml"),
-  `[package]\nname = "@test/curve"\nversion = "0.1.0"\nlicense = "MIT"\n\n[dependencies]\n# view.picture, since 2.4 (CARD-60).\n"@m2/core" = "2.4"\nstd = "0.9"\n`,
+  `[package]\nname = "@test/curve"\nversion = "0.1.0"\nlicense = "MIT"\n\n[dependencies]\n# view.picture, since 2.4 (CARD-60).\n"@m2/core" = "2.4"\nstd = "0.10"\n`,
 );
 fs.writeFileSync(
   path.join(PACK, "src/index.ts"),

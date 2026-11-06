@@ -14,7 +14,7 @@ const BEAT: usize = 24_000;
 /// that plays on the first beat of every two and is silent on the second).
 fn rendered(what: &str, imports: &str, out: &str, frames: usize) -> Vec<[f32; 2]> {
     let manifest = format!(
-        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/mixing\" = \"1\"\n"
+        "[project]\nname = \"{what}\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/mixing\" = \"1\"\n"
     );
     let song = format!(
         "import {{ song, time }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ lfo, when }} from \"std/control\";\nimport {{ scale }} from \"std/math\";\n{imports}\n\

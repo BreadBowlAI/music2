@@ -46,7 +46,7 @@ await page.click("[data-testid=upgrade-run]");
 check(await until(() => read("tracks/kick.ts") === today["tracks/kick.ts"], 15000), "Upgrade it writes the kick as the Drum's: today's file, byte for byte");
 check(read("tracks/hats.ts").includes('drums.drum(lane.notes("hits"), { drum: "hats" })'), "the hat is the Drum's hats");
 const manifest = read("music2.toml");
-check(['"@m2/core" = "2"', 'std = "0.9"', '"@m2/synths" = "2"', '"@m2/drums" = "2"'].every((l) => manifest.includes(`${l}\n`)), `music2.toml asks for this music2: ${manifest}`);
+check(['"@m2/core" = "2"', 'std = "0.10"', '"@m2/synths" = "2"', '"@m2/drums" = "2"'].every((l) => manifest.includes(`${l}\n`)), `music2.toml asks for this music2: ${manifest}`);
 check(read("music2.lock") === today["music2.lock"], "music2.lock locks today's packs");
 const upgraded = upgradedFiles();
 check(posts.slice(n).filter((p) => p.url === "/api/graph/upgrade").length === 1, "one write");

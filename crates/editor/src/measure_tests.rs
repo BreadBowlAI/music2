@@ -14,7 +14,7 @@ use crate::testing::Fixture;
 /// The packs these songs read: the tests' manifest's, and `@m2/mixing`'s EQ.
 fn manifest(rate: u32, extra: &str) -> String {
     format!(
-        "[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\
+        "[project]\nname = \"t\"\nformat = 1\nsample_rate = {rate}\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n\
          \"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n\"@m2/mixing\" = \"1\"\n{extra}"
     )
 }
