@@ -1458,6 +1458,8 @@ mod mute_tests;
 #[cfg(test)]
 mod optional_input_tests;
 #[cfg(test)]
+mod optional_tests;
+#[cfg(test)]
 mod poly_tests;
 #[cfg(test)]
 mod tests;

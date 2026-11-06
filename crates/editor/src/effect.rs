@@ -231,7 +231,7 @@ fn joined(mut imports: Vec<(u32, String)>) -> Vec<(u32, String)> {
 }
 
 /// Where a module reads track `track`'s export `export` (CARD-36): the one module that does, not a
-/// track's (a track can't read another), in its file, at the one place that file writes
+/// track's (a read in a track's own file, a Duck's side there or a Drum's cut, isn't the song's), in its file, at the one place that file writes
 /// `<handle>.<export>`, `<handle>` the name it imports the track by. As a site of its own, to be
 /// wrapped as a call is: the read's text is its callee. Why not, in words.
 pub(crate) fn track_read(s: &Session, track: &str, export: &str) -> Result<Site, String> {
@@ -818,8 +818,11 @@ pub struct Listens {
     /// the row stands alone.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub port: Option<String>,
-    /// The input, by its name in the descriptor (`side`, `key`).
+    /// The input, by its name in the descriptor (`side`, `key`, `cutBy`).
     pub input: String,
+    /// What the row is called, the input's label (`Cut by`); "Listens to" when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
     /// The track whose sound the call works on, by name, when it is one: what its undo step names.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub of: Option<String>,
@@ -844,12 +847,39 @@ pub struct Listens {
     pub refused: Option<String>,
 }
 
-/// The tracks a call can listen to, by key, with the name its file imports each by; or why it
-/// can't be changed here, in words.
-type Choices = Result<Vec<(String, String)>, String>;
+/// Another file an edit writes: its path, its text, and the edits there (each `(from, to, text)`).
+type OtherFile = (String, String, Vec<(u32, u32, String)>);
 
-/// The tracks call `site` can listen to (or why it can't be changed here: it is in a track's file),
-/// and the track whose sound it works on, by key, when it is one.
+/// A track a call can listen to: its key; the name the call's file imports it by, none when a pick
+/// adds the import; the file its code is in; and, for a notes input, the lane it plays from.
+#[derive(Clone, Debug)]
+struct Choice {
+    key: String,
+    handle: Option<String>,
+    file: String,
+    lane: Option<String>,
+}
+
+/// The tracks a call can listen to; or why it can't be changed here, in words.
+type Choices = Result<Vec<Choice>, String>;
+
+/// Whether `file`'s default export is track (or bus) `key`, read from its code
+/// (`sites::default_track`): what an import of the file reads.
+fn default_export_is(rev: &m2_session::Revision, key: &str, file: &str) -> bool {
+    rev.snapshot.files.get(Path::new(file)).and_then(|t| crate::sites::default_track(t)).as_deref() == Some(key)
+}
+
+/// The one notes lane track `t` plays from, when it has exactly one: what a notes input hears of it.
+fn notes_lane(t: &Module) -> Option<String> {
+    let mut lanes = t.lanes.iter().filter(|l| matches!(l.kind, m2_ir::Kind::Events(_)));
+    let one = lanes.next()?;
+    lanes.next().is_none().then(|| one.key.clone())
+}
+
+/// The tracks call `site` can listen to, and the track whose sound it works on, by key, when it is
+/// one. A track is offered when the call's file can read it: the file imports it, or can, since the
+/// track's own file exports it by default (one written in the song, or in the call's own file, isn't
+/// offered); and, for a notes input, when it plays from one notes lane, which it can hand out.
 fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Choices, Option<String>)> {
     let compiled = &s.accepted().compiled;
     let (m, _) = heard(compiled, site.id, &l.input.name)?;
@@ -866,18 +896,35 @@ fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Choices, Option
             })
         }),
     };
-    if m.track {
-        let what = format!("{}'s {} is in {}, which can't hear other tracks. Change it in code.", m.label(), l.d.label, site.file);
-        return Some((Err(what), of));
-    }
+    let rev = s.accepted();
     let choices = compiled
         .ir
         .modules
         .iter()
         .filter(|t| t.track && Some(&t.key) != of.as_ref())
         .filter_map(|t| {
-            let import = crate::sites::imports_of(text, &site.file, file_of(t)?).into_iter().find_map(|i| i.default)?;
-            Some((t.key.clone(), import))
+            let file = file_of(t)?;
+            if file == site.file {
+                return None;
+            }
+            // A track the file imports already is offered as it was; another only when its file
+            // exports it by default, so an import of it reads it.
+            let handle = crate::sites::imports_of(text, &site.file, file).into_iter().find_map(|i| i.default);
+            // Read from the file's code: its default export is the track, or the file is imported
+            // already and its code doesn't say otherwise (the song's own file never: its default
+            // is the song).
+            let read = rev.snapshot.files.get(Path::new(file)).and_then(|x| crate::sites::default_track(x));
+            let song_file = compiled.ir.modules.iter().find(|m| m.key == "song").and_then(file_of);
+            match (&handle, read.as_deref()) {
+                (_, Some(k)) if k == t.key => {}
+                (Some(_), None) if song_file != Some(file) => {}
+                _ => return None,
+            }
+            let lane = match l.input.kind {
+                PortKind::Notes => Some(notes_lane(t)?),
+                _ => None,
+            };
+            Some(Choice { key: t.key.clone(), handle, file: file.to_string(), lane })
         })
         .collect();
     Some((Ok(choices), of))
@@ -903,6 +950,7 @@ pub(crate) fn listens(s: &Session, site: &Site) -> Option<Listens> {
     let nothing = if l.input.kind == PortKind::Audio { "No other track" } else { "None" };
     let base = Listens {
         input: l.input.name.clone(),
+        label: l.input.label.clone(),
         of: of.as_deref().map(label),
         track,
         given: given_at(m, site, l.at, text),
@@ -915,7 +963,7 @@ pub(crate) fn listens(s: &Session, site: &Site) -> Option<Listens> {
     Some(match choices {
         Ok(choices) => {
             // By name, as a list a person reads.
-            let mut choices: Vec<(String, String)> = choices.into_iter().map(|(k, _)| (k.clone(), label(&k))).collect();
+            let mut choices: Vec<(String, String)> = choices.into_iter().map(|c| (c.key.clone(), label(&c.key))).collect();
             choices.sort_by(|a, b| (a.1.to_lowercase(), &a.0).cmp(&(b.1.to_lowercase(), &b.0)));
             Listens { choices, ..base }
         }
@@ -935,7 +983,7 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
     ready(s)?;
     let site = current_site(s, at, call)?.clone();
     let l = listener(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` listens to no other sound", site.callee)))?;
-    let (choices, _) = choices_of(s, &site, &l).ok_or_else(|| EditError::NotFound(call.to_string()))?;
+    let (choices, works_on) = choices_of(s, &site, &l).ok_or_else(|| EditError::NotFound(call.to_string()))?;
     let choices = choices.map_err(EditError::Rejected)?;
     let what = &l.d.label;
     let in_code = |why: &str| EditError::Rejected(format!("{what} can't change what it listens to here: {why}. Change it in code."));
@@ -946,19 +994,48 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
     let named = |key: &str| compiled.ir.modules.iter().find(|t| t.key == key).map_or(key.to_string(), |t| t.label().to_string());
     let arg = |i: usize| site.args.get(i).map(|a| a.span());
     // What its argument is to be, and the import it needs.
+    // A track the file doesn't import yet gets an import; a notes input reads the track's lane,
+    // which its file hands out beside its sound when it doesn't yet (KIT-27).
+    let mut imports: Vec<(u32, u32, String)> = vec![];
+    let mut more: Vec<OtherFile> = vec![];
     let new = match track {
         Some(track) => {
-            let handle = choices.iter().find(|(k, _)| k == track).map(|(_, h)| h.clone()).ok_or_else(|| {
-                EditError::Rejected(format!(
-                    "{what} can't listen to {} here: {} doesn't import it. Change it in code.",
-                    named(track),
-                    site.file
-                ))
+            let c = choices.iter().find(|c| c.key == track).cloned().ok_or_else(|| {
+                let o = compiled.ir.modules.iter().find(|t| t.key == track);
+                let why = match o.and_then(file_of) {
+                    _ if o.is_none_or(|t| !t.track) => format!("{} isn't a track", named(track)),
+                    _ if works_on.as_deref() == Some(track) => format!("{} is the sound it works on", named(track)),
+                    Some(f) if f == site.file => format!("{} is written in {f} too, where no import reaches it", named(track)),
+                    Some(f) if !default_export_is(s.accepted(), track, f) => {
+                        format!("{} is written in {f}, which {} can't import it from: give it a file of its own", named(track), site.file)
+                    }
+                    _ if l.input.kind == PortKind::Notes => format!("{} doesn't play from one notes lane", named(track)),
+                    _ => format!("{} is the sound it works on", named(track)),
+                };
+                EditError::Rejected(format!("{what} can't listen to {} here: {why}. Change it in code.", named(track)))
             })?;
+            let handle = match &c.handle {
+                Some(h) => h.clone(),
+                None => {
+                    let b = crate::sites::free_binding(&text, &crate::sites::camel(&c.key));
+                    let (at, line) = crate::tracks::import_edit(&text, &site.file, &c.file, &b);
+                    imports.push((at, at, line));
+                    b
+                }
+            };
             let env = compiled.ir.modules.iter().any(|t| t.key == track && t.exports.contains_key("env"));
-            Some(match (l.input.kind, env) {
-                (PortKind::Control, true) => (format!("{handle}.env"), None),
-                (PortKind::Control, false) => (format!("follow({handle}.out)"), import_insertion(&text, "std/dsp", "follow")),
+            Some(match (l.input.kind, env, &c.lane) {
+                (PortKind::Notes, _, Some(lane)) => {
+                    let other =
+                        s.accepted().snapshot.files.get(Path::new(&c.file)).ok_or_else(|| EditError::NotFound(c.file.clone()))?.clone();
+                    let edits = export_edits(s.accepted(), track, lane, &c.file, &other)?;
+                    if !edits.is_empty() {
+                        more.push((c.file.clone(), other.to_string(), edits));
+                    }
+                    (member(&handle, lane), None)
+                }
+                (PortKind::Control, true, _) => (format!("{handle}.env"), None),
+                (PortKind::Control, false, _) => (format!("follow({handle}.out)"), import_insertion(&text, "std/dsp", "follow")),
                 _ => (format!("{handle}.out"), None),
             })
         }
@@ -974,7 +1051,7 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
         (Some((n, _)), true) => {
             let (a, b) = arg(l.at).ok_or_else(|| in_code("its input isn't written in its call"))?;
             if text[a as usize..b as usize] == *n {
-                return Err(EditError::Rejected(format!("{what} listens to {} already.", named(track.unwrap_or_default()))));
+                return Err(EditError::Rejected(already(&l, what, &named(track.unwrap_or_default()))));
             }
             (a, b, n.clone(), (span((a, b)), n.clone()))
         }
@@ -989,7 +1066,7 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
                 _ => return Err(in_code("its arguments don't put it where its order says")),
             }
         }
-        (None, false) => return Err(EditError::Rejected(format!("{what} listens to {} already.", nothing_of(&l)))),
+        (None, false) => return Err(EditError::Rejected(already(&l, what, nothing_of(&l)))),
         (None, true) => {
             if site.args.len() > l.at + 1 && options != Some(l.at + 1) {
                 return Err(in_code("an argument after it would move into its place"));
@@ -1001,11 +1078,127 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
             (from, to, String::new(), (span(this), String::new()))
         }
     };
+    // What the argument it replaces (or takes out) read and nothing else does any more goes from the
+    // imports too, as a delete tidies them (review D4): the old track's import, a `follow` no other
+    // call reads. A name the new argument reads stays.
+    let words: Vec<&str> = written.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()).collect();
+    let unread: Vec<(u32, u32)> = match from < to {
+        true => crate::sites::unused_imports(&text, &[(from, to)])
+            .into_iter()
+            .filter(|(a, b)| {
+                let names = &text[*a as usize..*b as usize];
+                !words.iter().any(|w| names.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).any(|n| n == *w))
+            })
+            .collect(),
+        false => vec![],
+    };
     let mut edits = vec![(from, to, written)];
+    let mut inserts: Vec<(u32, u32, String)> = imports;
     if let Some((at, line)) = new.as_ref().and_then(|(_, i)| i.clone()) {
-        edits.push((at, at, line));
+        inserts.push((at, at, line));
     }
-    text_tx(s, &site, &text, &edits, track, label)
+    let mut gone = unread.clone();
+    for (at, _, line) in inserts {
+        // An import put where an unread one goes takes that line's place.
+        match gone.iter().position(|(a, b)| *a <= at && at <= *b) {
+            Some(i) => {
+                let (a, b) = gone.remove(i);
+                let whole = text[a as usize..b as usize].ends_with('\n');
+                let line = line.trim_matches('\n');
+                edits.push((a, b, if whole { format!("{line}\n") } else { line.to_string() }));
+            }
+            None => edits.push((at, at, line)),
+        }
+    }
+    edits.extend(gone.into_iter().map(|(a, b)| (a, b, String::new())));
+    // Its undo step's name, from the tracks' names (as the card's own): "Open hat cut by Hats",
+    // "Bass's duck listens to Kick".
+    let of = listens(s, &site).and_then(|x| x.of);
+    let to = track.map_or(nothing_of(&l).to_string(), named);
+    let done = text_tx(s, &site, &text, &edits, &more, track, label)?;
+    let words = match (&l.input.label, &of) {
+        (Some(label), Some(of)) => format!("{of} {} {to}", label.to_lowercase()),
+        (None, Some(of)) => format!("{of}'s {} listens to {to}", what.to_lowercase()),
+        _ => format!("the {} listens to {to}", what.to_lowercase()),
+    };
+    s.name_step(done.revision, &words, false);
+    Ok(done)
+}
+
+/// How code reads export `export` of a value named `binding`: `hats.hits`, or `hats["hits-2"]`.
+fn member(binding: &str, export: &str) -> String {
+    match crate::sites::identifier(export) {
+        true => format!("{binding}.{export}"),
+        false => format!("{binding}[{}]", serde_json::to_string(export).expect("a string")),
+    }
+}
+
+/// The edits that make track `key` (whose code is in `file`, `text`) hand out its notes lane `lane`
+/// by its key beside its sound (KIT-27): none when it does already; refused in words when it can't
+/// be sure of its code's shape. `({ lane }) => drum(…)` becomes
+/// `({ lane }) => ({ out: drum(…), hits: lane.notes("hits") })`; a returned object gets the property.
+fn export_edits(rev: &m2_session::Revision, key: &str, lane: &str, file: &str, text: &str) -> Result<Vec<(u32, u32, String)>, EditError> {
+    use crate::sites::{Lane, fn_params, fn_result, identifier, properties};
+    let m = rev.compiled.ir.modules.iter().find(|m| m.key == key).ok_or_else(|| EditError::NotFound(key.to_string()))?;
+    let change = |why: &str| EditError::Rejected(format!("{} can't hand out its notes from here: {why}. Change it in code.", m.label()));
+    if let Some(r) = m.exports.get(lane) {
+        let mut op = None;
+        walk(&m.nodes, &mut |n| {
+            if n.id == split_ref(r).0 {
+                op = Some(n.op.clone());
+            }
+        });
+        return match op {
+            Some(Op::Lane { lane: l }) if l == lane => Ok(vec![]),
+            _ => Err(change(&format!("it returns something else as {lane}"))),
+        };
+    }
+    let quoted = [serde_json::to_string(key).expect("a string"), format!("'{key}'")];
+    let call = rev
+        .compiled
+        .sites
+        .iter()
+        .find(|x| {
+            x.file == file
+                && x.callee == "track"
+                && x.args
+                    .first()
+                    .is_some_and(|a| quoted.iter().any(|q| text.get(a.span().0 as usize..a.span().1 as usize) == Some(q.as_str())))
+        })
+        .ok_or_else(|| change("its track() call isn't where it is expected"))?;
+    let span = call.args.last().map(Arg::span).ok_or_else(|| change("its track() call has no function"))?;
+    let params = fn_params(text, span).map_err(change)?;
+    let result = fn_result(text, span).ok_or_else(|| change("what its function returns isn't one value written last in it"))?;
+    let (reach, mut edits) = match params.lane {
+        Lane::Named(name) => (name, vec![]),
+        Lane::Added { start, end, text } => ("lane".to_string(), vec![(start, end, text)]),
+    };
+    let key_text = if identifier(lane) { lane.to_string() } else { serde_json::to_string(lane).expect("a string") };
+    let read = format!("{key_text}: {reach}.notes({})", serde_json::to_string(lane).expect("a string"));
+    match result.object {
+        Some(object) => {
+            let props = properties(text, object).ok_or_else(|| change("it returns an object written in a form it can't follow"))?;
+            match props.last() {
+                Some(last) => edits.push((last.end, last.end, format!(", {read}"))),
+                None => edits.push((object.0 + 1, object.1 - 1, format!(" {read} "))),
+            }
+        }
+        None => {
+            let was = &text[result.start as usize..result.end as usize];
+            let made = format!("{{ out: {was}, {read} }}");
+            edits.push((result.start, result.end, if result.arrow { format!("({made})") } else { made }));
+        }
+    }
+    Ok(edits)
+}
+
+/// That call `what` (a Drum) hears `track` already, in its row's words: "Drum listens to Kick
+/// already.", or by its input's label, "Drum's Cut by is Hats already.".
+fn already(l: &Listener, what: &str, track: &str) -> String {
+    match &l.input.label {
+        Some(label) => format!("{what}'s {label} is {track} already."),
+        None => format!("{what} listens to {track} already."),
+    }
 }
 
 /// What a call that listens to nothing listens to, as a sentence says it: "nothing" for a side
@@ -1047,7 +1240,7 @@ fn line_end(text: &str, i: usize) -> usize {
 /// one before (its line's end too, when the comma ends its line) through the comma that ends it
 /// (likewise), so each keeps its own comments. Else from that comma through its own comments.
 /// None when a comma isn't where it should be.
-fn taken_out(text: &str, before: u32, end: u32, more: bool) -> Option<(u32, u32)> {
+pub(crate) fn taken_out(text: &str, before: u32, end: u32, more: bool) -> Option<(u32, u32)> {
     let first = past_trivia(text, before as usize);
     (text.as_bytes().get(first) == Some(&b',')).then_some(())?;
     if !more {
@@ -1066,6 +1259,7 @@ fn text_tx(
     site: &Site,
     text: &str,
     edits: &[(u32, u32, String)],
+    more: &[OtherFile],
     track: Option<&str>,
     label: (String, String),
 ) -> Result<Edited, EditError> {
@@ -1078,10 +1272,21 @@ fn text_tx(
     let mut ranges = vec![Range::bytes(site.start, site.end)];
     ranges.extend(edits.iter().filter(|(a, _, _)| *a < site.start || *a > site.end).map(|(a, b, _)| Range::bytes(*a, *b)));
     // Where the call starts now: after any import put in above it.
-    let shift: i64 = edits.iter().filter(|(a, b, _)| *b <= site.start && a == b).map(|(_, _, line)| line.len() as i64).sum::<i64>();
+    let shift: i64 =
+        edits.iter().filter(|(_, b, _)| *b <= site.start).map(|(a, b, line)| line.len() as i64 - (*b - *a) as i64).sum::<i64>();
     let file = path(&site.file)?;
-    let expect = Expect::Confined(Confined { ranges: [(file.clone(), Ranges::Ranges(ranges))].into(), ..Confined::default() });
-    let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, text, &edits)], expect);
+    // Another track's file the pick edits too: the lane it hands out (KIT-27), confined to its edits.
+    let mut confined: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();
+    let mut ops = vec![plan::text_edit(&file, text, &edits)];
+    for (other, t, e) in more {
+        let mut e = e.clone();
+        e.sort_by_key(|x| x.0);
+        let p = path(other)?;
+        confined.insert(p.clone(), Ranges::Ranges(e.iter().map(|(a, b, _)| Range::bytes(*a, *b)).collect()));
+        ops.push(plan::text_edit(&p, t, &e));
+    }
+    let expect = Expect::Confined(Confined { ranges: confined, ..Confined::default() });
+    let tx = plan::planned(s, label.clone(), ops, expect);
     let named =
         track.map(|t| s.accepted().compiled.ir.modules.iter().find(|m| m.key == t).map_or(t.to_string(), |m| m.label().to_string()));
     let to = named.unwrap_or_else(|| "nothing".into());
@@ -1122,3 +1327,7 @@ fn text_tx(
 #[cfg(test)]
 #[path = "effect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cut_tests.rs"]
+mod cut_tests;

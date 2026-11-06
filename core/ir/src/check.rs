@@ -1332,6 +1332,8 @@ fn type_kernel(
     for p in &sig.inputs {
         let (k, written) = match (conns.get(p.name.as_str()), p.default) {
             (Some((_, k, written)), _) => (*k, *written),
+            // An audio input left out that defaults to silence reads 0 (ABI-12): nothing to type.
+            (None, Some(_)) if matches!(p.kind, PortKind::Audio(_)) => continue,
             // Its default, which a choice's or a switch's port holds as a place (`PortSig::parse`).
             (None, Some(d)) => (Kind::Control(None), Some(d)),
             // A plugin's unconnected inputs are silence (audio, notes) or its own value (parameters).
@@ -1510,6 +1512,28 @@ mod tests {
         // The constant is folded into the kernel input, so it drops out of the order.
         assert_eq!(names, ["song/o", "song/f"]);
         assert!(matches!(&f.nodes[0].op, FOp::Kernel { inputs, .. } if inputs[1] == Input::Const(800.0)));
+    }
+
+    // ABI-12: an audio input that defaults to silence may be left unconnected, reading 0; one that
+    // doesn't is still refused; connected, it reads its source.
+    #[test]
+    fn an_audio_input_left_out_reads_silence() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut k = kernels();
+        k.insert(
+            "t:cut".into(),
+            KernelSig::parse("t:cut", "", &s(&["in: audio<1>", "cut: audio<1> = 0"]), &s(&["out: audio<1>"]), 0).unwrap(),
+        );
+        let f = check(&song(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "k", "op": "kernel", "kernel": "t:cut", "inputs": {"in": "o"}}]), "k"), &k)
+            .unwrap_or_else(|e| panic!("{e:?}"));
+        let n = f.nodes.iter().find(|n| n.name == "song/k").unwrap();
+        assert!(matches!(&n.op, FOp::Kernel { inputs, .. } if inputs[1] == Input::Const(0.0)), "{:?}", n.op);
+        let wired = json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "k", "op": "kernel", "kernel": "t:cut", "inputs": {"in": "o", "cut": "o"}}]);
+        let f = check(&song(wired, "k"), &k).unwrap_or_else(|e| panic!("{e:?}"));
+        let n = f.nodes.iter().find(|n| n.name == "song/k").unwrap();
+        assert!(matches!(&n.op, FOp::Kernel { inputs, .. } if matches!(inputs[1], Input::Port { .. })), "{:?}", n.op);
+        let e = check(&song(json!([{"id": "k", "op": "kernel", "kernel": "t:cut"}]), "k"), &k).unwrap_err();
+        assert!(e.iter().any(|d| d.message.contains("input `in` (audio<1>) is not connected")), "{e:?}");
     }
 
     #[test]

@@ -66,7 +66,7 @@ fn kits_are_carried_in_order() {
         r#"{ "Basic kit": { db: db(-2), tracks: [{ name: "Kick", drum: "kick" }, { name: "Hats", drum: "hats", tune: semis(2), decay: ms(80), soft: true }] }, Two: { tracks: [{ name: "Snare", drum: "snare", tune: -1.5, decay: 0.08 }] }, Three: { db: -4.5, tracks: [{ name: "Kick" }] } }"#,
     ))
     .unwrap_or_else(|e| panic!("{e:?}"));
-    let track = |name: &str, values: Vec<Insert>| KitTrack { name: name.into(), values };
+    let track = |name: &str, values: Vec<Insert>| KitTrack { name: name.into(), values, inputs: Default::default() };
     let level = |value: f64, spelled: Option<&str>| Some(Spelled { value, spelled: spelled.map(str::to_string), written: value });
     assert_eq!(
         d.editor.kits,
@@ -195,4 +195,59 @@ export const drum = component(
     let keys = drum(r#"{ Two: { tracks: [{ name: "A" }] } } as any"#).replace("category: \"Drums\"", "category: \"Keys\"");
     let e = described(&keys).expect_err("a Keys instrument with kits builds");
     assert!(e.iter().any(|d| d.message.contains(says)), "{says}\n{e:?}");
+}
+
+/// [`drum`] with an optional notes input, `cutBy`, and an optional audio one, `key`, naming `kits`.
+fn cut_drum(kits: &str) -> String {
+    drum(kits).replace(
+        "inputs: { notes: port.notes() }",
+        "inputs: { notes: port.notes(), cutBy: port.notes().optional(), key: port.audio().optional() }",
+    )
+}
+
+// KIT-28: a kit's track gives an optional notes input the hits of an earlier track of its kit, by
+// that track's name; the descriptor carries it as the track's `inputs`, apart from its values, and
+// only on a track that has some.
+#[test]
+fn a_kit_track_may_be_cut_by_an_earlier_track() {
+    let d = described(&cut_drum(
+        r#"{ "808 kit": { tracks: [{ name: "Hats", drum: "hats" }, { name: "Open hat", drum: "snare", cutBy: "Hats" }] } }"#,
+    ))
+    .unwrap_or_else(|e| panic!("{e:?}"));
+    let tracks = &d.editor.kits[0].tracks;
+    assert_eq!(tracks[0].inputs, BTreeMap::new());
+    assert_eq!(tracks[1].inputs, [("cutBy".to_string(), "Hats".to_string())].into());
+    assert_eq!(tracks[1].values, [value("drum", 1.0, None, 1.0)]);
+    let json = serde_json::to_value(&d.editor.kits[0]).unwrap();
+    assert!(json["tracks"][0].get("inputs").is_none() && json["tracks"][1]["inputs"] == serde_json::json!({ "cutBy": "Hats" }), "{json}");
+}
+
+// KIT-28: the build refuses, in words, a name that is no earlier track of the kit (another, a later
+// one, the track itself, on the kit's first track), a value that isn't a name, and an optional input
+// that isn't notes.
+#[test]
+fn a_kit_tracks_cut_by_must_be_an_earlier_track() {
+    let refused_cut = |tracks: &str, says: &str| {
+        let kits = format!("{{ Kit: {{ tracks: {tracks} }} }}");
+        let e = described(&cut_drum(&kits)).err().unwrap_or_else(|| panic!("{kits} builds"));
+        assert!(e.iter().any(|d| d.message.contains(says)), "{kits}: {says}\n{e:?}");
+    };
+    refused_cut(
+        r#"[{ name: "Kick" }, { name: "Open hat", cutBy: "Hat" as any }]"#,
+        r#"editor.kits' "Kit": its track "Open hat": cutBy names an earlier track of its kit, by its name, not "Hat" (its tracks before it: Kick)"#,
+    );
+    refused_cut(r#"[{ name: "Open hat", cutBy: "Hats" as any }, { name: "Hats" }]"#, r#"not "Hats" (it is the kit's first)"#);
+    refused_cut(r#"[{ name: "Kick" }, { name: "Open hat", cutBy: "Open hat" as any }]"#, r#"not "Open hat" (its tracks before it: Kick)"#);
+    refused_cut(
+        r#"[{ name: "Kick" }, { name: "Open hat", cutBy: 1 as any }]"#,
+        "cutBy names an earlier track of its kit, by its name, not 1",
+    );
+    refused_cut(
+        r#"[{ name: "Kick" }, { name: "Open hat", key: "Kick" as any }]"#,
+        "sets the input key: a kit gives a track's hits to a notes input only",
+    );
+    refused_cut(
+        r#"[{ name: "Kick" }, { name: "Open hat", notes: "Kick" as any }]"#,
+        r#"sets "notes", which isn't a control of this sound"#,
+    );
 }

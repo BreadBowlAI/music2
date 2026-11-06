@@ -125,7 +125,7 @@ fn regions_settings_are_checked() {
         ("{ file: \"../x.wav\" }", "region 3: file must be a file name in assets/, not \"../x.wav\""),
         (
             "{ file: \"a.wav\", lokey: 3 }",
-            "region 3: unknown field \"lokey\" (fields: file, root, keys, velocity, round_robin, trigger, loop, tune, volume, pan, offset)",
+            "region 3: unknown field \"lokey\" (fields: file, root, keys, velocity, round_robin, trigger, loop, tune, volume, pan, offset, group, off_by)",
         ),
         ("{ file: \"a.wav\", root: 128 }", "region 3: root must be a MIDI note, a whole number from 0 to 127, not 128"),
         ("{ file: \"a.wav\", root: 60.5 }", "region 3: root must be a MIDI note"),
@@ -155,6 +155,8 @@ fn regions_settings_are_checked() {
         ("{ file: \"a.wav\", pan: -2 }", "region 3: pan must be a number from -1 (left) to 1 (right), not -2"),
         ("{ file: \"a.wav\", offset: 1.5 }", "region 3: offset must be a whole number of frames from 0, not 1.5"),
         ("{ file: \"a.wav\", offset: -1 }", "region 3: offset must be a whole number of frames from 0, not -1"),
+        ("{ file: \"a.wav\", group: 1.5 }", "region 3: group must be a whole number, not 1.5"),
+        ("{ file: \"a.wav\", off_by: \"hats\" }", "region 3: off_by must be a whole number, not \"hats\""),
     ] {
         let call = format!("{{ regions: [{ok}, {region}] }}");
         let e = regions_player(&call).err().unwrap_or_else(|| panic!("{call} builds"));
@@ -392,4 +394,46 @@ fn the_sampler_gives_its_regions_their_kernel() {
         let e = sampler_kernels(call).err().unwrap_or_else(|| panic!("{call} builds"));
         assert!(e.iter().any(|d| d.message.contains(says)), "{call}: {e:?}");
     }
+}
+
+// PKG-15, PKG-16 rule 8: regions with choke groups reach `std:regions` in the voices, its marks given, with 17
+// values each: the slot of the group its start marks, and of the one whose start cuts it, each group
+// some `off_by` names a slot in order (here 2 is slot 0, 1 slot 1); a group none names marks nowhere
+// (-1). Outside the voices, `std:regionmark` marks the groups each note starts, with the same regions.
+// Regions that name no `off_by` play through `std:regions` as before, 15 values each. A ninth group
+// named in `off_by` is refused in words.
+#[test]
+fn choke_groups_reach_their_kernels() {
+    let call = ", { regions: [\
+        { file: \"open.wav\", keys: [46, 46], group: 1, off_by: 2 },\
+        { file: \"closed.wav\", keys: [42, 42], group: 2, off_by: 1 },\
+        { file: \"crash.wav\", keys: [49, 49], group: 7 }] }";
+    let (outside, voices) = sampler_kernels(call).unwrap_or_else(|e| panic!("{e:?}"));
+    let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+    #[rustfmt::skip]
+    let values = vec![
+        17.0,
+        0.0, 60.0, 46.0, 46.0, 1.0, 127.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+        1.0, 60.0, 42.0, 42.0, 1.0, 127.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        2.0, 60.0, 49.0, 49.0, 1.0, 127.0, 1.0, 1.0, 0.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, -1.0, -1.0,
+    ];
+    let files = s(&["open.wav", "closed.wav", "crash.wav"]);
+    let of = |k: &str| voices.iter().filter(|(x, _)| x == k).map(|(_, s)| s.clone()).collect::<Vec<_>>();
+    assert_eq!(of("std:regions"), [(files.clone(), values.clone())], "the voices read the marks");
+    assert_eq!(of("std:regionmark"), [(files, values)], "the marks come from the same regions");
+    assert!(outside.contains(&"std:hitcount".to_string()), "{outside:?}");
+    // No off_by: as before.
+    let (_, voices) = sampler_kernels(", { regions: [{ file: \"a.wav\", group: 1 }] }").unwrap();
+    assert!(
+        voices.iter().any(|(k, (_, v))| k == "std:regions" && v[0] == 15.0) && !voices.iter().any(|(k, _)| k.starts_with("std:regionc")),
+        "{voices:?}"
+    );
+    let nine: Vec<String> = (1..=9).map(|g| format!("{{ file: \"a.wav\", off_by: {g} }}")).collect();
+    let e = sampler_kernels(&format!(", {{ regions: [{}] }}", nine.join(", "))).expect_err("nine groups build");
+    assert!(
+        e.iter().any(|d| d
+            .message
+            .contains("sampler(): regions: 9 groups are named in off_by (1, 2, 3, 4, 5, 6, 7, 8, 9): a Sampler cuts by 8 at most")),
+        "{e:?}"
+    );
 }

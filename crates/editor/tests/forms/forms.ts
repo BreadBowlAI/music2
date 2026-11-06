@@ -1515,7 +1515,9 @@ export default song(({ lane, time }) => {
     // 808 kit's Clap added as a track
     track("clap", { name: "Clap" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "clap" })),
     // 808 kit's Hats added as a track
-    track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats" })),
+    track("hats", { name: "Hats" }, ({ lane }) => ({ out: drums.drum(lane.notes("hits"), { drum: "hats" }), hits: lane.notes("hits") })),
+    // 808 kit's Open hat added as a track
+    track("open-hat", { name: "Open hat" }, ({ lane }) => drums.drum(lane.notes("hits"), lane.notes("hits"), { drum: "open hat" })),
     // 808 kit's Toms added as a track
     track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom", decay: 1.5 })),
     // 808 kit's Rim added as a track
@@ -1531,7 +1533,9 @@ export default song(({ lane, time }) => {
     // 909 kit's Clap added as a track
     track("clap", { name: "Clap" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "clap" })),
     // 909 kit's Hats added as a track
-    track("hats", { name: "Hats" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "hats", tune: 2 })),
+    track("hats", { name: "Hats" }, ({ lane }) => ({ out: drums.drum(lane.notes("hits"), { drum: "hats", tune: 2 }), hits: lane.notes("hits") })),
+    // 909 kit's Open hat added as a track
+    track("open-hat", { name: "Open hat" }, ({ lane }) => drums.drum(lane.notes("hits"), lane.notes("hits"), { drum: "open hat", tune: 2 })),
     // 909 kit's Toms added as a track
     track("toms", { name: "Toms" }, ({ lane }) => drums.drum(lane.notes("hits"), { drum: "tom", decay: 0.8 })),
     // 909 kit's Rim added as a track

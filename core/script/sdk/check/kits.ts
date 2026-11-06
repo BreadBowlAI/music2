@@ -138,3 +138,31 @@ component(
 
 // @m2/drums' own kits type-check as any pack's do, and its Drum plays as before.
 export const played: Audio[] = [drums.drum(null as unknown as Events, { drum: "snare" })];
+
+// KIT-28: a kit's track gives an optional notes input an earlier track's hits, by its name.
+const cutting = { notes: port.notes(), cutBy: port.notes({ sidechain: true }).optional() };
+component(
+  {
+    id: "drum",
+    inputs: cutting,
+    controls,
+    output: port.audio(),
+    editor: { category: "Drums", kits: { Hats: { tracks: [{ name: "Hats", drum: "hats" }, { name: "Open hat", drum: "hats", cutBy: "Hats" }] } } },
+  },
+  body,
+);
+
+component(
+  {
+    id: "drum",
+    inputs: cutting,
+    controls,
+    output: port.audio(),
+    // @ts-expect-error a track names the track whose hits cut it, by its name
+    editor: { category: "Drums", kits: { Hats: { tracks: [{ name: "Hats" }, { name: "Open hat", cutBy: 1 }] } } },
+  },
+  body,
+);
+
+// The Drum cut by another track's hits (KIT-27).
+export const cut: Audio[] = [drums.drum(null as unknown as Events, null as unknown as Events, { drum: "open hat" })];

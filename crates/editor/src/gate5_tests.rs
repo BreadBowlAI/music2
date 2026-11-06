@@ -372,16 +372,21 @@ fn planned_call_forms_are_current() {
     for k in crate::drums::presets(&s) {
         let i = s.instruments().into_iter().find(|i| i.component == k.component).expect("the kit's instrument");
         let d = &s.catalog().components[&k.component];
-        for t in &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks {
+        let tracks = &d.editor.kits.iter().find(|x| x.name == k.name).expect("the kit").tracks;
+        // A track another's input reads returns its lane beside its sound (KIT-28); the input reads
+        // notes, here a lane of this song's.
+        let read: BTreeSet<&str> = tracks.iter().flat_map(|t| t.inputs.values().map(String::as_str)).collect();
+        for t in tracks {
+            let args: String = t.inputs.keys().map(|_| format!(", lane.notes(\"{}\")", i.lane)).collect();
             let (values, ctors) = crate::tracks::values_text(d, &t.values, &[], &s.accepted().compiled.units).unwrap();
+            let values = format!("{args}{values}");
             assert!(ctors.is_empty(), "every-component imports no unit for {}'s {}", k.name, t.name);
             let key = crate::keys::propose(&t.name, |_| false);
-            forms.push(format!(
-                "    // {}'s {} added as a track\n    {},\n",
-                k.name,
-                t.name,
-                crate::tracks::track_call_text(&i, &key, &t.name, &values)
-            ));
+            let call = match read.contains(t.name.as_str()) {
+                true => crate::tracks::exporting_call_text(&i, &key, &t.name, &values),
+                false => crate::tracks::track_call_text(&i, &key, &t.name, &values),
+            };
+            forms.push(format!("    // {}'s {} added as a track\n    {call},\n", k.name, t.name));
         }
     }
     // + Drum in the beat grid (KIT-15): a Drum track playing the sound picked.

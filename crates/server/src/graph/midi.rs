@@ -75,12 +75,13 @@ impl Pads {
         Some(Pads { bus: k["bus"].as_str()?.to_string(), label: k["label"].as_str().unwrap_or("Drums").to_string(), rows })
     }
 
-    /// The Drum track and lane that answers to `key` (KIT-6): the first whose sound has the note.
+    /// The Drum track and lane that answers to `key` (KIT-6): the first whose sound's own note it
+    /// is (an Open hat's 46, KIT-28), else the first whose sound has the note.
     pub(super) fn answers(&self, key: u8) -> Option<(String, String)> {
-        self.rows
-            .iter()
-            .find(|(_, _, sound)| sound.as_deref().is_some_and(|s| m2_editor::drums::notes_of(s).contains(&key)))
-            .map(|(m, l, _)| (m.clone(), l.clone()))
+        let own = |s: &str| m2_editor::drums::own_note(s) == Some(key);
+        let has = |s: &str| m2_editor::drums::notes_of(s).contains(&key);
+        let first = |f: &dyn Fn(&str) -> bool| self.rows.iter().find(|(_, _, sound)| sound.as_deref().is_some_and(f));
+        first(&own).or_else(|| first(&has)).map(|(m, l, _)| (m.clone(), l.clone()))
     }
 }
 
@@ -347,3 +348,7 @@ impl Inner {
 #[cfg(test)]
 #[path = "midi_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "pads_tests.rs"]
+mod pads_tests;

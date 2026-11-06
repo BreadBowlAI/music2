@@ -247,9 +247,10 @@ outputs = ["out: audio<2>"]
 
 # std:regions plays std/sampler's `regions` (architecture.md, PKG-15 and PKG-16): the sampler voice
 # above, with regions in its values instead of zones. Its assets are the files, each once. Its values:
-#   [0]                  how many values each region takes: 15 (a region with fewer takes the
-#                        defaults for the rest; values past the ones it knows are skipped)
-#   then, region after region, 15 values each:
+#   [0]                  how many values each region takes: 15, or 17 with choke groups (a region
+#                        with fewer takes the defaults for the rest; values past the ones it knows
+#                        are skipped)
+#   then, region after region, that many values each:
 #    0 file      which asset, from 0          8 trigger   0 attack, 1 release
 #    1 root      the note it was recorded at  9 loop start a frame of the file, or -1 for no loop
 #    2, 3 keys   lowest, highest note        10 loop end   the loop's last frame, both played
@@ -257,6 +258,9 @@ outputs = ["out: audio<2>"]
 #    6, 7 round robin: position, of          12 volume    dB
 #                                            13 pan       -1..1
 #                                            14 offset    frames into the file it starts from
+#                                            15 group     the choke group its start marks: a slot,
+#                                                         0 to 7, or -1 for none (PKG-16, rule 8)
+#                                            16 off_by    the group whose start cuts it, a slot, or -1
 # `count` is how many times notes have started on the lane (std:hitcount of a one-voice poly of
 # std:drumhit), or on the note's key (its `keyCount`, with std/sampler's `turns: "key"`), read when
 # the note starts: its turn is ((count - 1) mod of) + 1. Left out, 1.
@@ -274,8 +278,15 @@ inputs = [
   "mode: control<scalar> = 0 in 0..1",
   "veltrack: control<unit01> = 1 in 0..1",
   "count: audio<1>",
+  "marks: audio<1> = 0",
 ]
 outputs = ["out: audio<2>"]
+
+[[kernel]]
+name = "regionmark"
+description = "Marks the choke groups a note's regions start (PKG-16, rule 8), for std:regions' voices to hear: on the note's first sample, 8^slot for each group (a slot, 0 to 7, in the regions' values) that an attack region matching the note (its key, velocity and turn, from `count`, as std:regions matches) marks, once a group; else 0. Its values are std:regions'"
+inputs = ["pitch: control<semitones>", "velocity: control<unit01> = 0.8", "count: audio<1>"]
+outputs = ["out: audio<1>"]
 
 [[kernel]]
 name = "drumhit"
