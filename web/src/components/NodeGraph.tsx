@@ -56,7 +56,7 @@ import {
   type Setting,
   type ViewNode,
 } from "../lib/graph";
-import { cutBy, listenTo, moveEffect, turnEffect } from "../lib/effects";
+import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
@@ -335,6 +335,8 @@ const GROUP_H = 24;
  */
 type Item =
   | { t: "input"; port: InputPort }
+  // "Listens to" with no input row of its own: the call leaves its key out (CARD-35).
+  | { t: "listens" }
   | { t: "group"; name: string; first: boolean }
   | { t: "setting"; x: Setting }
   | { t: "view"; v: CardView }
@@ -342,6 +344,17 @@ type Item =
   | { t: "fold"; hidden: number; hides: string[] };
 
 function items(n: ViewNode, folded: boolean): Item[] {
+  const all = itemsOf(n, folded);
+  // A "Listens to" whose call leaves its input out stands alone, right after the sound it works
+  // on, where its input's row would be (CARD-35).
+  if (n.listens && !n.listens.port) {
+    const at = all.findIndex((x) => x.t === "input");
+    all.splice(at + 1, 0, { t: "listens" });
+  }
+  return all;
+}
+
+function itemsOf(n: ViewNode, folded: boolean): Item[] {
   const settings = settingsOf(n);
   const views = n.views ?? [];
   if (!n.groups?.length) {
@@ -376,7 +389,7 @@ function items(n: ViewNode, folded: boolean): Item[] {
 
 /** How tall a row of a card is. */
 const itemHeight = (x: Item) =>
-  x.t === "input" ? inputHeight(x.port) : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
+  x.t === "input" ? inputHeight(x.port) : x.t === "listens" ? ROW_H : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
 
 /**
  * A node's height and where its ports are, from its top. Each input is a row; output `i` sits on
@@ -394,8 +407,7 @@ function geometry(n: ViewNode, folded = false) {
   }
   const rows: number[] = [];
   // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
-  // A Drum's Cut by row too (KIT-27).
-  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + (n.cut_by ? ROW_H : 0);
+  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0);
   let y = top + PAD;
   const all = items(n, folded);
   for (const x of all) {
@@ -1031,7 +1043,6 @@ function NodeCard({
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
-      {node.cut_by && !small && <CutByRow node={node} editable={editable} />}
       {presets && (
         <PresetPopover
           node={node.id}
@@ -1097,6 +1108,8 @@ function NodeCard({
                 revision={revision}
                 editable={editable}
               />
+            ) : x.t === "listens" ? (
+              <ListensRow key="listens" node={node} filled={false} editable={editable} />
             ) : x.t === "fill" ? (
               <div key={`fill:${x.id}`} className="h-7" />
             ) : x.t === "setting" ? (
@@ -1390,7 +1403,7 @@ function InputRow({
     );
   }
 
-  // A Duck's side input: what it listens to, and a list of the tracks it could (next D3).
+  // An input that listens (a duck's side, a key): what it hears, and a list of the tracks it could (CARD-35).
   if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
 
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
@@ -1434,33 +1447,44 @@ function InputRow({
 }
 
 /**
- * A Duck's side input (next D3, X28): "Listens to: Kick ▾". Its list has the song's other tracks;
- * one picked is written in the Duck's call. Where it can't change (a Duck in a track's file), the
- * button is greyed and its tooltip says why.
+ * An input that listens (CARD-35): "Listens to: Kick ▾", a duck's side or a compressor's or a
+ * gate's key, whatever the effect. Its list has the song's tracks but the one the effect works on,
+ * and None when the call may leave the input out; one picked is written in the call. With the
+ * input left out the row has no port and says None. Where it can't change (an effect in a track's
+ * file), the button is greyed and its tooltip says why.
  */
-function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: InputPort; filled: boolean; editable: boolean }) {
+function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?: InputPort; filled: boolean; editable: boolean }) {
   const tracks = useContext(Tracks);
   const why = useContext(Locked);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const l = node.listens!;
   const name = (key: string) => l.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
-  const now = l.track ? name(l.track) : "another sound";
+  const now = l.track ? name(l.track) : l.heard ? "another sound" : l.nothing;
   const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
+  const what = node.title ?? "It";
+  const title = l.label
+    ? l.heard
+      ? `${l.label}: ${now}. Choose another track, or None`
+      : `${l.label}: no track yet. Choose one`
+    : l.heard
+      ? `${what} listens to ${now}. Choose another track`
+      : `${what} listens to no other track. Choose one`;
   return (
-    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input.label} data-listens>
-      <Dot id={input.id} kind={input.kind} filled={filled} />
-      <span className="shrink-0 text-fg-muted">Listens to:</span>
+    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input?.label ?? l.input} data-listens>
+      {input && <Dot id={input.id} kind={input.kind} filled={filled} />}
+      <span className="shrink-0 text-fg-muted">{l.label ?? "Listens to"}:</span>
       <button
         data-testid="listens-to"
         className={clsx(
           "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
           off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
+          !l.heard && !off && "text-fg-muted",
           anchor && "bg-accent-soft text-accent-strong",
         )}
         aria-haspopup="menu"
         aria-expanded={!!anchor}
         aria-disabled={!!off || undefined}
-        title={off ?? `It ducks when ${now} plays. Choose another track`}
+        title={off ?? title}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           if (off) return;
@@ -1472,7 +1496,7 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: 
         <ChevronDown size={12} className="shrink-0" />
       </button>
       {anchor && (
-        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Listens to" data-testid="listens-menu" className="w-[200px]">
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label={l.label ?? "Listens to"} data-testid="listens-menu" className="w-[200px]">
           {l.choices.map(([key, label]) => (
             <MenuRow
               key={key}
@@ -1486,61 +1510,19 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: 
               {label}
             </MenuRow>
           ))}
-        </Popover>
-      )}
-    </div>
-  );
-}
-
-/**
- * A Drum's Cut by row (KIT-27), under its header: "Cut by: Hats ▾". Its list has None and the song's
- * other Drum tracks; one picked is written in the Drum's call, the other track's hits imported. Where
- * it can't change, the button is greyed and its tooltip says why.
- */
-function CutByRow({ node, editable }: { node: ViewNode; editable: boolean }) {
-  const tracks = useContext(Tracks);
-  const why = useContext(Locked);
-  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
-  const c = node.cut_by!;
-  const name = (key: string) => c.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
-  const now = c.by ? name(c.by) : "None";
-  const mine = tracks(c.track) ?? c.track;
-  const off = why ?? (editable ? null : "This song can't be edited here") ?? c.refused ?? null;
-  const pick = (key: string | null, label: string) => {
-    setAnchor(null);
-    if (key !== (c.by ?? null)) void cutBy(node, mine, key, label);
-  };
-  return (
-    <div className="relative h-7 shrink-0 px-3 flex items-center gap-1.5 text-xs min-w-0 border-b border-line" data-cut-by>
-      <span className="shrink-0 text-fg-muted">Cut by:</span>
-      <button
-        data-testid="cut-by"
-        className={clsx(
-          "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
-          off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
-          anchor && "bg-accent-soft text-accent-strong",
-        )}
-        aria-haspopup="menu"
-        aria-expanded={!!anchor}
-        aria-disabled={!!off || undefined}
-        title={off ?? (c.by ? `It stops when ${now} plays. Choose another track, or None` : "Choose a track whose hits stop it, as a closed hat stops an open one")}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={(e) => {
-          if (off) return;
-          const b = e.currentTarget;
-          setAnchor((a) => (a ? null : b));
-        }}
-      >
-        <span className="truncate">{now}</span>
-        <ChevronDown size={12} className="shrink-0" />
-      </button>
-      {anchor && (
-        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Cut by" data-testid="cut-by-menu" className="w-[200px]">
-          {[[null, "None"] as const, ...c.choices].map(([key, label]) => (
-            <MenuRow key={key ?? ""} data-track={key ?? ""} icon={<Check size={14} className={key === (c.by ?? null) ? undefined : "invisible"} />} onClick={() => pick(key, label)}>
-              {label}
+          {l.optional && (
+            <MenuRow
+              key="none"
+              data-track=""
+              icon={<Check size={14} className={l.heard ? "invisible" : undefined} />}
+              onClick={() => {
+                setAnchor(null);
+                if (l.given) void listenTo(node, null, l.nothing === "None" ? "nothing" : l.nothing.toLowerCase());
+              }}
+            >
+              {l.nothing}
             </MenuRow>
-          ))}
+          )}
         </Popover>
       )}
     </div>

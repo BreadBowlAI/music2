@@ -495,7 +495,7 @@ fn the_808_kits_hats_choke() {
     );
     let open_file = f.read(&format!("tracks/{open}.ts"));
     assert!(open_file.contains(&format!("import hats from \"./{hats}\";")), "{open_file}");
-    assert!(open_file.contains("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\", cutBy: hats.hits })"), "{open_file}");
+    assert!(open_file.contains("drums.drum(lane.notes(\"hits\"), hats.hits, { drum: \"open hat\" })"), "{open_file}");
     // One undo step took the kit in; the Open hat is a row of the kit as any Drum track is (KIT-1).
     let rows: Vec<String> = crate::kits::drum_kits(&s).iter().flat_map(|k| k.rows.iter().map(|r| r.track.clone())).collect();
     assert!(rows.contains(&open) && rows.contains(&hats), "{rows:?}");

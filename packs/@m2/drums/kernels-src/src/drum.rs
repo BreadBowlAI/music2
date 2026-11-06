@@ -50,9 +50,10 @@ const TUNE: usize = 28;
 const DECAY: usize = 29;
 const PUSH: usize = 30;
 const INPUTS: usize = 31;
-// `cut`'s one more: another track's hits (KIT-27), any of which cuts the drum, whatever it is.
+// One drum's one more: another track's hits (KIT-27), any of which cuts the drum, whatever it is.
+// Left unconnected it is silence (ABI-12), which cuts nothing.
 const CUT: usize = 31;
-const CUT_INPUTS: usize = 32;
+const ONE_INPUTS: usize = 32;
 
 /// What a place of the Drum's menu plays (KIT-20): one of the drum voice's own models (0 to 8),
 /// or the drum the drum machine plays at a General MIDI note, at any note.
@@ -702,11 +703,12 @@ fn cut_hit(h: f32) -> bool {
 export!(drum, Drum);
 
 /// The Drum's voice, `@m2/drums:one`: [`Drum`] with its drum a menu (its port 4, `drum`, a choice
-/// whose places [`SOUNDS`] reads), cut by any hit on its lane when its drum chokes.
+/// whose places [`SOUNDS`] reads), cut by any hit on its lane when its drum chokes, and by any hit on
+/// its `cut` input (another track's, KIT-27) whatever it plays.
 pub struct One(Drum);
 
 impl Kernel for One {
-    const INPUTS: usize = INPUTS;
+    const INPUTS: usize = ONE_INPUTS;
     const OUTPUTS: usize = 1;
 
     fn new(cfg: &Cfg) -> Self {
@@ -714,7 +716,7 @@ impl Kernel for One {
     }
 
     fn process(&mut self, io: &mut Io) {
-        self.0.process(io)
+        self.0.run::<ONE_INPUTS>(io)
     }
 
     fn active(&self) -> bool {
@@ -723,30 +725,6 @@ impl Kernel for One {
 }
 
 export!(one, One);
-
-/// The Drum's voice cut by another track's hits, `@m2/drums:cut` (KIT-27): [`One`] with one more
-/// input, `cut`, any hit on which fades it out whatever it plays. The Drum plays it only when its
-/// call says `cutBy`, so a Drum that doesn't plays `one`, every bit as before.
-pub struct Cut(Drum);
-
-impl Kernel for Cut {
-    const INPUTS: usize = CUT_INPUTS;
-    const OUTPUTS: usize = 1;
-
-    fn new(cfg: &Cfg) -> Self {
-        Cut(Drum { one: true, ..Drum::new(cfg) })
-    }
-
-    fn process(&mut self, io: &mut Io) {
-        self.0.run::<CUT_INPUTS>(io)
-    }
-
-    fn active(&self) -> bool {
-        self.0.active()
-    }
-}
-
-export!(cut, Cut);
 
 #[cfg(test)]
 mod tests;

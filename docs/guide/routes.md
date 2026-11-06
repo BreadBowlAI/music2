@@ -114,7 +114,7 @@ An example body:
 
 ### `POST /api/graph/effect/add`
 
-Put an effect after a call's sound, by its component id as the state's effects list it. It writes the song: one undo step.
+Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`), by its component id as the state's effects list it. It writes the song: one undo step.
 
 An example body:
 
@@ -154,7 +154,7 @@ An example body:
 
 ### `POST /api/graph/effect/sidechain`
 
-Make a Duck listen to another track. It writes the song: one undo step.
+Make an effect that listens (a duck's side, a compressor's or a gate's key) listen to another track, or to nothing (track: null). It writes the song: one undo step.
 
 An example body:
 
@@ -184,16 +184,6 @@ An example body:
 
 ```json
 {"session": 7, "fix": {"code": "delete-data", "title": "Delete it", "likely": false, "tx": {"id": "fix-delete-old", "base": {"data/kick/old.json": "sha256:9b74c9897bac770ffc029102a200c5de7d2a5d3e5d4c0f2f8b1c4e3a7d6f5e4c"}, "ops": [{"op": "remove", "file": "data/kick/old.json"}], "expect": "identical"}}}
-```
-
-### `POST /api/graph/kit/cut`
-
-Cut a Drum track's drum by another Drum track's hits, as its card's Cut by does (by: null for none). It writes the song: one undo step.
-
-An example body:
-
-```json
-{"session": 7, "track": "open-hat", "by": "hats"}
 ```
 
 ### `POST /api/graph/kit/drum`

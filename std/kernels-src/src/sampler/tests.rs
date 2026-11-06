@@ -12,7 +12,7 @@ use super::*;
 use crate::testkit::*;
 
 const NAMES: [&str; 9] = ["pitch", "gate", "velocity", "tune", "level", "attack", "release", "mode", "veltrack"];
-const REGION_NAMES: [&str; 10] = ["pitch", "gate", "velocity", "tune", "level", "attack", "release", "mode", "veltrack", "count"];
+const REGION_NAMES: [&str; 11] = ["pitch", "gate", "velocity", "tune", "level", "attack", "release", "mode", "veltrack", "count", "marks"];
 
 /// A file of `n` frames that changes at every sample, so a sample played twice or skipped shows.
 fn file(n: usize, seed: u32) -> Vec<f32> {
@@ -559,12 +559,10 @@ fn no_control_or_value_breaks_regions() {
 // ---------------------------------------------------------------- choke groups (PKG-16, rule 8)
 
 const MARK_NAMES: [&str; 3] = ["pitch", "velocity", "count"];
-const CUT_NAMES: [&str; 11] = ["pitch", "gate", "velocity", "tune", "level", "attack", "release", "mode", "veltrack", "count", "marks"];
 
 #[test]
 fn the_choke_kernels_ports_match_the_manifest() {
     defaults("regionmark", &MARK_NAMES);
-    defaults("regioncut", &CUT_NAMES);
 }
 
 /// What `std:regionmark` marks for `note` with `regions`, sample by sample, over `frames`.
@@ -600,15 +598,15 @@ fn a_notes_marks_are_the_groups_its_regions_start() {
     assert!(!at(46.0, 1.0).active[1], "it is done after its first sample");
 }
 
-/// `std:regioncut` with `assets` and `regions`, playing `note`, with `marks` on its marks input.
+/// `std:regions` with `assets` and `regions`, playing `note`, with `marks` on its marks input.
 fn play_cut(assets: &[Asset], regions: &[R], note: Note, frames: usize, marks: &dyn Fn(usize) -> f32) -> Played {
-    let mut patch = defaults("regioncut", &CUT_NAMES);
+    let mut patch = defaults("regions", &REGION_NAMES);
     patch[VELOCITY] = note.velocity;
     patch[VELTRACK] = 0.0;
     patch[COUNT] = note.count;
     let values = layout(regions);
     let cfg = Cfg { values: Vec::leak(values), assets: Vec::leak(assets.to_vec()), ..Cfg::new(SR, BLOCK, 2) };
-    play_cfg::<Sampler<true, true>>(cfg, frames, 37, &|p, _, t| match p {
+    play_cfg::<Sampler<true>>(cfg, frames, 37, &|p, _, t| match p {
         PITCH => note.pitch,
         GATE => (t < note.held) as u8 as f32,
         MARKS => marks(t),
@@ -618,7 +616,7 @@ fn play_cut(assets: &[Asset], regions: &[R], note: Note, frames: usize, marks: &
 
 // PKG-16 rule 8: a region whose off_by group is marked fades to exact silence over 4 ms, a raised
 // cosine, smoothly; its voice's other regions play on; a mark of another group, or on the sample it
-// starts, cuts nothing. With no marks, `std:regioncut` plays `std:regions`' bits.
+// starts, cuts nothing. With no marks (its default, silence) it plays the bits it played before.
 #[test]
 fn a_region_is_cut_when_its_off_by_group_starts() {
     let (x, assets) = files(4_000, 2);

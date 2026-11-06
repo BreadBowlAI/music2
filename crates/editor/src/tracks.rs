@@ -504,8 +504,8 @@ pub struct NewTrack {
     /// KIT-23).
     pub lanes: Vec<(String, String)>,
     /// Optional notes inputs of its instrument, each given the hits of an earlier track of this
-    /// list, by its place: `("cutBy", 4)` writes `cutBy: hats.hits`, imports that track, and has it
-    /// return its lane beside its sound (a kit's Open hat, cut by its Hats, KIT-28).
+    /// list, by its place: `("cutBy", 4)` writes `hats.hits` after the notes, imports that track, and
+    /// has it return its lane beside its sound (a kit's Open hat, cut by its Hats, KIT-28).
     pub hits_of: Vec<(String, usize)>,
 }
 
@@ -704,7 +704,7 @@ pub(crate) fn add_tracks_as(
             (Some(i), ..) => {
                 let d = &s.catalog().components[&i.component];
                 // The lanes of earlier tracks it reads (KIT-27): each imported by a name of its own.
-                let mut code = t.code.clone();
+                let mut args = String::new();
                 let mut reads: Vec<(String, String)> = vec![];
                 for (slot, j) in &t.hits_of {
                     let (Some(other), Some(other_file), Some(Play::Instrument(c))) =
@@ -719,11 +719,14 @@ pub(crate) fn add_tracks_as(
                     while taken.contains(&binding.as_str()) {
                         binding.push_str("Track");
                     }
-                    code.push((slot.clone(), format!("{binding}.{lane}")));
+                    // Given by its place, after the notes (PKG-18): only one is, the Drum's.
+                    let _ = slot;
+                    args.push_str(&format!(", {binding}.{lane}"));
                     reads.push((binding, other_file.clone()));
                 }
                 let exports = tracks.iter().any(|o| o.hits_of.iter().any(|(_, j)| *j == n));
-                track_text(i, &key, &label, &file, &values_text(d, &t.values, &code, &rev.compiled.units)?, &reads, exports)
+                let (values, ctors) = values_text(d, &t.values, &t.code, &rev.compiled.units)?;
+                track_text(i, &key, &label, &file, &(format!("{args}{values}"), ctors), &reads, exports)
             }
             (None, Some((id, _)), _) => crate::plugins::track_text(id, &key, &label),
             (None, None, Some(kind)) => {

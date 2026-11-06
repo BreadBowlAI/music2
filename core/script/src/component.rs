@@ -44,10 +44,13 @@ pub struct PortDesc {
     /// It takes any number of signals: the last input of a call only.
     #[serde(default)]
     pub many: bool,
-    /// A call may leave it out, and gives it by its name in the options (PKG-18). Written only when
+    /// A call may leave it out, and the body then gets `undefined` (PKG-18). Written only when
     /// true, so every other descriptor keeps its bytes.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub optional: bool,
+    /// What its card's row of another track is called (CARD-35), when given: "Cut by".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -280,8 +283,9 @@ impl Descriptor {
         self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
     }
 
-    /// Whether a new track can play it (PKG-7): notes first, its only input but optional ones
-    /// (PKG-18), and audio out. The + Track list offers it only when it has a category, which groups it.
+    /// Whether a new track can play it (PKG-7): notes first, its only input but those a call may leave
+    /// out (PKG-20), and audio out. The
+    /// + Track list offers it only when it has a category, which groups it.
     pub fn is_instrument(&self) -> bool {
         matches!(&self.inputs[..], [i, rest @ ..] if i.kind == PortKind::Notes && !i.optional && rest.iter().all(|r| r.optional))
             && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)

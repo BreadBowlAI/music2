@@ -92,8 +92,9 @@ export!(chorus, Chorus);
 const KNEE: f32 = 6.0;
 
 /// Feed-forward compressor, stereo-linked, with a soft knee. The gain reduction (in dB)
-/// follows the peak level with `attack` and `release`. Inputs: in, threshold (dB),
-/// ratio (1 = off), attack (s), release (s), makeup (dB).
+/// follows the peak level of `key` with `attack` and `release`. Inputs: in, threshold (dB),
+/// ratio (1 = off), attack (s), release (s), makeup (dB), key (stereo: what its detector hears,
+/// `in` itself or another sound, PKG-19).
 pub struct Compress {
     sr: f32,
     /// Gain reduction now, in dB (0 or more).
@@ -104,7 +105,7 @@ pub struct Compress {
 }
 
 impl Kernel for Compress {
-    const INPUTS: usize = 6;
+    const INPUTS: usize = 7;
     const OUTPUTS: usize = 1;
 
     fn new(cfg: &Cfg) -> Self {
@@ -115,11 +116,13 @@ impl Kernel for Compress {
 
     fn process(&mut self, io: &mut Io) {
         let stereo = io.channels > 1;
-        let ([l, r, threshold, ratio, attack, release, makeup], [ol, or]) =
-            io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, threshold, ratio, attack, release, makeup, kl, kr], [ol, or]) =
+            io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (6, 1)], [(0, 0), (0, 1)]);
         for i in 0..ol.len() {
             let (xl, xr) = (sane(l[i]), if stereo { sane(r[i]) } else { 0.0 });
-            let level = 20.0 * xl.abs().max(xr.abs()).max(1e-6).log10();
+            // A mono key is copied to both sides, so its level is its one side's, as a mono
+            // input's own was.
+            let level = 20.0 * sane(kl[i]).abs().max(sane(kr[i]).abs()).max(1e-6).log10();
             let over = level - clampf(threshold[i], -80.0, 12.0);
             let slope = 1.0 - 1.0 / clampf(ratio[i], 1.0, 50.0);
             let target = if over <= -KNEE / 2.0 {

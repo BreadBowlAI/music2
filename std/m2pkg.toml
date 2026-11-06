@@ -197,7 +197,7 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "compress"
-description = "Stereo-linked soft-knee compressor; ratio 1 is off"
+description = "Stereo-linked soft-knee compressor; ratio 1 is off. Its detector hears key (stereo or mono: a mono sound's copied to both sides): the input itself, or another sound to key it from"
 inputs = [
   "in: audio<*>",
   "threshold: control<db> = -18",
@@ -205,6 +205,7 @@ inputs = [
   "attack: control<seconds> = 0.01 in 0.0001..1",
   "release: control<seconds> = 0.15 in 0.001..5",
   "makeup: control<db> = 0",
+  "key: audio<2>",
 ]
 outputs = ["out: audio<*>"]
 
@@ -276,30 +277,13 @@ inputs = [
   "mode: control<scalar> = 0 in 0..1",
   "veltrack: control<unit01> = 1 in 0..1",
   "count: audio<1>",
-]
-outputs = ["out: audio<2>"]
-
-[[kernel]]
-name = "regioncut"
-description = "std:regions cut by choke groups (PKG-16, rule 8): with one more input, `marks` (a poly of std:regionmark over the same notes, outside the voices), a playing region whose off_by slot is marked, on any sample after its first, fades to exact silence over 4 ms, a raised cosine; its voice's other regions play on. With no marks, std:regions' bits"
-inputs = [
-  "pitch: control<semitones>",
-  "gate: control<unit01>",
-  "velocity: control<unit01> = 0.8",
-  "tune: control<semitones> = 0 in -24..24",
-  "level: control<db> = 0 in -24..12",
-  "attack: control<seconds> = 0 in 0..5",
-  "release: control<seconds> = 0.05 in 0..5",
-  "mode: control<scalar> = 0 in 0..1",
-  "veltrack: control<unit01> = 1 in 0..1",
-  "count: audio<1>",
-  "marks: audio<1>",
+  "marks: audio<1> = 0",
 ]
 outputs = ["out: audio<2>"]
 
 [[kernel]]
 name = "regionmark"
-description = "Marks the choke groups a note's regions start (PKG-16, rule 8), for std:regioncut's voices to hear: on the note's first sample, 8^slot for each group (a slot, 0 to 7, in the regions' values) that an attack region matching the note (its key, velocity and turn, from `count`, as std:regions matches) marks, once a group; else 0. Its values are std:regions'"
+description = "Marks the choke groups a note's regions start (PKG-16, rule 8), for std:regions' voices to hear: on the note's first sample, 8^slot for each group (a slot, 0 to 7, in the regions' values) that an attack region matching the note (its key, velocity and turn, from `count`, as std:regions matches) marks, once a group; else 0. Its values are std:regions'"
 inputs = ["pitch: control<semitones>", "velocity: control<unit01> = 0.8", "count: audio<1>"]
 outputs = ["out: audio<1>"]
 

@@ -1,5 +1,5 @@
 // An effect card's ⋯ menu (lane D of next): turn an effect off and on again (D1), move it before
-// or after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo
+// or after the effect written next to it (D2); and what an effect listens to (CARD-35). Each is one undo
 // step on the server, a `TextEdit` of the effects' own calls; a refusal says why in words. What
 // the view says of an effect card is added to graph.ts's types from here, as graph8b.ts adds its
 // own.
@@ -26,36 +26,38 @@ export interface MoveRow {
   refused?: string;
 }
 
-/** A Duck's "Listens to" row: the track it hears now, the ones it could, or why it can't change here. */
+/**
+ * A card's "Listens to" row (CARD-35): the track its sidechain input hears now, the ones it could,
+ * or why it can't change here.
+ */
 export interface Listens {
-  /** The card's input row it is (the Duck's side input). */
-  port: string;
-  /** The track whose sound it ducks, by name. */
-  ducks?: string;
+  /** The card's input row it is; none when the call leaves the input out (the row stands alone). */
+  port?: string;
+  /** The input, by its name in the descriptor (`side`, `key`, `cutBy`). */
+  input: string;
+  /** What the row is called, its input's label ("Cut by"); "Listens to" when it has none. */
+  label?: string;
+  /** The track whose sound the effect works on, by name. */
+  of?: string;
   /** The track it listens to now, by key. */
   track?: string;
+  /** Whether the call gives the input: when not, it listens to nothing (None). */
+  given: boolean;
+  /** Whether None can be picked: the call may leave the input out. */
+  optional: boolean;
+  /** Whether it hears a signal at all (a side that gives `undefined` hears nothing). */
+  heard: boolean;
+  /** What its None is called: "No other track" for a key (it hears its own sound), "None" for a Duck's side. */
+  nothing: string;
   /** The tracks it can listen to: key and name. */
-  choices: [string, string][];
-  refused?: string;
-}
-
-/** A Drum's "Cut by" row (KIT-27): the Drum track whose hits cut it, the ones that could, or why it can't change here. */
-export interface CutBy {
-  /** The track the Drum is on, by key. */
-  track: string;
-  /** The track whose hits cut it now, by key; none for None. */
-  by?: string;
-  /** The Drum tracks that can cut it: key and name. */
   choices: [string, string][];
   refused?: string;
 }
 
 declare module "./graph" {
   interface ViewNode {
-    /** A Duck's "Listens to" row. */
+    /** Its "Listens to" row (CARD-35). */
     listens?: Listens;
-    /** A Drum's "Cut by" row. */
-    cut_by?: CutBy;
     /** An effect turned off: `bypass: true` in its call. Its sound goes on without it. */
     bypassed?: boolean;
     /** What its ⋯ menu offers, on an effect's card. */
@@ -127,21 +129,14 @@ export function moveEffect(node: ViewNode, title: string, other: string, earlier
 }
 
 /**
- * Make Duck card `node` listen to track `key` (called `name`). The row says so at once, so there is
- * no toast: one undo step, "Bass's duck listens to Hats".
+ * Make effect card `node` listen to track `key` (called `name`), or to nothing (`null`, "nothing").
+ * The row says so at once, so there is no toast: one undo step, "Bass's duck listens to Hats".
  */
-export function listenTo(node: ViewNode, key: string, name: string) {
-  const whose = node.listens?.ducks ? `${node.listens.ducks}'s duck` : "the duck";
-  return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: `${whose} listens to ${name}` });
-}
-
-/**
- * Cut the Drum of card `node` (on track `name`) by the hits of Drum track `by` (called `byName`),
- * or by none (`by` null). The row says so at once, so there is no toast: one undo step, "Open hat
- * cut by Hats".
- */
-export function cutBy(node: ViewNode, name: string, by: string | null, byName: string) {
-  const track = node.cut_by?.track;
-  if (!track) return;
-  return edit("/api/graph/kit/cut", { node: node.id, track, by }, { name: by ? `${name} cut by ${byName}` : `${name} cut by nothing` });
+export function listenTo(node: ViewNode, key: string | null, name: string) {
+  const what = (node.title ?? "effect").toLowerCase();
+  const l = node.listens;
+  const whose = l?.of ? `${l.of}'s ${what}` : `the ${what}`;
+  // An input with a label names the step by it, as the server does: "Open hat cut by Hats" (KIT-27).
+  const step = l?.label && l.of ? `${l.of} ${l.label.toLowerCase()} ${name}` : `${whose} listens to ${name}`;
+  return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: step });
 }

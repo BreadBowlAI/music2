@@ -235,8 +235,11 @@ fn a_broken_package_module_still_opens() {
     );
     let s = Session::open(&f.0, std.packages()).unwrap_or_else(|d| panic!("the project must open: {d:?}"));
     let invalid: Vec<String> = s.problems().iter().filter(|d| d.code == "pkg.invalid").map(|d| d.to_string()).collect();
-    assert_eq!(invalid.len(), 2, "{invalid:?}");
+    // @m2/mixing's Pump is built on std/control (PACK-28), so the pack's module doesn't load either,
+    // and says why.
+    assert_eq!(invalid.len(), 3, "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/control") && m.contains("broken on purpose")), "{invalid:?}");
+    assert!(invalid.iter().any(|m| m.contains("`@m2/mixing`") && m.contains("broken on purpose")), "{invalid:?}");
     assert!(invalid.iter().any(|m| m.contains("std/src/fx.ts") && m.contains("std/src/filter.ts")), "both places: {invalid:?}");
     let catalog = s.catalog();
     assert!(!catalog.components.contains_key("std:lfo") && !catalog.components.contains_key("std:limit"));
@@ -374,8 +377,9 @@ fn planned_call_forms_are_current() {
         // notes, here a lane of this song's.
         let read: BTreeSet<&str> = tracks.iter().flat_map(|t| t.inputs.values().map(String::as_str)).collect();
         for t in tracks {
-            let code: Vec<(String, String)> = t.inputs.keys().map(|slot| (slot.clone(), format!("lane.notes(\"{}\")", i.lane))).collect();
-            let (values, ctors) = crate::tracks::values_text(d, &t.values, &code, &s.accepted().compiled.units).unwrap();
+            let args: String = t.inputs.keys().map(|_| format!(", lane.notes(\"{}\")", i.lane)).collect();
+            let (values, ctors) = crate::tracks::values_text(d, &t.values, &[], &s.accepted().compiled.units).unwrap();
+            let values = format!("{args}{values}");
             assert!(ctors.is_empty(), "every-component imports no unit for {}'s {}", k.name, t.name);
             let key = crate::keys::propose(&t.name, |_| false);
             let call = match read.contains(t.name.as_str()) {

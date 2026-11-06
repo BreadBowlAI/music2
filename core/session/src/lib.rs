@@ -536,9 +536,9 @@ export default song(() => v.out);
         let (sdk, std) = (Version::parse(m2_script::SDK_VERSION), packages.get("std").and_then(|p| Version::parse(&p.version)));
         let mut packs = 0;
         // PACK-23: and each pack that runs code asks for this app's major of @m2/core, and the minor
-        // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), or `"2.2"` once an
-        // instrument names kits (KIT-3), what its descriptors show; a pack of recordings alone may
-        // ask for none.
+        // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
+        // instrument names kits (KIT-3), or `"2.3"` once an input may be left out (PKG-18), what
+        // its descriptors show; a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         let uses = |name: &str, dir: &Path| -> String {
             let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
@@ -548,10 +548,12 @@ export default song(() => v.out);
             };
             let labelled = mine.clone().any(|(_, d)| d.settings.iter().chain(entries(d).iter()).any(|x| x.label.is_some()));
             let kits = mine.clone().any(|(_, d)| !d.editor.kits.is_empty());
-            match (major.as_deref(), kits, labelled) {
-                (Some(m), true, _) => format!("{m}.2"),
-                (Some(m), false, true) => format!("{m}.1"),
-                (Some(m), false, false) => m.to_string(),
+            let optional = mine.clone().any(|(_, d)| d.inputs.iter().any(|i| i.optional));
+            match (major.as_deref(), optional, kits, labelled) {
+                (Some(m), true, ..) => format!("{m}.3"),
+                (Some(m), false, true, _) => format!("{m}.2"),
+                (Some(m), false, false, true) => format!("{m}.1"),
+                (Some(m), false, false, false) => m.to_string(),
                 (None, ..) => "?".into(),
             }
         };

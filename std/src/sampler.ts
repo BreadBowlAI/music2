@@ -41,7 +41,7 @@ function files(sample: string | undefined, root: number, zones: Readonly<Record<
 
 /**
  * How many values a region takes in `std:regions`' layout (`std/m2pkg.toml`): 15, and 17 with its
- * choke groups' slots (PKG-16, rule 8), which `std:regioncut` and `std:regionmark` read.
+ * choke groups' slots (PKG-16, rule 8), which `std:regions` and `std:regionmark` read.
  */
 const FIELDS = 15;
 const CHOKE_FIELDS = 17;
@@ -125,7 +125,7 @@ export const sampler = component(
     // A voice hears the others as a Drum's do: outside the voices, one voice of regionmark a note
     // marks the groups its regions start, and every voice reads the marks. 7 voices: 3 bits a group.
     const marks = poly(notes, (n) => kernel("std:regionmark", { pitch: n.pitch, velocity: n.velocity, count: counted(n) }, settings), { voices: 7 });
-    return poly(notes, (n) => kernel("std:regioncut", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: counted(n), marks }, settings), {
+    return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: counted(n), marks }, settings), {
       voices: p.voices,
     });
   },

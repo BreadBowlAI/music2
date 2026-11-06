@@ -32,7 +32,7 @@ use std::sync::Arc;
 
 use m2_ir::{Ir, Module, Node, Op, split_ref};
 use m2_script::Descriptor;
-use m2_script::component::{PortKind, Spelled};
+use m2_script::component::{PortDesc, PortKind, Spelled};
 use m2_script::sites::{Arg, Site};
 use m2_session::{Checked, Compiled, Session};
 use m2_song::tx::{Confined, Declared as Ranges, Expect, Range};
@@ -230,8 +230,88 @@ fn joined(mut imports: Vec<(u32, String)>) -> Vec<(u32, String)> {
     out
 }
 
+/// Where a module reads track `track`'s export `export` (CARD-36): the one module that does, not a
+/// track's (a track can't read another), in its file, at the one place that file writes
+/// `<handle>.<export>`, `<handle>` the name it imports the track by. As a site of its own, to be
+/// wrapped as a call is: the read's text is its callee. Why not, in words.
+pub(crate) fn track_read(s: &Session, track: &str, export: &str) -> Result<Site, String> {
+    let compiled = &s.accepted().compiled;
+    let named = compiled.ir.modules.iter().find(|t| t.key == track).map_or(track.to_string(), |t| t.label().to_string());
+    let reads = |m: &Module| {
+        let mut found = false;
+        walk(&m.nodes, &mut |n| found |= matches!(&n.op, Op::Import { module, export: e } if module == track && e == export));
+        found
+    };
+    let mut readers = compiled.ir.modules.iter().filter(|m| !m.track && reads(m));
+    let (Some(m), None) = (readers.next(), readers.next()) else {
+        return Err(format!("{named}'s sound isn't read in one place of the song"));
+    };
+    // Read in one place by the graph: its import feeds one node (a node's input, a voice's
+    // capture, an export). The text alone can't tell: `(({ out }) => out)(hook)` reads it too.
+    let reads = consumers(m, track, export);
+    if reads != 1 {
+        return Err(format!("the song reads {named}'s sound in {reads} places, so where it would go isn't known"));
+    }
+    let (file, from) = (file_of(m).ok_or("its module has no file")?, compiled.ir.modules.iter().find(|t| t.key == track));
+    let text = s.accepted().snapshot.files.get(Path::new(file)).ok_or("its file isn't the song's")?;
+    let handle = from
+        .and_then(file_of)
+        .and_then(|t| crate::sites::imports_of(text, file, t).into_iter().find_map(|i| i.default))
+        .ok_or_else(|| format!("{file} doesn't import {named} by a name of its own"))?;
+    let written = format!("{handle}.{export}");
+    let ident = |c: char| c.is_alphanumeric() || c == '_' || c == '$';
+    let at: Vec<u32> = crate::sites::references(text, &handle)
+        .into_iter()
+        .filter(|&a| {
+            text[a as usize..].starts_with(&written) && !text[a as usize + written.len()..].starts_with(|c: char| ident(c) || c == '.')
+        })
+        .collect();
+    let start = match at[..] {
+        [start] => start,
+        [] => return Err(format!("{file} doesn't write {written} by name")),
+        _ => return Err(format!("{file} writes {written} in {} places, so which one is {named}'s sound isn't known", at.len())),
+    };
+    let end = start + written.len() as u32;
+    let line = text[..start as usize].matches('\n').count() as u32 + 1;
+    Ok(Site {
+        id: u32::MAX,
+        file: file.to_string(),
+        ordinal: u32::MAX,
+        start,
+        end,
+        open: start,
+        line,
+        callee: written,
+        binding: None,
+        constant: false,
+        in_project: true,
+        args: vec![],
+    })
+}
+
+/// How many times module `m` reads track `track`'s export `export`: the inputs, captures and exports
+/// that name one of its imports of it.
+fn consumers(m: &Module, track: &str, export: &str) -> usize {
+    let mut imports = BTreeSet::new();
+    walk(&m.nodes, &mut |n| {
+        if matches!(&n.op, Op::Import { module, export: e } if module == track && e == export) {
+            imports.insert(n.id.clone());
+        }
+    });
+    let count = std::cell::Cell::new(0);
+    let (mut nodes, mut exports) = (m.nodes.clone(), m.exports.clone());
+    let swap = |r: &mut String| {
+        if imports.contains(split_ref(r).0) {
+            count.set(count.get() + 1);
+        }
+    };
+    refs(&mut nodes, &mut exports, &|_| {}, &swap);
+    count.get()
+}
+
 /// Put effect `component` (a ComponentId, `@m2/effects:delay`, or an installed plugin, `clap:<id>`) after
-/// call `call` (`file#ordinal` at revision `at`).
+/// call `call` (`file#ordinal` at revision `at`), or after a track's sound where the song reads it
+/// (`import:<track>.<export>`, CARD-36).
 pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Result<Edited, EditError> {
     if component.starts_with("clap:") {
         return crate::plugins::add_effect(s, at, call, component);
@@ -239,7 +319,17 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
     ready(s)?;
     let effect = effects(s).into_iter().find(|e| e.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
     let desc = s.catalog().components[component].clone();
-    let site = current_site(s, at, call)?.clone();
+    let site = match call.strip_prefix("import:").and_then(|r| r.split_once('.')) {
+        Some((track, export)) => {
+            let site =
+                track_read(s, track, export).map_err(|why| EditError::Rejected(format!("{} can't go here: {why}.", effect.label)))?;
+            if at != s.accepted().number {
+                return Err(EditError::stale(s, at, &site.file));
+            }
+            site
+        }
+        None => current_site(s, at, call)?.clone(),
+    };
     if !site.in_project {
         return Err(EditError::NotFound(call.to_string()));
     }
@@ -660,37 +750,46 @@ pub fn reorder(s: &mut Session, at: u64, call: &str, earlier: bool) -> Result<Ed
     Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
 }
 
-// ---------------------------------------------------------------- what a Duck listens to (Next D3)
+// ---------------------------------------------------------------- what a call listens to (CARD-35)
 
-/// The Duck (`std:duck`, which the effect browser doesn't list) that call `site` of the accepted
-/// revision is, if it is one written in the project.
-fn duck_at(s: &Session, site: &Site) -> Option<Arc<Descriptor>> {
+/// A call that listens: the component call `site` of the accepted revision is, when it is written
+/// in the project, with its first sidechain input but its first (PKG-13), and that input's place
+/// among the call's arguments. Nothing here is one effect's: `duck`'s side, `compress`'s and
+/// `gate`'s keys and any pack's sidechain input are found the same way, from the descriptor.
+struct Listener {
+    d: Arc<Descriptor>,
+    input: PortDesc,
+    /// Its argument's index: the inputs `positional` doesn't name, then `positional` (PKG-1).
+    at: usize,
+}
+
+fn listener(s: &Session, site: &Site) -> Option<Listener> {
+    if !site.in_project {
+        return None;
+    }
     let compiled = &s.accepted().compiled;
     let mut ids = compiled.ir.modules.iter().flat_map(|m| &m.frames).filter(|f| f.site == site.id).map(|f| f.component.as_deref());
     let id = ids.next()??;
-    (site.in_project && id == "std:duck" && ids.all(|x| x == Some(id))).then(|| compiled.components.get(id).cloned())?
+    if ids.any(|x| x != Some(id)) {
+        return None;
+    }
+    let d = compiled.components.get(id)?.clone();
+    let input = d.inputs.iter().skip(1).find(|i| i.sidechain && !i.many)?.clone();
+    let lead = d.inputs.iter().map(|i| i.name.as_str()).filter(|n| !d.positional.iter().any(|p| p == n));
+    let at = lead.chain(d.positional.iter().map(String::as_str)).position(|n| n == input.name)?;
+    Some(Listener { d, input, at })
 }
 
-/// A Duck call (`std:duck`): the module it is in, and its kernel's audio and side inputs.
-fn duck_of(compiled: &Compiled, site: u32) -> Option<(&Module, String, String)> {
-    let (module, ids) = made_by(compiled, site)?;
-    let m = compiled.ir.modules.iter().find(|m| m.key == module)?;
-    let mut found = None;
-    walk(&m.nodes, &mut |n| {
-        if let Op::Kernel { kernel, inputs, .. } = &n.op
-            && kernel == "std:duck"
-            && ids.contains(&n.id)
-            && let (Some(a), Some(side)) = (inputs.get("in"), inputs.get("side"))
-        {
-            found = Some((a.clone(), side.clone()));
-        }
-    });
-    let (audio, side) = found?;
-    Some((m, audio, side))
+/// What sidechain input `input` of call `site` received, by its port ref, and the module the call
+/// ran in; the ref is none when the call left it out (PKG-18).
+fn heard<'a>(compiled: &'a Compiled, site: u32, input: &str) -> Option<(&'a Module, Option<String>)> {
+    let m = compiled.ir.modules.iter().find(|m| m.frames.iter().any(|f| f.site == site && f.component.is_some()))?;
+    let frame = m.frames.iter().find(|f| f.site == site && f.component.is_some())?;
+    Some((m, frame.sidechain.iter().find(|x| x.input == input).map(|x| x.source.clone())))
 }
 
 /// The track port reference `r` of module `m` comes from, by key: an import of a track's export
-/// (`kick.env`), or a `follow()` of one (`follow(hats.out)`).
+/// (`kick.env`, `kick.out`), or a `follow()` of one (`follow(hats.out)`).
 fn track_of(m: &Module, r: &str) -> Option<String> {
     let mut found = None;
     walk(&m.nodes, &mut |n| {
@@ -710,122 +809,485 @@ fn file_of(m: &Module) -> Option<&str> {
     m.src.as_deref().and_then(|s| s.rsplitn(3, ':').nth(2))
 }
 
-/// What a Duck card's "Listens to" row shows (Next D3): the track it listens to now, the tracks it
-/// can listen to (by key and name), or why it can't be changed here.
+/// What a card's "Listens to" row shows (CARD-35): the track its input hears now, if it is one;
+/// whether the call gives the input at all, and may leave it out; the tracks it can listen to (by
+/// key and name), or why it can't be changed here.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Listens {
-    /// The card's input row it is: the Duck's side input (the view fills it in).
-    pub port: String,
-    /// The track whose sound it ducks, by name, when it is one: what its undo step names.
+    /// The card's input row it is, when the card has one for it (the view fills it in): with none,
+    /// the row stands alone.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ducks: Option<String>,
+    pub port: Option<String>,
+    /// The input, by its name in the descriptor (`side`, `key`, `cutBy`).
+    pub input: String,
+    /// What the row is called, the input's label (`Cut by`); "Listens to" when it has none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    /// The track whose sound the call works on, by name, when it is one: what its undo step names.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub of: Option<String>,
+    /// The track it hears now, by key.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub track: Option<String>,
+    /// Whether the call gives the input: when not, it listens to nothing (None).
+    pub given: bool,
+    /// Whether the input may be left out (PKG-18), so None is offered.
+    pub optional: bool,
+    /// Whether it hears a signal at all: a side written as an expression that gives `undefined`
+    /// hears nothing, as one left out does.
+    pub heard: bool,
+    /// What its None is called: for a key left out, a compressor or a gate hears its own sound
+    /// ("No other track"); a Duck's side hears nothing ("None").
+    pub nothing: String,
+    /// What it hears, as a port of the call's module: how the view finds its row.
+    #[serde(skip)]
+    pub source: Option<String>,
     pub choices: Vec<(String, String)>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub refused: Option<String>,
 }
 
-/// The tracks the Duck call `site` can listen to, by key, with the name its file imports each by;
-/// or why it can't be changed here (it is in a track's file). None when `site` isn't a Duck.
-fn duck_choices(s: &Session, site: &Site) -> Option<Result<Vec<(String, String)>, String>> {
+/// Another file an edit writes: its path, its text, and the edits there (each `(from, to, text)`).
+type OtherFile = (String, String, Vec<(u32, u32, String)>);
+
+/// A track a call can listen to: its key; the name the call's file imports it by, none when a pick
+/// adds the import; the file its code is in; and, for a notes input, the lane it plays from.
+#[derive(Clone, Debug)]
+struct Choice {
+    key: String,
+    handle: Option<String>,
+    file: String,
+    lane: Option<String>,
+}
+
+/// The tracks a call can listen to; or why it can't be changed here, in words.
+type Choices = Result<Vec<Choice>, String>;
+
+/// Whether `file`'s default export is track (or bus) `key`: what an import of the file reads.
+fn default_export_is(rev: &m2_session::Revision, key: &str, file: &str) -> bool {
+    let Some(text) = rev.snapshot.files.get(Path::new(file)) else { return false };
+    let quoted = serde_json::to_string(key).unwrap_or_default();
+    ["track", "bus"].iter().any(|w| text.contains(&format!("export default {w}({quoted}")))
+}
+
+/// The one notes lane track `t` plays from, when it has exactly one: what a notes input hears of it.
+fn notes_lane(t: &Module) -> Option<String> {
+    let mut lanes = t.lanes.iter().filter(|l| matches!(l.kind, m2_ir::Kind::Events(_)));
+    let one = lanes.next()?;
+    lanes.next().is_none().then(|| one.key.clone())
+}
+
+/// The tracks call `site` can listen to, and the track whose sound it works on, by key, when it is
+/// one. A track is offered when the call's file can read it: the file imports it, or can, since the
+/// track's own file exports it by default (one written in the song, or in the call's own file, isn't
+/// offered); and, for a notes input, when it plays from one notes lane, which it can hand out.
+fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Choices, Option<String>)> {
     let compiled = &s.accepted().compiled;
-    let d = duck_at(s, site)?;
-    let (m, audio, _) = duck_of(compiled, site.id)?;
-    if m.track {
-        let what = format!("{}'s {} is in {}, which can't hear other tracks. Change it in code.", m.label(), d.label, site.file);
-        return Some(Err(what));
-    }
+    let (m, _) = heard(compiled, site.id, &l.input.name)?;
     let text = s.accepted().snapshot.files.get(Path::new(&site.file))?;
-    let ducked = track_of(m, &audio);
+    // The track it works on: its file's when it is a track's, else the track whose export its first
+    // argument names (`bass.out`), by the name the file imports it by.
+    let of = match m.track {
+        true => Some(m.key.clone()),
+        false => site.args.first().and_then(|a| {
+            let (handle, _) = text.get(a.span().0 as usize..a.span().1 as usize)?.split_once('.')?;
+            compiled.ir.modules.iter().filter(|t| t.track).find_map(|t| {
+                let import = crate::sites::imports_of(text, &site.file, file_of(t)?).into_iter().find_map(|i| i.default)?;
+                (import == handle.trim()).then(|| t.key.clone())
+            })
+        }),
+    };
+    let rev = s.accepted();
     let choices = compiled
         .ir
         .modules
         .iter()
-        .filter(|t| t.track && Some(&t.key) != ducked.as_ref())
+        .filter(|t| t.track && Some(&t.key) != of.as_ref())
         .filter_map(|t| {
-            let import = crate::sites::imports_of(text, &site.file, file_of(t)?).into_iter().find_map(|i| i.default)?;
-            Some((t.key.clone(), import))
+            let file = file_of(t)?;
+            if file == site.file || !default_export_is(rev, &t.key, file) {
+                return None;
+            }
+            let handle = crate::sites::imports_of(text, &site.file, file).into_iter().find_map(|i| i.default);
+            let lane = match l.input.kind {
+                PortKind::Notes => Some(notes_lane(t)?),
+                _ => None,
+            };
+            Some(Choice { key: t.key.clone(), handle, file: file.to_string(), lane })
         })
         .collect();
-    Some(Ok(choices))
+    Some((Ok(choices), of))
 }
 
-/// What Duck call `site`'s "Listens to" row shows; none when it isn't a Duck.
+/// Whether call `site` gives its argument at `at`: written there, and not where its options are.
+fn given_at(m: &Module, site: &Site, at: usize, text: &str) -> bool {
+    let options = options_of(m, site.id).ok().flatten();
+    site.args.get(at).is_some_and(|a| options != Some(at) && text.get(a.span().0 as usize..a.span().1 as usize) != Some("undefined"))
+}
+
+/// What call `site`'s "Listens to" row shows; none when it has no input that listens.
 pub(crate) fn listens(s: &Session, site: &Site) -> Option<Listens> {
+    let l = listener(s, site)?;
     let compiled = &s.accepted().compiled;
-    let (m, audio, side) = duck_of(compiled, site.id)?;
-    let track = track_of(m, &side);
+    let (m, source) = heard(compiled, site.id, &l.input.name)?;
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file))?;
+    let track = source.as_deref().and_then(|r| track_of(m, r));
     let label = |key: &str| compiled.ir.modules.iter().find(|t| t.key == key).map_or(key.to_string(), |t| t.label().to_string());
-    // A Duck in a track's file ducks that track's sound.
-    let ducks = track_of(m, &audio).or(m.track.then(|| m.key.clone())).map(|k| label(&k));
-    Some(match duck_choices(s, site)? {
+    let (choices, of) = choices_of(s, site, &l)?;
+    // With a key left out, an effect that listens to audio hears its own (std's `compress`, a
+    // pack's gate): it listens to no other track. A side left out (a Duck's) hears nothing.
+    let nothing = if l.input.kind == PortKind::Audio { "No other track" } else { "None" };
+    let base = Listens {
+        input: l.input.name.clone(),
+        label: l.input.label.clone(),
+        of: of.as_deref().map(label),
+        track,
+        given: given_at(m, site, l.at, text),
+        optional: l.input.optional,
+        heard: source.is_some(),
+        nothing: nothing.into(),
+        source,
+        ..Listens::default()
+    };
+    Some(match choices {
         Ok(choices) => {
             // By name, as a list a person reads.
-            let mut choices: Vec<(String, String)> = choices.into_iter().map(|(k, _)| (k.clone(), label(&k))).collect();
+            let mut choices: Vec<(String, String)> = choices.into_iter().map(|c| (c.key.clone(), label(&c.key))).collect();
             choices.sort_by(|a, b| (a.1.to_lowercase(), &a.0).cmp(&(b.1.to_lowercase(), &b.0)));
-            Listens { track, ducks, choices, ..Listens::default() }
+            Listens { choices, ..base }
         }
-        Err(why) => Listens { track, ducks, refused: Some(why), ..Listens::default() },
+        Err(why) => Listens { refused: Some(why), ..base },
     })
 }
 
-/// Make Duck call `call` listen to track `track` (Next D3, Q27, X28): its side argument becomes
-/// `<handle>.env` when the track exports `env`, else `follow(<handle>.out)` (importing `follow`
-/// from `std/dsp` when the file doesn't), where `<handle>` is the name its file imports the track
-/// by. Refused in words when the Duck is in a track's file, or its file doesn't import the track.
-/// One `TextEdit`, confined to the argument and the import line; the planner asserts that the
-/// Duck's side now comes from that track.
-pub fn sidechain(s: &mut Session, at: u64, call: &str, track: &str) -> Result<Edited, EditError> {
+/// Make call `call` listen to track `track` (CARD-35), or to nothing (`None`, an input a call may
+/// leave out). Its argument for the input that listens becomes, by the input's kind, `<handle>.out`
+/// for audio; for a control `<handle>.env` when the track exports `env`, else `follow(<handle>.out)`
+/// (importing `follow` from `std/dsp` when the file doesn't), where `<handle>` is the name its file
+/// imports the track by. Left out, it is written after the argument before it; None takes it out.
+/// Refused in words when the call is in a track's file, its file doesn't import the track, or its
+/// arguments don't put the input where its order says. One `TextEdit`, confined to the argument
+/// and the import line; the planner asserts that the input now hears that track, or nothing.
+pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> Result<Edited, EditError> {
     ready(s)?;
     let site = current_site(s, at, call)?.clone();
-    let not = || EditError::Rejected(format!("`{}` is not a Duck", site.callee));
-    let d = duck_at(s, &site).ok_or_else(not)?;
-    let choices = duck_choices(s, &site).ok_or_else(not)?.map_err(EditError::Rejected)?;
+    let l = listener(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` listens to no other sound", site.callee)))?;
+    let (choices, works_on) = choices_of(s, &site, &l).ok_or_else(|| EditError::NotFound(call.to_string()))?;
+    let choices = choices.map_err(EditError::Rejected)?;
+    let what = &l.d.label;
+    let in_code = |why: &str| EditError::Rejected(format!("{what} can't change what it listens to here: {why}. Change it in code."));
     let compiled = &s.accepted().compiled;
-    let named = compiled.ir.modules.iter().find(|t| t.key == track).map_or(track.to_string(), |t| t.label().to_string());
-    let handle = choices.iter().find(|(k, _)| k == track).map(|(_, h)| h.clone()).ok_or_else(|| {
-        EditError::Rejected(format!("{} can't listen to {named} here: {} doesn't import it. Change it in code.", d.label, site.file))
-    })?;
-    let env = compiled.ir.modules.iter().any(|t| t.key == track && t.exports.contains_key("env"));
-    let side = site
-        .args
-        .get(1)
-        .ok_or_else(|| EditError::Rejected(format!("{}'s side input isn't written in its call. Change it in code.", d.label)))?
-        .span();
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
-    let new = if env { format!("{handle}.env") } else { format!("follow({handle}.out)") };
-    if text[side.0 as usize..side.1 as usize] == new {
-        return Err(EditError::Rejected(format!("{} listens to {named} already.", d.label)));
+    let (m, _) = heard(compiled, site.id, &l.input.name).ok_or_else(|| EditError::NotFound(call.to_string()))?;
+    let given = given_at(m, &site, l.at, &text);
+    let named = |key: &str| compiled.ir.modules.iter().find(|t| t.key == key).map_or(key.to_string(), |t| t.label().to_string());
+    let arg = |i: usize| site.args.get(i).map(|a| a.span());
+    // What its argument is to be, and the import it needs.
+    // A track the file doesn't import yet gets an import; a notes input reads the track's lane,
+    // which its file hands out beside its sound when it doesn't yet (KIT-27).
+    let mut imports: Vec<(u32, u32, String)> = vec![];
+    let mut more: Vec<OtherFile> = vec![];
+    let new = match track {
+        Some(track) => {
+            let c = choices.iter().find(|c| c.key == track).cloned().ok_or_else(|| {
+                let o = compiled.ir.modules.iter().find(|t| t.key == track);
+                let why = match o.and_then(file_of) {
+                    _ if o.is_none_or(|t| !t.track) => format!("{} isn't a track", named(track)),
+                    _ if works_on.as_deref() == Some(track) => format!("{} is the sound it works on", named(track)),
+                    Some(f) if f == site.file => format!("{} is written in {f} too, where no import reaches it", named(track)),
+                    Some(f) if !default_export_is(s.accepted(), track, f) => {
+                        format!("{} is written in {f}, which {} can't import it from: give it a file of its own", named(track), site.file)
+                    }
+                    _ if l.input.kind == PortKind::Notes => format!("{} doesn't play from one notes lane", named(track)),
+                    _ => format!("{} is the sound it works on", named(track)),
+                };
+                EditError::Rejected(format!("{what} can't listen to {} here: {why}. Change it in code.", named(track)))
+            })?;
+            let handle = match &c.handle {
+                Some(h) => h.clone(),
+                None => {
+                    let b = crate::sites::free_binding(&text, &crate::sites::camel(&c.key));
+                    let (at, line) = crate::tracks::import_edit(&text, &site.file, &c.file, &b);
+                    imports.push((at, at, line));
+                    b
+                }
+            };
+            let env = compiled.ir.modules.iter().any(|t| t.key == track && t.exports.contains_key("env"));
+            Some(match (l.input.kind, env, &c.lane) {
+                (PortKind::Notes, _, Some(lane)) => {
+                    let other =
+                        s.accepted().snapshot.files.get(Path::new(&c.file)).ok_or_else(|| EditError::NotFound(c.file.clone()))?.clone();
+                    let edits = export_edits(s.accepted(), track, lane, &c.file, &other)?;
+                    if !edits.is_empty() {
+                        more.push((c.file.clone(), other.to_string(), edits));
+                    }
+                    (member(&handle, lane), None)
+                }
+                (PortKind::Control, true, _) => (format!("{handle}.env"), None),
+                (PortKind::Control, false, _) => (format!("follow({handle}.out)"), import_insertion(&text, "std/dsp", "follow")),
+                _ => (format!("{handle}.out"), None),
+            })
+        }
+        None if !l.input.optional => return Err(in_code(&format!("its {} must listen to something", l.input.name))),
+        None => None,
+    };
+    // The text it replaces: the argument; or, taking it out, it and its own comments with the comma
+    // between it and the one before; or, putting one in, nothing, before its options or after the
+    // argument before it. Each other argument keeps its text and its comments.
+    let span = |a: (u32, u32)| text[a.0 as usize..a.1 as usize].to_string();
+    let options = options_of(m, site.id).ok().flatten();
+    let (from, to, written, label) = match (&new, given) {
+        (Some((n, _)), true) => {
+            let (a, b) = arg(l.at).ok_or_else(|| in_code("its input isn't written in its call"))?;
+            if text[a as usize..b as usize] == *n {
+                return Err(EditError::Rejected(already(&l, what, &named(track.unwrap_or_default()))));
+            }
+            (a, b, n.clone(), (span((a, b)), n.clone()))
+        }
+        (Some((n, _)), false) => {
+            let before = l.at.checked_sub(1).and_then(arg).ok_or_else(|| in_code("its arguments before it aren't written"))?;
+            // Whatever is at its place must be its options, which then come after it, or
+            // `undefined`, which it replaces.
+            match (arg(l.at), options) {
+                (None, _) => (before.1, before.1, format!(", {n}"), (String::new(), n.clone())),
+                (Some((a, _)), Some(o)) if o == l.at => (a, a, format!("{n}, "), (String::new(), n.clone())),
+                (Some((a, b)), _) if &text[a as usize..b as usize] == "undefined" => (a, b, n.clone(), (span((a, b)), n.clone())),
+                _ => return Err(in_code("its arguments don't put it where its order says")),
+            }
+        }
+        (None, false) => return Err(EditError::Rejected(already(&l, what, nothing_of(&l)))),
+        (None, true) => {
+            if site.args.len() > l.at + 1 && options != Some(l.at + 1) {
+                return Err(in_code("an argument after it would move into its place"));
+            }
+            let before = arg(l.at - 1).ok_or_else(|| in_code("its arguments before it aren't written"))?;
+            let this = arg(l.at).ok_or_else(|| in_code("its input isn't written in its call"))?;
+            let (from, to) = taken_out(&text, before.1, this.1, site.args.len() > l.at + 1)
+                .ok_or_else(|| in_code("its commas aren't where they should be"))?;
+            (from, to, String::new(), (span(this), String::new()))
+        }
+    };
+    let mut edits = vec![(from, to, written)];
+    if let Some((at, line)) = new.as_ref().and_then(|(_, i)| i.clone()) {
+        edits.push((at, at, line));
     }
-    let import = if env { None } else { import_insertion(&text, "std/dsp", "follow") };
-    let mut edits = vec![(side.0, side.1, new.clone())];
-    let mut ranges = vec![Range::bytes(side.0, side.1)];
-    if let Some((at, line)) = &import {
-        edits.push((*at, *at, line.clone()));
-        ranges.push(Range::bytes(*at, *at));
+    edits.extend(imports);
+    // Its undo step's name, from the tracks' names (as the card's own): "Open hat cut by Hats",
+    // "Bass's duck listens to Kick".
+    let of = listens(s, &site).and_then(|x| x.of);
+    let to = track.map_or(nothing_of(&l).to_string(), named);
+    let done = text_tx(s, &site, &text, &edits, &more, track, label)?;
+    let words = match (&l.input.label, &of) {
+        (Some(label), Some(of)) => format!("{of} {} {to}", label.to_lowercase()),
+        (None, Some(of)) => format!("{of}'s {} listens to {to}", what.to_lowercase()),
+        _ => format!("the {} listens to {to}", what.to_lowercase()),
+    };
+    s.name_step(done.revision, &words, false);
+    Ok(done)
+}
+
+/// How code reads export `export` of a value named `binding`: `hats.hits`, or `hats["hits-2"]`.
+fn member(binding: &str, export: &str) -> String {
+    match crate::sites::identifier(export) {
+        true => format!("{binding}.{export}"),
+        false => format!("{binding}[{}]", serde_json::to_string(export).expect("a string")),
     }
+}
+
+/// The edits that make track `key` (whose code is in `file`, `text`) hand out its notes lane `lane`
+/// by its key beside its sound (KIT-27): none when it does already; refused in words when it can't
+/// be sure of its code's shape. `({ lane }) => drum(…)` becomes
+/// `({ lane }) => ({ out: drum(…), hits: lane.notes("hits") })`; a returned object gets the property.
+fn export_edits(rev: &m2_session::Revision, key: &str, lane: &str, file: &str, text: &str) -> Result<Vec<(u32, u32, String)>, EditError> {
+    use crate::sites::{Lane, fn_params, fn_result, identifier, properties};
+    let m = rev.compiled.ir.modules.iter().find(|m| m.key == key).ok_or_else(|| EditError::NotFound(key.to_string()))?;
+    let change = |why: &str| EditError::Rejected(format!("{} can't hand out its notes from here: {why}. Change it in code.", m.label()));
+    if let Some(r) = m.exports.get(lane) {
+        let mut op = None;
+        walk(&m.nodes, &mut |n| {
+            if n.id == split_ref(r).0 {
+                op = Some(n.op.clone());
+            }
+        });
+        return match op {
+            Some(Op::Lane { lane: l }) if l == lane => Ok(vec![]),
+            _ => Err(change(&format!("it returns something else as {lane}"))),
+        };
+    }
+    let quoted = [serde_json::to_string(key).expect("a string"), format!("'{key}'")];
+    let call = rev
+        .compiled
+        .sites
+        .iter()
+        .find(|x| {
+            x.file == file
+                && x.callee == "track"
+                && x.args
+                    .first()
+                    .is_some_and(|a| quoted.iter().any(|q| text.get(a.span().0 as usize..a.span().1 as usize) == Some(q.as_str())))
+        })
+        .ok_or_else(|| change("its track() call isn't where it is expected"))?;
+    let span = call.args.last().map(Arg::span).ok_or_else(|| change("its track() call has no function"))?;
+    let params = fn_params(text, span).map_err(change)?;
+    let result = fn_result(text, span).ok_or_else(|| change("what its function returns isn't one value written last in it"))?;
+    let (reach, mut edits) = match params.lane {
+        Lane::Named(name) => (name, vec![]),
+        Lane::Added { start, end, text } => ("lane".to_string(), vec![(start, end, text)]),
+    };
+    let key_text = if identifier(lane) { lane.to_string() } else { serde_json::to_string(lane).expect("a string") };
+    let read = format!("{key_text}: {reach}.notes({})", serde_json::to_string(lane).expect("a string"));
+    match result.object {
+        Some(object) => {
+            let props = properties(text, object).ok_or_else(|| change("it returns an object written in a form it can't follow"))?;
+            match props.last() {
+                Some(last) => edits.push((last.end, last.end, format!(", {read}"))),
+                None => edits.push((object.0 + 1, object.1 - 1, format!(" {read} "))),
+            }
+        }
+        None => {
+            let was = &text[result.start as usize..result.end as usize];
+            let made = format!("{{ out: {was}, {read} }}");
+            edits.push((result.start, result.end, if result.arrow { format!("({made})") } else { made }));
+        }
+    }
+    Ok(edits)
+}
+
+/// That call `what` (a Drum) hears `track` already, in its row's words: "Drum listens to Kick
+/// already.", or by its input's label, "Drum's Cut by is Hats already.".
+fn already(l: &Listener, what: &str, track: &str) -> String {
+    match &l.input.label {
+        Some(label) => format!("{what}'s {label} is {track} already."),
+        None => format!("{what} listens to {track} already."),
+    }
+}
+
+/// What a call that listens to nothing listens to, as a sentence says it: "nothing" for a side
+/// (a Duck's), "no other track" for a key (it hears its own sound).
+fn nothing_of(l: &Listener) -> &'static str {
+    if l.input.kind == PortKind::Audio { "no other track" } else { "nothing" }
+}
+
+/// Where trivia (white space and comments) after byte `i` of `text` ends.
+fn past_trivia(text: &str, mut i: usize) -> usize {
+    loop {
+        let rest = &text[i..];
+        let t = rest.trim_start();
+        i += rest.len() - t.len();
+        if t.starts_with("/*") {
+            i += t.find("*/").map_or(t.len(), |e| e + 2);
+        } else if t.starts_with("//") {
+            i += t.find('\n').unwrap_or(t.len());
+        } else {
+            return i;
+        }
+    }
+}
+
+/// Byte `i` of `text`, or where its next line starts when all that follows it on its line is
+/// spaces and a line comment: a comma that ends its line takes that line's end with it.
+fn line_end(text: &str, i: usize) -> usize {
+    let rest = &text[i..];
+    let t = rest.trim_start_matches([' ', '\t']);
+    let t = if t.starts_with("//") { &t[t.find('\n').unwrap_or(t.len())..] } else { t };
+    match t.strip_prefix("\r\n").or_else(|| t.strip_prefix('\n')) {
+        Some(next) => text.len() - next.len(),
+        None => i,
+    }
+}
+
+/// The bytes that take an argument out of a call (CARD-35), the argument before it ending at
+/// `before` and it at `end`. When an argument follows (`more`): from after the comma that ends the
+/// one before (its line's end too, when the comma ends its line) through the comma that ends it
+/// (likewise), so each keeps its own comments. Else from that comma through its own comments.
+/// None when a comma isn't where it should be.
+fn taken_out(text: &str, before: u32, end: u32, more: bool) -> Option<(u32, u32)> {
+    let first = past_trivia(text, before as usize);
+    (text.as_bytes().get(first) == Some(&b',')).then_some(())?;
+    if !more {
+        return Some((first as u32, past_trivia(text, end as usize) as u32));
+    }
+    let second = past_trivia(text, end as usize);
+    (text.as_bytes().get(second) == Some(&b',')).then_some(())?;
+    Some((line_end(text, first + 1) as u32, line_end(text, second + 1) as u32))
+}
+
+/// Run call `site`'s Listens to edit, `edits` of `text` (each `(from, to, text)`), as one
+/// `TextEdit` Tx confined to the call and the import line; the planner asserts that the call's input now hears `track`,
+/// or nothing. What it says: the argument before and after (empty when there is none).
+fn text_tx(
+    s: &mut Session,
+    site: &Site,
+    text: &str,
+    edits: &[(u32, u32, String)],
+    more: &[OtherFile],
+    track: Option<&str>,
+    label: (String, String),
+) -> Result<Edited, EditError> {
+    let l = listener(s, site).ok_or_else(|| EditError::NotFound(site.file.clone()))?;
+    let what = l.d.label.clone();
+    let mut edits = edits.to_vec();
     edits.sort_by_key(|e| e.0);
-    let shift: u32 = import.iter().filter(|(at, _)| *at <= site.start).map(|(_, line)| line.len() as u32).sum();
+    // Confined to the call (what it makes changes with what it hears: a key's wire, the side a
+    // Duck holds at 0 with none) and the import line.
+    let mut ranges = vec![Range::bytes(site.start, site.end)];
+    ranges.extend(edits.iter().filter(|(a, _, _)| *a < site.start || *a > site.end).map(|(a, b, _)| Range::bytes(*a, *b)));
+    // Where the call starts now: after any import put in above it.
+    let shift: i64 = edits.iter().filter(|(a, b, _)| *b <= site.start && a == b).map(|(_, _, line)| line.len() as i64).sum::<i64>();
     let file = path(&site.file)?;
-    let expect = Expect::Confined(Confined { ranges: [(file.clone(), Ranges::Ranges(ranges))].into(), ..Confined::default() });
-    let label = (text[side.0 as usize..side.1 as usize].to_string(), new);
-    let tx = plan::planned(s, label.clone(), vec![plan::text_edit(&file, &text, &edits)], expect);
-    let refused = || EditError::Rejected(format!("making {} listen to {named} would change more than that", d.label));
-    let said = |why: &str| EditError::Rejected(format!("making {} listen to {named} would change more than that ({why})", d.label));
+    // Another track's file the pick edits too: the lane it hands out (KIT-27), confined to its edits.
+    let mut confined: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();
+    let mut ops = vec![plan::text_edit(&file, text, &edits)];
+    for (other, t, e) in more {
+        let mut e = e.clone();
+        e.sort_by_key(|x| x.0);
+        let p = path(other)?;
+        confined.insert(p.clone(), Ranges::Ranges(e.iter().map(|(a, b, _)| Range::bytes(*a, *b)).collect()));
+        ops.push(plan::text_edit(&p, t, &e));
+    }
+    let expect = Expect::Confined(Confined { ranges: confined, ..Confined::default() });
+    let tx = plan::planned(s, label.clone(), ops, expect);
+    let named =
+        track.map(|t| s.accepted().compiled.ir.modules.iter().find(|m| m.key == t).map_or(t.to_string(), |m| m.label().to_string()));
+    let to = named.unwrap_or_else(|| "nothing".into());
+    let refused = || EditError::Rejected(format!("making {what} listen to {to} would change more than that"));
+    let said = |why: &str| EditError::Rejected(format!("making {what} listen to {to} would change more than that ({why})"));
+    let (file_name, start, callee, input) = (site.file.clone(), site.start as i64 + shift, site.callee.clone(), l.input.name.clone());
+    let at = l.at;
+    // The call's other arguments, as written: the Tx is confined to the whole call, so the planner
+    // checks them itself (CARD-35).
+    let others = |text: &str, x: &Site, m: &Module| -> Vec<String> {
+        let options = options_of(m, x.id).ok().flatten();
+        let skip = (x.args.len() > at && options != Some(at)).then_some(at);
+        let args = x.args.iter().enumerate().filter(|(i, _)| Some(*i) != skip);
+        args.map(|(_, a)| text[a.span().0 as usize..a.span().1 as usize].to_string()).collect()
+    };
+    let was = {
+        let compiled = &s.accepted().compiled;
+        let m = heard(compiled, site.id, &input).ok_or_else(|| EditError::NotFound(site.file.clone()))?.0;
+        others(text, site, m)
+    };
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         let c = &checked.candidate().compiled;
-        let now = c.sites.iter().find(|x| x.file == site.file && x.start == site.start + shift && x.callee == site.callee);
-        let (m, _, side) = now.and_then(|x| duck_of(c, x.id)).ok_or_else(refused)?;
-        match track_of(m, &side).as_deref() == Some(track) {
+        let now = c.sites.iter().find(|x| x.file == file_name && x.start as i64 == start && x.callee == callee).ok_or_else(refused)?;
+        let (m, source) = heard(c, now.id, &input).ok_or_else(refused)?;
+        let written = checked.candidate().snapshot.files.get(Path::new(&file_name)).ok_or_else(refused)?;
+        if others(written, now, m) != was {
+            return Err(refused());
+        }
+        match source.as_deref().and_then(|r| track_of(m, r)).as_deref() == track && (track.is_some() == source.is_some()) {
             true => Ok(()),
             false => Err(refused()),
         }
     })?;
-    Ok(Edited { revision: done.number, file: site.file, before: label.0, after: label.1 })
+    Ok(Edited { revision: done.number, file: site.file.clone(), before: label.0, after: label.1 })
 }
 
 #[cfg(test)]
 #[path = "effect_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "cut_tests.rs"]
+mod cut_tests;

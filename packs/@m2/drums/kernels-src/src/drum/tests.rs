@@ -487,9 +487,16 @@ fn a_drums_knobs_move_the_drum_it_plays() {
 }
 
 /// `one`'s ports: the drum kernel's, but its drum is a menu, `drum`, where the kit has `model`.
-const ONE_NAMES: [&str; INPUTS] = {
-    let mut n = NAMES;
+/// One drum's ports: the drum voice's, its drum a menu, and `cut` (KIT-27) last.
+const ONE_NAMES: [&str; ONE_INPUTS] = {
+    let mut n = [""; ONE_INPUTS];
+    let mut i = 0;
+    while i < INPUTS {
+        n[i] = NAMES[i];
+        i += 1;
+    }
     n[MODEL] = "drum";
+    n[CUT] = "cut";
     n
 };
 
@@ -793,27 +800,10 @@ fn the_first_nine_play_as_before() {
     }
 }
 
-/// `cut`'s ports: One drum's, then `cut` (KIT-27).
-const CUT_NAMES: [&str; CUT_INPUTS] = {
-    let mut n = [""; CUT_INPUTS];
-    let mut i = 0;
-    while i < INPUTS {
-        n[i] = ONE_NAMES[i];
-        i += 1;
-    }
-    n[CUT] = "cut";
-    n
-};
-
-#[test]
-fn cuts_ports_match_the_manifest() {
-    defaults("cut", &CUT_NAMES);
-}
-
-/// The Drum cut by another track (`cut`) playing `drum` at `pitch`, with `cut` on its cut input
+/// One drum playing `drum` at `pitch`, with `cut` on its cut input
 /// (KIT-27) and no hits on its lane.
 fn one_cut(drum: f32, pitch: f32, frames: usize, cut: &dyn Fn(usize) -> f32) -> Vec<f32> {
-    let mut p = defaults("cut", &CUT_NAMES);
+    let mut p = defaults("one", &ONE_NAMES);
     p[MODEL] = drum;
     let input = |port: usize, _c: usize, t: usize| match port {
         PITCH => pitch,
@@ -821,7 +811,7 @@ fn one_cut(drum: f32, pitch: f32, frames: usize, cut: &dyn Fn(usize) -> f32) -> 
         CUT => cut(t),
         _ => p[port],
     };
-    play::<Cut>(frames, BLOCK, &input).left()
+    play::<One>(frames, BLOCK, &input).left()
 }
 
 // KIT-27: a hit on the cut input (another track's, marked as drumhit marks a start) fades every drum

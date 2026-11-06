@@ -3,7 +3,7 @@
 [[pack]]
 name = "@m2/drums"
 version = "2.1.0"
-hash = "sha256:23bc52ad42c9bb1cd7ee9f26300c1a57714c359f938f15f02ad15a73b527c205"
+hash = "sha256:be98dfd161358c97ec09f362120b72da38afc7a331484f4008bb81c3b19af411"
 
 [[pack]]
 name = "@m2/effects"
@@ -12,8 +12,8 @@ hash = "sha256:e49f20aefced6adbff11d6556f367f647b5c3accc68d94f5f64f7d47a23e0aef"
 
 [[pack]]
 name = "@m2/mixing"
-version = "1.0.0"
-hash = "sha256:f75958ad72f7e2778468603f8706665b76140396e03bdf1bae9f4d0d597ed2a3"
+version = "1.1.0"
+hash = "sha256:46adda6827342521c90b7f2f4b0c41b6a803286e2b4b10438db4f2c607a6532f"
 
 [[pack]]
 name = "@m2/synths"

@@ -79,10 +79,16 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
   since track `events` (ABI-8), so a Drum could take a second events input fed by the other tracks' lanes. It waits
   until a real case needs it; this note doesn't build it.
 - *Amended by track `choke` (2026-11-06):* built, as TypeScript over what is there: a Drum takes another track's hits as
-  an optional input, `drums.drum(lane.notes("hits"), { drum: "open hat", cutBy: hats.hits })`, the cutting track
-  returning its lane beside its sound; the Drum's card writes it from a **Cut by** menu; the 808 and 909 kits play
-  their hats on Hats and Open hat, the Open hat cut by the Hats (KIT-27, KIT-28). No events input on the kernel was
-  needed: the other track's hits are marked by `drumhit` outside the voices, as the Drum's own are.
+  an optional input that only listens, `drums.drum(lane.notes("hits"), hats.hits, { drum: "open hat" })`, the cutting
+  track returning its lane beside its sound; the Drum's card picks it on its row of another track, the one a Duck's
+  side has, called **Cut by** by the input's label; the 808 and 909 kits play their hats on Hats and Open hat, the
+  Open hat cut by the Hats (KIT-27, KIT-28). No events input on the kernel was needed: the other track's hits are
+  marked by `drumhit` outside the voices, as the Drum's own are. What the core gained (RISC): one checker rule, an
+  audio input may default to silence (ABI-12), so One drum's own kernel takes `cut` and std's `regions` takes
+  `marks` with no second kernel for either; an instrument may take optional inputs (PKG-20) and an input a label;
+  one std kernel, `regionmark` (the Sampler's groups, which `drumhit` can't mark: a region's group depends on its
+  key, velocity and turn, not on a General MIDI pitch); the regions' `group` and `off_by` fields, and a kit track's
+  `inputs`. No new route, no second planner: Cut by is CARD-35's row.
 
 ## 5. What goes
 

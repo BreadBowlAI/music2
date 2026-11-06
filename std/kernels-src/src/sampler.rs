@@ -62,7 +62,8 @@
 //! voice of it a note outside the voices, marks on the note's first sample 8^slot for each group its
 //! attack regions start (matched as the voices match them), once a group: with 7 voices at most,
 //! each slot's 3 bits never carry, and a sum of marks is an integer below 2^24, exact in f32.
-//! `regioncut` is `regions` with one more input, `marks` (the sum of those voices): a playing region
+//! `regions` reads them at its `marks` input (the sum of those voices; silence, ABI-12, when no region
+//! names an `off_by`, so a Sampler with none plays as before): a playing region
 //! whose cut slot is marked, on any sample after the one it started on, fades to exact silence over
 //! 4 ms, a raised cosine, as a Drum's choke does; its voice's other regions play on.
 
@@ -72,7 +73,7 @@ use m2_kernel::{Asset, Cfg, Io, Kernel, db_to_gain, export};
 
 use m2_dsp::voice::{Memo, clampf, pitch_of, sin2pi};
 
-// Inputs, in manifest order: `sampler` has the first 9, `regions` 10, `regioncut` all 11.
+// Inputs, in manifest order: `sampler` has the first 9, `regions` all 11.
 const PITCH: usize = 0;
 const GATE: usize = 1;
 const VELOCITY: usize = 2;
@@ -234,6 +235,21 @@ fn region(assets: &[Asset], r: &[f64]) -> Option<Region> {
     })
 }
 
+/// A note's key, its pitch rounded: what a region's keys hold (PKG-16, rule 1).
+fn key_of(pitch: f32) -> f32 {
+    pitch_of(pitch).round()
+}
+
+/// A velocity (0 to 1) as MIDI's, once, by one rule: round(velocity × 127), 1 to 127 (rule 1).
+fn midi_velocity(velocity: f32) -> u32 {
+    clampf((clampf(velocity, 0.0, 1.0) * 127.0).round(), 1.0, 127.0) as u32
+}
+
+/// The count a turn is worked out from (rule 3): a float to int cast saturates; NaN is the first turn too.
+fn turn_count(count: f32) -> u32 {
+    count.max(1.0) as u32
+}
+
 /// A choke group's slot, 0 to 7: none for -1, or anything else.
 fn slot(x: f64) -> Option<u32> {
     (x >= 0.0 && x < SLOTS as f64 && x.fract() == 0.0).then_some(x as u32)
@@ -378,9 +394,9 @@ impl Layer {
 }
 
 /// Inputs: pitch, gate, velocity, tune, level, attack, release, mode, veltrack, and for `regions`
-/// count, and for `regioncut` marks. Output: stereo. `REGIONS`: whether its values are regions, else
-/// zones; `CUT`: whether marks cut them (rule 8).
-pub struct Sampler<const REGIONS: bool, const CUT: bool = false> {
+/// count and marks. Output: stereo. `REGIONS`: whether its values are regions, else
+/// zones.
+pub struct Sampler<const REGIONS: bool> {
     sr: f32,
     regions: Box<[Region]>,
     gate: bool,
@@ -396,18 +412,18 @@ pub struct Sampler<const REGIONS: bool, const CUT: bool = false> {
     layers: Box<[Layer]>,
 }
 
-impl<const REGIONS: bool, const CUT: bool> Sampler<REGIONS, CUT> {
+impl<const REGIONS: bool> Sampler<REGIONS> {
     /// Start a note: the attack regions it plays, from their offsets.
     fn start(&mut self, at: &dyn Fn(usize) -> f32) {
-        let key = pitch_of(at(PITCH)).round();
+        let key = key_of(at(PITCH));
         let attack = clampf(at(ATTACK), 0.0, 60.0) * self.sr;
         let (env, slope) = if attack >= 1.0 { (0.0, 1.0 / attack) } else { (1.0, 0.0) };
         let velocity = clampf(at(VELOCITY), 0.0, 1.0);
         let v = clampf(at(VELTRACK), 0.0, 1.0);
         self.key = key;
-        self.velocity = clampf((velocity * 127.0).round(), 1.0, 127.0) as u32;
-        // A float to int cast saturates; NaN is the first turn too. Zones have no turns.
-        self.count = if REGIONS { at(COUNT).max(1.0) as u32 } else { 1 };
+        // One rule each, as regionmark reads them (rule 8). Zones have no turns.
+        self.velocity = midi_velocity(velocity);
+        self.count = if REGIONS { turn_count(at(COUNT)) } else { 1 };
         self.amp = 1.0 - v + v * velocity;
         self.to_release = self.regions.iter().any(|r| r.release && r.holds(key, self.velocity, self.count));
         let gated = at(MODE) >= 0.5;
@@ -451,14 +467,8 @@ impl<const REGIONS: bool, const CUT: bool> Sampler<REGIONS, CUT> {
     }
 }
 
-impl<const REGIONS: bool, const CUT: bool> Kernel for Sampler<REGIONS, CUT> {
-    const INPUTS: usize = if CUT {
-        11
-    } else if REGIONS {
-        10
-    } else {
-        9
-    };
+impl<const REGIONS: bool> Kernel for Sampler<REGIONS> {
+    const INPUTS: usize = if REGIONS { 11 } else { 9 };
     const OUTPUTS: usize = 1;
 
     fn new(cfg: &Cfg) -> Self {
@@ -493,7 +503,7 @@ impl<const REGIONS: bool, const CUT: bool> Kernel for Sampler<REGIONS, CUT> {
     }
 
     fn process(&mut self, io: &mut Io) {
-        if CUT { self.run::<11>(io) } else { self.run::<10>(io) }
+        self.run(io)
     }
 
     /// While a file plays: past the note's end, a one-shot plays to the file's end, a gated one
@@ -506,12 +516,12 @@ impl<const REGIONS: bool, const CUT: bool> Kernel for Sampler<REGIONS, CUT> {
     }
 }
 
-impl<const REGIONS: bool, const CUT: bool> Sampler<REGIONS, CUT> {
-    /// Play a block, reading `N` inputs: `regioncut`'s marks at [`MARKS`] when it has them.
-    fn run<const N: usize>(&mut self, io: &mut Io) {
-        // `sampler` has no count: its place reads the gate again, and nothing reads it.
-        let count = if REGIONS { COUNT } else { GATE };
-        let (ins, [l, r]) = io.ports(std::array::from_fn::<_, N, _>(|p| (if p == COUNT { count } else { p }, 0)), [(0, 0), (0, 1)]);
+impl<const REGIONS: bool> Sampler<REGIONS> {
+    /// Play a block. `regions` reads its marks at [`MARKS`] (silence when left out, ABI-12).
+    fn run(&mut self, io: &mut Io) {
+        // `sampler` has no count nor marks: their places read the gate again, and nothing reads it.
+        let remap = |p: usize| if !REGIONS && (p == COUNT || p == MARKS) { GATE } else { p };
+        let (ins, [l, r]) = io.ports(std::array::from_fn::<_, 11, _>(|p| (remap(p), 0)), [(0, 0), (0, 1)]);
         let n = l.len();
         let fade = 1.0 / (CUT_FADE * self.sr).max(1.0);
         for i in 0..n {
@@ -526,7 +536,7 @@ impl<const REGIONS: bool, const CUT: bool> Sampler<REGIONS, CUT> {
                 }
             }
             let mut silent = true;
-            let marks = ins.get(MARKS).map_or(0.0, |m| m[i]);
+            let marks = if REGIONS { ins[MARKS][i] } else { 0.0 };
             for layer in self.layers.iter_mut() {
                 let Some(ri) = layer.play.region else { continue };
                 let region = self.regions[ri];
@@ -612,7 +622,6 @@ impl<const REGIONS: bool, const CUT: bool> Sampler<REGIONS, CUT> {
 
 export!(sampler, Sampler<false>);
 export!(regions, Sampler<true>);
-export!(regioncut, Sampler<true, true>);
 
 /// The marks of a note's choke groups (rule 8), on its first sample, else 0: 8^slot for each group
 /// its attack regions start, once a group. Inputs: pitch, velocity, count. Output: out.
@@ -639,9 +648,7 @@ impl Kernel for RegionMark {
         for i in 0..out.len() {
             out[i] = 0.0;
             if std::mem::take(&mut self.first) {
-                let key = pitch_of(pitch[i]).round();
-                let velocity = clampf((clampf(velocity[i], 0.0, 1.0) * 127.0).round(), 1.0, 127.0) as u32;
-                let count = count[i].max(1.0) as u32;
+                let (key, velocity, count) = (key_of(pitch[i]), midi_velocity(velocity[i]), turn_count(count[i]));
                 let mut groups = 0u32;
                 for r in self.regions.iter().filter(|r| !r.release && !r.asset.missing() && r.holds(key, velocity, count)) {
                     if let Some(s) = r.mark {

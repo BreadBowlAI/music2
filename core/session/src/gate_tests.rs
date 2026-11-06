@@ -1035,7 +1035,7 @@ fn cut_render(open: &str, closed: &[f64]) -> Vec<[f32; 2]> {
 #[test]
 fn a_drum_cut_by_another_tracks_hits_stops_at_each() {
     let uncut = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })", &[0.25]);
-    let cut = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\", cutBy: hats.hits })", &[0.25]);
+    let cut = cut_render("drums.drum(lane.notes(\"hits\"), hats.hits, { drum: \"open hat\" })", &[0.25]);
     let at = 6_000; // beat 0.25 at 120 bpm, 48 kHz
     let left = |x: &[[f32; 2]], a: usize, b: usize| x[a..b].iter().map(|f| f[0].abs()).fold(0.0f32, f32::max);
     assert!(left(&uncut, at, at + 4_800) > 0.01, "the open hat rings past the closed hat");
@@ -1045,7 +1045,7 @@ fn a_drum_cut_by_another_tracks_hits_stops_at_each() {
     let step = |x: &[[f32; 2]], a: usize, b: usize| x[a..b].windows(2).map(|w| (w[1][0] - w[0][0]).abs()).fold(0.0f32, f32::max);
     assert!(step(&cut, at, at + 200) <= 1.5 * step(&uncut, at - 480, at + 200), "no click");
     // Cut by a track that plays no hits, or with `cutBy` left out: the open hat as it was.
-    assert_eq!(bits(&cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\", cutBy: hats.hits })", &[])), bits(&uncut));
+    assert_eq!(bits(&cut_render("drums.drum(lane.notes(\"hits\"), hats.hits, { drum: \"open hat\" })", &[])), bits(&uncut));
     // The open hat is the hats' A#2, at every note.
     let hats = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"hats\" })", &[0.25]);
     assert_eq!(bits(&hats), bits(&uncut), "the hats at A#2 are the open hat");

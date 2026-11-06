@@ -56,13 +56,11 @@ const DRUMS = [
 function machine(notes: Events, voice: "@m2/drums:drum" | "@m2/drums:one", voices: number, patch: Record<string, Value | Choice>, cutBy?: Events): Audio {
   const hits = poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model: -1 }), { voices: 8 });
   const count = kernel("std:hitcount", { hits });
-  if (cutBy !== undefined) {
-    // Another track's hits (KIT-27), marked as a tom's are (a start, in no choke group): every voice
-    // hears them, and fades out at each, whatever it plays. Left out, the Drum is what it was.
-    const cut = poly(cutBy, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 8 });
-    return poly(notes, (n) => kernel("@m2/drums:cut", { pitch: n.pitch, velocity: n.velocity, hits, count, ...patch, cut }), { voices });
-  }
-  return poly(notes, (n) => kernel(voice, { pitch: n.pitch, velocity: n.velocity, hits, count, ...patch }), { voices });
+  // Another track's hits (KIT-27), marked as a tom's are (a start, in no choke group): every voice
+  // hears them at its `cut`, and fades out at each, whatever it plays. Left out, `cut` is silence
+  // (ABI-12), no node is made, and the Drum is what it was.
+  const cut = cutBy === undefined ? {} : { cut: poly(cutBy, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 8 }) };
+  return poly(notes, (n) => kernel(voice, { pitch: n.pitch, velocity: n.velocity, hits, count, ...patch, ...cut }), { voices });
 }
 
 const KICK_TUNE = control.hz(48).range(30, 120).log();
@@ -180,7 +178,7 @@ export const drums = {
    * hats and the tom) the drum each removed single played (CARD-33). Its kits are several of it,
    * each on a track of its own, going to one Drums bus (KIT-4). `cutBy`, another track's hits, cuts
    * it at each, whatever it plays (KIT-27): an open hat cut by the closed one,
-   * `drums.drum(lane.notes("hits"), { drum: "open hat", cutBy: hats.hits })`, where the Hats track
+   * `drums.drum(lane.notes("hits"), hats.hits, { drum: "open hat" })`, where the Hats track
    * returns its lane beside its sound, `({ out: drums.drum(…), hits: lane.notes("hits") })`.
    */
   drum: component(
@@ -188,9 +186,10 @@ export const drums = {
       id: "drum",
       // The one building block (KIT-2): + Track lists the kits apart, as "Drum kit (several tracks)".
       label: "Drum",
-      signature: signature<(notes: Events) => Audio>(),
-      // `cutBy`: another track's hits, which cut it (KIT-27): `{ cutBy: hats.hits }`.
-      inputs: { notes: port.notes(), cutBy: port.notes().optional() },
+      signature: signature<(notes: Events, cutBy?: Events) => Audio>(),
+      // `cutBy`: another track's hits, which cut it (KIT-27): `drums.drum(notes, hats.hits)`. It
+      // only listens (PKG-13), a call may leave it out (PKG-18), and its card's row is "Cut by" (CARD-35).
+      inputs: { notes: port.notes(), cutBy: port.notes({ sidechain: true, label: "Cut by" }).optional() },
       controls: {
         drum: control.choice(DRUMS, "kick").label("sound"),
         tune: control.semis(0).range(-24, 24),

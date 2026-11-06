@@ -53,8 +53,8 @@ fn a_kernel_takes_its_settings() {
         assert!(e.iter().any(|d| d.message.contains(says)), "{bad}: {e:?}");
     }
     assert_eq!(
-        SDK_VERSION, "2.2.0",
-        "additions to @m2/core (FMT-2): kernel settings in 1.3.0, the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0, editor.unlisted in 1.10.0; a filter view's resonance, and the pack contract frozen (PACK-22), in 2.0.0; a setting's label in 2.1.0; an instrument's kits in 2.2.0"
+        SDK_VERSION, "2.3.0",
+        "additions to @m2/core (FMT-2): kernel settings in 1.3.0, the poly op's options in 1.4.0, buses in 1.5.0, regions in 1.6.0, file() in 1.7.0, kinds in 1.8.0, keyCount in 1.9.0, editor.unlisted in 1.10.0; a filter view's resonance, and the pack contract frozen (PACK-22), in 2.0.0; a setting's label in 2.1.0; an instrument's kits in 2.2.0; an input a call may leave out in 2.3.0"
     );
 }
 
@@ -396,7 +396,7 @@ fn the_sampler_gives_its_regions_their_kernel() {
     }
 }
 
-// PKG-15, PKG-16 rule 8: regions with choke groups reach `std:regioncut` in the voices, with 17
+// PKG-15, PKG-16 rule 8: regions with choke groups reach `std:regions` in the voices, its marks given, with 17
 // values each: the slot of the group its start marks, and of the one whose start cuts it, each group
 // some `off_by` names a slot in order (here 2 is slot 0, 1 slot 1); a group none names marks nowhere
 // (-1). Outside the voices, `std:regionmark` marks the groups each note starts, with the same regions.
@@ -419,9 +419,9 @@ fn choke_groups_reach_their_kernels() {
     ];
     let files = s(&["open.wav", "closed.wav", "crash.wav"]);
     let of = |k: &str| voices.iter().filter(|(x, _)| x == k).map(|(_, s)| s.clone()).collect::<Vec<_>>();
-    assert_eq!(of("std:regioncut"), [(files.clone(), values.clone())], "the voices are cut by marks");
+    assert_eq!(of("std:regions"), [(files.clone(), values.clone())], "the voices read the marks");
     assert_eq!(of("std:regionmark"), [(files, values)], "the marks come from the same regions");
-    assert!(of("std:regions").is_empty() && outside.contains(&"std:hitcount".to_string()), "{outside:?}");
+    assert!(outside.contains(&"std:hitcount".to_string()), "{outside:?}");
     // No off_by: as before.
     let (_, voices) = sampler_kernels(", { regions: [{ file: \"a.wav\", group: 1 }] }").unwrap();
     assert!(

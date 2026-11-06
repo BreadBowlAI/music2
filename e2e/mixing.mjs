@@ -38,8 +38,8 @@ await page.click('[data-effect-browser] [data-effect="eq"]');
 const added = 'eq(pluck(lane.notes("chords")))';
 check(await until(() => read("tracks/keys.ts").includes(added), 15000), `the EQ wraps the pluck: ${read("tracks/keys.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/keys.ts").includes('import { eq } from "@m2/mixing";'), "and imports it from @m2/mixing");
-check(/^"@m2\/mixing" = "1\.0"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
-check(/name = "@m2\/mixing"\nversion = "1\.0\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(/^"@m2\/mixing" = "1\.1"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
+check(/name = "@m2\/mixing"\nversion = "1\.1\.0"/.test(read("music2.lock")), "music2.lock locks it");
 const withEq = files();
 
 // ---------------------------------------------------------------- its card: eight bands, band 8's curve

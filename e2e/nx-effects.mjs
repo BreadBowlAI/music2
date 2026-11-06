@@ -170,7 +170,7 @@ check((await listening()) === "Listens to:Kick", `the Duck's side row says what 
 await page.click(`${duck} [data-testid=listens-to]`).catch(() => {});
 await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
 const choices = await page.$$eval("[data-testid=listens-menu] [role=menuitem]", (r) => r.map((x) => x.textContent));
-check(choices.join() === "Hats,Keys,Kick", `its list has the song's other tracks, by name: ${choices.join()}`);
+check(choices.join() === "Hats,Keys,Kick,None", `its list has the song's other tracks, by name, then None (CARD-35): ${choices.join()}`);
 await linted(`${duck} [data-listens], [data-testid=listens-menu]`, "the Listens to row and its list");
 await page.click('[data-testid=listens-menu] [data-track="hats"]').catch(() => {});
 const hats = orig.song

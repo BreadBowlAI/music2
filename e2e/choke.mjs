@@ -1,7 +1,8 @@
-// A Drum cut by another track's hits (KIT-27), from its card: an Open hat added by + Drum to a
-// Basic kit says "Cut by: None"; its list has None and the song's other Drum tracks, by name;
-// picking Hats writes `cutBy: hats2.hits` into its call, imports the Hats, and has the Hats return
-// their lane beside their sound, one undo step ("Open hat cut by Hats 2"), and the row says so. The
+// A Drum cut by another track's hits (KIT-27), from its card's row of another track (CARD-35), called
+// by its input's label: an Open hat added by + Drum to a Basic kit says "Cut by: None"; its list has
+// the song's other tracks that play notes, by name, and None; picking Hats 2 writes `hats2.hits`
+// after its notes, imports the Hats 2, and has it return its lane beside its sound, one undo step
+// ("Open hat cut by Hats 2"), and the row says so. The
 // render changes only after the closed hat: the open hat stops there (an open hat at beat 0, a closed
 // one at beat 0.25). ⌘Z puts every file back, and the render with them; None takes `cutBy` out. The
 // row and its list linted.
@@ -62,18 +63,18 @@ const before = { open: read("tracks/open-hat.ts"), hats: read("tracks/hats-2.ts"
 // ---------------------------------------------------------------- the Cut by row
 
 await show("open-hat");
-const row = '[data-module="open-hat"] [data-cut-by]';
+const row = '[data-module="open-hat"] [data-listens]';
 await until(async () => !!(await page.$(row)), 8000);
 const says = () => page.$eval(row, (e) => e.textContent).catch(() => null);
 check((await says()) === "Cut by:None", `the Open hat's card says what cuts it: ${await says()}`);
-await page.click(`${row} [data-testid=cut-by]`).catch(() => {});
-await until(async () => !!(await page.$("[data-testid=cut-by-menu]")), 3000);
-const choices = await page.$$eval("[data-testid=cut-by-menu] [role=menuitem]", (r) => r.map((x) => x.textContent));
-check(choices.join() === "None,Hats,Hats 2,Kick,Kick 2,Snare", `its list: None and the other Drum tracks, by name: ${choices.join()}`);
-await linted(`${row}, [data-testid=cut-by-menu]`, "the Cut by row and its list");
-await page.click('[data-testid=cut-by-menu] [data-track="hats-2"]').catch(() => {});
+await page.click(`${row} [data-testid=listens-to]`).catch(() => {});
+await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
+const choices = await page.$$eval("[data-testid=listens-menu] [role=menuitem]", (r) => r.map((x) => x.textContent));
+check(choices.join() === "Bass,Hats,Hats 2,Keys,Kick,Kick 2,Snare,None", `its list: the other tracks that play notes, by name, then None: ${choices.join()}`);
+await linted(`${row}, [data-testid=listens-menu]`, "the Cut by row and its list");
+await page.click('[data-testid=listens-menu] [data-track="hats-2"]').catch(() => {});
 check(
-  await until(() => read("tracks/open-hat.ts").includes('drums.drum(lane.notes("hits"), { drum: "open hat", cutBy: hats2.hits })')),
+  await until(() => read("tracks/open-hat.ts").includes('drums.drum(lane.notes("hits"), hats2.hits, { drum: "open hat" })')),
   `picking Hats 2 writes cutBy: ${read("tracks/open-hat.ts").split("\n").at(-2)}`,
 );
 check(read("tracks/open-hat.ts").includes('import hats2 from "./hats-2";'), "and imports the Hats 2 track");
@@ -97,9 +98,9 @@ check(await until(async () => (await says()) === "Cut by:None"), `and the row: $
 check(apart(render("back.wav"), uncut, 0, uncut.length) === 0, "and the render with them");
 await key("Meta+Shift+z");
 check(await until(async () => (await says()) === "Cut by:Hats 2"), "⌘⇧Z cuts it again");
-await page.click(`${row} [data-testid=cut-by]`).catch(() => {});
-await until(async () => !!(await page.$("[data-testid=cut-by-menu]")), 3000);
-await page.click('[data-testid=cut-by-menu] [data-track=""]').catch(() => {});
-check(await until(() => read("tracks/open-hat.ts").includes('drums.drum(lane.notes("hits"), { drum: "open hat" })')), "None takes cutBy out");
+await page.click(`${row} [data-testid=listens-to]`).catch(() => {});
+await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
+await page.click('[data-testid=listens-menu] [data-track=""]').catch(() => {});
+check(await until(() => read("tracks/open-hat.ts").includes('drums.drum(lane.notes("hits"), { drum: "open hat" })')), "None takes the cut out");
 check(await until(async () => (await says()) === "Cut by:None"), "and the row says None");
 done(errors);

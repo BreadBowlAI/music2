@@ -80,6 +80,12 @@ export const duck = component(
   (x: Audio) => x,
 );
 
+/** A key a call may leave out (PKG-18): the audio, then the key or nothing. Two inputs lead, so a signature says their order. */
+export const keyed = component(
+  { id: "keyed", signature: signature<(x: Audio, key?: Audio) => Audio>(), inputs: { in: port.audio(), key: port.audio({ sidechain: true }).optional() }, controls: { depth: control.db(-8) }, output: port.audio() },
+  (x: Audio, key: Audio | undefined) => key ?? x,
+);
+
 /** One positional control after the audio: the options form only for `bypass` (Next D1). */
 export const gain = component(
   { id: "gain", inputs: { in: port.audio() }, controls: { db: control.db(0) }, output: port.audio(), positional: ["db"] },
@@ -139,6 +145,16 @@ export const ok = [
   gain(x, -3),
   gain(x, -3, { bypass: true }),
   gain(x, { bypass: false }),
+  // A key a call may leave out (PKG-18): left out, given, or `undefined` in its place.
+  keyed(x),
+  keyed(x, x),
+  keyed(x, { depth: -6 }),
+  keyed(x, x, { depth: -6 }),
+  keyed(x, undefined, { depth: -6 }),
+  // @ts-expect-error one key, not two
+  keyed(x, x, x),
+  // @ts-expect-error a key is a sound, not a number
+  keyed(x, 0.5),
 ];
 
 // The generic helpers' results keep their kind.
@@ -186,12 +202,12 @@ mix({ hats: { in: x, gain: 1 } });
 // @ts-expect-error a signature listing 2 parameters for a descriptor that has 3
 export const drifted = component({ id: "drifted", signature: signature<(x: Audio, cutoff?: Value) => Audio>(), inputs: { in: port.audio() }, controls: { cutoff: control.hz(1000), q: control.scalar(0.7) }, output: port.audio(), positional: ["cutoff", "q"] }, (y: Audio) => y);
 
-/** An optional input (PKG-18): given by its name in the options, never by its place; left out, `undefined`. */
+/** An instrument with an optional input after its notes (PKG-20): given by its place; left out, `undefined`. */
 export const cut = component(
   {
     id: "cut",
-    signature: signature<(notes: Events) => Audio>(),
-    inputs: { notes: port.notes(), cutBy: port.notes().optional() },
+    signature: signature<(notes: Events, cutBy?: Events) => Audio>(),
+    inputs: { notes: port.notes(), cutBy: port.notes({ sidechain: true, label: "Cut by" }).optional() },
     controls: { tune: control.semis(0).range(-24, 24) },
     output: port.audio(),
     editor: { category: "Drums" },
@@ -203,12 +219,11 @@ export function cuts(ctx: Ctx, other: Events) {
   const notes = ctx.lane.notes("hits");
   cut(notes);
   cut(notes, { tune: 2 });
-  cut(notes, { cutBy: other });
-  cut(notes, { cutBy: undefined, tune: 1 });
-  // @ts-expect-error an optional input is given by its name, never by its place
   cut(notes, other);
+  cut(notes, other, { tune: 2 });
+  cut(notes, undefined, { tune: 1 });
   // @ts-expect-error notes cut a drum, not a number
-  cut(notes, { cutBy: 0.5 });
+  cut(notes, 0.5);
   // @ts-expect-error notes cut a drum, not audio
-  cut(notes, { cutBy: osc.sine(hz(1)) });
+  cut(notes, osc.sine(hz(1)));
 }

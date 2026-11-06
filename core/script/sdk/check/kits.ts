@@ -140,7 +140,7 @@ component(
 export const played: Audio[] = [drums.drum(null as unknown as Events, { drum: "snare" })];
 
 // KIT-28: a kit's track gives an optional notes input an earlier track's hits, by its name.
-const cutting = { notes: port.notes(), cutBy: port.notes().optional() };
+const cutting = { notes: port.notes(), cutBy: port.notes({ sidechain: true }).optional() };
 component(
   {
     id: "drum",
@@ -165,4 +165,4 @@ component(
 );
 
 // The Drum cut by another track's hits (KIT-27).
-export const cut: Audio[] = [drums.drum(null as unknown as Events, { drum: "open hat", cutBy: null as unknown as Events })];
+export const cut: Audio[] = [drums.drum(null as unknown as Events, null as unknown as Events, { drum: "open hat" })];

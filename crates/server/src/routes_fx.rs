@@ -1,5 +1,5 @@
 //! Lane D's routes (next), in the one route table (AGENT-8): turn an effect off and on, move it
-//! before or after another, and choose what a Duck listens to.
+//! before or after another, and choose what a call listens to (CARD-35).
 
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ crate::api::routes! {
         "Move an effect before the one written around it (earlier), or after the one around it",
         r#"{"session": 7, "revision": 42, "node": "tracks/keys.ts#1", "earlier": true}"#;
     POST "/api/graph/effect/sidechain" => effect_sidechain; writes, agents,
-        "Make a Duck listen to another track",
+        "Make an effect that listens (a duck's side, a compressor's or a gate's key) listen to another track, or to nothing (track: null)",
         r#"{"session": 7, "revision": 42, "node": "song.ts#4", "track": "kick"}"#;
 }
 
@@ -73,18 +73,18 @@ async fn effect_move(State(s): S, Json(r): Json<MoveReq>) -> ApiResult {
 struct SidechainReq {
     session: u64,
     revision: u64,
-    /// The Duck's card: its call, `file#ordinal`.
+    /// The effect's card: its call, `file#ordinal`.
     node: String,
-    /// The track it is to listen to, by key.
-    track: String,
+    /// The track it is to listen to, by key; `null` for nothing (an input a call may leave out).
+    track: Option<String>,
 }
 
-/// Make a Duck listen to another track (Next D3): `{session, revision, node, track}`, one Tx and
-/// one undo step. A write. Answers `{file, before, after, revision}`; refused in words when the
-/// Duck can't hear that track from where it is written.
+/// Make an effect listen to another track through its sidechain input, or to nothing (CARD-35):
+/// `{session, revision, node, track}`, one Tx and one undo step. A write. Answers `{file, before,
+/// after, revision}`; refused in words when it can't hear that track from where it is written.
 async fn effect_sidechain(State(s): S, Json(r): Json<SidechainReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.listen_to(r.session, r.revision, &r.node, &r.track)).await;
+    let result = blocking(move || state.graph.listen_to(r.session, r.revision, &r.node, r.track.as_deref())).await;
     s.graph_changed();
     Ok(Json(result?))
 }
