@@ -16,7 +16,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { ViewRow } from "./CardViews";
 import { DockSlot } from "./Dock";
-import { CardTools, Fed, InputRow, ListensRow, Locked, MixerCard, NodeGraph, PluginRow, Ports, stableKeys, titleOf, Tracks, VoicesLine } from "./NodeGraph";
+import { CardTools, Fed, InputRow, KeyLine, ListensRow, Locked, MixerCard, NodeGraph, PluginRow, Ports, stableKeys, titleOf, Tracks, VoicesLine } from "./NodeGraph";
 import { SettingRow, shown } from "./Settings";
 import { Segment } from "./ui";
 
@@ -283,6 +283,7 @@ function Frame({
         )}
       </div>
       {node.voices && size !== "folded" && <VoicesLine words={node.voices} />}
+      {node.reads_key && size !== "folded" && <KeyLine />}
       {node.plugin && size !== "folded" && <PluginRow node={node.plugin} title={titled} session={graph.session} />}
       <div data-node-body className={clsx("flex flex-col min-w-0", off && "opacity-50")}>
         {mixer != null ? (

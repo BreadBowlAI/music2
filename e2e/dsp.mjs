@@ -75,7 +75,7 @@ check(
 await press('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
 await page.waitForSelector("[data-effect-browser]");
 const groups = await page.$$eval("[data-effect-browser] [data-category]", (els) => els.map((e) => e.dataset.category));
-check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Utility"]), `the browser groups them (${groups.join(", ")})`);
+check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Voice", "Utility"]), `the browser groups them (${groups.join(", ")})`);
 const groupOf = (name) => page.$eval(`[data-effect-browser] [data-effect="${name}"]`, (e) => e.closest("[data-category]")?.dataset.category ?? e.parentElement.closest("[data-category]")?.dataset.category).catch(() => null);
 const listed = await Promise.all(["reverb", "chorus", "compress"].map(groupOf));
 check(listed.join() === "Delay & Reverb,Modulation,Dynamics", `reverb, chorus and compress are listed under theirs (${listed})`);

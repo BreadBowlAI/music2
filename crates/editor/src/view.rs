@@ -181,6 +181,10 @@ pub struct ViewNode {
     /// An instrument's card: how it plays its notes, in plain words (RENDER-16). Read-only.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub voices: Option<String>,
+    /// Its sound reads the song's key (`time.key`): its card says the key, or that none is set
+    /// (VOX-26). The page reads the key itself from the timeline (NOTE-2).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub reads_key: bool,
     /// Its component's settings, in its descriptor's order (CARD-1).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub settings: Vec<Setting>,
@@ -492,6 +496,7 @@ enum Group {
 /// The canvas view of the accepted revision.
 pub fn view(session: &Session) -> GraphView {
     let rev = session.accepted();
+    let reads_key = crate::songkey::readers(&rev.compiled);
     let sites: HashMap<u32, &Site> = rev.compiled.sites.iter().map(|s| (s.id, s)).collect();
     let in_project = |id: u32| sites.get(&id).is_some_and(|s| s.in_project);
     let controls: HashMap<(u32, Vec<String>), Control> =
@@ -843,6 +848,9 @@ pub fn view(session: &Session) -> GraphView {
             };
             let (audio, effect) = match g {
                 Group::Site(s) if kind == "call" => (audio_out(session, *s), effect_at(session, sites[s]).map(|e| e.label.clone())),
+                // An audio lane read where it is written takes an effect around it, in its track's
+                // own code, so everything that reads the track hears it (review U10).
+                Group::Site(s) if kind == "lane" => (audio_out(session, *s), None),
                 // A track's sound where the song reads it, in one place, takes an effect (CARD-36).
                 Group::Import(module, export) => {
                     let sound = rev.compiled.ir.modules.iter().find(|t| &t.key == module).and_then(|t| t.exports.get(export.as_str()));
@@ -915,6 +923,7 @@ pub fn view(session: &Session) -> GraphView {
                 listens,
                 plugin: plugins.get(g).cloned(),
                 voices,
+                reads_key: matches!(g, Group::Site(s) if kind == "call" && reads_key.contains(s)),
                 settings,
                 groups: vec![],
                 views: vec![],
@@ -1028,6 +1037,7 @@ pub fn view(session: &Session) -> GraphView {
                 listens: None,
                 plugin: None,
                 voices: None,
+                reads_key: false,
                 settings: vec![],
                 groups: vec![],
                 views: vec![],

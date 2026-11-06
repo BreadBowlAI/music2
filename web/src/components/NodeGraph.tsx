@@ -73,6 +73,7 @@ import { makeKit } from "./Tracks";
 import { MenuValue, Segmented, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
 import { useFolded } from "../lib/folded";
+import { useKeyAsk } from "./KeyField";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 export const Locked = createContext<string | null>(null);
@@ -321,7 +322,7 @@ const VALUE_H = 48;
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
 /** The settings a card shows (CARD-7), under its knobs, in its descriptor's order. */
 const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
-/** An instrument's line under its name: how it plays its notes. */
+/** An instrument's line under its name: how it plays its notes; a sound's that follows the key, the key. */
 const VOICES_H = 24;
 
 /**
@@ -414,7 +415,7 @@ function geometry(n: ViewNode, folded = false) {
   }
   const rows: number[] = [];
   // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
-  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0);
+  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.reads_key ? VOICES_H : 0) + (n.plugin ? ROW_H : 0);
   let y = top + PAD;
   const all = items(n, folded);
   for (const x of all) {
@@ -942,6 +943,7 @@ function NodeCard({
         <CardTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={!!mixing} />
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
+      {node.reads_key && !small && <KeyLine />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
       {small && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
       {mixing && (
@@ -1201,6 +1203,33 @@ export function VoicesLine({ words }: { words: string }) {
   return (
     <div data-testid="voices" className="h-6 shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" title={words} aria-label={words}>
       <span className="truncate">{first}</span>
+    </div>
+  );
+}
+
+/**
+ * The key a sound follows (VOX-26), under its name: "Key: A minor", read from the timeline (NOTE-2);
+ * with none, "Every note allowed" and Set the key, which opens the key field in the top bar.
+ */
+export function KeyLine() {
+  const key = useStore((s) => s.graph?.timeline.key ?? null);
+  return (
+    <div
+      data-testid="card-key"
+      className="h-6 shrink-0 px-3 flex items-center gap-2 text-xs text-fg-muted min-w-0 border-b border-line"
+      title={key ? `It follows the song's key, ${key.name}` : "No key set: every note is allowed. Set the key to choose the notes it moves to"}
+    >
+      <span className="truncate">{key ? `Key: ${key.name}` : "Every note allowed"}</span>
+      {!key && (
+        <button
+          data-testid="card-set-key"
+          className="ml-auto shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => useKeyAsk.getState().ask()}
+        >
+          Set the key
+        </button>
+      )}
     </div>
   );
 }

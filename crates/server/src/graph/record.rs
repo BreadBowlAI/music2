@@ -14,8 +14,8 @@
 //!   now, with no count. With Punch on, or the loop on, recording starts at the loop's start, the
 //!   song playing up to it first (MON-10, MON-11). Only the control plane is read, never the
 //!   session: R is transport, and never waits for a compile (RENDER-29).
-//! - **Where it is heard**: the take's anchor is the engine clock where the transport is at the
-//!   take's start. Each note, and the take's end, is placed by the clock, which never wraps, and by
+//! - **Where it is heard**: the take's anchor is the engine clock where the transport is heard at
+//!   the take's start: where it is there, plus the song's latency (VOX-25). Each note, and the take's end, is placed by the clock, which never wraps, and by
 //!   the transport's frame, which is exact: in a pass of the loop and a frame of it ([`Take::place`]).
 //! - **Notes:** each On and Off audition sends on the take's notes lane, from a MIDI keyboard or a
 //!   window that marks its notes `record` (the keyboard piano), goes where it was heard
@@ -370,9 +370,12 @@ impl Take {
         if self.anchor.is_some() {
             return;
         }
+        // The engine plays the take's start at the clock its Play applied at; a late song (RENDER-19:
+        // Tune's look-ahead, a plugin's) is heard `L` frames after that, and so is sung to (VOX-25).
+        let late = player.latency() as u64;
         self.anchor = match self.phase {
-            Phase::Count { seq, frames, .. } => player.applied(seq).map(|a| a.clock + frames + self.skip),
-            Phase::Play { seq } => player.applied(seq).map(|a| a.clock + self.skip),
+            Phase::Count { seq, frames, .. } => player.applied(seq).map(|a| a.clock + frames + self.skip + late),
+            Phase::Play { seq } => player.applied(seq).map(|a| a.clock + self.skip + late),
             Phase::Take => None,
         };
         if self.anchor.is_none()

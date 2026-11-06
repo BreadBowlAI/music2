@@ -537,9 +537,32 @@ export default song(() => v.out);
         let mut packs = 0;
         // PACK-23: and each pack that runs code asks for this app's major of @m2/core, and the minor
         // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
-        // instrument names kits (KIT-3), or `"2.3"` once an input may be left out (PKG-18), what
-        // its descriptors show; a pack of recordings alone may ask for none.
+        // instrument names kits (KIT-3), `"2.3"` once an input may be left out (PKG-18), what its
+        // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12); a pack of
+        // recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
+        // The packs whose components read `time.key`: a time node of the key in a frame of one of
+        // theirs (review U5), in every-component's graph.
+        let mut keyed = std::collections::BTreeSet::new();
+        let s = crate::gate_tests::every_component().open();
+        for m in &s.accepted().compiled.ir.modules {
+            fn walk(nodes: &[m2_ir::Node], f: &mut dyn FnMut(&m2_ir::Node)) {
+                for n in nodes {
+                    f(n);
+                    if let m2_ir::Op::Poly { body, .. } = &n.op {
+                        walk(&body.nodes, f);
+                    }
+                }
+            }
+            walk(&m.nodes, &mut |n| {
+                if matches!(n.op, m2_ir::Op::Time { of: m2_ir::TimeOf::Key }) {
+                    let packs =
+                        m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
+                    keyed.extend(packs);
+                }
+            });
+        }
+        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/vocals"], "the packs whose sounds read the song's key");
         let uses = |name: &str, dir: &Path| -> String {
             let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
             let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
@@ -549,7 +572,11 @@ export default song(() => v.out);
             let labelled = mine.clone().any(|(_, d)| d.settings.iter().chain(entries(d).iter()).any(|x| x.label.is_some()));
             let kits = mine.clone().any(|(_, d)| !d.editor.kits.is_empty());
             let optional = mine.clone().any(|(_, d)| d.inputs.iter().any(|i| i.optional));
+            // The song's key, `time.key` (2.4, VOX-12), is read in a body, which no descriptor shows:
+            // the graph of every-component, which calls every component of every bundled pack, does.
+            let keyed = keyed.contains(name);
             match (major.as_deref(), optional, kits, labelled) {
+                (Some(m), ..) if keyed => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
                 (Some(m), false, true, _) => format!("{m}.2"),
                 (Some(m), false, false, true) => format!("{m}.1"),
@@ -615,7 +642,7 @@ export default song(() => v.out);
                 (m.package.name, m.package.version, hash)
             })
             .collect();
-        assert_eq!(bundled.len(), 5, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths and @m2/wavetable");
+        assert_eq!(bundled.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable");
         let (mut songs, mut wrong) = (0, vec![]);
         let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
         while let Some(d) = stack.pop() {

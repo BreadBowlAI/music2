@@ -191,6 +191,30 @@ fn a_take_records_midi_notes_where_they_were_heard() {
     assert!(!r.graph.status().playing, "the stop stopped");
 }
 
+// VOX-25: a song with Tune on a track is 15 ms late; a key struck while it plays lands where it was
+// heard all the same (the take's anchor is where its start was heard, and its notes are placed from
+// it), not 720 frames late.
+#[test]
+fn a_note_under_a_latent_song_lands_where_it_was_heard() {
+    let tuned = SONG
+        .replace("import { sum } from 'std/math';", "import { sum } from 'std/math';\nimport { tune } from '@m2/vocals';")
+        .replace("export default song(() => sum(b.out, k.out));", "const v = track('vox', { name: 'Vox' }, ({ lane }) => tune(lane.audio('clips')));\nexport default song(() => sum(b.out, k.out, v.out));");
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/vocals\" = \"1\"\n";
+    let mut r = Rig::with(&[("music2.toml", manifest), ("song.ts", &tuned)]);
+    r.anchored(0, 0.0);
+    r.start(false, None);
+    r.to(1.0);
+    let on = r.key(&[0x90, 60, 100]);
+    r.to(1.5);
+    let off = r.key(&[0x80, 60, 0]);
+    r.to(3.0);
+    r.graph.transport("stop").unwrap();
+    assert!(r.written()["written"].is_object());
+    let c = &r.clips()[0];
+    let (_, start, length, _) = note(c, 0);
+    assert!(on.has(start) && off.has(start + length), "heard at {on:?} to {off:?}, written {start} for {length}");
+}
+
 // RENDER-36: the pedal isn't recorded, but a take keeps each note as it sounded: a key let go under
 // the pedal ends where the pedal lifts, or where the key is struck again; one let go with the pedal
 // up ends at its Off.
@@ -1092,6 +1116,33 @@ mod audio {
         assert_eq!(heard, [37, 24_037, 48_037], "each click where it was heard");
         let length = c["length"].as_f64().unwrap();
         assert!((length - s.len() as f64 / BEAT).abs() < 1e-9, "as long as the take: {length} beats, {} frames", s.len());
+    }
+
+    // VOX-25 (the vocals note's V7): with Tune on the vox track the whole song is 15 ms (720 frames)
+    // late, so the speakers play the take's start 720 frames after the engine played it. A singer
+    // sings with what they hear: a click sung on each beat as heard lands in the file on the beat,
+    // to the sample, as it does in a song with no latency.
+    #[test]
+    fn a_take_under_a_latent_song_lands_where_it_was_heard() {
+        const TUNED: &str = "import { song, track } from '@m2/core';\nimport { tune } from '@m2/vocals';\n\
+                             const vox = track('vox', { name: 'Vox' }, ({ lane }) => tune(lane.audio('clips')));\n\
+                             export default song(() => vox.out);\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/vocals\" = \"1\"\n";
+        let mut r = Rig::with(TUNED, &[("music2.toml", manifest)], &[]);
+        let late = 720;
+        assert_eq!(r.player.latency(), late, "Tune makes the song 15 ms late");
+        r.anchor = r.graph.engine_clock().unwrap() + late as u64;
+        let at: Vec<u64> = (0..3).map(|b| r.anchor + b * BEAT as u64 + 37).collect();
+        r.sound = clicks(at);
+        r.start(false, false);
+        r.to(2.5);
+        r.graph.transport("stop").unwrap();
+        r.written();
+        let c = &r.clips()[0];
+        assert_eq!(c["start"].as_f64(), Some(0.0), "{c}");
+        let (s, _, _) = r.samples(c);
+        let heard: Vec<usize> = s.iter().enumerate().filter(|(_, x)| **x != 0.0).map(|(i, _)| i).collect();
+        assert_eq!(heard, [37, 24_037, 48_037], "each click where it was heard");
     }
 
     // WRITE-1, FMT-14: the take's file is pushed, named and its folder synced before the Tx names it.

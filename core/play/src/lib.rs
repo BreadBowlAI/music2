@@ -246,6 +246,11 @@ struct Shared {
     seconds: AtomicU64,
     playing: AtomicBool,
     generation: AtomicU64,
+    /// The playing renderer's latency `L`, in frames (RENDER-19).
+    latency: AtomicU32,
+    /// The engine clock of the next frame handed out, where `pos` is: the pair `heard_frame`
+    /// reads (`clock` is where the engine has rendered to, up to a block ahead of it).
+    out_clock: AtomicU64,
     /// When the last callback began, on [`now_ns`]'s clock, and the engine clock after it: one
     /// pair, so an input's callback places its stamps by one callback, never by two.
     pair_ns: AtomicU64,
@@ -737,10 +742,12 @@ impl Callback {
         s.seq.store(seq + 1, Ordering::Relaxed);
         fence(Ordering::Release);
         s.pos.store(st.pos, Ordering::Relaxed);
+        s.out_clock.store(self.live.as_ref().map_or(0, |l| l.engine.out_clock()), Ordering::Relaxed);
         s.beats.store(st.beats.to_bits(), Ordering::Relaxed);
         s.seconds.store(st.seconds.to_bits(), Ordering::Relaxed);
         s.playing.store(st.playing, Ordering::Relaxed);
         s.generation.store(st.generation, Ordering::Relaxed);
+        s.latency.store(self.live.as_ref().and_then(|l| l.engine.current()).map_or(0, |r| r.latency()), Ordering::Relaxed);
         s.pair_ns.store(ns, Ordering::Relaxed);
         s.pair_clock.store(self.live.as_ref().map_or(0, |l| l.engine.clock()), Ordering::Relaxed);
         if let Some(l) = &self.live {
@@ -1415,6 +1422,24 @@ impl Player {
         self.shared.published()
     }
 
+    /// The song's latency as it plays, in frames: what its output is late by (RENDER-19), as of
+    /// the last callback. 0 before a song plays.
+    pub fn latency(&self) -> u32 {
+        let s = &self.shared;
+        loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let l = s.latency.load(Ordering::Relaxed);
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                return l;
+            }
+        }
+    }
+
     /// Where playback is. Never waits for anything: a project loaded, or a seek, a play or a stop
     /// sent, that the audio thread hasn't taken yet is reported as where it goes. So a stop then a
     /// seek back reads stopped there at once, never playing on from there for a block.
@@ -1555,9 +1580,24 @@ impl Player {
         let rate = self.rate() as f64;
         let since = ns.saturating_sub(s.last_callback_ns.load(Ordering::Relaxed)) as f64 * rate / 1e9;
         let d = since - 2.0 * buffer * rate / self.device_rate.max(1) as f64;
-        let st = self.published();
+        // The transport's frame and the clock of the same frame: the next one handed out, read in
+        // one write of the callback's (the review's aside: the clock rendered to is up to a block
+        // ahead of it).
+        let (st, clock) = loop {
+            let a = s.seq.load(Ordering::Acquire);
+            if a & 1 == 1 {
+                std::hint::spin_loop();
+                continue;
+            }
+            let st = self.published();
+            let clock = s.out_clock.load(Ordering::Relaxed);
+            fence(Ordering::Acquire);
+            if s.seq.load(Ordering::Relaxed) == a {
+                break (st, clock);
+            }
+        };
         let at = |x: u64| (x as f64 + d).round().max(0.0) as u64;
-        Some((at(s.clock.load(Ordering::Relaxed)), if st.playing { at(st.pos) } else { st.pos }))
+        Some((at(clock), if st.playing { at(st.pos) } else { st.pos }))
     }
 
     /// Whether the output chosen is gone, so this plays on the default ([`Player::start_on`]).

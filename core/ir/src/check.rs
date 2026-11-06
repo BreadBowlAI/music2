@@ -1049,13 +1049,13 @@ impl<'a> Checker<'a> {
                     };
                     // The planner compensates latency at the top level (RENDER-18), never inside a
                     // voice, whose notes start at their own sample.
-                    if sig.latency > 0 && scope.in_voice() {
+                    if sig.late() && scope.in_voice() {
                         self.diags.push(diag(
                             m,
                             Some(node),
                             format!(
-                                "`{kernel}` adds {} samples of latency, which can't be made up for inside poly; use it after the voices",
-                                sig.latency
+                                "`{kernel}` adds {} of latency, which can't be made up for inside poly; use it after the voices",
+                                sig.lateness()
                             ),
                         ));
                         continue;
@@ -2021,6 +2021,32 @@ mod tests {
         );
         let bad = codes(json!([o, p("a", json!({"key": "Tune", "frames": ["Chain L"]}))]));
         assert_eq!(bad.iter().map(|(c, _)| c.as_str()).collect::<Vec<_>>(), ["key.invalid", "key.invalid"]);
+    }
+
+    // VOX-24: a latency in seconds is a latency as frames are: made up for at the top level, refused
+    // inside a voice, in words that say how late it is.
+    #[test]
+    fn a_latency_in_seconds_is_refused_inside_poly() {
+        let mut k = kernels();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let mut late = KernelSig::parse("t:shift", "", &s(&["in: audio<1>"]), &s(&["out: audio<1>"]), 0).unwrap();
+        late.latency_s = 0.015;
+        k.insert("t:shift".into(), late);
+        let ir = |nodes: serde_json::Value| {
+            serde_json::from_value::<Ir>(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
+                "modules": [{"key": "song", "lanes": [{"key": "n", "kind": "events<note>"}], "nodes": nodes, "exports": {"out": "x"}}]}))
+            .unwrap()
+        };
+        assert!(check(&ir(json!([{"id": "o", "op": "kernel", "kernel": "t:saw"}, {"id": "x", "op": "kernel", "kernel": "t:shift", "inputs": {"in": "o"}}])), &k).is_ok());
+        let voiced = json!([
+            {"id": "n", "op": "lane", "lane": "n"},
+            {"id": "x", "op": "poly", "events": "n", "voices": 2, "body": {"out": "l", "nodes": [
+                {"id": "o", "op": "kernel", "kernel": "t:saw"},
+                {"id": "l", "op": "kernel", "kernel": "t:shift", "inputs": {"in": "o"}},
+            ]}},
+        ]);
+        let e = check(&ir(voiced), &k).unwrap_err();
+        assert!(e[0].message.contains("`t:shift` adds 15 ms of latency, which can't be made up for inside poly"), "{}", e[0]);
     }
 
     #[test]
