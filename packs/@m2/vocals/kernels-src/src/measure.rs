@@ -213,7 +213,11 @@ impl Notes {
                 let (a, z) = span(at);
                 let before = middle(&me.p[a..at], &mut me.sorting);
                 let after = middle(&me.p[at..z], &mut me.sorting);
-                let nearer = |j: usize| !((me.p[j] - after).abs() >= (me.p[j] - before).abs());
+                // An unvoiced hop (no pitch) doesn't hold the cut back.
+                let nearer = |j: usize| {
+                    let (to, from) = ((me.p[j] - after).abs(), (me.p[j] - before).abs());
+                    to < from || to.is_nan() || from.is_nan()
+                };
                 (a..z).find(|&j| (j..(j + stay).min(z)).all(nearer)).unwrap_or(at).max(1)
             };
             for i in least..=n.saturating_sub(least) {
