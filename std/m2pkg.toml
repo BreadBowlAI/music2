@@ -247,9 +247,10 @@ outputs = ["out: audio<2>"]
 
 # std:regions plays std/sampler's `regions` (architecture.md, PKG-15 and PKG-16): the sampler voice
 # above, with regions in its values instead of zones. Its assets are the files, each once. Its values:
-#   [0]                  how many values each region takes: 17 (a region with fewer takes the
-#                        defaults for the rest; values past the ones it knows are skipped)
-#   then, region after region, 17 values each:
+#   [0]                  how many values each region takes: 15, or 17 with choke groups (a region
+#                        with fewer takes the defaults for the rest; values past the ones it knows
+#                        are skipped)
+#   then, region after region, that many values each:
 #    0 file      which asset, from 0          8 trigger   0 attack, 1 release
 #    1 root      the note it was recorded at  9 loop start a frame of the file, or -1 for no loop
 #    2, 3 keys   lowest, highest note        10 loop end   the loop's last frame, both played

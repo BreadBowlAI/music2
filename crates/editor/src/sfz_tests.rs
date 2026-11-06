@@ -738,7 +738,7 @@ fn an_sfz_with_more_choke_groups_than_eight_keeps_the_first_eight() {
         assert_eq!(r.contains(&format!("off_by = {g}\n")), g <= 8, "region {g}: {r}");
     }
     assert!(
-        said.iter().any(|l| l == "changed: 1 region has its off_by left out (off_by=9): a Sampler cuts by 8 groups at most"),
+        said.iter().any(|l| l == "changed: 1 region has its off_by left out (off_by 9): a Sampler cuts by 8 groups at most"),
         "{said:?}"
     );
 }

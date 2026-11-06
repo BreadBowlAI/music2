@@ -1104,7 +1104,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         let n = kept.iter().filter(|m| m.off_by.is_some_and(|g| dropped.contains(&g))).count();
         let which: Vec<String> = dropped.iter().map(|g| g.to_string()).collect();
         *said
-            .entry(format!("have their off_by left out (off_by={}): a Sampler cuts by 8 groups at most", which.join(", ")))
+            .entry(format!("have their off_by left out (off_by {}): a Sampler cuts by 8 groups at most", crate::listed(&which)))
             .or_default() += n;
     }
     for (what, n) in &said {

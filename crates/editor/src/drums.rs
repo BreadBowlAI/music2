@@ -214,20 +214,21 @@ pub(crate) fn kit_bus(db: Option<Spelled>) -> NewTrack {
 /// they use, by [`split`], named as the table words it and
 /// going to the bus, with one clip of that sound's notes (`clip` makes it); the notes no sound
 /// answers to on Percussion, which plays the tom, each at its own pitch.
-/// With `open_own` (the file plays its open hats on a part of their own, as music2 writes an Open
-/// hat track, KIT-28), the open hats (46) come in on an Open hat track after the Hats, cut by them.
+/// `open` are open hats a file plays on a part of their own (as music2 writes an Open hat track,
+/// KIT-28): they come in on an Open hat track after the Hats, cut by them; the other parts' open
+/// hats stay the Hats'.
 pub(crate) fn kit_of(
     notes: &[Note],
+    open: &[Note],
     bus: usize,
-    open_own: bool,
     clip: impl Fn(Vec<Note>) -> Result<serde_json::Value, EditError>,
 ) -> Result<Vec<NewTrack>, EditError> {
     let Split { mut lanes, left } = split(notes);
-    if open_own && let Some(i) = lanes.iter().position(|(sound, _)| *sound == "hats") {
-        let (open, closed): (Vec<Note>, Vec<Note>) = lanes[i].1.drain(..).partition(|n| key_of(n) == 46);
-        lanes[i].1 = closed;
-        lanes.insert(i + 1, ("open hat", open));
-        lanes.retain(|(_, mine)| !mine.is_empty());
+    if !open.is_empty() {
+        // In the Drum's menu order: right after the hats, before every sound after them.
+        let place = |s: &str| GM.iter().position(|g| g.sound == s).unwrap_or(usize::MAX);
+        let at = lanes.iter().position(|(s, _)| place(s) > place("open hat")).unwrap_or(lanes.len());
+        lanes.insert(at, ("open hat", open.to_vec()));
     }
     let mut out = vec![kit_bus(None)];
     let named = |sound: &'static str| GM.iter().find(|g| g.sound == sound).map_or(sound, |g| g.name);

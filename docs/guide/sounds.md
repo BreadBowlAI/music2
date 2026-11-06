@@ -197,7 +197,7 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.
-- An effect written in a track's own file can't listen to other tracks: its card says so. Move it to `song.ts`, where every track is.
+- An effect written in a track's own file lists the other tracks too: a pick adds an import of the track it listens to at the top of that file. Only a track written in `song.ts`, or in the effect's own file, can't be picked there: give it a file of its own.
 
 **`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 
@@ -256,7 +256,7 @@ The kits that come with `@m2/drums`:
 | It in code | `drums.drum(lane.notes("hits"), hats.hits, { drum: "open hat" })`: the hits that cut it come right after its own |
 | Delete the Hats | delete it as any track: the Open hat's cut goes with it (the delete asks first) |
 
-- Cut by is the Drum's **Listens to** row (see [Sidechain](#sidechain)), named for what it does. Its menu lists the song's other tracks that play notes from a file of their own. Picking one is one undo step, "Open hat cut by Hats". It writes three things: the other track's hits in the drum's call, an import of that track at the top of its file, and that track's hits handed out beside its sound: `({ out: drums.drum(lane.notes("hits")), hits: lane.notes("hits") })`. None takes out the hits in the call only.
+- Cut by is the Drum's **Listens to** row (see [Sidechain](#sidechain)), named for what it does. Its menu lists the song's other tracks that play notes from a file of their own. Picking one is one undo step, "Open hat cut by Hats". It writes three things: the other track's hits in the drum's call, an import of that track at the top of its file, and that track's hits handed out beside its sound: `({ out: drums.drum(lane.notes("hits")), hits: lane.notes("hits") })`. None takes out the hits in the call, and the import nothing reads any more; the other track keeps handing out its hits, which changes no sound.
 - Pads, keys and a take play A#2 (the open hat's note) on the Open hat track when the kit has one. A MIDI file music2 writes of such a kit comes back with its Open hat track, cut by the Hats.
 - A cut stops any drum, even one that rings on by itself (a ride, a tom). A hit at the very same moment as the drum's own hit doesn't cut it.
 - Where the code is written in a way the menu can't be sure of, the menu is greyed out and its tooltip says why: change it in code.

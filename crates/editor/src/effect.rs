@@ -231,7 +231,7 @@ fn joined(mut imports: Vec<(u32, String)>) -> Vec<(u32, String)> {
 }
 
 /// Where a module reads track `track`'s export `export` (CARD-36): the one module that does, not a
-/// track's (a track can't read another), in its file, at the one place that file writes
+/// track's (a read in a track's own file, a Duck's side there or a Drum's cut, isn't the song's), in its file, at the one place that file writes
 /// `<handle>.<export>`, `<handle>` the name it imports the track by. As a site of its own, to be
 /// wrapped as a call is: the read's text is its callee. Why not, in words.
 pub(crate) fn track_read(s: &Session, track: &str, export: &str) -> Result<Site, String> {
@@ -863,11 +863,10 @@ struct Choice {
 /// The tracks a call can listen to; or why it can't be changed here, in words.
 type Choices = Result<Vec<Choice>, String>;
 
-/// Whether `file`'s default export is track (or bus) `key`: what an import of the file reads.
+/// Whether `file`'s default export is track (or bus) `key`, read from its code
+/// (`sites::default_track`): what an import of the file reads.
 fn default_export_is(rev: &m2_session::Revision, key: &str, file: &str) -> bool {
-    let Some(text) = rev.snapshot.files.get(Path::new(file)) else { return false };
-    let quoted = serde_json::to_string(key).unwrap_or_default();
-    ["track", "bus"].iter().any(|w| text.contains(&format!("export default {w}({quoted}")))
+    rev.snapshot.files.get(Path::new(file)).and_then(|t| crate::sites::default_track(t)).as_deref() == Some(key)
 }
 
 /// The one notes lane track `t` plays from, when it has exactly one: what a notes input hears of it.
@@ -905,10 +904,22 @@ fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Choices, Option
         .filter(|t| t.track && Some(&t.key) != of.as_ref())
         .filter_map(|t| {
             let file = file_of(t)?;
-            if file == site.file || !default_export_is(rev, &t.key, file) {
+            if file == site.file {
                 return None;
             }
+            // A track the file imports already is offered as it was; another only when its file
+            // exports it by default, so an import of it reads it.
             let handle = crate::sites::imports_of(text, &site.file, file).into_iter().find_map(|i| i.default);
+            // Read from the file's code: its default export is the track, or the file is imported
+            // already and its code doesn't say otherwise (the song's own file never: its default
+            // is the song).
+            let read = rev.snapshot.files.get(Path::new(file)).and_then(|x| crate::sites::default_track(x));
+            let song_file = compiled.ir.modules.iter().find(|m| m.key == "song").and_then(file_of);
+            match (&handle, read.as_deref()) {
+                (_, Some(k)) if k == t.key => {}
+                (Some(_), None) if song_file != Some(file) => {}
+                _ => return None,
+            }
             let lane = match l.input.kind {
                 PortKind::Notes => Some(notes_lane(t)?),
                 _ => None,
@@ -1067,11 +1078,39 @@ pub fn sidechain(s: &mut Session, at: u64, call: &str, track: Option<&str>) -> R
             (from, to, String::new(), (span(this), String::new()))
         }
     };
+    // What the argument it replaces (or takes out) read and nothing else does any more goes from the
+    // imports too, as a delete tidies them (review D4): the old track's import, a `follow` no other
+    // call reads. A name the new argument reads stays.
+    let words: Vec<&str> = written.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).filter(|w| !w.is_empty()).collect();
+    let unread: Vec<(u32, u32)> = match from < to {
+        true => crate::sites::unused_imports(&text, &[(from, to)])
+            .into_iter()
+            .filter(|(a, b)| {
+                let names = &text[*a as usize..*b as usize];
+                !words.iter().any(|w| names.split(|c: char| !(c.is_alphanumeric() || c == '_' || c == '$')).any(|n| n == *w))
+            })
+            .collect(),
+        false => vec![],
+    };
     let mut edits = vec![(from, to, written)];
+    let mut inserts: Vec<(u32, u32, String)> = imports;
     if let Some((at, line)) = new.as_ref().and_then(|(_, i)| i.clone()) {
-        edits.push((at, at, line));
+        inserts.push((at, at, line));
     }
-    edits.extend(imports);
+    let mut gone = unread.clone();
+    for (at, _, line) in inserts {
+        // An import put where an unread one goes takes that line's place.
+        match gone.iter().position(|(a, b)| *a <= at && at <= *b) {
+            Some(i) => {
+                let (a, b) = gone.remove(i);
+                let whole = text[a as usize..b as usize].ends_with('\n');
+                let line = line.trim_matches('\n');
+                edits.push((a, b, if whole { format!("{line}\n") } else { line.to_string() }));
+            }
+            None => edits.push((at, at, line)),
+        }
+    }
+    edits.extend(gone.into_iter().map(|(a, b)| (a, b, String::new())));
     // Its undo step's name, from the tracks' names (as the card's own): "Open hat cut by Hats",
     // "Bass's duck listens to Kick".
     let of = listens(s, &site).and_then(|x| x.of);
@@ -1233,7 +1272,8 @@ fn text_tx(
     let mut ranges = vec![Range::bytes(site.start, site.end)];
     ranges.extend(edits.iter().filter(|(a, _, _)| *a < site.start || *a > site.end).map(|(a, b, _)| Range::bytes(*a, *b)));
     // Where the call starts now: after any import put in above it.
-    let shift: i64 = edits.iter().filter(|(a, b, _)| *b <= site.start && a == b).map(|(_, _, line)| line.len() as i64).sum::<i64>();
+    let shift: i64 =
+        edits.iter().filter(|(_, b, _)| *b <= site.start).map(|(a, b, line)| line.len() as i64 - (*b - *a) as i64).sum::<i64>();
     let file = path(&site.file)?;
     // Another track's file the pick edits too: the lane it hands out (KIT-27), confined to its edits.
     let mut confined: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();

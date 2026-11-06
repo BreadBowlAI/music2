@@ -80,14 +80,13 @@ fn cut_by_writes_the_code_as_one_undo_step() {
     assert_eq!(tree(&f), after);
     assert!(cut(&mut s, Some("hats")).unwrap_err().to_string().contains("Drum's Cut by is Hats already."));
     cut(&mut s, Some("kick")).unwrap();
-    assert!(!f.read("tracks/open-hat.ts").contains("hats.hits") && f.read("tracks/open-hat.ts").contains("kick.hits"));
+    let open = f.read("tracks/open-hat.ts");
+    assert!(!open.contains("hats.hits") && open.contains("kick.hits"), "{open}");
+    assert!(open.contains("import kick from \"./kick\";") && !open.contains("import hats"), "the Hats' import, unread, goes (D4): {open}");
     let done = cut(&mut s, None).unwrap();
     assert_eq!((done.before.as_str(), done.after.as_str()), ("kick.hits", ""));
     let open = f.read("tracks/open-hat.ts");
-    assert!(
-        open.contains("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })") && open.contains("import kick from \"./kick\";"),
-        "{open}"
-    );
+    assert!(open.contains("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })") && !open.contains("import kick"), "{open}");
     assert_eq!(row(&s).track, None);
     assert_eq!(s.step_names().0.and_then(|n| n.name), Some("Open hat cut by nothing".to_string()));
 }
@@ -142,4 +141,21 @@ fn cut_by_offers_and_writes_only_what_it_can() {
     f.write("tracks/hats.ts", "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\"hats\", { name: \"Hats\" }, ({ lane }) => ({ out: drums.drum(lane.notes(\"hits\"), { drum: \"hats\" }), hits: lane.mask(\"other\") }));\n");
     let mut s = f.open();
     says(cut(&mut s, Some("hats")), "Hats can't hand out its notes from here: it returns something else as hits");
+}
+
+// CARD-35 (review D3): a track whose file exports it by default is offered whatever its code's quotes
+// and line breaks (as Prettier writes a long call), read from its code; picking it imports it.
+#[test]
+fn a_track_written_with_other_quotes_and_line_breaks_is_offered() {
+    let (f, s) = kit();
+    drop(s);
+    f.write(
+        "tracks/kick.ts",
+        "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\n\nexport default track(\n  'kick',\n  { name: 'Kick' },\n  ({ lane }) => drums.drum(lane.notes('hits')),\n);\n",
+    );
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    assert!(row(&s).choices.iter().any(|(k, _)| k == "kick"), "{:?}", row(&s).choices);
+    cut(&mut s, Some("kick")).unwrap();
+    assert!(f.read("tracks/open-hat.ts").contains("import kick from \"./kick\";"), "{}", f.read("tracks/open-hat.ts"));
 }

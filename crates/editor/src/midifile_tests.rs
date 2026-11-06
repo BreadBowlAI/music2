@@ -896,6 +896,15 @@ fn an_open_hat_part_round_trips_with_its_cut() {
     let again = smf::read(&export_song(&s).unwrap()).unwrap();
     let t = made(import_tracks(&mut back, &again, "again.mid", &at(None, 0.0), None).unwrap());
     assert_eq!(t.tracks.iter().map(|t| t.1.as_str()).collect::<Vec<_>>(), ["Drums", "Hats", "Open hat"], "the same kit");
+    // A Hats part's own open hats stay on the Hats track (review D5): only the Open hat part's move.
+    let i = fixture("templates/empty");
+    let mut both = i.open();
+    let own =
+        file(1, vec![(Some("Hats"), [played(9, 42, 0, 12), played(9, 46, 24, 12)].concat()), (Some("Open hat"), played(9, 46, 48, 12))]);
+    let t = made(import_tracks(&mut both, &own, "own.mid", &at(None, 0.0), None).unwrap());
+    let rev = both.accepted();
+    let keys = |k: usize| -> Vec<f64> { rev.compiled.data.notes(&t.tracks[k].0, "hits").iter().map(|n| n.start).collect() };
+    assert_eq!((keys(1), keys(2)), (vec![0.0, 0.25], vec![0.5]), "the Hats keep their own open hat; the Open hat part's is the Open hat's");
     let h = fixture("templates/empty");
     let mut one = h.open();
     let shared = file(1, vec![(Some("Kit"), [played(9, 42, 0, 12), played(9, 46, 48, 12)].concat())]);

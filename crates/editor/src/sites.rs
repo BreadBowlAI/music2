@@ -36,6 +36,51 @@ pub fn imported_names(source: &str, module: &str) -> Vec<String> {
     names
 }
 
+/// The key of the track (or bus) `source`'s default export makes, read from its code: the first
+/// argument of the `track(…)` or `bus(…)` call it exports, written straight there
+/// (`export default track("kick", …)`, any quotes, any line breaks) or bound to the `const` it
+/// exports (`const kick = track("kick", …); export default kick;`). None for anything else: what
+/// an import of the file reads is then not certain (CARD-35).
+pub fn default_track(source: &str) -> Option<String> {
+    use oxc::ast::ast::{Argument, ExportDefaultDeclarationKind, Expression};
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let key_of = |e: &Expression<'_>| -> Option<String> {
+        let Expression::CallExpression(call) = e.without_parentheses() else { return None };
+        let Expression::Identifier(callee) = &call.callee else { return None };
+        if callee.name != "track" && callee.name != "bus" {
+            return None;
+        }
+        match call.arguments.first()? {
+            Argument::StringLiteral(k) => k.value.as_str().map(str::to_string),
+            _ => None,
+        }
+    };
+    let mut consts: Vec<(String, Option<String>)> = vec![];
+    let mut exported = None;
+    for statement in &ret.program.body {
+        match statement {
+            Statement::VariableDeclaration(v) if v.kind.is_const() => {
+                for d in &v.declarations {
+                    if let BindingPattern::BindingIdentifier(id) = &d.id {
+                        consts.push((id.name.to_string(), d.init.as_ref().and_then(|e| key_of(e))));
+                    }
+                }
+            }
+            Statement::ExportDefaultDeclaration(e) => {
+                exported = match &e.declaration {
+                    ExportDefaultDeclarationKind::Identifier(id) => {
+                        consts.iter().rev().find(|(n, _)| n.as_str() == id.name.as_str()).and_then(|(_, k)| k.clone())
+                    }
+                    d => d.as_expression().and_then(|x| key_of(x)),
+                };
+            }
+            _ => {}
+        }
+    }
+    exported
+}
+
 /// Where to insert text so that `source` imports `name` from `module`, and the text;
 /// `None` if it already does. Joins an existing `import { … } from module`, or else adds
 /// a line after the last import.
@@ -656,6 +701,22 @@ impl<'a> Visit<'a> for FindFn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // CARD-35 (review D3): the key a file's default export makes, read from its code whatever its
+    // quotes and line breaks, through a const too; none for what isn't a track's or a bus's call.
+    #[test]
+    fn a_files_default_track_is_read_from_its_code() {
+        assert_eq!(default_track("export default track(\"kick\", ({ lane }) => x);").as_deref(), Some("kick"));
+        assert_eq!(
+            default_track("export default track(\n  'kick',\n  { name: \"Kick\" },\n  ({ lane }) => x,\n);").as_deref(),
+            Some("kick")
+        );
+        assert_eq!(default_track("const kick = track(\"kick\", () => x);\nexport default kick;").as_deref(), Some("kick"));
+        assert_eq!(default_track("export default bus(\"drums\", ({ input }) => gain(input));").as_deref(), Some("drums"));
+        assert_eq!(default_track("export default song(() => x);"), None);
+        assert_eq!(default_track("const k = \"kick\";\nexport default track(k, () => x);"), None);
+        assert_eq!(default_track("export const kick = track(\"kick\", () => x);"), None);
+    }
 
     // KIT-27: what a track's function returns, in each form it is written, and none where that
     // isn't certain.

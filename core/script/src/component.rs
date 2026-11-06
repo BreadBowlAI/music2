@@ -284,8 +284,8 @@ impl Descriptor {
     }
 
     /// Whether a new track can play it (PKG-7): notes first, its only input but those a call may leave
-    /// out (PKG-20), and audio out. The
-    /// + Track list offers it only when it has a category, which groups it.
+    /// out (PKG-20), and audio out. The + Track list offers it only when it has a category, which
+    /// groups it.
     pub fn is_instrument(&self) -> bool {
         matches!(&self.inputs[..], [i, rest @ ..] if i.kind == PortKind::Notes && !i.optional && rest.iter().all(|r| r.optional))
             && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Audio)
