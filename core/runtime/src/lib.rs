@@ -3124,8 +3124,9 @@ impl Renderer {
             flat.overlays.iter().enumerate().map(|(k, s)| (base + k, placed.nodes[k].channels, arrive[s.src.node])).collect();
         // A live plan's taps (TAP-1): its rings, and what may be a point. Its meters are the
         // server's to lay out ([`Renderer::tap`]).
-        let taps = (mode == m2_plugins::RenderMode::Realtime)
-            .then(|| Taps::new(taps::TapSlots::new(sound.iter().map(|s| s.0.clone()).collect(), copy_sites.iter().map(|s| (s.0, s.1)).collect())));
+        let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
+            Taps::new(taps::TapSlots::new(sound.iter().map(|s| s.0.clone()).collect(), copy_sites.iter().map(|s| (s.0, s.1)).collect()))
+        });
         for (i, e) in graph.exec.iter_mut().enumerate().take(checked.nodes.len()) {
             if let Exec::Plugin(p) = e {
                 p.reports = Some((report.clone(), i));

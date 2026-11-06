@@ -411,7 +411,10 @@ fn a_ring_reads_any_output_with_sound_and_a_slot_only_a_meter() {
     let first = taps.frames(1, 0, RING, &mut frames).unwrap();
     assert!(!frames.is_empty() && frames.iter().any(|f| f[0] != 0.0));
     let at = first as usize;
-    assert!(frames.iter().enumerate().all(|(i, f)| f[0].to_bits() == copied[at + i].to_bits() && f[1] == f[0]), "the high-pass, mono on both sides");
+    assert!(
+        frames.iter().enumerate().all(|(i, f)| f[0].to_bits() == copied[at + i].to_bits() && f[1] == f[0]),
+        "the high-pass, mono on both sides"
+    );
 }
 
 // TAP-15, ABI-13: a slot pointed at a kernel's meter reads, once a block, the meter's last frame:

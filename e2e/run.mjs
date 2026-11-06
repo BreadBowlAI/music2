@@ -174,6 +174,7 @@ export const SUITES = [
   ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
   ["taps", "fix", { expect: 23, s: 20 }],
+  ["taps2", "fix", { expect: 15, s: 10 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 38, s: 8 }],
   ["kits", "fix", { expect: 18, s: 6 }],

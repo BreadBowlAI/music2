@@ -61,6 +61,7 @@ pub mod sites;
 pub mod smf;
 pub mod song;
 pub mod songkey;
+pub mod spectrum;
 pub mod swap;
 pub mod take;
 pub mod timeline;

@@ -110,7 +110,7 @@ fn a_scopes_frames_arrive_while_asked() {
     let mut rig = Rig::new(SONG);
     let saw = rig.id("osc.saw");
     let asked = rig.graph.scope(rig.token(), "w1", "bass", &saw, true).unwrap();
-    assert_eq!(asked, json!({"scope": {"module": "bass", "node": saw, "channels": 1}}));
+    assert_eq!(asked, json!({"scope": {"module": "bass", "node": saw, "kind": "scope", "at": "out", "channels": 1}}));
     rig.graph.transport("play").unwrap();
     rig.read(16);
     let m = rig.read(16);
@@ -170,8 +170,9 @@ fn a_scope_follows_its_box_into_each_new_plan() {
     assert!(flat > SCOPE / 2, "the same call, now a square: {flat} flat");
 }
 
-// TAP-8: what isn't one sound at the top of its track is refused in words; a fifth box is refused
-// while four are shown; a window that closes ends its scopes, and so do 10 s without an ask.
+// TAP-8: what isn't one sound at the top of its track is refused in words; a fifth box is shown
+// beside four (TAP-10 gives a plan 31 rings for looks, `a_look_past_the_rings_is_refused_in_words`);
+// a window that closes ends its scopes, and so do 10 s without an ask.
 #[test]
 fn a_scope_is_refused_in_words_and_ends_with_its_client() {
     let mut rig = Rig::new(SONG);
@@ -186,8 +187,9 @@ fn a_scope_is_refused_in_words_and_ends_with_its_client() {
     rig.graph.transport("play").unwrap();
     rig.read(16);
     assert_eq!(scopes(&rig.read(16)).len(), 4, "four shown");
-    let fifth = rig.graph.scope(token, "w2", "pad", &rig.id("osc.square"), true).unwrap_err();
-    assert_eq!(format!("{fifth:#}"), "4 scopes are showing already: close one, then try again.");
+    rig.graph.scope(token, "w2", "pad", &rig.id("osc.square"), true).unwrap();
+    assert_eq!(scopes_of(&rig.read(16), "w2").len(), 1, "a fifth, shown to the window that asked");
+    rig.graph.scope(token, "w2", "pad", &rig.id("osc.square"), false).unwrap();
     // Another window asks for one shown: it shares it, and keeps it when the first closes.
     rig.graph.scope(token, "w2", "bass", &boxes[0].1, true).unwrap();
     rig.graph.client_gone("w1");
@@ -265,4 +267,122 @@ fn while_what_plays_isnt_the_view_a_scope_waits_and_says_why() {
     let got = scopes(&rig.read(16));
     assert_eq!(got.len(), 1, "it plays as shown again");
     assert!(got[0].1 == moved && one_way(&got[0].2[0]) > SCOPE * 9 / 10, "the saw, by the view's id");
+}
+
+/// A saw through a compressor that turns it down a lot, and a sine at 1 kHz, half as loud as full
+/// scale, into std's mixer.
+const LOOKS: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { compress } from 'std/fx';\n\
+                     import { scale } from 'std/math';\nimport { mixer } from 'std/mix';\n\
+                     const bass = track('bass', () => compress(osc.saw(110), { threshold: -30, ratio: 8 }));\n\
+                     const pad = track('pad', () => scale(osc.sine(1000), 0.5));\n\
+                     export default song(() => mixer({ bass: bass.out, pad: pad.out }));\n";
+
+/// What `m` sends w1 of the look of `kind` at `at` of box `node`.
+fn entry(m: &MetersOut, node: &str, kind: &str, at: &str) -> Option<Value> {
+    sent_to(m, "w1").into_iter().find(|s| s["node"] == node && s["kind"] == kind && s["at"] == at)
+}
+
+fn numbers(v: &Value) -> Vec<f64> {
+    v.as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect()
+}
+
+/// A look by its kind and point, as the route takes it.
+fn look(module: &str, node: &str, kind: &str, at: &str) -> Look {
+    Look { module: module.into(), node: node.into(), kind: kind.parse().unwrap(), at: m2_editor::scope::At::parse(at) }
+}
+
+// TAP-12 to TAP-15: each kind of look arrives while asked, in the window's message: the sine's
+// spectrum, loudest in the band of 1 kHz, at its level; the level of what goes into the
+// compressor, the saw at full scale, and of what comes out, lower; and the compressor's meter, how
+// far it turns down. Looks at one point share its ring, and a meter takes a slot.
+#[test]
+fn looks_of_each_kind_arrive_while_asked() {
+    let mut rig = Rig::new(LOOKS);
+    let token = rig.token();
+    let (comp, sine) = (rig.id("compress"), rig.id("scale"));
+    let spectrum = rig.graph.look(token, "w1", &look("pad", &sine, "spectrum", "out"), true).unwrap();
+    let hz = numbers(&spectrum["scope"]["hz"]);
+    assert_eq!(hz.len(), 120, "a band each twelfth of an octave, from 20 Hz to under 20 kHz");
+    assert!((hz[0] - 20.0).abs() < 1e-9 && (hz[12] - 40.0).abs() < 1e-9 && hz[119] < 20_000.0, "{:?}", &hz[..13]);
+    for (kind, at) in [("scope", "out"), ("level", "in"), ("level", "out")] {
+        rig.graph.look(token, "w1", &look("bass", &comp, kind, at), true).unwrap();
+    }
+    let meter = rig.graph.look(token, "w1", &look("bass", &comp, "meter", "reduction"), true).unwrap();
+    assert_eq!(
+        (&meter["scope"]["kind"], &meter["scope"]["at"], &meter["scope"]["unit"]),
+        (&json!("meter"), &json!("reduction"), &json!("db"))
+    );
+    rig.graph.transport("play").unwrap();
+    rig.read(64);
+    let m = rig.read(64);
+    let bands = numbers(&entry(&m, &sine, "spectrum", "out").expect("the spectrum")["bins"]);
+    let loudest = (0..bands.len()).max_by(|&a, &b| bands[a].total_cmp(&bands[b])).unwrap();
+    assert!((hz[loudest] / 1000.0).log2().abs() < 1.0 / 24.0, "loudest at 1 kHz: {} Hz", hz[loudest]);
+    assert!((bands[loudest] + 6.02).abs() < 1.0, "half of full scale is −6 dB: {}", bands[loudest]);
+    assert!(bands[loudest - 24] < -60.0 && bands[loudest + 24] < -60.0, "an octave either side, nearly nothing: {bands:?}");
+    let level = |at: &str| entry(&m, &comp, "level", at).unwrap_or_else(|| panic!("the level at {at}"));
+    let (went, came) = (level("in"), level("out"));
+    let (peak, rms) = (numbers(&went["peak"])[0], numbers(&went["rms"])[0]);
+    assert!(peak > 0.95 && (rms - 1.0 / 3f64.sqrt()).abs() < 0.05, "a saw at full scale goes in: peak {peak}, rms {rms}");
+    assert!(numbers(&came["peak"])[0] < peak / 2.0, "and comes out turned down: {came}");
+    let read = entry(&m, &comp, "meter", "reduction").expect("the meter");
+    let (now, most) = (read["now"].as_f64().unwrap(), read["most"].as_f64().unwrap());
+    assert!(now > 10.0 && most >= now, "turned down more than 10 dB: now {now}, most {most}");
+    assert_eq!(entry(&m, &comp, "scope", "out").unwrap()["frames"][0].as_array().unwrap().len(), SCOPE, "and its scope");
+    let cp = rig.graph.inner.control.lock();
+    assert_eq!(cp.asks.rings(), 3, "the sine's, and the compressor's input and output: its scope and level share one");
+}
+
+// TAP-10, TAP-12: a 32nd point is refused in words while 31 are shown, as is a 257th meter; a
+// kind or a point an ask can't have is refused too.
+#[test]
+fn a_look_past_the_rings_is_refused_in_words() {
+    let tracks: String = (0..32).map(|k| format!("const t{k} = track('t{k}', () => osc.sine({}));\n", 100 + k)).collect();
+    let mix: Vec<String> = (0..32).map(|k| format!("t{k}: t{k}.out")).collect();
+    let song = format!(
+        "import {{ song, track }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\nimport {{ mixer }} from 'std/mix';\n{tracks}\
+         export default song(() => mixer({{ {} }}));\n",
+        mix.join(", ")
+    );
+    let rig = Rig::new(&song);
+    let token = rig.token();
+    let sines: Vec<(String, String)> = {
+        let state = rig.graph.state().unwrap();
+        let mods = state["view"]["modules"].as_array().unwrap().clone();
+        let mut v = vec![];
+        for m in &mods {
+            for n in m["nodes"].as_array().unwrap() {
+                if n["label"] == "osc.sine" {
+                    v.push((m["key"].as_str().unwrap().to_string(), n["id"].as_str().unwrap().to_string()));
+                }
+            }
+        }
+        v
+    };
+    assert_eq!(sines.len(), 32);
+    rig.graph.loudness(token, "w1", true).unwrap();
+    for (module, node) in &sines[..31] {
+        rig.graph.look(token, "w1", &look(module, node, "spectrum", "out"), true).unwrap();
+    }
+    let (module, node) = &sines[31];
+    let no = rig.graph.look(token, "w1", &look(module, node, "level", "out"), true).unwrap_err();
+    assert_eq!(format!("{no:#}"), "No room to show this: 31 sounds are shown already. Fold a card or scroll one away, then try again.");
+    rig.graph.look(token, "w1", &look(&sines[0].0, &sines[0].1, "scope", "out"), true).expect("a point shown already has room");
+    // A meter's slots, as many as a plan has, and one more.
+    let mut cp = rig.graph.inner.control.lock();
+    let now = Instant::now();
+    for k in 0..m2_runtime::METERS {
+        cp.asks.add("w1", What::Box(look("t0", &format!("x#{k}"), "meter", "reduction")), now).unwrap();
+    }
+    let no = cp.asks.add("w1", What::Box(look("t0", "x#x", "meter", "reduction")), now).err().unwrap();
+    assert_eq!(format!("{no:#}"), "No room to show this: 256 meters are shown already. Fold a card or scroll one away, then try again.");
+    drop(cp);
+    for (kind, at, says) in [
+        ("meter", "out", "A meter look names the meter it shows, such as at: \"reduction\"."),
+        ("scope", "reduction", "A scope shows sound at a call's out or in; a meter is a look of its own, kind: \"meter\"."),
+    ] {
+        let e = rig.graph.look(token, "w1", &look(&sines[0].0, &sines[0].1, kind, at), true).unwrap_err();
+        assert_eq!(format!("{e:#}"), says);
+    }
+    assert_eq!("picture".parse::<Kind>().unwrap_err(), "A look is a scope, a spectrum, a level or a meter, not picture.");
 }

@@ -13,9 +13,11 @@
 //!   records on an audio lane, `"input": [x]` is the sound input's loudest sample since the last
 //!   message, both sides (the io plan's slice 3: the take's level bar), read from the take's ring
 //!   at a place of its own.
-//! - **Each window's scopes:** `{"t": "scopes", "scopes": [{"module", "node", "frames": [[…],
-//!   …]}]}`, the last [`super::scope::SCOPE`] frames of each scope it asked for, a list per channel
-//!   (`why` in place of `frames` while it can't show), to that window's socket alone (TAP-8).
+//! - **Each window's looks:** `{"t": "scopes", "scopes": [{"module", "node", "kind", "at",
+//!   "frames": [[…], …]}]}`, what each look it asked for saw (TAP-8, TAP-12): a scope's last
+//!   [`super::scope::SCOPE`] frames, a list per channel; a spectrum's `bins`; a level's `peak` and
+//!   `rms`; a meter's `now` and `most` (`why` in place of them while it can't show), to that
+//!   window's socket alone.
 //! - **When:** the server's `music2-meters` thread calls [`Graph::meters`] every 33 ms and sends what
 //!   it gives on a `watch` channel, never the event broadcast (M1): a window that falls behind skips
 //!   to the latest meters, and loses no `graph` event for them. Nothing is sent while no socket
@@ -331,7 +333,16 @@ impl Graph {
             let loudness = asks.loudness().then(|| meters.loudness());
             let input = record.input().map(|(ring, ch)| meters.input_level(ring, ch));
             let dropouts = player.device_errors().xruns + meters.late;
-            (open.engine.token, taps.take(), plays.meters.clone(), loudness, asks.frames(taps), meters.load(), dropouts, input)
+            (
+                open.engine.token,
+                taps.take(),
+                plays.meters.clone(),
+                loudness,
+                asks.looks(taps, plays.info.id, plays.info.rate),
+                meters.load(),
+                dropouts,
+                input,
+            )
         };
         let mut all = json!({
             "t": "meters",

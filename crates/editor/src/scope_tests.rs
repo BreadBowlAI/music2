@@ -125,7 +125,8 @@ fn on_line(s: &Session, callee: &str, line: u32) -> String {
 /// The flat node of `rev` that names `kernel` in module `module`, the `nth` of them.
 fn kernel_node(rev: &Revision, module: &str, kernel: &str, nth: usize) -> usize {
     let flat = &rev.compiled.flat;
-    let mut found = (0..flat.nodes.len()).filter(|&i| flat.nodes[i].module == module && matches!(&flat.nodes[i].op, FOp::Kernel { kernel: k, .. } if k == kernel));
+    let mut found = (0..flat.nodes.len())
+        .filter(|&i| flat.nodes[i].module == module && matches!(&flat.nodes[i].op, FOp::Kernel { kernel: k, .. } if k == kernel));
     found.nth(nth).unwrap_or_else(|| panic!("no {kernel} in {module}"))
 }
 
@@ -163,12 +164,23 @@ fn a_look_is_refused_in_words_where_it_doesnt_fit() {
     let (_f, s) = looks();
     let rev = s.accepted();
     let no = |module: &str, callee: &str, at: At| look(rev, &s.packages, module, &id(&s, callee), &at).unwrap_err();
-    let first = |callee: &str| rev.compiled.sites.iter().filter(|x| x.file == "song.ts" && x.callee == callee).map(|x| format!("{}#{}", x.file, x.ordinal)).next().unwrap();
+    let first = |callee: &str| {
+        rev.compiled
+            .sites
+            .iter()
+            .filter(|x| x.file == "song.ts" && x.callee == callee)
+            .map(|x| format!("{}#{}", x.file, x.ordinal))
+            .next()
+            .unwrap()
+    };
     let sine = first("osc.sine");
     assert_eq!(look(rev, &s.packages, "c", &sine, &At::In).unwrap_err(), "osc.sine takes no sound in, so it has no input to show.");
     assert_eq!(no("c", "sum", At::In), "sum takes more than one sound in, so a look at its input can't tell which one to show.");
     let comp = on_line(&s, "compress", 7);
-    assert_eq!(look(rev, &s.packages, "a", &comp, &At::Meter("gain".into())).unwrap_err(), "compress gives no meter gain: its meter is reduction.");
+    assert_eq!(
+        look(rev, &s.packages, "a", &comp, &At::Meter("gain".into())).unwrap_err(),
+        "compress gives no meter gain: its meter is reduction."
+    );
     let saw = first("osc.saw");
     assert_eq!(look(rev, &s.packages, "a", &saw, &At::Meter("reduction".into())).unwrap_err(), "osc.saw gives no meters.");
     assert_eq!(
