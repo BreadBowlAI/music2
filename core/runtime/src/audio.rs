@@ -575,6 +575,7 @@ pub(crate) fn render_clip(
             rate: sample_rate,
             channels,
             frames: sh.len,
+            measure: false,
         };
         match stretch {
             Some(k) => whole(k, &run)?,

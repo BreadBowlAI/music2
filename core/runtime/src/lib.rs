@@ -50,6 +50,7 @@ pub mod fpenv;
 pub mod gauge;
 mod keep;
 pub mod latency;
+pub mod measure;
 pub(crate) mod limit;
 mod offline;
 mod overlay;

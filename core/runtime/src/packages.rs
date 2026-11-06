@@ -36,6 +36,18 @@ struct KernelDecl {
     /// the audio thread, never by song code. No inputs; one `audio` output; its source is asset 0.
     #[serde(default)]
     offline: bool,
+    /// A measure's hop, in frames of its source (VOX-41): an offline kernel that writes controls,
+    /// one frame of them each hop, instead of audio. 0: not a measure.
+    #[serde(default)]
+    hop: u32,
+}
+
+/// An offline kernel as its manifest declares it (VOX-41): a measure's hop (0 for a kernel that
+/// makes audio) and its outputs' names, in order.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct OfflineDecl {
+    pub hop: usize,
+    pub outputs: Vec<String>,
 }
 
 /// One loaded version of a package: its manifest, its kernels and its compiled module. Shared by
@@ -64,7 +76,7 @@ pub struct Package {
     /// Its kernels by id (`<package>:<name>`, PACK-4), and its offline kernels' ids: kept apart, so
     /// no song's graph types or runs an offline one (`kernel.offline`).
     kernels: HashMap<String, KernelSig>,
-    offline: BTreeSet<String>,
+    offline: BTreeMap<String, OfflineDecl>,
 }
 
 impl Package {
@@ -107,7 +119,7 @@ impl View {
     /// The package holding kernel `id` (an offline one too), when this view has it.
     fn holding(&self, id: &str) -> Option<&Package> {
         let (package, _) = m2_song::pack::split_id(id)?;
-        self.get(package).filter(|p| p.kernels.contains_key(id) || p.offline.contains(id))
+        self.get(package).filter(|p| p.kernels.contains_key(id) || p.offline.contains_key(id))
     }
 
     /// Whether it holds exactly the versions `other` holds.
@@ -380,13 +392,16 @@ impl PackageSet {
             }
             None => (None, None),
         };
-        let (mut sigs, mut offline) = (HashMap::new(), BTreeSet::new());
+        let (mut sigs, mut offline) = (HashMap::new(), BTreeMap::new());
         for k in &kernels {
             let id = format!("{name}:{}", k.name);
             if k.offline {
-                check_offline(&id, k)?;
-                offline.insert(id);
+                let decl = check_offline(&id, k)?;
+                offline.insert(id, decl);
                 continue;
+            }
+            if k.hop > 0 {
+                bail!("kernel `{id}` gives a `hop`, which only a measure has: an offline kernel (`offline = true`, VOX-41)");
             }
             let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).and_then(|s| s.with_meters(&k.meters));
             let mut sig = sig.map_err(anyhow::Error::msg)?;
@@ -604,6 +619,11 @@ impl PackageSet {
         diags
     }
 
+    /// Offline kernel `id` as its manifest declares it, when this view has it (VOX-41).
+    pub fn offline_decl(&self, id: &str) -> Option<&OfflineDecl> {
+        self.view.holding(id)?.offline.get(id)
+    }
+
     /// The SHA-256 of the wasm module holding kernel `id` (an offline one too).
     pub fn module_sha(&self, id: &str) -> Option<m2_song::Sha> {
         self.view.holding(id)?.module_sha
@@ -623,7 +643,7 @@ impl Kernels for PackageSet {
     }
 
     fn offline(&self, id: &str) -> bool {
-        self.view.holding(id).is_some_and(|p| p.offline.contains(id))
+        self.view.holding(id).is_some_and(|p| p.offline.contains_key(id))
     }
 
     fn plugin(&self, id: &str) -> Option<&KernelSig> {
@@ -803,18 +823,24 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
 /// An offline kernel's ports, as kernel ABI v1 has them (`docs/kernel-abi.md`, Offline kernels):
 /// no inputs, since its source is its asset 0, and one output of audio, each port written as any
 /// port is.
-fn check_offline(id: &str, k: &KernelDecl) -> Result<()> {
+fn check_offline(id: &str, k: &KernelDecl) -> Result<OfflineDecl> {
     let outputs = k.outputs.iter().map(|o| m2_ir::PortSig::parse(o).map_err(|e| anyhow::anyhow!("kernel `{id}`: {e}")));
     let outputs = outputs.collect::<Result<Vec<_>>>()?;
-    if !k.inputs.is_empty()
-        || k.latency > 0
-        || k.latency_s != 0.0
-        || !k.meters.is_empty()
-        || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }])
-    {
-        bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0), gives no meters and has one audio output");
+    if !k.inputs.is_empty() || k.latency > 0 || k.latency_s != 0.0 || !k.meters.is_empty() {
+        bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0), gives no meters and has no latency");
     }
-    Ok(())
+    // A measure writes controls at its hop (VOX-41); any other offline kernel one audio output.
+    let shaped = match k.hop {
+        0 => matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]),
+        _ => !outputs.is_empty() && outputs.iter().all(|o| matches!(o.kind, PortKind::Control(_))),
+    };
+    if !shaped {
+        match k.hop {
+            0 => bail!("kernel `{id}` is offline: it has one audio output, or, a measure with a `hop`, controls"),
+            _ => bail!("kernel `{id}` is a measure (it has a `hop`): its outputs are controls, one or more, and no audio"),
+        }
+    }
+    Ok(OfflineDecl { hop: k.hop as usize, outputs: outputs.into_iter().map(|o| o.name).collect() })
 }
 
 /// The kernel ABI version this runtime speaks (`docs/kernel-abi.md`). Frozen: v1 only ever gains

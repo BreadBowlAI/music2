@@ -188,7 +188,7 @@ fn make(shared: &Shared, job: Job) -> Result<()> {
     let raw = out.raw().clone();
     let (channels, frames) = raw.size();
     let stopped = || raw.stopped() || shared.closing.load(Ordering::Acquire);
-    let run = offline::Run { source, values: &values, map: &map, rate, channels, frames };
+    let run = offline::Run { source, values: &values, map: &map, rate, channels, frames, measure: false };
     let mut sink = |b: &[&[f32]]| -> Result<()> {
         if shared.held.load(Ordering::Acquire) {
             held(shared, &raw, &mut out, &stopped)?;

@@ -36,14 +36,14 @@ use crate::yin::{HIGHEST, LOWEST};
 pub const LATENCY_S: f64 = 0.015;
 /// How far `semitones` reaches: down to where a grain, two periods at most, still overlaps the
 /// next (7 down lays them 1.5 periods apart), and an octave up (review U1).
-const DOWN: f32 = -7.0;
-const UP: f32 = 12.0;
+pub(crate) const DOWN: f32 = -7.0;
+pub(crate) const UP: f32 = 12.0;
 /// How far `formant` reaches, each way.
 const MOST: f32 = 12.0;
 /// A grain that passes the sound through: half of it, in seconds.
 pub const PASS: f32 = 0.010;
 /// Marks in a row the pitch may say an octave off before the voice is taken to have leapt.
-const LEAP: u8 = 8;
+pub(crate) const LEAP: u8 = 8;
 /// Marks kept.
 const MARKS: usize = 64;
 /// Grains whose second half is still to come.
@@ -85,9 +85,9 @@ enum Last {
     Voiced { s: f64, mark: usize },
 }
 
-/// A two-pole low-pass (RBJ), its state in f64.
+/// A two-pole low-pass (RBJ), its state in f64: the pulses are marked in the voice through it.
 #[derive(Clone, Copy)]
-struct Lowpass {
+pub(crate) struct Lowpass {
     b: [f64; 3],
     a: [f64; 2],
     x: [f64; 2],
@@ -95,7 +95,7 @@ struct Lowpass {
 }
 
 impl Lowpass {
-    fn new(sr: f64, f: f64) -> Self {
+    pub(crate) fn new(sr: f64, f: f64) -> Self {
         let w = std::f64::consts::TAU * f / sr;
         let alpha = w.sin() / (2.0 * std::f64::consts::FRAC_1_SQRT_2);
         let a0 = 1.0 + alpha;
@@ -108,7 +108,7 @@ impl Lowpass {
         }
     }
 
-    fn tick(&mut self, x: f32) -> f32 {
+    pub(crate) fn tick(&mut self, x: f32) -> f32 {
         let x = x as f64;
         let y = self.b[0] * x + self.b[1] * self.x[0] + self.b[2] * self.x[1] - self.a[0] * self.y[0] - self.a[1] * self.y[1];
         let y = if y.abs() < 1e-30 { 0.0 } else { y };
@@ -117,7 +117,7 @@ impl Lowpass {
         y as f32
     }
 
-    fn clear(&mut self) {
+    pub(crate) fn clear(&mut self) {
         (self.x, self.y) = ([0.0; 2], [0.0; 2]);
     }
 }

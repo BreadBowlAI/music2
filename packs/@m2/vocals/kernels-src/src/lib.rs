@@ -6,7 +6,9 @@
 //!
 //! Tune (VOX-20) is the three in a row, joined in the pack's TypeScript: [`pitch`] finds the voice's
 //! pitch ([`yin`]), [`snap`] works out how far to move it to the song's key ([`aim`]), [`shift`] moves it ([`psola`]) and keeps its
-//! colour. Classic sound maths only, each written from its paper, nothing learned from data.
+//! colour. A voice's notes (VOX-40) are two offline kernels the host runs: [`notes`], a measure that
+//! finds a recorded voice's notes ([`measure`]), and [`voice`], which plays a clip's edited ones ([`phrase`], RENDER-30b).
+//! Classic sound maths only, each written from its paper, nothing learned from data.
 //!
 //! The house rules are m2-dsp's: audio that isn't finite counts as silence and absurd levels are
 //! capped before they reach any state; controls are clamped (NaN to their rest); every buffer is
@@ -20,11 +22,16 @@ use m2_kernel::{abi, export};
 
 pub mod aim;
 pub mod fft;
+pub mod file;
+pub mod measure;
 pub mod psola;
+pub mod phrase;
 pub mod yin;
 
 pub use aim::Snap;
+pub use measure::Notes;
 pub use psola::{LATENCY_S, Shift};
+pub use phrase::Voice;
 pub use yin::Pitch;
 
 abi!();
@@ -32,6 +39,8 @@ abi!();
 export!(pitch, Pitch);
 export!(snap, Snap);
 export!(shift, Shift);
+export!(notes, Notes);
+export!(voice, Voice);
 
 #[cfg(test)]
 mod tests;

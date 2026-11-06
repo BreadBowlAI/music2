@@ -447,6 +447,8 @@ pub fn in_place(s: &mut Session, track: &str, bounced: &Bounced) -> Result<InPla
         reverse: false,
         pitch: 0.0,
         warp: vec![],
+        render: None,
+        sung: vec![],
     };
     let clip = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
     let new = NewTrack {

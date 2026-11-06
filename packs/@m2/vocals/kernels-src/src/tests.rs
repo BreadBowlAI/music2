@@ -862,3 +862,274 @@ fn no_input_breaks_them() {
         }
     }
 }
+
+// ---------------------------------------------------------------- a voice's notes (VOX-42, VOX-45)
+
+mod sung {
+    use m2_kernel::{Host, OFFLINE, native};
+
+    use super::*;
+    use crate::measure::HOP;
+
+    /// `x` silent before `from` and after `to` seconds, with 5 ms fades.
+    fn between(mut x: Vec<f32>, sr: f32, from: f64, to: f64) -> Vec<f32> {
+        for (i, v) in x.iter_mut().enumerate() {
+            let t = i as f64 / sr as f64;
+            *v *= ((t - from).min(to - t) / 0.005).clamp(0.0, 1.0) as f32;
+        }
+        x
+    }
+
+    /// What `notes` measures of a mono file `x` at `sr`, played `split` frames at a time: each
+    /// hop's `hz`, `clarity`, `level`, `note` and `centre`.
+    fn measured_split(sr: f32, x: Vec<f32>, split: usize) -> Vec<[f32; 5]> {
+        let hops = x.len().div_ceil(HOP);
+        let assets = Vec::leak(vec![native::asset(sr, vec![x])]);
+        let mut k = Host::<Notes>::of(Cfg { flags: OFFLINE, assets, ..Cfg::new(sr, BLOCK, 1) });
+        let mut out = vec![];
+        while out.len() < hops {
+            let n = (hops - out.len()).min(split).min(BLOCK);
+            k.process(n as u32);
+            for i in 0..n {
+                out.push([0, 1, 2, 3, 4].map(|o| k.port_mut(o)[i]));
+            }
+        }
+        out
+    }
+
+    fn measured(sr: f32, x: Vec<f32>) -> Vec<[f32; 5]> {
+        measured_split(sr, x, BLOCK)
+    }
+
+    /// The notes of a measure: each run of one note number, as (start s, end s, centre).
+    fn runs(m: &[[f32; 5]], sr: f32) -> Vec<(f64, f64, f64)> {
+        let secs = |k: usize| (k * HOP) as f64 / sr as f64;
+        let mut out: Vec<(f64, f64, f64)> = vec![];
+        let mut last = 0.0;
+        for (k, h) in m.iter().enumerate() {
+            if h[3] != 0.0 && h[3] == last {
+                out.last_mut().unwrap().1 = secs(k + 1);
+            } else if h[3] != 0.0 {
+                out.push((secs(k), secs(k + 1), h[4] as f64));
+            }
+            last = h[3];
+        }
+        out
+    }
+
+    // VOX-42: a singer sings C4, moves to E4 at once, says "s", then sings G4: three notes, each
+    // starting within 15 ms of where it was sung, each centre within 10 cents of the note, numbered
+    // 1, 2, 3; nothing before or after.
+    #[test]
+    fn notes_finds_each_note_a_singer_sings() {
+        for sr in RATES {
+            let song = Song {
+                secs: 2.2,
+                midi: &|t| if t < 0.7 { 60.0 } else if t < 1.25 { 64.0 } else { 67.0 },
+                vibrato: 0.25,
+                formants: AH,
+                s: Some((1.2, 1.35)),
+            };
+            let x = between(song.sing(sr), sr, 0.2, 1.9);
+            let m = measured(sr, x.clone());
+            assert_eq!(m.len(), x.len().div_ceil(HOP), "{sr}: a value each hop");
+            let found = runs(&m, sr);
+            let want = [(0.2, 60.0), (0.7, 64.0), (1.35, 67.0)];
+            assert_eq!(found.len(), 3, "{sr}: three notes, not {found:?}");
+            for ((at, _, centre), (when, midi)) in found.iter().zip(want) {
+                assert!((at - when).abs() < 0.015, "{sr}: a note at {at:.3}, sung at {when}");
+                assert!((centre - midi).abs() < 0.1, "{sr}: its centre {centre:.3}, sung {midi}");
+            }
+            let numbers: Vec<f32> = m.iter().map(|h| h[3]).filter(|&n| n != 0.0).collect();
+            assert!(numbers.windows(2).all(|w| w[1] == w[0] || w[1] == w[0] + 1.0) && numbers[0] == 1.0, "{sr}: numbered in order");
+            assert!(found.last().unwrap().1 < 1.92, "{sr}: the last ends where the voice does");
+        }
+    }
+
+    // VOX-42: `hz`, `clarity` and `level` are `pitch`'s reading of the window centred on each hop,
+    // the same numbers; and the same bits however the host splits the calls.
+    #[test]
+    fn notes_reads_the_pitch_line_pitch_reads() {
+        let sr = 48_000.0;
+        let x = between(steady(57.0, 0.3, 1.0).sing(sr), sr, 0.1, 0.9);
+        let m = measured(sr, x.clone());
+        let mut p = <Pitch as m2_kernel::Kernel>::new(&Cfg::new(sr, BLOCK, 1));
+        let (span, half) = (p.span() as i64, p.window() as i64 / 2);
+        for k in [40usize, 80, 120] {
+            let end = (k * HOP) as i64 + half;
+            let w: Vec<f32> = (end - span..end).map(|f| if f >= 0 && (f as usize) < x.len() { x[f as usize] } else { 0.0 }).collect();
+            let (hz, clarity, level) = p.read_window(&w);
+            assert_eq!([m[k][0], m[k][1], m[k][2]], [hz, clarity, level], "hop {k}");
+            assert!(cents(hz as f64, hz_of(57.0)).abs() < 60.0, "hop {k}: {hz} Hz");
+        }
+        for split in [1, 7, 100] {
+            assert!(measured_split(sr, x.clone(), split) == m, "split by {split}");
+        }
+    }
+
+    /// What `voice` renders of `src` (each channel as long) at `src_rate`, at `sr`: output frames
+    /// `from..to` of a clip laid out by `map`, with `lead_in` seconds and `notes`, `split` frames a
+    /// call: both channels.
+    #[allow(clippy::too_many_arguments)]
+    fn voiced_split(
+        sr: f32,
+        src: Vec<Vec<f32>>,
+        src_rate: f32,
+        map: &[[f64; 2]],
+        (from, to): (usize, usize),
+        notes: &[[f64; 5]],
+        split: usize,
+    ) -> Vec<[f32; 2]> {
+        let channels = src.len();
+        let mut values = vec![from as f64, to as f64, 0.1];
+        values.extend(notes.iter().flatten());
+        let (values, assets, time_map) = (Vec::leak(values), Vec::leak(vec![native::asset(src_rate, src)]), Vec::leak(map.to_vec()));
+        let mut k = Host::<Voice>::of(Cfg { flags: OFFLINE, values, assets, time_map, ..Cfg::new(sr, BLOCK, channels) });
+        let mut out = vec![];
+        while out.len() < to - from {
+            let n = (to - from - out.len()).min(split).min(BLOCK);
+            k.process(n as u32);
+            let p = k.port_mut(0);
+            for i in 0..n {
+                out.push([p[i], p[BLOCK + i]]);
+            }
+        }
+        out
+    }
+
+    fn voiced(sr: f32, x: &[f32], map: &[[f64; 2]], span: (f64, f64), notes: &[[f64; 5]]) -> Vec<f32> {
+        let f = |s: f64| (s * sr as f64).round() as usize;
+        left(&voiced_split(sr, vec![x.to_vec()], sr, map, (f(span.0), f(span.1)), notes, BLOCK))
+    }
+
+    /// `x` read at fractional frame `pos` as a clip's normal path reads it (a cubic Hermite,
+    /// `stream::read_in`), silence outside.
+    fn cubic(x: &[f32], pos: f64) -> f32 {
+        if pos < 0.0 || pos > x.len() as f64 - 1.0 {
+            return 0.0;
+        }
+        let i = pos.floor() as isize;
+        let t = (pos - i as f64) as f32;
+        let at = |k: isize| if k < 0 || k as usize >= x.len() { 0.0 } else { x[k as usize] };
+        let (y0, y1, y2, y3) = (at(i - 1), at(i), at(i + 1), at(i + 2));
+        let c1 = 0.5 * (y2 - y0);
+        let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+        let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+        ((c3 * t + c2) * t + c1) * t + y1
+    }
+
+    // VOX-45: with nothing to move (no note edited, or none there) and no warp, the voice is the
+    // file within 1e-5, read from the clip's offset as the normal path reads it, at the song's rate
+    // or another, and the same bits however the host splits its calls.
+    #[test]
+    fn with_nothing_to_move_the_voice_comes_back() {
+        let sr = 48_000.0;
+        let song = Song { secs: 1.6, midi: &|t| 55.0 + 4.0 * t, vibrato: 0.5, formants: AH, s: Some((0.8, 0.95)) };
+        let x = song.sing(sr);
+        let unedited = [[0.3, 0.4, 56.0, 0.0, 0.0], [0.75, 0.5, 58.0, 0.0, 0.0]];
+        for (offset, notes) in [(0.0, &unedited[..]), (0.123_456_7, &[][..])] {
+            let out = voiced(sr, &x, &[[offset, 0.0]], (0.2, 1.3), notes);
+            for (i, v) in out.iter().enumerate() {
+                let want = cubic(&x, offset * sr as f64 + (i + (0.2 * sr) as usize) as f64);
+                assert!((v - want).abs() < 1e-5, "offset {offset}: frame {i}: {v} for {want}");
+            }
+        }
+        let f = |s: f64| (s * 44_100.0f64).round() as usize;
+        let other = left(&voiced_split(44_100.0, vec![x.clone()], sr, &[[0.0, 0.0]], (f(0.2), f(1.3)), &[], BLOCK));
+        for (i, v) in other.iter().enumerate() {
+            let want = cubic(&x, (f(0.2) + i) as f64 * sr as f64 / 44_100.0);
+            assert!((v - want).abs() < 1e-5, "at 44.1 kHz: frame {i}: {v} for {want}");
+        }
+        let notes = [[0.3, 0.6, 56.3, 1.5, 0.5]];
+        let whole = voiced_split(sr, vec![x.clone(), x.clone()], sr, &[[0.0, 0.0]], (9_600, 62_400), &notes, BLOCK);
+        for split in [1, 77] {
+            assert!(voiced_split(sr, vec![x.clone(), x.clone()], sr, &[[0.0, 0.0]], (9_600, 62_400), &notes, split) == whole, "split by {split}");
+        }
+    }
+
+    // VOX-45 (the note's §8): a note sung 31 cents sharp with vibrato, straightened, plays at 64.31,
+    // one straight pitch; moved by -0.31 too, it plays at 64. Measured by an autocorrelation, not by
+    // the pitch line the kernel reads.
+    #[test]
+    fn a_note_sung_31_cents_sharp_straightened_plays_at_64_31() {
+        for sr in RATES {
+            let x = steady(64.31, 0.4, 1.6).sing(sr);
+            let heard_in = |y: &[f32]| -> (f64, f64) {
+                let m: Vec<f64> = heard(y, sr, 64.3, 0.45, 1.05).into_iter().map(|(_, m)| m).collect();
+                let mean = m.iter().sum::<f64>() / m.len() as f64;
+                (mean, m.iter().cloned().fold(f64::MIN, f64::max) - m.iter().cloned().fold(f64::MAX, f64::min))
+            };
+            let (_, sung) = heard_in(&x);
+            assert!(sung > 0.7, "{sr}: the singer wobbles by 0.8 semitones: {sung:.2}");
+            for (moved, want) in [(0.0, 64.31), (-0.31, 64.0)] {
+                let out = voiced(sr, &x, &[[0.0, 0.0]], (0.0, 1.5), &[[0.2, 1.1, 64.31, moved, 1.0]]);
+                let (mean, wobble) = heard_in(&out);
+                assert!((mean - want).abs() < 0.05, "{sr}: moved {moved}: plays at {mean:.3}, not {want}");
+                assert!(wobble < 0.15, "{sr}: moved {moved}: straight, but wobbles by {wobble:.3}");
+            }
+        }
+    }
+
+    // VOX-45: laid out by its time map. A note stretched to twice its length keeps its pitch (within
+    // 10 cents), and an "s" lands where the map puts it.
+    #[test]
+    fn a_voice_follows_its_time_map() {
+        let sr = 48_000.0;
+        let song = Song { secs: 2.0, midi: &|_| 60.0, vibrato: 0.0, formants: AH, s: Some((1.0, 1.1)) };
+        let x = song.sing(sr);
+        let map = [[0.0, 0.0], [0.5, 0.5], [1.0, 1.5], [2.0, 2.5]];
+        let out = voiced(sr, &x, &map, (0.0, 2.4), &[[0.1, 0.85, 60.0, 0.5, 0.0]]);
+        let m: Vec<f64> = heard(&out, sr, 60.5, 0.7, 1.3).into_iter().map(|(_, m)| m).collect();
+        let mean = m.iter().sum::<f64>() / m.len() as f64;
+        assert!((mean - 60.5).abs() < 0.1, "stretched twice as long, moved half a semitone: {mean:.3}");
+        let loud = |a: f64, b: f64| part(&out, sr, a, b - a).iter().map(|v| v * v).sum::<f32>() / ((b - a) * sr as f64) as f32;
+        let hiss = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>() / y.len() as f32;
+        assert!(hiss(part(&out, sr, 1.52, 0.06)) > 4.0 * hiss(part(&out, sr, 1.3, 0.06)), "the s lands at 1.5 s");
+        let (stretched, sung) = (loud(0.7, 1.3), loud(0.2, 0.45));
+        assert!(stretched > 0.5 * sung, "no hole in the stretched note: {stretched} for {sung}");
+    }
+
+    // RENDER-28, ABI-5: once born, neither allocates while it runs; and no input breaks them.
+    #[test]
+    fn notes_and_voice_allocate_nothing_and_nothing_breaks_them() {
+        for sr in RATES {
+            let x = steady(62.0, 0.3, 0.8).sing(sr);
+            let assets = Vec::leak(vec![native::asset(sr, vec![x.clone(), x.clone()])]);
+            let mut m = Host::<Notes>::of(Cfg { flags: OFFLINE, assets, ..Cfg::new(sr, BLOCK, 1) });
+            let values = Vec::leak(vec![0.0, (0.7 * sr) as f64, 0.1, 0.1, 0.5, 62.2, 2.0, 0.5]);
+            let time_map = Vec::leak(vec![[0.0, 0.0], [0.8, 0.7]]);
+            let mut v = Host::<Voice>::of(Cfg { flags: OFFLINE, values, assets, time_map, ..Cfg::new(sr, BLOCK, 2) });
+            let before = counting::here();
+            for _ in 0..(x.len() / 256).div_ceil(BLOCK) {
+                m.process(BLOCK as u32);
+            }
+            for _ in 0..((0.7 * sr) as usize).div_ceil(BLOCK) {
+                v.process(BLOCK as u32);
+                assert!(v.port_mut(0).iter().all(|s| s.is_finite() && s.abs() <= 1.0));
+            }
+            assert_eq!(counting::here(), before, "{sr}: allocated while it ran");
+        }
+        let mut rng = Lcg(11);
+        for _ in 0..40 {
+            let pick = |rng: &mut Lcg| EXTREMES[rng.next() as usize % EXTREMES.len()] as f64;
+            let x = vec![pick(&mut rng) as f32; 4_000];
+            let values = Vec::leak(vec![pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng), pick(&mut rng)]);
+            let time_map = Vec::leak(vec![[pick(&mut rng), pick(&mut rng)], [pick(&mut rng), pick(&mut rng)]]);
+            let assets = Vec::leak(vec![native::asset(48_000.0, vec![x])]);
+            let mut v = Host::<Voice>::of(Cfg { flags: OFFLINE, values, assets, time_map, ..Cfg::new(48_000.0, BLOCK, 1) });
+            let mut m = Host::<Notes>::of(Cfg { flags: OFFLINE, assets, ..Cfg::new(48_000.0, BLOCK, 1) });
+            for _ in 0..8 {
+                v.process(BLOCK as u32);
+                m.process(BLOCK as u32);
+                assert!(v.port_mut(0).iter().all(|s| s.is_finite()), "{values:?} {time_map:?}");
+                assert!((0..5).all(|o| m.port_mut(o).iter().all(|s| s.is_finite())));
+            }
+        }
+    }
+
+    // The manifest says what the code does: `notes`' hop, and both are offline.
+    #[test]
+    fn the_manifest_says_the_hop() {
+        assert!(MANIFEST.contains(&format!("hop = {HOP}")), "notes' hop is {HOP}");
+    }
+}
