@@ -59,16 +59,6 @@ fn assets(song: &Path) -> Vec<String> {
     n
 }
 
-/// Wait for the first `bounce` event that says how far it is.
-fn until_rendering(events: &mut tokio::sync::broadcast::Receiver<String>) {
-    loop {
-        let e: Value = serde_json::from_str(&events.blocking_recv().unwrap()).unwrap();
-        if e["t"] == "bounce" && e.get("progress").is_some() {
-            return;
-        }
-    }
-}
-
 // RENDER-40: the route bounces Keys into a free name, adds Keys audio after it and mutes Keys, as
 // one step named "bouncing Keys"; a second bounce of it is refused in words (it is muted now).
 #[test]
@@ -96,42 +86,91 @@ fn the_route_bounces_in_place_as_one_step() {
     assert!(!state.exports.running(), "the slot is free");
 }
 
-// RENDER-40: a bounce stopped while it renders adds nothing and leaves no file; the slot is free.
+/// Hooks that hold the render at its first word of progress until `go` says, telling `held`, and
+/// note the furthest it got.
+fn held(furthest: Arc<std::sync::Mutex<f64>>) -> (Hooks, std::sync::mpsc::Receiver<()>, std::sync::mpsc::Sender<()>) {
+    let (tell, held) = std::sync::mpsc::channel();
+    let (go, wait) = std::sync::mpsc::channel::<()>();
+    let mut first = true;
+    let rendering = move |p: f64| {
+        let mut f = furthest.lock().unwrap();
+        *f = f.max(p);
+        drop(f);
+        if std::mem::take(&mut first) {
+            tell.send(()).unwrap();
+            wait.recv().unwrap();
+        }
+    };
+    (Hooks { rendering: Some(Box::new(rendering)), written: None }, held, go)
+}
+
+// RENDER-40: a bounce stopped while it renders adds nothing and leaves no file, not even the
+// `assets/` folder it made; the slot is free. The render is held until the stop is asked: no race.
 #[test]
 fn a_stopped_bounce_leaves_nothing() {
     let temp = Temp::new();
     let (state, token, song) = first_song(&temp, 4000);
-    let mut events = state.events.subscribe();
     let revision = state.graph.state().unwrap()["view"]["revision"].clone();
+    let furthest = Arc::new(std::sync::Mutex::new(0.0));
+    let (hooks, rendering, go) = held(furthest.clone());
     let running = {
         let state = state.clone();
-        std::thread::spawn(move || run(&state, token, "keys".into(), None))
+        std::thread::spawn(move || run_with(&state, token, "keys".into(), None, hooks))
     };
-    until_rendering(&mut events);
+    rendering.recv().unwrap();
+    assert!(ask_stop(&state), "a bounce renders");
+    go.send(()).unwrap();
     assert!(stop(&state), "it stopped");
     let e = format!("{:#}", running.join().unwrap().unwrap_err());
-    assert!(e.contains("stopped"), "{e}");
-    assert_eq!(assets(&song), Vec::<String>::new(), "no file is left");
+    assert_eq!(e, STOPPED);
+    assert!(*furthest.lock().unwrap() < 0.5, "it stopped at once, at {}", furthest.lock().unwrap());
+    assert!(!song.join("assets").exists(), "no file is left, nor its folder");
     assert_eq!(state.graph.state().unwrap()["view"]["revision"], revision, "nothing was added");
     assert!(!state.exports.running());
+    assert!(stop(&state), "with nothing rendering, a stop answers at once");
 }
 
-// RENDER-40: when the song changes while it renders, nothing is added and its files go: the
-// bounce is of a song that isn't there now.
+// RENDER-40: a change to the song while it renders stops it at once: nothing is added and nothing
+// is left, and it says why. The change is made while the render is held: no race.
 #[test]
 fn a_change_while_bouncing_refuses_and_leaves_nothing() {
     let temp = Temp::new();
     let (state, token, song) = first_song(&temp, 4000);
-    let mut events = state.events.subscribe();
+    let furthest = Arc::new(std::sync::Mutex::new(0.0));
+    let (hooks, rendering, go) = held(furthest.clone());
     let running = {
         let state = state.clone();
-        std::thread::spawn(move || run(&state, token, "keys".into(), None))
+        std::thread::spawn(move || run_with(&state, token, "keys".into(), None, hooks))
     };
-    until_rendering(&mut events);
+    rendering.recv().unwrap();
     state.graph.label(token, "hats", "Hi hats").unwrap();
+    go.send(()).unwrap();
     let e = running.join().unwrap().unwrap_err().to_string();
-    assert!(e.contains("The song changed while it bounced"), "{e}");
-    assert_eq!(assets(&song), Vec::<String>::new(), "its files went");
+    assert_eq!(e, "The song changed while it bounced, so nothing was added. Bounce it again.");
+    assert!(*furthest.lock().unwrap() < 0.5, "it stopped at once, at {}", furthest.lock().unwrap());
+    assert!(!song.join("assets").exists(), "its files went");
     assert!(!std::fs::read_to_string(song.join("song.ts")).unwrap().contains("keys-audio"));
     assert!(!state.exports.running());
+}
+
+// RENDER-40, the review's B1: the watcher taking in the bounce's own files, after they are named
+// and before the bounce is placed, is no change to the song: the bounce lands.
+#[test]
+fn the_watcher_taking_in_its_own_files_is_no_change() {
+    let temp = Temp::new();
+    let (state, token, song) = first_song(&temp, 32);
+    let before = state.graph.shown_revision().unwrap();
+    let watcher = state.clone();
+    let written = move || {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        while watcher.graph.shown_revision() == Some(before) && std::time::Instant::now() < deadline {
+            watcher.graph.watch();
+            watcher.graph.watch_wait(std::time::Duration::from_millis(50));
+        }
+    };
+    let done = run_with(&state, token, "keys".into(), None, Hooks { rendering: None, written: Some(Box::new(written)) });
+    let after = state.graph.state().unwrap();
+    assert!(done.is_ok(), "{done:?}");
+    assert!(after["view"]["revision"].as_u64().unwrap() > before + 1, "the watcher took the files in first");
+    assert!(std::fs::read_to_string(song.join("song.ts")).unwrap().contains("keys-audio"));
 }

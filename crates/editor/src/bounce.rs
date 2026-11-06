@@ -7,8 +7,9 @@
 //! (C3), the same bits (RENDER-2).
 //!
 //! [`in_place`] then puts a track's bounce in the song, as one Tx: an audio track right after it,
-//! playing the file from beat 0 in a copy of its channel, and the track muted in the song, so the
-//! song sounds the same.
+//! playing the file from beat 0 to its last sound in a copy of its channel, and the track muted in
+//! the song, so the song sounds the same and is as long. That bounce renders as Export Audio does:
+//! to the song's last clip, then on until the track falls silent ([`Length::Song`]).
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -17,7 +18,7 @@ use anyhow::{Result, anyhow, bail};
 use m2_ir::{FOp, Root};
 use m2_runtime::PackageSet;
 use m2_session::{Compiled, Revision, Session};
-use m2_song::{AssetName, DataPath, ROOT, Sha};
+use m2_song::{AssetName, DataPath, ROOT, Sha, Snapshot};
 use serde_json::json;
 
 use crate::mix::{Mixing, mixer};
@@ -32,11 +33,11 @@ pub struct Bounce {
     /// The module and export it plays: the song's own root, or a track's export.
     pub bounced: Root,
     pub from: f64,
-    pub seconds: f64,
+    pub length: Length,
     pub sample_rate: u32,
-    /// The revision it was planned on, when a session's: a change after it refuses
-    /// [`in_place`].
-    revision: Option<u64>,
+    /// The song it was planned on, when a session's: a change to it after that refuses
+    /// [`in_place`] ([`Bounce::changed`]).
+    planned: Option<Planned>,
     /// Every package file the build and the runtime read, by package (RENDER-2).
     packages: serde_json::Value,
 }
@@ -51,25 +52,79 @@ pub struct Bounced {
     /// The file's hash, as a clip pins it.
     pub hash: Sha,
     pub seconds: f64,
+    /// How long it sounds: to its last sample that isn't silent, in seconds from its start.
+    pub sounding: f64,
     pub rendered: Rendered,
     /// The channels of the sound bounced: a mono one is written as two equal channels.
     pub channels: u8,
-    revision: Option<u64>,
+    planned: Option<Planned>,
+    /// The folder it made for the file (`assets/`), if it made one.
+    made: Option<PathBuf>,
+}
+
+/// The song a bounce was planned on: its revision, and its files as that revision read them.
+#[derive(Clone, Debug)]
+pub struct Planned {
+    number: u64,
+    snapshot: Arc<Snapshot>,
+}
+
+impl Planned {
+    /// The revision it was planned on: until the song has another, it can't have changed.
+    pub fn number(&self) -> u64 {
+        self.number
+    }
+
+    /// Whether `rev` is another song than this one, apart from the files a bounce writes as `asset`.
+    pub fn changed_from(&self, rev: &Revision, asset: &AssetName) -> bool {
+        self.changed(rev, &own_paths(asset))
+    }
+
+    /// Whether `rev` is another song than this one, apart from `own`, the bounce's own two files
+    /// (relative to the song's folder): the watcher may take those in before the bounce is placed,
+    /// and they change nothing heard until a clip names them.
+    fn changed(&self, rev: &Revision, own: &[PathBuf]) -> bool {
+        if rev.number == self.number {
+            return false;
+        }
+        let (a, b) = (&*self.snapshot, &rev.snapshot);
+        let binaries =
+            |s: &Snapshot| s.binaries.iter().filter(|(p, _)| !own.contains(p)).map(|(p, x)| (p.clone(), x.clone())).collect::<Vec<_>>();
+        a.files != b.files || a.not_utf8 != b.not_utf8 || a.unreadable != b.unreadable || binaries(a) != binaries(b)
+    }
+}
+
+/// The paths of `asset` and its provenance, relative to the song's folder.
+fn own_paths(asset: &AssetName) -> Vec<PathBuf> {
+    let path = DataPath::Asset(asset.clone()).path();
+    let mut record = path.clone().into_os_string();
+    record.push(".json");
+    vec![path, PathBuf::from(record)]
 }
 
 impl Bounced {
     /// Take the files back: nothing names them (a Tx that would have was refused). An asset is
-    /// never replaced (FMT-14), but one this bounce made and nothing reads is no one's yet.
+    /// never replaced (FMT-14), but one this bounce made and nothing reads is no one's yet. The
+    /// folder goes too when this bounce made it and it is empty.
     pub fn remove(&self) {
         let _ = std::fs::remove_file(&self.record);
         let _ = std::fs::remove_file(&self.path);
+        if let Some(dir) = &self.made {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+
+    /// Whether `rev` is another song than the one this bounce was planned on, apart from the
+    /// bounce's own files.
+    pub fn changed(&self, rev: &Revision) -> bool {
+        self.planned.as_ref().is_some_and(|p| p.changed(rev, &own_paths(&self.asset)))
     }
 }
 
 impl Bounce {
     /// Bounce song `c` with `packages`: export `track.1` of track `track.0` alone (a track by its
     /// key, ID-11), else the whole song; from `from` seconds (rendered from 0, RENDER-1) for
-    /// `seconds`, else to 2 s past the song's last clip.
+    /// `seconds`, else to 2 s past the song's last clip (`m2 bounce`'s length, a stem's).
     pub fn plan(
         c: &Compiled,
         packages: &PackageSet,
@@ -80,29 +135,41 @@ impl Bounce {
     ) -> Result<Bounce> {
         let mut ir = c.ir.clone();
         let mut bounced = ir.root.clone();
+        let mut named = None;
         if let Some((track, export)) = track {
-            if !ir.modules.iter().any(|m| m.key == track) {
+            let Some(m) = ir.modules.iter().find(|m| m.key == track) else {
                 bail!("--track takes a track's key, and there's no track `{track}`: the tracks are {}", tracks(&ir));
+            };
+            if !m.exports.contains_key(export) {
+                let outputs: Vec<&str> = m.exports.keys().map(String::as_str).collect();
+                bail!("{} has no output `{export}`: its outputs are {}", m.label(), outputs.join(", "));
             }
+            named = Some(format!("{}'s {export}", m.label()));
             bounced = Root { module: track.to_string(), export: export.to_string() };
             // Played through an export of the root module, which stays `song` (ID-3): as a stem is.
             ir = rooted(&ir, track, export)?;
         }
-        let song = Arc::new(Parts::of(c, ir, packages).map_err(|d| {
-            let first = d.first().map_or_else(String::new, |d| format!(": {}", d.message));
-            anyhow!("the bounce doesn't build{first}")
+        let song = Arc::new(Parts::of(c, ir, packages).map_err(|d| match &named {
+            // The song builds, and the export is there: what the root adds that doesn't is that its
+            // output isn't audio.
+            Some(named) if d.iter().all(|d| d.module.as_deref() == Some(ROOT)) => anyhow!("{named} isn't a sound, so it can't be bounced"),
+            _ => {
+                let first = d.first().map_or_else(String::new, |d| format!(": {}", d.message));
+                anyhow!("the bounce doesn't build{first}")
+            }
         })?);
-        let seconds = seconds.unwrap_or_else(|| bounce_seconds(&c.data) - from);
-        Ok(Bounce { song, bounced, from, seconds, sample_rate, revision: None, packages: provenance(c, packages) })
+        let length = Length::Seconds(seconds.unwrap_or_else(|| bounce_seconds(&c.data) - from));
+        Ok(Bounce { song, bounced, from, length, sample_rate, planned: None, packages: provenance(c, packages) })
     }
 
-    /// The bounce Bounce to audio makes of track `track` of `rev` (RENDER-40): its `out`, from 0,
-    /// once [`check`] says it can go in place. Refused in words before anything is rendered.
+    /// The bounce Bounce to audio makes of track `track` of `rev` (RENDER-40): its `out`, from 0 until
+    /// it falls silent, as Export Audio renders, once [`check`] says it can go in place. Refused in
+    /// words before anything is rendered.
     pub fn in_place_of(rev: &Revision, packages: &PackageSet, track: &str) -> Result<Bounce, EditError> {
         check(rev, track)?;
         let mut b = Bounce::plan(&rev.compiled, packages, Some((track, "out")), 0.0, None, rev.project.sample_rate())
             .map_err(|e| EditError::Rejected(format!("{e:#}")))?;
-        let label = label(rev, track);
+        let label = label_of(rev, track);
         let plugins = plugins_of(&b.song.flat, packages);
         if !plugins.is_empty() {
             return Err(EditError::Rejected(format!(
@@ -111,8 +178,15 @@ impl Bounce {
                 crate::listed(&plugins)
             )));
         }
-        b.revision = Some(rev.number);
+        b.length = Length::Song;
+        b.planned = Some(Planned { number: rev.number, snapshot: Arc::new(rev.snapshot.clone()) });
         Ok(b)
+    }
+
+    /// The song it was planned on, when a session's: what a change while it renders is told from
+    /// ([`Planned::changed_from`]), which refuses it (RENDER-40).
+    pub fn planned(&self) -> Option<Planned> {
+        self.planned.clone()
     }
 
     /// Where `assets/<asset>` and its provenance go in the project at `project`; refused when either
@@ -138,7 +212,7 @@ impl Bounce {
     /// Its renderer, on `threads`, at its start: exact (RENDER-1), with the packages it was built
     /// with (PACK-9). From the song's start it renders nothing yet; from later it replays up to there.
     pub fn render(&self, packages: &PackageSet, threads: Threads) -> Result<Render> {
-        Render::new(self.song.clone(), packages, self.sample_rate, self.from, Length::Seconds(self.seconds), threads)
+        Render::new(self.song.clone(), packages, self.sample_rate, self.from, self.length, threads)
     }
 
     /// Render it with `render` (made by [`Bounce::render`], stopped when its stop is set) into the
@@ -150,12 +224,23 @@ impl Bounce {
     pub fn write(&self, render: Render, project: &Path, asset: &AssetName, progress: impl FnMut(f64)) -> Result<Bounced> {
         let (path, record) = Bounce::free(project, asset)?;
         let folder = path.parent().expect("inside assets/").to_path_buf();
+        // The first folder it makes, to take back with the file.
+        let made = folder.ancestors().take_while(|d| !d.exists()).last().map(Path::to_path_buf);
         // `assets/`, and `vox/` in it for `vox/keys`, each synced in the one above as it is made.
         m2_os::fs::make_dirs(&folder)?;
-        let rendered = render.write_float(&path, progress)?;
+        let rendered = match render.write_float(&path, progress) {
+            Ok(r) => r,
+            Err(e) => {
+                if let Some(dir) = &made {
+                    let _ = std::fs::remove_dir(dir);
+                }
+                return Err(e);
+            }
+        };
+        let seconds = rendered.seconds();
         let provenance = json!({
             "bounced_from": {"module": self.bounced.module, "export": self.bounced.export},
-            "from_seconds": self.from, "seconds": self.seconds, "sample_rate": self.sample_rate,
+            "from_seconds": self.from, "seconds": seconds, "sample_rate": self.sample_rate,
             "reproducible": self.reproducible(),
             "packages": self.packages,
         });
@@ -171,11 +256,16 @@ impl Bounce {
         });
         if let Err(e) = written {
             let _ = std::fs::remove_file(&path);
+            if let Some(dir) = &made {
+                let _ = std::fs::remove_dir(dir);
+            }
             return Err(e.context(format!("writing {}", record.display())));
         }
         let hash = Sha::of_file(&path)?;
         let channels = self.song.flat.out_kind.channels();
-        Ok(Bounced { asset: asset.clone(), path, record, hash, seconds: self.seconds, rendered, channels, revision: self.revision })
+        let sounding = rendered.sounding as f64 / self.sample_rate as f64;
+        let planned = self.planned.clone();
+        Ok(Bounced { asset: asset.clone(), path, record, hash, seconds, sounding, rendered, channels, planned, made })
     }
 }
 
@@ -234,13 +324,15 @@ fn plugins_of(flat: &m2_ir::Flat, packages: &PackageSet) -> Vec<String> {
 }
 
 /// A module's label, or its key when there is no such module.
-fn label(rev: &Revision, key: &str) -> String {
+fn label_of(rev: &Revision, key: &str) -> String {
     rev.compiled.ir.modules.iter().find(|m| m.key == key).map_or_else(|| key.to_string(), |m| m.label().to_string())
 }
 
-/// Whether track `track` of `rev` can be bounced in place (RENDER-40), in words when not: a track,
-/// not muted in the song, in a mixer channel of its own that reads its `out` by name (`keys.out`),
-/// and its sound read nowhere else, so muting it silences only what the bounce plays.
+/// Whether track `track` of `rev` can be bounced in place (RENDER-40), in words when not: a track
+/// (a bus too: "print the drums"), not muted in the song, in a mixer channel of its own that its
+/// copy can read the bounce in (it reads `keys.out` by name), and its sound going nowhere else a
+/// mute reaches. Where a mute reaches is the planner's own: the track's overlay sites (MON-1),
+/// which leave out what only listens, a sidechain key (MON-2). Every refusal comes before a render.
 pub fn check(rev: &Revision, track: &str) -> Result<(), EditError> {
     let no = |why: String| Err(EditError::Rejected(why));
     let Some(m) = rev.compiled.ir.modules.iter().find(|m| m.key == track) else {
@@ -269,32 +361,50 @@ pub fn check(rev: &Revision, track: &str) -> Result<(), EditError> {
         let others: Vec<String> = c.tracks.iter().filter(|t| *t != track).map(|t| label_of(rev, t)).collect();
         return no(format!("{label} shares its mixer channel with {}, so its bounce can't have a copy of it.", crate::listed(&others)));
     }
-    let reads: Vec<&crate::mix::ExportRead> = c.reads.iter().filter(|r| r.module == track && !r.sidechain).collect();
-    if reads.is_empty() {
-        return no(format!("{label}'s mixer channel doesn't read it by name ({track}.out), so music2 can't copy it for the bounce."));
-    }
-    if let Some(r) = reads.iter().find(|r| r.export != "out") {
-        return no(format!("{label}'s mixer channel reads its {} as well, which the bounce doesn't hold.", r.export));
-    }
-    // Muting it silences every place its sound goes; the bounce replaces only its channel. A
-    // sidechain only listens (MON-2), and a mute never silences that.
-    if let Some(o) = mixer.channels.iter().find(|o| o.key != c.key && o.reads.iter().any(|r| r.module == track && !r.sidechain && r.audio))
-    {
-        return no(format!("{label}'s sound goes into the {} channel too, which muting it would silence.", o.key));
-    }
-    let plays_it = |o: &m2_ir::Module| {
-        o.nodes.iter().any(|n| matches!(&n.op, m2_ir::Op::Import { module, export } if module == track && export == "out"))
-    };
-    if let Some(o) = rev.compiled.ir.modules.iter().find(|o| o.key != ROOT && o.key != track && plays_it(o)) {
-        return no(format!("{} plays {label}'s sound, which muting it would silence.", o.label()));
+    // Its copy, as the Tx will write it: refused here, not after the render.
+    let text = rev.snapshot.files.get(Path::new(&mixer.file)).map(|t| &**t).unwrap_or("");
+    crate::tracks::copied_channel(text, &mixer, track, label, "bounce", "bounce")?;
+    crate::mute::muting(rev, &[track.to_string()], true)?;
+    // Muting it silences every site where its sound enters another module; the bounce stands in
+    // for its `out` in its own channel, in the song, only.
+    let flat = &rev.compiled.flat;
+    let out = out_node(rev, track);
+    for site in flat.overlays.iter().filter(|s| s.module == track) {
+        if site.into != ROOT {
+            let into = label_of(rev, &site.into);
+            return no(format!("{into} plays {label}'s sound, which muting {label} would silence."));
+        }
+        if out != Some(site.src.node) {
+            return no(format!("The song plays more of {label} than its sound out, which muting {label} would silence."));
+        }
     }
     Ok(())
 }
 
-/// A module's label, or its key when there is no such module.
-fn label_of(rev: &Revision, key: &str) -> String {
-    label(rev, key)
+/// The node of `rev`'s graph that track `track`'s `out` is, following the imports it re-exports.
+fn out_node(rev: &Revision, track: &str) -> Option<usize> {
+    let ir = &rev.compiled.ir;
+    let (mut m, mut r) =
+        (ir.modules.iter().find(|m| m.key == track)?, ir.modules.iter().find(|m| m.key == track)?.exports.get("out")?.clone());
+    for _ in 0..32 {
+        let id = m2_ir::split_ref(&r).0.to_string();
+        let node = m.nodes.iter().find(|n| n.id == id)?;
+        match &node.op {
+            m2_ir::Op::Import { module, export } => {
+                m = ir.modules.iter().find(|x| &x.key == module)?;
+                r = m.exports.get(export)?.clone();
+            }
+            _ => {
+                let name = format!("{}/{id}", m.key);
+                return rev.compiled.flat.nodes.iter().position(|n| n.name == name);
+            }
+        }
+    }
+    None
 }
+
+/// What a bounce refused by a change to the song while it rendered says.
+pub const CHANGED: &str = "The song changed while it bounced, so nothing was added. Bounce it again.";
 
 /// What [`in_place`] did: the track it added, and the step.
 #[derive(Clone, Debug)]
@@ -305,19 +415,24 @@ pub struct InPlace {
 
 /// Put `bounced`, the bounce of track `track` ([`Bounce::in_place_of`]), in the song (RENDER-40):
 /// one Tx, one undo step, that adds "Keys audio" right after the track, playing the file from beat
-/// 0 at its own length in a copy of the track's channel, and mutes the track in the song. Refused
-/// when the song changed since the bounce was planned (it may sound different now), and as
-/// [`check`] refuses. The file stays either way: the caller removes it when nothing names it.
+/// 0 to its last sound in a copy of the track's channel, and mutes the track in the song. Refused
+/// when the song changed since the bounce was planned (it may sound different now), apart from the
+/// bounce's own files; when the track made no sound; and as [`check`] refuses. The file stays
+/// either way: the caller removes it when nothing names it.
 pub fn in_place(s: &mut Session, track: &str, bounced: &Bounced) -> Result<InPlace, EditError> {
     crate::ready(s)?;
-    if bounced.revision.is_some_and(|r| r != s.accepted().number) {
-        return Err(EditError::Rejected("The song changed while it bounced, so nothing was added. Bounce it again.".into()));
+    if bounced.changed(s.accepted()) {
+        return Err(EditError::Rejected(CHANGED.into()));
     }
     check(s.accepted(), track)?;
+    if bounced.rendered.sounding == 0 {
+        return Err(EditError::Rejected(format!("{} made no sound, so there's nothing to bounce.", label_of(s.accepted(), track))));
+    }
     crate::import::take_in_assets(s, std::iter::once(&bounced.asset))?;
     let rev = s.accepted();
     let tempo = rev.compiled.data.tempo();
-    let length = tempo.beat_at(tempo.seconds_at(0.0) + bounced.seconds);
+    // To its last sound: the rest is silence, and would make the song longer.
+    let length = tempo.beat_at(tempo.seconds_at(0.0) + bounced.sounding);
     let clip = m2_song::AudioClip {
         id: None,
         other_id: None,
@@ -336,7 +451,7 @@ pub fn in_place(s: &mut Session, track: &str, bounced: &Bounced) -> Result<InPla
     let clip = serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))?;
     let new = NewTrack {
         play: Play::Audio,
-        label: Some(format!("{} audio", label(rev, track))),
+        label: Some(format!("{} audio", label_of(rev, track))),
         clips: vec![clip],
         like: Some(track.to_string()),
         mono: bounced.channels == 1,

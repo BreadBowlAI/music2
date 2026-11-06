@@ -187,18 +187,28 @@ pub(crate) fn prop_key(key: &str) -> String {
 /// The channel entry of a new track keyed `key`, its file imported as `binding`, that copies track
 /// `like`'s channel in `mixer` (Bounce to audio, RENDER-40): that property keyed anew, its value
 /// as written with each read of `like.out` (`keys.out`, the binding the song gives it) reading
-/// `binding.out` instead. And the key of the channel copied. Refused in words when `like` hasn't
-/// a channel of its own that reads its `out` by name, and only that.
-pub(crate) fn copied_channel(text: &str, mixer: &Mixer, like: &str, key: &str, binding: &str) -> Result<(String, String), EditError> {
-    let no = |why: &str| EditError::Rejected(format!("{like}'s mixer channel can't be copied: {why}"));
-    let c = mixer.channel_of(like).ok_or_else(|| no("it isn't in one channel"))?;
-    if c.tracks.len() != 1 {
-        return Err(no("other tracks go into it too"));
-    }
+/// `binding.out` instead. And the key of the channel copied. Refused in words, naming `like` as
+/// `shown`, when it hasn't a channel of its own that reads its `out` by name, and only that.
+pub(crate) fn copied_channel(
+    text: &str,
+    mixer: &Mixer,
+    like: &str,
+    shown: &str,
+    key: &str,
+    binding: &str,
+) -> Result<(String, String), EditError> {
+    let by_name = || {
+        EditError::Rejected(format!(
+            "{shown}'s mixer channel doesn't read it by name, so music2 can't copy it for the bounce: write it `{like}.out` there."
+        ))
+    };
+    let Some(c) = mixer.channel_of(like).filter(|c| c.tracks.len() == 1) else {
+        return Err(EditError::Rejected(format!("{shown} hasn't a mixer channel of its own, so music2 can't copy it for the bounce.")));
+    };
     let mut reads: Vec<&mix::ExportRead> = c.reads.iter().filter(|r| r.module == like && !r.sidechain).collect();
     reads.sort_by_key(|r| r.at);
     if reads.is_empty() || reads.iter().any(|r| r.export != "out") {
-        return Err(no("it doesn't read its out by name"));
+        return Err(by_name());
     }
     let (start, end) = (c.property.value.0 as usize, c.property.value.1 as usize);
     let mut value = String::new();
@@ -209,8 +219,8 @@ pub(crate) fn copied_channel(text: &str, mixer: &Mixer, like: &str, key: &str, b
         let name =
             text[from..].chars().take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '$').map(char::len_utf8).sum::<usize>();
         let read = from + name + ".out".len();
-        if from < at || read > end || name == 0 || &text[from + name..read] != ".out" {
-            return Err(no("it doesn't read its out by name"));
+        if from < at || read > end || name == 0 || text.get(from + name..read) != Some(".out") {
+            return Err(by_name());
         }
         value.push_str(&text[at..from]);
         value.push_str(binding);
@@ -711,7 +721,8 @@ pub(crate) fn add_tracks_as(
         match &t.like {
             // A copy of another track's channel, reading this one there (RENDER-40).
             Some(like) => {
-                let (entry, channel) = copied_channel(&song_text, &mixer, like, &key, &binding)?;
+                let shown = rev.compiled.ir.modules.iter().find(|m| m.key == *like).map_or(like.as_str(), |m| m.label());
+                let (entry, channel) = copied_channel(&song_text, &mixer, like, shown, &key, &binding)?;
                 entries.push(entry);
                 routed.push((key.clone(), before.get(&channel).cloned().unwrap_or_default()));
                 copied.get_or_insert(channel);

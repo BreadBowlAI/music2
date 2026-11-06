@@ -5,7 +5,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
-use m2_editor::bounce::{Bounce, Bounced};
+use m2_editor::bounce::{Bounce, Bounced, Planned};
 use m2_editor::render::{Render, Threads};
 use m2_song::AssetName;
 use serde_json::{Value, json};
@@ -66,10 +66,25 @@ impl Graph {
         })
     }
 
+    /// The revision the window shows now, without waiting for the actor: a bounce rendering asks
+    /// whether the song changed ([`Graph::bounce_changed`]) only once it moves.
+    pub fn shown_revision(&self) -> Option<u64> {
+        self.inner.control.lock().open.as_ref().map(|p| p.shown.revision)
+    }
+
+    /// Whether the open song is another than the one `planned` names, apart from the files a bounce
+    /// writes as `asset` (RENDER-40): a change while it renders. A song closed or opened anew is.
+    pub fn bounce_changed(&self, token: u64, planned: Planned, asset: AssetName) -> bool {
+        self.call(move |a| {
+            Ok(a.open.as_ref().filter(|o| o.token == token).is_none_or(|o| planned.changed_from(o.session.accepted(), &asset)))
+        })
+        .unwrap_or(true)
+    }
+
     /// Put `bounced`, the bounce of track `track`, in the open song (RENDER-40): one actor job, one
     /// undo step, "bouncing Keys" (or an agent's words). Answers the edit with the new track's
     /// `module` and `label`, the track `muted`, and the `asset`. Refused when the song changed
-    /// since it was planned.
+    /// since it was planned, apart from the bounce's own files (the watcher may have taken them in).
     pub fn bounce_place(&self, token: u64, track: String, bounced: Bounced) -> Result<Value> {
         let words = crate::caller::now().why();
         let done = self.call(move |a| {

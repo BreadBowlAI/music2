@@ -63,9 +63,15 @@ fn bounce_of_a_track_still_writes_its_file() {
     assert!(std::fs::read(&stem).unwrap() == std::fs::read(&bounced).unwrap(), "the stem and the bounce differ");
 }
 
-// RENDER-40: the app's Bounce to audio writes `m2 bounce --track`'s bytes. `m2 bounce --in-place`
-// with the app open is the app's own (one undo step of the agent's, Keys muted in the song, Keys
-// audio added); with the app closed `m2` does the same itself, the same bytes again.
+/// A WAV's samples.
+fn samples(path: &Path) -> Vec<f32> {
+    hound::WavReader::open(path).unwrap().into_samples::<f32>().map(Result::unwrap).collect()
+}
+
+// RENDER-40: Bounce to audio renders what `m2 bounce --track` renders, to the bit, where both have
+// sound (it goes on until the track falls silent; `m2 bounce`, to 2 s past the song's last clip).
+// `m2 bounce --in-place` with the app open is the app's own (one undo step of the agent's, Keys
+// muted in the song, Keys audio added); with the app closed `m2` does the same itself, the same bytes.
 #[test]
 fn the_apps_bounce_is_m2_bounces_bits() {
     let a = app::App::open("first-song", |_| {});
@@ -78,17 +84,28 @@ fn the_apps_bounce_is_m2_bounces_bits() {
         app::said(&o)
     };
     ok(a.m2(&["bounce", shut, "keys-bounce", "--track", "keys"]));
-    let plain = std::fs::read(closed.join("assets/keys-bounce.wav")).unwrap();
+    let plain = samples(&closed.join("assets/keys-bounce.wav"));
 
     let out = ok(a.m2(&["bounce", a.dir(), "keys-bounce", "--track", "keys", "--in-place", "--as", "Claude"]));
     assert!(out.contains("in the open app: one undo step"), "{out}");
-    assert!(std::fs::read(a.song.join("assets/keys-bounce.wav")).unwrap() == plain, "the app's bounce is m2 bounce's bytes");
+    let apps = std::fs::read(a.song.join("assets/keys-bounce.wav")).unwrap();
+    let heard = samples(&a.song.join("assets/keys-bounce.wav"));
+    let n = plain.len().min(heard.len());
+    assert!(n > 48_000 * 2 * 15, "both hold the song: {n} samples");
+    let differ = plain[..n].iter().zip(&heard[..n]).filter(|(x, y)| x.to_bits() != y.to_bits()).count();
+    assert_eq!(differ, 0, "the app's bounce is m2 bounce's render where both have it");
+    assert!(heard.len() < plain.len(), "and ends sooner: Keys is silent before 2 s past the song's end");
     assert!(a.read("tracks/keys.ts").contains("muted: true") && a.read("song.ts").contains("keys-audio"), "{}", a.read("song.ts"));
     assert_eq!((&a.top()["by"], &a.top()["name"]), (&serde_json::json!("Claude"), &serde_json::json!("bouncing Keys")), "{}", a.top());
 
     let out = ok(a.m2(&["bounce", shut, "keys-again", "--track", "keys", "--in-place"]));
     assert!(out.contains("Keys audio"), "{out}");
-    assert!(std::fs::read(closed.join("assets/keys-again.wav")).unwrap() == plain, "and m2's own, the app closed");
+    assert!(std::fs::read(closed.join("assets/keys-again.wav")).unwrap() == apps, "and m2's own, the app closed, the same bytes");
     let text = std::fs::read_to_string(closed.join("song.ts")).unwrap();
     assert!(text.contains("keys-audio") && std::fs::read_to_string(closed.join("tracks/keys.ts")).unwrap().contains("muted: true"));
+
+    // Refused with the app open: its words alone, as with it closed.
+    let o = a.m2(&["bounce", a.dir(), "keys-3", "--track", "keys", "--in-place"]);
+    let said = app::said(&o);
+    assert!(!o.status.success() && said.contains("error: Keys is muted in the song"), "{said}");
 }

@@ -45,7 +45,7 @@ pub const EXPORTS: &str = "Exports";
 pub struct Exports {
     running: AtomicBool,
     /// Set to stop it (the app is quitting).
-    stop: Arc<AtomicBool>,
+    pub(crate) stop: Arc<AtomicBool>,
     /// The song being exported.
     song: Mutex<Option<String>>,
     /// How the last export that borrowed live instances went.
