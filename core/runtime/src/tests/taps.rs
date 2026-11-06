@@ -437,7 +437,9 @@ fn a_meter_slot_reads_a_kernels_meter_once_a_block() {
     let mut seen = 0;
     for n in [1, 3, 7, 2, 11] {
         blocks(&mut live, n);
+        let peeked = taps.peek_meter(0).expect("a meter peeked at");
         let m = taps.meter(0).expect("a meter read");
+        assert_eq!(peeked, m, "a peek takes nothing from the read after it");
         // The point is taken at the first block, which it reads too.
         let these = &last[seen..seen + n];
         seen += n;

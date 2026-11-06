@@ -1,6 +1,6 @@
 # Kernel ABI v1
 
-The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5 to ABI-11](architecture.md#kernel-abi-reservations); this page is the detail behind them.
+The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5 to ABI-11, ABI-13](architecture.md#kernel-abi-reservations); this page is the detail behind them.
 
 ## In short
 
@@ -11,6 +11,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - The only thing a kernel may import is **`m2.asset_read`**: it copies part of an audio file into the kernel's memory.
 - An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
 - A kernel may take **notes**: an `events<note>` input gets its lane's notes and controllers each block, stamped to the sample.
+- A kernel may give **meters**: numbers for the window to show (how far a compressor turns down), which nothing in the song can read ([below](#meters-abi-13)).
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
 - A pack's kernels have a **time limit** on every call: 100 ms while the song plays, 5 s for everything else. A call still running then is stopped, and its sound goes silent ([below](#the-time-limit-abi-6-abi-7)). std's kernels and those of music2's own packs have none.
@@ -23,6 +24,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | Where the sound goes in and out | [The port table](#the-port-table) |
 | Reading an audio file | [The asset import](#the-asset-import) |
 | Notes in, each block | [Event inputs](#event-inputs) |
+| Numbers for the window | [Meters](#meters-abi-13) |
 | A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
 | How long a call may take | [The time limit](#the-time-limit-abi-6-abi-7) |
@@ -168,6 +170,15 @@ A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track 
 The Rust kit reads all this for you (ABI-9): name the inputs in `Kernel::NOTES`, and `io.events(i)` gives this call's events, each as an `Event`, its frame counted from the call's first frame, so `frame` indexes the call's other inputs. A kind the kit doesn't know is skipped.
 
 **Why it keeps v1:** this shape was fixed among v1's reservations, and a module without an events input sees nothing new. So it is an addition, as an optional export is.
+
+## Meters (ABI-13)
+
+A meter is a number a kernel gives the window to show, such as how far a compressor turns the sound down. Nothing in the song may read one, so a meter can never change what plays.
+
+- **In the manifest:** `meters = ["reduction: control<db>"]` in the kernel's `[[kernel]]`, after `outputs`. Each is a control of a unit, with no default and no range.
+- **In the port table:** a meter is an output after the kernel's outputs, one channel of `max_block` f32s. `k_ports` counts it with the outputs, and so does the settings block's `ports` list. A kernel with no meters is as it was.
+- **Writing it:** as any output, every frame of `from..to` ([rule 4](#the-five-rules-abi-5)). The host reads the last frame of each block, and only while a window or an agent looks at it. The Rust kit's `io.meter(o, value)` fills the call's frames with one number.
+- **The checker** refuses a wire from a meter, in words: "`reduction` is a meter of `std:compress`: it is for the window to show, and nothing in the song can read it".
 
 ## Offline kernels
 

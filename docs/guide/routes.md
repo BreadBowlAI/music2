@@ -386,12 +386,12 @@ An example body:
 
 ### `POST /api/graph/scope`
 
-Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop.
+Look at a box as it plays: its sound's last frames (kind scope), its spectrum, its level, or a meter its sound gives (kind meter, at its name); at its output (at out) or its input (at in); to the window that asks (and in each answer), while you ask again within 10 s; or stop.
 
 An example body:
 
 ```json
-{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}
+{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "kind": "spectrum", "at": "in", "on": true}
 ```
 
 ### `POST /api/graph/sections`

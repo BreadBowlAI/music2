@@ -945,6 +945,23 @@ fn m2_kernels_lists_the_kernels_of_the_packs_music2_comes_with() {
     }
 }
 
+// ABI-13: `m2 kernels` lists a kernel's meters after its outputs, so an agent knows what to ask a
+// look for: std's compressor's `reduction`, in words and in JSON.
+#[test]
+fn m2_kernels_lists_a_kernels_meters() {
+    let t = Temp::new("kernel-meters");
+    let listed = ok(t.m2(&["kernels"]));
+    let line = listed.lines().find(|l| l.starts_with("std:compress")).unwrap_or_else(|| panic!("{listed}"));
+    assert!(line.ends_with("-> (out: audio<*>) meters (reduction: control<db>)"), "{line}");
+    let json = ok(t.m2(&["kernels", "--json"]));
+    let limit: serde_json::Value =
+        json.lines().map(|l| serde_json::from_str(l).unwrap()).find(|v: &serde_json::Value| v["id"] == "std:limit").unwrap();
+    assert_eq!(limit["meters"], serde_json::json!(["reduction: control<db>"]));
+    let sine: serde_json::Value =
+        json.lines().map(|l| serde_json::from_str(l).unwrap()).find(|v: &serde_json::Value| v["id"] == "std:sine").unwrap();
+    assert_eq!(sine["meters"], serde_json::json!([]), "none");
+}
+
 /// Every file under `dir` with its bytes, sorted.
 fn tree_of(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
     let mut out = vec![];

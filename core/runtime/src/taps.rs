@@ -345,15 +345,26 @@ impl TapSlots {
     }
 
     /// What meter slot `slot` read since the last read: its meter's last number and the most since
-    /// (TAP-15). None while it points nowhere, or the audio thread hasn't read a block of its point.
+    /// (TAP-15), which starts again from here. None while it points nowhere, or the audio thread
+    /// hasn't read a block of its point.
     pub fn meter(&self, slot: usize) -> Option<Reading> {
+        self.read_meter(slot, true)
+    }
+
+    /// What [`TapSlots::meter`] would say, leaving the most where it is: an agent's answer, which
+    /// mustn't take it from the window's next read.
+    pub fn peek_meter(&self, slot: usize) -> Option<Reading> {
+        self.read_meter(slot, false)
+    }
+
+    fn read_meter(&self, slot: usize, take: bool) -> Option<Reading> {
         let s = self.slots.get(slot)?;
         let asked = s.asked.load(Ordering::Acquire);
         if asked == OFF || s.took.load(Ordering::Acquire) != asked || s.blocks.load(Ordering::Acquire) == 0 {
             return None;
         }
         let now = f32::from_bits(s.now.load(Ordering::Relaxed));
-        let most = s.most.swap(0, Ordering::Relaxed);
+        let most = if take { s.most.swap(0, Ordering::Relaxed) } else { s.most.load(Ordering::Relaxed) };
         Some(Reading { now, most: if most == 0 { now } else { unkey(most) } })
     }
 

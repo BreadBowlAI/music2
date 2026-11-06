@@ -490,14 +490,19 @@ fn run(args: Vec<String>) -> Result<()> {
                         })
                         .collect::<Vec<_>>()
                 };
+                // Its meters (ABI-13): what a look may ask for by name, never a wire.
+                let meters = match s.meters.is_empty() {
+                    true => String::new(),
+                    false => format!(" meters ({})", ports(&s.meters).join(", ")),
+                };
                 if on(&args, "--json") {
                     println!(
                         "{}",
-                        serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs)})
+                        serde_json::json!({"id": s.id, "description": s.description, "inputs": ports(&s.inputs), "outputs": ports(&s.outputs), "meters": ports(&s.meters)})
                     );
                 } else {
                     println!(
-                        "{:12} ({}) -> ({})\n             {}",
+                        "{:12} ({}) -> ({}){meters}\n             {}",
                         s.id,
                         ports(&s.inputs).join(", "),
                         ports(&s.outputs).join(", "),

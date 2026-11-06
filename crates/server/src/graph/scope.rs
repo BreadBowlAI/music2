@@ -223,8 +223,8 @@ fn sides(frames: &[[f32; 2]], channels: u8) -> Vec<Vec<f64>> {
     (0..(channels as usize).clamp(1, 2)).map(side).collect()
 }
 
-/// What `a`, a look, saw in `taps`, a plan with id `plan` at `rate`: a level reads from where it
-/// last read when `advance`, else peeks there. None when there is nothing yet.
+/// What `a`, a look, saw in `taps`, a plan with id `plan` at `rate`: a level, and a meter's most,
+/// read from where they last read when `advance`, else peek there. None when there is nothing yet.
 fn see(a: &mut Ask, taps: &TapSlots, plan: u64, rate: u32, advance: bool) -> Option<Seen> {
     let What::Box(look) = &a.what else { return None };
     let mut frames = vec![];
@@ -245,7 +245,8 @@ fn see(a: &mut Ask, taps: &TapSlots, plan: u64, rate: u32, advance: bool) -> Opt
             }
             (!frames.is_empty()).then_some(Seen::Level(frames))
         }
-        (Kind::Meter, Place::Meter(m)) => taps.meter(m).map(Seen::Meter),
+        // An agent's answer peeks, so the window's next read still has the most since its last.
+        (Kind::Meter, Place::Meter(m)) => if advance { taps.meter(m) } else { taps.peek_meter(m) }.map(Seen::Meter),
         _ => None,
     }
 }

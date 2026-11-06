@@ -120,7 +120,7 @@ pub const COMMANDS: &[Command] = &[
         name: "kernels",
         also: &[],
         usage: "m2 kernels [--json]",
-        words: "list every kernel and its typed ports: std's, and those of the packs music2 comes with",
+        words: "list every kernel and its typed ports, and the meters it gives: std's, and those of the packs music2 comes with",
         more: "",
     },
     Command {
