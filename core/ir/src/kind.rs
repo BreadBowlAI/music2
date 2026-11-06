@@ -76,14 +76,15 @@ impl Unit {
         let ok = match self {
             Unit::Switch => v == 0.0 || v == 1.0,
             Unit::Choice(n) => v.fract() == 0.0 && v >= 0.0 && v < n.len() as f64,
-            Unit::Keyset => v.fract() == 0.0 && (0.0..=4095.0).contains(&v),
+            // An empty set has no note to move to (VOX-12).
+            Unit::Keyset => v.fract() == 0.0 && (1.0..=4095.0).contains(&v),
             _ => return Ok(()),
         };
         match self {
             _ if ok => Ok(()),
             Unit::Switch => Err("0 or 1".into()),
             Unit::Choice(n) => Err(format!("a whole number from 0 to {}", n.len() - 1)),
-            Unit::Keyset => Err("a set of notes, a whole number from 0 to 4095".into()),
+            Unit::Keyset => Err("a set of at least one note, a whole number from 1 to 4095".into()),
             _ => unreachable!("a number's unit holds any number"),
         }
     }

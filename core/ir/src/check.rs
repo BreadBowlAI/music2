@@ -1350,10 +1350,10 @@ fn type_kernel(
         if let (PortKind::Any | PortKind::Control(None), Kind::Control(Some(u))) = (p.kind, k)
             && !u.is_number()
         {
-            let only = if u == Unit::Switch {
-                "a switch reaches only a port of a switch"
-            } else {
-                "a choice reaches only a port of its own options"
+            let only = match u {
+                Unit::Switch => "a switch reaches only a port of a switch",
+                Unit::Keyset => "the song's key (time.key) reaches only a port of the unit keyset",
+                _ => "a choice reaches only a port of its own options",
             };
             errs.push(format!("input `{}` ({}) works with numbers, and {k} isn't a number: {only}", p.name, p.kind));
             continue;
@@ -2166,9 +2166,11 @@ mod tests {
         assert_eq!("keyset".parse::<Unit>(), Ok(Unit::Keyset));
         assert!(!Unit::Keyset.is_number());
         assert_eq!(Unit::Keyset.holds(2741.0), Ok(()));
-        for bad in [-1.0, 4096.0, 0.5] {
-            assert!(Unit::Keyset.holds(bad).unwrap_err().contains("0 to 4095"), "{bad}");
+        // An empty set has no note to move to: a set holds one note at least.
+        for bad in [0.0, -1.0, 4096.0, 0.5] {
+            assert!(Unit::Keyset.holds(bad).unwrap_err().contains("at least one note, a whole number from 1 to 4095"), "{bad}");
         }
+        assert_eq!(Unit::Keyset.holds(1.0), Ok(()));
         let wired = |src: serde_json::Value, port: &str| {
             let mut nodes = vec![src, json!({"id": "o", "op": "kernel", "kernel": "t:saw"})];
             nodes.push(match port {
@@ -2181,10 +2183,21 @@ mod tests {
         assert!(e[0].message.contains("expects control<gain>, got control<keyset>"), "{}", e[0]);
         let e = wired(json!({"id": "x", "op": "time", "of": "playing"}), "key").unwrap_err();
         assert!(e[0].message.contains("expects control<keyset>, got control<unit01>"), "{}", e[0]);
+        // Math, whose ports take any number, refuses it in the key's own words.
+        let e = check(
+            &song(json!([{"id": "k", "op": "time", "of": "key"}, {"id": "a", "op": "kernel", "kernel": "t:add", "inputs": {"a": "k", "b": "k"}}]), "a"),
+            &kernels(),
+        )
+        .unwrap_err();
+        assert!(
+            e[0].message.contains("control<keyset> isn't a number: the song's key (time.key) reaches only a port of the unit keyset"),
+            "{}",
+            e[0]
+        );
         // A number written there is a set of notes fixed in the code, as a switch takes a written 0 or 1.
         assert!(wired(json!({"id": "x", "op": "const", "value": 2741}), "key").is_ok(), "C major, written");
         let e = wired(json!({"id": "x", "op": "const", "value": 5000}), "key").unwrap_err();
-        assert!(e[0].message.contains("must be a set of notes, a whole number from 0 to 4095, not 5000"), "{}", e[0]);
+        assert!(e[0].message.contains("must be a set of at least one note, a whole number from 1 to 4095, not 5000"), "{}", e[0]);
     }
 
     /// A song with frames: `o` made in a component frame 0 inside the `key()` frame 1's parent.

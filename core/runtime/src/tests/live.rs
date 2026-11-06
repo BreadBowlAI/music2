@@ -367,7 +367,7 @@ fn a_key_change_while_playing_reaches_the_kernel_at_once() {
         "(f32.store (i32.const 4096) (f32.add (f32.load (i32.const 4096)) (f32.const 1))) {}",
         out_v1("(f32.add (local.get $x) (f32.load (i32.const 4096)))")
     );
-    let dir = package_with(&module_v1(&kernel_v1("k", &body)), "inputs = [\"key: control<keyset> = 0\"]\noutputs = [\"out: audio<1>\"]");
+    let dir = package_with(&module_v1(&kernel_v1("k", &body)), "inputs = [\"key: control<keyset> = 4095\"]\noutputs = [\"out: audio<1>\"]");
     let mut pk = own_packages();
     pk.load(&dir).unwrap();
     let ir = song(
