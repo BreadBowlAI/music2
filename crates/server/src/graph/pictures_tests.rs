@@ -252,3 +252,164 @@ fn a_pictures_words_are_in_the_view() {
     assert!(rig.graph.pictures_words());
     assert_eq!(views(&rig)[0]["words"], "cut at 2400 Hz, 4 dB");
 }
+
+// ------------------------------------------------ curves measured from the sound (CARD-80 to CARD-86)
+
+/// A song's own lowpass whose curve is measured, and a drum whose hit is: one test sound each.
+const MEASURED: &str = "import { axis, component, control, port, view } from '@m2/core';
+import { lowpass } from 'std/filter';
+import { drums } from '@m2/drums';
+export const tone = component(
+  {
+    id: 'tone', label: 'Tone',
+    inputs: { x: port.audio() },
+    controls: { cutoff: control.hz(1000).range(20, 20000).log(), q: control.scalar(0.7).range(0.3, 20).log(), boost: control.db(0) },
+    output: port.audio(),
+    editor: {
+      views: {
+        curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }),
+        nohit: view.picture({ x: axis.time(0.5), y: axis.lin('bipolar', -1, 1) }),
+      },
+    },
+  },
+  (x, { cutoff, q }) => lowpass(x, { cutoff, q }),
+  {
+    curve: { draw: (v, p) => [p.response({ name: 'curve' }), p.handle(v.cutoff, v.boost, { x: 'cutoff', y: 'boost' })], words: (v) => `cut at ${v.cutoff} Hz` },
+    nohit: { draw: (v, p) => [p.hit()], words: () => 'no hit' },
+  },
+);
+export const thump = component(
+  {
+    id: 'thump', label: 'Thump',
+    inputs: { notes: port.notes() },
+    controls: { decay: control.scalar(1).range(0.1, 10).log() },
+    output: port.audio(),
+    editor: { views: { hit: view.picture({ x: axis.time(0.5), y: axis.lin('bipolar', -1, 1) }) } },
+  },
+  (notes, { decay }) => drums.drum(notes, { decay }),
+  { hit: { draw: (v, p) => [p.hit({ note: 36 })], words: (v) => `a kick, decay ${v.decay}` } },
+);
+";
+
+const MEASURED_SONG: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { sum } from 'std/math';\n\
+                             import { thump, tone } from './lib/sounds';\n\
+                             const lead = track('lead', () => tone(osc.saw(110), { cutoff: 2400, q: 2 }));\n\
+                             const kick = track('kick', ({ lane }) => thump(lane.notes('hits'), { decay: 1 }));\n\
+                             export default song(() => sum(lead.out, kick.out));\n";
+
+fn measured() -> Rig {
+    let fixture = Fixture::new();
+    fixture.put("lib/sounds.ts", MEASURED);
+    fixture.put("song.ts", MEASURED_SONG);
+    let (p, _driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    Rig { fixture, graph }
+}
+
+impl Rig {
+    /// The id of card `title` of track `module`, and of its knob for `slot`.
+    fn card_in(&self, module: &str, title: &str) -> Value {
+        let state = self.state();
+        let m = state["view"]["modules"].as_array().unwrap().iter().find(|m| m["key"] == module).unwrap().clone();
+        m["nodes"].as_array().unwrap().iter().find(|n| n["title"] == title).unwrap().clone()
+    }
+
+    fn knob_in(&self, module: &str, title: &str, slot: &str) -> String {
+        let card = self.card_in(module, title);
+        card["knobs"].as_array().unwrap().iter().find(|k| k["slot"] == slot).unwrap()["id"].as_str().unwrap().to_string()
+    }
+
+    fn ask_in(&self, client: &str, module: &str, title: &str, view: &str) -> Value {
+        let node = self.card_in(module, title)["id"].as_str().unwrap().to_string();
+        self.graph.picture(self.token(), self.revision(), client, (module, &node, view), true).unwrap()
+    }
+}
+
+/// The cookbook's lowpass in dB at `hz`, at 48 kHz.
+fn textbook(cutoff: f64, q: f64, hz: f64) -> f64 {
+    let (rate, tau) = (48_000.0, std::f64::consts::TAU);
+    let w0 = tau * cutoff / rate;
+    let (cos, alpha) = (w0.cos(), w0.sin() / (2.0 * q));
+    let b = [(1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0];
+    let a = [1.0 + alpha, -2.0 * cos, 1.0 - alpha];
+    let w = tau * hz / rate;
+    let at = |c: [f64; 3]| (c[0] + c[1] * w.cos() + c[2] * (2.0 * w).cos()).powi(2) + (c[1] * w.sin() + c[2] * (2.0 * w).sin()).powi(2);
+    10.0 * (at(b) / at(a)).log10()
+}
+
+/// How far a response's points are from the cookbook's lowpass, at most, where it is above −60 dB.
+fn off_textbook(response: &Value, cutoff: f64, q: f64) -> f64 {
+    let pts: Vec<f64> = response["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+    assert_eq!(pts.len(), 512, "256 points");
+    pts.chunks(2).filter(|p| textbook(cutoff, q, p[0]) > -60.0).map(|p| (p[1] - textbook(cutoff, q, p[0])).abs()).fold(0.0, f64::max)
+}
+
+// CARD-80, CARD-82, CARD-85: a response is filled in by the server, measured from the call's own
+// sound: the textbook's curve at the code's values, and, while a knob is dragged, at the dragged
+// value, drawn again for the window that asked. An agent reads the same points.
+#[test]
+fn a_measured_curve_follows_a_knobs_drag() {
+    let rig = measured();
+    let answer = rig.ask_in("w1", "lead", "Tone", "curve");
+    let curve = &answer["picture"]["shapes"][0];
+    assert_eq!((&curve["kind"], &curve["name"]), (&json!("response"), &json!("curve")));
+    assert!(off_textbook(curve, 2400.0, 2.0) < 0.5, "{}", off_textbook(curve, 2400.0, 2.0));
+    assert_eq!(rig.ask_in("agent:a", "lead", "Tone", "curve"), answer, "an agent reads the same points");
+    rig.graph.preview_for(Some("w1"), rig.token(), rig.revision(), &rig.knob_in("lead", "Tone", "cutoff"), "g1", 500.0).unwrap();
+    let now = sent(&rig.graph.pictures_frame(), "w1", 0);
+    let curve = &now[0]["shapes"][0];
+    assert!(off_textbook(curve, 500.0, 2.0) < 0.5, "drawn at the dragged value: {}", off_textbook(curve, 500.0, 2.0));
+    assert!(off_textbook(curve, 2400.0, 2.0) > 6.0, "not at the code's");
+}
+
+// CARD-83, CARD-85: a hit is the call's sound from one note, filled in by the server, and drawn
+// again when a knob moves: a shorter decay leaves less sound in its last half.
+#[test]
+fn a_hit_redraws_when_a_knob_moves() {
+    let rig = measured();
+    let hit = rig.ask_in("w1", "kick", "Thump", "hit")["picture"]["shapes"][0].clone();
+    assert_eq!((&hit["kind"], &hit["note"], &hit["seconds"]), (&json!("hit"), &json!(36), &json!(0.5)));
+    let late = |hit: &Value| {
+        let pts: Vec<f64> = hit["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        assert_eq!(pts.len(), 1024, "256 columns, there and back");
+        pts[..512].chunks(2).filter(|p| p[0] > 0.25).map(|p| p[1].abs()).sum::<f64>()
+    };
+    let before = late(&hit);
+    assert!(before > 0.0, "the kick still sounds after a quarter of a second");
+    rig.graph.preview_for(Some("w1"), rig.token(), rig.revision(), &rig.knob_in("kick", "Thump", "decay"), "g1", 0.2).unwrap();
+    let now = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!(now[0]["words"], "a kick, decay 0.2");
+    let after = late(&now[0]["shapes"][0]);
+    assert!(after < before / 2.0, "a shorter decay: {after} against {before}");
+}
+
+// CARD-84: a measure is kept by what it is made from: a value its call doesn't play (the dot's
+// boost) draws the picture again with no render, and a drag back to where it was renders nothing.
+#[test]
+fn a_measure_is_kept_by_what_it_is_made_from() {
+    let rig = measured();
+    let first = rig.ask_in("w1", "lead", "Tone", "curve")["picture"]["shapes"][0].clone();
+    let renders = || rig.graph.measures_rendered();
+    assert_eq!(renders(), 1);
+    let (token, rev) = (rig.token(), rig.revision());
+    rig.graph.preview_for(Some("w1"), token, rev, &rig.knob_in("lead", "Tone", "boost"), "g1", 6.0).unwrap();
+    let now = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!(now[0]["shapes"][1]["y"], json!(6.0), "drawn again");
+    assert_eq!((renders(), &now[0]["shapes"][0]), (1, &first), "not measured again");
+    rig.graph.preview_for(Some("w1"), token, rev, &rig.knob_in("lead", "Tone", "cutoff"), "g1", 3000.0).unwrap();
+    rig.graph.pictures_frame();
+    assert_eq!(renders(), 2);
+    rig.graph.preview_for(Some("w1"), token, rev, &rig.knob_in("lead", "Tone", "cutoff"), "g1", 2400.0).unwrap();
+    let back = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!((renders(), &back.last().unwrap()["shapes"][0]), (2, &first), "back where it was: kept");
+}
+
+// CARD-81: a layer that can't be measured greys its picture, saying why, named by its card.
+#[test]
+fn a_layer_that_cant_be_measured_greys_its_picture_in_words() {
+    let rig = measured();
+    let p = &rig.ask_in("w1", "lead", "Tone", "nohit")["picture"];
+    assert_eq!(p["why"], "Tone's picture can't measure its sound: it plays no notes, so p.hit has no note to play.");
+    assert_eq!((&p["shapes"], &p["words"]), (&Value::Null, &Value::Null));
+}

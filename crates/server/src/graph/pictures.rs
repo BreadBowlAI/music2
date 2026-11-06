@@ -16,12 +16,17 @@
 //!   words at the view's values, and [`Graph::state`] puts them in the view (CARD-63).
 //! - **Each dot's knobs.** The runner checked the names a dot moves against the descriptor; the
 //!   answer gives each the card's own knob, or why the card can't move it (CARD-66).
+//! - **Measured layers** (CARD-80 to CARD-85). A draw's `p.response()` and `p.hit()` come with no
+//!   points: [`fill`] measures each from an offline copy of the call (`m2_editor::measure`), at the
+//!   values the picture was drawn at, after the draw, on the thread that drew it and outside the
+//!   control plane's lock, and keeps each measure by what it was made from ([`Measures`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
+use m2_editor::measure::{self, Layer, Span};
 use m2_editor::views::{Drawn as Part, PictureCall};
 use m2_script::pictures::Drawn;
 use serde_json::{Map, Value, json};
@@ -89,6 +94,36 @@ pub struct PicturesOut {
     pub clients: Vec<(String, Vec<SentPicture>)>,
 }
 
+/// The measures kept (CARD-84) at most: the one used longest ago goes first.
+const MEASURES: usize = 64;
+
+/// The measures kept by what each was made from (CARD-84), and how many were rendered.
+#[derive(Default)]
+pub(super) struct Measures {
+    kept: parking_lot::Mutex<std::collections::VecDeque<(String, Arc<Vec<f64>>)>>,
+    rendered: std::sync::atomic::AtomicU64,
+}
+
+impl Measures {
+    fn get(&self, key: &str) -> Option<Arc<Vec<f64>>> {
+        let mut kept = self.kept.lock();
+        let i = kept.iter().position(|(k, _)| k == key)?;
+        let hit = kept.remove(i)?;
+        let points = hit.1.clone();
+        kept.push_back(hit);
+        Some(points)
+    }
+
+    fn put(&self, key: String, points: Arc<Vec<f64>>) {
+        let mut kept = self.kept.lock();
+        kept.retain(|(k, _)| *k != key);
+        if kept.len() >= MEASURES {
+            kept.pop_front();
+        }
+        kept.push_back((key, points));
+    }
+}
+
 /// A picture to draw, as found on the control plane.
 struct Found {
     module: String,
@@ -101,6 +136,8 @@ struct Found {
     ask: m2_script::pictures::Ask,
     /// What it is drawn from: its code and its values.
     from: String,
+    /// The revision it is drawn from, which a measured layer copies its call from (CARD-81).
+    rev: Arc<m2_session::Revision>,
 }
 
 impl Pictures {
@@ -181,12 +218,60 @@ fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Foun
     let playing = |id: &str| cp.leases.live.iter().find(|l| l.token == token && l.control.id == id).map(|l| l.playing);
     let ask = call.at(playing);
     let from = format!("{}\n{}\n{view}\n{}", ask.key, ask.descriptor.id, ask.values);
-    Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from })
+    let rev = accepted.clone();
+    Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from, rev })
+}
+
+/// Each measured layer of `shapes`, a part's too, filled with its points (CARD-80): measured from
+/// an offline copy of `f`'s call at the values it was drawn at, or kept from a measure made from the
+/// same (CARD-84). Refused in words that follow "can't measure its sound: ".
+fn fill(f: &Found, measures: &Measures, shapes: &mut [Value]) -> Result<(), String> {
+    let mut packages: Option<m2_runtime::PackageSet> = None;
+    fill_in(f, measures, shapes, &mut packages)
+}
+
+fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut Option<m2_runtime::PackageSet>) -> Result<(), String> {
+    for s in shapes {
+        if let Some(inner) = s.get_mut("shapes").and_then(Value::as_array_mut) {
+            fill_in(f, measures, inner, packages)?;
+            continue;
+        }
+        let layer = match s["kind"].as_str() {
+            Some("response") => Layer::Response,
+            Some("hit") => Layer::Hit { note: s["note"].as_u64().unwrap_or(60) as u8, seconds: s["seconds"].as_f64().unwrap_or(1.0) },
+            _ => continue,
+        };
+        let Some(m2_script::component::ViewOf::Picture { x, .. }) =
+            f.ask.descriptor.editor.views.iter().find(|v| v.name == f.view).map(|v| &v.of)
+        else {
+            continue;
+        };
+        let values: Map<String, Value> = serde_json::from_str(&f.ask.values).unwrap_or_default();
+        // The revision's own kernels (PACK-9), whatever the session shows now.
+        let packages = packages.get_or_insert_with(|| m2_runtime::PackageSet::default().viewing(&f.rev.compiled.view).into_owned());
+        let copy = measure::copy(&f.rev, packages, &f.module, &f.node, &values, layer)?;
+        let points = match measures.get(&copy.key) {
+            Some(p) => p,
+            None => {
+                let sound = copy.render(packages)?;
+                measures.rendered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                let points = Arc::new(match layer {
+                    Layer::Response => measure::response(&sound, copy.rate(), Span { log: x.scale == "log", lo: x.lo, hi: x.hi }),
+                    Layer::Hit { seconds, .. } => measure::hit(&sound, seconds),
+                });
+                measures.put(copy.key.clone(), points.clone());
+                points
+            }
+        };
+        s["points"] = json!(*points);
+    }
+    Ok(())
 }
 
 /// The picture as an answer says it (CARD-67): its shapes, each dot's values with the card's own
-/// knobs, and its words; or why it can't be drawn, named by its card.
-fn said(f: &Found, drawn: Drawn) -> Value {
+/// knobs, and its measured layers' points (CARD-80); its words; or why it can't be drawn, named by
+/// its card.
+fn said(f: &Found, drawn: Drawn, measures: &Measures) -> Value {
     let mut out = json!({"module": f.module, "node": f.node, "view": f.view, "component": f.ask.descriptor.id, "revision": f.revision});
     match drawn {
         Drawn::Cant(why) => out["why"] = json!(format!("{}'s picture {}.", f.call.label, why.trim_end_matches('.'))),
@@ -210,6 +295,10 @@ fn said(f: &Found, drawn: Drawn) -> Value {
                 .collect();
             if let Some(shapes) = drew["shapes"].as_array_mut() {
                 knobbed(shapes, &knobs);
+                if let Err(why) = fill(f, measures, shapes) {
+                    out["why"] = json!(format!("{}'s picture can't measure its sound: {}.", f.call.label, why.trim_end_matches('.')));
+                    return out;
+                }
             }
             out["words"] = drew["words"].take();
             out["shapes"] = drew["shapes"].take();
@@ -269,7 +358,7 @@ impl Graph {
         };
         let drawn = self.inner.runner().draw_within(found.ask.clone(), Some(WAIT));
         let busy = drawn == Drawn::Busy;
-        let picture = said(&found, drawn);
+        let picture = said(&found, drawn, &self.inner.measures);
         let mut cp = self.inner.control.lock();
         let picture = match busy {
             true => Arc::new(picture),
@@ -317,7 +406,7 @@ impl Graph {
             if drawn == Drawn::Busy {
                 continue;
             }
-            let picture = said(f, drawn);
+            let picture = said(f, drawn, &self.inner.measures);
             self.inner.control.lock().pictures.drew(f, picture);
         }
         let cp = self.inner.control.lock();
@@ -396,6 +485,12 @@ impl Graph {
         let changed = cp.pictures.words.1 != words;
         cp.pictures.words = (if whole { revision } else { 0 }, words);
         changed
+    }
+
+    /// How many measures were rendered, not kept (CARD-84): what a test reads.
+    #[doc(hidden)]
+    pub fn measures_rendered(&self) -> u64 {
+        self.inner.measures.rendered.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// `client`'s window closed: the pictures it asked for end (CARD-67).
