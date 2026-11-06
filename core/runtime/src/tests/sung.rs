@@ -3,6 +3,7 @@
 //! live as offline, and a timing drag's markers.
 
 use super::*;
+use crate::fault::Code;
 use crate::measure::{self, Measured};
 
 /// A made-up singer at `rate` for `secs`: a buzzy tone (a pulse train through a resonance near
@@ -500,4 +501,58 @@ fn a_chunk_the_transport_reaches_is_left_as_it_was() {
         lane.refresh_unless(k, &|_| false);
     }
     assert!(stale.iter().all(|&k| !lane.stale(k)) && !differ(&copied(&lane, len), &before).is_empty());
+}
+
+// RENDER-30b (the review's S8, S9): a clip whose edited notes can't play plays as sung, and says
+// so, once a build, `sung.unheard`, naming the clip: played backwards, at another pitch, or naming
+// a `render` the song's packs don't have, or one of std's (no pack's voice renderer). A clip with
+// edits that play says nothing.
+#[test]
+fn edits_that_cant_play_say_so() {
+    let dir = project(&[]);
+    sung_file(&dir);
+    let pk = own_packages();
+    let k = offline::Kernel::of(&pk, offline::STRETCH).unwrap();
+    let makers = audio::Makers { stretch: Some(&k), packages: Some(&pk) };
+    let tempo = m2_song::TempoMap::constant(120.0);
+    let len = 3 * RATE as usize;
+    let plain = {
+        let mut cache = audio::Cache::with_renders_in(None);
+        played(
+            &audio::AudioLane::build_in(
+                &[the_clip(json!([]), None)],
+                &|a| Some(dir.join(a)),
+                &mut cache,
+                &tempo,
+                RATE as f64,
+                1,
+                makers,
+                None,
+            )
+            .unwrap(),
+            len,
+        )
+    };
+    let told = |c: m2_song::AudioClip| {
+        let mut cache = audio::Cache::with_renders_in(None);
+        let l = audio::AudioLane::build_in(&[c], &|a| Some(dir.join(a)), &mut cache, &tempo, RATE as f64, 1, makers, None).unwrap();
+        let said: Vec<_> = cache.faults().drain().into_iter().map(|f| (f.code, f.subject)).collect();
+        (said, played(&l, len))
+    };
+    let clip = crate::fault::Subject::Clip { lane: 0, clip: 0 };
+    let edited = the_clip(json!([]), Some(notes(0.0, 1.0)));
+    for (why, c) in [
+        ("backwards", m2_song::AudioClip { reverse: true, ..edited.clone() }),
+        ("std's", m2_song::AudioClip { render: Some("std:stretch".into()), ..edited.clone() }),
+        ("not the song's", m2_song::AudioClip { render: Some("@nobody/none:voice".into()), ..edited.clone() }),
+    ] {
+        let (said, out) = told(c.clone());
+        assert_eq!(said, [(Code::NotesUnheard, clip)], "{why}: said, once");
+        let as_sung = told(m2_song::AudioClip { sung: vec![], render: None, ..c }).1;
+        assert!(differ(&out, &as_sung).is_empty(), "{why}: it plays as sung");
+    }
+    let pitched = m2_song::AudioClip { pitch: 2.0, ..edited.clone() };
+    assert_eq!(told(pitched).0, [(Code::NotesUnheard, clip)], "at another pitch: said");
+    let (said, out) = told(edited);
+    assert!(said.is_empty() && !differ(&out, &plain).is_empty(), "edits that play say nothing");
 }

@@ -42,6 +42,10 @@ pub enum Code {
     TooLong,
     /// A warped clip's stretch failed (`stretch.failed`).
     StretchFailed,
+    /// A clip's edited notes can't play (RENDER-30b): it plays backwards or at another pitch, or
+    /// its `render` is no kernel of the song's packs that plays them, so it plays as sung
+    /// (`sung.unheard`).
+    NotesUnheard,
     /// The sound input chosen in Settings isn't there, so a take records from another
     /// (`input.missing`).
     InputMissing,
@@ -75,6 +79,7 @@ impl Code {
             Code::PluginCrashed | Code::PluginHung => "plugin.crashed",
             Code::Unreadable | Code::NotWav | Code::TooLong => "asset.unreadable",
             Code::StretchFailed => "stretch.failed",
+            Code::NotesUnheard => "sung.unheard",
             Code::InputMissing => "input.missing",
             Code::InputLost => "input.lost",
             Code::InputRefused => "input.refused",

@@ -278,8 +278,12 @@ pub(crate) struct Makers<'a> {
 }
 
 impl Makers<'_> {
-    /// The kernel `id` that renders a clip's edited phrases, when the song's packages have it.
+    /// The kernel `id` that renders a clip's edited phrases, when the song's packages have it: a
+    /// pack's offline kernel that makes sound, never std's (the review's S9).
     fn render(&self, id: &str) -> Option<Kernel> {
+        if m2_song::pack::split_id(id).is_none_or(|(p, _)| p == m2_song::pack::STD) {
+            return None;
+        }
         let k = Kernel::of(self.packages?, id)?;
         self.packages?.offline_decl(id).is_some_and(|d| d.hop == 0).then_some(k)
     }
@@ -911,6 +915,10 @@ impl AudioLane {
                     // Its edited phrases, when its `render` is a kernel the song has (RENDER-30b).
                     let kernel = c.render.as_deref().and_then(|id| makers.render(id));
                     let specs = kernel.as_ref().map(|_| phrases_of(c, tempo, sample_rate)).unwrap_or_default();
+                    // Edits that can't play are said, never dropped in silence (the review's S8).
+                    if c.render.is_some() && c.sung.iter().any(m2_song::Sung::edited) && specs.is_empty() {
+                        tell.report.faults().report(tell.fault(Code::NotesUnheard, i as u32));
+                    }
                     let mut made = vec![];
                     for p in &specs {
                         let k = kernel.as_ref().expect("a kernel for its phrases");

@@ -186,3 +186,70 @@ fn a_resize_keeps_the_notes_it_plays() {
     edit(&mut s, &Gesture::Resize { clip, start: 2.0, length: 2.0 }).unwrap();
     assert_eq!(the_clip(&s).sung.iter().map(|n| n.at).collect::<Vec<_>>(), [1.2]);
 }
+
+// RENDER-30b (the review's S8): Reverse on a clip whose notes are edited is refused in words,
+// since played backwards they would play as sung; on one whose notes aren't edited it is fine.
+#[test]
+fn reverse_is_refused_on_edited_notes() {
+    let clip = ClipRef { lane: vox(), id: Some("vox00001".into()), at: None, sha: None };
+    let reverse = Gesture::Audio { clip, gain_db: None, fade_in: None, fade_out: None, reverse: Some(true), follow: None, offset: None };
+    let f = song(SUNG);
+    let mut s = f.open();
+    let why = edit(&mut s, &reverse).map(drop).unwrap_err().to_string();
+    assert!(why.contains("notes are edited") && !the_clip(&s).reverse, "{why}");
+    let f = song(&SUNG.replace("\"move\": 1", "\"move\": 0"));
+    let mut s = f.open();
+    edit(&mut s, &reverse).unwrap();
+    assert!(the_clip(&s).reverse);
+}
+
+// VOX-43 (the review's S8): a song that plays a version of @m2/vocals with no measure (one made
+// before 1.1, here a copy of the pack from a folder without `notes`) is told which version it
+// plays and how to update it.
+#[test]
+fn find_notes_on_an_older_vocals_says_to_update() {
+    let f = song(CLIP);
+    let pack = f.0.join("old-vocals");
+    let from = m2_song::pack::source_packs().join("@m2/vocals");
+    for rel in ["m2pkg.toml", "README.md", "src/index.ts", "kernels/vocals.wasm"] {
+        let to = pack.join(rel);
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(from.join(rel), &to).unwrap();
+    }
+    for p in std::fs::read_dir(from.join("presets/tune")).unwrap() {
+        let p = p.unwrap().path();
+        let to = pack.join("presets/tune").join(p.file_name().unwrap());
+        std::fs::create_dir_all(to.parent().unwrap()).unwrap();
+        std::fs::copy(&p, to).unwrap();
+    }
+    let manifest = std::fs::read_to_string(pack.join("m2pkg.toml")).unwrap();
+    let cut = manifest.find("[[kernel]]\nname = \"notes\"").unwrap();
+    std::fs::write(pack.join("m2pkg.toml"), manifest[..cut].replace("version = \"1.1.0\"", "version = \"1.0.0\"")).unwrap();
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/vocals\" = {{ path = \"old-vocals\" }}\n"));
+    let s = f.open();
+    let why = crate::sung::packages_for(&s, "@m2/vocals:notes", "@m2/vocals:voice").map(drop).unwrap_err().to_string();
+    assert!(why.contains("@m2/vocals 1.0.0") && why.contains("m2 pack update @m2/vocals"), "{why}");
+}
+
+// VOX-44 (the review's S12): a comp leaves each piece the notes that reach the part of the file
+// it plays. A loop's three takes of 4 s in one file, the clip playing the third (file seconds 8 to
+// 12) with a note in each half; Take 2 comped over the second half: the first piece keeps the
+// first note, the second plays file seconds 6 to 8 and keeps none.
+#[test]
+fn a_comp_keeps_each_pieces_notes() {
+    let clip = r#"{"id": "vox00001", "start": 0, "length": 8, "asset": "vox.wav", "offset": 8, "render": "@m2/vocals:voice",
+        "sung": [{"at": 8.5, "length": 0.5, "pitch": 64, "move": 1, "straighten": 0},
+                 {"at": 10.5, "length": 0.5, "pitch": 66, "move": 0, "straighten": 0}]}"#;
+    let f = song(clip);
+    let path = f.0.join("assets/vox.wav");
+    m2_runtime::audio::write_wav(&path.with_file_name("vox12.wav"), &[vec![0.1; 12 * RATE as usize]], RATE).unwrap();
+    std::fs::rename(path.with_file_name("vox12.wav"), &path).unwrap();
+    f.write("assets/vox.wav.json", "{\"takes\": [0, 4, 8]}\n");
+    let mut s = f.open();
+    let at = ClipRef { lane: vox(), id: Some("vox00001".into()), at: None, sha: None };
+    edit(&mut s, &Gesture::Comp { clip: at, takes: vec![0.0, 4.0, 8.0], take: 1, from: 4.0, to: 8.0 }).unwrap();
+    let LaneData::Audio(c) = (**s.accepted().compiled.data.lane("vox", "clips").unwrap()).clone() else { panic!() };
+    assert_eq!(c.len(), 2, "{c:?}");
+    let ats = |c: &AudioClip| c.sung.iter().map(|n| n.at).collect::<Vec<_>>();
+    assert_eq!((ats(&c[0]), ats(&c[1])), (vec![8.5], vec![]));
+}

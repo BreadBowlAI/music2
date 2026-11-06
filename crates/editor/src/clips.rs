@@ -547,6 +547,12 @@ fn apply_then(
                 )));
             }
             if let Some(r) = reverse {
+                // Played backwards, edited notes would play as sung (RENDER-30b, the review's S8).
+                if *r && !c.reverse && c.render.is_some() && c.sung.iter().any(m2_song::Sung::edited) {
+                    return Err(EditError::Rejected(
+                        "This clip's notes are edited, and played backwards they would play as sung: set their moves and straightening back to 0 first, or reverse a copy.".into(),
+                    ));
+                }
                 c.reverse = *r;
             }
             if let Some(o) = offset {

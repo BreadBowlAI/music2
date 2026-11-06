@@ -308,10 +308,14 @@ impl Sung {
     }
 }
 
-/// Whether `id` reads as a kernel's id, `<package>:<name>` (VOX-40).
+/// Whether `id` reads as a pack's kernel's id, `@owner/pack:name` (VOX-40): never std's, whose
+/// kernels play no clip's edited notes (the review's S9).
 pub fn kernel_id(id: &str) -> bool {
     match id.split_once(':') {
-        Some((p, n)) => !p.is_empty() && !n.is_empty() && !id.chars().any(|c| c.is_whitespace() || c.is_control()),
+        Some((p, n)) => {
+            let pack = p.strip_prefix('@').and_then(|r| r.split_once('/')).is_some_and(|(o, k)| !o.is_empty() && !k.is_empty());
+            pack && !n.is_empty() && !id.chars().any(|c| c.is_whitespace() || c.is_control())
+        }
         None => false,
     }
 }
@@ -484,7 +488,7 @@ impl LaneData {
                     if let Some(r) = &c.render
                         && !kernel_id(r)
                     {
-                        return Err(invalid(format!("{at}: `render` must name a kernel, as `@owner/pack:name`, not {}", string(r))));
+                        return Err(invalid(format!("{at}: `render` must name a pack's kernel, as `@owner/pack:name`, not {}", string(r))));
                     }
                     if let Some((n, why)) = c.sung.iter().enumerate().find_map(|(n, x)| Some((n, x.problem()?))) {
                         return Err(invalid(format!("{at}: sung note {}: {why}", n + 1)));
@@ -1432,7 +1436,11 @@ mod tests {
         assert!(invalid(&with(r#"{"at": 0, "length": 1, "pitch": 60, "bend": 1}"#), &LaneKind::Audio).contains("bend"));
         let render = |r: &str| format!(r#"{{"clips": [{{"start": 0, "length": 1, "asset": "a.wav", "render": {r}}}]}}"#);
         assert!(LaneData::read(&render(r#""@m2/vocals:voice""#), &LaneKind::Audio).is_ok());
-        assert!(invalid(&render(r#""voice""#), &LaneKind::Audio).contains("`render` must name a kernel"));
+        assert!(invalid(&render(r#""voice""#), &LaneKind::Audio).contains("`render` must name a pack's kernel"));
+        assert!(
+            invalid(&render(r#""std:stretch""#), &LaneKind::Audio).contains("`render` must name a pack's kernel"),
+            "no std kernel (S9)"
+        );
     }
 
     // FMT-8a: readers order clips by (start, id) and notes by (start, pitch), so the order of an

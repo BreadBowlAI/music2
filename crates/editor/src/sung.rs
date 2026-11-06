@@ -144,6 +144,19 @@ fn packages_with(s: &Session, ids: &[&str]) -> Result<PackageSet, EditError> {
     }
     let view = set.view_of(&packs).map_err(|e| EditError::Rejected(format!("{e:#}")))?;
     set.show(&view);
+    // A version of the pack from before it had the kernel: say which, and how to update it.
+    for &id in ids {
+        if let Some((package, _)) = m2_song::pack::split_id(id)
+            && set.offline_decl(id).is_none()
+            && let Some(p) = set.get(package)
+            && rev.project.manifest.dependencies.contains_key(package)
+        {
+            return Err(EditError::Rejected(format!(
+                "This song plays {package} {}, which has no `{id}`: update it to the version music2 comes with (`m2 pack update {package}`), then Find notes again.",
+                p.version
+            )));
+        }
+    }
     if set.offline_decl(measure).is_none_or(|d| d.hop == 0) {
         return Err(EditError::Rejected(format!(
             "`{measure}` isn't a measure: a measure is an offline kernel with a hop, as `@m2/vocals:notes`"
