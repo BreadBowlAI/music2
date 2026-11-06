@@ -172,15 +172,37 @@ impl Runner {
     }
 }
 
+/// How long a picture stopped for its time or memory is refused at once before it is tried again:
+/// a stop on a busy machine may be a blip (CARD-64).
+#[cfg(not(test))]
+const BACKOFF: Duration = Duration::from_secs(10);
+#[cfg(test)]
+const BACKOFF: Duration = Duration::from_millis(300);
+
+/// What a picture's draws were stopped at: when last, and the values stopped once and twice.
+#[derive(Default)]
+struct Stops {
+    last: Option<(std::time::Instant, String)>,
+    once: HashSet<String>,
+    twice: HashSet<String>,
+}
+
 /// One runtime's thread's own: its runtime, and what it refuses until its code changes.
 #[derive(Default)]
 struct Kept {
     one: Option<One>,
     /// Why every picture here is refused: a load that failed or was stopped.
     broken: Option<String>,
-    /// Why a picture here is refused, by component and view: a draw stopped for its time or memory.
-    stopped: HashMap<(String, String), String>,
+    /// Each picture's stops, by component and view (CARD-64).
+    stopped: HashMap<(String, String), Stops>,
+    /// The pictures shown pure here: each runtime's first draw of each runs twice (CARD-64).
+    proven: HashSet<(String, String)>,
+    /// The pictures that drew differently for the same values: refused until the code changes.
+    impure: HashSet<(String, String)>,
 }
+
+/// What a picture whose draw keeps something between draws is refused with.
+const IMPURE: &str = "draws differently each time for the same values: a picture keeps nothing between its draws";
 
 impl Kept {
     fn draw(&mut self, ask: &Ask) -> Drawn {
@@ -188,8 +210,18 @@ impl Kept {
             return Drawn::Cant(why.clone());
         }
         let at = (ask.descriptor.id.clone(), ask.view.clone());
-        if let Some(why) = self.stopped.get(&at) {
-            return Drawn::Cant(why.clone());
+        if self.impure.contains(&at) {
+            return Drawn::Cant(IMPURE.into());
+        }
+        if let Some(st) = self.stopped.get(&at) {
+            if st.twice.contains(&ask.values) {
+                return Drawn::Cant("was stopped twice at these values, and is drawn at them again once its code changes".into());
+            }
+            if let Some((when, why)) = &st.last
+                && when.elapsed() < BACKOFF
+            {
+                return Drawn::Cant(format!("{why}; it is tried again in {} s", BACKOFF.as_secs().max(1)));
+            }
         }
         if self.one.is_none() {
             match made(ask) {
@@ -206,34 +238,69 @@ impl Kept {
             self.broken = Some(why.clone());
             return Drawn::Cant(why);
         }
-        // Twice, at the same values: a pure draw gives the same both times (CARD-64).
+        // A picture's first draw here runs twice, at the same values: a pure draw gives the same
+        // both times (CARD-64). After that, once.
         let first = one.call(ask);
+        let twice = !self.proven.contains(&at);
         let second = match &first {
-            Ok(_) => one.call(ask),
-            Err(_) => first.clone(),
+            Ok(_) if twice => one.call(ask),
+            _ => first.clone(),
         };
         match (first, second) {
-            (Ok(a), Ok(b)) if a == b => match a.strip_prefix("{\"why\":") {
-                Some(_) => Drawn::Cant(
-                    serde_json::from_str::<serde_json::Value>(&a).ok().and_then(|v| v["why"].as_str().map(String::from)).unwrap_or(a),
-                ),
-                None => match checked(&a, &ask.descriptor, &ask.view) {
-                    Ok(json) => Drawn::Shapes(json),
-                    Err(why) => Drawn::Cant(why),
-                },
-            },
+            (Ok(a), Ok(b)) if a == b => {
+                self.proven.insert(at);
+                match a.strip_prefix("{\"why\":") {
+                    Some(_) => Drawn::Cant(
+                        serde_json::from_str::<serde_json::Value>(&a).ok().and_then(|v| v["why"].as_str().map(String::from)).unwrap_or(a),
+                    ),
+                    None => match checked(&a, &ask.descriptor, &ask.view) {
+                        Ok(json) => Drawn::Shapes(json),
+                        Err(why) => Drawn::Cant(why),
+                    },
+                }
+            }
             (Ok(_), Ok(_)) => {
-                Drawn::Cant("draws differently each time for the same values: a picture keeps nothing between its draws".into())
+                self.impure.insert(at);
+                Drawn::Cant(IMPURE.into())
             }
             (Err(Stop::Hard(why)), _) | (_, Err(Stop::Hard(why))) => {
-                // Stopped for its time or its memory: its runtime is made again, and the picture refused until its code changes.
+                // Stopped for its time or its memory: its runtime is made again; the picture is
+                // refused for a while, and at these values for good once they were stopped twice.
                 self.one = None;
-                self.stopped.insert(at, why.clone());
-                Drawn::Cant(why)
+                let st = self.stopped.entry(at).or_default();
+                st.last = Some((std::time::Instant::now(), why.clone()));
+                if !st.once.insert(ask.values.clone()) {
+                    st.twice.insert(ask.values.clone());
+                }
+                Drawn::Cant(format!("{why}; it is tried again in {} s", BACKOFF.as_secs().max(1)))
             }
             (Err(Stop::Plain(m)), _) | (_, Err(Stop::Plain(m))) => Drawn::Cant(format!("couldn't be drawn: {m}")),
         }
     }
+}
+
+/// What a picture of `desc` is drawn from at its defaults (`m2 pack check`, CARD-64): each control
+/// but a dictionary at its default (a choice's name, a switch's true or false), each setting of a
+/// number, a name or true or false at its default, the rest null.
+pub fn defaults(desc: &Descriptor) -> String {
+    let mut v = serde_json::Map::new();
+    for c in desc.controls.iter().filter(|c| c.each.is_none()) {
+        let x = match (&c.default, &c.unit) {
+            (None, _) => serde_json::Value::Null,
+            (Some(d), Some(Unit::Switch)) => serde_json::json!(d.value != 0.0),
+            (Some(d), Some(Unit::Choice(_))) => c
+                .options()
+                .and_then(|o| o.names().get(d.value as usize).map(|n| serde_json::json!(&**n)))
+                .unwrap_or(serde_json::Value::Null),
+            (Some(d), _) => serde_json::json!(d.value),
+        };
+        v.insert(c.name.clone(), x);
+    }
+    for st in &desc.settings {
+        let plain = st.default.as_ref().filter(|d| d.is_number() || d.is_string() || d.is_boolean()).cloned();
+        v.insert(st.name.clone(), plain.unwrap_or(serde_json::Value::Null));
+    }
+    serde_json::Value::Object(v).to_string()
 }
 
 /// Why a call into the sandbox gave nothing.

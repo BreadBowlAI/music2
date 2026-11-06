@@ -396,7 +396,10 @@ fn words_are_one_line_of_400_characters_at_most() {
     assert!(cant(runner.draw(pack.ask("sep", "pic", v.clone()))).contains("its words must be one line of 1 to 400 characters"));
     // A name of 20 MB is never sent: refused by its length, or stopped while it is made.
     let why = cant(runner.draw(pack.ask("bigname", "pic", v)));
-    assert!(why.contains("a line's name is a plain name of up to 32 characters") || why == "took too long and was stopped", "{why}");
+    assert!(
+        why.contains("a line's name is a plain name of up to 32 characters") || why.starts_with("took too long and was stopped"),
+        "{why}"
+    );
 }
 
 // CARD-65: what a draw gives is checked in Rust, whatever the pack did to its sandbox: a pack that
@@ -480,30 +483,44 @@ fn a_pack_that_hangs_at_load_holds_only_its_own_pictures_once() {
 }
 
 // CARD-64: each draw has its own limit, counted from its start. One past it is stopped in words, and
-// that picture is refused at once until its code changes; the pack's other pictures still draw, and
-// a hundred draws take far longer than one's limit in all with none stopped.
+// the picture is refused at once only for a short back-off (a stop on a busy machine may be a blip),
+// then tried again; at values stopped twice it is refused until its code changes. A hundred draws
+// take far longer than one's limit in all, with none stopped.
 #[test]
-fn an_endless_draw_is_stopped_and_remembered() {
+fn an_endless_draw_backs_off_and_is_refused_at_values_stopped_twice() {
     let pack = Pack::new("endless", CURVE);
     let runner = Runner::new();
     let desc = pack.descriptor("curve");
+    let ask = |key: &str, v: Value| runner.draw(pack.ask_as(key, desc.clone(), "curve", v));
     let t = Instant::now();
     for i in 0..100 {
         let mut v = at_defaults();
         v["gain1"] = json!(i as f64 / 10.0);
-        shapes(runner.draw(pack.ask_as("endless", desc.clone(), "curve", v)));
+        shapes(ask("endless", v));
     }
     assert!(t.elapsed() > Duration::from_millis(20), "{:?}", t.elapsed());
     let mut hang = at_defaults();
     hang["hang"] = json!(1);
     let t = Instant::now();
-    assert!(cant(runner.draw(pack.ask_as("endless", desc.clone(), "curve", hang))).contains("took too long and was stopped"));
+    let why = cant(ask("endless", hang.clone()));
+    assert!(why.starts_with("took too long and was stopped; it is tried again in"), "{why}");
     assert!(t.elapsed() < Duration::from_secs(1), "stopped soon: {:?}", t.elapsed());
+    // While it backs off, refused at once, at any values.
     let t = Instant::now();
-    assert_eq!(cant(runner.draw(pack.ask_as("endless", desc.clone(), "curve", at_defaults()))), "took too long and was stopped");
+    assert!(cant(ask("endless", at_defaults())).starts_with("took too long and was stopped; it is tried again in"));
     assert!(t.elapsed() < Duration::from_millis(50), "refused at once: {:?}", t.elapsed());
-    // Its code changed: a new runtime, which draws.
-    shapes(runner.draw(pack.ask_as("endless, edited", desc, "curve", at_defaults())));
+    // After it, tried again: other values draw.
+    std::thread::sleep(Duration::from_millis(350));
+    shapes(ask("endless", at_defaults()));
+    // The same values stopped a second time: refused at them until the code changes.
+    assert!(cant(ask("endless", hang.clone())).starts_with("took too long and was stopped"));
+    std::thread::sleep(Duration::from_millis(350));
+    let t = Instant::now();
+    assert_eq!(cant(ask("endless", hang.clone())), "was stopped twice at these values, and is drawn at them again once its code changes");
+    assert!(t.elapsed() < Duration::from_millis(50), "refused at once: {:?}", t.elapsed());
+    shapes(ask("endless", at_defaults()));
+    // Its code changed: a new runtime, which tries them again.
+    assert!(cant(ask("endless, edited", hang)).starts_with("took too long and was stopped; it is tried again in"));
 }
 
 // CARD-64, CARD-65: the sandbox's limits, each said in words (review G15): too much memory, a long
@@ -519,13 +536,13 @@ fn the_sandbox_stops_each_hostile_draw_in_words() {
         Drawn::Shapes(json) => serde_json::from_str::<Value>(&json).unwrap()["words"].as_str().unwrap().to_string(),
         Drawn::Busy => "busy".into(),
     };
-    assert_eq!(said("memhog"), "used too much memory and was stopped");
+    assert!(said("memhog").starts_with("used too much memory and was stopped; it is tried again in"));
     let sorted = said("sorted");
-    assert!(sorted == "took too long and was stopped" || sorted == "used too much memory and was stopped", "{sorted}");
+    assert!(sorted.starts_with("took too long and was stopped") || sorted.starts_with("used too much memory and was stopped"), "{sorted}");
     assert!(said("deep").starts_with("couldn't be drawn: "), "endless recursion is said");
     assert!(said("bigint").starts_with("couldn't be drawn: "), "a huge BigInt is said");
-    assert_eq!(said("regex"), "took too long and was stopped");
-    assert_eq!(said("spin"), "took too long and was stopped");
+    assert!(said("regex").starts_with("took too long and was stopped"));
+    assert!(said("spin").starts_with("took too long and was stopped"));
     let reach = said("reach");
     for gone in [
         "Date:undefined",
@@ -550,6 +567,21 @@ fn a_draw_that_keeps_state_is_refused() {
     let runner = Runner::new();
     let why = cant(runner.draw(evil.ask("counter", "pic", json!({"freq": 1000}))));
     assert_eq!(why, "draws differently each time for the same values: a picture keeps nothing between its draws");
+    // Remembered: refused at once at any values after, until the code changes.
+    assert_eq!(cant(runner.draw(evil.ask("counter", "pic", json!({"freq": 2000})))), why);
+}
+
+// CARD-64: a picture's values at its defaults, as `m2 pack check` draws it: a choice by its name,
+// a switch true or false, a setting's default.
+#[test]
+fn a_pictures_defaults_are_its_descriptors() {
+    let b = build_curve().unwrap_or_else(|e| panic!("{e:?}"));
+    let desc = b.components.into_iter().find(|d| d.id == "curve").unwrap();
+    let v: Value = serde_json::from_str(&pictures::defaults(&desc)).unwrap();
+    assert_eq!(
+        v,
+        json!({"freq1": 200.0, "gain1": 0.0, "q1": 1.0, "on1": true, "freq2": 2000.0, "gain2": 0.0, "q2": 1.0, "on2": true, "hang": 0.0})
+    );
 }
 
 // CARD-64: a part runs again only when a value it read changed since that picture's last draw.
