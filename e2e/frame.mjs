@@ -11,6 +11,7 @@
 //   node e2e/frame.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { tips } from "./tiplib.mjs";
 
 const { page, errors, api, view, box, posts } = await open(1440, 900, { device: "chain" });
 
@@ -74,7 +75,19 @@ const lp = `${chain} [data-node="lowpass"]`;
 check((await page.$eval(`${lp} [data-pack]`, (e) => e.textContent).catch(() => null)) === "std", "Lowpass's header names its package, std (CARD-43)");
 check(!(await page.$(`${wob} [data-pack]`)), "Wob, the song's own, names none");
 await linted("[data-testid=chain]", "the chain");
+const untipped = await page.evaluate(tips, "[data-testid=chain]", {});
+check(untipped.length === 0, `every control in the chain has a tooltip${untipped.length ? `: ${untipped.slice(0, 3).join(" | ")}` : ""}`);
 await page.screenshot({ path: `${ROOT}/frame-chain.png` });
+
+// The Song's chain: its Duck, its mixer as one compact card (MX-6) and its master. The Duck still
+// says what it listens to (CARD-35), a connection the chain shows in words.
+await page.click('[data-module-tab="song"]');
+const songChain = '[data-testid=chain] [data-module="song"]';
+check(await until(async () => JSON.stringify(await page.$$eval(`${songChain} [data-node-title]`, (els) => els.map((e) => e.textContent)).catch(() => [])) === '["Duck","Mixer","Master"]'), "the Song's chain: Duck, Mixer, Master");
+check(/Listens to:\s*Kick/.test(await page.$eval(`${songChain} [data-node="duck"] [data-listens]`, (e) => e.textContent).catch(() => "")), "the Duck's card says it listens to Kick");
+check(!!(await page.$(`${songChain} [data-testid=open-mix]`)) && !(await page.$(`${songChain} [data-node="mixer"] [data-knob]`)), "the mixer is one compact card, its levels in Mix");
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(wob)));
 
 // ---------------------------------------------------------------- the face, the tabs, All (CARD-43, CARD-45)
 

@@ -168,7 +168,9 @@ function Frame({
   // All: every value in one list, as the patch's card shows it, each with its id in its tooltip.
   const list = (rows: CardRow[]) => <div className="py-1">{rows.map((r) => row(r, undefined, true))}</div>;
   const body = (t: FrameTab) => (t.name === ALL ? list(t.rows) : grid(t.rows, TAB_KNOB));
-  const listens = node.listens && !node.listens.port ? <ListensRow node={node} filled={false} editable={editable} /> : null;
+  // "Listens to" (CARD-35), a connection the chain still shows: what its input hears, after the face.
+  const heard = node.listens?.port ? node.inputs.find((p) => p.id === node.listens!.port) : undefined;
+  const listens = node.listens ? <ListensRow node={node} input={heard} filled={false} editable={editable} /> : null;
   return (
     <div
       className="group/card shrink-0 rounded-md bg-raised ring-1 ring-line flex flex-col overflow-hidden"
@@ -455,6 +457,7 @@ function Tab({ node, tab, on, onPick, onKeyDown }: { node: ViewNode; tab: FrameT
       data-hides={hides.join(" ") || undefined}
       data-glow={glows || undefined}
       data-on={dot === undefined ? undefined : String(dot)}
+      title={tab.name === ALL ? "Every value, each with its id for m2 set (← → for the next tab)" : `${tab.name}${dot === undefined ? "" : dot ? ": on" : ": off"} (← → for the next tab)`}
       onMouseDown={(e) => e.preventDefault()}
       onClick={onPick}
       onKeyDown={onKeyDown}

@@ -63,7 +63,7 @@ try {
     p.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
     p.on("pageerror", (e) => errors.push(String(e)));
     await p.evaluateOnNewDocument((token, platform) => {
-      window.__M2__ = { native: false, token, platform };
+      window.__M2__ = { native: false, token, platform }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
       try {
         localStorage.setItem("m2.browser.open", "false");
       } catch {}

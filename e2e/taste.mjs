@@ -118,7 +118,7 @@ linux.on("console", (m) => m.type() === "error" && !/Failed to load resource/.te
 linux.on("pageerror", (e) => errors.push(`linux page: ${e}`));
 await linux.setViewport({ width: 1440, height: 900 });
 await linux.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: false, token, platform: "linux" };
+  window.__M2__ = { native: false, token, platform: "linux" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
 }, sess.page_token);
 await linux.goto(sess.url, { waitUntil: "domcontentloaded" });
 await linux.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });

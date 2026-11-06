@@ -33,7 +33,7 @@ async function appPage(answers = {}) {
   await p.setViewport({ width: 1440, height: 900 });
   p.on("pageerror", (e) => errors.push(`app page: ${e}`));
   await p.evaluateOnNewDocument((token, answers) => {
-    window.__M2__ = { native: true, token, platform: "macos" };
+    window.__M2__ = { native: true, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
     try {
       localStorage.setItem("m2.browser.open", "false");
     } catch {}

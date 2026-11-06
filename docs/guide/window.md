@@ -63,9 +63,28 @@ Down the left (⌥⌘B shows or hides it): the instruments (Drums, Instruments, 
 
 It shows the selected track (or the Song) in one of four views, picked with the switcher in its header or ⌥1 to ⌥4: **Device**, **Notes**, **Mix** and **Code**. A drum kit's track has a fifth, **Beat** (⌥5), beside Notes: [the beat grid](#the-beat-grid). The view stays what you picked while you select other tracks. Drag the line between the timeline and the dock to resize it; double-click it, or press E, to hide or show the dock.
 
-- **Device:** the track's sound as boxes and knobs.
+- **Device:** the track's sound as cards and knobs. **Chain · Patch** at the right of the dock's header picks how:
+
+  | You pick | You see |
+  |---|---|
+  | **Chain** (at first) | one card for each sound, left to right, as the sound flows: the instrument, then its effects. No cables. |
+  | **Patch** | every part of the sound as boxes, with the cables between them. |
+
+  The window keeps your pick; it changes nothing in the song. A sound made of two sounds mixed, or built from parts (oscillators, filters), has no chain: Device shows its patch and says "This sound is built from parts. Showing its patch." A part that moves a knob without making sound (an LFO, a follower) has no card in the chain: the knob it moves reads "← LFO", and Patch shows it.
+  - **A card in the chain:**
+
+    | Part | What it is |
+    |---|---|
+    | header | the sound's name, its pack (`std` for music2's own basics), its three sizes, Presets, ⋯, the bin and **+**. An instrument's card has its track's colour along the top |
+    | face | the few knobs and pictures that matter most, drawn big. The sound chooses them; without a choice it is the sound's first group |
+    | tabs | the sound's other groups, then **All**, every value in one list (each one's id, for `m2 set`, is in its tooltip). ← and → move between tabs. A dot on a tab is that tab's on/off switch, filled when on (an EQ's bands) |
+    | code line | the call as your code writes it, such as `lowpass(…, { cutoff: 900 })` (`…` is the sound it works on). It changes as you change the card |
+
+    The three sizes, from the buttons in the header: **Fold** (–) shows one line of the face's values; **Normal** (▢) the face, one tab and the code line; **Expand** (⤢) everything, every tab side by side, with All behind a click. The size is this window's own: it changes nothing in the song.
+  - A choice of five or fewer sits on the card as buttons side by side (saw · square · sine): one click picks one. A longer one is a menu.
+  - A knob on a tab you aren't looking at is still there: when an agent changes it, its tab lights, and **Show** on an agent's pointer opens that tab.
   - Drag a knob up or down to hear it (300 pixels take it across its whole range; hold ⇧ for a tenth of that, to fine-tune); let go to write the number into the code. ⌥-click a knob to put it back at its default (the middle of its range when its control declares no default).
-  - Double-click a knob or its number to type a value: `-3`, `2k`, `120ms`, `50%`, `L20` for a pan, or a pitch such as `C4` for a frequency. Enter writes it, Escape leaves it, Tab writes it and moves to the next knob. A knob you've clicked or tabbed to also takes ↑ and ↓ (with ⇧, ten steps), Return to type and Delete to reset; the scroll wheel steps it too. A run of steps is written as one edit.
+  - Double-click a knob or its number to type a value: `-3`, `2k`, `120ms`, `50%`, `L20` for a pan, or a pitch such as `C4` for a frequency. Enter writes it, Escape leaves it, Tab writes it and moves to the next knob. A knob you've clicked or tabbed to also takes ↑ and ↓, or → and ← (with ⇧, ten steps), Page Up and Page Down (a tenth of its range), Home and End (its lowest and highest), Return to type and Delete to reset; the scroll wheel steps it too. A run of steps is written as one edit.
   - Numbers read the way a mixing desk writes them: "−6.0 dB", "350 Hz", "1.2 kHz", "120 ms", and pans as "C", "L 20" or "R 35".
   - Right-click a knob for **Automate** and **Reset to default**. Automate gives the knob an automation lane of its own, under its track in the timeline: the code reads the knob from the lane (`pan: lane.control("hats-pan", "bipolar", 0.3)`), and the lane plays the old number until it has points, so nothing sounds different. Undo takes the lane out again. When a knob can't be automated (it's shared by several tracks, say), the item is greyed out and says why.
   - Double-click the track's name in the dock's header to rename it, as in the timeline.
@@ -85,7 +104,7 @@ It shows the selected track (or the Song) in one of four views, picked with the 
     Each change is written into the sound's code (`lfo(time.beats, { shape: "saw" })`) as one Undo step. A setting decides what is built, so changing one rebuilds that sound: a note playing just then may stop. A grey value is the default, not written in the code yet. A setting the code works out, or a list of regions, says **edit in code**.
   - A plugin's parameter that has a few steps with names (a filter's type, say) is a menu of the plugin's own names, and one that is just off or on (a bypass) is a switch. The code still holds the number.
   - **Menus and switches that play at once.** A sound can also have a choice or an on/off that it plays while it sounds, with no rebuild: a wave's **Shape** (saw, square or sine), a **Sub** that is on or off. These sit with the knobs. Click the menu and pick a name, or click the switch: the name (`shape: "square"`) or `true` goes into the code, one undo step. They don't drag. Right-click one for **Automate**: its lane is a lane of names (see the timeline, below).
-  - **Groups.** A sound can put its card in order: its knobs and pictures under titles, such as **Sound**, **Filter** and **Loudness**, with **More** last for the rest. The arrow in the card's header folds it to its first group; "3 more" under it unfolds it.
+  - **Groups.** A sound can put its card in order: its knobs and pictures under titles, such as **Sound**, **Filter** and **Loudness**, with **More** last for the rest. In the chain they are the card's tabs. In Patch they are titles down the box: the arrow in its header folds it to its first group, and "3 more" under it unfolds it.
   - **Pictures.** A sound can show pictures of its knobs. Each one shows values that live in the code: it never holds one of its own.
 
     | Picture | It shows | You can |
@@ -94,10 +113,10 @@ It shows the selected track (or the Song) in one of four views, picked with the 
     | Filter | a low-pass filter's curve: it lets the lows through and cuts the highs above the cutoff, with a bump at the cutoff for a high q. It is a drawing of a low-pass, worked out from the two knobs, not a measurement of the sound | drag the bump: left and right for the cutoff, up and down for the q. One undo step for both |
     | Keys | which recording plays on which keys, and how hard (a box for each; harder is higher) | click to hear a key: the higher you click, the harder it plays. It plays only while audition is on (the speaker in the Notes view's header), as the piano roll's keys do |
     | Scope | the sound's wave as it plays | look. It shows only while the song plays, and only while the card is on screen |
-  - Cables: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
+  - Cables, in Patch: drag from a named output (the dot at the right edge of a box whose result has a `const` name in the code) onto a knob. The ✕ on a connected input disconnects it.
   - An effect card's ⋯ menu has **Turn off** (the sound goes on without it; the card stays, dimmed, "Reverb · Off", and `bypass: true` goes into its code) and **Turn on**, and **Move left** and **Move right**, which swap it with the effect next to it. Each is one undo step. An effect that listens to another track (Duck, Compress, Gate) says on its card what it listens to ("Listens to: Kick ▾"): click it to pick another track, or None. See [Sidechain](sounds.md#sidechain).
   - **+** on a box that makes sound opens the effect browser (in the **song** tab, a track's sound where the song mixes it, `Bass.out`, has one too): 24 effects in seven groups (Filter, EQ, Dynamics, Distortion, Delay & Reverb, Modulation, Utility), as the effects themselves declare them. Type to search, then press Enter or click. The bin icon on an effect removes it.
-  - Zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
+  - In Patch, zoom with ⌘ and scroll, or pinch. The buttons at the bottom right zoom and fit the graph to the panel.
   - An instrument's card says how it plays under its name, such as "Plays one note at a time." (the rest is in its tooltip).
   - A **Sampler**'s card takes a WAV or FLAC file: drop one on it, or on its recording's row (see [Sounds and effects](sounds.md)).
   - A CLAP plugin's box has **Open window**, for the plugin's own window (see [CLAP plugins](plugins.md)).

@@ -173,7 +173,19 @@ export const wobble = component(
 );
 ```
 
-A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu and a switch a switch, the views are pictures whose corners move their knobs, and the groups are titles over their rows (see [The window](window.md)).
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu (buttons side by side, in Device's chain, when it has five options or fewer) and a switch a switch, the views are pictures whose corners move their knobs, and the groups are the card's tabs in the chain, and titles over their rows in Patch (see [The window](window.md)).
+
+**The face** is what the card draws big, above its tabs: the few values and pictures a beginner needs first. Name them in `editor.face`, each once, two pictures and six values at most:
+
+```ts
+editor: {
+  views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
+  face: ["filter", "shape", "cutoff", "attack", "release"],
+  groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Loudness: ["amp"] },
+},
+```
+
+A value on the face may be in a group too. With no face, the card's first group is its face. A name the sound doesn't have, or one named twice, is a red line under `face`; too many is refused by the build, in words. A face needs `@m2/core` 2.4: say `"@m2/core" = "2.4"` in `m2pkg.toml`.
 
 **Labels.** A card names each value by its name in the code, as words: `cutoff` is Cutoff. Where a name doesn't read as words (`subOctave`, `tableA`), give it a label, a control's or a setting's alike:
 

@@ -162,7 +162,7 @@ async function heard() {
     const p2 = await browser.newPage();
     await p2.setViewport({ width: 1440, height: 900 });
     await p2.evaluateOnNewDocument((token) => {
-      window.__M2__ = { native: false, token, platform: "macos" };
+      window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
     }, s2.page_token);
     await p2.goto(s2.url, { waitUntil: "domcontentloaded" });
     await p2.waitForSelector("[data-testid=metronome-toggle]", { timeout: 10000 });
