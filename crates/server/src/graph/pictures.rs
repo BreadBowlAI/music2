@@ -97,31 +97,48 @@ pub struct PicturesOut {
 /// The measures kept (CARD-84) at most: the one used longest ago goes first.
 const MEASURES: usize = 64;
 
-/// The measures kept by what each was made from (CARD-84), and how many were rendered.
+/// How long a call whose measure was stopped for its time waits before it is measured again (CARD-85,
+/// as a picture's draw does, CARD-64).
+pub(super) const BACK_OFF: Duration = Duration::from_secs(10);
+
+/// A measure's points, or why it can't be measured.
+type Measured = Result<Arc<Vec<f64>>, String>;
+
+/// What a measure gave, kept by what it was made from (CARD-84): its points, or why it can't be
+/// measured; and the calls stopped for their time, by call and code, since when.
 #[derive(Default)]
 pub(super) struct Measures {
-    kept: parking_lot::Mutex<std::collections::VecDeque<(String, Arc<Vec<f64>>)>>,
+    kept: parking_lot::Mutex<std::collections::VecDeque<(String, Measured)>>,
+    /// Each copy stopped for its time once, by its key; and each call stopped, by when.
+    slow: parking_lot::Mutex<(HashMap<String, u32>, HashMap<String, Instant>)>,
     rendered: std::sync::atomic::AtomicU64,
+    tried: std::sync::atomic::AtomicU64,
 }
 
 impl Measures {
-    fn get(&self, key: &str) -> Option<Arc<Vec<f64>>> {
+    fn get(&self, key: &str) -> Option<Measured> {
         let mut kept = self.kept.lock();
         let i = kept.iter().position(|(k, _)| k == key)?;
         let hit = kept.remove(i)?;
-        let points = hit.1.clone();
+        let got = hit.1.clone();
         kept.push_back(hit);
-        Some(points)
+        Some(got)
     }
 
-    fn put(&self, key: String, points: Arc<Vec<f64>>) {
+    fn put(&self, key: String, got: Measured) {
         let mut kept = self.kept.lock();
         kept.retain(|(k, _)| *k != key);
         if kept.len() >= MEASURES {
             kept.pop_front();
         }
-        kept.push_back((key, points));
+        kept.push_back((key, got));
     }
+}
+
+/// Why a measured layer has no points: in words that follow "Its picture ", or stopped for its time.
+enum Unmeasured {
+    Cant(String),
+    Slow,
 }
 
 /// A picture to draw, as found on the control plane.
@@ -223,14 +240,16 @@ fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Foun
 }
 
 /// Each measured layer of `shapes`, a part's too, filled with its points (CARD-80): measured from
-/// an offline copy of `f`'s call at the values it was drawn at, or kept from a measure made from the
-/// same (CARD-84). Refused in words that follow "can't measure its sound: ".
-fn fill(f: &Found, measures: &Measures, shapes: &mut [Value]) -> Result<(), String> {
+/// an offline copy of `f`'s call at the values it was drawn at, within [`measure::budget`], or taken
+/// from what was kept for the same copy (CARD-84). A copy stopped for its time is measured again only
+/// after [`BACK_OFF`], and a second stop at the same values is kept (CARD-85).
+fn fill(f: &Found, measures: &Measures, shapes: &mut [Value]) -> Result<(), Unmeasured> {
     let mut packages: Option<m2_runtime::PackageSet> = None;
     fill_in(f, measures, shapes, &mut packages)
 }
 
-fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut Option<m2_runtime::PackageSet>) -> Result<(), String> {
+fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut Option<m2_runtime::PackageSet>) -> Result<(), Unmeasured> {
+    use std::sync::atomic::Ordering::Relaxed;
     for s in shapes {
         if let Some(inner) = s.get_mut("shapes").and_then(Value::as_array_mut) {
             fill_in(f, measures, inner, packages)?;
@@ -247,25 +266,63 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
             continue;
         };
         let values: Map<String, Value> = serde_json::from_str(&f.ask.values).unwrap_or_default();
-        // The revision's own kernels (PACK-9), whatever the session shows now.
-        let packages = packages.get_or_insert_with(|| m2_runtime::PackageSet::default().viewing(&f.rev.compiled.view).into_owned());
-        let copy = measure::copy(&f.rev, packages, &f.module, &f.node, &values, layer)?;
+        // The revision's own kernels (PACK-9), whatever the session shows now, each call into a
+        // pack's kernel held to the measure's budget (CARD-85).
+        let packages = packages.get_or_insert_with(|| {
+            let most = measure::budget(f.rev.project.sample_rate());
+            m2_runtime::PackageSet::default().viewing(&f.rev.compiled.view).into_owned().with_offline_limit(most)
+        });
+        let copy = measure::copy(&f.rev, packages, &f.module, &f.node, &values, layer)
+            .map_err(|why| Unmeasured::Cant(format!("can't measure its sound: {why}")))?;
         let points = match measures.get(&copy.key) {
-            Some(p) => p,
+            Some(Ok(p)) => p,
+            Some(Err(why)) => return Err(Unmeasured::Cant(why)),
             None => {
-                let sound = copy.render(packages)?;
-                measures.rendered.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-                let points = Arc::new(match layer {
-                    Layer::Response => measure::response(&sound, copy.rate(), Span { log: x.scale == "log", lo: x.lo, hi: x.hi }),
-                    Layer::Hit { seconds, .. } => measure::hit(&sound, seconds),
-                });
-                measures.put(copy.key.clone(), points.clone());
-                points
+                let call = format!("{}\n{}\n{}\n{}", f.rev.code_rev, f.module, f.node, f.view);
+                if measures.slow.lock().1.get(&call).is_some_and(|t| t.elapsed() < BACK_OFF) {
+                    return Err(Unmeasured::Slow);
+                }
+                measures.tried.fetch_add(1, Relaxed);
+                let span = Span { log: x.scale == "log", lo: x.lo, hi: x.hi };
+                match copy.measure(packages, span, measure::budget(copy.rate())) {
+                    Ok(points) => {
+                        measures.rendered.fetch_add(1, Relaxed);
+                        let points = Arc::new(points);
+                        measures.put(copy.key.clone(), Ok(points.clone()));
+                        points
+                    }
+                    Err(measure::Failed::Cant(why)) => {
+                        let why = format!("can't measure its sound: {why}");
+                        measures.put(copy.key.clone(), Err(why.clone()));
+                        return Err(Unmeasured::Cant(why));
+                    }
+                    Err(measure::Failed::Slow) => {
+                        let mut slow = measures.slow.lock();
+                        slow.1.insert(call, Instant::now());
+                        let times = slow.0.entry(copy.key.clone()).or_default();
+                        *times += 1;
+                        if *times >= 2 {
+                            let why = "took too long to measure at these values, twice, and was stopped".to_string();
+                            drop(slow);
+                            measures.put(copy.key.clone(), Err(why.clone()));
+                            return Err(Unmeasured::Cant(why));
+                        }
+                        return Err(Unmeasured::Slow);
+                    }
+                }
             }
         };
         s["points"] = json!(*points);
     }
     Ok(())
+}
+
+/// Whose code a picture's sound is, as ABI-7 says it: its package, or the song's own code.
+fn whose(f: &Found) -> String {
+    match f.ask.descriptor.id.split_once(':') {
+        Some((package, _)) => package.to_string(),
+        None => "the song's own code".to_string(),
+    }
 }
 
 /// The picture as an answer says it (CARD-67): its shapes, each dot's values with the card's own
@@ -295,9 +352,21 @@ fn said(f: &Found, drawn: Drawn, measures: &Measures) -> Value {
                 .collect();
             if let Some(shapes) = drew["shapes"].as_array_mut() {
                 knobbed(shapes, &knobs);
-                if let Err(why) = fill(f, measures, shapes) {
-                    out["why"] = json!(format!("{}'s picture can't measure its sound: {}.", f.call.label, why.trim_end_matches('.')));
-                    return out;
+                match fill(f, measures, shapes) {
+                    Ok(()) => {}
+                    Err(Unmeasured::Cant(why)) => {
+                        out["why"] = json!(format!("{}'s picture {}.", f.call.label, why.trim_end_matches('.')));
+                        return out;
+                    }
+                    Err(Unmeasured::Slow) => {
+                        let s = BACK_OFF.as_secs();
+                        out["why"] = json!(format!(
+                            "{}'s picture, from {}, took too long to measure and was stopped; it is tried again in {s} s.",
+                            f.call.label,
+                            whose(f)
+                        ));
+                        return out;
+                    }
                 }
             }
             out["words"] = drew["words"].take();
@@ -491,6 +560,12 @@ impl Graph {
     #[doc(hidden)]
     pub fn measures_rendered(&self) -> u64 {
         self.inner.measures.rendered.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// How many measures were tried, rendered or not (CARD-85): what a test reads.
+    #[doc(hidden)]
+    pub fn measures_tried(&self) -> u64 {
+        self.inner.measures.tried.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     /// `client`'s window closed: the pictures it asked for end (CARD-67).

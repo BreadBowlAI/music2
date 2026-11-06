@@ -413,3 +413,39 @@ fn a_layer_that_cant_be_measured_greys_its_picture_in_words() {
     assert_eq!(p["why"], "Tone's picture can't measure its sound: it plays no notes, so p.hit has no note to play.");
     assert_eq!((&p["shapes"], &p["words"]), (&Value::Null, &Value::Null));
 }
+
+// CARD-85 (review M3): a measure that runs too long is stopped within its budget, said by the
+// sound's name and its pack, never a node's id; drawn again at once (a value its sound doesn't read
+// moved), it isn't measured again until its back-off ends.
+#[test]
+fn a_measure_that_runs_too_long_is_stopped_and_waits() {
+    let fixture = Fixture::new();
+    let pack =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures/packs/spin").canonicalize().unwrap();
+    let manifest = std::fs::read_to_string(fixture.0.join("music2.toml")).unwrap();
+    fixture.put(
+        "music2.toml",
+        &manifest.replace("[dependencies]\n", &format!("[dependencies]\n\"@test/spin\" = {{ path = {:?} }}\n", pack.display().to_string())),
+    );
+    fixture.put(
+        "song.ts",
+        "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { spin } from '@test/spin';\n\
+         const a = track('a', () => spin(osc.saw(110)));\nexport default song(() => a.out);\n",
+    );
+    let (p, _driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    let rig = Rig { fixture, graph };
+    let t = Instant::now();
+    let answer = rig.ask_in("w1", "a", "Spin", "curve");
+    assert!(t.elapsed() < Duration::from_millis(500), "stopped within its budget: {:?}", t.elapsed());
+    assert_eq!(
+        answer["picture"]["why"],
+        "Spin's picture, from @test/spin, took too long to measure and was stopped; it is tried again in 10 s."
+    );
+    assert_eq!(rig.graph.measures_tried(), 1);
+    rig.graph.preview_for(Some("w1"), rig.token(), rig.revision(), &rig.knob_in("a", "Spin", "drift"), "g1", 0.5).unwrap();
+    let again = sent(&rig.graph.pictures_frame(), "w1", 0);
+    assert_eq!(again[0]["why"], answer["picture"]["why"], "drawn again, it says so again");
+    assert_eq!(rig.graph.measures_tried(), 1, "and isn't measured again while it waits");
+}
