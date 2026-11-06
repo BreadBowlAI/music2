@@ -541,6 +541,28 @@ export default song(() => v.out);
         // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12); a pack of
         // recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
+        // The packs whose components read `time.key`: a time node of the key in a frame of one of
+        // theirs (review U5), in every-component's graph.
+        let mut keyed = std::collections::BTreeSet::new();
+        let s = crate::gate_tests::every_component().open();
+        for m in &s.accepted().compiled.ir.modules {
+            fn walk(nodes: &[m2_ir::Node], f: &mut dyn FnMut(&m2_ir::Node)) {
+                for n in nodes {
+                    f(n);
+                    if let m2_ir::Op::Poly { body, .. } = &n.op {
+                        walk(&body.nodes, f);
+                    }
+                }
+            }
+            walk(&m.nodes, &mut |n| {
+                if matches!(n.op, m2_ir::Op::Time { of: m2_ir::TimeOf::Key }) {
+                    let packs =
+                        m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
+                    keyed.extend(packs);
+                }
+            });
+        }
+        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/vocals"], "the packs whose sounds read the song's key");
         let uses = |name: &str, dir: &Path| -> String {
             let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
             let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
@@ -551,12 +573,8 @@ export default song(() => v.out);
             let kits = mine.clone().any(|(_, d)| !d.editor.kits.is_empty());
             let optional = mine.clone().any(|(_, d)| d.inputs.iter().any(|i| i.optional));
             // The song's key, `time.key` (2.4, VOX-12), is read in a body, which no descriptor shows:
-            // its code says so.
-            let keyed = std::fs::read_dir(dir.join("src"))
-                .into_iter()
-                .flatten()
-                .flatten()
-                .any(|f| std::fs::read_to_string(f.path()).is_ok_and(|code| code.contains("time.key")));
+            // the graph of every-component, which calls every component of every bundled pack, does.
+            let keyed = keyed.contains(name);
             match (major.as_deref(), optional, kits, labelled) {
                 (Some(m), ..) if keyed => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
