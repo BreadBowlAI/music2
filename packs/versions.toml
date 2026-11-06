@@ -4,7 +4,7 @@
 # it will ship, never one for each step. `m2_song::pack::own` reads this to say which installed packs
 # are music2's (PACK-19); `every_bundled_pack_is_the_version_its_record_names` checks it against
 # packs/@m2/*. No release has shipped music2's own packs yet, so it holds one version of each.
-"@m2/drums 2.1.0" = "sha256:c4c4613ba06a176560460243dac1a32746ec9d07d3f5e8ccbbaf9bc9e20663bb"
+"@m2/drums 2.1.0" = "sha256:be98dfd161358c97ec09f362120b72da38afc7a331484f4008bb81c3b19af411"
 "@m2/effects 1.2.0" = "sha256:e49f20aefced6adbff11d6556f367f647b5c3accc68d94f5f64f7d47a23e0aef"
 "@m2/mixing 1.1.0" = "sha256:46adda6827342521c90b7f2f4b0c41b6a803286e2b4b10438db4f2c607a6532f"
 "@m2/synths 2.0.0" = "sha256:04470bf491b3f5fb1a50de2534e438c0cebd78fcb64a61d04956d3db7bd557ac"

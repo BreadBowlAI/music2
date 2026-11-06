@@ -12,6 +12,10 @@
 // `volume`, `pan` and `offset`. Every region that matches a note plays (PKG-16), through the
 // `std:regions` kernel. Give one of `sample`, `zones` and `regions`.
 //
+// A region in a choke group (`group`) cuts, when it starts, every region whose `off_by` is that group,
+// in any voice, in 4 ms (PKG-16, rule 8): a closed hat cutting an open one, as SFZ's `group` and
+// `off_by` do. A voice hears the others' starts through marks made outside the voices.
+//
 // A region's turn (`round_robin`) counts the notes the lane has started (`turns: "lane"`, the
 // default), or each key's own (`turns: "key"`, as SFZ does): a kick and a snare that alternate on
 // one lane then each take their own turns.
@@ -35,17 +39,23 @@ function files(sample: string | undefined, root: number, zones: Readonly<Record<
   return sample === undefined ? { assets: [], values: [] } : { assets: [sample], values: [root, 0, 127] };
 }
 
-/** How many values a region takes in `std:regions`' layout (`std/m2pkg.toml`). */
+/**
+ * How many values a region takes in `std:regions`' layout (`std/m2pkg.toml`): 15, and 17 with its
+ * choke groups' slots (PKG-16, rule 8), which `std:regions` and `std:regionmark` read.
+ */
 const FIELDS = 15;
+const CHOKE_FIELDS = 17;
 
 /**
  * `std:regions`' settings for `regions`: each file once, as its assets, and its values: FIELDS, then
  * each region's, its defaults filled in (PKG-15). A region that gives a root but no keys plays its
- * root alone; one that gives neither plays every note.
+ * root alone; one that gives neither plays every note. With `slots`, the groups `off_by` names, each
+ * region's mark and cut too: a group's slot, or -1.
  */
-function layout(regions: readonly Region[]): { assets: string[]; values: number[] } {
+function layout(regions: readonly Region[], slots: readonly number[]): { assets: string[]; values: number[] } {
   const assets: string[] = [];
-  const values = [FIELDS];
+  const values = [slots.length ? CHOKE_FIELDS : FIELDS];
+  const slot = (g: number | undefined) => (g === undefined ? -1 : slots.indexOf(g));
   for (const r of regions) {
     if (!assets.includes(r.file)) assets.push(r.file);
     const root = r.root ?? 60;
@@ -55,6 +65,7 @@ function layout(regions: readonly Region[]): { assets: string[]; values: number[
     const [start, end] = r.loop ?? [-1, -1];
     const trigger = r.trigger === "release" ? 1 : 0;
     values.push(assets.indexOf(r.file), root, lo, hi, soft, loud, position, of, trigger, start, end, r.tune ?? 0, r.volume ?? 0, r.pan ?? 0, r.offset ?? 0);
+    if (slots.length) values.push(slot(r.group), slot(r.off_by));
   }
   return { assets, values };
 }
@@ -95,19 +106,27 @@ export const sampler = component(
     }
     const also = [p.sample !== undefined ? "sample" : "", Object.keys(p.zones).length > 0 ? "zones" : ""].filter((x) => x !== "");
     if (also.length > 0) throw new Error(`sampler(): give one of sample, zones and regions, not ${[...also, "regions"].join(" and ")}`);
-    const settings = layout(regions);
-    // A turn for each key: each note's count on its key, which the voices keep (`keyCount`).
-    if (p.turns === "key") {
-      return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: n.keyCount }, settings), {
-        voices: p.voices,
-      });
-    }
-    // The lane's turn: counted outside the voices, as std's drums count their hits. One voice marks
+    // Choke groups (PKG-16, rule 8): a slot for each group some region's `off_by` names, in order
+    // (the build refuses a ninth).
+    const slots = [...new Set(regions.flatMap((r) => (r.off_by === undefined ? [] : [r.off_by])))];
+    const settings = layout(regions, slots);
+    // A turn for each key: each note's count on its key, which the voices keep (`keyCount`). Else
+    // the lane's turn: counted outside the voices, as std's drums count their hits. One voice marks
     // each sample on which notes start (as a tom, which chokes nothing), so notes that start together
     // count once, and hitcount counts the marks: never engine time, so live playback from 0 takes the
     // export's turns.
-    const starts = poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 1 });
-    const count = kernel("std:hitcount", { hits: starts });
-    return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count }, settings), { voices: p.voices });
+    const lane = p.turns === "key" ? undefined : kernel("std:hitcount", { hits: poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 1 }) });
+    const counted = (n: { keyCount: Audio }) => lane ?? n.keyCount;
+    if (slots.length === 0) {
+      return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: counted(n) }, settings), {
+        voices: p.voices,
+      });
+    }
+    // A voice hears the others as a Drum's do: outside the voices, one voice of regionmark a note
+    // marks the groups its regions start, and every voice reads the marks. 7 voices: 3 bits a group.
+    const marks = poly(notes, (n) => kernel("std:regionmark", { pitch: n.pitch, velocity: n.velocity, count: counted(n) }, settings), { voices: 7 });
+    return poly(notes, (n) => kernel("std:regions", { pitch: n.pitch, gate: n.gate, velocity: n.velocity, ...patch, count: counted(n), marks }, settings), {
+      voices: p.voices,
+    });
   },
 );

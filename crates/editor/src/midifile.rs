@@ -671,16 +671,21 @@ pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, cho
         let clip = NoteClip { id: None, other_id: None, start: at, length: clip_length(timing, at, end), notes };
         serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))
     };
-    // The drums, every part on channel 10, by start: one kit.
-    let mut drums: Vec<Note> = brought.parts.iter().filter(|p| p.drums).flat_map(|p| p.notes.iter().cloned()).collect();
+    // The drums, every part on channel 10, by start: one kit. A part of open hats alone (an Open
+    // hat track music2 wrote) keeps a track of its own, cut by the Hats (KIT-28); every other
+    // part's open hats are the Hats'.
+    let open_alone = |p: &&Part| p.drums && !p.notes.is_empty() && p.notes.iter().all(|n| n.pitch.round() == 46.0);
+    let mut drums: Vec<Note> = brought.parts.iter().filter(|p| p.drums && !open_alone(p)).flat_map(|p| p.notes.iter().cloned()).collect();
     drums.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut open: Vec<Note> = brought.parts.iter().filter(open_alone).flat_map(|p| p.notes.iter().cloned()).collect();
+    open.sort_by(|a, b| a.start.total_cmp(&b.start));
     let drums_end = brought.parts.iter().filter(|p| p.drums).map(Part::end).fold(0.0, f64::max);
     let mut new = vec![];
     for (i, p) in brought.parts.iter().enumerate() {
         if p.drums {
             if !brought.parts[..i].iter().any(|q| q.drums) {
                 let first = new.len();
-                new.extend(crate::drums::kit_of(&drums, first, |notes| clip_of(notes, drums_end))?);
+                new.extend(crate::drums::kit_of(&drums, &open, first, |notes| clip_of(notes, drums_end))?);
             }
             continue;
         }

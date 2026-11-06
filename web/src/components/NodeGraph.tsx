@@ -407,7 +407,8 @@ function geometry(n: ViewNode, folded = false) {
   }
   const rows: number[] = [];
   // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
-  let y = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + PAD;
+  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0);
+  let y = top + PAD;
   const all = items(n, folded);
   for (const x of all) {
     const h = itemHeight(x);
@@ -423,7 +424,7 @@ function geometry(n: ViewNode, folded = false) {
   });
   const roomy = n.inputs.length || all.some((x) => x.t === "setting" || x.t === "view");
   const w = roomy && n.outputs.length ? NODE_W : (n.views?.length ? NODE_W : SLIM_W);
-  return { w, h: all.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
+  return { w, h: all.length ? y + PAD : top, ins, outs };
 }
 
 
@@ -1461,11 +1462,17 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
   const now = l.track ? name(l.track) : l.heard ? "another sound" : l.nothing;
   const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
   const what = node.title ?? "It";
-  const title = l.heard ? `${what} listens to ${now}. Choose another track` : `${what} listens to no other track. Choose one`;
+  const title = l.label
+    ? l.heard
+      ? `${l.label}: ${now}. Choose another track, or None`
+      : `${l.label}: no track yet. Choose one`
+    : l.heard
+      ? `${what} listens to ${now}. Choose another track`
+      : `${what} listens to no other track. Choose one`;
   return (
     <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input?.label ?? l.input} data-listens>
       {input && <Dot id={input.id} kind={input.kind} filled={filled} />}
-      <span className="shrink-0 text-fg-muted">Listens to:</span>
+      <span className="shrink-0 text-fg-muted">{l.label ?? "Listens to"}:</span>
       <button
         data-testid="listens-to"
         className={clsx(
@@ -1489,7 +1496,7 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?:
         <ChevronDown size={12} className="shrink-0" />
       </button>
       {anchor && (
-        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Listens to" data-testid="listens-menu" className="w-[200px]">
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label={l.label ?? "Listens to"} data-testid="listens-menu" className="w-[200px]">
           {l.choices.map(([key, label]) => (
             <MenuRow
               key={key}

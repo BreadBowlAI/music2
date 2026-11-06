@@ -487,9 +487,16 @@ fn a_drums_knobs_move_the_drum_it_plays() {
 }
 
 /// `one`'s ports: the drum kernel's, but its drum is a menu, `drum`, where the kit has `model`.
-const ONE_NAMES: [&str; INPUTS] = {
-    let mut n = NAMES;
+/// One drum's ports: the drum voice's, its drum a menu, and `cut` (KIT-27) last.
+const ONE_NAMES: [&str; ONE_INPUTS] = {
+    let mut n = [""; ONE_INPUTS];
+    let mut i = 0;
+    while i < INPUTS {
+        n[i] = NAMES[i];
+        i += 1;
+    }
     n[MODEL] = "drum";
+    n[CUT] = "cut";
     n
 };
 
@@ -516,13 +523,14 @@ fn one(drum: f32, pitch: f32, frames: usize, changes: &[(usize, f32)], hits: &dy
 
 /// The menu's drums, by place, grouped by family (KIT-20): each with the General MIDI note it is the
 /// drum machine's drum at.
-const MENU: [(&str, f32); 17] = [
+const MENU: [(&str, f32); 18] = [
     ("kick", 36.0),
     ("kick 2", 35.0),
     ("snare", 38.0),
     ("snare 2", 40.0),
     ("clap", 39.0),
     ("hats", 42.0),
+    ("open hat", 46.0),
     ("tom", 45.0),
     ("rim", 37.0),
     ("claves", 75.0),
@@ -566,7 +574,7 @@ fn one_drum_chokes_on_any_hit_where_its_drum_chokes() {
             |hits: f32| peak_in(&one(place as f32, *pitch, s(0.3), &[], &|t| if t == at { hits } else { 0.0 }), at + s(0.01), s(0.02));
         let free = after(0.0);
         assert!(free > 0.0, "{name} rings");
-        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "cymbal" | "kick 2" | "snare 2" | "cymbal 2");
+        let chokes = matches!(*name, "kick" | "snare" | "clap" | "hats" | "open hat" | "cymbal" | "kick 2" | "snare 2" | "cymbal 2");
         // A hit marked in the tom's group (no choke group: the field alone) and one in the kick's.
         for hits in [h, h + 1.0, 2.0 * h + 4096.0] {
             assert_eq!(after(hits) == 0.0, chokes, "{name}, a hit marked {hits}");
@@ -614,7 +622,7 @@ fn general_midi() -> Vec<(String, Vec<u8>)> {
         .map(|rest| {
             let (sound, rest) = rest.split_once('"').expect("a sound");
             let notes = rest.split_once("&[").and_then(|(_, r)| r.split_once(']')).expect("its notes").0;
-            (sound.to_string(), notes.split(',').map(|n| n.trim().parse().expect("a note")).collect())
+            (sound.to_string(), notes.split(',').filter(|n| !n.trim().is_empty()).map(|n| n.trim().parse().expect("a note")).collect())
         })
         .collect()
 }
@@ -661,7 +669,7 @@ fn each_other_drum_is_the_drum_machines_at_its_note() {
         assert!(one(place as f32, *note, s(4.0), &[], &|_| 0.0) == kit(*note), "{name} at its own note: the drum machine's bits");
     }
     // A place past the menu plays nothing, as before.
-    assert_eq!(sound_at(17.0, 36.0).0, Kind::Silent);
+    assert_eq!(sound_at(18.0, 36.0).0, Kind::Silent);
     assert_eq!(sound_at(99.0, 36.0).0, Kind::Silent);
 }
 
@@ -671,7 +679,8 @@ fn digest(x: &[f32]) -> u64 {
 }
 
 /// The nine first sounds' bits at twelve notes, as `@m2/drums` 2.1.0 played them before KIT-20
-/// (`digest`): (place in today's menu, note, bits).
+/// (`digest`): (place in today's menu, note, bits). Open hat (KIT-28) moved the places after the hats
+/// one on.
 const BEFORE: [(usize, f32, u64); 108] = [
     (0, 24.0, 0x5abff48f9174b16e),
     (0, 30.0, 0x527424f270cda65d),
@@ -721,72 +730,114 @@ const BEFORE: [(usize, f32, u64); 108] = [
     (5, 71.0, 0x8c00c3ffd113f8db),
     (5, 38.0, 0xd2a266a223f17630),
     (5, 36.0, 0x528547e966958e9d),
-    (6, 24.0, 0x56d2df68af22e945),
-    (6, 30.0, 0xd4937d0a4ebfe2b7),
-    (6, 34.0, 0x48590b5715f3a6be),
-    (6, 41.0, 0x2fb6eef832b2d73f),
-    (6, 44.0, 0x1026162839012af8),
-    (6, 52.0, 0x8534476d88ac8960),
-    (6, 53.0, 0x2851aac300820358),
-    (6, 55.0, 0x98afb62df05d76e9),
-    (6, 60.0, 0x564c8e08ee8c1a66),
-    (6, 71.0, 0x742a5afa2f0aa51b),
-    (6, 38.0, 0xddf72580da10612b),
-    (6, 36.0, 0x3e163667efc6416f),
-    (7, 24.0, 0x430ba0f549fae92b),
-    (7, 30.0, 0x430ba0f549fae92b),
-    (7, 34.0, 0x430ba0f549fae92b),
-    (7, 41.0, 0x430ba0f549fae92b),
-    (7, 44.0, 0x430ba0f549fae92b),
-    (7, 52.0, 0x430ba0f549fae92b),
-    (7, 53.0, 0x430ba0f549fae92b),
-    (7, 55.0, 0x430ba0f549fae92b),
-    (7, 60.0, 0x430ba0f549fae92b),
-    (7, 71.0, 0x430ba0f549fae92b),
-    (7, 38.0, 0x430ba0f549fae92b),
-    (7, 36.0, 0x430ba0f549fae92b),
-    (9, 24.0, 0x06977af6a342ea00),
-    (9, 30.0, 0x9c8a6a8691727fb4),
-    (9, 34.0, 0xd6b2ef0f5654d9f9),
-    (9, 41.0, 0x708e1de101f28fa1),
-    (9, 44.0, 0x6a555359226f6158),
-    (9, 52.0, 0x50782e30c0b43c5c),
-    (9, 53.0, 0xdeaaf3f6ea5a2c19),
-    (9, 55.0, 0x0e0c882a8d449611),
-    (9, 60.0, 0xea07c21340ef2cca),
-    (9, 71.0, 0x47ce347b1351b4f0),
-    (9, 38.0, 0x8f959ca1d9b9b2cd),
-    (9, 36.0, 0x43286ec066c01c76),
-    (10, 24.0, 0xdbd0631d3379ebb2),
-    (10, 30.0, 0x5e6948933430a62a),
-    (10, 34.0, 0x6a299d1b90554bbe),
-    (10, 41.0, 0x18d7b117b220d9bd),
-    (10, 44.0, 0xd23483f07a882969),
-    (10, 52.0, 0xbecee51b79e9fe56),
-    (10, 53.0, 0x2e696e3771af4821),
-    (10, 55.0, 0x2762b430c24ddae1),
-    (10, 60.0, 0xce56e93b7c636040),
-    (10, 71.0, 0x698222d8c92b2772),
-    (10, 38.0, 0x7e321e5ff2e1410f),
-    (10, 36.0, 0x0f2a4535fa23cbbd),
-    (14, 24.0, 0x0470d3e46c3c3b9e),
-    (14, 30.0, 0x2be99759fe6fa346),
-    (14, 34.0, 0x0721e7eb231380bc),
-    (14, 41.0, 0xd4b6573a025fcf7b),
-    (14, 44.0, 0xb54f5815d1fd37b2),
-    (14, 52.0, 0x528a9d4056be5354),
-    (14, 53.0, 0xfb8fb7a6294ed02a),
-    (14, 55.0, 0x6bd36b69c7e6f71b),
-    (14, 60.0, 0x3f40a3abd423f94c),
-    (14, 71.0, 0xc6d51a1f0fc92aaf),
-    (14, 38.0, 0xc1ff160ad744bd23),
-    (14, 36.0, 0xe0b12c76cdddce71),
+    (7, 24.0, 0x56d2df68af22e945),
+    (7, 30.0, 0xd4937d0a4ebfe2b7),
+    (7, 34.0, 0x48590b5715f3a6be),
+    (7, 41.0, 0x2fb6eef832b2d73f),
+    (7, 44.0, 0x1026162839012af8),
+    (7, 52.0, 0x8534476d88ac8960),
+    (7, 53.0, 0x2851aac300820358),
+    (7, 55.0, 0x98afb62df05d76e9),
+    (7, 60.0, 0x564c8e08ee8c1a66),
+    (7, 71.0, 0x742a5afa2f0aa51b),
+    (7, 38.0, 0xddf72580da10612b),
+    (7, 36.0, 0x3e163667efc6416f),
+    (8, 24.0, 0x430ba0f549fae92b),
+    (8, 30.0, 0x430ba0f549fae92b),
+    (8, 34.0, 0x430ba0f549fae92b),
+    (8, 41.0, 0x430ba0f549fae92b),
+    (8, 44.0, 0x430ba0f549fae92b),
+    (8, 52.0, 0x430ba0f549fae92b),
+    (8, 53.0, 0x430ba0f549fae92b),
+    (8, 55.0, 0x430ba0f549fae92b),
+    (8, 60.0, 0x430ba0f549fae92b),
+    (8, 71.0, 0x430ba0f549fae92b),
+    (8, 38.0, 0x430ba0f549fae92b),
+    (8, 36.0, 0x430ba0f549fae92b),
+    (10, 24.0, 0x06977af6a342ea00),
+    (10, 30.0, 0x9c8a6a8691727fb4),
+    (10, 34.0, 0xd6b2ef0f5654d9f9),
+    (10, 41.0, 0x708e1de101f28fa1),
+    (10, 44.0, 0x6a555359226f6158),
+    (10, 52.0, 0x50782e30c0b43c5c),
+    (10, 53.0, 0xdeaaf3f6ea5a2c19),
+    (10, 55.0, 0x0e0c882a8d449611),
+    (10, 60.0, 0xea07c21340ef2cca),
+    (10, 71.0, 0x47ce347b1351b4f0),
+    (10, 38.0, 0x8f959ca1d9b9b2cd),
+    (10, 36.0, 0x43286ec066c01c76),
+    (11, 24.0, 0xdbd0631d3379ebb2),
+    (11, 30.0, 0x5e6948933430a62a),
+    (11, 34.0, 0x6a299d1b90554bbe),
+    (11, 41.0, 0x18d7b117b220d9bd),
+    (11, 44.0, 0xd23483f07a882969),
+    (11, 52.0, 0xbecee51b79e9fe56),
+    (11, 53.0, 0x2e696e3771af4821),
+    (11, 55.0, 0x2762b430c24ddae1),
+    (11, 60.0, 0xce56e93b7c636040),
+    (11, 71.0, 0x698222d8c92b2772),
+    (11, 38.0, 0x7e321e5ff2e1410f),
+    (11, 36.0, 0x0f2a4535fa23cbbd),
+    (15, 24.0, 0x0470d3e46c3c3b9e),
+    (15, 30.0, 0x2be99759fe6fa346),
+    (15, 34.0, 0x0721e7eb231380bc),
+    (15, 41.0, 0xd4b6573a025fcf7b),
+    (15, 44.0, 0xb54f5815d1fd37b2),
+    (15, 52.0, 0x528a9d4056be5354),
+    (15, 53.0, 0xfb8fb7a6294ed02a),
+    (15, 55.0, 0x6bd36b69c7e6f71b),
+    (15, 60.0, 0x3f40a3abd423f94c),
+    (15, 71.0, 0xc6d51a1f0fc92aaf),
+    (15, 38.0, 0xc1ff160ad744bd23),
+    (15, 36.0, 0xe0b12c76cdddce71),
 ];
 
-// KIT-20: the nine first sounds play as they did, every bit, pinned: the menu grew at its end.
+// KIT-20, KIT-28: the nine first sounds play as they did, every bit, pinned, wherever the menu grew.
 #[test]
 fn the_first_nine_play_as_before() {
     for (place, n, bits) in BEFORE {
         assert_eq!(digest(&one(place as f32, n, s(4.0), &[], &|_| 0.0)), bits, "{} at {n}", MENU[place].0);
+    }
+}
+
+/// One drum playing `drum` at `pitch`, with `cut` on its cut input
+/// (KIT-27) and no hits on its lane.
+fn one_cut(drum: f32, pitch: f32, frames: usize, cut: &dyn Fn(usize) -> f32) -> Vec<f32> {
+    let mut p = defaults("one", &ONE_NAMES);
+    p[MODEL] = drum;
+    let input = |port: usize, _c: usize, t: usize| match port {
+        PITCH => pitch,
+        VELOCITY => 0.8,
+        CUT => cut(t),
+        _ => p[port],
+    };
+    play::<One>(frames, BLOCK, &input).left()
+}
+
+// KIT-27: a hit on the cut input (another track's, marked as drumhit marks a start) fades every drum
+// of the menu out, the ones that ring on too, in 4 ms (a kick's 3 ms) to exact silence, smoothly: no
+// step bigger than the drum's own. A hit on its own first sample doesn't cut it; with no hit on it,
+// it is One drum, bit for bit.
+#[test]
+fn a_cut_fades_every_drum_out_without_a_click() {
+    let at = s(0.02);
+    let h = m2_dsp::kit::HIT_FIELD as f32;
+    for (place, (name, pitch)) in MENU.iter().enumerate() {
+        let place = place as f32;
+        let free = one(place, *pitch, s(0.3), &[], &|_| 0.0);
+        assert_eq!(one_cut(place, *pitch, s(0.3), &|_| 0.0), free, "{name}: no cut, no change");
+        for mark in [h, h + 4096.0, 1.0] {
+            let x = one_cut(place, *pitch, s(0.3), &|t| if t == at { mark } else { 0.0 });
+            assert_eq!(x[..at], free[..at], "{name}: the same up to the cut");
+            let fade = if *name == "kick" || *name == "kick 2" { s(0.003) } else { s(0.004) };
+            assert!(peak_in(&x, at + fade + 1, s(0.25)) == 0.0, "{name} is silent after its fade, cut by {mark}");
+            assert!(peak_in(&x, at, fade / 2) > 0.0, "{name} fades, it doesn't stop");
+            assert!(
+                max_step(&x, at, at + fade + 1) <= 1.5 * max_step(&free, at, at + fade + 1).max(max_step(&free, at - s(0.005), at)),
+                "{name}: no click"
+            );
+        }
+        let own = one_cut(place, *pitch, s(0.3), &|t| if t == 0 { h } else { 0.0 });
+        assert_eq!(own, free, "{name}: a cut on its own first sample is no cut");
     }
 }

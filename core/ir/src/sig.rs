@@ -54,8 +54,11 @@ impl PortSig {
             return Err(format!("port `{spec}`: bad name"));
         }
         let kind: PortKind = kind.parse().map_err(|e| format!("port `{spec}`: {e}"))?;
-        if default.is_some() && !matches!(kind, PortKind::Control(_) | PortKind::Any) {
-            return Err(format!("port `{spec}`: only controls can have defaults"));
+        // An audio input may default to silence, so a kernel may be called with it left out (ABI-12).
+        match (kind, default) {
+            (PortKind::Audio(_), Some(d)) if d != 0.0 => return Err(format!("port `{spec}`: an audio input's default is silence, 0")),
+            (PortKind::Control(_) | PortKind::Any | PortKind::Audio(_), _) | (_, None) => {}
+            _ => return Err(format!("port `{spec}`: only controls, and audio as silence, have defaults")),
         }
         // An unconnected choice or switch plays its default, which must be one of its places (CARD-12).
         if let (PortKind::Control(Some(u)), Some(d)) = (kind, default)
@@ -153,6 +156,21 @@ mod tests {
         assert!(PortSig::parse("in: audio<1> = 3").is_err());
         assert!(PortSig::parse("no kind").is_err());
         assert_eq!(p.range, None);
+    }
+
+    // ABI-12: an audio input may default to silence, `= 0`, and only to it: left unconnected, it
+    // reads 0. Notes and other audio defaults stay refused.
+    #[test]
+    fn an_audio_input_may_default_to_silence() {
+        let p = PortSig::parse("cut: audio<1> = 0").unwrap();
+        assert_eq!((p.kind, p.default), (PortKind::Audio(Some(1)), Some(0.0)));
+        for (bad, says) in [
+            ("in: audio<1> = 0.5", "an audio input's default is silence, 0"),
+            ("n: events<note> = 0", "only controls, and audio as silence, have defaults"),
+        ] {
+            let e = PortSig::parse(bad).unwrap_err();
+            assert!(e.contains(says), "{bad}: {e}");
+        }
     }
 
     #[test]
