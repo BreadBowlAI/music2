@@ -70,7 +70,9 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 | Go back to one take | Swipe that take across the whole loop | It is one clip again, as it was. |
 | Close the rows | Click **Takes** again | The lane shows the comp as clips. |
 
-- **A comp is only clips.** Each part is a normal audio clip that plays its take from the one file. You can move, split or delete them as any clip.
+- **A comp is only clips.** Each part is a normal audio clip that plays its take from the one file. You can move, split or delete them as any clip. A swipe changes only the bars you swiped: a split or a fade you made elsewhere stays.
 - **Each join crossfades** over 10 ms (a hundredth of a second), so you hear no click.
 - **Agents comp too:** `POST /api/graph/take` with `from` and `to` (beats) plays the take there only ([routes](routes.md)).
-- A comp works on the clips of one recording that sit in a row. A copy of the clip further on is a comp of its own.
+- A comp works on the clips of one recording that sit in a row, in time with the loop they were recorded on. A copy of the clip, even straight after it, is a comp of its own. A swipe that runs into the next comp changes only the one it started in.
+- **When a take stopped early** (you pressed stop partway round), it has no sound for the rest of the loop. A swipe there says where the take stops, and changes nothing.
+- **A cut inside a fade** is refused: make the fade shorter first, or swipe outside it.

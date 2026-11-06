@@ -108,9 +108,12 @@ Each line is one small gap, without a number.
 - **Sound made during the count-in** isn't kept in the take.
 - **An input on its own clock** (not the output's device) can drift a little against the song in a long take.
 - **A take shows no waveform** until it is written.
-- **A comp's joins drift after a tempo change**: a join's overlap is worked out in beats from the tempo when it was made, so at a new tempo it is a little off (at 60 bpm, 20 ms of overlap with 10 ms fades) until the comp is next touched, which makes every join again (VOX-4).
-- **Comping joins a clip you split**: two clips of a comp side by side that play on from each other become one clip when the comp is next touched (VOX-5), so a split made to move half of it later is undone.
+- **A comp after a tempo change**: each join's overlap is in beats and its fades in seconds, so a new tempo puts the joins off, more than a little.
+  - Clips that follow the tempo: at half the tempo the overlap is 20 ms with 10 ms fades, and each join is up to 4 dB louder for about 20 ms. (Fixing it needs fades in beats, a format change.)
+  - Clips that don't follow the tempo (a take, as recorded): each keeps reading at its own speed, so at 100 bpm a comp made at 120 bpm plays about 0.2 s of the vocal twice at each join, as two split halves do. Its pieces no longer keep one pass's timeline, so a swipe sees each as a comp of its own and can't put them back.
+- **A comp's piece can read up to half a sample off**, all along it, when its start isn't on a sample, as Split's halves do: no click at a join, but very high sounds (12 kHz) change a little.
 - **The Takes rows draw each join's middle in beats**, the comp in seconds: under a tempo change inside a join, a row's lit edge can be off by less than 5 ms.
+- **A take row doesn't show where a take stopped early**: a swipe there is refused in words, but the row draws the take's silence as faint as any other part.
 - **A crash during a take loses it**: the part file is swept.
 - **The input stays open** (a Mac shows its microphone light) from the first take until the song closes; a new choice in Settings opens at the next take.
 - **Hearing yourself drops out** when the output buffer is more than about four times the input's (2048 against 128); the take is fine. It should lag by the larger buffer instead (the io review's r4).
