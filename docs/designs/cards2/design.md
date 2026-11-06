@@ -355,12 +355,15 @@ The sum of levels is wrong exactly where it matters.
 A pack that draws its EQ's curve in TypeScript knows its maths twice. The kernel is Rust: `parametric.rs`, prewarped cookbook filters in f32, its frequency kept from 10 Hz to 0.45 × the sample rate, its gain to ±30 dB, its q to 0.05 to 50. The picture would be TypeScript. A clamp missed on either side, or a ladder filter drawn as a cookbook filter, shows a curve that isn't the sound: the drift CARD-27 warns about.
 
 So a curve that can be measured is measured:
-- **`p.response()`:** the server makes a fresh offline copy of the call's own sound at the card's values (written, or as they are being dragged). It plays one click (an impulse) through it, 16,384 frames, and takes its spectrum.
-  - It is exact for every sound that stays the same at every level: the EQs, the filters, the delay's echoes, the reverb's tail, and later a plugin EQ's card.
-  - 8 biquads for 16,384 frames is well under a millisecond in native code.
+- **`p.response()`:** the server makes a fresh offline copy of the call's own sound at the card's values (written, or as they are being dragged). *As built (track `measure`, CARD-81 to CARD-85):*
+  - **A step, not a click.** The graph has no click to play, and a new kernel would grow the core. So the copy plays a step (a note's key count, RENDER-39, scaled by std's `scale` to −20 dBFS), and the first difference of what comes out is the click's sound. For a sound that stays the same at every level and every time, the two are the same.
+  - **As long as it rings.** It listens until the click has stayed quiet (under −90 dB) for half a second, up to 2 s, in seconds at any rate; a longer click is refused in words, never cut short. A short click is worked out at each point's own frequency, a long one by an FFT.
+  - **Only where it is exact.** It plays the step again at −50 dBFS and again 0.1 s later; a sound that differs by more than 0.5 dB (a compressor, drive, a chorus), or whose values a lane, a cable or the beat moves, greys the picture: its pack draws that curve from its maths (D13).
+  - So it draws the EQs and the filters, and short echoes. A long delay's echoes and a big reverb's tail are the pack's own maths, as is a plugin EQ's card for now.
+  - A measure has a budget of 20 ms of CPU at 48 kHz (more at higher rates); an EQ's takes about 6 ms at 48 kHz, twice that at 96 kHz.
   - It never touches what plays (RENDER-33, TAP-2).
-- **`p.hit({ note })`:** the same offline copy plays one note, and music2 draws its sound. That is the Drum's hit, and one note of a synth, as it really sounds, before you play.
-- **The pack's own maths** is only for sounds that change with level, which no click can measure: the compressor's transfer curve, drive, the transient shaper, Pump's dip. Each such picture in a bundled pack has a test that renders the call offline at stepped levels and checks the picture's curve, within 0.5 dB. That test is about being right, not speed, so it runs in the PR tier.
+- **`p.hit({ note })`:** the same offline copy plays one note, and music2 draws its sound. That is the Drum's hit, and one note of a synth, as it really sounds, before you play. *As built:* a second at most, so it follows a drag too; what only listens (a drum's Cut by) is silent in it.
+- **The pack's own maths** is for sounds that change with level or with time, or ring longer than music2 listens, which no click can measure: the compressor's transfer curve, drive, the transient shaper, Pump's dip. Each such picture in a bundled pack has a test that renders the call offline at stepped levels and checks the picture's curve, within 0.5 dB. That test is about being right, not speed, so it runs in the PR tier.
 - **Inside a synth's voice,** a click can't reach the filter. There the pack draws its filter from its maths, and its kernel tests check the kernel's filter against the same points.
 - **Tables:** the Wavetable's built-in tables are made in its kernel. The pack's build writes their frames as a file it ships, and `p.waveform` draws that file, so the picture and the sound read the same numbers.
 
