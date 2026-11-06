@@ -73,6 +73,7 @@ import { makeKit } from "./Tracks";
 import { MenuValue, Segmented, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
 import { useFolded } from "../lib/folded";
+import { useKeyAsk } from "./KeyField";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 export const Locked = createContext<string | null>(null);
@@ -1224,7 +1225,7 @@ export function KeyLine() {
           data-testid="card-set-key"
           className="ml-auto shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"
           onMouseDown={(e) => e.preventDefault()}
-          onClick={() => document.querySelector<HTMLButtonElement>('[data-testid="key-field"]')?.click()}
+          onClick={() => useKeyAsk.getState().ask()}
         >
           Set the key
         </button>

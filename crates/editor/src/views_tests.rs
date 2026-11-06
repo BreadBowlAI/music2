@@ -786,3 +786,32 @@ fn a_call_that_reads_the_key_says_so() {
     assert!(reads("own").iter().any(|(l, r)| l == "keyed" && *r), "{:?}", reads("own"));
     assert!(reads("bare").iter().all(|(_, r)| !r), "no call there reads it: {:?}", reads("bare"));
 }
+
+// VOX-20 (review U10): an audio track's lane card takes an effect from its +, as a call's result
+// does: Tune goes into the track's own code, around what it returns, so the song, a send and a
+// Duck's side all hear the tuned voice. One Tx; its pack's line and lock come with it.
+#[test]
+fn tune_goes_into_an_audio_tracks_own_code() {
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "tracks/vox.ts",
+        "import { track } from \"@m2/core\";\n\nexport default track(\"vox\", { name: \"Vox\" }, ({ lane }) => lane.audio(\"clips\"));\n",
+    );
+    f.write("song.ts", "import { song } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\nimport vox from \"./tracks/vox\";\nexport default song(() => mixer({ vox: vox.out }));\n");
+    let mut s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let v = s.view();
+    let lane = v.modules.iter().find(|m| m.key == "vox").unwrap().nodes.iter().find(|n| n.kind == "lane").unwrap().clone();
+    assert!(lane.audio, "the vocal lane's card has a +: {lane:?}");
+    let at = s.accepted().number;
+    s.add_effect(at, &lane.id, "@m2/vocals:tune").unwrap();
+    assert!(
+        f.read("tracks/vox.ts").contains("({ lane }) => tune(lane.audio(\"clips\"), { glide: 0.1, amount: 1 }));"),
+        "around what the track returns: {}",
+        f.read("tracks/vox.ts")
+    );
+    assert!(f.read("tracks/vox.ts").contains("import { tune } from \"@m2/vocals\";"));
+    assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.0\""), "{}", f.read("music2.toml"));
+    assert!(f.read("song.ts").contains("vox: vox.out"), "the song reads the track as it did");
+}

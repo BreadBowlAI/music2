@@ -4,7 +4,8 @@
 // data/arrangement.json, one undo step each, no toast.
 
 import clsx from "clsx";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { create } from "zustand";
 import { lockReason, type GraphState } from "../lib/graph";
 import { loadTheory, ROOTS, rootName, setSongKey, useTheory, type SongKey } from "../lib/songKey";
 import { useStore } from "../lib/store";
@@ -12,16 +13,29 @@ import { Button, keepFocus, Popover, Segment } from "./ui";
 
 const HELP = "The song's key. In Notes, rows not in the key are shaded. Saved in data/arrangement.json.\nIts scale is the set of notes that sound right together: Notes can lock notes to it and stamp its chords.";
 
+/** Asks for the key field's picker from elsewhere: a card's Set the key (VOX-26). Each ask counts one more. */
+export const useKeyAsk = create<{ asks: number; ask: () => void }>((set) => ({ asks: 0, ask: () => set((s) => ({ asks: s.asks + 1 })) }));
+
 export default function KeyField({ graph }: { graph: GraphState }) {
   const connected = useStore((s) => s.connected);
   const locked = lockReason(graph, connected);
   const key = graph.timeline.key ?? null;
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const field = useRef<HTMLButtonElement>(null);
+  // A card's Set the key opens the picker here, as a click on the field does.
+  const asks = useKeyAsk((s) => s.asks);
+  const seen = useRef(asks);
+  useEffect(() => {
+    if (asks === seen.current) return;
+    seen.current = asks;
+    if (!locked && field.current) setAnchor(field.current);
+  }, [asks, locked]);
   // The scales come from the server's table, read once.
   useEffect(() => void loadTheory(), []);
   return (
     <>
       <button
+        ref={field}
         data-testid="key-field"
         aria-label="Key"
         aria-expanded={!!anchor}

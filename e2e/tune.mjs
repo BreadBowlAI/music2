@@ -1,10 +1,11 @@
-// Tune, from @m2/vocals (VOX-20, VOX-26): a vocal track (an audio lane playing a sung clip) is read by
-// the song; the + on its sound there (CARD-36) lists Tune under Voice, and picking it writes
-// `tune(vox.out, …)`, its import, the pack's [dependencies] line and its lock in one edit. Its card
+// Tune, from @m2/vocals (VOX-20, VOX-26): on a vocal track (an audio lane playing a sung clip), the +
+// on its lane's card lists Tune under Voice, and picking it writes `tune(lane.audio("clips"), …)` in
+// the track's own code, its import, the pack's [dependencies] line and its lock in one edit. Its card
 // says "Every note allowed" with Set the key while the song has no key (its tooltip: "No key set:
 // every note is allowed."); Set the key opens the key field, and once a key is picked the card says
 // it ("Key: A major"). Glide and Amount are knobs: dragging each writes
-// its new value into the call, one undo step each. Each state linted.
+// its new value into the call, one undo step each. The Robot preset writes Glide 0, one undo step.
+// Each state linted.
 //
 //   node e2e/tune.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -69,32 +70,30 @@ write("data/vox/clips.json", JSON.stringify({ clips: [{ id: "voxclip1", start: 0
 const song = read("song.ts");
 write("song.ts", song.replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport vox from "./tracks/vox";').replace("      kick: kick.out,", "      kick: kick.out,\n      vox: vox.out,"));
 check(!!(await until(() => page.$('[data-module-tab="vox"]'), 20000)), "the Vox track is there");
-const files = () => ["song.ts", "music2.toml", "music2.lock"].map(read).join("\n----\n");
+const files = () => ["tracks/vox.ts", "music2.toml", "music2.lock"].map(read).join("\n----\n");
 
 // ---------------------------------------------------------------- + Effect ▸ Tune
 
-// The vocal track's sound where the song reads it takes an effect (CARD-36).
-await until(async () => !!(await page.$('[data-module="song"]')), 9000);
-await show("song");
+// The vocal track's own lane takes an effect around it, in the track's code (review U10).
+await show("vox");
 await view("graph");
-const voice = '[data-module="song"] [data-node="Vox.out"]';
-const plus = `${voice} button[aria-label="Add an effect after Vox.out"]`;
-check(!!(await until(() => page.$(plus), 15000)), "the Vox track's sound in the song has a +");
+const plus = '[data-module="vox"] button[aria-label="Add an effect after clips"]';
+check(!!(await until(() => page.$(plus), 15000)), "the Vox track's lane has a +");
 await page.click(plus);
 await page.waitForSelector('[data-effect-browser] [data-effect="tune"]', { timeout: 5000 }).catch(() => {});
 const group = await page.$eval('[data-effect-browser] [data-effect="tune"]', (e) => e.closest("[data-category]")?.dataset.category).catch(() => null);
 check(group === "Voice", `Tune is listed under Voice: ${group}`);
 await linted("[data-effect-browser]", "the effect browser");
 await page.click('[data-effect-browser] [data-effect="tune"]');
-const added = "vox: tune(vox.out, { glide: 0.1, amount: 1 }),";
-check(await until(() => read("song.ts").includes(added), 15000), `Tune goes around the vocal, at Natural: ${read("song.ts").match(/vox: .*/)?.[0]}`);
-check(read("song.ts").includes('import { tune } from "@m2/vocals";'), "and is imported from @m2/vocals");
+const added = 'tune(lane.audio("clips"), { glide: 0.1, amount: 1 })';
+check(await until(() => read("tracks/vox.ts").includes(added), 15000), `Tune goes around the vocal, in its track, at Natural: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
+check(read("tracks/vox.ts").includes('import { tune } from "@m2/vocals";') && read("song.ts").includes("vox: vox.out,"), "imported there; the song reads the track as it did");
 check(/^"@m2\/vocals" = "1\.0"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
 check(/name = "@m2\/vocals"\nversion = "1\.0\.0"/.test(read("music2.lock")), "music2.lock locks it");
 
 // ---------------------------------------------------------------- no key: the card says so (VOX-26)
 
-const card = '[data-module="song"] [data-node="tune"]';
+const card = '[data-module="vox"] [data-node="tune"]';
 check(!!(await until(() => page.$(`${card} [data-testid=card-key]`), 15000)), "Tune's card has its key line");
 const line = () => page.$eval(`${card} [data-testid=card-key]`, (e) => e.textContent).catch(() => "");
 check(await until(async () => (await line()) === "Every note allowedSet the key"), `with no key: ${await line()}`);
@@ -121,17 +120,30 @@ const glide = `${card} [data-knob="glide"]`;
 check(!!(await until(() => page.$(glide), 5000)), "Glide is a knob");
 await until(async () => (await page.$eval(glide, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(glide, 30);
-check(await until(() => /tune\(vox\.out, \{ glide: 0\.1[1-9]\d*, amount: 1 \}\)/.test(read("song.ts"))), `dragging Glide up writes a longer glide: ${read("song.ts").match(/vox: .*/)?.[0]}`);
+check(await until(() => /tune\(lane\.audio\("clips"\), \{ glide: 0\.1[1-9]\d*, amount: 1 \}\)/.test(read("tracks/vox.ts"))), `dragging Glide up writes a longer glide: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune glide"), `one undo step: ${await undoTitle()}`);
 const amount = `${card} [data-knob="amount"]`;
 check(!!(await until(() => page.$(amount), 5000)), "Amount is a knob");
 await until(async () => (await page.$eval(amount, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(amount, -30);
-check(await until(() => /amount: 0\.\d+ \}\)/.test(read("song.ts"))), `dragging Amount down writes less: ${read("song.ts").match(/vox: .*/)?.[0]}`);
+check(await until(() => /amount: 0\.\d+ \}\)/.test(read("tracks/vox.ts"))), `dragging Amount down writes less: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune amount"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 await key("Meta+z");
 check(await until(() => files() === before), "two ⌘Z take Amount and Glide back, byte for byte");
+
+// ---------------------------------------------------------------- the Robot preset (review U11)
+
+await seen(`${card} [data-presets]`);
+await page.click(`${card} [data-presets]`);
+check(!!(await until(() => page.$("[data-preset-group=std] [data-preset='Robot']"), 5000)), "Presets lists Robot and Natural, music2's own");
+check(!!(await page.$("[data-preset-group=std] [data-preset='Natural']")), "and Natural");
+await page.click("[data-preset-group=std] [data-preset='Robot']");
+check(await until(() => read("tracks/vox.ts").includes('tune(lane.audio("clips"), { glide: 0, amount: 1 })')), `loading Robot writes Glide 0: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
+check(await until(async () => /Undo .*Robot/.test((await undoTitle()) ?? "")), `one undo step: ${await undoTitle()}`);
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => files() === before), "⌘Z takes it back, byte for byte");
 
 done(errors);
