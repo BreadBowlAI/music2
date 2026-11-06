@@ -1,7 +1,7 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more) and `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump).
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump) and `@m2/vocals` (Tune, which moves a voice onto the song's key: [Tune a voice](audio.md#tune-a-voice)).
 - std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 24 effects in seven groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 

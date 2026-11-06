@@ -5,6 +5,7 @@
 - Record notes from a MIDI keyboard or the computer's keys, or your voice or a guitar.
 - Arm tracks to record several at once, punch in to fix one part, and keep a take for each time round a loop.
 - Comp: build one take from the best parts of several, by swiping across the take you like.
+- Tune a voice: move each sung note onto the song's key, gently or as the hard "robot" pop sound.
 - Bounce a track to audio, to chop it, play it backwards or change its pitch: the song sounds the same.
 
 - **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
@@ -76,3 +77,24 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 - A comp works on the clips of one recording that sit in a row, in time with the loop they were recorded on. A copy of the clip, even straight after it, is a comp of its own. A swipe that runs into the next comp changes only the one it started in.
 - **When a take stopped early** (you pressed stop partway round), it has no sound for the rest of the loop. A swipe there says where the take stops, and changes nothing.
 - **A cut inside a fade** is refused: make the fade shorter first, or swipe outside it.
+
+## Tune a voice
+
+**Tune** moves each note a singer sings onto the nearest note of the song's [key](music-basics.md) (pitch correction, as Auto-Tune does). It comes with music2, in the pack `@m2/vocals`.
+
+| To do this | Do this | What happens |
+|---|---|---|
+| Add Tune to a vocal | In the Song's Device view, click **+** on the vocal track's card (Vox), then **Tune** (under Voice) | `tune(vox.out, { glide: 0.1, amount: 1 })` is written into `song.ts`. It starts on **Natural**. |
+| Set the notes it moves to | Click **Key** in the top bar, or **Set the key** on Tune's card | Tune's card says the key, such as "Key: A minor". |
+| The hard, stepped pop sound | Load the **Robot** preset (Presets on its card), or turn **Glide** to 0 | Each note jumps to its pitch at once. |
+| A gentle fix | Turn **Glide** up to about 0.1 s (Natural) or more | Each note slides to its pitch, and the singer's wobble (vibrato) stays. |
+| Fix only part of each note's error | Turn **Amount** down | At 0.5, half of each note's error is fixed; at 0, none. |
+
+- **No key set:** every note is allowed, so Tune moves each sung note to the nearest of all twelve. Its card says "Every note allowed" with **Set the key**.
+- **Glide** is how long a note takes to reach its pitch: 0 to 0.4 seconds. **Amount** is how much of the error it fixes: 0 to 1.
+- **The voice keeps its colour.** Tune moves the pitch without making the singer sound like a chipmunk or a giant.
+- **A breath or an "s"** has no pitch, so Tune lets it through as it is.
+- **The whole song plays 15 ms later** (15 thousandths of a second) while Tune is on any track, so every track stays in time with the tuned voice. You won't hear the delay, but a singer listening to themselves may feel it. A take you record still lands where you heard it.
+- **An export sounds the same as playback.**
+- **It works best on one voice at a time.** A choir, or a voice with a loud band behind it, confuses it.
+- **Agents:** `tune(x, { glide, amount })` from `"@m2/vocals"` in any track's code; `m2 listen` measures the result ([listening](listening.md)).

@@ -28,6 +28,7 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 | `@m2/drums` | 808/909 drums: the Drum, which plays one drum, picked from its menu, and three drum kits of it; and the older drum machine, a whole kit on one track |
 | `@m2/effects` | delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen |
 | `@m2/mixing` | the tools a mix needs: an eight-band EQ, a gate, a transient shaper, a de-esser and a multiband compressor |
+| `@m2/vocals` | tools for a sung voice: Tune, which moves each sung note onto the song's key |
 
 They come with the app and with `m2`. When either starts, it installs each one your store doesn't have yet, as `m2 pack install` would; a start that finds them there writes nothing. From then on they are packs like any other: a song lists them in `music2.toml`, locks them in `music2.lock`, and keeps the version it was made with when a newer music2 brings a newer one. The templates and examples come locked to them.
 
