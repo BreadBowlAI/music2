@@ -5,7 +5,7 @@
 
 import clsx from "clsx";
 import { Maximize2, Minus, Square } from "lucide-react";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
 import { ALL, chainOf, frameOf, knobsOf, packOf, type FrameTab } from "../lib/frame";
 import { useCards, type CardSize } from "../lib/folded";
@@ -155,6 +155,7 @@ function Frame({
   const frame = useMemo(() => frameOf(node), [node]);
   const tab = frame.tabs.find((t) => t.name === picked) ?? frame.tabs[0];
   const pack = packOf(node);
+  const recordings = (node.settings ?? []).filter((x) => x.kind === "recording" && !x.readonly && shown(x));
   // An instrument (it takes notes) wears its track's colour along its top (taste.md §3.5).
   const instrument = node.inputs.some((i) => i.kind === "notes");
   const colour = instrument ? trackColors(graph.timeline, module) : null;
@@ -179,6 +180,10 @@ function Frame({
       data-node-id={node.id}
       data-frame={size}
       data-bypassed={off || undefined}
+      // A card with one recording takes a file dropped anywhere on it, as the patch's card does (CARD-5).
+      data-recording-call={recordings.length === 1 ? node.id : undefined}
+      data-recording-setting={recordings.length === 1 ? recordings[0].slot : undefined}
+      data-recording-title={recordings.length === 1 ? titled : undefined}
       title={node.file ? `${node.file}:${node.line}` : undefined}
     >
       {colour && <div className="h-[3px] shrink-0" style={{ background: colour.bar }} />}
@@ -305,6 +310,7 @@ function RowOf({
   ided: boolean;
 }) {
   const locked = useStore((s) => lockReason(graph, s.connected));
+  const tracks = useContext(Tracks);
   const wide = (el: React.ReactNode) => (cell ? <div className="col-span-full min-w-0">{el}</div> : el);
   if ("input" in row) {
     const port = node.inputs.find((p) => p.id === row.input);
@@ -338,7 +344,8 @@ function RowOf({
         revision={graph.view.revision}
         editable={editable}
         locked={locked}
-        tracks={(k) => graph.view.modules.find((m) => m.key === k)?.label}
+        tracks={tracks}
+        ided={ided}
       />,
     );
   }

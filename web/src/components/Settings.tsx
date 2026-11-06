@@ -62,6 +62,8 @@ interface Props {
   card: string;
   /** The card's id: what a recording's drop names. */
   call: string;
+  /** Its id for `m2 set` in its tooltip (a chain card's All, CARD-43). */
+  ided?: boolean;
 }
 
 /** One setting of a card, as its kind draws it. */
@@ -69,7 +71,7 @@ export function SettingRow(p: Props) {
   const { x, owner, session, revision, editable, locked, tracks } = p;
   const toast = useStore((s) => s.toast);
   const label = controlLabel(x, tracks);
-  const where = `In your code: ${x.file}, line ${x.line}`;
+  const where = `In your code: ${x.file}, line ${x.line}${p.ided ? `\nIts id: ${x.id}` : ""}`;
   const off = !editable ? `${locked ?? "It can't be edited right now"}.` : null;
   /** Write `value`: one edit, named "LFO shape" by its label (CARD-34); a refusal says why. */
   const write = (value: Choice["value"]) =>
