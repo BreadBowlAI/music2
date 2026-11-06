@@ -374,13 +374,24 @@ fn find_notes_through_the_server() {
     )
     .unwrap();
     let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
-    let (status, body) =
-        get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Anotes"));
-    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
-    let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
-    assert_eq!((m["hop"].as_u64(), m["rate"].as_f64()), (Some(256), Some(48_000.0)));
+    // As bytes (the review's S10): a header, then each output's numbers, four bytes each.
+    let measured = |q: &str| {
+        let (status, body) =
+            get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Anotes{q}"));
+        assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+        let n = u32::from_le_bytes(body[..4].try_into().unwrap()) as usize;
+        let head: serde_json::Value = serde_json::from_slice(&body[4..4 + n]).unwrap();
+        let values: Vec<f32> = body[4 + n..].as_chunks::<4>().0.iter().map(|b| f32::from_le_bytes(*b)).collect();
+        (head, values)
+    };
+    let hops = 24_000usize.div_ceil(256);
+    let (m, all) = measured("");
+    assert_eq!((m["hop"].as_u64(), m["rate"].as_f64(), m["hops"].as_u64()), (Some(256), Some(48_000.0), Some(hops as u64)));
     assert_eq!(m["outputs"][3], "note");
-    assert_eq!(m["values"][3].as_array().unwrap().len(), 24_000usize.div_ceil(256));
+    assert_eq!(all.len(), 5 * hops, "five outputs, a number each hop");
+    let (m, some) = measured("&outputs=hz,level");
+    assert_eq!((m["outputs"].clone(), some.len()), (serde_json::json!(["hz", "level"]), 2 * hops));
+    assert_eq!(some[..hops], all[..hops], "hz as it is among them all");
     let (status, body) =
         get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Avoice"));
     assert!(status == 400 && String::from_utf8_lossy(&body).contains("isn't a measure"), "{status} {}", String::from_utf8_lossy(&body));

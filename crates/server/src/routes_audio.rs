@@ -23,8 +23,8 @@ crate::api::routes! {
         "An audio file's waveform peaks, as bytes",
         r#"{"session": 7, "asset": "vox.wav"}"#;
     GET "/api/graph/clip/measure" => clip_measure; reads, agents,
-        "What a measure finds in an audio file, every hop: @m2/vocals:notes gives the voice's pitch (hz), how sure (clarity), its level, each note's number and its sung pitch (centre)",
-        r#"{"session": 7, "asset": "vox.wav", "measure": "@m2/vocals:notes"}"#;
+        "What a measure finds in an audio file, every hop, as bytes: a u32 header length, a JSON header (hop, rate, hops, outputs), then each output's numbers as f32. @m2/vocals:notes gives the voice's pitch (hz), how sure (clarity), its level, each note's number and its sung pitch (centre); outputs (a comma list) picks some",
+        r#"{"session": 7, "asset": "vox.wav", "measure": "@m2/vocals:notes", "outputs": "hz,clarity,level"}"#;
     POST "/api/graph/audio/import" => audio_import up to UPLOAD; writes, agents,
         "Bring audio files on this computer in, and place their clips: on a lane, on a new track after one, or on new tracks below",
         r#"{"session": 7, "paths": ["/Users/you/Samples/vox.wav"], "to": {"kind": "below", "beat": 0}}"#;
@@ -75,12 +75,17 @@ struct MeasureReq {
     session: u64,
     asset: String,
     measure: String,
+    #[serde(default)]
+    outputs: Option<String>,
 }
 
-/// What a measure finds in asset `asset` of the open song (VOX-41): `{measure, asset, hop, rate,
-/// outputs, values}`. Measured once, on a blocking task, then read from the cache folder. A read.
-async fn clip_measure(State(s): S, Query(r): Query<MeasureReq>) -> Result<Json<Value>, ApiError> {
-    Ok(Json(blocking(move || s.graph.measure(r.session, r.asset, r.measure)).await?))
+/// What a measure finds in asset `asset` of the open song (VOX-41), as bytes (`Graph::measure`'s
+/// layout): `application/octet-stream`. Measured once, on a blocking task, then read from the
+/// cache folder. A read.
+async fn clip_measure(State(s): S, Query(r): Query<MeasureReq>) -> Result<Response, ApiError> {
+    let only = r.outputs.map(|o| o.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect());
+    let bytes = blocking(move || s.graph.measure(r.session, r.asset, r.measure, only)).await?;
+    Ok(([(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store")], bytes).into_response())
 }
 
 #[derive(Deserialize)]

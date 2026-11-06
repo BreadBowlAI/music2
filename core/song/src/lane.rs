@@ -804,8 +804,6 @@ fn shape_hint(c: &Value, kind: &LaneKind) -> &'static str {
     }
 }
 
-/// Notes by start, then pitch, then length and velocity: a total order, so no two notes'
-/// order is left to the file.
 /// Sung notes by `at`, then by each other field (VOX-40).
 fn sung_order(a: &Sung, b: &Sung) -> Ordering {
     a.at.total_cmp(&b.at)
@@ -815,6 +813,8 @@ fn sung_order(a: &Sung, b: &Sung) -> Ordering {
         .then(a.straighten.total_cmp(&b.straighten))
 }
 
+/// Notes by start, then pitch, then length and velocity: a total order, so no two notes'
+/// order is left to the file.
 fn note_order(a: &Note, b: &Note) -> Ordering {
     a.start
         .total_cmp(&b.start)

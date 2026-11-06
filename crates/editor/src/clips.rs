@@ -1900,8 +1900,11 @@ pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>)
         crate::beats_since(s, since, "where the song's music is")?;
     }
     // A comp acts on every piece of its comp, not only the clip it names (VOX-1), as the Beat
-    // grid's steps act on their lane.
-    if let (Gesture::Hits { lane, .. } | Gesture::Comp { clip: ClipRef { lane, .. }, .. }, Some(since)) = (g, since) {
+    // grid's steps act on their lane; and `set` writes clips whole, as a voice's roll sends them,
+    // so another's change to the lane since is refused rather than written over (the review's S7).
+    if let (Gesture::Hits { lane, .. } | Gesture::Comp { clip: ClipRef { lane, .. }, .. } | Gesture::Set { lane, .. }, Some(since)) =
+        (g, since)
+    {
         let file = DataPath::lane(lane).to_string();
         let folder = format!("data/{}/", lane.module);
         crate::unchanged_since(s, since, &file, |p| p == file || p == folder.trim_end_matches('/'))?;

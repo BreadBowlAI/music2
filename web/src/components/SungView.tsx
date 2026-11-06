@@ -32,6 +32,8 @@ const cents = (x: number) => Math.round(x * 100) / 100;
 /** A drag under way: what it started from, and the clip as it would be written now. */
 interface Drag {
   i: number;
+  /** The revision it began on: it writes from there (AGENT-2). */
+  drawnAt: number;
   how: "pitch" | "time" | "left" | "right" | null;
   x0: number;
   y0: number;
@@ -45,7 +47,8 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
   const ppb = useZoom();
   const roll = useLocal<{ lock?: boolean }>("roll", {});
   const [drag, setDrag] = useState<Drag | null>(null);
-  const [menu, setMenu] = useState<{ i: number; anchor: HTMLElement; amount: number } | null>(null);
+  // Straighten's popover: the note, the revision it opened on, and its amount as it is and as set.
+  const [menu, setMenu] = useState<{ i: number; anchor: HTMLElement; amount: number; was: number; drawnAt: number } | null>(null);
   const c = lane?.kind === "audio" ? (lane.clips[clipIndex(lane.clips, ref)] as AudioClip | undefined) : undefined;
   const measure = useMeasure(c ?? { asset: "" });
   if (!lane || lane.kind !== "audio" || !c) return null;
@@ -90,9 +93,9 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
   const x = (s: number) => beatOf(shown, tempo, s) * ppb;
   const keyed = key ? inKey(key) : null;
   const m = measure && measure !== "failed" ? measure : null;
-  const hz = m ? output(m, "hz") : [];
-  const clarity = m ? output(m, "clarity") : [];
-  const level = m ? output(m, "level") : [];
+  const hz = m ? output(m, "hz") : new Float32Array();
+  const clarity = m ? output(m, "clarity") : new Float32Array();
+  const level = m ? output(m, "level") : new Float32Array();
   const loudest = Math.max(1e-6, ...level);
   const loudness = (n: Sung) => {
     if (!m) return 0.5;
@@ -120,7 +123,7 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
     const at = e.clientX - r.left;
     const how = at < EDGE ? "left" : at > r.width - EDGE ? "right" : null;
-    setDrag({ i, how, x0: e.clientX, y0: e.clientY, notes: c.sung ?? [] });
+    setDrag({ i, how, x0: e.clientX, y0: e.clientY, notes: c.sung ?? [], drawnAt: graph.view.revision });
   };
   const moving = (e: React.PointerEvent) => {
     if (!drag) return;
@@ -151,12 +154,16 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
     if (!drag) return;
     const d = drag;
     setDrag(null);
-    if (d.how === "pitch" && d.notes[d.i].move !== (c.sung ?? [])[d.i]?.move) void writeClip(ref, c, { sung: d.notes }, step("Moving"));
-    if (d.how !== "pitch" && d.how && d.warp) void writeClip(ref, c, { warp: d.warp }, step("Retiming"));
+    if (d.how === "pitch" && d.notes[d.i].move !== (c.sung ?? [])[d.i]?.move) void writeClip(ref, c, { sung: d.notes }, step("Moving"), d.drawnAt);
+    if (d.how !== "pitch" && d.how && d.warp) void writeClip(ref, c, { warp: d.warp }, step("Retiming"), d.drawnAt);
   };
-  const straighten = (i: number, amount: number) => {
-    const sung = (c.sung ?? []).map((o, k) => (k === i ? { ...o, straighten: Math.round(amount) / 100 } : o));
-    void writeClip(ref, c, { sung }, step("Straightening"));
+  // Straighten's amount written once it is let go of, or the popover closes, and only when it
+  // changed: one undo step for one slider, however it was moved (the review's S14).
+  const straighten = <M extends { i: number; amount: number; was: number; drawnAt: number }>(m: M): M => {
+    if (m.amount === m.was) return m;
+    const sung = (c.sung ?? []).map((o, k) => (k === m.i ? { ...o, straighten: Math.round(m.amount) / 100 } : o));
+    void writeClip(ref, c, { sung }, step("Straightening"), m.drawnAt);
+    return { ...m, was: m.amount };
   };
 
   return (
@@ -197,7 +204,8 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
               onPointerCancel={() => setDrag(null)}
               onContextMenu={(e) => {
                 e.preventDefault();
-                setMenu({ i, anchor: e.currentTarget, amount: Math.round(n.straighten * 100) });
+                const amount = Math.round(n.straighten * 100);
+                setMenu({ i, anchor: e.currentTarget, amount, was: amount, drawnAt: graph.view.revision });
               }}
             />
           );
@@ -209,7 +217,14 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
         </div>
       )}
       {menu && (
-        <Popover anchor={menu.anchor} onClose={() => setMenu(null)} className="w-[220px] p-3 space-y-2">
+        <Popover
+          anchor={menu.anchor}
+          onClose={() => {
+            straighten(menu);
+            setMenu(null);
+          }}
+          className="w-[220px] p-3 space-y-2"
+        >
           <label className="block text-sm">
             Straighten: {menu.amount}%
             <input
@@ -220,8 +235,7 @@ export default function SungView({ graph, clip: ref, track }: { graph: GraphStat
               data-testid="straighten"
               className="w-full"
               onChange={(e) => setMenu({ ...menu, amount: Number(e.target.value) })}
-              onPointerUp={() => straighten(menu.i, menu.amount)}
-              onKeyUp={() => straighten(menu.i, menu.amount)}
+              onPointerUp={() => setMenu(straighten(menu))}
             />
           </label>
           <p className="text-xs text-fg-muted">Flattens its wobble and vibrato: 100% sings one straight pitch.</p>

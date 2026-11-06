@@ -253,3 +253,23 @@ fn a_comp_keeps_each_pieces_notes() {
     let ats = |c: &AudioClip| c.sung.iter().map(|n| n.at).collect::<Vec<_>>();
     assert_eq!((ats(&c[0]), ats(&c[1])), (vec![8.5], vec![]));
 }
+
+// AGENT-2 (the review's S7): the roll's edits are the clip written whole (`set`), from the
+// revision the drag began on: one that another change to the lane came after is refused, so a
+// drag never writes old notes over an agent's edit made while it was under way.
+#[test]
+fn a_set_from_before_anothers_change_to_its_lane_is_refused() {
+    let f = song(SUNG);
+    let mut s = f.open();
+    let base = s.accepted().number;
+    let mut c = the_clip(&s);
+    c.sung[1].straighten = 0.5;
+    let set = |c: &AudioClip| Gesture::Set { lane: vox(), put: vec![serde_json::to_value(c).unwrap()], delete: vec![] };
+    edit(&mut s, &set(&c)).unwrap();
+    let mut drag = c.clone();
+    drag.sung[1].straighten = 0.0;
+    drag.sung[0].move_by = 2.0;
+    let late = crate::clips::edit_since(&mut s, &set(&drag), "tx-late", Some(base));
+    assert!(matches!(late, Err(crate::EditError::Changed(_))), "{:?}", late.map(|d| d.edited));
+    assert_eq!(the_clip(&s).sung[1].straighten, 0.5, "the other change stays");
+}

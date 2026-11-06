@@ -116,9 +116,10 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 - **Each edit is one undo step**, and you hear it at once, even while the song plays.
 - **A note moves at most 7 semitones down and 12 up.** Further, the voice would sound broken, so the drag stops and says so.
 - **The voice keeps its colour** when a note moves, as with Tune.
-- **Only the notes you edit change.** The rest of the clip plays exactly as it did.
+- **Only the notes you edit change.** After a pitch edit or Straighten, the rest of the clip plays exactly as it did. After a timing edit the whole clip follows the song's tempo, so the notes you didn't move may sit up to 8 ms (8 thousandths of a second) off.
 - **Copies are separate.** Fixing a note in one copy of a chorus doesn't change the other copies.
 - **Split a clip, and each piece keeps its notes.** A note across the cut is in both pieces.
 - **One voice at a time.** Find notes doesn't hear chords, or a voice with a loud band behind it.
-- **Find notes needs the clip played forwards, at its own pitch.**
-- **Agents:** the notes are the clip's `sung` field in its lane file, `{"at", "length", "pitch", "move", "straighten"}` (seconds of the file; MIDI numbers with cents), with `"render": "@m2/vocals:voice"`. Find notes is the clip gesture `{"op": "find_notes", "clip", "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}`; `GET /api/graph/clip/measure` gives the pitch line ([routes](routes.md)).
+- **Find notes needs the clip played forwards, at its own pitch.** If edited notes can't play (the clip turned around, or its pitch changed by hand), the song's problems say so, and they play as sung.
+- **An older song** may play `@m2/vocals` 1.0.0, which can't find notes: Find notes says so, and `m2 pack update @m2/vocals` updates it.
+- **Agents:** the notes are the clip's `sung` field in its lane file, `{"at", "length", "pitch", "move", "straighten"}` (seconds of the file; MIDI numbers with cents), with `"render": "@m2/vocals:voice"`. Find notes is the clip gesture `{"op": "find_notes", "clip", "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}`; `GET /api/graph/clip/measure` gives the pitch line, as bytes ([routes](routes.md)). A `set` of the clip from an older `revision` is refused when another changed the lane since.

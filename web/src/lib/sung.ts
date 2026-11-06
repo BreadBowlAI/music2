@@ -8,7 +8,8 @@ import { findLane, type AudioClip, type ClipRef, type GraphState, type TimelineL
 import { send, serverRef, type Gesture } from "./clips";
 import { editing, goesFrom, lanesOf } from "./history";
 import { beatAt, secondsAt, type Tempo } from "./peaks";
-import { request } from "./projects";
+import { http } from "./http";
+import { token } from "./native";
 import { useShell } from "./shell";
 import { useStore } from "./store";
 
@@ -39,18 +40,28 @@ export const UP = 12;
 /** How near a timing drag may take a note to its neighbour's marker, in seconds (VOX-47). */
 const GAP = 0.01;
 
-/** What a measure found in a file (VOX-41). */
+/** What a measure found in a file (VOX-41): each output asked, a number each hop. */
 export interface Measured {
   hop: number;
   rate: number;
   outputs: string[];
-  values: number[][];
+  values: Float32Array[];
 }
 
 const measures = create<{ got: Record<string, Measured | "failed"> }>(() => ({ got: {} }));
 const asked = new Set<string>();
 
-/** What `@m2/vocals:notes` found in the file clip `c` plays: null until it comes, "failed" when it can't. */
+/** What the measure route sends (the review's S10): a u32 header length, its JSON header, then each output's f32s. */
+export function readMeasure(buf: ArrayBuffer): Measured {
+  const n = new DataView(buf).getUint32(0, true);
+  const head = JSON.parse(new TextDecoder().decode(new Uint8Array(buf, 4, n))) as { hop: number; rate: number; hops: number; outputs: string[] };
+  const at = 4 + n;
+  const all = new Float32Array(buf.slice(at, at + head.outputs.length * head.hops * 4));
+  const values = head.outputs.map((_, i) => all.subarray(i * head.hops, (i + 1) * head.hops));
+  return { hop: head.hop, rate: head.rate, outputs: head.outputs, values };
+}
+
+/** What `@m2/vocals:notes` found in the file clip `c` plays, the roll's three outputs: null until it comes, "failed" when it can't. */
 export function useMeasure(c: Pick<AudioClip, "asset" | "hash">): Measured | "failed" | null {
   const session = useStore((s) => s.graph?.session);
   const key = `${session}\n${c.asset}\n${c.hash ?? ""}`;
@@ -58,17 +69,17 @@ export function useMeasure(c: Pick<AudioClip, "asset" | "hash">): Measured | "fa
   useEffect(() => {
     if (session == null || !c.asset || asked.has(key)) return;
     asked.add(key);
-    const q = `session=${session}&asset=${encodeURIComponent(c.asset)}&measure=${encodeURIComponent(MEASURE)}`;
-    request<Measured>(`/api/graph/clip/measure?${q}`).then(
-      (m) => measures.setState((s) => ({ got: { ...s.got, [key]: m } })),
-      () => measures.setState((s) => ({ got: { ...s.got, [key]: "failed" } })),
-    );
+    const q = `session=${session}&asset=${encodeURIComponent(c.asset)}&measure=${encodeURIComponent(MEASURE)}&outputs=hz,clarity,level`;
+    const done = (m: Measured | "failed") => measures.setState((s) => ({ got: { ...s.got, [key]: m } }));
+    http(`/api/graph/clip/measure?${q}`, { headers: token ? { "x-m2-token": token } : {} })
+      .then(async (res) => done(res.ok ? readMeasure(await res.arrayBuffer()) : "failed"))
+      .catch(() => done("failed"));
   }, [session, key, c.asset]);
   return got ?? null;
 }
 
 /** Output `name` of a measure. */
-export const output = (m: Measured, name: string) => m.values[m.outputs.indexOf(name)] ?? [];
+export const output = (m: Measured, name: string): Float32Array => m.values[m.outputs.indexOf(name)] ?? new Float32Array();
 
 /** The MIDI pitch of `hz`. */
 export const midiOf = (hz: number) => 69 + 12 * Math.log2(hz / 440);
@@ -143,15 +154,17 @@ function written(c: AudioClip, changes: Partial<AudioClip>): Record<string, unkn
 }
 
 /**
- * Write clip `ref`, drawn as `c`, with `changes` (its notes, its markers): one Tx and one undo step,
- * named `step`. Refused, the toast says the server's words.
+ * Write clip `ref`, drawn as `c` at revision `drawnAt`, with `changes` (its notes, its markers):
+ * one Tx and one undo step, named `step`. Refused, the toast says the server's words.
  */
-export async function writeClip(ref: ClipRef, c: AudioClip, changes: Partial<AudioClip>, step: string) {
+export async function writeClip(ref: ClipRef, c: AudioClip, changes: Partial<AudioClip>, step: string, drawnAt: number) {
   const { graph, toast } = useStore.getState();
   if (!graph) return null;
   const ours = editing();
   try {
-    const f = await goesFrom(graph.session, graph.view.revision, [lanesOf(ref.module)], ours);
+    // From the revision the edit began on (AGENT-2, as the piano roll's): another's change to the
+    // lane since is refused, never written over (the review's S7).
+    const f = await goesFrom(graph.session, drawnAt, [lanesOf(ref.module)], ours);
     const gesture = { op: "set", module: ref.module, lane: ref.lane, put: [written(c, changes)] } as unknown as Gesture;
     return await send(f.graph, gesture, { name: step }, undefined, ours, f.base);
   } catch (error) {

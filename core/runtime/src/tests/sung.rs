@@ -408,7 +408,8 @@ fn a_timing_drag_stretches_only_its_gaps() {
     };
     for (a, b) in [(0.32, 0.78), (1.82, 2.38)] {
         let (lag, r) = alike(a, b);
-        assert!(lag.abs() <= 384 && r > 0.95, "{a}..{b} s plays where it played: most alike {lag} frames off ({r:.4})");
+        let ms = lag.abs() as f64 * 1000.0 / RATE as f64;
+        assert!(ms <= 8.0 && r > 0.95, "{a}..{b} s plays where it played, within 8 ms: most alike {ms:.2} ms off ({r:.4})");
     }
     // Where the second note sounds: its first and last 5 ms over a tenth of its level.
     let loud = |x: &[f32], at: usize| x[at..at + f(0.005)].iter().fold(0.0f32, |m, v| m.max(v.abs()));

@@ -45,10 +45,12 @@ impl Graph {
         Ok(answer)
     }
 
-    /// What measure `measure` finds in the open song's asset `asset` (VOX-41): `{measure, asset,
-    /// hop, rate, outputs, values}`, each output's numbers a list in `values`, in the order of
-    /// `outputs`. Measured off the session's lock, and kept in the cache folder.
-    pub fn measure(&self, token: u64, asset: String, measure: String) -> Result<Value> {
+    /// What measure `measure` finds in the open song's asset `asset` (VOX-41), as bytes (the
+    /// review's S10): a little-endian u32, the length of the JSON header after it, `{measure, asset,
+    /// hop, rate, hops, outputs}`; then each output of `outputs` (all, when none is asked) in turn,
+    /// its numbers one a hop, little-endian f32. Measured off the session's lock, and kept in the
+    /// cache folder.
+    pub fn measure(&self, token: u64, asset: String, measure: String, only: Option<Vec<String>>) -> Result<Vec<u8>> {
         let file = self.asset_file(token, &asset)?;
         let plain = |e: EditError| anyhow::anyhow!("{}", e.to_string().trim_start_matches("edit rejected: "));
         let m = measure.clone();
@@ -58,9 +60,22 @@ impl Graph {
             m2_editor::sung::packages_measuring(&o.session, &m).map_err(plain)
         })?;
         let found = m2_runtime::measure::measure(&packages, &measure, &file, &[])?;
-        Ok(
-            json!({"measure": measure, "asset": asset, "hop": found.hop, "rate": found.rate, "outputs": found.outputs, "values": found.values}),
-        )
+        let outputs = only.unwrap_or_else(|| found.outputs.clone());
+        let mut body = vec![];
+        for name in &outputs {
+            let Some(values) = found.output(name) else {
+                anyhow::bail!("`{measure}` has no output `{name}`: it has {}", found.outputs.join(", "))
+            };
+            body.extend(values.iter().flat_map(|v| v.to_le_bytes()));
+        }
+        let head =
+            json!({"measure": measure, "asset": asset, "hop": found.hop, "rate": found.rate, "hops": found.hops(), "outputs": outputs})
+                .to_string()
+                .into_bytes();
+        let mut out = (head.len() as u32).to_le_bytes().to_vec();
+        out.extend(head);
+        out.extend(body);
+        Ok(out)
     }
 
     /// `gesture`, a Find notes (VOX-43) given what its measure found in the clip's file, and its
