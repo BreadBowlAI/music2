@@ -807,10 +807,13 @@ pub struct Listens {
     pub refused: Option<String>,
 }
 
-/// The tracks call `site` can listen to, by key, with the name its file imports each by; or why it
-/// can't be changed here (it is in a track's file). The track whose sound it works on, by key,
-/// when it is one.
-fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Result<Vec<(String, String)>, String>, Option<String>)> {
+/// The tracks a call can listen to, by key, with the name its file imports each by; or why it
+/// can't be changed here, in words.
+type Choices = Result<Vec<(String, String)>, String>;
+
+/// The tracks call `site` can listen to (or why it can't be changed here: it is in a track's file),
+/// and the track whose sound it works on, by key, when it is one.
+fn choices_of(s: &Session, site: &Site, l: &Listener) -> Option<(Choices, Option<String>)> {
     let compiled = &s.accepted().compiled;
     let (m, _) = heard(compiled, site.id, &l.input.name)?;
     let text = s.accepted().snapshot.files.get(Path::new(&site.file))?;
