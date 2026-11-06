@@ -197,7 +197,7 @@ outputs = ["out: audio<*>"]
 
 [[kernel]]
 name = "compress"
-description = "Stereo-linked soft-knee compressor; ratio 1 is off"
+description = "Stereo-linked soft-knee compressor; ratio 1 is off. Its detector hears key (stereo or mono: a mono sound's copied to both sides): the input itself, or another sound to key it from"
 inputs = [
   "in: audio<*>",
   "threshold: control<db> = -18",
@@ -205,6 +205,7 @@ inputs = [
   "attack: control<seconds> = 0.01 in 0.0001..1",
   "release: control<seconds> = 0.15 in 0.001..5",
   "makeup: control<db> = 0",
+  "key: audio<2>",
 ]
 outputs = ["out: audio<*>"]
 

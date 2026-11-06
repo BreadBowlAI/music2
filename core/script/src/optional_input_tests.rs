@@ -81,9 +81,7 @@ fn refused(lib: &str, says: &str) {
 }
 
 fn lib(desc: &str) -> String {
-    format!(
-        "import {{ component, control, each, kernel, port }} from \"@m2/core\";\nexport const c = component({desc}, (x: any) => x);\n"
-    )
+    format!("import {{ component, control, each, kernel, port }} from \"@m2/core\";\nexport const c = component({desc}, (x: any) => x);\n")
 }
 
 // PKG-18: an output is one signal, always made; an input that takes many signals may be none of
@@ -97,7 +95,9 @@ fn what_may_not_be_optional_is_refused_in_words() {
         "takes many signals, so a call may give none already",
     );
     refused(
-        &lib("{ id: \"c\", inputs: { in: port.audio() }, controls: { ch: each({ side: (port.audio() as any).optional() }) }, output: port.audio() }"),
+        &lib(
+            "{ id: \"c\", inputs: { in: port.audio() }, controls: { ch: each({ side: (port.audio() as any).optional() }) }, output: port.audio() }",
+        ),
         "can't be left out",
     );
     refused(

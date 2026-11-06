@@ -8,18 +8,25 @@
 
 import { component, control, kernel, port, signature, type Audio, type Params, type Value } from "@m2/core";
 
-/** Turn `x` down by `depth` dB while `side` is high. Use another track's `follow()` export as `side`. */
+/**
+ * Turn `x` down by `depth` dB while `side` is high: `duck(bass.out, kick.env)`, or
+ * `follow(kick.out)` for a track with no `env`. With no `side` (as + Effect adds it, until its card
+ * picks what it listens to) it plays `x` as it is, bit for bit (PKG-19).
+ */
 export const duck = component(
   {
     id: "duck",
     label: "Duck",
-    signature: signature<(x: Audio, side: Value) => Audio>(),
-    // `side` only listens: muting the track it comes from must not stop the ducking (PKG-13).
-    inputs: { in: port.audio(), side: port.control("unit01", { sidechain: true }) },
+    signature: signature<(x: Audio, side?: Value) => Audio>(),
+    // `side` only listens: muting the track it comes from must not stop the ducking (PKG-13). A
+    // call may leave it out (PKG-18): its card's Listens to picks it (CARD-35).
+    inputs: { in: port.audio(), side: port.control("unit01", { sidechain: true }).optional() },
     controls: { depth: control.db(-8).range(-60, 0) },
     output: port.audio(),
+    editor: { category: "Dynamics", description: "Turns the sound down while another track plays: pick it in Listens to", insert: { depth: -8 } },
   },
-  (x: Audio, side: Value, { depth }: Params) => kernel("std:duck", { in: x, side, depth }),
+  // With no side the kernel's side is 0, so its gain is exactly 1.
+  (x: Audio, side: Value | undefined, { depth }: Params) => kernel("std:duck", { in: x, side: side ?? 0, depth }),
 );
 
 /** Peak limiter with a hard ceiling in dB. */
@@ -43,14 +50,17 @@ export const limit = component(
 /**
  * Compressor: above `threshold` (dB) the level rises only 1/`ratio` as fast, so loud and
  * quiet moments even out. `attack` and `release` (seconds) are how fast it grabs and lets
- * go; `makeup` (dB) brings the level back up.
+ * go; `makeup` (dB) brings the level back up. It hears its own sound, or a key given after it:
+ * `compress(bass.out, kick.out)` turns the bass down only while the kick plays (PKG-19).
  */
 export const compress = component(
   {
     id: "compress",
     label: "Compress",
-    signature: signature<(x: Audio) => Audio>(),
-    inputs: { in: port.audio() },
+    signature: signature<(x: Audio, key?: Audio) => Audio>(),
+    // `key` only listens (PKG-13), and a call may leave it out (PKG-18): its card's Listens to
+    // picks it (CARD-35).
+    inputs: { in: port.audio(), key: port.audio({ sidechain: true }).optional() },
     controls: {
       threshold: control.db(-18).range(-60, 0),
       ratio: control.scalar(3).range(1, 20).log(),
@@ -66,7 +76,9 @@ export const compress = component(
       insert: { threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 },
     },
   },
-  (x: Audio, { threshold, ratio, attack, release, makeup }: Params) => kernel("std:compress", { in: x, threshold, ratio, attack, release, makeup }),
+  // With no key its detector hears `x` itself, as it did before it took one.
+  (x: Audio, key: Audio | undefined, { threshold, ratio, attack, release, makeup }: Params) =>
+    kernel("std:compress", { in: x, threshold, ratio, attack, release, makeup, key: key ?? x }),
 );
 
 /** Three-band EQ: `low`, `mid` and `high` in dB (0 leaves the sound alone), around `lowFreq`, `midFreq` and `highFreq` in Hz. */

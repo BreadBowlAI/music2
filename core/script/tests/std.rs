@@ -223,7 +223,7 @@ fn every_std_control_is_found_by_its_slot() {
 
 /// The effects `m2pkg.toml` listed before step 5, as `[[effect]]` entries: module, name,
 /// category, description, and the `args` written after the audio when one is added.
-const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 17] = [
+const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 18] = [
     ("std/filter", "lowpass", "Filter", "Darker: removes the highs above the cutoff", "1000"),
     ("std/filter", "highpass", "Filter", "Thinner: removes the lows below the cutoff", "200"),
     ("std/filter", "bandpass", "Filter", "Keeps only a band around the cutoff, like a telephone", "1000"),
@@ -245,6 +245,8 @@ const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 17] = [
         "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 }",
     ),
     ("std/fx", "eq3", "EQ", "Bass, middle and treble, each up or down in dB", "{ low: 0, mid: 0, high: 0 }"),
+    // Offered since track sidechain, with nothing to listen to until its card picks it (PKG-19).
+    ("std/fx", "duck", "Dynamics", "Turns the sound down while another track plays: pick it in Listens to", "{ depth: -8 }"),
     ("@m2/effects", "bitcrush", "Distortion", "Lo-fi digital crunch, like an old sampler", "{ bits: 8, rate: 12000, mix: 1 }"),
     ("@m2/effects", "widen", "Utility", "Makes the stereo image wider, or narrower toward mono", "{ width: 1.5 }"),
 ];
