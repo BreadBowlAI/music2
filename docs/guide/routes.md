@@ -356,12 +356,12 @@ An example body:
 
 ### `POST /api/graph/picture`
 
-Show a card's picture: its shapes in its axes' units, each dot's values with the knobs that move them, and its words, drawn from what plays; its window's socket gets it again as its values change, while you ask again within 10 s; or stop.
+Show a card's picture: its shapes in its axes' units, each dot's values with the knobs that move them, and its words, drawn from what plays, the card by its id in the view of the revision named (refused when the song's code changed since); its window's socket gets it again as its values change, while you ask again within 10 s; or stop.
 
 An example body:
 
 ```json
-{"session": 7, "client": "w1", "module": "keys", "node": "tracks/keys.ts#2", "view": "curve", "on": true}
+{"session": 7, "revision": 42, "client": "w1", "module": "keys", "node": "tracks/keys.ts#2", "view": "curve", "on": true}
 ```
 
 ### `POST /api/graph/preset/load`

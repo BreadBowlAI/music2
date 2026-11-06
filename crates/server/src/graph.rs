@@ -268,6 +268,8 @@ struct EngineView {
 struct Shown {
     /// The accepted revision the view shows.
     revision: u64,
+    /// The view itself, as the state's `view` is: what the pictures are drawn from (CARD-63, CARD-67).
+    view: Arc<m2_editor::GraphView>,
     /// The state without the transport and the gestures, which [`Graph::state`] adds as they are
     /// now, nor the timeline.
     state: Value,
@@ -844,6 +846,8 @@ impl Inner {
         };
         let status = self.status();
         let mut state = shown.state.clone();
+        // Each picture's words, once the runner worked them out for this view (CARD-63).
+        pictures::put_words(&self.control.lock().pictures, shown.revision, &mut state["view"]);
         faults::listed(self, token, &mut state["problems"]);
         state["timeline"] = shown.timeline.to_value();
         state["playing"] = json!(status.playing);

@@ -768,16 +768,18 @@ export const tone = component(
     output: port.audio(),
     editor: {
       views: {
-        curve: view.picture({
-          x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24),
-          draw: (v, p) => [p.handle(v.cutoff, v.boost, { x: \"cutoff\", y: \"boost\" })],
-          words: (v) => `cut at ${v.cutoff} Hz`,
-        }),
+        curve: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24) }),
       },
       face: [\"curve\", \"cutoff\"],
     },
   },
   ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),
+  {
+    curve: {
+      draw: (v, p) => [p.handle(v.cutoff, v.boost, { x: \"cutoff\", y: \"boost\" })],
+      words: (v) => `cut at ${v.cutoff} Hz`,
+    },
+  },
 );
 ";
 
@@ -819,6 +821,7 @@ fn a_pictures_values_are_in_the_view() {
                 {"name": "on", "value": true, "knob": id("on")},
                 {"name": "voices", "value": 4},
             ],
+            "words": null,
         })
     );
     // Automated, a value plays its lane's fallback, which the card can't move, and says why.

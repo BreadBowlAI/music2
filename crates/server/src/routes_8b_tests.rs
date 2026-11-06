@@ -690,9 +690,9 @@ fn a_pictures_shapes_go_to_the_window_that_asked_as_a_knob_moves() {
         dir.join("lib/tone.ts"),
         "import { axis, component, control, port, view } from '@m2/core';\nimport { lowpass } from 'std/filter';\nimport { osc } from 'std/dsp';\n\
          export const tone = component({ id: 'tone', label: 'Tone', controls: { cutoff: control.hz(1000) }, output: port.audio(),\n\
-         editor: { views: { curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24),\n\
-         draw: (v, p) => [p.handle(v.cutoff, 0, { x: 'cutoff' })], words: (v) => `cut at ${v.cutoff} Hz` }) } } },\n\
-         ({ cutoff }) => lowpass(osc.saw(110), { cutoff }));\n",
+         editor: { views: { curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }) } } },\n\
+         ({ cutoff }) => lowpass(osc.saw(110), { cutoff }),\n\
+         { curve: { draw: (v, p) => [p.handle(v.cutoff, 0, { x: 'cutoff' })], words: (v) => `cut at ${v.cutoff} Hz` } });\n",
     )
     .unwrap();
     std::fs::write(
@@ -714,7 +714,8 @@ fn a_pictures_shapes_go_to_the_window_that_asked_as_a_knob_moves() {
     let (node, knob) = (card["id"].as_str().unwrap().to_string(), card["knobs"][0]["id"].as_str().unwrap().to_string());
     let url = &running.url;
     let (mut w1, mut w2) = (Ws::connect(url, "client=w1&token=t0k"), Ws::connect(url, "client=w2&token=t0k"));
-    let ask = json!({"session": session, "client": "w1", "module": "lead", "node": node, "view": "curve", "on": true});
+    let ask =
+        json!({"session": session, "revision": revision, "client": "w1", "module": "lead", "node": node, "view": "curve", "on": true});
     let (status, answer) = post(url, "/api/graph/picture", Some("t0k"), &ask);
     assert_eq!((status, &answer["picture"]["words"]), (200, &json!("cut at 800 Hz")), "{answer}");
     assert_eq!(answer["picture"]["shapes"][0]["moves"]["x"], json!({"name": "cutoff", "knob": knob}));

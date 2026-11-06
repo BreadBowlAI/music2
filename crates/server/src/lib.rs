@@ -475,10 +475,10 @@ fn spawn_meters(state: &Arc<AppState>) {
         .expect("spawn the meters");
 }
 
-/// `music2-pictures` (CARD-68): as soon as a lease's value moves (or every 100 ms), and at most once
-/// a frame, each picture a window or an agent asks for whose values or code changed is drawn again
+/// `music2-pictures` (CARD-63, CARD-68): as soon as a lease's value moves (or every 100 ms), each
+/// picture a window or an agent asks for whose values or code changed is drawn again
 /// ([`graph::Graph::pictures_frame`]), and the windows that asked are sent it, on a channel of their
-/// own, never the event broadcast. Ends once the state is dropped.
+/// own, never the event broadcast; then a new view's words. Ends once the state is dropped.
 fn spawn_pictures(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
     std::thread::Builder::new()
@@ -487,12 +487,14 @@ fn spawn_pictures(state: &Arc<AppState>) {
             loop {
                 let Some(state) = weak.upgrade() else { return };
                 state.graph.pictures_wait(graph::pictures::LOOK);
-                let began = std::time::Instant::now();
+                // Drawn at once; moves that come meanwhile are drawn together after (CARD-68).
                 if let Some(out) = state.graph.pictures_frame() {
                     state.pictures.send_replace(Arc::new(out));
                 }
-                // One frame at most for each draw: a drag's moves in it wait for the next.
-                std::thread::sleep(graph::pictures::FRAME.saturating_sub(began.elapsed()));
+                // Each picture's words in a new view (CARD-63): windows read it again.
+                if state.graph.pictures_words() {
+                    state.graph_changed();
+                }
             }
         })
         .expect("spawn the pictures");

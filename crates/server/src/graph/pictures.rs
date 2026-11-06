@@ -1,32 +1,38 @@
-//! Pictures asked for (CARD-67, CARD-68): a card's picture, drawn by the picture runner
-//! (`m2_script::pictures`, CARD-64) from what plays, while a window or an agent asks for it.
+//! Pictures (CARD-63, CARD-67, CARD-68): a card's picture, drawn by the picture runner
+//! (`m2_script::pictures`, CARD-64) from what plays, while a window or an agent asks for it; and
+//! every picture's words, in the view.
 //!
-//! - **On request.** `POST /api/graph/picture` names a card by the shown view's id and a picture by
-//!   its name; the answer is drawn from what plays then: the accepted view's values, and every live
-//!   lease's on the card. An ask lasts as a scope's does ([`super::scope::KEEP`]): while its client
-//!   asks again, until it stops, or its window's socket closes.
-//! - **Drawn again once a frame.** The server's `music2-pictures` thread calls
-//!   [`Graph::pictures_frame`] as soon as a lease's value moves, or every [`LOOK`], and at most once
-//!   every [`FRAME`]: each picture asked for whose values or code changed since it was drawn is drawn
-//!   again, once for all its card's leases, and each window that asked gets it in its own
-//!   `pictures` message. Nothing changed, nothing is drawn.
-//! - **Each dot's knobs.** The runner names the values a dot moves; the answer adds the knob that
-//!   moves each, from the view, or why the card can't (CARD-66), so an agent writes it as a knob.
+//! - **On request.** `POST /api/graph/picture` names a card by its id in the view of a revision and
+//!   a picture by its name. An id is good only while the song's code is as it was then: past that
+//!   it may name another call, so the ask is refused, and asked again by the card's id now. The
+//!   answer is drawn from what plays then: the view's values, and every live lease's on the card.
+//!   An ask lasts as a scope's does ([`super::scope::KEEP`]); asked again with nothing changed, it
+//!   is answered with the picture already drawn.
+//! - **Drawn again at once.** The `music2-pictures` thread waits for a lease to move (or [`LOOK`]),
+//!   then draws each picture asked for whose values or code changed since it was drawn, once for
+//!   all its card's leases; moves that come while it draws are drawn together after it. Each window
+//!   that asked gets it in its own `pictures` message.
+//! - **Words in the view.** After each accepted revision the same thread works out every picture's
+//!   words at the view's values, and [`Graph::state`] puts them in the view (CARD-63).
+//! - **Each dot's knobs.** The runner checked the names a dot moves against the descriptor; the
+//!   answer gives each the card's own knob, or why the card can't move it (CARD-66).
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
-use m2_script::pictures::{Ask, Drawn, Song};
+use m2_editor::views::{Drawn as Part, PictureCall};
+use m2_script::pictures::Drawn;
 use serde_json::{Map, Value, json};
 
 use super::{ControlPlane, Graph};
 
-/// How often a picture is drawn again at most: one screen frame.
-pub const FRAME: Duration = Duration::from_millis(16);
 /// How long the pictures' thread waits for a lease to move before it looks anyway: for a write, an
-/// agent's change, a new code revision and asks that end.
+/// agent's change, a new revision's words and asks that end.
 pub const LOOK: Duration = Duration::from_millis(100);
+/// How long an ask waits for its draw (CARD-64).
+const WAIT: Duration = Duration::from_secs(2);
 
 /// What wakes the pictures' thread: a lease's value moved, so a picture may draw again now.
 #[derive(Default)]
@@ -42,21 +48,26 @@ impl Wake {
     }
 }
 
-/// The pictures windows and agents ask for, on the control plane.
+/// The pictures windows and agents ask for, on the control plane, and the words of every picture.
 #[derive(Default)]
 pub(super) struct Pictures {
     asked: Vec<Asked>,
     /// What each draw is numbered by, so a socket sends only what is newer than what it sent.
     version: u64,
-    /// The song's code at its last code revision, for its own sounds' pictures (D16).
-    song: Option<Arc<Song>>,
+    /// Every picture's words in the view (CARD-63), by module, card and picture, at the revision
+    /// they were worked out for: its words, or why it can't be drawn.
+    words: (u64, HashMap<(String, String, String), Value>),
+    /// What each picture's words were worked out from, and what they were.
+    said: HashMap<String, Value>,
 }
 
-/// One picture asked for: by its module, the shown view's id of its card, and its name.
+/// One picture asked for: by its module, its card's id at a code revision, and its name.
 struct Asked {
     module: String,
     node: String,
     view: String,
+    /// The code revision its id names its card at.
+    code: u64,
     clients: Vec<(String, Instant)>,
     /// What it was last drawn from, and the picture that drew, numbered.
     from: Option<String>,
@@ -78,35 +89,35 @@ pub struct PicturesOut {
     pub clients: Vec<(String, Vec<SentPicture>)>,
 }
 
-/// A picture to draw, as found on the control plane: what the runner is asked, and what the answer
-/// is made with.
+/// A picture to draw, as found on the control plane.
 struct Found {
     module: String,
     node: String,
     view: String,
-    /// The card's label, which names a picture that can't be drawn.
-    label: String,
-    ask: Ask,
+    code: u64,
+    revision: u64,
+    call: PictureCall,
+    /// The runner's ask, the leases' values on the view's.
+    ask: m2_script::pictures::Ask,
     /// What it is drawn from: its code and its values.
     from: String,
-    /// Each value's knob, or why the card can't move it, by name.
-    knobs: Map<String, Value>,
 }
 
 impl Pictures {
-    fn find(&mut self, module: &str, node: &str, view: &str) -> Option<&mut Asked> {
-        self.asked.iter_mut().find(|a| a.module == module && a.node == node && a.view == view)
+    fn find(&mut self, module: &str, node: &str, view: &str, code: u64) -> Option<&mut Asked> {
+        self.asked.iter_mut().find(|a| a.module == module && a.node == node && a.view == view && a.code == code)
     }
 
     /// Keep `client`'s ask for the picture, from now.
-    fn renew(&mut self, client: &str, module: &str, node: &str, view: &str, now: Instant) {
-        let a = match self.find(module, node, view) {
+    fn renew(&mut self, client: &str, f: &Found, now: Instant) {
+        let a = match self.find(&f.module, &f.node, &f.view, f.code) {
             Some(a) => a,
             None => {
                 let a = Asked {
-                    module: module.into(),
-                    node: node.into(),
-                    view: view.into(),
+                    module: f.module.clone(),
+                    node: f.node.clone(),
+                    view: f.view.clone(),
+                    code: f.code,
                     clients: vec![],
                     from: None,
                     drawn: None,
@@ -122,11 +133,11 @@ impl Pictures {
         }
     }
 
-    /// `client` stops asking for the picture, or for every one (`None`, its window closed); asks no
-    /// one keeps, or no one renewed in [`super::scope::KEEP`], end.
-    fn stop(&mut self, client: &str, which: Option<(&str, &str, &str)>, now: Instant) {
+    /// `client` stops asking for the picture at code revision `code` (any, when `None`), or for every
+    /// one (`which` none: its window closed); asks no one keeps end.
+    fn stop(&mut self, client: &str, which: Option<(&str, &str, &str, Option<u64>)>, now: Instant) {
         for a in &mut self.asked {
-            if which.is_none_or(|(m, n, v)| a.module == m && a.node == n && a.view == v) {
+            if which.is_none_or(|(m, n, v, c)| a.module == m && a.node == n && a.view == v && c.is_none_or(|c| c == a.code)) {
                 a.clients.retain(|(c, _)| c != client);
             }
         }
@@ -141,108 +152,64 @@ impl Pictures {
         self.asked.retain(|a| !a.clients.is_empty());
     }
 
-    /// Store what `found` drew; the picture as its answer says it.
-    fn drew(&mut self, found: &Found, picture: Value) -> Arc<Value> {
+    /// Store what `f` drew; the picture as its answer says it.
+    fn drew(&mut self, f: &Found, picture: Value) -> Arc<Value> {
         self.version += 1;
         let version = self.version;
         let picture = Arc::new(picture);
-        if let Some(a) = self.find(&found.module, &found.node, &found.view) {
-            (a.from, a.drawn, a.version) = (Some(found.from.clone()), Some(picture.clone()), version);
+        if let Some(a) = self.find(&f.module, &f.node, &f.view, f.code) {
+            (a.from, a.drawn, a.version) = (Some(f.from.clone()), Some(picture.clone()), version);
         }
         picture
     }
 }
 
-/// The picture `view` of card `node` of module `module` in what the control plane holds: what to
-/// ask the runner, from the accepted view's values and each live lease's.
-fn found(cp: &mut ControlPlane, module: &str, node: &str, view: &str) -> Result<Found> {
-    let open = cp.open.as_ref().context("no project is open")?;
-    let (shown, accepted, token) = (open.shown.clone(), open.engine.accepted.clone(), open.engine.token);
-    let state = &shown.state;
-    let modules = state["view"]["modules"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let m = modules.iter().find(|m| m["key"] == module).with_context(|| format!("there is no track {module}"))?;
-    let nodes = m["nodes"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let card = nodes.iter().find(|n| n["id"] == node).with_context(|| format!("{module} has no card {node}: refresh the graph"))?;
-    let views = card["views"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let Some(part) = views.iter().find(|v| v["name"] == view && v["kind"] == "picture") else {
-        bail!("{} has no picture named {view}", card["title"].as_str().unwrap_or(node));
-    };
-    let cid = card["component"].as_str().context("the card is no sound's")?.to_string();
-    let code = accepted.compiled.code();
-    let desc = code.components.get(&cid).with_context(|| format!("no sound {cid} was built"))?;
-    let packages: Vec<(String, std::path::PathBuf)> = code.decls.packages.iter().map(|(n, d)| (n.clone(), d.clone())).collect();
-    // A sound of the song's own draws from the song's code at its code revision (D16).
-    let song = match cid.contains(':') {
-        true => None,
-        false => {
-            let kept = cp.pictures.song.as_ref().filter(|s| s.key == accepted.code_rev);
-            Some(match kept {
-                Some(s) => s.clone(),
-                None => {
-                    let project = &accepted.project;
-                    let s = Arc::new(Song {
-                        key: accepted.code_rev,
-                        code: project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect(),
-                        dependencies: project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect(),
-                    });
-                    cp.pictures.song = Some(s.clone());
-                    s
-                }
-            })
-        }
-    };
-    // What plays: the view's values, and each live lease's on them (CARD-68).
-    let mut values = Map::new();
-    let mut knobs = Map::new();
-    for v in part["values"].as_array().map(Vec::as_slice).unwrap_or_default() {
-        let name = v["name"].as_str().unwrap_or_default().to_string();
-        let mut value = v["value"].clone();
-        if let Some(id) = v["knob"].as_str()
-            && let Some(l) = cp.leases.live.iter().find(|l| l.token == token && l.control.id == id)
-        {
-            value = json!(l.playing);
-        }
-        let mut k = Map::new();
-        for f in ["knob", "why"] {
-            if let Some(x) = v.get(f).filter(|x| !x.is_null()) {
-                k.insert(f.into(), x.clone());
-            }
-        }
-        knobs.insert(name.clone(), Value::Object(k));
-        values.insert(name, value);
-    }
-    let values = Value::Object(values).to_string();
-    let code_key = match &song {
-        Some(s) => format!("song {}", s.key),
-        None => format!("{packages:?}"),
-    };
-    let from = format!("{code_key}\n{cid}\n{view}\n{values}");
-    let ask = Ask {
-        packages,
-        song,
-        module: desc.module.clone(),
-        component: cid,
-        view: view.to_string(),
-        values,
-        memo: format!("{module}\u{0}{node}\u{0}{view}"),
-    };
-    let label = card["title"].as_str().or(card["label"].as_str()).unwrap_or(node).to_string();
-    Ok(Found { module: module.into(), node: node.into(), view: view.into(), label, ask, from, knobs })
+/// The card `node` of module `module` in the view the control plane holds, and its picture `view`.
+fn card<'a>(view: &'a m2_editor::GraphView, module: &str, node: &str) -> Result<&'a m2_editor::ViewNode> {
+    let m = view.modules.iter().find(|m| m.key == module).with_context(|| format!("there is no track {module}"))?;
+    m.nodes.iter().find(|n| n.id == node).with_context(|| format!("{module} has no card {node}: refresh the graph"))
 }
 
-/// The picture as an answer says it (CARD-67): its shapes, each dot's values with their knobs, and
-/// its words; or why it can't be drawn, named by its card.
-fn said(found: &Found, drawn: Drawn) -> Value {
-    let mut out = json!({"module": found.module, "node": found.node, "view": found.view});
+/// The picture `view` of card `node` of module `module`, from what the control plane holds: the
+/// accepted view's values, each live lease's on them (CARD-68).
+fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Found> {
+    let open = cp.open.as_ref().context("no project is open")?;
+    let (shown, accepted, token, code) = (&open.shown, &open.engine.accepted, open.engine.token, open.engine.code_rev);
+    let n = card(&shown.view, module, node)?;
+    let call = m2_editor::views::picture_call(accepted, n, view)
+        .with_context(|| format!("{} has no picture named {view}", n.title.as_deref().unwrap_or(node)))?;
+    let playing = |id: &str| cp.leases.live.iter().find(|l| l.token == token && l.control.id == id).map(|l| l.playing);
+    let ask = call.at(playing);
+    let from = format!("{}\n{}\n{view}\n{}", ask.key, ask.descriptor.id, ask.values);
+    Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from })
+}
+
+/// The picture as an answer says it (CARD-67): its shapes, each dot's values with the card's own
+/// knobs, and its words; or why it can't be drawn, named by its card.
+fn said(f: &Found, drawn: Drawn) -> Value {
+    let mut out = json!({"module": f.module, "node": f.node, "view": f.view, "component": f.ask.descriptor.id, "revision": f.revision});
     match drawn {
-        Drawn::Cant(why) => {
-            let why = format!("{}'s picture {}", found.label, why.trim_end_matches('.'));
-            out["why"] = json!(format!("{why}."));
-        }
+        Drawn::Cant(why) => out["why"] = json!(format!("{}'s picture {}.", f.call.label, why.trim_end_matches('.'))),
+        Drawn::Busy => out["why"] = json!(format!("{}'s picture is still being drawn: ask again in a moment.", f.call.label)),
         Drawn::Shapes(json) => {
             let mut drew: Value = serde_json::from_str(&json).unwrap_or_default();
+            let knobs: Map<String, Value> = f
+                .call
+                .values
+                .iter()
+                .map(|v| {
+                    let mut k = Map::new();
+                    if let Some(id) = &v.knob {
+                        k.insert("knob".into(), json!(id));
+                    }
+                    if let Some(why) = &v.why {
+                        k.insert("why".into(), json!(why));
+                    }
+                    (v.name.clone(), Value::Object(k))
+                })
+                .collect();
             if let Some(shapes) = drew["shapes"].as_array_mut() {
-                knobbed(shapes, &found.knobs);
+                knobbed(shapes, &knobs);
             }
             out["words"] = drew["words"].take();
             out["shapes"] = drew["shapes"].take();
@@ -251,7 +218,8 @@ fn said(found: &Found, drawn: Drawn) -> Value {
     out
 }
 
-/// Each dot of `shapes`, in a part's too, its values given their knobs (CARD-66).
+/// Each dot of `shapes`, in a part's too, its values given the card's own knobs (CARD-66). The
+/// runner checked each name is one of the card's controls.
 fn knobbed(shapes: &mut [Value], knobs: &Map<String, Value>) {
     for s in shapes {
         if let Some(inner) = s.get_mut("shapes").and_then(Value::as_array_mut) {
@@ -259,40 +227,69 @@ fn knobbed(shapes: &mut [Value], knobs: &Map<String, Value>) {
         }
         let Some(moves) = s.get_mut("moves").and_then(Value::as_object_mut) else { continue };
         for m in moves.values_mut() {
-            let Some(k) = m["name"].as_str().and_then(|n| knobs.get(n)).and_then(Value::as_object) else { continue };
+            let k = m["name"].as_str().and_then(|n| knobs.get(n)).and_then(Value::as_object).cloned().unwrap_or_default();
             for (f, x) in k {
-                m[f] = x.clone();
+                m[f] = x;
             }
         }
     }
 }
 
 impl Graph {
-    /// Start, keep or stop picture `view` of card `node` of module `module`, by the shown view's id,
-    /// for `client` (`POST /api/graph/picture`, CARD-67). Not a write: it works read-only too.
-    /// Answers `{picture: {module, node, view, words, shapes}}` drawn from what plays now, or
-    /// `{picture: {…, why}}` when it can't be drawn; `{}` for a stop.
-    pub fn picture(&self, token: u64, client: &str, module: &str, node: &str, view: &str, on: bool) -> Result<Value> {
+    /// Start, keep or stop picture `view` of card `node` of module `module` (`(module, node, view)`), by its id in the view of
+    /// `revision`, for `client` (`POST /api/graph/picture`, CARD-67). Not a write: it works read-only
+    /// too. Refused when the song's code changed since `revision` (the id may name another call
+    /// now). Answers `{picture: {module, node, view, component, revision, words, shapes}}` drawn
+    /// from what plays now, or with `why` when it can't be drawn; `{}` for a stop.
+    pub fn picture(&self, token: u64, revision: u64, client: &str, (module, node, view): (&str, &str, &str), on: bool) -> Result<Value> {
         let found = {
             let mut cp = self.inner.control.lock();
-            cp.open.as_ref().filter(|o| o.engine.token == token).context("the open song changed; refresh it first")?;
+            let open = cp.open.as_ref().filter(|o| o.engine.token == token).context("the open song changed; refresh it first")?;
+            let code = open.revs.code_rev(revision);
             let now = Instant::now();
             if !on {
-                cp.pictures.stop(client, Some((module, node, view)), now);
+                cp.pictures.stop(client, Some((module, node, view, code)), now);
                 return Ok(json!({}));
             }
-            let found = found(&mut cp, module, node, view)?;
-            cp.pictures.renew(client, module, node, view, now);
+            if code != Some(open.engine.code_rev) {
+                bail!(
+                    "the song's code changed since revision {revision}, so {node} may name another call now: ask again by the card's id in the view now"
+                );
+            }
+            let found = found(&cp, module, node, view)?;
+            cp.pictures.renew(client, &found, now);
+            // Nothing changed since it was drawn: the picture drawn (review G1).
+            if let Some(a) = cp.pictures.find(module, node, view, found.code)
+                && a.from.as_ref() == Some(&found.from)
+                && let Some(d) = &a.drawn
+            {
+                return Ok(json!({"picture": **d}));
+            }
             found
         };
-        let drawn = self.inner.runner().draw(found.ask.clone());
+        let drawn = self.inner.runner().draw_within(found.ask.clone(), Some(WAIT));
+        let busy = drawn == Drawn::Busy;
         let picture = said(&found, drawn);
-        let picture = self.inner.control.lock().pictures.drew(&found, picture);
+        let mut cp = self.inner.control.lock();
+        let picture = match busy {
+            true => Arc::new(picture),
+            false => cp.pictures.drew(&found, picture),
+        };
         Ok(json!({"picture": *picture}))
     }
 
-    /// One frame of pictures (CARD-68): each picture asked for whose values or code changed since it
-    /// was drawn, drawn again; and each window's pictures, when any was.
+    /// Wait until a lease's value moves, or `most` (the pictures' thread, CARD-68).
+    pub fn pictures_wait(&self, most: Duration) {
+        let w = &self.inner.picture_wake;
+        let mut due = w.due.lock();
+        if !*due {
+            w.rung.wait_for(&mut due, most);
+        }
+        *due = false;
+    }
+
+    /// One look (CARD-68): each picture asked for whose values or code changed since it was drawn,
+    /// drawn again; and each window's pictures, when any was.
     pub fn pictures_frame(&self) -> Option<PicturesOut> {
         let (token, todo) = {
             let mut cp = self.inner.control.lock();
@@ -300,13 +297,15 @@ impl Graph {
             if cp.pictures.asked.is_empty() {
                 return None;
             }
-            let token = cp.open.as_ref()?.engine.token;
-            let asked: Vec<(String, String, String, Option<String>)> =
-                cp.pictures.asked.iter().map(|a| (a.module.clone(), a.node.clone(), a.view.clone(), a.from.clone())).collect();
-            // A card gone from the view waits: its window asks for it by its new id.
-            let todo: Vec<Found> = asked
-                .into_iter()
-                .filter_map(|(m, n, v, from)| found(&mut cp, &m, &n, &v).ok().filter(|f| from.as_ref() != Some(&f.from)))
+            let open = cp.open.as_ref()?;
+            let (token, code) = (open.engine.token, open.engine.code_rev);
+            // An ask by an id of older code waits: its window asks again by the card's id now.
+            let todo: Vec<Found> = cp
+                .pictures
+                .asked
+                .iter()
+                .filter(|a| a.code == code)
+                .filter_map(|a| found(&cp, &a.module, &a.node, &a.view).ok().filter(|f| a.from.as_ref() != Some(&f.from)))
                 .collect();
             (token, todo)
         };
@@ -314,7 +313,11 @@ impl Graph {
             return None;
         }
         for f in &todo {
-            let picture = said(f, self.inner.runner().draw(f.ask.clone()));
+            let drawn = self.inner.runner().draw_within(f.ask.clone(), Some(WAIT));
+            if drawn == Drawn::Busy {
+                continue;
+            }
+            let picture = said(f, drawn);
             self.inner.control.lock().pictures.drew(f, picture);
         }
         let cp = self.inner.control.lock();
@@ -332,19 +335,97 @@ impl Graph {
         Some(PicturesOut { session: token, clients })
     }
 
-    /// Wait until a lease's value moves, or `most` (the pictures' thread, CARD-68).
-    pub fn pictures_wait(&self, most: Duration) {
-        let w = &self.inner.picture_wake;
-        let mut due = w.due.lock();
-        if !*due {
-            w.rung.wait_for(&mut due, most);
+    /// Every picture's words in the accepted view (CARD-63), worked out by the runner when the view
+    /// is new: whether any changed, so windows read the view again.
+    pub fn pictures_words(&self) -> bool {
+        let (revision, todo) = {
+            let mut cp = self.inner.control.lock();
+            let Some(open) = cp.open.as_ref() else { return false };
+            let revision = open.shown.revision;
+            if cp.pictures.words.0 == revision || revision != open.engine.revision {
+                return false;
+            }
+            let mut todo = vec![];
+            for m in &open.shown.view.modules {
+                for n in &m.nodes {
+                    for v in n.views.iter().filter(|v| matches!(v.of, Part::Picture { .. })) {
+                        if let Some(call) = m2_editor::views::picture_call(&open.engine.accepted, n, &v.name) {
+                            let ask = call.at(|_| None);
+                            let from = format!("{}\n{}\n{}\n{}", ask.key, ask.descriptor.id, ask.view, ask.values);
+                            todo.push(((m.key.clone(), n.id.clone(), v.name.clone()), call, ask, from));
+                        }
+                    }
+                }
+            }
+            if todo.is_empty() {
+                let had = !cp.pictures.words.1.is_empty();
+                cp.pictures.words = (revision, HashMap::new());
+                return had;
+            }
+            (revision, todo)
+        };
+        let mut words = HashMap::new();
+        let mut whole = true;
+        for (at, call, ask, from) in todo {
+            let known = self.inner.control.lock().pictures.said.get(&from).cloned();
+            let said = match known {
+                Some(s) => s,
+                None => {
+                    let s = match self.inner.runner().draw_within(ask, Some(WAIT)) {
+                        Drawn::Shapes(json) => json!({"words": serde_json::from_str::<Value>(&json).ok().map(|d| d["words"].clone())}),
+                        Drawn::Cant(why) => {
+                            json!({"words": null, "why": format!("{}'s picture {}.", call.label, why.trim_end_matches('.'))})
+                        }
+                        // Still being drawn: its words come at a later look.
+                        Drawn::Busy => {
+                            whole = false;
+                            continue;
+                        }
+                    };
+                    let mut cp = self.inner.control.lock();
+                    if cp.pictures.said.len() > 4096 {
+                        cp.pictures.said.clear();
+                    }
+                    cp.pictures.said.insert(from, s.clone());
+                    s
+                }
+            };
+            words.insert(at, said);
         }
-        *due = false;
+        let mut cp = self.inner.control.lock();
+        let changed = cp.pictures.words.1 != words;
+        cp.pictures.words = (if whole { revision } else { 0 }, words);
+        changed
     }
 
     /// `client`'s window closed: the pictures it asked for end (CARD-67).
     pub(super) fn pictures_gone(&self, client: &str) {
         self.inner.control.lock().pictures.stop(client, None, Instant::now());
+    }
+}
+
+/// Put each picture's words in the state's view (CARD-63), when they were worked out for the
+/// revision it shows: `words` stays null until then.
+pub(super) fn put_words(cp: &Pictures, revision: u64, view: &mut Value) {
+    if cp.words.0 != revision {
+        return;
+    }
+    for m in view["modules"].as_array_mut().into_iter().flatten() {
+        let key = m["key"].as_str().unwrap_or_default().to_string();
+        for n in m["nodes"].as_array_mut().into_iter().flatten() {
+            let id = n["id"].as_str().unwrap_or_default().to_string();
+            for v in n["views"].as_array_mut().into_iter().flatten() {
+                if v["kind"] != "picture" {
+                    continue;
+                }
+                let at = (key.clone(), id.clone(), v["name"].as_str().unwrap_or_default().to_string());
+                if let Some(said) = cp.words.1.get(&at).and_then(Value::as_object) {
+                    for (k, x) in said {
+                        v[k] = x.clone();
+                    }
+                }
+            }
+        }
     }
 }
 

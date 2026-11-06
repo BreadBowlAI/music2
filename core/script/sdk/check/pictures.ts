@@ -1,87 +1,107 @@
-// A picture's dots, typed against the very descriptor they are declared in (CARD-62), as the code
-// editor types them: each name a control of the sound, of the kind its move needs. A line that
-// should fail carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
-// `pictures_tests.rs` draws the same picture, and the runner refuses each mistake again, in words.
+// A picture's code, typed by the very descriptor it belongs to (CARD-62), as the code editor types
+// it: `v` by the descriptor's values, and each dot's `moves` by its controls and the picture's
+// axes. A line that should fail carries `@ts-expect-error`, so a type that stops refusing it fails
+// the check too. `pictures_tests.rs` draws the same picture, and the runner refuses each mistake
+// again, in words.
 
-import { axis, component, control, kernel, knob, live, port, view, type Audio } from "@m2/core";
+import { axis, component, control, kernel, knob, live, port, setting, view, type Audio } from "@m2/core";
 
 const BANDS = [1, 2] as const;
-const controls = {
-  freq1: control.hz(200).range(20, 20000).log(),
-  gain1: control.db(0).range(-24, 24),
-  q1: control.scalar(1),
-  on1: control.bool(true),
-  freq2: control.hz(2000).range(20, 20000).log(),
-  gain2: control.db(0).range(-24, 24),
-  q2: control.scalar(1),
-  on2: control.bool(true),
-};
+const desc = {
+  id: "curve",
+  inputs: { x: port.audio() },
+  controls: {
+    freq1: control.hz(200).range(20, 20000).log(),
+    gain1: control.db(0).range(-24, 24),
+    q1: control.scalar(1),
+    on1: control.bool(true),
+    freq2: control.hz(2000).range(20, 20000).log(),
+    gain2: control.db(0).range(-24, 24),
+    q2: control.scalar(1),
+    on2: control.bool(true),
+    shape: control.choice(["bell", "shelf"], "bell"),
+  },
+  settings: { voices: setting.int(4) },
+  output: port.audio(),
+  editor: {
+    views: { curve: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), live: [live.spectrum("in", { tone: "faint" }), live.history(live.meter("reduction"))] }) },
+    groups: { "Band 1": ["on1", "freq1", "gain1", "q1"], "Band 2": ["on2", "freq2", "gain2", "q2", "shape"] },
+    face: ["curve"],
+  },
+} as const;
 
 /** A two-band curve: names written out, and names worked out (`freq${b}`), each fitting. */
-export const curve = component(
-  {
-    id: "curve",
-    inputs: { x: port.audio() },
-    controls,
-    output: port.audio(),
-    editor: {
-      views: {
-        curve: view.picture({
-          x: axis.log("hz", 20, 20000),
-          y: axis.lin("db", -24, 24),
-          live: [live.spectrum("in", { tone: "faint" }), live.history(live.meter("reduction"))],
-          draw: (v, p) => [
-            p.line([20, 0, 20000, 0], { name: "curve" }),
-            p.handle(v.freq1, v.gain1, { x: "freq1", y: "gain1", wheel: "q1", toggles: "on1", mark: "1" }),
-            ...BANDS.map((b) => p.handle(v[`freq${b}`], v[`gain${b}`], { x: `freq${b}`, y: `gain${b}`, wheel: `q${b}`, toggles: `on${b}` })),
-            p.part("knobs", () => [p.handle(1, 1, { y: knob("q2") })]),
-          ],
-          words: (v) => `Band 1: ${v.gain1} dB at ${v.freq1} Hz`,
-        }),
-      },
-      face: ["curve"],
+export const curve = component(desc, (x, v) => kernel<Audio>("test:curve", { x, ...v }), {
+  curve: {
+    draw: (v, p) => {
+      const f: number | null = v.freq1;
+      const on: boolean | null = v.on1;
+      const shape: "bell" | "shelf" | null = v.shape;
+      const voices: number | null = v.voices;
+      return [
+        p.line([20, f ?? 0, 20000, voices ?? 0], { name: "curve" }),
+        p.handle(v.freq1, v.gain1, { x: "freq1", y: "gain1", wheel: "q1", toggles: "on1", mark: "1", opens: "Band 1", off: !on || shape === "shelf" }),
+        ...BANDS.map((b) => p.handle(v[`freq${b}`], v[`gain${b}`], { x: `freq${b}`, y: `gain${b}`, wheel: `q${b}`, toggles: `on${b}` })),
+        p.part("knobs", () => [p.handle(1, 1, { y: knob("q2") })]),
+      ];
     },
+    words: (v) => `Band 1: ${v.gain1} dB at ${v.freq1} Hz`,
   },
-  (x, v) => kernel<Audio>("test:curve", { x, ...v }),
-);
+});
 
-/** The same sound with its picture's dots `draw` gives: what each mistake below declares. */
-const at = <D>(d: D) => d;
-
+const k = () => kernel<Audio>("test:w", {});
 export const wrong = [
-  component(
-    // @ts-expect-error its picture's dot names "freq9", which isn't a control of this sound
-    at({ id: "w1", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => [p.handle(1, 1, { x: "freq9" })], words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
-  component(
-    // @ts-expect-error its picture's dot moves "gain1" on an axis in hz, and "gain1" isn't in hz
-    at({ id: "w2", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => [p.handle(1, 1, { x: "gain1" })], words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
-  component(
-    // @ts-expect-error its picture's dot flips "q1", which isn't a switch
-    at({ id: "w3", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => [p.handle(1, 1, { toggles: "q1" })], words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
-  component(
-    // @ts-expect-error its picture's dot moves "on1" as a number, which it isn't
-    at({ id: "w4", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => [p.handle(1, 1, { wheel: "on1" })], words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
-  component(
-    // @ts-expect-error a name worked out as the code runs must fit every control it can match: `on${b}` is a switch, not a frequency
-    at({ id: "w5", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => BANDS.map((b) => p.handle(1, 1, { x: `on${b}` })), words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
-  component(
-    // @ts-expect-error a dot inside a part is checked as one outside it is
-    at({ id: "w6", controls, editor: { views: { c: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: (v, p) => [p.part("a", () => [p.handle(1, 1, { y: knob("on2") })])], words: () => "x" }) } } }),
-    () => kernel<Audio>("test:w", {}),
-  ),
+  component(desc, k, {
+    curve: {
+      draw: (v, p) => [
+        // @ts-expect-error a value this sound doesn't have
+        p.label(1, 1, `${v.freq9}`),
+        // @ts-expect-error a switch isn't a number
+        p.line([1, v.on1]),
+        // @ts-expect-error a dot names freq9, which isn't a control of this sound
+        p.handle(1, 1, { x: "freq9" }),
+        // @ts-expect-error gain1 is in dB, and the x axis in Hz
+        p.handle(1, 1, { x: "gain1" }),
+        // @ts-expect-error only a switch flips
+        p.handle(1, 1, { toggles: "q1" }),
+        // @ts-expect-error the wheel moves a number, not a switch
+        p.handle(1, 1, { wheel: "on1" }),
+        // @ts-expect-error a knob's drag moves a number, not a switch
+        p.handle(1, 1, { y: knob("on2") }),
+        // @ts-expect-error a name worked out must fit: on1 and on2 are switches, not frequencies
+        ...BANDS.map((b) => p.handle(1, 1, { x: `on${b}` })),
+        // @ts-expect-error a dot opens a group of the card
+        p.handle(1, 1, { opens: "Band 9" }),
+      ],
+      words: () => "x",
+    },
+  }),
+  // @ts-expect-error a picture's code is required: words too
+  component(desc, k, { curve: { draw: () => [] } }),
+  // @ts-expect-error a sound with a picture takes its code
+  component(desc, k),
+  // @ts-expect-error the third argument names only pictures
+  component(desc, k, { curve: { draw: () => [], words: () => "x" }, other: { draw: () => [], words: () => "x" } }),
 ];
 
 // @ts-expect-error a tone is main, soft or faint, never a colour
 live.spectrum("in", { tone: "red" });
-// @ts-expect-error words are required: a picture says itself in words
-view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24), draw: () => [] });
+
+/** The descriptor written in the call, as a pack writes it: typed the same. */
+export const inline = component(
+  {
+    id: "inline",
+    inputs: { x: port.audio() },
+    controls: { cutoff: control.hz(1000), on: control.bool(true) },
+    output: port.audio(),
+    editor: { views: { curve: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }) } },
+  },
+  (x, { cutoff }) => kernel<Audio>("test:inline", { x, cutoff }),
+  {
+    curve: {
+      // @ts-expect-error cutof isn't a value of this sound
+      draw: (v, p) => [p.handle(v.cutoff, 0, { x: "cutoff", toggles: "on" }), p.label(1, 1, `${v.cutof}`)],
+      words: (v) => `cut at ${v.cutoff} Hz`,
+    },
+  },
+);

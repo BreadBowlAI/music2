@@ -577,8 +577,6 @@ fn run(args: Vec<String>) -> Result<()> {
                 return Ok(());
             }
             println!("revision {}", v.revision);
-            // Pictures are drawn by their own code, on the runner's thread (CARD-64, CARD-74).
-            let pictures = m2_editor::views::Runner::new();
             // Each drum kit (KIT-1): its name and bus, then each row's track, lane and sound.
             let label = |key: &str| v.modules.iter().find(|m| m.key == key).map_or(key.to_string(), |m| m.label.clone());
             for k in &v.drum_kits {
@@ -658,11 +656,12 @@ fn run(args: Vec<String>) -> Result<()> {
                         };
                         Ok(format!("      {:14} {:>9} {kind:9} {}{how}", x.label, value, x.id))
                     };
-                    // A view (CARD-26): its name and what it draws; a picture its words, drawn from
-                    // what plays, or why it can't be drawn, named by its card (CARD-74).
+                    // A view (CARD-26): its name and what it draws.
                     let view_line = |v: &m2_editor::views::CardView| {
-                        if let Some(said) = m2_editor::views::picture_said(&pictures, s.accepted(), n, &v.name) {
-                            return format!("      {:14} picture: {said}", v.name);
+                        // A picture by its axes: its words are the app's to work out, never this command's (CARD-74).
+                        if let m2_editor::views::Drawn::Picture { x, y, .. } = &v.of {
+                            let (xs, ys) = (format!("{} ({})", x.unit.name(), x.scale), format!("{} ({})", y.unit.name(), y.scale));
+                            return format!("      {:14} picture over {xs} and {ys}; its words are in the app's view", v.name);
                         }
                         let what =
                             serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();

@@ -77,6 +77,9 @@ pub enum Drawn {
         #[serde(skip_serializing_if = "Vec::is_empty")]
         live: Vec<serde_json::Value>,
         values: Vec<PictureValue>,
+        /// Its words at these values, or why it can't be drawn: worked out by the picture runner
+        /// after the view is made, never by the settle that makes it, so null here (CARD-63).
+        words: Option<String>,
     },
 }
 
@@ -336,7 +339,7 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
                 }
                 ViewOf::Scope => Drawn::Scope {},
                 ViewOf::Picture { x, y, live } => {
-                    Drawn::Picture { x: x.clone(), y: y.clone(), live: live.clone(), values: picture_values(m, desc, node) }
+                    Drawn::Picture { x: x.clone(), y: y.clone(), live: live.clone(), values: picture_values(m, desc, node), words: None }
                 }
             };
             CardView { name: v.name.clone(), of }
@@ -377,48 +380,68 @@ fn picture_values(m: &Module, desc: &Descriptor, node: &ViewNode) -> Vec<Picture
     out
 }
 
-/// What the picture runner is asked to draw picture `view` of card `node` as revision `rev` plays
-/// it (CARD-64, CARD-74): the packages its build resolved, the song's code for a sound of its own,
-/// and the values the view gives. None when the card has no such picture.
-pub fn picture_ask(rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<m2_script::pictures::Ask> {
+/// A picture to draw (CARD-64): what the runner is asked, with the view's values as they play,
+/// each with its knob, for the server to put a lease's value on (CARD-68), and the card's label,
+/// which names a picture that can't be drawn (CARD-65).
+pub struct PictureCall {
+    pub ask: m2_script::pictures::Ask,
+    pub values: Vec<PictureValue>,
+    pub label: String,
+}
+
+impl PictureCall {
+    /// The ask at the view's values, with `playing` (a knob's id to the value a lease plays) on top.
+    pub fn at(&self, playing: impl Fn(&str) -> Option<f64>) -> m2_script::pictures::Ask {
+        let values: serde_json::Map<String, serde_json::Value> = self
+            .values
+            .iter()
+            .map(|v| (v.name.clone(), v.knob.as_deref().and_then(&playing).map_or_else(|| v.value.clone(), |x| serde_json::json!(x))))
+            .collect();
+        m2_script::pictures::Ask { values: serde_json::Value::Object(values).to_string(), ..self.ask.clone() }
+    }
+}
+
+/// What picture `view` of card `node` is drawn from as revision `rev` plays it: None when the card
+/// has no such picture. Its runtime's key is what the code is (CARD-64): the hashes of every package
+/// file the build read, and for a sound of the song's own, the song's code revision too; so an
+/// edited folder dependency, or `m2 upgrade`, makes a new runtime (review G3).
+pub fn picture_call(rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<PictureCall> {
     let Drawn::Picture { values, .. } = &node.views.iter().find(|v| v.name == view)?.of else { return None };
     let cid = node.component.clone()?;
     let code = rev.compiled.code();
-    let desc = code.components.get(&cid)?;
-    let song = (!cid.contains(':')).then(|| {
+    let desc = code.components.get(&cid)?.clone();
+    let own = !cid.contains(':');
+    let song = own.then(|| {
         std::sync::Arc::new(m2_script::pictures::Song {
             key: rev.code_rev,
             code: rev.project.code.iter().map(|(p, t)| (p.clone(), t.to_string())).collect(),
             dependencies: rev.project.manifest.dependencies.keys().filter(|d| *d != m2_song::SDK).cloned().collect(),
         })
     });
-    let values: serde_json::Map<String, serde_json::Value> = values.iter().map(|v| (v.name.clone(), v.value.clone())).collect();
-    Some(m2_script::pictures::Ask {
-        packages: code.decls.packages.iter().map(|(n, d)| (n.clone(), d.clone())).collect(),
+    let packages: Vec<(String, std::path::PathBuf)> = code.decls.packages.iter().map(|(n, d)| (n.clone(), d.clone())).collect();
+    let mut key = <sha2::Sha256 as sha2::Digest>::new();
+    for (n, d) in &packages {
+        sha2::Digest::update(&mut key, format!("{n}\0{}\0", d.display()));
+    }
+    for f in &code.package_files {
+        sha2::Digest::update(&mut key, format!("{}\0{}\0", f.path, f.sha256));
+    }
+    if own {
+        sha2::Digest::update(&mut key, format!("song {}", rev.code_rev));
+    }
+    let key: String = sha2::Digest::finalize(key).iter().map(|b| format!("{b:02x}")).collect();
+    let ask = m2_script::pictures::Ask {
+        key,
+        packages,
         song,
         module: desc.module.clone(),
-        component: cid,
+        descriptor: desc,
         view: view.to_string(),
-        values: serde_json::Value::Object(values).to_string(),
+        values: String::new(),
         memo: format!("{}\u{0}{view}", node.id),
-    })
-}
-
-/// The picture runner (CARD-64), for a reader of the view that draws pictures itself (`m2 graph`).
-pub use m2_script::pictures::Runner;
-
-/// Picture `view` of card `node` in words (CARD-74), drawn by `runner` as revision `rev` plays:
-/// its words, or why it can't be drawn, named by its card. None when the card has no such picture.
-pub fn picture_said(runner: &Runner, rev: &m2_session::Revision, node: &ViewNode, view: &str) -> Option<String> {
-    let ask = picture_ask(rev, node, view)?;
-    Some(match runner.draw(ask) {
-        m2_script::pictures::Drawn::Shapes(json) => {
-            serde_json::from_str::<serde_json::Value>(&json).ok().and_then(|d| d["words"].as_str().map(String::from)).unwrap_or_default()
-        }
-        m2_script::pictures::Drawn::Cant(why) => {
-            format!("{}'s picture {}.", node.title.as_deref().unwrap_or(&node.label), why.trim_end_matches('.'))
-        }
-    })
+    };
+    let label = node.title.clone().unwrap_or_else(|| node.label.clone());
+    Some(PictureCall { ask, values: values.clone(), label })
 }
 
 /// A unit in words, as a beginner reads it.
