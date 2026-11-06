@@ -34,6 +34,9 @@ type Shape =
   | { kind: "mark"; axis: "x" | "y"; at: number; words?: string }
   | { kind: "label"; x: number; y: number; words: string }
   | { kind: "play"; box: number[]; note: number }
+  // The layers the server measures from the sound itself (CARD-80, CARD-86), with their points.
+  | { kind: "response"; points?: number[]; tone?: string; name?: string }
+  | { kind: "hit"; points?: number[]; note: number; seconds: number; tone?: string }
   | { kind: "part"; name: string; shapes: Shape[] };
 type Handle = Extract<Shape, { kind: "handle" }>;
 
@@ -317,6 +320,12 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
           switch (s.kind) {
             case "line":
               return <polyline key={i} data-line={s.name} points={points(s.points)} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
+            case "response":
+              return <polyline key={i} data-response data-line={s.name} points={points(s.points ?? [])} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
+            case "hit":
+              return (
+                <polygon key={i} data-hit points={points(s.points ?? [])} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke={TONE[s.tone ?? "main"]} strokeWidth={0.5} />
+              );
             case "fill": {
               const pts = s.points;
               const closed = s.base === undefined ? pts : [...pts, pts[pts.length - 2], s.base, pts[0], s.base];
@@ -558,7 +567,7 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
         g.globalAlpha = 1;
       } else if (l.kind === "level" && last?.peak) {
         const db = 20 * Math.log10(Math.max(1e-6, Math.max(...last.peak)));
-        const on = l.on ? (flatShapes(shapes).find((s) => s.kind === "line" && s.name === l.on) as { points: number[] } | undefined) : undefined;
+        const on = l.on ? (flatShapes(shapes).find((s) => (s.kind === "line" || s.kind === "response") && s.name === l.on) as { points: number[] } | undefined) : undefined;
         if (on && view.x.unit === "db") {
           // A dot riding its line: x the level, y the line there (CARD-73).
           const x = px(db, view.x) * c.width;
