@@ -546,7 +546,8 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       greys.current = { faint: css.getPropertyValue("--color-fg-faint").trim() || "#8a8f96", soft: css.getPropertyValue("--color-fg-muted").trim() || "#8a8f96" };
     }
     const grey = (t?: string) => (t === "faint" ? greys.current!.faint : greys.current!.soft);
-    const plot = c.height * ((PICTURE_H - 8 - FOOT) / (PICTURE_H - 8));
+    // Above the x axis's labels, at the canvas's twice-the-pixels scale.
+    const plot = c.height - 2 * FOOT;
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
     const dbY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
     g.clearRect(0, 0, c.width, c.height);

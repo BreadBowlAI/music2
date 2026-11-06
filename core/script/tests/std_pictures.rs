@@ -167,3 +167,102 @@ fn the_lfo_draws_its_shape_over_one_bar() {
     assert!((at[1] - at[0] / 2.0).abs() < 1e-9, "a saw over 2 beats: {at:?}");
     assert_eq!(d["words"], "A saw wave from 0 to 1, once every 2 beats");
 }
+
+// CARD-30, CARD-97: a drawn lowpass reads a q or a resonance from 0 to 1: `@m2/synths`' lead draws
+// its resonance as the q 0.5 × 60^r, its dot moving the resonance as its knob does, and its words
+// say resonance, and that it is a drawing.
+#[test]
+fn a_drawn_lowpass_reads_a_resonance() {
+    let packages = vec![
+        ("@m2/synths".to_string(), Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2/synths")),
+        ("std".to_string(), std_dir()),
+    ];
+    let catalog = m2_script::describe(&packages);
+    let descriptor = catalog.components.get("@m2/synths:synth-lead").cloned().unwrap_or_else(|| panic!("{:?}", catalog.problems));
+    let mut values = serde_json::Map::new();
+    for c in &descriptor.controls {
+        values.insert(c.name.clone(), json!(1));
+    }
+    for s in &descriptor.settings {
+        values.insert(s.name.clone(), s.default.clone().unwrap_or(Value::Null));
+    }
+    values.insert("shape".into(), json!("saw"));
+    values.insert("cutoff".into(), json!(1200));
+    values.insert("resonance".into(), json!(0.5));
+    let ask = Ask {
+        key: "synths".into(),
+        packages,
+        song: None,
+        module: descriptor.module.clone(),
+        descriptor,
+        view: "filter".into(),
+        values: Value::Object(values).to_string(),
+        memo: "lead\u{0}filter".into(),
+    };
+    let d = match Runner::new().draw(ask) {
+        Drawn::Shapes(json) => serde_json::from_str::<Value>(&json).unwrap(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(kinds(&d), ["fill", "line", "handle"]);
+    assert_eq!(dots(&d), ["wheel=resonance x=cutoff y=resonance(knob)"]);
+    let h = &d["shapes"][2];
+    let q = 0.5 * 60f64.powf(0.5);
+    assert!((h["y"].as_f64().unwrap() - 20.0 * q.log10()).abs() < 1e-9, "{h}");
+    assert_eq!(
+        d["words"],
+        "Cuts the highs above 1.2 kHz, resonance 0.5: a drawing of a 12 dB per octave filter, not measured from the sound"
+    );
+}
+
+// CARD-75, CARD-90: every picture std and music2's own packs draw does draw, at its defaults: each
+// value as its control's default (a choice's name, a switch's true or false), each setting as its.
+#[test]
+fn every_bundled_picture_draws_at_its_defaults() {
+    let packs = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../packs/@m2");
+    let mut packages = vec![("std".to_string(), std_dir())];
+    for p in std::fs::read_dir(&packs).unwrap().flatten() {
+        packages.push((format!("@m2/{}", p.file_name().to_string_lossy()), p.path()));
+    }
+    let catalog = m2_script::describe(&packages);
+    assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
+    let runner = Runner::new();
+    let (mut drew, mut wrong) = (0, vec![]);
+    for (cid, d) in &catalog.components {
+        for view in d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })) {
+            let mut values = serde_json::Map::new();
+            for c in d.controls.iter().filter(|c| c.each.is_none()) {
+                let at = c.default.as_ref().map_or(0.0, |s| s.value);
+                let v = match c.unit {
+                    Some(m2_ir::Unit::Switch) => json!(at != 0.0),
+                    _ => match c.options() {
+                        Some(names) => json!(names.name(at as usize).unwrap_or_default()),
+                        None => json!(at),
+                    },
+                };
+                values.insert(c.name.clone(), v);
+            }
+            for s in &d.settings {
+                values.insert(
+                    s.name.clone(),
+                    s.default.clone().filter(|v| v.is_number() || v.is_string() || v.is_boolean()).unwrap_or(Value::Null),
+                );
+            }
+            let ask = Ask {
+                key: cid.split(':').next().unwrap().into(),
+                packages: packages.clone(),
+                song: None,
+                module: d.module.clone(),
+                descriptor: d.clone(),
+                view: view.name.clone(),
+                values: Value::Object(values).to_string(),
+                memo: format!("{cid}\u{0}{}", view.name),
+            };
+            match runner.draw(ask) {
+                Drawn::Shapes(_) => drew += 1,
+                other => wrong.push(format!("{cid}'s {}: {other:?}", view.name)),
+            }
+        }
+    }
+    assert!(wrong.is_empty(), "{}", wrong.join("\n"));
+    assert!(drew >= 30, "{drew} pictures drawn");
+}

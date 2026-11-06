@@ -14,6 +14,8 @@ use crate::component::{Group, View, ViewOf};
 /// A sound that uses every kind a descriptor declares: `every` in `sdk/check/kinds.ts`, which `tsc`
 /// checks as the code editor does. `tone` and `wave` are for handing a choice on.
 const EVERY: &str = r#"import { component, control, kernel, port, setting, view, type Audio } from "@m2/core";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 export const every = component(
   {
     id: "every", label: "Every kind", inputs: { notes: port.notes() },
@@ -26,11 +28,15 @@ export const every = component(
     output: port.audio(),
     editor: {
       category: "Instruments",
-      views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q"), keys: view.keys("regions"), scope: view.scope() },
+      views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys("regions"), scope: view.scope() },
       groups: { Sound: ["shape", "sub", "scope"], Filter: ["filter", "cutoff", "q"], Amp: ["amp", "attack", "decay", "sustain", "release"] },
     },
   },
   (notes, { shape, sub, cutoff }) => kernel<Audio>("test:every", { shape, sub, cutoff }),
+  {
+    amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
+    filter: { draw: (v, p) => lowpass(p, v, { cutoff: "cutoff", q: "q" }), words: (v) => lowpassWords(v, { cutoff: "cutoff" }) },
+  },
 );
 export const tone = component(
   { id: "tone", controls: { cutoff: control.hz(800) }, output: port.audio() },
@@ -273,55 +279,27 @@ fn declaration_refused(controls: &str, settings: &str, editor: &str, says: &str)
 
 const ADSR: &str = "a: control.ms(5), d: control.beats(1), s: control.db(-6), r: control.secs(0.2), f: control.khz(2), q: control.scalar(1), shape: control.choice([\"lo\", \"hi\"], \"lo\")";
 
-// CARD-30: a filter view's q is a q (a plain number) or a resonance from 0 to 1, as a synth's knob
-// says it; anything else is refused in words naming both.
-#[test]
-fn a_filter_views_q_is_a_q_or_a_resonance() {
-    let b = declared("f: control.hz(800), res: control.frac(0.3)", "", "{ views: { lp: view.filter(\"f\", \"res\") } }")
-        .unwrap_or_else(|e| panic!("{e:?}"));
-    let d = b.components.iter().find(|d| d.id == "c").unwrap();
-    assert_eq!(d.editor.views[0].of, ViewOf::Filter { cutoff: "f".into(), q: "res".into() });
-    declaration_refused(
-        "f: control.hz(800), g: control.db(0)",
-        "",
-        "{ views: { lp: view.filter(\"f\", \"g\") } }",
-        "the filter's q names \"g\", a control in db, but it must be a q (scalar or unit01)",
-    );
-}
-
-// CARD-16: a view names this very descriptor's controls, in a unit that fits (or for keys its
-// regions or keymap setting), by a name of its own; the descriptor carries the views in order.
+// CARD-16: a view names this very descriptor's settings (for keys its regions or keymap), by a name
+// of its own; the descriptor carries the views in order. CARD-100: an envelope and a filter are no
+// views of @m2/core's since 2.4.0: they are std's pictures, and the build says so.
 #[test]
 fn views_are_checked_against_their_descriptor() {
-    let b = declared(ADSR, "zones: setting.keymap()", "{ views: { env: view.envelope(\"a\", \"d\", \"s\", \"r\"), lp: view.filter(\"f\", \"q\"), map: view.keys(\"zones\"), out: view.scope() } }")
+    let b = declared(ADSR, "zones: setting.keymap()", "{ views: { map: view.keys(\"zones\"), out: view.scope() } }")
         .unwrap_or_else(|e| panic!("{e:?}"));
     let d = b.components.iter().find(|d| d.id == "c").unwrap();
     let s = |x: &str| x.to_string();
     assert_eq!(
         d.editor.views,
-        [
-            View { name: s("env"), of: ViewOf::Envelope { attack: s("a"), decay: s("d"), sustain: s("s"), release: s("r") } },
-            View { name: s("lp"), of: ViewOf::Filter { cutoff: s("f"), q: s("q") } },
-            View { name: s("map"), of: ViewOf::Keys { regions: s("zones") } },
-            View { name: s("out"), of: ViewOf::Scope },
-        ]
+        [View { name: s("map"), of: ViewOf::Keys { regions: s("zones") } }, View { name: s("out"), of: ViewOf::Scope }]
     );
     for (editor, says) in [
         (
-            "{ views: { env: view.envelope(\"a\", \"d\", \"s\", \"rel\") } }",
-            "editor.views' \"env\": the envelope's release names \"rel\", which isn't a control of this sound",
+            "{ views: { env: (view as any).envelope(\"a\", \"d\", \"s\", \"r\") } }",
+            "view.envelope is gone from @m2/core 2.4: an envelope is a picture of std/pictures, envelopePicture() and envelope() (CARD-96)",
         ),
         (
-            "{ views: { lp: view.filter(\"a\", \"q\") } }",
-            "editor.views' \"lp\": the filter's cutoff names \"a\", a control in seconds, but it must be a frequency (hz)",
-        ),
-        (
-            "{ views: { env: view.envelope(\"a\", \"d\", \"shape\", \"r\") } }",
-            "the envelope's sustain names \"shape\", a choice, but it must be a level (unit01 or gain or db)",
-        ),
-        (
-            "{ views: { env: view.envelope(\"f\", \"d\", \"s\", \"r\") } }",
-            "the envelope's attack names \"f\", a control in hz, but it must be a time (seconds or beats)",
+            "{ views: { lp: (view as any).filter(\"f\", \"q\") } }",
+            "view.filter is gone from @m2/core 2.4: a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-97)",
         ),
         (
             "{ views: { map: view.keys(\"file\") } }",
@@ -329,7 +307,10 @@ fn views_are_checked_against_their_descriptor() {
         ),
         ("{ views: { map: view.keys(\"a\") } }", "the key map's setting names \"a\", which isn't a setting of this sound"),
         ("{ views: { f: view.scope() } }", "editor.views' \"f\": \"f\" is a value of this sound; give the view a name of its own"),
-        ("{ views: { env: { kind: \"envelope\" } } }", "editor.views' \"env\" must be made with view.envelope()"),
+        (
+            "{ views: { env: { kind: \"envelope\" } } }",
+            "editor.views' \"env\" must be made with view.keys(), view.scope() or view.picture()",
+        ),
         ("{ looks: {} }", "editor has no field \"looks\""),
     ] {
         declaration_refused(ADSR, "file: setting.asset(\"a.wav\")", editor, says);
@@ -347,7 +328,7 @@ fn groups_are_checked_against_their_descriptor() {
     let b = declared(
         ADSR,
         "n: setting.int(1)",
-        "{ views: { lp: view.filter(\"f\", \"q\") }, groups: { Filter: [\"lp\", \"f\", \"q\"], Other: [\"n\", \"shape\"] } }",
+        "{ views: { lp: view.scope() }, groups: { Filter: [\"lp\", \"f\", \"q\"], Other: [\"n\", \"shape\"] } }",
     )
     .unwrap_or_else(|e| panic!("{e:?}"));
     let d = b.components.iter().find(|d| d.id == "c").unwrap();
@@ -373,14 +354,14 @@ fn groups_are_checked_against_their_descriptor() {
 // leaves it out when there is none, so every other descriptor keeps its bytes.
 #[test]
 fn a_face_is_checked_against_its_descriptor() {
-    let editor = "{ views: { lp: view.filter(\"f\", \"q\"), amp: view.envelope(\"a\", \"d\", \"s\", \"r\") }, groups: { Filter: [\"lp\", \"f\", \"q\"] }, face: [\"lp\", \"f\", \"a\", \"n\"] }";
+    let editor = "{ views: { lp: view.scope(), amp: view.scope() }, groups: { Filter: [\"lp\", \"f\", \"q\"] }, face: [\"lp\", \"f\", \"a\", \"n\"] }";
     let b = declared(ADSR, "n: setting.int(1)", editor).unwrap_or_else(|e| panic!("{e:?}"));
     let d = b.components.iter().find(|d| d.id == "c").unwrap();
     assert_eq!(d.editor.face, ["lp", "f", "a", "n"]);
     let plain = declared(ADSR, "", "{}").unwrap_or_else(|e| panic!("{e:?}"));
     let json = serde_json::to_value(&plain.components.iter().find(|d| d.id == "c").unwrap().editor).unwrap();
     assert!(json.get("face").is_none(), "no face, no field: {json}");
-    let views = "views: { lp: view.filter(\"f\", \"q\"), amp: view.envelope(\"a\", \"d\", \"s\", \"r\"), sc: view.scope() }";
+    let views = "views: { lp: view.scope(), amp: view.scope(), sc: view.scope() }";
     for (editor, says) in [
         ("{ face: [\"a\", \"zz\"] }".to_string(), "editor.face names \"zz\", which isn't a value or a view of this sound"),
         ("{ face: [\"a\", \"a\"] }".into(), "editor.face names \"a\" twice: each value or view goes on the face once"),
@@ -406,7 +387,7 @@ fn the_catalog_carries_views_and_groups() {
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(dir.join("src")).unwrap();
     std::fs::write(dir.join("src/every.ts"), EVERY).unwrap();
-    let catalog = describe(&[("pkg".into(), dir.clone())]);
+    let catalog = describe(&[("pkg".into(), dir.clone()), ("std".into(), Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std"))]);
     let _ = std::fs::remove_dir_all(&dir);
     assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
     let d = &catalog.components["pkg:every"];
@@ -415,7 +396,8 @@ fn the_catalog_carries_views_and_groups() {
     let groups: Vec<(&str, usize)> = d.editor.groups.iter().map(|g| (g.name.as_str(), g.items.len())).collect();
     assert_eq!(groups, [("Sound", 3), ("Filter", 3), ("Amp", 5)]);
     assert!(d.control("shape").and_then(|c| c.options()).is_some());
-    assert_eq!(catalog.instruments().map(|d| d.id.as_str()).collect::<Vec<_>>(), ["pkg:every"]);
+    // std's Sampler is an instrument too, now that std is in this catalog (for std/pictures).
+    assert_eq!(catalog.instruments().map(|d| d.id.as_str()).filter(|id| id.starts_with("pkg:")).collect::<Vec<_>>(), ["pkg:every"]);
 }
 
 /// A song with a track `a` whose function is `track`, then the song's `song`; `lib/every.ts` imported.

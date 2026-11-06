@@ -8,6 +8,7 @@ import { db, hz, khz, kernel, ms, poly, secs, semis, type Audio, type Control, t
 import { drums } from "@m2/drums";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { bass, fm, pad, pluck, synth } from "@m2/synths";
+import { wavetable } from "@m2/wavetable";
 import { choose, lfo, when } from "std/control";
 import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
@@ -222,3 +223,6 @@ osc.saw(110, { bypass: true });
 lfo(beats, { bypass: true });
 // @ts-expect-error bypass is true or false
 reverb(x, { bypass: 1 });
+
+// The Wavetable, whose pictures are std's envelope and lowpass (CARD-96, CARD-97), typed by its descriptor.
+wavetable(notes, { tableA: "vowels", cutoff: hz(2400) });

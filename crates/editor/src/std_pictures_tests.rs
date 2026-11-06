@@ -42,7 +42,12 @@ fn drawn(packages: Vec<(String, PathBuf)>, cid: &str, view: &str, values: Value)
 
 /// The points of the line `name` a picture drew.
 fn line(drawn: &Value, name: &str) -> Vec<(f64, f64)> {
-    let s = drawn["shapes"].as_array().unwrap().iter().find(|s| s["kind"] == "line" && s["name"] == name).unwrap_or_else(|| panic!("no line {name}: {drawn}"));
+    let s = drawn["shapes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "line" && s["name"] == name)
+        .unwrap_or_else(|| panic!("no line {name}: {drawn}"));
     s["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect()
 }
 
@@ -99,7 +104,10 @@ fn the_compressors_transfer_curve_is_its_sound() {
                 0.5,
             );
             let heard = db(out[out.len() - 1]);
-            assert!((heard - y).abs() <= 0.5, "ratio {ratio}, at {level} dB in: the curve says {y:.2} dB out, the compressor plays {heard:.2} dB");
+            assert!(
+                (heard - y).abs() <= 0.5,
+                "ratio {ratio}, at {level} dB in: the curve says {y:.2} dB out, the compressor plays {heard:.2} dB"
+            );
         }
     }
 }
@@ -143,7 +151,12 @@ fn the_lfo_shape_is_its_sound() {
     for (shape, period, phase) in [("sine", 1.5, 0.0), ("tri", 0.75, 0.25), ("saw", 2.0, 0.1)] {
         let v = json!({"period": period, "phase": phase, "shape": shape});
         let wave = line(&drawn(vec![("std".into(), std_dir())], "std:lfo", "wave", v), "shape");
-        let out = render(&format!("export default song(() => vca({STEADY}, lfo(time.beats, {{ period: {period}, phase: {phase}, shape: '{shape}' }})));\n"), 2.0);
+        let out = render(
+            &format!(
+                "export default song(() => vca({STEADY}, lfo(time.beats, {{ period: {period}, phase: {phase}, shape: '{shape}' }})));\n"
+            ),
+            2.0,
+        );
         let mut checked = 0;
         for &(beat, y) in &wave {
             let i = (beat * 0.5 * RATE).round() as usize;

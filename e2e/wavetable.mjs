@@ -42,7 +42,7 @@ const file = "tracks/wavetable.ts";
 check(await until(() => fs.existsSync(`${PROJ}/${file}`)), "picking it adds tracks/wavetable.ts");
 const added = fs.existsSync(`${PROJ}/${file}`) ? read(file) : "";
 check(added.includes('import { wavetable } from "@m2/wavetable";') && added.includes('wavetable(lane.notes("notes"))'), `a track that plays it from its notes: ${added}`);
-check(/"@m2\/wavetable" = "1\.0"/.test(read("music2.toml")) && read("music2.lock").includes('name = "@m2/wavetable"'), "the song lists its pack and locks it");
+check(/"@m2\/wavetable" = "1\.1"/.test(read("music2.toml")) && read("music2.lock").includes('name = "@m2/wavetable"'), "the song lists its pack and locks it");
 check(read("song.ts") !== song, "the song mixes the new track");
 
 // ---------------------------------------------------------------- its card
@@ -100,11 +100,17 @@ check(refused.length === 0 && !shownToasts.some((t) => /changed around this cont
 
 // ---------------------------------------------------------------- the pictures
 
-for (const corner of ["attack", "decay", "release"]) {
-  check(!!(await page.$(`${card} [data-view="amp"] [data-handle="${corner}"]`)), `the amp envelope's picture draws its ${corner} corner`);
+// std's pictures (CARD-96, CARD-97): the corners are the envelope's dots 0 to 2, the filter's peak its
+// one dot, each drawn once its picture is on screen and its shapes have come (CARD-69).
+const onScreen = (name) => page.$eval(`${card} [data-picture="${name}"]`, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
+await onScreen("amp");
+for (const [i, corner] of ["attack", "decay", "release"].entries()) {
+  check(await until(async () => !!(await page.$(`${card} [data-picture="amp"] [data-dot="${i}"]`)), 15000), `the amp envelope's picture draws its ${corner} corner`);
 }
-check(!!(await page.$(`${card} [data-view="filterEnvelope"] [data-handle="attack"]`)), "the filter envelope has its picture");
-check(!!(await page.$(`${card} [data-view="curve"] [data-handle="peak"]`)), "and the filter its curve");
+await onScreen("filterEnvelope");
+check(await until(async () => !!(await page.$(`${card} [data-picture="filterEnvelope"] [data-dot="0"]`)), 15000), "the filter envelope has its picture");
+await onScreen("curve");
+check(await until(async () => !!(await page.$(`${card} [data-picture="curve"] [data-dot="0"]`)), 15000), "and the filter its curve");
 await linted(`${card} [data-view="amp"]`, "the amp envelope's picture");
 
 // ---------------------------------------------------------------- a note: the meter moves

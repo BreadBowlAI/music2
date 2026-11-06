@@ -34,9 +34,12 @@ const stepIs = async (want) => until(async () => (await undoTitle()) === `Undo $
 // ---------------------------------------------------------------- Wob, then a Lowpass: a chain
 
 const BANDS = [1, 2, 3, 4, 5, 6];
-const TRACK = `import { component, control, port, track, view } from "@m2/core";
+const TRACK = `import { component, control, port, track } from "@m2/core";
 import { lowpass } from "std/filter";
 import { osc } from "std/dsp";
+import { envelope, envelopePicture, envelopeWords } from "std/pictures";
+
+const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
 const wob = component(
   {
@@ -54,12 +57,13 @@ ${BANDS.map((b) => `      on${b}: control.bool(${b === 1}),\n      gain${b}: con
     },
     output: port.audio(),
     editor: {
-      views: { amp: view.envelope("attack", "decay", "sustain", "release") },
+      views: { amp: envelopePicture() },
       face: ["amp", "shape", "cutoff", "release"],
       groups: { ${BANDS.map((b) => `"Band ${b}": ["on${b}", "gain${b}"]`).join(", ")} },
     },
   },
   () => osc.saw(110),
+  { amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) } },
 );
 
 export default track("wob", { name: "Wob" }, ({ lane }) => {
@@ -112,6 +116,9 @@ check(!!(await page.$(`${songChain} [data-branch="Bass"] button[aria-label="Add 
 check((await page.$eval(`${songChain} [data-node="duck"] [data-code-line]`, (e) => e.textContent).catch(() => "")) === "duck(bass.out, kick.env, { depth: db(-9) })", "the Duck's code line names the track it ducks");
 check(/Listens to:\s*Kick/.test(await page.$eval(`${songChain} [data-node="duck"] [data-listens]`, (e) => e.textContent).catch(() => "")), "the Duck's card says it listens to Kick");
 check(!!(await page.$(`${songChain} [data-testid=open-mix]`)) && !(await page.$(`${songChain} [data-node="mixer"] [data-knob]`)), "the mixer is one compact card, its levels in Mix");
+// A card with no picture on its face is 380 px at Normal (CARD-44): the Master.
+const masterWidth = Math.round((await box(`${songChain} [data-node="master"]`)).width);
+check(masterWidth === 380, `Normal: 380 px with no picture on its face: the Master's ${masterWidth}`);
 // An instrument's card wears its track's colour along its top (CARD-43, review F13); an effect's doesn't.
 await page.click('[data-module-tab="keys"] [data-testid=track-label]');
 const bar = '[data-testid=chain] [data-module="keys"] [data-node="pluck"] [data-colour-bar]';
@@ -212,12 +219,14 @@ check(read("tracks/wob.ts") === afterAgent, "and ↑ then writes nothing");
 const width = async (sel) => Math.round((await box(sel)).width);
 const sent = posts.length;
 const text = read("tracks/wob.ts");
-check((await width(wob)) === 460 && (await width(lp)) === 380, `Normal: 460 px with a picture on its face, else 380: ${await width(wob)} ${await width(lp)}`);
+// Both have a picture on their face: Wob its envelope, the Lowpass its curve (CARD-91).
+check((await width(wob)) === 460 && (await width(lp)) === 460, `Normal: 460 px with a picture on its face: ${await width(wob)} ${await width(lp)}`);
 await page.click(`${wob} [data-size-to="folded"]`);
 check(await until(async () => (await page.$eval(wob, (e) => e.dataset.frame)) === "folded"), "Fold folds it");
 check((await width(wob)) === 240 && !(await page.$(`${wob} [data-code-line]`)) && !(await page.$(`${wob} [role=tab]`)), "Folded: 240 px, no tabs, no code line");
 const sentence = await page.$eval(`${wob} [data-sentence]`, (e) => e.textContent);
-check(/^Shape square · Cutoff [\d.]+ kHz · Release 300 ms$/.test(sentence), `and one sentence of its face's values: ${sentence}`);
+// Its face's first picture is its envelope, so its sentence is the picture's words (CARD-63).
+check(sentence === "How loud a note is over time: attack 10 ms, decay 200 ms, sustain 0.6, release 300 ms", `and one sentence: its face's picture's words: ${sentence}`);
 await linted(wob, "Wob, folded");
 // A Folded effect keeps its name: its header is the name and the sizes only (review F3).
 await page.click(`${lp} [data-size-to="folded"]`);
@@ -236,7 +245,9 @@ await page.screenshot({ path: `${ROOT}/frame-expanded.png` });
 await page.click(`${wob} [data-size-to="normal"]`);
 await until(async () => (await page.$eval(wob, (e) => e.dataset.frame)) === "normal");
 await sleep(300);
-check(posts.length === sent && read("tracks/wob.ts") === text, `the sizes write nothing: ${posts.slice(sent).map((p) => p.url).join(" ")}`);
+// A picture's ask and its live layers' looks are no writes (CARD-67, TAP-8): a picture shown again asks again.
+const sizesWrote = posts.slice(sent).filter((p) => !/^\/api\/graph\/(picture|look)$/.test(p.url));
+check(sizesWrote.length === 0 && read("tracks/wob.ts") === text, `the sizes write nothing: ${sizesWrote.map((p) => p.url).join(" ")}`);
 
 // ---------------------------------------------------------------- an agent's change on a hidden tab (CARD-47)
 

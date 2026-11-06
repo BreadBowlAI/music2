@@ -47,6 +47,9 @@ export function tips(sel = "body", keys = {}) {
       if (n !== e && [...n.querySelectorAll(CONTROL)].some((c) => c !== e && !c.contains(e) && !e.contains(c) && seen(c))) return "";
       const t = n.getAttribute("title");
       if (t !== null) return t.trim();
+      // An SVG element's tooltip is its own <title> child (a picture's dot, CARD-69).
+      const svgTitle = n instanceof SVGElement ? [...n.children].find((c) => c.tagName.toLowerCase() === "title") : undefined;
+      if (svgTitle) return (svgTitle.textContent ?? "").trim();
     }
     return "";
   };

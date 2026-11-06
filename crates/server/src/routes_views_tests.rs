@@ -9,12 +9,15 @@ use crate::routes_8b::tests::post;
 use crate::{ServeOptions, start_with};
 
 /// A sound with a choice, a switch and an envelope's controls, and a song that plays it.
-const WOBBLE: &str = "import { component, control, port, view } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
+const WOBBLE: &str = "import { component, control, port } from '@m2/core';\nimport { sampler } from 'std/sampler';\n\
+    import { envelope, envelopePicture, envelopeWords } from 'std/pictures';\n\
+    const ENV = { attack: 'attack', decay: 'decay', sustain: 'sustain', release: 'release' } as const;\n\
     export const wobble = component({ id: 'wobble', label: 'Wobble', inputs: { notes: port.notes() },\n\
       controls: { shape: control.choice(['saw', 'square', 'sine'], 'saw'), sub: control.bool(false), attack: control.secs(0.005),\n\
         decay: control.secs(0.2), sustain: control.frac(0.6), release: control.secs(0.3) },\n\
-      output: port.audio(), editor: { views: { amp: view.envelope('attack', 'decay', 'sustain', 'release') } } },\n\
-      (notes, { attack, release }) => sampler(notes, { attack, release }));\n";
+      output: port.audio(), editor: { views: { amp: envelopePicture() } } },\n\
+      (notes, { attack, release }) => sampler(notes, { attack, release }),\n\
+      { amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) } });\n";
 const SONG: &str = "import { song, track } from '@m2/core';\nimport { wobble } from './lib/wobble';\n\
     const lead = track('lead', ({ lane }) => wobble(lane.notes('notes'), { shape: 'saw', decay: 0.4 }));\nexport default song(() => lead.out);\n";
 

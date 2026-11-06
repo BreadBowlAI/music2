@@ -16,8 +16,14 @@
 // `voices: 1` plays one note at a time, sliding over `glide` between notes that overlap (std/dsp's
 // `mono`); with more, each note gets its own voice and `glide` does nothing.
 
-import { component, control, kernel, poly, port, setting, signature, view, type Audio, type Events, type Params } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+
+/** The names each of its pictures reads (std/pictures, CARD-96, CARD-97): the amp envelope, the filter's, and the filter. */
+const AMP = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+const FILTER_ENV = { attack: "filterAttack", decay: "filterDecay", sustain: "filterSustain", release: "filterRelease" } as const;
+const FILTER = { cutoff: "cutoff", q: "q" } as const;
 
 /** The built-in tables, in the order the kernel numbers them. */
 const TABLES = ["basic", "pulse", "vowels", "harmonics", "digital"] as const;
@@ -80,9 +86,9 @@ export const wavetable = component(
       category: "Instruments",
       description: "Two oscillators that slide through tables of waveforms: from soft to bright, vowels to digital",
       views: {
-        amp: view.envelope("attack", "decay", "sustain", "release"),
-        curve: view.filter("cutoff", "q"),
-        filterEnvelope: view.envelope("filterAttack", "filterDecay", "filterSustain", "filterRelease"),
+        amp: envelopePicture(),
+        curve: curvePicture({ live: false }),
+        filterEnvelope: envelopePicture(),
       },
       groups: {
         Oscillators: ["tableA", "fileA", "positionA", "pitchA", "levelA", "tableB", "fileB", "positionB", "pitchB", "levelB"],
@@ -135,5 +141,10 @@ export const wavetable = component(
         { assets: files, values },
       );
     return p.voices === 1 ? mono(notes, voice, { glide: p.glide }) : poly(notes, voice, { voices: p.voices });
+  },
+  {
+    amp: { draw: (v, p) => envelope(p, v, AMP), words: (v) => envelopeWords(v, AMP) },
+    curve: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
+    filterEnvelope: { draw: (v, p) => envelope(p, v, FILTER_ENV), words: (v) => envelopeWords(v, FILTER_ENV) },
   },
 );

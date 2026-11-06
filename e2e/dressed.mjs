@@ -3,7 +3,7 @@
 // and picking sine writes `shape: "sine"`, one undo step, and the sound changes while it plays: the
 // scope's frames lose the saw's sharp edge (their slope's energy falls). Its
 // envelope's attack corner, dragged right, writes a longer attack; its filter's peak, dragged up, a
-// higher resonance in hundredths, and its words say resonance. The kick plays the Drum (KIT-2): its
+// higher resonance (std's drawn lowpass, CARD-97), and its words say resonance. The kick plays the Drum (KIT-2): its
 // menu (a control) lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step
 // named by its label ("Drum sound"), ⌘Z taking it back byte for byte. Each card linted.
 //
@@ -126,7 +126,11 @@ check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes the cod
 
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
-const handle = await seen(`${card} [data-view="amp"] [data-handle="attack"]`);
+// std's envelope picture (CARD-96): its attack corner is its first dot, drawn once the picture is on
+// screen and its shapes have come (CARD-69).
+await seen(`${card} [data-picture="amp"]`);
+await until(async () => !!(await page.$(`${card} [data-picture="amp"] [data-dot="0"]`)), 15000);
+const handle = await seen(`${card} [data-picture="amp"] [data-dot="0"]`);
 check(!!handle, "the Lead's envelope draws its attack corner");
 await linted(`${card} [data-view="amp"]`, "the envelope");
 await page.mouse.move(handle.x + handle.width / 2, handle.y + handle.height / 2);
@@ -143,9 +147,12 @@ await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");
 // ---------------------------------------------------------------- the filter's resonance (CARD-30)
 
-// The Lead's filter view draws its resonance (0 to 1) as the q it stands for; its peak dragged up
-// writes a higher resonance, in hundredths, inside 0 to 1, and its words say resonance.
-const peakSel = `${card} [data-view="filter"] [data-handle="peak"]`;
+// The Lead's filter, std's drawn lowpass (CARD-97), draws its resonance (0 to 1) as the q it stands
+// for; its dot dragged up writes a higher resonance, as its knob's drag would (three figures at most),
+// inside 0 to 1, and its dot says resonance.
+const peakSel = `${card} [data-picture="filter"] [data-dot="0"]`;
+await seen(`${card} [data-picture="filter"]`);
+await until(async () => !!(await page.$(peakSel)), 15000);
 const peakAt = await seen(peakSel);
 const said = await page.$eval(peakSel, (e) => e.querySelector("title")?.textContent ?? "");
 check(!!peakAt && said.includes("resonance") && !said.includes("· q "), `the Lead's filter view names its resonance: ${said.split("\n")[0]}`);
@@ -157,7 +164,7 @@ await sleep(200);
 await page.mouse.up();
 check(await until(() => /resonance: [0-9.]+/.test(read("tracks/lead.ts"))), `dragging the peak up writes the resonance: ${read("tracks/lead.ts").match(/synth\.lead\([^\n]*/)?.[0]}`);
 const res = read("tracks/lead.ts").match(/resonance: ([0-9.]+)/)?.[1] ?? "";
-check(Number(res) > resonanceBefore && Number(res) <= 1 && /^\d(\.\d{1,2})?$/.test(res), `higher, in hundredths, inside 0 to 1: ${resonanceBefore} → ${res}`);
+check(Number(res) > resonanceBefore && Number(res) <= 1 && /^0?(\.\d{1,3})?$|^1$/.test(res), `higher, three figures at most, inside 0 to 1: ${resonanceBefore} → ${res}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");

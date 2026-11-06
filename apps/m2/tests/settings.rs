@@ -107,8 +107,11 @@ fn m2_set_reads_a_word_as_its_setting_takes_it() {
     assert!(line("fast").contains("@fast"), "{}", line("fast"));
 }
 
-const TONE: &str = r#"import { component, control, port, song, view } from "@m2/core";
+const TONE: &str = r#"import { component, control, port, song } from "@m2/core";
 import { osc } from "std/dsp";
+import { envelope, envelopePicture, envelopeWords } from "std/pictures";
+
+const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
 const tone = component(
   {
@@ -116,9 +119,10 @@ const tone = component(
     label: "Tone",
     controls: { shape: control.choice(["saw", "square", "sine"], "saw"), sub: control.bool(false), attack: control.secs(0.01), decay: control.secs(0.1), sustain: control.frac(0.5), release: control.secs(0.2) },
     output: port.audio(),
-    editor: { views: { amp: view.envelope("attack", "decay", "sustain", "release") }, groups: { Sound: ["shape", "sub"], Amp: ["amp", "attack"] } },
+    editor: { views: { amp: envelopePicture() }, groups: { Sound: ["shape", "sub"], Amp: ["amp", "attack"] } },
   },
   () => osc.saw(110),
+  { amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) } },
 );
 
 export default song(() => tone({ shape: "saw" }));

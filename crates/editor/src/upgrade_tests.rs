@@ -110,7 +110,11 @@ fn a_song_made_for_std_0_9_moves_to_0_10_and_says_so() {
     let manifest_change = up.changes.iter().find(|c| c.file == "music2.toml").expect("it says it wrote music2.toml");
     assert!(manifest_change.lines.iter().any(|l| l.contains("- std = \"0.9\"")), "{:#?}", manifest_change.lines);
     assert!(manifest_change.lines.iter().any(|l| l.contains("+ std = \"0.10\"")), "{:#?}", manifest_change.lines);
-    assert!(!up.changes.iter().any(|c| c.file.ends_with(".ts")), "no code is written: {:?}", up.changes.iter().map(|c| &c.file).collect::<Vec<_>>());
+    assert!(
+        !up.changes.iter().any(|c| c.file.ends_with(".ts")),
+        "no code is written: {:?}",
+        up.changes.iter().map(|c| &c.file).collect::<Vec<_>>()
+    );
     assert!(s.draft_errors.is_empty() && s.accepted().has_code(), "it builds: {:?}", s.draft_errors);
     assert!(!needed(&s), "made for this music2 now");
 }
