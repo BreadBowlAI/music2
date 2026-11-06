@@ -1398,7 +1398,7 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
   response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string }) => Shape : never;
   /**
    * One note's sound, as a copy of the call plays it at these values (CARD-80): `note` (60) held
-   * `seconds` (the x axis's end, 4 at most). Only on an x axis in `seconds` and a `bipolar` y axis.
+   * `seconds` (the x axis's end, 1 at most). Only on an x axis in `seconds` and a `bipolar` y axis.
    */
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
 }
@@ -1663,8 +1663,10 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (ax.x.unit !== "seconds" || ax.y.unit !== "bipolar") bad(`gives p.hit an x axis in ${ax.x.unit} and a y axis in ${ax.y.unit}: a hit is drawn across seconds and up bipolar`);
       const note = o?.note ?? 60;
       if (typeof note !== "number" || !Number.isInteger(note) || note < 0 || note > 127) bad(`gives p.hit the note ${shown(note)}: a note is a whole number 0 to 127`);
-      const seconds = o?.seconds ?? ax.x.hi;
-      if (typeof seconds !== "number" || !(seconds > 0 && seconds <= 4)) bad(`gives p.hit ${shown(seconds)} seconds: a hit lasts more than 0 and at most 4 seconds`);
+      // Left out, a hit lasts its axis, a second at most (CARD-80).
+      const seconds = o?.seconds ?? Math.min(ax.x.hi, 1);
+      if (typeof seconds !== "number" || !(seconds > 0 && seconds <= 1)) bad(`gives p.hit ${shown(seconds)} seconds: a hit lasts more than 0 and at most 1 second`);
+      if ((seconds as number) > ax.x.hi) bad(`gives p.hit ${seconds} seconds, past its x axis's end at ${ax.x.hi} s`);
       const t = tone("p.hit", o?.tone);
       once("p.hit", 4 * MEASURED.hit);
       return shape({ kind: "hit", note, seconds, tone: t });

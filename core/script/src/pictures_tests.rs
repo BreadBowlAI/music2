@@ -390,6 +390,7 @@ fn the_runner_checks_each_draw_in_words() {
 fn a_measured_layer_is_checked_in_words() {
     let hz = "x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24)";
     let time = "x: axis.time(0.5), y: axis.lin(\"bipolar\", -1, 1)";
+    let long = "x: axis.time(8), y: axis.lin(\"bipolar\", -1, 1)";
     let draws = [
         (hz, "p.response({ name: \"measured\", tone: \"soft\" })", Ok(json!([{"kind": "response", "name": "measured", "tone": "soft"}]))),
         (time, "p.hit({ note: 36 })", Ok(json!([{"kind": "hit", "note": 36, "seconds": 0.5}]))),
@@ -406,7 +407,11 @@ fn a_measured_layer_is_checked_in_words() {
         (hz, "p.hit()", Err("gives p.hit an x axis in hz and a y axis in db: a hit is drawn across seconds and up bipolar")),
         (hz, "p.response(), p.response()", Err("gives p.response twice: a picture holds one at most")),
         (time, "p.hit({ note: 128 })", Err("gives p.hit the note 128: a note is a whole number 0 to 127")),
-        (time, "p.hit({ seconds: 5 })", Err("gives p.hit 5 seconds: a hit lasts more than 0 and at most 4 seconds")),
+        (time, "p.hit({ seconds: 0 })", Err("gives p.hit 0 seconds: a hit lasts more than 0 and at most 1 second")),
+        (long, "p.hit({ seconds: 2 })", Err("gives p.hit 2 seconds: a hit lasts more than 0 and at most 1 second")),
+        (time, "p.hit({ seconds: 0.75 })", Err("gives p.hit 0.75 seconds, past its x axis's end at 0.5 s")),
+        // Left out, a hit lasts its axis, or a second at most (review M4, M10).
+        (long, "p.hit()", Ok(json!([{"kind": "hit", "note": 60, "seconds": 1.0}]))),
         (hz, "p.response({ tone: \"red\" })", Err("gives p.response the tone \"red\": a tone is main, soft or faint, never a colour")),
         (
             hz,
@@ -447,7 +452,8 @@ fn a_measured_layer_is_checked_in_words() {
         "gives p.response twice: a picture holds one at most"
     );
     assert!(forged("m1", "[{\"kind\":\"response\"}]").unwrap_err().contains("a response is drawn across hz and up db"));
-    assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":9}]").unwrap_err().contains("at most 4 seconds"));
+    assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":2}]").unwrap_err().contains("at most 1 second"));
+    assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":0.75}]").unwrap_err().contains("past its x axis's end at 0.5 s"));
     assert!(
         forged("m0", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":1}]")
             .unwrap_err()

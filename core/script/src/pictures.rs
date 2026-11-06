@@ -573,7 +573,7 @@ pub fn checked(json: &str, desc: &Descriptor, view: &str) -> Result<String, Stri
         return Err(format!("is no picture named {view}"));
     };
     let mut numbers = 0;
-    check(&d.shapes, desc, (x.unit, y.unit), &mut numbers, false)?;
+    check(&d.shapes, desc, (x.unit, y.unit, x.hi), &mut numbers, false)?;
     measured_once(&d.shapes, &mut vec![])?;
     if !fits(&d.words, 1, 400) || d.words.trim().is_empty() {
         return Err(format!("its words must be one line of 1 to 400 characters, not {:?}", cut(&d.words)));
@@ -587,7 +587,8 @@ fn cut(t: &str) -> String {
     if s.len() < t.len() { format!("{s}…") } else { s }
 }
 
-fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit), numbers: &mut usize, inside: bool) -> Result<(), String> {
+/// `axes`: the x and y axes' units, and where the x axis ends.
+fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit, f64), numbers: &mut usize, inside: bool) -> Result<(), String> {
     let count = |numbers: &mut usize, n: usize| {
         *numbers += n;
         if *numbers > NUMBERS { Err("draws more than 20,000 numbers: draw fewer points".to_string()) } else { Ok(()) }
@@ -678,8 +679,11 @@ fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit), numbers: &mut 
                 if *note > 127 {
                     return Err(format!("gives p.hit the note {note}: a note is a whole number 0 to 127"));
                 }
-                if !(*seconds > 0.0 && *seconds <= 4.0) {
-                    return Err(format!("gives p.hit {seconds} seconds: a hit lasts more than 0 and at most 4 seconds"));
+                if !(*seconds > 0.0 && *seconds <= 1.0) {
+                    return Err(format!("gives p.hit {seconds} seconds: a hit lasts more than 0 and at most 1 second"));
+                }
+                if *seconds > axes.2 {
+                    return Err(format!("gives p.hit {seconds} seconds, past its x axis's end at {} s", axes.2));
                 }
                 count(numbers, 4 * MEASURED.1)?;
             }
