@@ -22,6 +22,9 @@ crate::api::routes! {
     GET "/api/graph/audio/peaks" => audio_peaks; reads, agents,
         "An audio file's waveform peaks, as bytes",
         r#"{"session": 7, "asset": "vox.wav"}"#;
+    GET "/api/graph/clip/measure" => clip_measure; reads, agents,
+        "What a measure finds in an audio file, every hop: @m2/vocals:notes gives the voice's pitch (hz), how sure (clarity), its level, each note's number and its sung pitch (centre)",
+        r#"{"session": 7, "asset": "vox.wav", "measure": "@m2/vocals:notes"}"#;
     POST "/api/graph/audio/import" => audio_import up to UPLOAD; writes, agents,
         "Bring audio files on this computer in, and place their clips: on a lane, on a new track after one, or on new tracks below",
         r#"{"session": 7, "paths": ["/Users/you/Samples/vox.wav"], "to": {"kind": "below", "beat": 0}}"#;
@@ -65,6 +68,19 @@ async fn audio_peaks(State(s): S, Query(r): Query<PeaksReq>) -> Result<Response,
     })
     .await?;
     Ok(([(header::CONTENT_TYPE, "application/octet-stream"), (header::CACHE_CONTROL, "no-store")], bytes).into_response())
+}
+
+#[derive(Deserialize)]
+struct MeasureReq {
+    session: u64,
+    asset: String,
+    measure: String,
+}
+
+/// What a measure finds in asset `asset` of the open song (VOX-41): `{measure, asset, hop, rate,
+/// outputs, values}`. Measured once, on a blocking task, then read from the cache folder. A read.
+async fn clip_measure(State(s): S, Query(r): Query<MeasureReq>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(blocking(move || s.graph.measure(r.session, r.asset, r.measure)).await?))
 }
 
 #[derive(Deserialize)]

@@ -350,3 +350,49 @@ pub(crate) fn copy(from: &std::path::Path, to: &std::path::Path) {
         if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
     }
 }
+
+// VOX-41, VOX-43: a measure of an asset through its route, and Find notes through the clips route
+// on a song that doesn't list @m2/vocals: the clip gets its notes and its render, the song the pack,
+// one undo step named for it; a measure that isn't one is refused in words.
+#[test]
+fn find_notes_through_the_server() {
+    let dir = project("sung");
+    // A buzzy voice at A3 from 0.1 to 0.4 s of a 0.5 s file.
+    let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+    let mut w = hound::WavWriter::create(dir.join("assets/vox.wav"), spec).unwrap();
+    for i in 0..24_000 {
+        let t = i as f32 / 48_000.0;
+        let on = if (0.1..0.4).contains(&t) { 1.0 } else { 0.0 };
+        let v: f32 = (1..8).map(|h| (std::f32::consts::TAU * 220.0 * h as f32 * t).sin() / h as f32).sum();
+        w.write_sample(0.2 * on * v).unwrap();
+    }
+    w.finalize().unwrap();
+    std::fs::write(dir.join("data/vox/clips.json"), r#"{"clips": [{"id": "a", "start": 0, "length": 1, "asset": "vox.wav"}]}"#).unwrap();
+    let running = start_with(
+        ServeOptions { port: 0, web_dir: dir.join("no-web"), token: "t00ls".into(), page_token: "t0k".into() },
+        Graph::silent().stored(),
+    )
+    .unwrap();
+    let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+    let (status, body) = get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Anotes"));
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let m: serde_json::Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!((m["hop"].as_u64(), m["rate"].as_f64()), (Some(256), Some(48_000.0)));
+    assert_eq!(m["outputs"][3], "note");
+    assert_eq!(m["values"][3].as_array().unwrap().len(), 24_000usize.div_ceil(256));
+    let (status, body) = get(&running.url, &format!("/api/graph/clip/measure?session={session}&asset=vox.wav&measure=%40m2%2Fvocals%3Avoice"));
+    assert!(status == 400 && String::from_utf8_lossy(&body).contains("isn't a measure"), "{status} {}", String::from_utf8_lossy(&body));
+    let gesture = serde_json::json!({"session": session, "gesture": {"op": "find_notes", "clip": {"module": "vox", "lane": "clips", "id": "a"},
+        "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}});
+    let (status, done) = post(&running.url, "/api/graph/clips", "application/json", gesture.to_string().as_bytes());
+    assert_eq!(status, 200, "{done}");
+    let clip = &clips_of(&dir)[0];
+    assert_eq!(clip["render"], "@m2/vocals:voice");
+    let sung = clip["sung"].as_array().unwrap();
+    assert_eq!(sung.len(), 1, "{clip}");
+    assert!((sung[0]["pitch"].as_f64().unwrap() - 57.0).abs() < 0.1 && (sung[0]["at"].as_f64().unwrap() - 0.1).abs() < 0.02, "{clip}");
+    assert!(std::fs::read_to_string(dir.join("music2.toml")).unwrap().contains("@m2/vocals"));
+    let (undo, _) = running.state.graph.undo_names();
+    assert!(undo.as_deref().is_some_and(|n| n.starts_with("Find notes on")), "{undo:?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -544,7 +544,7 @@ impl LanePlan {
         tempo: &TempoMap,
         rate: f64,
         keep: Option<&Keep>,
-        stretch: Option<&crate::offline::Kernel>,
+        makers: audio::Makers,
         report: &Reporter,
     ) -> Result<LanePlan> {
         let refs = lane_slots(flat);
@@ -585,7 +585,8 @@ impl LanePlan {
                 (Kind::Control(_), None) => LaneSlot::Control(Some(Arc::new(data.control(m, l)))),
                 (Kind::Audio(ch), from) => {
                     let tell = audio::Tell { report: report.clone(), lane: s as u32 };
-                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, stretch, &tell)?;
+                    let was = from.and_then(|(k, o)| k.info.lanes[o].audio.clone());
+                    let lane = AudioLane::build(data.audio(m, l), data, cache, tempo, rate, ch as usize, makers, &tell, was.as_deref())?;
                     match from.map(|(k, o)| (o, k.info.lanes[o].audio.clone())) {
                         Some((o, Some(was))) if was.same(&lane) => {
                             audio = Some(was);

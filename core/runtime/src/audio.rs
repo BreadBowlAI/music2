@@ -31,7 +31,7 @@ use crate::fault::{Code, Failed, Reporter, Subject};
 use crate::offline::Kernel;
 use crate::renders::{self, Stretcher};
 use crate::sandbox::Held;
-use crate::stream::{self, Clip, Making, Raw, Ring, Shape, Source, Wav};
+use crate::stream::{self, Clip, Making, Phrase, Raw, Ring, Shape, Source, Wav};
 use crate::transport::{Jump, Runs};
 
 /// Decoded audio, planar, at its own sample rate.
@@ -143,6 +143,8 @@ struct ClipKey {
     tempo: Vec<u64>,
     rate: u64,
     stretch: Option<Sha>,
+    /// Its edited phrases' renders (RENDER-30b): a clip edited otherwise plays otherwise.
+    phrases: Vec<PhraseKey>,
 }
 
 impl ClipKey {
@@ -151,7 +153,135 @@ impl ClipKey {
         clip.extend(c.warp.iter().flat_map(|&(a, b)| [a, b]));
         let tempo = tempo.segments().iter().flat_map(|t| [t.beat, t.bpm]).map(f64::to_bits).collect();
         let stretch = stretch.filter(|_| !c.warp.is_empty()).map(|k| k.sha);
-        ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits(), stretch }
+        ClipKey { asset, clip: clip.into_iter().map(f64::to_bits).collect(), tempo, rate: rate.to_bits(), stretch, phrases: vec![] }
+    }
+
+    /// What names its normal path: everything but its phrases.
+    fn normal(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        ClipKey { phrases: vec![], ..self.clone() }.hash(&mut h);
+        h.finish()
+    }
+}
+
+/// What an edited phrase's render depends on (RENDER-30b): everything its kernel is given. The
+/// source's bytes, the kernel's module, the phrase's frames, the lead-in, the time map's pairs
+/// that reach it, its notes and the rate.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct PhraseKey {
+    asset: Sha,
+    kernel: Sha,
+    numbers: Vec<u64>,
+}
+
+impl PhraseKey {
+    fn of(asset: Sha, kernel: Sha, p: &PhraseSpec, rate: f64) -> PhraseKey {
+        let mut numbers = vec![rate.to_bits(), p.map.len() as u64];
+        numbers.extend(p.map.iter().flatten().map(|v| v.to_bits()));
+        numbers.extend(p.values.iter().map(|v| v.to_bits()));
+        PhraseKey { asset, kernel, numbers }
+    }
+
+    /// Its bytes, for a file name.
+    fn bytes(&self) -> Vec<u8> {
+        let mut b = format!("phrase {} {}\n", self.asset.hex(), self.kernel.hex()).into_bytes();
+        for n in &self.numbers {
+            b.extend_from_slice(&n.to_le_bytes());
+        }
+        b
+    }
+}
+
+/// The lead-in each phrase's render reads before its region, in seconds (RENDER-30b).
+pub(crate) const LEAD_IN: f64 = 0.1;
+/// The margin round an edited note, the gap under which two regions are one phrase, and the
+/// phrase's crossfade, in seconds.
+const MARGIN: f64 = 0.05;
+const JOIN: f64 = 0.02;
+const FADE: f64 = 0.01;
+
+/// One edited phrase of a clip as its kernel is given it: its frames in the clip's output, the
+/// time map's pairs that reach it, and its values (its first and last frame, the lead-in, and the
+/// five numbers of each note that reaches it).
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct PhraseSpec {
+    pub(crate) from: usize,
+    pub(crate) to: usize,
+    pub(crate) map: Vec<[f64; 2]>,
+    pub(crate) values: Vec<f64>,
+}
+
+/// Seconds of `map`'s first side at `x` of its second (`by` 1), or the other way (`by` 0), as the
+/// kit reads a time map: straight between two pairs, the nearest line beyond, speed 1 through one.
+fn through(map: &[[f64; 2]], x: f64, by: usize) -> f64 {
+    let other = 1 - by;
+    match map.len() {
+        0 => x,
+        1 => map[0][other] + (x - map[0][by]),
+        n => {
+            let i = map.partition_point(|p| p[by] <= x).clamp(1, n - 1);
+            let (a, b) = (map[i - 1], map[i]);
+            a[other] + (x - a[by]) * (b[other] - a[other]) / (b[by] - a[by])
+        }
+    }
+}
+
+/// Clip `c`'s edited phrases at `rate` (RENDER-30b): none for a clip with no `render`, one that
+/// plays backwards or at another pitch. Each edited note's region (50 ms each side of it, in the
+/// file's seconds) within the part of the file the clip plays; regions that overlap or are less
+/// than 20 ms apart are one phrase.
+pub(crate) fn phrases_of(c: &AudioClip, tempo: &TempoMap, rate: f64) -> Vec<PhraseSpec> {
+    if c.render.is_none() || c.reverse || c.pitch != 0.0 || !c.sung.iter().any(m2_song::Sung::edited) {
+        return vec![];
+    }
+    let map = if c.warp.is_empty() { vec![[c.offset, 0.0]] } else { time_map(c, tempo) };
+    let len = stream::clip_len(c, tempo, rate);
+    let (plays_from, plays_to) = (through(&map, 0.0, 1), through(&map, len as f64 / rate, 1));
+    let mut regions: Vec<(f64, f64)> = vec![];
+    for n in c.sung.iter().filter(|n| n.edited() && n.end() > plays_from && n.at < plays_to) {
+        let (a, b) = (n.at - MARGIN, n.end() + MARGIN);
+        match regions.last_mut() {
+            Some(r) if a < r.1 + JOIN => r.1 = r.1.max(b),
+            _ => regions.push((a, b)),
+        }
+    }
+    let frame = |s: f64| ((through(&map, s, 0) * rate).round().max(0.0) as usize).min(len);
+    regions
+        .into_iter()
+        .filter_map(|(a, b)| {
+            let (from, to) = (frame(a), frame(b));
+            if to <= from {
+                return None;
+            }
+            // The pairs that reach it, its lead-in too: those from the last at or before its start on,
+            // to the first at or after its end, so the kernel lays it out as the whole map would.
+            let (lead, end) = (through(&map, from as f64 / rate, 1) - LEAD_IN, through(&map, to as f64 / rate, 1));
+            let first = map.partition_point(|p| p[0] <= lead).saturating_sub(1);
+            let last = (map.partition_point(|p| p[0] < end) + 1).min(map.len());
+            let reach = map[first..last.max(first + 1).min(map.len())].to_vec();
+            let mut values = vec![from as f64, to as f64, LEAD_IN];
+            for n in c.sung.iter().filter(|n| n.end() > lead && n.at < end) {
+                values.extend([n.at, n.length, n.pitch, n.move_by, n.straighten]);
+            }
+            Some(PhraseSpec { from, to, map: reach, values })
+        })
+        .collect()
+}
+
+/// The offline kernels a lane's clips are made with: std's stretch for warped clips, and the kernel
+/// each clip's `render` names, from the song's packages.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Makers<'a> {
+    pub(crate) stretch: Option<&'a Kernel>,
+    pub(crate) packages: Option<&'a crate::packages::PackageSet>,
+}
+
+impl Makers<'_> {
+    /// The kernel `id` that renders a clip's edited phrases, when the song's packages have it.
+    fn render(&self, id: &str) -> Option<Kernel> {
+        let k = Kernel::of(self.packages?, id)?;
+        self.packages?.offline_decl(id).is_some_and(|d| d.hop == 0).then_some(k)
     }
 }
 
@@ -204,12 +334,15 @@ struct LaneKey {
 pub struct Cache {
     wavs: HashMap<Sha, Found<Arc<Wav>>>,
     warps: HashMap<WarpKey, Arc<Raw>>,
+    /// Edited phrases' renders, by what their kernel is given (RENDER-30b).
+    phrases: HashMap<PhraseKey, Arc<Raw>>,
     lanes: HashMap<LaneKey, Arc<AudioLane>>,
     /// The files kernels read (kernel ABI v1), decoded whole, kept while a build uses them.
     kernels: HashMap<Sha, Found<Arc<Asset>>>,
     used_wavs: HashSet<Sha>,
     used_kernels: HashSet<Sha>,
     used_warps: HashSet<WarpKey>,
+    used_phrases: HashSet<PhraseKey>,
     used_lanes: HashSet<LaneKey>,
     decodes: usize,
     renders: usize,
@@ -388,11 +521,57 @@ impl Cache {
         Ok(Some((key, raw)))
     }
 
+    /// Edited phrase `p` of clip `c`'s render by `kernel` from its file `wav`, the asset `asset`,
+    /// and its key: from the cache folder when it is there, else asked for now (RENDER-30b), as a
+    /// stretch is: live, made on the stretch thread ahead of stretches, while the lane plays what
+    /// it played there before; offline, made here, and one that fails fails the build with
+    /// `stretch.failed`, `at` naming the clip.
+    #[allow(clippy::too_many_arguments)]
+    fn phrase(
+        &mut self,
+        wav: &Arc<Wav>,
+        asset: Sha,
+        c: &AudioClip,
+        kernel: &Kernel,
+        p: &PhraseSpec,
+        rate: f64,
+        at: (&Tell, u32),
+    ) -> Result<(PhraseKey, Arc<Raw>)> {
+        let key = PhraseKey::of(asset, kernel.sha, p, rate);
+        self.used_phrases.insert(key.clone());
+        if let Some(r) = self.phrases.get(&key) {
+            return Ok((key, r.clone()));
+        }
+        let (ch, frames) = (wav.channels(), p.to - p.from);
+        let path = self.folder.0.as_deref().map(|f| stream::render_path(f, &key.bytes()));
+        let raw = match path.as_deref().and_then(|f| Raw::open(f, ch, frames)) {
+            Some(whole) => Arc::new(whole),
+            None => {
+                self.renders += 1;
+                let out = Making::new(path.as_deref(), ch, frames);
+                let raw = out.raw().clone();
+                let source = Held::Disk(wav.clone());
+                let job = renders::Job { kernel: kernel.clone(), source, values: p.values.clone(), map: p.map.clone(), rate, out };
+                match &mut self.live {
+                    Some(live) => live.push_first(job),
+                    None => renders::make_now(job).map_err(|e| {
+                        let why = e.context(format!("the edited notes of {} at beat {} can't be rendered", c.asset, c.start));
+                        Failed::new(at.0.fault(Code::StretchFailed, at.1), Some(why))
+                    })?,
+                }
+                raw
+            }
+        };
+        self.phrases.insert(key.clone(), raw.clone());
+        Ok((key, raw))
+    }
+
     /// Keep only what the builds since the last call used: an edited lane's old ring goes once
     /// the renderer that played it is built over.
     pub fn prune(&mut self) {
         let wavs = std::mem::take(&mut self.used_wavs);
         let warps = std::mem::take(&mut self.used_warps);
+        let phrases = std::mem::take(&mut self.used_phrases);
         let lanes = std::mem::take(&mut self.used_lanes);
         let kernels = std::mem::take(&mut self.used_kernels);
         self.wavs.retain(|k, _| wavs.contains(k));
@@ -400,6 +579,13 @@ impl Cache {
         // A stretch no build asked for any more stops, and its part file goes (D10).
         self.warps.retain(|k, r| {
             let keep = warps.contains(k);
+            if !keep {
+                r.stop();
+            }
+            keep
+        });
+        self.phrases.retain(|k, r| {
+            let keep = phrases.contains(k);
             if !keep {
                 r.stop();
             }
@@ -536,6 +722,19 @@ pub(crate) fn time_map(c: &AudioClip, tempo: &TempoMap) -> Vec<[f64; 2]> {
     beats.into_iter().map(|b| [src_at_beat(b), tempo.seconds_at(c.start + b) - t0]).collect()
 }
 
+/// The part of its file clip `c` plays, in seconds of the file (VOX-44): from its offset, through
+/// its time map when warped, else at its speed (its `pitch` as varispeed).
+pub fn file_span(c: &AudioClip, tempo: &TempoMap) -> (f64, f64) {
+    let secs = tempo.seconds_at(c.start + c.length) - tempo.seconds_at(c.start);
+    match c.warp.is_empty() {
+        true => (c.offset, c.offset + secs * libm::exp2(c.pitch / 12.0)),
+        false => {
+            let map = time_map(c, tempo);
+            (through(&map, 0.0, 1), through(&map, secs, 1))
+        }
+    }
+}
+
 /// What `k` makes as `run` says, whole in memory (tests' reference).
 #[cfg(test)]
 fn whole(k: &Kernel, run: &crate::offline::Run) -> Result<RenderedClip> {
@@ -630,6 +829,9 @@ impl AudioLane {
     /// enough to stay whole is filled here. Warped clips are stretched by `stretch` (the song's
     /// `std:stretch`); without it they are silent. An error only offline: a stretch that failed
     /// ([`Cache::warp`]).
+    /// A clip's edited phrases are rendered by the kernel its `render` names ([`Makers`]); live,
+    /// until a phrase's render is whole, the same clip's phrases on `was`, the lane this one
+    /// replaces, play over it (RENDER-30b).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn build(
         clips: &[AudioClip],
@@ -638,10 +840,11 @@ impl AudioLane {
         tempo: &TempoMap,
         sample_rate: f64,
         channels: usize,
-        stretch: Option<&Kernel>,
+        makers: Makers,
         tell: &Tell,
+        was: Option<&AudioLane>,
     ) -> Result<Arc<AudioLane>> {
-        AudioLane::make(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, stretch, tell)
+        AudioLane::make(clips, &|a| data.asset_path(a), cache, tempo, sample_rate, channels, makers, tell, was)
     }
 
     /// [`AudioLane::build`] with each asset's path from `asset_path`, its faults reported to
@@ -657,7 +860,24 @@ impl AudioLane {
         stretch: Option<&Kernel>,
     ) -> Result<Arc<AudioLane>> {
         let tell = Tell { report: Reporter::new(cache.faults().clone(), 0), lane: 0 };
-        AudioLane::make(clips, asset_path, cache, tempo, sample_rate, channels, stretch, &tell)
+        AudioLane::make(clips, asset_path, cache, tempo, sample_rate, channels, Makers { stretch, packages: None }, &tell, None)
+    }
+
+    /// [`AudioLane::build_with`] with its clips' renders from `makers`, replacing `was` (tests).
+    #[cfg(test)]
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn build_in(
+        clips: &[AudioClip],
+        asset_path: &dyn Fn(&str) -> Option<std::path::PathBuf>,
+        cache: &mut Cache,
+        tempo: &TempoMap,
+        sample_rate: f64,
+        channels: usize,
+        makers: Makers,
+        was: Option<&AudioLane>,
+    ) -> Result<Arc<AudioLane>> {
+        let tell = Tell { report: Reporter::new(cache.faults().clone(), 0), lane: 0 };
+        AudioLane::make(clips, asset_path, cache, tempo, sample_rate, channels, makers, &tell, was)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -668,14 +888,31 @@ impl AudioLane {
         tempo: &TempoMap,
         sample_rate: f64,
         channels: usize,
-        stretch: Option<&Kernel>,
+        makers: Makers,
         tell: &Tell,
+        was: Option<&AudioLane>,
     ) -> Result<Arc<AudioLane>> {
+        let stretch = makers.stretch;
         let mut found = vec![];
+        let mut phrases = vec![];
         for (i, c) in clips.iter().enumerate() {
             let Some(path) = asset_path(&c.asset) else { continue };
             match cache.wav(&path) {
-                Found::Plays((sha, w)) => found.push((i as u32, c, ClipKey::of(sha, c, tempo, sample_rate, stretch), w)),
+                Found::Plays((sha, w)) => {
+                    let mut key = ClipKey::of(sha, c, tempo, sample_rate, stretch);
+                    // Its edited phrases, when its `render` is a kernel the song has (RENDER-30b).
+                    let kernel = c.render.as_deref().and_then(|id| makers.render(id));
+                    let specs = kernel.as_ref().map(|_| phrases_of(c, tempo, sample_rate)).unwrap_or_default();
+                    let mut made = vec![];
+                    for p in &specs {
+                        let k = kernel.as_ref().expect("a kernel for its phrases");
+                        let (pk, raw) = cache.phrase(&w, sha, c, k, p, sample_rate, (tell, i as u32))?;
+                        key.phrases.push(pk);
+                        made.push((p.from, p.to, raw));
+                    }
+                    phrases.push(made);
+                    found.push((i as u32, c, key, w))
+                }
                 Found::Empty => {}
                 Found::Unreadable => tell.report.faults().report(tell.fault(Code::Unreadable, i as u32)),
                 Found::NotWav => tell.report.faults().report(tell.fault(Code::NotWav, i as u32)),
@@ -691,7 +928,8 @@ impl AudioLane {
             return Ok(l.clone());
         }
         let (mut out, mut warps) = (vec![], vec![]);
-        for (i, c, k, w) in found {
+        let fade = ((FADE * sample_rate).round() as usize).max(1);
+        for ((i, c, k, w), made) in found.into_iter().zip(phrases) {
             let at = (tempo.seconds_at(c.start) * sample_rate).round() as u64;
             let sh = Shape::of(c, w.rate, tempo, sample_rate);
             let src = if c.warp.is_empty() {
@@ -701,7 +939,24 @@ impl AudioLane {
                 warps.push(key);
                 Source::Render(raw, sh)
             };
-            out.push(Clip::new(at, src, stream::clip_len(c, tempo, sample_rate), i));
+            let mut clip = Clip::new(at, src, stream::clip_len(c, tempo, sample_rate), i);
+            clip.normal = k.normal();
+            // Until a phrase's render is whole, the same clip's phrases on the lane this replaces
+            // play over it: each whole one that reaches it, or what played over one that isn't.
+            let old: Vec<&Arc<Phrase>> =
+                was.into_iter().flat_map(|l| &l.clips).filter(|o| o.normal == clip.normal).flat_map(|o| &o.phrases).collect();
+            for (from, to, render) in made {
+                let mut before = vec![];
+                for o in old.iter().filter(|o| o.from < to && o.to > from) {
+                    match o.render.whole() || o.before.is_empty() {
+                        true => before.push(Arc::clone(o)),
+                        false => before.extend(o.before.iter().filter(|b| b.from < to && b.to > from).cloned()),
+                    }
+                }
+                let before = before.into_iter().filter(|b| !Arc::ptr_eq(&b.render, &render)).collect();
+                clip.phrases.push(Arc::new(Phrase { from, to, fade: fade.min((to - from) / 2).max(1), render, before }));
+            }
+            out.push(clip);
         }
         let mut lane = AudioLane::of(out, channels, tempo.clone(), sample_rate, Some(key.clone()), Some(tell.clone()));
         lane.warps = warps;
