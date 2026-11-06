@@ -576,13 +576,19 @@ elif [ $OS = linux ]; then
   # Xvfb picks a free display itself and writes its number to fd 9.
   Xvfb -displayfd 9 -screen 0 1600x1000x24 -nolisten tcp 9> "$SCR/display" > "$OUT/xvfb.log" 2>&1 &
   XVFB=$!
+  # Wait for Xvfb to say its display, or to end: a busy machine can take more than 10 s to start it
+  # (the nightly of 2026-11-06 gave up at 10 s with Xvfb still starting). 120 s only catches a hang.
   t=0
-  while [ $t -lt 100 ] && [ ! -s "$SCR/display" ]; do sleep 0.1; t=$((t + 1)); done
+  while [ $t -lt 1200 ] && [ ! -s "$SCR/display" ] && kill -0 "$XVFB" 2> /dev/null; do sleep 0.1; t=$((t + 1)); done
   DISPLAYN=$(tr -dc 0-9 < "$SCR/display")
   ok=0
   if [ -z "$DISPLAYN" ]; then
     ok=1
-    echo "app: Xvfb didn't start: see xvfb.log" >> "$OUT/failed"
+    if kill -0 "$XVFB" 2> /dev/null; then
+      echo "app: Xvfb started no display in 120 s: see xvfb.log" >> "$OUT/failed"
+    else
+      echo "app: Xvfb ended without starting a display: see xvfb.log" >> "$OUT/failed"
+    fi
   elif [ ! -x "$TARGET/debug/music2-desktop" ]; then
     ok=1
     echo "app: no $TARGET/debug/music2-desktop (the build failed)" >> "$OUT/failed"
