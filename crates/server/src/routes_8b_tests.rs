@@ -730,3 +730,20 @@ fn a_pictures_shapes_go_to_the_window_that_asked_as_a_knob_moves() {
     assert!(!w2.kinds(10).iter().any(|t| t == "pictures"), "nothing for a window that didn't ask");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// CARD-68 (the follow-up to review G6): every socket the server accepts writes at once
+// (TCP_NODELAY). Without it a window's `pictures` message, written just after its `meters` one,
+// waited for the reader's delayed ACK: 23 ms at the median on one move in five, measured from Node.
+#[test]
+fn every_socket_the_server_accepts_writes_at_once() {
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    rt.block_on(async {
+        use axum::serve::Listener;
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let at = l.local_addr().unwrap();
+        let mut l = crate::listening(l);
+        let client = tokio::net::TcpStream::connect(at);
+        let (accepted, _) = tokio::join!(l.accept(), client);
+        assert!(accepted.0.nodelay().unwrap(), "TCP_NODELAY");
+    });
+}

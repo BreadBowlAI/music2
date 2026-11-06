@@ -367,7 +367,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     std::thread::Builder::new().name("music2-http".into()).spawn(move || {
         let rt = tokio::runtime::Runtime::new().expect("tokio runtime");
         rt.block_on(async move {
-            let listener = tokio::net::TcpListener::from_std(listener).expect("listener");
+            let listener = listening(tokio::net::TcpListener::from_std(listener).expect("listener"));
             if let Err(e) = axum::serve(listener, app).await {
                 eprintln!("music2: server stopped: {e}");
             }
@@ -440,6 +440,15 @@ fn spawn_graph_watch(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the server's notices");
+}
+
+/// What the server accepts its connections from: each socket writing at once (TCP_NODELAY), so a
+/// window's small messages one after another (its meters, then its pictures) never wait for the
+/// reader's delayed ACK, which held a picture about 23 ms behind a meters message (CARD-68).
+pub(crate) fn listening(l: tokio::net::TcpListener) -> impl axum::serve::Listener<Io = tokio::net::TcpStream, Addr = SocketAddr> {
+    axum::serve::ListenerExt::tap_io(l, |s: &mut tokio::net::TcpStream| {
+        let _ = s.set_nodelay(true);
+    })
 }
 
 /// The meters as the sockets get them (TAP-4, TAP-8, TAP-12): what every listener gets, and each

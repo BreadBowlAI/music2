@@ -98,7 +98,22 @@ export async function pictures() {
     };
     const both = (xs: number[]) => ({ median_ms: q(xs, 0.5), p99_ms: q(xs, 0.99), max_ms: q(xs, 1) });
     const frames = (xs: number[]) => Math.ceil(q(xs, 0.99) / (1000 / 60));
-    say(JSON.stringify({ n: took.length, lost, heard: both(heard), on_screen: both(took), frames_p99: frames(took), since_last_ms: both(since), meters_while: both(meters), agent: navigator.userAgent }));
+    // The samples a meters message came in while they waited, apart from the rest: is it the cause?
+    const split = (xs: number[], on: boolean) => xs.filter((_, i) => (meters[i] > 0) === on);
+    const quiet = split(heard, false), noisy = split(heard, true);
+    say(
+      JSON.stringify({
+        n: took.length,
+        lost,
+        heard: both(heard),
+        on_screen: both(took),
+        frames_p99: frames(took),
+        since_last_ms: both(since),
+        heard_no_meters: quiet.length ? { n: quiet.length, ...both(quiet) } : null,
+        heard_with_meters: noisy.length ? { n: noisy.length, ...both(noisy) } : null,
+        agent: navigator.userAgent,
+      }),
+    );
   } catch (e) {
     say(JSON.stringify({ error: String(e) }));
   }
