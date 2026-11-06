@@ -59,6 +59,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | a setting's label (new in 2.1) | `"2.1"`, as `@m2/synths` and `@m2/wavetable` do | a music2 with 2.0 then says in words that your pack needs 2.1. Asked for as `"2"`, it would try your pack and stop in its code |
 | the song's key, `time.key` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than play it without the key |
 | a card's face, `editor.face` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than stop at a field it doesn't know |
+| a picture, `view.picture` (new in 2.4) | `"2.4"` | the same: an older music2 says in words that your pack needs 2.4 |
 
 ### music2's promise to your pack
 
@@ -214,6 +215,90 @@ A value the instrument doesn't have (`drum: "kik"`, a knob it hasn't got, `hz(2)
 **Optional inputs.** An input a call may leave out is `.optional()` (any kind of port), and a call gives it by its place, after the inputs a call must give: `drums.drum(notes, hats.hits, { drum: "open hat" })`; left out, the body gets `undefined`. An instrument may have such inputs after its notes and is still listed. One that only listens, `port.notes({ sidechain: true, label: "Cut by" })`, gets a row on its card that picks a track, called by its label ("Listens to" without one). In a kit, a track gives an optional notes input another track's hits by that track's name, an earlier one in the kit: `{ name: "Open hat", drum: "open hat", cutBy: "Hats" }`. Adding the kit writes the import and the export that takes ([Cut by](sounds.md#cut-by)). Ask for `"@m2/core" = "2.3"`.
 
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
+
+## Pictures
+
+**In short:** a picture is TypeScript that turns your card's values into shapes. music2 draws the shapes in its own style, and does every drag, write and undo. Your code never writes anything.
+
+A picture is a view (above) with its own code: `view.picture({ x, y, live, draw, words })`.
+
+| Field | What it is |
+|---|---|
+| `x`, `y` | The axes: `axis.log("hz", 20, 20000)` (a log scale starts above 0), `axis.lin("db", -24, 24)`, `axis.time(2)` (0 to 2 seconds). music2 draws the grid and its labels. |
+| `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`, or `null` where a cable or the code works it out. `p` makes the shapes. |
+| `words` | Required: a function of `v` that says the picture in one sentence (1 to 400 characters). `m2 graph`, agents and screen readers read it. |
+| `live` | Optional: layers that move with the sound (below). |
+
+The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1, …]`.
+
+| Word | Draws |
+|---|---|
+| `p.line(points, { tone, name })` | a line; `name` lets a live layer ride it |
+| `p.fill(points, { base, tone })` | a filled shape, closed or down to `base` |
+| `p.bars(points, { base, tone })` | a bar at each point, from `base` (0) |
+| `p.handle(x, y, moves)` | a dot the musician drags |
+| `p.mark("x", at, words)` | a thin guide line (a threshold) |
+| `p.label(x, y, words)` | a few words, 40 characters at most |
+| `p.play([x0, y0, x1, y1], { note })` | a place that plays a note when clicked (audition must be on) |
+| `p.part(name, () => shapes)` | shapes made again only when a value they read changes: for a big picture |
+
+A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a colour.
+
+**A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
+
+```ts
+import { axis, component, control, live, port, view } from "@m2/core";
+import { lowpass } from "std/filter";
+
+const BANDS = [1, 2] as const;
+const bell = (f: number, freq: number, gain: number, q: number) => gain / (1 + (Math.log2(f / freq) * q * 2) ** 2);
+
+export const curve = component(
+  {
+    id: "curve",
+    label: "Curve EQ",
+    inputs: { x: port.audio() },
+    controls: {
+      freq1: control.hz(200).range(20, 20000).log(), gain1: control.db(0).range(-24, 24), q1: control.scalar(1), on1: control.bool(true),
+      freq2: control.hz(2000).range(20, 20000).log(), gain2: control.db(0).range(-24, 24), q2: control.scalar(1), on2: control.bool(true),
+    },
+    output: port.audio(),
+    editor: {
+      category: "EQ",
+      views: {
+        curve: view.picture({
+          x: axis.log("hz", 20, 20000),
+          y: axis.lin("db", -24, 24),
+          live: [live.spectrum("out", { tone: "faint" })],
+          draw: (v, p) => {
+            const points: number[] = [];
+            for (let i = 0; i < 180; i++) {
+              const f = 20 * 1000 ** (i / 179);
+              let db = 0;
+              for (const b of BANDS) if (v[`on${b}`]) db += bell(f, v[`freq${b}`], v[`gain${b}`], v[`q${b}`]);
+              points.push(f, db);
+            }
+            return [
+              p.line(points),
+              ...BANDS.map((b) => p.handle(v[`freq${b}`], v[`gain${b}`], { x: `freq${b}`, y: `gain${b}`, wheel: `q${b}`, toggles: `on${b}`, opens: `Band ${b}`, mark: `${b}` })),
+            ];
+          },
+          words: (v) => BANDS.map((b) => `Band ${b}: ${v[`gain${b}`]} dB at ${v[`freq${b}`]} Hz`).join("; "),
+        }),
+      },
+      groups: { "Band 1": ["on1", "freq1", "gain1", "q1"], "Band 2": ["on2", "freq2", "gain2", "q2"] },
+      face: ["curve"],
+    },
+  },
+  (x, { freq2, q2 }) => lowpass(x, { cutoff: freq2, q: q2 }),
+);
+```
+
+**Live layers** move with the sound while the card shows: `live.spectrum("in")` or `("out")` (its frequencies, at the call's input or output), `live.level("in", { on: "curve" })` (a dot at the level, riding the line named `curve`), `live.meter("reduction")` (a meter your kernel gives), `live.history(live.meter("reduction"))` (its last seconds), `live.playhead("beat")` (the song's beat in the bar) and `live.scope("out")` (the wave).
+
+**What is checked.** As you type, a dot's names must be the sound's controls, of the right kind: a red line under the picture says which one isn't. A name you work out (`` `freq${b}` ``) is checked as it can be, and again each time the picture draws. Anything wrong (a name the sound doesn't have, a point that isn't a number, an odd count of numbers, more than 20,000 numbers, words over one line) greys the picture with words that say why ("Curve EQ's picture names freq9, which this sound doesn't have."). So does a draw that takes over 20 ms: keep it well under 8 ms. The knobs still work.
+
+**Where it runs.** On music2's server, in the same sandbox as your pack's code at build time: no `Date`, no `Math.random`, no `eval`. `v` can't be changed. What your module keeps between draws may be lost. A picture needs `@m2/core` 2.4.
 
 ## Kernels of its own
 
