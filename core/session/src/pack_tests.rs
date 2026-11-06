@@ -138,10 +138,10 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
     for (asks, said) in [
         (
             "1",
-            "is made for @m2/core 1, and this app has @m2/core 2.3.0, whose changes may break it. Get a version of it made for \
+            "is made for @m2/core 1, and this app has @m2/core 2.4.0, whose changes may break it. Get a version of it made for \
              @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
         ),
-        ("3", "is made for @m2/core 3, newer than this app's 2.3.0. Update music2 to use it"),
+        ("3", "is made for @m2/core 3, newer than this app's 2.4.0. Update music2 to use it"),
     ] {
         let root = scratch(&format!("core-{asks}"));
         copy(&fixtures(), &root);

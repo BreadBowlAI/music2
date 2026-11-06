@@ -368,6 +368,36 @@ fn groups_are_checked_against_their_descriptor() {
     }
 }
 
+// CARD-40: a face names this descriptor's own values and views, each once, two views and six
+// values at most; it may name what a group names too. The descriptor carries it in order, and
+// leaves it out when there is none, so every other descriptor keeps its bytes.
+#[test]
+fn a_face_is_checked_against_its_descriptor() {
+    let editor = "{ views: { lp: view.filter(\"f\", \"q\"), amp: view.envelope(\"a\", \"d\", \"s\", \"r\") }, groups: { Filter: [\"lp\", \"f\", \"q\"] }, face: [\"lp\", \"f\", \"a\", \"n\"] }";
+    let b = declared(ADSR, "n: setting.int(1)", editor).unwrap_or_else(|e| panic!("{e:?}"));
+    let d = b.components.iter().find(|d| d.id == "c").unwrap();
+    assert_eq!(d.editor.face, ["lp", "f", "a", "n"]);
+    let plain = declared(ADSR, "", "{}").unwrap_or_else(|e| panic!("{e:?}"));
+    let json = serde_json::to_value(&plain.components.iter().find(|d| d.id == "c").unwrap().editor).unwrap();
+    assert!(json.get("face").is_none(), "no face, no field: {json}");
+    let views = "views: { lp: view.filter(\"f\", \"q\"), amp: view.envelope(\"a\", \"d\", \"s\", \"r\"), sc: view.scope() }";
+    for (editor, says) in [
+        ("{ face: [\"a\", \"zz\"] }".to_string(), "editor.face names \"zz\", which isn't a value or a view of this sound"),
+        ("{ face: [\"a\", \"a\"] }".into(), "editor.face names \"a\" twice: each value or view goes on the face once"),
+        ("{ face: \"a\" }".into(), "editor.face must be a list of this sound's values and views"),
+        (
+            format!("{{ {views}, face: [\"lp\", \"amp\", \"sc\"] }}"),
+            "editor.face names 3 views (lp, amp, sc): a face has two pictures at most",
+        ),
+        (
+            "{ face: [\"a\", \"d\", \"s\", \"r\", \"f\", \"q\", \"shape\"] }".into(),
+            "editor.face names 7 values (a, d, s, r, f, q, shape): a face has six at most",
+        ),
+    ] {
+        declaration_refused(ADSR, "n: setting.int(1)", &editor, says);
+    }
+}
+
 // CARD-16, CARD-17, PKG-11: the catalog editors read (`Session::catalog`, from `describe`) carries a
 // package's views and groups as the build does.
 #[test]
