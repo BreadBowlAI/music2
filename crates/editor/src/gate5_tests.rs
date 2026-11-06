@@ -396,7 +396,9 @@ fn planned_call_forms_are_current() {
         crate::plugins::track_call_text("clap:m2.probe", "m2-probe", "m2 probe")
     ));
     // An audio track (studio lane A's Q8).
-    forms.push(format!("    // an audio track added\n    {},\n", crate::tracks::audio_call_text("audio", "Audio")));
+    forms.push(format!("    // an audio track added\n    {},\n", crate::tracks::audio_call_text("audio", "Audio", false)));
+    // A mono track's bounce, on a mono lane (RENDER-40).
+    forms.push(format!("    // a mono track bounced\n    {},\n", crate::tracks::audio_call_text("keys-audio", "Keys audio", true)));
     // A bus of each kind the Add bus menu makes (RENDER-34).
     for kind in crate::bus::BusKind::ALL {
         let name = crate::bus::bus_import(kind);

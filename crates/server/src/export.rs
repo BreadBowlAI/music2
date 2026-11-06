@@ -50,6 +50,8 @@ pub struct Exports {
     song: Mutex<Option<String>>,
     /// How the last export that borrowed live instances went.
     borrowed: Mutex<Option<Borrowing>>,
+    /// The job in the slot is a bounce (RENDER-40), which its Stop may stop.
+    pub(crate) bouncing: AtomicBool,
 }
 
 /// How an export that borrowed the live plugin instances went, its times on the player's clock

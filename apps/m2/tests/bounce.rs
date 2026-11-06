@@ -1,5 +1,8 @@
 //! `m2 bounce --track` after its root moved into `m2_editor::render::rooted` (studio C3): it still
-//! writes the track's own output, and that file is a stem's, byte for byte.
+//! writes the track's own output, and that file is a stem's, byte for byte. And Bounce to audio
+//! (RENDER-40): the app's, and `m2 bounce --in-place`, write those same bytes.
+
+mod app;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,4 +61,34 @@ fn bounce_of_a_track_still_writes_its_file() {
         .write_float(&stem, |_| {})
         .unwrap();
     assert!(std::fs::read(&stem).unwrap() == std::fs::read(&bounced).unwrap(), "the stem and the bounce differ");
+}
+
+// RENDER-40: the app's Bounce to audio writes `m2 bounce --track`'s bytes. `m2 bounce --in-place`
+// with the app open is the app's own (one undo step of the agent's, Keys muted in the song, Keys
+// audio added); with the app closed `m2` does the same itself, the same bytes again.
+#[test]
+fn the_apps_bounce_is_m2_bounces_bits() {
+    let a = app::App::open("first-song", |_| {});
+    let temp = app::Temp::new("bounce-bits");
+    let closed = temp.0.join("first-song");
+    app::copy(&app::example("first-song"), &closed);
+    let shut = closed.to_str().unwrap();
+    let ok = |o: std::process::Output| {
+        assert!(o.status.success(), "{}", app::said(&o));
+        app::said(&o)
+    };
+    ok(a.m2(&["bounce", shut, "keys-bounce", "--track", "keys"]));
+    let plain = std::fs::read(closed.join("assets/keys-bounce.wav")).unwrap();
+
+    let out = ok(a.m2(&["bounce", a.dir(), "keys-bounce", "--track", "keys", "--in-place", "--as", "Claude"]));
+    assert!(out.contains("in the open app: one undo step"), "{out}");
+    assert!(std::fs::read(a.song.join("assets/keys-bounce.wav")).unwrap() == plain, "the app's bounce is m2 bounce's bytes");
+    assert!(a.read("tracks/keys.ts").contains("muted: true") && a.read("song.ts").contains("keys-audio"), "{}", a.read("song.ts"));
+    assert_eq!((&a.top()["by"], &a.top()["name"]), (&serde_json::json!("Claude"), &serde_json::json!("bouncing Keys")), "{}", a.top());
+
+    let out = ok(a.m2(&["bounce", shut, "keys-again", "--track", "keys", "--in-place"]));
+    assert!(out.contains("Keys audio"), "{out}");
+    assert!(std::fs::read(closed.join("assets/keys-again.wav")).unwrap() == plain, "and m2's own, the app closed");
+    let text = std::fs::read_to_string(closed.join("song.ts")).unwrap();
+    assert!(text.contains("keys-audio") && std::fs::read_to_string(closed.join("tracks/keys.ts")).unwrap().contains("muted: true"));
 }

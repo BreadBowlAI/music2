@@ -514,7 +514,7 @@ fn the_planner_lets_only_the_drum_machine_go() {
         plan.becomes.edits.push((at, at + find.len() as u32, put.to_string()));
         plan.becomes.edits.sort_by_key(|e| (e.0, e.1));
         let before = tree(&f);
-        let err = tracks::add_tracks_as(&mut s, &plan.tracks, Some("beat"), None, Some(&plan.becomes)).unwrap_err().to_string();
+        let err = tracks::add_tracks_as(&mut s, &plan.tracks, Some("beat"), None, Some(&plan.becomes), &[]).unwrap_err().to_string();
         assert!(err.contains(why), "{find}: {err}");
         assert!(tree(&f) == before, "nothing written");
     }

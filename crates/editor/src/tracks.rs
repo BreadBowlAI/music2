@@ -184,6 +184,43 @@ pub(crate) fn prop_key(key: &str) -> String {
     if identifier(key) { key.to_string() } else { quoted(key) }
 }
 
+/// The channel entry of a new track keyed `key`, its file imported as `binding`, that copies track
+/// `like`'s channel in `mixer` (Bounce to audio, RENDER-40): that property keyed anew, its value
+/// as written with each read of `like.out` (`keys.out`, the binding the song gives it) reading
+/// `binding.out` instead. And the key of the channel copied. Refused in words when `like` hasn't
+/// a channel of its own that reads its `out` by name, and only that.
+pub(crate) fn copied_channel(text: &str, mixer: &Mixer, like: &str, key: &str, binding: &str) -> Result<(String, String), EditError> {
+    let no = |why: &str| EditError::Rejected(format!("{like}'s mixer channel can't be copied: {why}"));
+    let c = mixer.channel_of(like).ok_or_else(|| no("it isn't in one channel"))?;
+    if c.tracks.len() != 1 {
+        return Err(no("other tracks go into it too"));
+    }
+    let mut reads: Vec<&mix::ExportRead> = c.reads.iter().filter(|r| r.module == like && !r.sidechain).collect();
+    reads.sort_by_key(|r| r.at);
+    if reads.is_empty() || reads.iter().any(|r| r.export != "out") {
+        return Err(no("it doesn't read its out by name"));
+    }
+    let (start, end) = (c.property.value.0 as usize, c.property.value.1 as usize);
+    let mut value = String::new();
+    let mut at = start;
+    for r in reads {
+        let from = r.at as usize;
+        // `<binding>.out`, as written there.
+        let name =
+            text[from..].chars().take_while(|ch| ch.is_alphanumeric() || *ch == '_' || *ch == '$').map(char::len_utf8).sum::<usize>();
+        let read = from + name + ".out".len();
+        if from < at || read > end || name == 0 || &text[from + name..read] != ".out" {
+            return Err(no("it doesn't read its out by name"));
+        }
+        value.push_str(&text[at..from]);
+        value.push_str(binding);
+        value.push_str(".out");
+        at = read;
+    }
+    value.push_str(&text[at..end]);
+    Ok((format!("{}: {value}", prop_key(key)), c.key.clone()))
+}
+
 /// The edits that make `entry` (`pluck: pluck.out`) the last property of the mixer's object,
 /// in the object's style: on a line of its own at the properties' indentation when they are on
 /// lines, with a trailing comma when they have one; inline otherwise. In an object that holds only
@@ -403,13 +440,13 @@ pub(crate) fn adds_one(checked: &Checked, key: &str, channel: &str) -> Result<()
 /// nothing of the song removed but an empty mixer's stand-in, no value changed, and each new track
 /// in its own channel.
 fn adds(checked: &Checked, made: &[(String, String)]) -> Result<(), EditError> {
-    adds_beside(checked, made, None)
+    adds_beside(checked, made, None, &[])
 }
 
 /// [`adds`], where a track becoming a bus (KIT-22), `beside`, gives up the call it played and its
 /// lanes: the nodes made under that call's frame, and those lanes', may go or change; nothing else
 /// of it.
-fn adds_beside(checked: &Checked, made: &[(String, String)], beside: Option<&Becomes>) -> Result<(), EditError> {
+fn adds_beside(checked: &Checked, made: &[(String, String)], beside: Option<&Becomes>, muted: &[ModuleChange]) -> Result<(), EditError> {
     let d = &checked.delta;
     let theirs = |name: &Vec<String>| {
         beside.is_some_and(|b| {
@@ -422,6 +459,7 @@ fn adds_beside(checked: &Checked, made: &[(String, String)], beside: Option<&Bec
     let refused = |why: &str| EditError::Rejected(format!("adding the track would {why}"));
     let mut want =
         made.iter().map(|(k, _)| Key::new(k).map(ModuleChange::Added).map_err(EditError::Rejected)).collect::<Result<Vec<_>, _>>()?;
+    want.extend(muted.iter().cloned());
     let mut got = d.modules.clone();
     want.sort_by_key(|m| format!("{m:?}"));
     got.sort_by_key(|m| format!("{m:?}"));
@@ -479,6 +517,13 @@ pub struct NewTrack {
     /// Lanes of its own beside the one it plays, each its key and its file's text (a knob's lane,
     /// KIT-23).
     pub lanes: Vec<(String, String)>,
+    /// Its channel a copy of track `like`'s, reading it where that one reads `like.out` (Bounce to
+    /// audio, RENDER-40): the same fader, pan, effects, bus and sends; right after that channel.
+    /// Its own `db` and `to` aren't given then.
+    pub like: Option<String>,
+    /// An audio track's lane is mono (`lane.audio("clips", 1)`): the bounce of a track whose sound
+    /// is, which its channel's pan then places as it placed the track's (RENDER-40).
+    pub mono: bool,
 }
 
 /// A track that becomes a bus in the same Tx as the tracks added to go to it (Make it a kit,
@@ -514,10 +559,12 @@ pub enum Goes {
 /// The lane an audio track plays its clips from.
 pub const AUDIO_LANE: &str = "clips";
 
-/// The `track(…)` call a new audio track's file makes (lane A's Q8): also checked as a call form.
-pub(crate) fn audio_call_text(key: &str, label: &str) -> String {
+/// The `track(…)` call a new audio track's file makes (lane A's Q8), its lane mono
+/// (`lane.audio("clips", 1)`) when `mono` says so (RENDER-40): also checked as a call form.
+pub(crate) fn audio_call_text(key: &str, label: &str, mono: bool) -> String {
     let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
-    format!("track({}{options}, ({{ lane }}) => lane.audio({}))", quoted(key), quoted(AUDIO_LANE))
+    let channels = if mono { ", 1" } else { "" };
+    format!("track({}{options}, ({{ lane }}) => lane.audio({}{channels}))", quoted(key), quoted(AUDIO_LANE))
 }
 
 /// Add a track playing instrument `component` (a ComponentId, or an installed plugin's
@@ -540,19 +587,23 @@ pub fn add(s: &mut Session, component: &str, label: Option<&str>, key: Option<&s
 /// asserts that exactly those modules are added, each in a channel of its own, the buses buses,
 /// and each new channel going where it says, no other channel's routing changed.
 pub fn add_tracks(s: &mut Session, tracks: &[NewTrack], after: Option<&str>, arrangement: Option<String>) -> Result<Vec<Made>, EditError> {
-    add_tracks_as(s, tracks, after, arrangement, None)
+    add_tracks_as(s, tracks, after, arrangement, None, &[])
 }
 
 /// [`add_tracks`], with a track that becomes a bus in the same Tx, which the new tracks may go to
-/// (Make it a kit, KIT-22): its nodes may change, and the planner asserts it a bus.
+/// (Make it a kit, KIT-22): its nodes may change, and the planner asserts it a bus. And with the
+/// tracks `muting` muted in the song in the same Tx (Bounce to audio, RENDER-40), which the planner
+/// asserts muted. A Tx doesn't do both.
 pub(crate) fn add_tracks_as(
     s: &mut Session,
     tracks: &[NewTrack],
     after: Option<&str>,
     arrangement: Option<String>,
     becomes: Option<&Becomes>,
+    muting: &[String],
 ) -> Result<Vec<Made>, EditError> {
     ready(s)?;
+    debug_assert!(becomes.is_none() || muting.is_empty(), "a Tx that makes a bus mutes nothing");
     if tracks.is_empty() {
         return Err(EditError::Rejected("No track to add.".into()));
     }
@@ -593,8 +644,11 @@ pub(crate) fn add_tracks_as(
     let mut writes = vec![];
     let mut lanes = vec![];
     let mut ranges: BTreeMap<TxPath, Declared> = BTreeMap::new();
-    // Where each new channel goes: a new bus, by its key, or the master.
-    let mut routed: Vec<(String, Option<String>)> = vec![];
+    // Where each new channel goes: a new bus, by its key, or the master; and a copied channel's
+    // sends.
+    let mut routed: Vec<(String, crate::bus::Route)> = vec![];
+    // The channel the first copied one copies, which the new channels go after.
+    let mut copied: Option<String> = None;
     for (n, t) in tracks.iter().enumerate() {
         let (inst, plugin) = match &t.play {
             Play::Instrument(c) => (Some(catalog.iter().find(|i| i.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?), None),
@@ -654,15 +708,26 @@ pub(crate) fn add_tracks_as(
             Some(Goes::Bus(c)) => return Err(EditError::Rejected(format!("The mixer has no bus channel {c}, so no track can go to it."))),
             None => None,
         };
-        // Its fader, when given, as a channel's `db` (a kit's bus's, KIT-4), before where it goes.
-        let mut fields: Vec<String> =
-            t.db.iter().map(|v| format!("db: {}", crate::effect::insert_text(v, &rev.compiled.units).0)).collect();
-        fields.extend(to.as_ref().map(|b| format!("to: {}", quoted(b))));
-        entries.push(match fields.is_empty() {
-            true => format!("{}: {binding}.out", prop_key(&key)),
-            false => format!("{}: {{ in: {binding}.out, {} }}", prop_key(&key), fields.join(", ")),
-        });
-        routed.push((key.clone(), to));
+        match &t.like {
+            // A copy of another track's channel, reading this one there (RENDER-40).
+            Some(like) => {
+                let (entry, channel) = copied_channel(&song_text, &mixer, like, &key, &binding)?;
+                entries.push(entry);
+                routed.push((key.clone(), before.get(&channel).cloned().unwrap_or_default()));
+                copied.get_or_insert(channel);
+            }
+            None => {
+                // Its fader, when given, as a channel's `db` (a kit's bus's, KIT-4), before where it goes.
+                let mut fields: Vec<String> =
+                    t.db.iter().map(|v| format!("db: {}", crate::effect::insert_text(v, &rev.compiled.units).0)).collect();
+                fields.extend(to.as_ref().map(|b| format!("to: {}", quoted(b))));
+                entries.push(match fields.is_empty() {
+                    true => format!("{}: {binding}.out", prop_key(&key)),
+                    false => format!("{}: {{ in: {binding}.out, {} }}", prop_key(&key), fields.join(", ")),
+                });
+                routed.push((key.clone(), crate::bus::Route { to, sends: vec![] }));
+            }
+        }
         // Beside the import of the bus it goes to, when that is a track becoming one (KIT-22).
         let line = format!("import {binding} from {};", quoted(&specifier(&mixer.file, &file)));
         match becomes.and_then(|b| crate::sites::import_end(&song_text, &mixer.file, &b.file)) {
@@ -682,7 +747,9 @@ pub(crate) fn add_tracks_as(
                 let d = &s.catalog().components[kind.body().0];
                 crate::bus::bus_text(kind, &buses[kind.body().0], &key, &label, &values_text(d, &t.values, &t.code, &rev.compiled.units)?)
             }
-            (None, None, None) => format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label)),
+            (None, None, None) => {
+                format!("import {{ track }} from \"@m2/core\";\n\nexport default {};\n", audio_call_text(&key, &label, t.mono))
+            }
         };
         writes.push(Op::Write { file: new_file.clone(), bytes: Payload::Text(text.into()) });
         ranges.insert(new_file, Declared::Whole);
@@ -713,8 +780,14 @@ pub(crate) fn add_tracks_as(
     // The imports in one insertion where they share a place; the channels in one edit, after the
     // channel of the track that becomes their bus.
     let joined = joined_entries(&song_text, &mixer, &entries);
-    let mut edits = channel_edits_after(&song_text, &mixer, &joined, becomes.map(|b| b.channel.as_str()));
+    let mut edits = channel_edits_after(&song_text, &mixer, &joined, becomes.map(|b| b.channel.as_str()).or(copied.as_deref()));
     let mut declared = vec![Range::bytes(mixer.call.0, mixer.call.1)];
+    // The tracks muted in the song with them: their options' edits, the mixer's file's with its own.
+    let crate::mute::Muting { edits: mut mutes, changes: muted, .. } = crate::mute::muting(rev, muting, true)?;
+    if let Some(e) = mutes.remove(&mixer.file) {
+        declared.extend(e.iter().map(|(a, b, _)| Range::bytes(*a, *b)));
+        edits.extend(e);
+    }
     match becomes.filter(|b| b.file == mixer.file) {
         // A track written in the mixer's file becomes the bus there: its edits and every import in
         // the one edit of that file.
@@ -756,6 +829,13 @@ pub(crate) fn add_tracks_as(
     let needs = crate::packs::needs_all(s, &components)?;
     ops.extend(needs.ops);
     ranges.extend(needs.ranges);
+    for (f, e) in mutes {
+        let text = rev.snapshot.files.get(Path::new(&f)).ok_or_else(|| EditError::NotFound(f.clone()))?;
+        let e = sorted(e)?;
+        let file = path(&f)?;
+        ops.push(plan::text_edit(&file, text, &e));
+        ranges.insert(file, Declared::Ranges(e.iter().map(|(a, b, _)| Range::bytes(*a, *b)).collect()));
+    }
     if let Some(b) = becomes {
         // Its own file's edit, when that isn't the mixer's (written with the song's above).
         if b.file != mixer.file {
@@ -779,11 +859,10 @@ pub(crate) fn add_tracks_as(
         }
         None => None,
     };
-    let expect = Expect::Confined(Confined {
-        ranges,
-        lanes: lanes.clone(),
-        modules: keys_made.iter().map(|k| Key::new(k).map(ModuleChange::Added)).collect::<Result<_, _>>().map_err(EditError::Rejected)?,
-    });
+    let mut modules: Vec<ModuleChange> =
+        keys_made.iter().map(|k| Key::new(k).map(ModuleChange::Added)).collect::<Result<_, _>>().map_err(EditError::Rejected)?;
+    modules.extend(muted.iter().cloned());
+    let expect = Expect::Confined(Confined { ranges, lanes: lanes.clone(), modules });
     let layout = layout_write(s, |v| {
         let mut colours = v.colours.clone();
         let mut order = v.order.clone();
@@ -813,12 +892,15 @@ pub(crate) fn add_tracks_as(
         for id in plugins.keys() {
             crate::plugins::installed_in(checked, id)?;
         }
-        adds_beside(checked, &made, becomes)?;
+        adds_beside(checked, &made, becomes, &muted)?;
         let candidate = checked.candidate();
+        if !muting.iter().all(|k| candidate.compiled.flat.muted.contains(k)) {
+            return Err(EditError::Rejected(format!("adding {shown} wouldn't mute what it says")));
+        }
         if bus_keys.iter().any(|k| !candidate.compiled.ir.modules.iter().any(|m| m.key == **k && m.bus)) {
             return Err(EditError::Rejected(format!("adding {shown} would make a bus that isn't one")));
         }
-        routed_as(checked, &before, &routed).map_err(|why| EditError::Rejected(format!("adding {shown} would {why}")))
+        routed_with(checked, &before, &routed).map_err(|why| EditError::Rejected(format!("adding {shown} would {why}")))
     })?;
     let edited = Edited { revision: done.number, file: files[0].clone(), before: String::new(), after: shown };
     Ok(keys_made
@@ -828,13 +910,22 @@ pub(crate) fn add_tracks_as(
         .collect())
 }
 
-/// The routing a builder's candidate must have: each channel that was there as `before`, and each
-/// new one going where `new` says (a bus by its channel's key, or the master), with no sends.
+/// [`routed_with`], each new channel going where `new` says (a bus by its channel's key, or the
+/// master), with no sends.
+#[cfg(test)]
 fn routed_as(checked: &Checked, before: &BTreeMap<String, crate::bus::Route>, new: &[(String, Option<String>)]) -> Result<(), String> {
+    let new: Vec<(String, crate::bus::Route)> =
+        new.iter().map(|(k, to)| (k.clone(), crate::bus::Route { to: to.clone(), sends: vec![] })).collect();
+    routed_with(checked, before, &new)
+}
+
+/// The routing a builder's candidate must have: each channel that was there as `before`, and each
+/// new one as `new` says, where it goes and its sends (a copied channel's, RENDER-40).
+fn routed_with(checked: &Checked, before: &BTreeMap<String, crate::bus::Route>, new: &[(String, crate::bus::Route)]) -> Result<(), String> {
     let Mixing::One(m) = mix::mixer(checked.candidate()) else { return Err("lose the mixer".into()) };
     let mut want = before.clone();
-    for (key, to) in new {
-        want.insert(key.clone(), crate::bus::Route { to: to.clone(), sends: vec![] });
+    for (key, route) in new {
+        want.insert(key.clone(), route.clone());
     }
     let got = crate::bus::routing(checked.candidate(), &m);
     // A channel written bare has no routing entry of its own: as the master, no sends.

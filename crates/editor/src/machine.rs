@@ -133,7 +133,7 @@ pub struct MadeKit {
 pub fn make_kit(s: &mut Session, module: &str) -> Result<MadeKit, EditError> {
     ready(s)?;
     let plan = plan(s.accepted(), module)?;
-    let tracks = tracks::add_tracks_as(s, &plan.tracks, Some(module), None, Some(&plan.becomes))?;
+    let tracks = tracks::add_tracks_as(s, &plan.tracks, Some(module), None, Some(&plan.becomes), &[])?;
     if let Some(first) = tracks.first() {
         s.name_step(first.edited.revision, &plan.becomes.shown, true);
     }
