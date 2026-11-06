@@ -1034,18 +1034,25 @@ function optionsProblem(options: unknown): string | undefined {
 }
 
 /** What a port declaration holds. */
-type PortSpec = { kind: "audio" | "control" | "notes" | "any"; unit?: Unit; sidechain: boolean; many: boolean };
+type PortSpec = { kind: "audio" | "control" | "notes" | "any"; unit?: Unit; sidechain: boolean; many: boolean; optional?: boolean };
 
 /** An input or the output: `S` is the signal it carries, `M` whether it takes any number of signals. */
-export class PortDecl<S = unknown, M extends boolean = false> {
-  declare readonly [PHANTOM]?: [S, M];
+export class PortDecl<S = unknown, M extends boolean = false, O extends boolean = false> {
+  declare readonly [PHANTOM]?: [S, M, O];
   /** @internal */
   constructor(spec: PortSpec) {
     specs.set(this, spec);
   }
   /** Any number of signals (`sum(a, b, c)`): the last input of a call only. The body gets them as an array. */
-  many(): PortDecl<S, true> {
-    return new PortDecl<S, true>({ ...specOf<PortSpec>(this), many: true });
+  many(): PortDecl<S, true, O> {
+    return new PortDecl<S, true, O>({ ...specOf<PortSpec>(this), many: true });
+  }
+  /**
+   * A call may leave it out (PKG-18): it is given by its name in the options object, never by its
+   * place (`drums.drum(notes, { cutBy: hats.hits })`), and the body gets `undefined` when it is left out.
+   */
+  optional(): PortDecl<S, M, true> {
+    return new PortDecl<S, M, true>({ ...specOf<PortSpec>(this), optional: true });
   }
 }
 
@@ -1120,7 +1127,7 @@ export const setting = {
   },
 };
 
-type EntryDecl = Record<string, PortDecl<any, false> | ControlDecl<any> | EachDecl<any> | SettingDecl<any, boolean>>;
+type EntryDecl = Record<string, PortDecl<any, false, false> | ControlDecl<any> | EachDecl<any> | SettingDecl<any, boolean>>;
 
 /**
  * A dictionary slot: one entry per key the caller writes, each with these inputs, controls,
@@ -1226,7 +1233,7 @@ export type Descriptor = {
   /** For editors only (see `signature`). */
   signature?: Signature<any>;
   /** The signals a call reads, in call order. Never knobs. */
-  inputs?: Record<string, PortDecl<any, boolean>>;
+  inputs?: Record<string, PortDecl<any, boolean, boolean>>;
   /** Values that may change while the song plays: knobs, or signals connected to them. */
   controls?: Record<string, ControlDecl<boolean> | EachDecl<any>>;
   /** Build-time values: changing one rebuilds. */
@@ -1272,14 +1279,16 @@ export type Params = { readonly [name: string]: any };
 // The call type: derived from the descriptor (and its `signature`), so an editor checks calls
 // against what the component declares, every form an editor writes included.
 
-type Ins<D> = D extends { inputs: infer I extends Record<string, PortDecl<any, boolean>> } ? I : {};
+type Ins<D> = D extends { inputs: infer I extends Record<string, PortDecl<any, boolean, boolean>> } ? I : {};
+/** The inputs a call may leave out, given by name in its options (PKG-18). */
+type OptIns<D> = { [K in keyof Ins<D>]: Ins<D>[K] extends PortDecl<any, any, true> ? K : never }[keyof Ins<D>];
 type Ctls<D> = D extends { controls: infer C extends Record<string, ControlDecl<boolean> | EachDecl<any>> } ? C : {};
 type Sets<D> = D extends { settings: infer S extends Record<string, SettingDecl<any, boolean>> } ? S : {};
 type Pos<D> = D extends { positional: infer P extends readonly string[] } ? P : [];
 
 /** What a call may pass for an input: audio and notes are signals; a control or any input also takes a number. */
-type InArg<P> = P extends PortDecl<infer S, any> ? (S extends Audio | Events ? S : Value) : never;
-type PortKeys<E> = { [K in keyof E]: E[K] extends PortDecl<any, any> ? K : never }[keyof E];
+type InArg<P> = P extends PortDecl<infer S, any, any> ? (S extends Audio | Events ? S : Value) : never;
+type PortKeys<E> = { [K in keyof E]: E[K] extends PortDecl<any, any, any> ? K : never }[keyof E];
 type CtlKeys<E> = { [K in keyof E]: E[K] extends ControlDecl<any> ? K : never }[keyof E];
 type EachKeys<E> = { [K in keyof E]: E[K] extends EachDecl<infer _> ? K : never }[keyof E];
 type SetKeys<E> = { [K in keyof E]: E[K] extends SettingDecl<any, any> ? K : never }[keyof E];
@@ -1323,7 +1332,7 @@ type Req<D, K> = K extends keyof Ins<D>
  * editor's signature help and hover list the options in the order declared (`{ time?: Value;
  * mix?: Value }`) instead of naming this type with the whole descriptor as its argument.
  */
-export type CallOptions<D> = { [K in keyof Ctls<D>]?: ArgOf<D, K> } & { [K in keyof Sets<D>]?: ArgOf<D, K> } & (Bypassable<D> extends true
+export type CallOptions<D> = { [K in keyof Ctls<D>]?: ArgOf<D, K> } & { [K in keyof Sets<D>]?: ArgOf<D, K> } & { [K in OptIns<D>]?: InArg<Ins<D>[K]> } & (Bypassable<D> extends true
   ? { bypass?: boolean }
   : {}) extends infer O
   ? { -readonly [K in keyof O]: O[K] }
@@ -1340,7 +1349,7 @@ type OptionalPositional<D> = OptionalIn<D, Pos<D>>;
  */
 type NeedsOptions<D> = Bypassable<D> extends true
   ? true
-  : [NotPositional<D>] extends [never]
+  : [NotPositional<D> | OptIns<D>] extends [never]
     ? (true extends IsUnion<OptionalPositional<D>> ? true : false)
     : true;
 
@@ -1352,17 +1361,17 @@ type Forms<A extends unknown[], O> = Prefixes<OrUndefined<Required<A>, RequiredK
 
 // Without a signature: the inputs `positional` doesn't name, then the positional slots. Their
 // order can be read from types only when one input leads; a component with more needs a signature.
-type Lead<D> = { [K in keyof Ins<D>]: K extends Pos<D>[number] ? never : K }[keyof Ins<D>];
+type Lead<D> = { [K in keyof Ins<D>]: K extends Pos<D>[number] | OptIns<D> ? never : K }[keyof Ins<D>];
 type LeadTuple<D> = [Lead<D>] extends [never]
   ? []
-  : Ins<D>[Lead<D>] extends PortDecl<any, infer M>
+  : Ins<D>[Lead<D>] extends PortDecl<any, infer M, any>
       ? M extends true ? InArg<Ins<D>[Lead<D>]>[] : [InArg<Ins<D>[Lead<D>]>]
       : [];
 type Positional<D, P extends readonly string[]> = P extends readonly [infer H, ...infer R extends readonly string[]]
   ? Req<D, H> extends true ? [ArgOf<D, H>, ...Positional<D, R>] : [(ArgOf<D, H> | undefined)?, ...Positional<D, R>]
   : [];
 type Derived<D> = [...LeadTuple<D>, ...Positional<D, Pos<D>>];
-type Out<D> = D extends { output: PortDecl<infer S, any> } ? S : Signal;
+type Out<D> = D extends { output: PortDecl<infer S, any, any> } ? S : Signal;
 
 /** A call's first argument: its signature's, else the descriptor's. */
 type FirstArg<D> = D extends { signature: Signature<infer F extends (...args: any[]) => any> }
@@ -1678,6 +1687,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (!(d instanceof PortDecl)) fail(`${where} "${name}" must be declared with port.audio(), port.control(), port.notes() or port.any()`);
     const spec = specOf<PortSpec>(d as object);
     if (spec.unit !== undefined && !UNIT_NAMES.includes(spec.unit)) fail(`${where} "${name}" names no unit "${String(spec.unit)}" (units: ${UNIT_NAMES.join(", ")})`);
+    if (spec.optional && spec.many) fail(`${where} "${name}" is optional, so it can't take many signals: an optional input is given by its name, once (PKG-18)`);
     return { name, spec };
   };
   const ctl = (name: string, d: unknown, where: string): Ctl => {
@@ -1740,6 +1750,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
       if (e instanceof PortDecl) {
         const i = input(k, e, `the entry input of "${path}"`);
         if (i.spec.many) fail(`the entry input "${path}.${k}" can't take many signals`);
+        if (i.spec.optional) fail(`the entry input "${path}.${k}" can't be optional: an entry gives its inputs or leaves the entry out`);
         ins.push(i);
       } else if (e instanceof EachDecl) ctls.push({ ...entryOf(`${path}.${k}`, e), name: k });
       else if (e instanceof SettingDecl) sets.push(setting_(k, e, `the entry setting of "${path}"`));
@@ -1758,12 +1769,14 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   if (desc.output !== undefined && !(desc.output instanceof PortDecl)) fail("its output must be declared with port.audio(), port.control(), …");
   const output = desc.output && input("output", desc.output, "the output").spec;
   if (output?.many) fail("its output is one signal, not many");
+  if (output?.optional) fail("its output is always there, not optional");
 
   // Call order: the inputs `positional` doesn't name, then `positional`.
   const positional = desc.positional ?? [];
   if (!Array.isArray(positional)) fail("positional must be a list of names");
   const kindOf = (n: string): Param => {
     const i = inputs.find((x) => x.name === n);
+    if (i?.spec.optional) fail(`positional names "${n}", an optional input: it is given by its name in the options (PKG-18)`);
     if (i) return { name: n, kind: "input", required: !i.spec.many, many: i.spec.many, each: false };
     const c = controls.find((x) => x.name === n);
     if (c) return { name: n, kind: "control", required: !!c.each || (!c.spec.optional && c.spec.default === undefined), many: false, each: !!c.each };
@@ -1772,8 +1785,10 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     return fail(`positional names "${n}", which isn't an input, a control or a setting`);
   };
   if (new Set(positional).size !== positional.length) fail("positional names a slot twice");
-  const lead = inputs.filter((i) => !positional.includes(i.name));
-  if (lead.length !== inputs.length && lead.length) {
+  // An optional input takes no place in a call: it is given by its name in the options (PKG-18).
+  const inPlace = inputs.filter((i) => !i.spec.optional);
+  const lead = inPlace.filter((i) => !positional.includes(i.name));
+  if (lead.length !== inPlace.length && lead.length) {
     // Then adding an input could move the arguments of calls already written (D16).
     fail(`positional names some inputs but not ${lead.map((i) => `"${i.name}"`).join(", ")}: it names every input or none`);
   }
@@ -1862,7 +1877,9 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
   const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
   if (instrument) {
-    const [first, ...rest] = inputs;
+    // Its other inputs may only be optional ones (PKG-18): it still builds from its notes alone.
+    const [first, ...others] = inputs;
+    const rest = others.filter((i) => !i.spec.optional);
     if (rest.length) fail(`an instrument (editor.category, notes first) has one input, not "${rest[0].name}" too`);
     if (lead[0] !== first) fail("an instrument (editor.category, notes first) takes its notes as its first argument");
     if (output?.kind !== "audio") fail("an instrument (editor.category, notes first) outputs audio");
@@ -1874,9 +1891,10 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
   } else if (editor.category !== undefined) {
     // An effect is added after any audio as `<name>(<audio>, <insert>)`, so that must be a whole call.
-    const [first, ...rest] = inputs;
+    const [first, ...others] = inputs;
     if (!first || first.spec.kind !== "audio" || lead[0] !== first) fail("an effect (editor.category) takes audio as its first argument");
-    if (rest.some((i) => !i.spec.many)) fail(`an effect (editor.category) has one input, not "${rest[0].name}" too`);
+    const rest = others.filter((i) => !i.spec.many && !i.spec.optional);
+    if (rest.length) fail(`an effect (editor.category) has one input, not "${rest[0].name}" too`);
     if (output?.kind !== "audio") fail("an effect (editor.category) outputs audio");
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
@@ -1944,7 +1962,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
   });
 
   const cid = home.package === null ? desc.id : `${home.package}:${desc.id}`;
-  const portJson = (s: PortSpec) => ({ kind: s.kind, unit: s.unit ?? null, sidechain: s.sidechain, many: s.many });
+  const portJson = (s: PortSpec) => ({ kind: s.kind, unit: s.unit ?? null, sidechain: s.sidechain, many: s.many, ...(s.optional ? { optional: true } : {}) });
   // `optional` written only when true, and `label` only when given, so every other descriptor keeps its bytes.
   const setJson = (s: Set_) => ({
     name: s.name,
@@ -2176,7 +2194,8 @@ function parse(
   }
   const inputs = new Map<string, unknown>();
   const given = new Map<string, Given>();
-  const names = () => [...c.controls.map((x) => x.name), ...c.settings.map((x) => x.name)].join(", ") || "none";
+  const optional = c.inputs.filter((x) => x.spec.optional);
+  const names = () => [...c.controls.map((x) => x.name), ...c.settings.map((x) => x.name), ...optional.map((x) => x.name)].join(", ") || "none";
   let bypass = false;
   const options = (o: Record<string, unknown>, at: number) => {
     for (const k of Object.keys(o)) {
@@ -2189,6 +2208,18 @@ function parse(
       }
       if (k === "bypass" && !c.controls.some((x) => x.name === k) && !c.settings.some((x) => x.name === k)) {
         fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio can be (options: ${names()})`);
+      }
+      // An optional input, by its name (PKG-18): left out when `undefined`, as a control is.
+      const opt = optional.find((x) => x.name === k);
+      if (opt) {
+        const signal = o[k];
+        if (signal === undefined) continue;
+        if (opt.spec.kind === "notes" && !(signal instanceof Signal)) {
+          notTrack(c.id, k, signal);
+          fail(c.id, `the input ${k} must be a signal, not ${shown(signal)}`);
+        }
+        inputs.set(k, inputValue(c.id, k, signal));
+        continue;
       }
       const isSlot = c.controls.some((x) => x.name === k) || c.settings.some((x) => x.name === k);
       if (!isSlot) {
@@ -2203,7 +2234,7 @@ function parse(
   };
   // The call type's options are `options?`, so a helper may forward ones it wasn't given
   // (`delay(x, echo)` with `echo` left out): `undefined` where the options go is no options.
-  const hasOptions = c.controls.length + c.settings.length > 0 || c.bypassable;
+  const hasOptions = c.controls.length + c.settings.length + optional.length > 0 || c.bypassable;
   let at: number | undefined;
   let p = 0;
   for (let i = 0; i < args.length; i++) {
@@ -2242,7 +2273,7 @@ function parse(
   }
   for (const i of c.inputs) {
     if (i.spec.many) inputs.set(i.name, inputs.get(i.name) ?? []);
-    else if (!inputs.has(i.name)) fail(c.id, `the input ${i.name} is missing`);
+    else if (!inputs.has(i.name) && !i.spec.optional) fail(c.id, `the input ${i.name} is missing`);
   }
   return { inputs, given, options: at, bypass };
 }

@@ -44,6 +44,10 @@ pub struct PortDesc {
     /// It takes any number of signals: the last input of a call only.
     #[serde(default)]
     pub many: bool,
+    /// A call may leave it out, and gives it by its name in the options (PKG-18). Written only when
+    /// true, so every other descriptor keeps its bytes.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub optional: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

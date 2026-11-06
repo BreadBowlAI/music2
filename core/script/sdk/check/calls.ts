@@ -2,7 +2,7 @@
 // (PKG-1, the step 5 design's D15). A line that should fail carries `@ts-expect-error`, so a
 // type that stops refusing it fails the check too.
 
-import { component, control, each, kernel, port, setting, signature, hz, ms, time, type Audio, type Control, type Ctx, type Params, type Signal, type Value } from "@m2/core";
+import { component, control, each, kernel, port, setting, signature, hz, ms, time, type Audio, type Control, type Ctx, type Events, type Params, type Signal, type Value } from "@m2/core";
 import { osc } from "std/dsp";
 import { mixer } from "std/mix";
 
@@ -185,3 +185,30 @@ mix({ hats: { in: x, gain: 1 } });
 
 // @ts-expect-error a signature listing 2 parameters for a descriptor that has 3
 export const drifted = component({ id: "drifted", signature: signature<(x: Audio, cutoff?: Value) => Audio>(), inputs: { in: port.audio() }, controls: { cutoff: control.hz(1000), q: control.scalar(0.7) }, output: port.audio(), positional: ["cutoff", "q"] }, (y: Audio) => y);
+
+/** An optional input (PKG-18): given by its name in the options, never by its place; left out, `undefined`. */
+export const cut = component(
+  {
+    id: "cut",
+    signature: signature<(notes: Events) => Audio>(),
+    inputs: { notes: port.notes(), cutBy: port.notes().optional() },
+    controls: { tune: control.semis(0).range(-24, 24) },
+    output: port.audio(),
+    editor: { category: "Drums" },
+  },
+  (notes: Events, cutBy: Events | undefined, { tune }: Params): Audio => kernel("test:cut", { notes, tune, ...(cutBy ? { cutBy } : {}) }),
+);
+
+export function cuts(ctx: Ctx, other: Events) {
+  const notes = ctx.lane.notes("hits");
+  cut(notes);
+  cut(notes, { tune: 2 });
+  cut(notes, { cutBy: other });
+  cut(notes, { cutBy: undefined, tune: 1 });
+  // @ts-expect-error an optional input is given by its name, never by its place
+  cut(notes, other);
+  // @ts-expect-error notes cut a drum, not a number
+  cut(notes, { cutBy: 0.5 });
+  // @ts-expect-error notes cut a drum, not audio
+  cut(notes, { cutBy: osc.sine(hz(1)) });
+}
