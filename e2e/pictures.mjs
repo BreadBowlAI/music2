@@ -67,21 +67,6 @@ export const curve = component(
           x: axis.log("hz", 20, 20000),
           y: axis.lin("db", -24, 24),
           live: [live.spectrum("out", { tone: "faint" }), live.playhead("beat")],
-          draw: (v, p) => {
-            const points: number[] = [];
-            for (let i = 0; i < 180; i++) {
-              const f = 20 * 1000 ** (i / 179);
-              let db = 0;
-              for (const b of BANDS) if (v[\`on\${b}\`]) db += bell(f, v[\`freq\${b}\`], v[\`gain\${b}\`], v[\`q\${b}\`]);
-              points.push(f, db);
-            }
-            return [
-              p.mark("y", 0, "0 dB"),
-              p.line(points, { name: "curve" }),
-              ...BANDS.map((b) => p.handle(v[\`freq\${b}\`], v[\`gain\${b}\`], { x: \`freq\${b}\`, y: \`gain\${b}\`, wheel: \`q\${b}\`, toggles: \`on\${b}\`, opens: \`Band \${b}\`, mark: \`\${b}\`, off: !v[\`on\${b}\`] })),
-            ];
-          },
-          words: (v) => BANDS.map((b) => \`Band \${b}: \${v[\`gain\${b}\`]} dB at \${v[\`freq\${b}\`]} Hz\`).join("; "),
         }),
       },
       groups: { "Band 1": ["on1", "freq1", "gain1", "q1"], "Band 2": ["on2", "freq2", "gain2", "q2"] },
@@ -89,6 +74,25 @@ export const curve = component(
     },
   },
   (x, { freq2, q2 }) => lowpass(x, { cutoff: freq2, q: q2 }),
+  {
+    curve: {
+      draw: (v, p) => {
+        const points: number[] = [];
+        for (let i = 0; i < 180; i++) {
+          const f = 20 * 1000 ** (i / 179);
+          let db = 0;
+          for (const b of BANDS) if (v[\`on\${b}\`]) db += bell(f, v[\`freq\${b}\`] ?? 1000, v[\`gain\${b}\`] ?? 0, v[\`q\${b}\`] ?? 1);
+          points.push(f, db);
+        }
+        return [
+          p.mark("y", 0, "0 dB"),
+          p.line(points, { name: "curve" }),
+          ...BANDS.map((b) => p.handle(v[\`freq\${b}\`], v[\`gain\${b}\`], { x: \`freq\${b}\`, y: \`gain\${b}\`, wheel: \`q\${b}\`, toggles: \`on\${b}\`, opens: \`Band \${b}\`, mark: \`\${b}\`, off: !v[\`on\${b}\`] })),
+        ];
+      },
+      words: (v) => BANDS.map((b) => \`Band \${b}: \${v[\`gain\${b}\`]} dB at \${v[\`freq\${b}\`]} Hz\`).join("; "),
+    },
+  },
 );
 `,
 );
@@ -108,7 +112,7 @@ const card = '[data-testid=chain] [data-module="eq"] [data-node="curve"]';
 const pic = `${card} [data-picture="curve"]`;
 check(await until(async () => !!(await page.$(`${pic}[data-drawn] polyline[data-line="curve"]`)), 20000), "Curve EQ's face draws its picture, asked for while it shows (CARD-69)");
 check((await page.$eval(pic, (e) => e.dataset.asking)) === "true", "it asks while it is on screen");
-const words = () => page.$eval(`${pic} [role=img]`, (e) => e.getAttribute("aria-label")).catch(() => null);
+const words = () => page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null);
 check((await words()) === "Band 1: 0 dB at 200 Hz; Band 2: 3 dB at 2000 Hz", `its words are its accessible name: ${await words()}`);
 check((await page.$$(`${pic} [data-dot]`)).length === 2, "a dot for each band");
 await linted(card, "the picture's card");
@@ -145,7 +149,10 @@ check(await until(async () => (await words()) === `Band 1: 0 dB at 200 Hz; Band 
 // An agent reads the same shapes, as numbers, and each dot's knobs (CARD-67).
 const state = (await api("")).body;
 const node = state.view.modules.find((m) => m.key === "eq").nodes.find((n) => n.title === "Curve EQ");
-const asked = await agent("/api/graph/picture", { session: state.session, client: "reader", module: "eq", node: node.id, view: "curve", on: true });
+const asked = await agent("/api/graph/picture", { session: state.session, revision: state.view.revision, client: "reader", module: "eq", node: node.id, view: "curve", on: true });
+// The words are in the view an agent reads first (CARD-63), once the server worked them out.
+const inView = async () => (await api("")).body.view.modules.find((m) => m.key === "eq").nodes.find((n) => n.title === "Curve EQ").views[0].words;
+check(await until(async () => (await inView()) === asked.picture?.words), `and the view has the picture's words: ${await inView()}`);
 const line = asked.picture?.shapes?.find((s) => s.kind === "line");
 check(asked.picture?.words === (await words()), `an agent reads the picture's words: ${asked.picture?.words}`);
 const drawnPoints = (await curvePoints()).split(" ").length;
@@ -178,11 +185,43 @@ await page.keyboard.down("Meta");
 await page.keyboard.press("z");
 await page.keyboard.up("Meta");
 check(await until(async () => read("tracks/eq.ts") === flipped, 8000), "⌘Z turns it back on");
-// The keys: ↑ on a dot moves its y one step (0.1 dB), one write (CARD-70).
+// The keys (CARD-70, review G4): five quick ↑ on a dot step its y five times from where each left
+// it (0.1 dB each), one gesture written once they stop, one undo step.
+const steps0 = read("tracks/eq.ts");
 await page.$eval(`${pic} [data-dot="1"]`, (e) => e.focus());
-await page.keyboard.press("ArrowUp");
-check(await until(async () => /gain2: 3\.1\b/.test(read("tracks/eq.ts")), 8000), `↑ on band 2's dot moves its gain one step: ${/gain2: [^,}]*/.exec(read("tracks/eq.ts"))?.[0]}`);
-check(await until(async () => (await undoTitle()) === "Undo Curve EQ gain2 (⌘Z)"), `one undo step: ${await undoTitle()}`);
+for (let i = 0; i < 5; i++) await page.keyboard.press("ArrowUp");
+check(await until(async () => /gain2: 3\.5\b/.test(read("tracks/eq.ts")), 8000), `five quick ↑ on band 2's dot move its gain five steps, none lost: ${/gain2: [^,}]*/.exec(read("tracks/eq.ts"))?.[0]}`);
+check(await until(async () => (await undoTitle()) === "Undo Curve EQ gain2 (⌘Z)"), `one undo step for the run: ${await undoTitle()}`);
+await page.keyboard.down("Meta");
+await page.keyboard.press("z");
+await page.keyboard.up("Meta");
+check(await until(async () => read("tracks/eq.ts") === steps0, 8000), "⌘Z takes the whole run back");
+// The wheel (review G4, G5): a step every 40 px, as a knob's, never scrolling the chain under it.
+const chainEl = "[data-testid=chain]";
+const scrolled = () => page.$eval(chainEl, (e) => e.scrollTop + e.scrollLeft);
+const s0 = await scrolled();
+const d2 = await box(`${pic} [data-dot="1"]`);
+await page.mouse.move(d2.x + d2.width / 2, d2.y + d2.height / 2);
+for (let i = 0; i < 10; i++) await page.mouse.wheel({ deltaY: -3 });
+await sleep(700);
+check(read("tracks/eq.ts") === steps0, "30 px of wheel, less than a notch, writes nothing");
+await page.mouse.wheel({ deltaY: -100 });
+check(await until(async () => /q2: 1\.03\b/.test(read("tracks/eq.ts")), 8000), `then 100 px more makes 130 px, three notches: q2 three 1% steps, one write: ${/q2: [^,}]*/.exec(read("tracks/eq.ts"))?.[0]}`);
+check((await scrolled()) === s0, `the wheel on a dot scrolls nothing under it: ${s0} then ${await scrolled()}`);
+check(await until(async () => (await undoTitle()) === "Undo Curve EQ q2 (⌘Z)"), `one undo step: ${await undoTitle()}`);
+await page.keyboard.down("Meta");
+await page.keyboard.press("z");
+await page.keyboard.up("Meta");
+await until(async () => read("tracks/eq.ts") === steps0, 8000);
+// Its text is never stretched (CARD-69, review G9): an axis label is as wide Expanded as at Normal.
+const label = () => page.$eval(`${pic} text[data-tick]`, (e) => { const r = e.getBoundingClientRect(); return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10]; });
+const normal = await label();
+await page.click(`${card} [data-size-to="expanded"]`);
+await until(async () => (await page.$eval(`${pic} svg`, (e) => e.dataset.size).catch(() => "")) !== "", 3000);
+await sleep(300);
+const wide = await label();
+check(Math.abs(wide[0] - normal[0]) < 1 && Math.abs(wide[1] - normal[1]) < 1, `an axis label keeps its size, Expanded: ${normal} then ${wide}`);
+await page.click(`${card} [data-size-to="normal"]`);
 await linted(card, "the card after its gestures");
 
 // ---------------------------------------------------------------- live layers (CARD-73)

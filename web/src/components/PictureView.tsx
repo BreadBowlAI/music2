@@ -9,12 +9,13 @@ import clsx from "clsx";
 import { useEffect, useRef, useState } from "react";
 import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
-import { beatNow } from "../lib/clock";
+import { beatNow, playingNow } from "../lib/clock";
 import { useCards } from "../lib/folded";
 import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
-import { barAt, controlLabel, graphApi, inSentence, picks, type CardView, type Knob, type NumberKnob } from "../lib/graph";
+import { barAt, controlLabel, graphApi, inSentence, picks, stepValue, type CardView, type Knob, type NumberKnob } from "../lib/graph";
 import { useStore } from "../lib/store";
 import { useViewDrag, type ViewProps } from "./CardViews";
+import { NOTCH, useKnobGesture } from "./Knob";
 import { words as said } from "./Settings";
 
 type PictureView = Extract<CardView, { kind: "picture" }>;
@@ -54,8 +55,6 @@ interface PicturesIn {
 
 /** How often a picture asks again: the server keeps an ask 10 s (CARD-67). */
 const ASK_MS = 4000;
-/** The drawing's size, in its own units; the card stretches it across. */
-const W = 400;
 /** How tall a picture is on its card. */
 export const PICTURE_H = 132;
 /** Room at the foot for the x axis's labels. */
@@ -105,30 +104,37 @@ function rounded(v: number, unit: string | null) {
   return Math.round(v * p) / p;
 }
 
-/** One step of knob `k` from `v` (taste.md §5.2): a 1% ratio in Hz or on a log knob, 0.1 dB, a semitone, else 1% of its range. */
-function step(k: NumberKnob, v: number, n: number) {
-  if (k.unit === "hz" || k.log) return v * 1.01 ** n;
-  if (k.unit === "db") return v + 0.1 * n;
-  if (k.unit === "semitones") return v + n;
-  return v + (k.range ? (k.range[1] - k.range[0]) / 100 : Math.max(Math.abs(v), 1) / 100) * n;
-}
-
 const inRange = (k: NumberKnob, v: number) => (k.range ? Math.min(k.range[1], Math.max(k.range[0], v)) : v);
+
+/** A picture's size on screen, in pixels: what it is drawn at, so its text and dots are never stretched (CARD-69). */
+function useSize(el: React.RefObject<Element | null>): { w: number; h: number } {
+  const [size, setSize] = useState({ w: 0, h: 0 });
+  useEffect(() => {
+    const at = el.current;
+    if (!at) return;
+    const seen = () => {
+      const r = at.getBoundingClientRect();
+      setSize((s) => (Math.round(r.width) === s.w && Math.round(r.height) === s.h ? s : { w: Math.round(r.width), h: Math.round(r.height) }));
+    };
+    seen();
+    const ro = new ResizeObserver(seen);
+    ro.observe(at);
+    return () => ro.disconnect();
+  }, [el]);
+  return size;
+}
 
 /** A card's picture (CARD-69): asked for while it shows, drawn from its shapes, its dots moving the card's values. */
 export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const box = useRef<HTMLDivElement>(null);
-  const svg = useRef<SVGSVGElement>(null);
   const [drawn, setDrawn] = useState<Drawn | null>(null);
   const [asked, setAsked] = useState<string | null>(null);
   const count = useRef(0);
-  const { session, module } = p;
+  const { session, module, revision } = p;
   const node = p.node.id;
   const name = view.name;
   // Looked at: the card on screen, in a window that shows (CARD-69, as a look, TAP-16).
   const looking = useLooking(box);
-  // The view's values as it is drawn: a new view asks again at once.
-  const values = JSON.stringify(view.values);
   useEffect(() => {
     if (!looking) return;
     let alive = true;
@@ -137,9 +143,12 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
       count.current += 1;
       box.current?.setAttribute("data-drawn", String(count.current));
       setDrawn(d);
+      setAsked(null);
     };
+    // By its id in the view of `revision`: a stop names the same, so it never ends an ask made by a
+    // renumbered card's id (CARD-67).
     const ask = (on: boolean) =>
-      graphApi.picture(session, module, node, name, on).then(
+      graphApi.picture(session, revision, module, node, name, on).then(
         (a) => (on && a.picture ? take(a.picture) : undefined),
         (e) => alive && on && setAsked(said(e)),
       );
@@ -155,39 +164,48 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
       off();
       void ask(false).catch(() => {});
     };
-  }, [session, module, node, name, looking, values]);
+  }, [session, revision, module, node, name, looking]);
   const why = asked ?? drawn?.why ?? null;
+  const words = why ?? drawn?.words ?? view.words ?? `${p.owner}'s picture`;
   return (
     <div ref={box} className="h-full" data-picture={name} data-asking={looking || undefined}>
       <div
         className={clsx("relative h-full rounded-sm ring-1 ring-line bg-canvas overflow-hidden", why && "opacity-60")}
         data-greyed={why ? true : undefined}
-        role="img"
-        aria-label={why ?? drawn?.words ?? `${p.owner}'s picture`}
-        title={why ?? drawn?.words}
+        role="group"
+        aria-label={words}
+        title={words}
       >
         {drawn?.shapes && !why && view.live?.length ? <Live view={view} shapes={drawn.shapes} looking={looking} {...p} /> : null}
-        {drawn?.shapes && !why && <Shapes svg={svg} view={view} shapes={drawn.shapes} {...p} />}
+        {drawn?.shapes && !why && <Shapes view={view} shapes={drawn.shapes} {...p} />}
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </div>
     </div>
   );
 }
 
-/** The grid and the shapes, and the dots' gestures. */
-function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<SVGSVGElement | null>; view: PictureView; shapes: Shape[] }) {
-  const H = PICTURE_H - 8;
-  const plot = H - FOOT;
-  const X = (v: number) => along(view.x, v) * W;
-  const Y = (v: number) => (1 - along(view.y, v)) * plot;
+/** Where values sit on a picture of `w` × `h` pixels: x and y on the plot, above the x axis's labels. */
+function placer(view: PictureView, w: number, h: number) {
+  const plot = Math.max(1, h - FOOT);
+  return { plot, X: (v: number) => along(view.x, v) * w, Y: (v: number) => (1 - along(view.y, v)) * plot };
+}
+
+/** The grid and the shapes, at the picture's own size in pixels, and its dots. */
+function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes: Shape[] }) {
+  const svg = useRef<SVGSVGElement>(null);
+  const { w, h } = useSize(svg);
+  const { plot, X, Y } = placer(view, w, h);
   const drag = useViewDrag(p);
-  const toast = useStore((s) => s.toast);
   const tab = useCards((s) => s.tabs[p.node.id]);
   const [held, setHeld] = useState<{ i: number; x: number | null; y: number | null } | null>(null);
   const [picked, setPicked] = useState<number | null>(null);
+  const flat: Shape[] = [];
+  const flatten = (ss: Shape[]) => ss.forEach((s) => (s.kind === "part" ? flatten(s.shapes) : flat.push(s)));
+  flatten(shapes);
+  const handles = flat.filter((s): s is Handle => s.kind === "handle");
   // A tab picked marks the dot that opens it (CARD-71).
   useEffect(() => {
-    const i = handles.findIndex((h) => h.opens !== undefined && h.opens === tab);
+    const i = handles.findIndex((x) => x.opens !== undefined && x.opens === tab);
     if (i >= 0) setPicked(i);
   }, [tab]);
   useEffect(() => attach(), []);
@@ -198,56 +216,28 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
     const k: Knob | undefined = m?.knob ? p.node.knobs.find((x) => x.id === m.knob) : undefined;
     return k && !picks(k) ? (k as NumberKnob) : null;
   };
-  const anyKnob = (m?: Moved): Knob | undefined => (m?.knob ? p.node.knobs.find((x) => x.id === m.knob) : undefined);
-  const flat: Shape[] = [];
-  const flatten = (ss: Shape[]) => ss.forEach((s) => (s.kind === "part" ? flatten(s.shapes) : flat.push(s)));
-  flatten(shapes);
-  const handles = flat.filter((s): s is Handle => s.kind === "handle");
-  const stepName = (ks: (Knob | NumberKnob)[]) => `${p.owner} ${ks.map((k) => inSentence(controlLabel(k))).join(" and ")}`;
-  /** Why dot `h` can't be moved, when it can't (CARD-66). */
-  const fixed = (h: Handle): string | null => {
-    const moves = Object.values(h.moves);
-    const stuck = moves.find((m) => m && !m.knob);
-    if (stuck) return `${stuck.name} can't be moved here: ${stuck.why ?? "it isn't a knob of this card"}.`;
-    if (!p.editable) return `${p.locked ?? "It can't be edited right now"}.`;
-    return moves.length ? null : "This dot moves nothing.";
-  };
   const pick = (i: number) => {
     setPicked(i);
-    const opens = handles[i].opens;
+    const opens = handles[i]?.opens;
     if (opens) useCards.getState().tab(p.node.id, opens);
   };
-  /** One write of one value, one undo step (CARD-70): a step, or a flip. */
-  const write = (k: Knob, value: number | boolean) => {
-    void graphApi.setValue(p.session, p.revision, k.id, value, { name: stepName([k]) }).catch((e) => toast(said(e)));
-  };
-  const nudge = (m: Moved | undefined, n: number) => {
-    const k = knobOf(m);
-    if (k) write(k, rounded(inRange(k, step(k, k.value, n)), k.unit));
-  };
-  const flip = (h: Handle) => {
-    const k = anyKnob(h.moves.toggles);
-    if (k) write(k, k.value !== true);
-  };
+  /** A dot's drag (CARD-70): from where its values were, by how far the pointer went, one write at release. */
   const down = (e: React.PointerEvent<SVGCircleElement>, i: number) => {
-    const h = handles[i];
+    const hd = handles[i];
     pick(i);
-    if (e.button !== 0 || !svg.current || fixed(h)) return;
-
+    if (e.button !== 0 || !svg.current || fixedOf(hd, p)) return;
     e.stopPropagation();
     e.preventDefault();
     const el = e.currentTarget, pointer = e.pointerId;
     el.setPointerCapture(pointer);
-    const r = svg.current.getBoundingClientRect();
-    const sx = W / r.width, sy = H / r.height;
-    const [mx, my] = [h.moves.x, h.moves.y];
+    const [mx, my] = [hd.moves.x, hd.moves.y];
     const kx = knobOf(mx), ky = knobOf(my);
     const knobs = [kx, ky].filter((k): k is NumberKnob => !!k);
     if (!knobs.length) return;
     drag.begin(knobs);
     const start = knobs.map((k) => k.value);
     const x0 = e.clientX, y0 = e.clientY;
-    /** How far `d` drawing units move a value from `v` (CARD-70): on its axis in its scale, or as its knob's drag (300 px). */
+    /** How far `d` pixels move a value from `v`: on its axis in its scale, or as its knob's drag (300 px). */
     const moved = (m: Moved, k: NumberKnob, a: Axis, v: number, d: number, span: number) => {
       if (m.by === "knob") {
         const [lo, hi] = k.range ?? [a.lo, a.hi];
@@ -256,10 +246,10 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
       return a.scale === "log" ? v * (a.hi / a.lo) ** (d / span) : v + (d / span) * (a.hi - a.lo);
     };
     const values = (ev: PointerEvent) => {
-      const dx = (ev.clientX - x0) * sx, dy = -(ev.clientY - y0) * sy;
+      const dx = ev.clientX - x0, dy = -(ev.clientY - y0);
       const out: number[] = [];
-      if (kx && mx) out.push(rounded(inRange(kx, moved(mx, kx, view.x, start[0], mx.by === "knob" ? (ev.clientX - x0) : dx, W)), kx.unit));
-      if (ky && my) out.push(rounded(inRange(ky, moved(my, ky, view.y, start[knobs.length - 1], my.by === "knob" ? -(ev.clientY - y0) : dy, plot)), ky.unit));
+      if (kx && mx) out.push(rounded(inRange(kx, moved(mx, kx, view.x, start[0], dx, Math.max(1, w))), kx.unit));
+      if (ky && my) out.push(rounded(inRange(ky, moved(my, ky, view.y, start[knobs.length - 1], dy, plot)), ky.unit));
       return out;
     };
     const move = (ev: PointerEvent) => {
@@ -267,9 +257,7 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
       const vs = values(ev);
       drag.move(vs);
       // The dot follows the pointer; the rest of the picture each `pictures` message (CARD-70).
-      const vx = kx && mx && mx.by !== "knob" ? vs[0] : h.x;
-      const vy = ky && my && my.by !== "knob" ? vs[vs.length - 1] : h.y;
-      setHeld({ i, x: vx, y: vy });
+      setHeld({ i, x: kx && mx && mx.by !== "knob" ? vs[0] : hd.x, y: ky && my && my.by !== "knob" ? vs[vs.length - 1] : hd.y });
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== pointer) return;
@@ -277,25 +265,15 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
       setHeld(null);
-      if (ev.type === "pointerup") void drag.end(stepName(knobs));
+      if (ev.type === "pointerup") void drag.end(stepName(p.owner, knobs));
       else void drag.cancel();
     };
     el.addEventListener("pointermove", move);
     el.addEventListener("pointerup", up);
     el.addEventListener("pointercancel", up);
   };
-  const key = (e: React.KeyboardEvent, h: Handle) => {
-    const n = e.shiftKey ? 10 : 1;
-    if (fixed(h)) return;
-    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) nudge(h.moves.wheel, e.key === "ArrowUp" ? n : -n);
-    else if (e.key === "ArrowRight" || e.key === "ArrowLeft") nudge(h.moves.x, e.key === "ArrowRight" ? n : -n);
-    else if (e.key === "ArrowUp" || e.key === "ArrowDown") nudge(h.moves.y, e.key === "ArrowUp" ? n : -n);
-    else if (e.key === "Enter" || e.key === " ") flip(h);
-    else return;
-    e.preventDefault();
-  };
   const play = (e: React.PointerEvent<SVGRectElement>, s: Extract<Shape, { kind: "play" }>) => {
-    if (e.button !== 0 || !notes || !svg.current) return;
+    if (e.button !== 0 || !notes) return;
     const r = e.currentTarget.getBoundingClientRect();
     const velocity = Math.min(1, Math.max(0.01, 1 - (e.clientY - r.top) / Math.max(1, r.height)));
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -311,127 +289,185 @@ function Shapes({ svg, view, shapes, ...p }: ViewProps & { svg: React.RefObject<
     return out.join(" ");
   };
   return (
-    <svg ref={svg} viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-full" data-shapes={flat.length}>
-      {ticks(view.x).map((t) => (
-        <g key={`x${t.v}`}>
-          <line x1={X(t.v)} x2={X(t.v)} y1={0} y2={plot} stroke="var(--color-line)" strokeWidth={0.5} vectorEffect="non-scaling-stroke" />
-          {t.label && (
-            <text x={X(t.v) + 2} y={H - 2} fontSize={9} fill="var(--color-fg-faint)">
-              {t.label}
-            </text>
-          )}
-        </g>
-      ))}
-      {ticks(view.y).map((t) => (
-        <g key={`y${t.v}`}>
-          <line x1={0} x2={W} y1={Y(t.v)} y2={Y(t.v)} stroke="var(--color-line)" strokeWidth={0.5} vectorEffect="non-scaling-stroke" />
-          {t.label && (
-            <text x={2} y={Y(t.v) - 2} fontSize={9} fill="var(--color-fg-faint)">
-              {t.label}
-            </text>
-          )}
-        </g>
-      ))}
-      {flat.map((s, i) => {
-        switch (s.kind) {
-          case "line":
-            return <polyline key={i} data-line={s.name} points={points(s.points)} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} vectorEffect="non-scaling-stroke" />;
-          case "fill": {
-            const pts = s.points;
-            const closed = s.base === undefined ? pts : [...pts, pts[pts.length - 2], s.base, pts[0], s.base];
-            return <polygon key={i} points={points(closed)} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke="none" />;
-          }
-          case "bars":
-            return (
-              <g key={i} fill={TONE[s.tone ?? "main"]}>
-                {Array.from({ length: s.points.length / 2 }, (_, j) => {
-                  const x = X(s.points[2 * j]), y = Y(s.points[2 * j + 1]), b = Y(s.base ?? 0);
-                  return <rect key={j} x={x - 1} width={2} y={Math.min(y, b)} height={Math.abs(b - y)} />;
-                })}
-              </g>
-            );
-          case "mark": {
-            const v = s.axis === "x" ? X(s.at) : Y(s.at);
-            return (
-              <line key={i} x1={s.axis === "x" ? v : 0} x2={s.axis === "x" ? v : W} y1={s.axis === "x" ? 0 : v} y2={s.axis === "x" ? plot : v} stroke="var(--color-fg-faint)" strokeDasharray="3 3" strokeWidth={1} vectorEffect="non-scaling-stroke">
-                {s.words && <title>{s.words}</title>}
-              </line>
-            );
-          }
-          case "label":
-            return (
-              <text key={i} x={X(s.x)} y={Y(s.y)} fontSize={10} fill="var(--color-fg-muted)">
-                {s.words}
-              </text>
-            );
-          case "play": {
-            const [x0, y0, x1, y1] = s.box;
-            const title = !notes ? "This card plays no notes lane, so it can't play here" : hearing ? "Click to hear it: higher plays it harder" : "Audition is off (in Notes' header): turn it on to hear it";
-            return (
-              <rect key={i} data-play={s.note} x={Math.min(X(x0), X(x1))} width={Math.abs(X(x1) - X(x0))} y={Math.min(Y(y0), Y(y1))} height={Math.abs(Y(y1) - Y(y0))} fill="transparent" className={notes ? "cursor-pointer" : undefined} onPointerDown={(e) => play(e, s)} onPointerUp={lift} onPointerCancel={lift}>
-                <title>{title}</title>
-              </rect>
-            );
-          }
-          default:
-            return null;
-        }
-      })}
-      {handles.map((h, i) => {
-        const x = held?.i === i ? held.x : h.x, y = held?.i === i ? held.y : h.y;
-        if (x === null || y === null) return null;
-        const cx = X(x), cy = Y(y);
-        const stuck = fixed(h);
-        const marked = picked === i || held?.i === i;
-        const names = Object.values(h.moves).map((m) => m?.name).filter(Boolean).join(", ");
-        return (
-          <g key={`h${i}`}>
-            <ellipse
-              cx={cx}
-              cy={cy}
-              rx={3.5 * (W / (svg.current?.getBoundingClientRect().width || W))}
-              ry={3.5 * (H / (svg.current?.getBoundingClientRect().height || H))}
-              fill={marked ? "var(--color-accent)" : h.off || stuck ? "var(--color-raised)" : "var(--color-fg)"}
-              stroke={marked ? "var(--color-accent)" : stuck ? "var(--color-fg-off)" : "var(--color-fg)"}
-              strokeWidth={1.5}
-              vectorEffect="non-scaling-stroke"
-              pointerEvents="none"
-            />
-            {h.mark && (
-              <text x={cx} y={cy - 7} fontSize={9} textAnchor="middle" fill="var(--color-fg-muted)" pointerEvents="none">
-                {h.mark}
+    <svg ref={svg} viewBox={w && h ? `0 0 ${w} ${h}` : undefined} className="block w-full h-full" data-shapes={flat.length} data-size={`${w}x${h}`}>
+      {w > 0 &&
+        ticks(view.x).map((t) => (
+          <g key={`x${t.v}`}>
+            <line x1={X(t.v)} x2={X(t.v)} y1={0} y2={plot} stroke="var(--color-line)" strokeWidth={0.5} />
+            {t.label && (
+              <text x={X(t.v) + 2} y={h - 2} fontSize={9} fill="var(--color-fg-faint)" data-tick>
+                {t.label}
               </text>
             )}
-            <circle
-              data-dot={i}
-              data-opens={h.opens}
-              data-marked={marked || undefined}
-              data-fixed={stuck ? true : undefined}
-              tabIndex={0}
-              role="button"
-              aria-label={`${p.owner}: ${names}`}
-              cx={cx}
-              cy={cy}
-              r={9}
-              fill="transparent"
-              className={stuck ? "cursor-default" : "cursor-grab"}
-              onPointerDown={(e) => down(e, i)}
-              onFocus={() => pick(i)}
-              onKeyDown={(e) => key(e, h)}
-              // A double-click flips the dot's switch: one write, never a drag (CARD-70).
-              onClick={(e) => e.detail === 2 && !stuck && flip(h)}
-              onWheel={(e) => {
-                if (stuck || !h.moves.wheel) return;
-                e.preventDefault();
-                nudge(h.moves.wheel, e.deltaY < 0 ? 1 : -1);
-              }}
-            >
-              <title>{stuck ?? `${names}: drag to move${h.moves.wheel ? ", scroll for " + h.moves.wheel.name : ""}${h.moves.toggles ? ", double-click to turn it on or off" : ""}`}</title>
-            </circle>
           </g>
-        );
-      })}
+        ))}
+      {w > 0 &&
+        ticks(view.y).map((t) => (
+          <g key={`y${t.v}`}>
+            <line x1={0} x2={w} y1={Y(t.v)} y2={Y(t.v)} stroke="var(--color-line)" strokeWidth={0.5} />
+            {t.label && (
+              <text x={2} y={Y(t.v) - 2} fontSize={9} fill="var(--color-fg-faint)" data-tick>
+                {t.label}
+              </text>
+            )}
+          </g>
+        ))}
+      {w > 0 &&
+        flat.map((s, i) => {
+          switch (s.kind) {
+            case "line":
+              return <polyline key={i} data-line={s.name} points={points(s.points)} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
+            case "fill": {
+              const pts = s.points;
+              const closed = s.base === undefined ? pts : [...pts, pts[pts.length - 2], s.base, pts[0], s.base];
+              return <polygon key={i} points={points(closed)} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke="none" />;
+            }
+            case "bars":
+              return (
+                <g key={i} fill={TONE[s.tone ?? "main"]}>
+                  {Array.from({ length: s.points.length / 2 }, (_, j) => {
+                    const x = X(s.points[2 * j]), y = Y(s.points[2 * j + 1]), b = Y(s.base ?? 0);
+                    return <rect key={j} x={x - 1} width={2} y={Math.min(y, b)} height={Math.abs(b - y)} />;
+                  })}
+                </g>
+              );
+            case "mark": {
+              const v = s.axis === "x" ? X(s.at) : Y(s.at);
+              return (
+                <line key={i} x1={s.axis === "x" ? v : 0} x2={s.axis === "x" ? v : w} y1={s.axis === "x" ? 0 : v} y2={s.axis === "x" ? plot : v} stroke="var(--color-fg-faint)" strokeDasharray="3 3" strokeWidth={1}>
+                  {s.words && <title>{s.words}</title>}
+                </line>
+              );
+            }
+            case "label":
+              return (
+                <text key={i} x={X(s.x)} y={Y(s.y)} fontSize={10} fill="var(--color-fg-muted)">
+                  {s.words}
+                </text>
+              );
+            case "play": {
+              const [x0, y0, x1, y1] = s.box;
+              const title = !notes ? "This card plays no notes lane, so it can't play here" : hearing ? "Click to hear it: higher plays it harder" : "Audition is off (in Notes' header): turn it on to hear it";
+              return (
+                <rect key={i} data-play={s.note} x={Math.min(X(x0), X(x1))} width={Math.abs(X(x1) - X(x0))} y={Math.min(Y(y0), Y(y1))} height={Math.abs(Y(y1) - Y(y0))} fill="transparent" className={notes ? "cursor-pointer" : undefined} onPointerDown={(e) => play(e, s)} onPointerUp={lift} onPointerCancel={lift}>
+                  <title>{title}</title>
+                </rect>
+              );
+            }
+            default:
+              return null;
+          }
+        })}
+      {w > 0 &&
+        handles.map((hd, i) => {
+          const x = held?.i === i ? held.x : hd.x, y = held?.i === i ? held.y : hd.y;
+          if (x === null || y === null) return null;
+          return <Dot key={`h${i}`} i={i} handle={hd} cx={X(x)} cy={Y(y)} marked={picked === i || held?.i === i} knobOf={knobOf} onDown={down} onPick={pick} {...p} />;
+        })}
     </svg>
+  );
+}
+
+/** Why dot `h` can't be moved, when it can't (CARD-66). */
+function fixedOf(h: Handle, p: ViewProps): string | null {
+  const moves = Object.values(h.moves);
+  const stuck = moves.find((m) => m && !m.knob);
+  if (stuck) return `${stuck.name} can't be moved here: ${stuck.why ?? "it isn't a knob of this card"}.`;
+  if (!p.editable) return `${p.locked ?? "It can't be edited right now"}.`;
+  return moves.length ? null : "This dot moves nothing.";
+}
+
+/** What an undo step of a dot's gesture is called: the card and what moved ("Curve EQ freq2 and gain2"). */
+const stepName = (owner: string, ks: (Knob | NumberKnob)[]) => `${owner} ${ks.map((k) => inSentence(controlLabel(k))).join(" and ")}`;
+
+/** A placeholder for a value a dot doesn't move: its steps go nowhere (the gesture isn't editable). */
+const NONE = { id: "", label: "", value: 0, unit: null, range: null, log: false } as unknown as NumberKnob;
+
+/**
+ * One dot (CARD-70): a 7 px circle with its mark, a button in the picture's group. Its wheel (a step
+ * every 40 px), ⌥↑ ⌥↓, and ← → ↑ ↓ step its values as a knob's keys do: a run of steps is one
+ * gesture from the value the last step left, written half a second after the last, one undo step.
+ * A double-click, Enter or Space flips its switch: one write.
+ */
+function Dot({ i, handle, cx, cy, marked, knobOf, onDown, onPick, ...p }: ViewProps & { i: number; handle: Handle; cx: number; cy: number; marked: boolean; knobOf: (m?: Moved) => NumberKnob | null; onDown: (e: React.PointerEvent<SVGCircleElement>, i: number) => void; onPick: (i: number) => void }) {
+  const toast = useStore((s) => s.toast);
+  const el = useRef<SVGCircleElement>(null);
+  const stuck = fixedOf(handle, p);
+  const kx = knobOf(handle.moves.x), ky = knobOf(handle.moves.y), kw = knobOf(handle.moves.wheel);
+  // A value the dot doesn't move gets a gesture that does nothing.
+  const of = (k: NumberKnob | null) => ({ session: p.session, revision: p.revision, knob: k ?? NONE, editable: p.editable && !!k && !stuck, name: k ? stepName(p.owner, [k]) : "", label: k ? controlLabel(k) : "" });
+  const gx = useKnobGesture(of(kx));
+  const gy = useKnobGesture(of(ky));
+  const gw = useKnobGesture(of(kw));
+  const steps = (g: ReturnType<typeof useKnobGesture>, k: NumberKnob | null, n: number) => k && g.step((v, d) => stepValue(d, v, n));
+  const stepping = useRef({ gw, kw });
+  stepping.current = { gw, kw };
+  const wheel = useRef(0);
+  // The wheel steps it, never scrolling what is under it: not passive (review G5).
+  useEffect(() => {
+    const at = el.current;
+    if (!at) return;
+    const turn = (e: WheelEvent) => {
+      if (e.ctrlKey || e.metaKey) return;
+      e.preventDefault();
+      const { gw, kw } = stepping.current;
+      if (!kw) return;
+      wheel.current -= e.deltaMode === 1 ? e.deltaY * NOTCH : e.deltaY;
+      const n = Math.trunc(wheel.current / NOTCH);
+      if (n === 0) return;
+      wheel.current -= n * NOTCH;
+      gw.step((v, d) => stepValue(d, v, n));
+    };
+    at.addEventListener("wheel", turn, { passive: false });
+    return () => at.removeEventListener("wheel", turn);
+  }, []);
+  const flip = () => {
+    const k = handle.moves.toggles?.knob ? p.node.knobs.find((x) => x.id === handle.moves.toggles!.knob) : undefined;
+    if (!k || stuck) return;
+    void graphApi.setValue(p.session, p.revision, k.id, k.value !== true, { name: stepName(p.owner, [k]) }).catch((e) => toast(said(e)));
+  };
+  const key = (e: React.KeyboardEvent) => {
+    if (stuck) return;
+    const n = e.shiftKey ? 10 : 1;
+    if (e.altKey && (e.key === "ArrowUp" || e.key === "ArrowDown")) steps(gw, kw, e.key === "ArrowUp" ? n : -n);
+    else if (e.key === "ArrowRight" || e.key === "ArrowLeft") steps(gx, kx, e.key === "ArrowRight" ? n : -n);
+    else if (e.key === "ArrowUp" || e.key === "ArrowDown") steps(gy, ky, e.key === "ArrowUp" ? n : -n);
+    else if (e.key === "Enter" || e.key === " ") flip();
+    else return;
+    e.preventDefault();
+  };
+  const names = Object.values(handle.moves).map((m) => m?.name).filter(Boolean).join(", ");
+  return (
+    <g>
+      <circle cx={cx} cy={cy} r={3.5} fill={marked ? "var(--color-accent)" : handle.off || stuck ? "var(--color-raised)" : "var(--color-fg)"} stroke={marked ? "var(--color-accent)" : stuck ? "var(--color-fg-off)" : "var(--color-fg)"} strokeWidth={1.5} pointerEvents="none" />
+      {handle.mark && (
+        <text x={cx} y={cy - 7} fontSize={9} textAnchor="middle" fill="var(--color-fg-muted)" pointerEvents="none">
+          {handle.mark}
+        </text>
+      )}
+      <circle
+        ref={el}
+        data-dot={i}
+        data-opens={handle.opens}
+        data-marked={marked || undefined}
+        data-fixed={stuck ? true : undefined}
+        tabIndex={0}
+        role="button"
+        aria-label={`${p.owner}: ${names}`}
+        cx={cx}
+        cy={cy}
+        r={9}
+        fill="transparent"
+        className={stuck ? "cursor-default" : "cursor-grab"}
+        onPointerDown={(e) => onDown(e, i)}
+        onFocus={() => onPick(i)}
+        onKeyDown={key}
+        // A double-click flips the dot's switch: one write, never a drag (CARD-70).
+        onClick={(e) => e.detail === 2 && flip()}
+      >
+        <title>{stuck ?? `${names}: drag to move${handle.moves.wheel ? ", scroll for " + handle.moves.wheel.name : ""}${handle.moves.toggles ? ", double-click to turn it on or off" : ""}`}</title>
+      </circle>
+    </g>
   );
 }
 
@@ -469,14 +505,19 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     cancelAnimationFrame(frame.current);
     frame.current = requestAnimationFrame(() => draw());
   };
-  // The playhead moves with the song's beat, read from the clock, at the screen's rate.
+  // The playhead moves with the song's beat, at the screen's rate, only while the song plays (review G14).
   const playhead = layers.some((l) => l.kind === "playhead" && (l.from ?? "beat") === "beat");
+  const greys = useRef<Record<string, string> | null>(null);
   useEffect(() => {
     if (!playhead || !looking) return;
     let alive = true;
+    let was = false;
     const tick = () => {
       if (!alive) return;
-      draw();
+      const now = playingNow();
+      // Once more as it stops, so the line rests where the song did.
+      if (now || was) draw();
+      was = now;
       requestAnimationFrame(tick);
     };
     requestAnimationFrame(tick);
@@ -490,8 +531,12 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     if (!c || !g) return;
     const r = c.getBoundingClientRect();
     if (c.width !== Math.round(r.width * 2) || c.height !== Math.round(r.height * 2)) [c.width, c.height] = [Math.round(r.width * 2), Math.round(r.height * 2)];
-    const css = getComputedStyle(c);
-    const grey = (t?: string) => css.getPropertyValue(t === "faint" ? "--color-fg-faint" : t === "soft" ? "--color-fg-muted" : "--color-fg-muted").trim() || "#8a8f96";
+    // The greys read once, not at every frame.
+    if (!greys.current) {
+      const css = getComputedStyle(c);
+      greys.current = { faint: css.getPropertyValue("--color-fg-faint").trim() || "#8a8f96", soft: css.getPropertyValue("--color-fg-muted").trim() || "#8a8f96" };
+    }
+    const grey = (t?: string) => (t === "faint" ? greys.current!.faint : greys.current!.soft);
     const plot = c.height * ((PICTURE_H - 8 - FOOT) / (PICTURE_H - 8));
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
     const dbY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));

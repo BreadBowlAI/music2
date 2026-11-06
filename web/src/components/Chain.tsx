@@ -426,7 +426,10 @@ function RowOf({
 function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
   const hides = node.knobs.map((k) => k.id);
   const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
-  const said = rows
+  // The words of the face's first picture, once the server worked them out (CARD-63), else its values.
+  const first = rows.flatMap((r) => ("view" in r ? (node.views ?? []).filter((v) => v.name === r.view && v.kind === "picture") : []))[0];
+  const words = first?.kind === "picture" ? first.words : null;
+  const values = rows
     .flatMap((r) => {
       if (!("input" in r)) return [];
       const p = node.inputs.find((x) => x.id === r.input);
@@ -437,6 +440,7 @@ function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
     })
     .slice(0, 4)
     .join(" · ");
+  const said = words ?? values;
   return (
     <button
       data-sentence
