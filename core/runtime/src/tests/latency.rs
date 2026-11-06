@@ -141,3 +141,48 @@ fn no_latency_makes_no_delay() {
     assert_eq!((l.delays.len(), l.total), (0, 0));
     assert_eq!(insert(&flat, &l), flat);
 }
+
+/// A package whose kernel `@test/t:k` passes its mono input on, its manifest saying how late with
+/// `latency` (`latency_s = 0.015`, say).
+fn late_kernel(latency: &str) -> PathBuf {
+    package_with(
+        &module_v1(&kernel_v1("k", &out_v1("(local.get $x)"))),
+        &format!("inputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\n{latency}"),
+    )
+}
+
+// VOX-24: a latency in seconds is counted at the song's rate by the kit's one rule, rounded up: the
+// song is that many frames late at 44.1, 48 and 96 kHz, and the path beside the kernel is delayed
+// to match it (RENDER-18).
+#[test]
+fn a_latency_in_seconds_is_made_up_for_at_every_rate() {
+    let dir = late_kernel("latency_s = 0.015");
+    let mut pk = std_packages();
+    pk.load(&dir).unwrap();
+    let ir = song(
+        json!([
+            {"id": "f", "op": "const", "value": 440.0},
+            {"id": "x", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "f"}},
+            {"id": "late", "op": "kernel", "kernel": "@test/t:k", "inputs": {"in": "x"}},
+            {"id": "sum", "op": "kernel", "kernel": "std:add", "inputs": {"a": "late", "b": "x"}},
+        ]),
+        "sum",
+        json!([]),
+    );
+    let flat = check(&ir, &pk).unwrap();
+    for (rate, frames) in [(44_100, 662), (48_000, 720), (96_000, 1_440)] {
+        assert_eq!(frames, m2_kernel::latency_frames(0.015, rate as f64), "the kit's rule");
+        let r = Renderer::new(&flat, &DataSet::empty(), &pk, rate).unwrap();
+        assert_eq!((r.latency(), r.stats().delays), (frames, 1), "{rate} Hz: the song is as late, the path beside it delayed");
+    }
+    std::fs::remove_dir_all(dir).ok();
+}
+
+// VOX-24: a kernel says its latency one way: in frames or in seconds, never both.
+#[test]
+fn a_latency_in_seconds_and_in_frames_is_refused() {
+    let dir = late_kernel("latency = 64\nlatency_s = 0.015");
+    let e = std_packages().load(&dir).map(|_| ()).unwrap_err();
+    assert!(format!("{e:#}").contains("gives its latency twice: say `latency` (frames) or `latency_s` (seconds)"), "{e:#}");
+    std::fs::remove_dir_all(dir).ok();
+}

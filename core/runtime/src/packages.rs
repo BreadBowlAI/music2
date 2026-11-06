@@ -26,6 +26,9 @@ struct KernelDecl {
     outputs: Vec<String>,
     #[serde(default)]
     latency: u32,
+    /// Its latency in seconds instead (VOX-24): counted in frames at the song's rate.
+    #[serde(default)]
+    latency_s: f64,
     /// An offline kernel (kernel ABI v1, flags bit 0): run by the host to make a clip's render, off
     /// the audio thread, never by song code. No inputs; one `audio` output; its source is asset 0.
     #[serde(default)]
@@ -382,7 +385,15 @@ impl PackageSet {
                 offline.insert(id);
                 continue;
             }
-            let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
+            let mut sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
+            // A latency in seconds is counted at the song's rate (VOX-24); a kernel says it one way.
+            if k.latency > 0 && k.latency_s != 0.0 {
+                bail!("kernel `{id}` gives its latency twice: say `latency` (frames) or `latency_s` (seconds)");
+            }
+            if !(k.latency_s.is_finite() && k.latency_s >= 0.0 && k.latency_s <= 10.0) {
+                bail!("kernel `{id}`: `latency_s` must be seconds from 0 to 10, not {}", k.latency_s);
+            }
+            sig.latency_s = k.latency_s;
             sigs.insert(id, sig);
         }
         Ok(Package {
@@ -698,6 +709,7 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
         inputs,
         outputs: vec![port("out", PortKind::Audio(Some(2)))],
         latency: 0,
+        latency_s: 0.0,
     }
 }
 
@@ -777,6 +789,7 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
         inputs,
         outputs: vec![m2_ir::PortSig { name: "out".into(), kind: m2_ir::PortKind::Audio(Some(out)), default: None, range: None }],
         latency: info.latency,
+        latency_s: 0.0,
     };
     Ok(sig)
 }
@@ -787,7 +800,7 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
 fn check_offline(id: &str, k: &KernelDecl) -> Result<()> {
     let outputs = k.outputs.iter().map(|o| m2_ir::PortSig::parse(o).map_err(|e| anyhow::anyhow!("kernel `{id}`: {e}")));
     let outputs = outputs.collect::<Result<Vec<_>>>()?;
-    if !k.inputs.is_empty() || k.latency > 0 || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]) {
+    if !k.inputs.is_empty() || k.latency > 0 || k.latency_s != 0.0 || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]) {
         bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0) and has one audio output");
     }
     Ok(())
