@@ -88,7 +88,9 @@ async function pageOn(s) {
   await page.setViewport({ width: 1440, height: 900 });
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
-  await page.evaluateOnNewDocument((token) => (window.__M2__ = { native: false, token, platform: "macos" }), s.page_token);
+  await page.evaluateOnNewDocument((token) => {
+    window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+  }, s.page_token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=timeline]", { timeout: 20000 });
   const state = () => page.evaluate(async (t) => (await fetch("/api/graph", { headers: { "x-m2-token": t } })).json(), s.page_token);

@@ -13,7 +13,7 @@ import { useMemo, useRef, useState, type ReactNode } from "react";
 import { controlLabel, graphApi, inSentence, moduleName, type Choice, type Setting } from "../lib/graph";
 import { MISSING, usePeaks, type Peaks } from "../lib/peaks";
 import { useStore } from "../lib/store";
-import { MenuRow, Popover } from "./ui";
+import { MenuRow, Popover, Segment } from "./ui";
 
 /** A setting's row; a recording's is taller, for its waveform. */
 const ROW_H = 28;
@@ -62,6 +62,8 @@ interface Props {
   card: string;
   /** The card's id: what a recording's drop names. */
   call: string;
+  /** Its id for `m2 set` in its tooltip (a chain card's All, CARD-43). */
+  ided?: boolean;
 }
 
 /** One setting of a card, as its kind draws it. */
@@ -69,7 +71,7 @@ export function SettingRow(p: Props) {
   const { x, owner, session, revision, editable, locked, tracks } = p;
   const toast = useStore((s) => s.toast);
   const label = controlLabel(x, tracks);
-  const where = `In your code: ${x.file}, line ${x.line}`;
+  const where = `In your code: ${x.file}, line ${x.line}${p.ided ? `\nIts id: ${x.id}` : ""}`;
   const off = !editable ? `${locked ?? "It can't be edited right now"}.` : null;
   /** Write `value`: one edit, named "LFO shape" by its label (CARD-34); a refusal says why. */
   const write = (value: Choice["value"]) =>
@@ -166,6 +168,35 @@ export function MenuValue({ value, label, off, title, onPick }: { value: { value
         </Popover>
       )}
     </>
+  );
+}
+
+/**
+ * A choice of five options or fewer, all in sight (CARD-45): a segmented control, one click a pick.
+ * The option now is raised; a default not written yet reads in `fg-muted` (HOME-1).
+ */
+export function Segmented({ value, label, off, title, onPick }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; title?: string; onPick: (v: Choice["value"]) => void }) {
+  return (
+    <div role="radiogroup" aria-label={label} data-testid="setting-segmented" className="ml-auto min-w-0 h-6 flex items-center gap-0.5 p-0.5 rounded-sm bg-hover" onPointerDown={(e) => e.stopPropagation()}>
+      {(value.options ?? []).map((o) => {
+        const on = o.value === value.value;
+        return (
+          <Segment
+            key={String(o.value)}
+            role="radio"
+            aria-checked={on}
+            data-option={o.label}
+            on={on}
+            disabled={!!off}
+            title={off ?? title}
+            className={clsx("!h-5 !px-1.5 !text-xs min-w-0 truncate", on && value.written === false && "!text-fg-muted")}
+            onClick={() => !on && onPick(o.value)}
+          >
+            {o.label}
+          </Segment>
+        );
+      })}
+    </div>
   );
 }
 

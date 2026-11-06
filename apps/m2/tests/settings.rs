@@ -178,3 +178,27 @@ fn m2_set_writes_a_choice_by_its_name() {
     let shape = text.lines().nth(line("shape")).unwrap();
     assert!(shape.contains("choice: saw | square | sine (square)"), "{shape}");
 }
+
+// CARD-41: `m2 graph` prints a card's face as a heading, Face, over its rows, before its groups,
+// and each call's code, on one line, under its name.
+#[test]
+fn m2_graph_prints_a_face_and_the_code() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-face-cli-{}", std::process::id())));
+    let song = temp.0.join("song");
+    put(
+        &song,
+        "music2.toml",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+    );
+    let text = TONE
+        .replace("groups: { Sound:", "face: [\"amp\", \"release\"], groups: { Sound:")
+        .replace("tone({ shape: \"saw\" })", "tone({\n  shape: \"saw\",\n})");
+    put(&song, "song.ts", &text);
+    let o = m2(&["graph", song.to_str().unwrap()]);
+    let out = said(&o);
+    assert!(o.status.success(), "{out}");
+    let at = |word: &str| out.lines().position(|l| l.trim() == word).unwrap_or_else(|| panic!("no heading {word} in {out}"));
+    let line = |word: &str| out.lines().position(|l| l.trim_start().starts_with(word)).unwrap_or_else(|| panic!("no {word} in {out}"));
+    assert!(at("Face") < line("amp") && line("amp") < line("release") && line("release") < at("Sound"), "{out}");
+    assert!(line("code: tone({ shape: \"saw\" })") < at("Face"), "{out}");
+}

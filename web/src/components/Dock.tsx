@@ -7,10 +7,10 @@ import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
 import BeatView from "./BeatView";
+import { Device } from "./Chain";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import CodeView from "./CodeView";
 import Mix from "./Mix";
-import { NodeGraph } from "./NodeGraph";
 import NoteView from "./NoteView";
 import TrackName from "./TrackName";
 import { Button, EmptyState, keepFocus, Segment } from "./ui";
@@ -25,7 +25,7 @@ export function DockSlot({ at, children }: { at: "title" | "tools"; children: Re
 }
 
 const VIEW: Record<DockView, { label: string; Icon: typeof Piano; tab: string }> = {
-  // The id the graph tab had: the Device view shows the track's sound (its patch, until the chain view).
+  // The id the graph tab had: the Device view shows the track's sound, as a chain or its patch (CARD-42).
   device: { label: "Device", Icon: SlidersHorizontal, tab: "graph" },
   notes: { label: "Notes", Icon: Piano, tab: "notes" },
   beat: { label: "Beat", Icon: Drum, tab: "beat" },
@@ -146,7 +146,7 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
   const live = clip && findNoteClip(graph.timeline, clip) ? clip : null;
   return (
     <>
-      {open && view === "device" && <NodeGraph graph={graph} module={module} />}
+      {open && view === "device" && <Device graph={graph} module={module} />}
       {open && view === "notes" &&
         (live ? (
           <NoteView key={`${live.module}:${live.lane}:${live.id}`} graph={graph} clip={live} />

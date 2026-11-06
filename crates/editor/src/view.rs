@@ -194,6 +194,12 @@ pub struct ViewNode {
     /// Its card's views, resolved for the call (CARD-26).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub views: Vec<crate::views::CardView>,
+    /// Its card's face, when its descriptor names one (CARD-41): rows as a group's are.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub face: Vec<crate::views::Row>,
+    /// A call's code, as its file writes it, on one line; an effect's sound written `…` (CARD-41).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub code: Option<String>,
 }
 
 /// An effect card's ⋯ menu (Next D1, D2): each row's words when it can't run here.
@@ -883,6 +889,15 @@ pub fn view(session: &Session) -> GraphView {
                 (Group::Site(s), Some(c)) if kind == "call" => crate::settings::of_card(rev, m, sites[s], c),
                 _ => vec![],
             };
+            // Its code, as its file writes it (CARD-41).
+            let code = match g {
+                Group::Site(s) if kind == "call" => {
+                    let site = sites[s];
+                    let desc = component.as_deref().and_then(|c| rev.compiled.components.get(c)).map(|d| &**d);
+                    rev.snapshot.files.get(Path::new(&site.file)).and_then(|text| crate::views::code(site, text, desc))
+                }
+                _ => None,
+            };
             nodes.push(ViewNode {
                 id: id.clone(),
                 label,
@@ -908,6 +923,8 @@ pub fn view(session: &Session) -> GraphView {
                 settings,
                 groups: vec![],
                 views: vec![],
+                face: vec![],
+                code,
             });
             id
         };
@@ -1020,6 +1037,8 @@ pub fn view(session: &Session) -> GraphView {
                 settings: vec![],
                 groups: vec![],
                 views: vec![],
+                face: vec![],
+                code: None,
             });
             // A track's output that an effect turned off gives on comes from its card.
             let (r, g) = match off.iter().find(|(_, _, input)| input.contains(r.as_str())) {
@@ -1261,6 +1280,7 @@ pub fn view(session: &Session) -> GraphView {
             // Its groups and views (CARD-25, CARD-26), over its inputs and settings as they now are.
             if let Some((site, desc)) = card_of.get(&n.id) {
                 n.groups = crate::views::groups(desc, n);
+                n.face = crate::views::face(desc, n);
                 n.views = crate::views::views(m, *site, desc, n, notes_of.get(&n.id));
             }
             let mut names = HashSet::new();
