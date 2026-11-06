@@ -4,6 +4,7 @@
 - Bring in WAV, FLAC and MIDI files, edit audio clips, and keep audio in time when the tempo changes.
 - Record notes from a MIDI keyboard or the computer's keys, or your voice or a guitar.
 - Arm tracks to record several at once, punch in to fix one part, and keep a take for each time round a loop.
+- Comp: build one take from the best parts of several, by swiping across the take you like.
 - Bounce a track to audio, to chop it, play it backwards or change its pitch: the song sounds the same.
 
 - **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
@@ -56,3 +57,22 @@ Bouncing turns a track into a recording of itself ("resampling"). Then you can c
 - **Pass** means one time round the loop. A **take** is one recording of a part.
 - **When the input has a problem**, a message says so, and the status pill lists it: an input chosen in Settings that isn't plugged in records from another and says which; one unplugged during a take keeps the take up to there; a Mac that doesn't allow the microphone drops the take (it is only silence) and says where to allow it. With the disk full, or a take over 3.1 hours, the take is kept up to there.
 - The song plays on through all of these.
+
+### Comp: the best parts of several takes
+
+Singers often record a line a few times and keep the best bits of each. **Comping** builds one take from those bits. Record round a loop first, so each time round is a take (above).
+
+| To do this | Do this | What happens |
+|---|---|---|
+| See the takes | Click **Takes** on the track's header | One row opens under the lane for each take: Take 1, Take 2, … Each row shows that take's waveform. The parts that play are lit; the rest is faint. Opening the rows is not an edit. |
+| Use one take for a few bars | Swipe along that take's row, across the bars (press, drag, let go) | That take plays there; the rest stays as it was. It snaps to the grid (hold ⌘ for no snap). One undo step: "Comp on Vox". |
+| Use a take for one part | Click a faint part of its row | That take plays for that part. |
+| Go back to one take | Swipe that take across the whole loop | It is one clip again, as it was. |
+| Close the rows | Click **Takes** again | The lane shows the comp as clips. |
+
+- **A comp is only clips.** Each part is a normal audio clip that plays its take from the one file. You can move, split or delete them as any clip. A swipe changes only the bars you swiped: a split or a fade you made elsewhere stays.
+- **Each join crossfades** over 10 ms (a hundredth of a second), so you hear no click.
+- **Agents comp too:** `POST /api/graph/take` with `from` and `to` (beats) plays the take there only ([routes](routes.md)).
+- A comp works on the clips of one recording that sit in a row, in time with the loop they were recorded on. A copy of the clip, even straight after it, is a comp of its own. A swipe that runs into the next comp changes only the one it started in.
+- **When a take stopped early** (you pressed stop partway round), it has no sound for the rest of the loop. A swipe there says where the take stops, and changes nothing.
+- **A cut inside a fade** is refused: make the fade shorter first, or swipe outside it.

@@ -1563,8 +1563,16 @@ impl Graph {
     }
 
     /// Choose take `take` (from 0) of an audio clip whose file is a take over a loop (MON-11): its
-    /// offset moves to the same place in that pass. One Tx, one undo step, "Vox take 2".
-    pub fn choose_take(&self, token: u64, clip: m2_editor::clips::ClipRef, take: usize, since: Option<u64>) -> Result<Value> {
+    /// offset moves to the same place in that pass. One Tx, one undo step, "Vox take 2". With a
+    /// `range`, from and to in beats, it plays there only, in the clip's comp (VOX-1): "Comp on Vox".
+    pub fn choose_take(
+        &self,
+        token: u64,
+        clip: m2_editor::clips::ClipRef,
+        take: usize,
+        range: Option<(f64, f64)>,
+        since: Option<u64>,
+    ) -> Result<Value> {
         let (dir, label) = {
             let cp = self.inner.control.lock();
             let p = cp.open.as_ref().context("no project is open")?;
@@ -1591,22 +1599,28 @@ impl Graph {
             bail!("This clip's file has no takes to choose from.");
         }
         let Some(to) = takes.get(take) else { bail!("Its file has {} takes: choose 1 to {}.", takes.len(), takes.len()) };
-        let now = takes.iter().rposition(|t| *t <= found.offset + 1e-6).unwrap_or(0);
-        let offset = (found.offset - takes[now] + to).max(0.0);
-        let gesture = m2_editor::clips::Gesture::Audio {
-            clip,
-            gain_db: None,
-            fade_in: None,
-            fade_out: None,
-            reverse: None,
-            follow: None,
-            offset: Some(offset),
+        let (gesture, name) = match range {
+            Some((from, to)) => (m2_editor::clips::Gesture::Comp { clip, takes, take, from, to }, format!("Comp on {label}")),
+            None => {
+                let now = takes.iter().rposition(|t| *t <= found.offset + 1e-6).unwrap_or(0);
+                let offset = (found.offset - takes[now] + to).max(0.0);
+                let gesture = m2_editor::clips::Gesture::Audio {
+                    clip,
+                    gain_db: None,
+                    fade_in: None,
+                    fade_out: None,
+                    reverse: None,
+                    follow: None,
+                    offset: Some(offset),
+                };
+                (gesture, format!("{label} take {}", take + 1))
+            }
         };
         let (done, _) = self.clips_why_since(token, gesture, None, since);
         let v = done?;
         // Named by its id: the take it had already makes no change, and no step (AGENT-2).
         if let Some(step) = v["step"].as_u64()
-            && let Err(err) = self.name_step_by(token, None, Some(step), format!("{label} take {}", take + 1), false)
+            && let Err(err) = self.name_step_by(token, None, Some(step), name, false)
         {
             eprintln!("music2: couldn't name the take's undo step: {err:#}");
         }
