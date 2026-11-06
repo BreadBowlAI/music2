@@ -219,6 +219,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | # | What's missing | Why it matters | Old app? | Size |
 |---|---|---|---|---|
 | 36 | **The rest of export**: MP3 or AAC, stems of a song that plays plugins, and a range (the loop, a selection), bit depth and normalize. | Sharing ideas with other apps and people. | No | medium |
+| 53 | **The rest of Bounce to audio**: bouncing only the bars selected on the ruler (the whole track is muted, so the rest of it would go silent: it needs the track's notes cut out there instead); a track that plays a plugin (the render would need the live plugin, as Export Audio borrows it); a track whose sound reaches the mix in more than one place, or whose channel doesn't read it by name. Each is refused in words. | Resampling a chorus or one fill, and freezing a heavy plugin to save power. | No | medium |
 
 - **An export whose sound had NaN or infinite samples** silences them, and the app doesn't say so (`m2 render` warns).
 
