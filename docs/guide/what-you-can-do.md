@@ -30,6 +30,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Fix one part by punching in, or keep a take each time round a loop | right-click Record ▸ **Punch in and out**; the clip's menu ▸ **Take 1**, **Take 2**, … |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
+| Turn a track into audio, to chop it or save power; the song sounds the same | the track's menu ▸ **Bounce to audio** ([how](audio.md#bounce-a-track-to-audio)) |
 | Bring in a MIDI file as new tracks | File ▸ Import MIDI…, or drop the `.mid` file |
 | Play a WAV file as an instrument | + Track ▸ Sampler, then drop a WAV (or a FLAC) on its card |
 | Add a CLAP plugin, and open its own window | drag it from the browser's **Plugins** onto a track, or + Track ▸ **Plugins**; **Open window** on its box |

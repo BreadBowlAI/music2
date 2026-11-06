@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, AudioWaveform, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
@@ -16,6 +16,7 @@ import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
 import { addAudioTrack, AUDIO_TRACK } from "../lib/audioImport";
+import { bounce, useBounce } from "../lib/bouncing";
 import PluginsFoot from "./PluginsFoot";
 
 // Tracks (design-8b §3, taste.md §3.4, TL-2, TL-3): + Track and its instrument list, the header
@@ -208,6 +209,27 @@ export async function duplicateTrack(module: string) {
     toast(r.new_channel ? `Duplicated ${name} into the mixer` : `Duplicated ${name}`, undoAction(graph.session, r.step));
   } catch (error) {
     toast(message(error));
+  }
+}
+
+/**
+ * Bounce to audio (RENDER-40): `module` rendered to a file, a new audio track under it playing it in
+ * a copy of its channel, and `module` muted in the song, as one undo step: the song sounds the same.
+ * The new track is selected and lit; the toast says what happened, with Undo.
+ */
+export async function bounceTrack(module: string) {
+  const graph = writable();
+  if (!graph || module === "song") return;
+  const toast = useStore.getState().toast;
+  if (useBounce.getState().progress !== null) return toast("A track is being bounced. Wait for it to finish, then bounce this one.");
+  const name = nameOf(graph, module);
+  try {
+    const r = await bounce(graph.session, module, name);
+    await refreshed();
+    arrived(r.module, "clips");
+    toast(`Bounced ${name} to audio: ${r.label} plays it, and ${name} is muted in the song`, undoAction(graph.session, r.step));
+  } catch (error) {
+    toast(`Couldn't bounce ${name}: ${message(error)}`);
   }
 }
 
@@ -655,6 +677,19 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
       <MenuRow icon={<Copy size={14} />} shortcut={chord("D")} disabled={!!locked} onClick={run(() => void duplicateTrack(module))}>
         Duplicate
       </MenuRow>
+      {/* RENDER-40: a bus plays what it is sent, and a track muted in the song would bounce silence. */}
+      {!track?.bus && !inSong && (
+        <MenuRow
+          icon={<AudioWaveform size={14} />}
+          disabled={!!locked}
+          title={locked ?? undefined}
+          data-testid="bounce"
+          detail="Turns it into audio you can chop. The song sounds the same."
+          onClick={run(() => void bounceTrack(module))}
+        >
+          Bounce to audio
+        </MenuRow>
+      )}
       <MenuRow icon={<Trash2 size={14} />} shortcut={DELETE_KEY} disabled={!!locked} onClick={run(() => void deleteTrack(module))}>
         Delete
       </MenuRow>

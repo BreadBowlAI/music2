@@ -4,11 +4,32 @@
 - Bring in WAV, FLAC and MIDI files, edit audio clips, and keep audio in time when the tempo changes.
 - Record notes from a MIDI keyboard or the computer's keys, or your voice or a guitar.
 - Arm tracks to record several at once, punch in to fix one part, and keep a take for each time round a loop.
+- Bounce a track to audio, to chop it or to save the computer's power: the song sounds the same.
 
 - **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
 - **Edit an audio clip:** drag its edges to trim it, and the small squares at its top to fade it in or out. Its menu sets its volume, plays it backwards, or removes the fades. Each is one undo step.
 - **Follow tempo:** right-click an audio clip and turn on **Follow tempo**. Change the song's tempo later, and the clip stretches to keep its beats; its pitch stays the same. The stretch is made in the background while the song plays on. Turn it off and the clip plays at its own speed again.
 - **Bring in a MIDI file:** File → Import MIDI…, or drop a `.mid` file. Each part becomes a new track with a fitting sound, its notes in one clip; the drums (channel 10) come in as a [drum kit](sounds.md#drum-kits), a track for each drum. If the file's tempo differs from the song's, it asks: **Keep** the song's (Return) or **Use** the file's. One Undo takes the whole import back.
+
+## Bounce a track to audio
+
+Bouncing turns a track into a recording of itself ("resampling"). Then you can chop it, play it backwards or change its pitch like any audio clip. It also saves the computer's power: a heavy sound plays as a plain file.
+
+- **How:** open a track's menu (the ⋯ on its header, or right-click its strip in Mix) and pick **Bounce to audio**.
+- **What it does,** as one undo step:
+
+| What | Where |
+|---|---|
+| The track is rendered to a new file | `assets/keys-bounce.wav`, with a note beside it saying how it was made |
+| A new audio track plays the file | right under it, called "Keys audio", one clip from the start |
+| The new track gets the same mixer settings | its volume, pan, effects and where it goes are copied from the track |
+| The track is muted in the song | it stays, with its notes, so you can go back |
+
+- **The song sounds the same** afterwards: exactly the same, sample for sample.
+- **While it renders**, a box says how far it is. **Stop** in it adds nothing and leaves no file. If you change the song while it renders, nothing is added either, and it says so: bounce again.
+- **Undo** (⌘Z) takes it all back: the new track goes, and the track plays again. The file stays in `assets/`.
+- **Agents** do the same with `m2 bounce <song> keys-bounce --track keys --in-place`.
+- **Not yet:** only the bars you selected, and a track that plays a plugin. A track that shares its mixer channel, or is muted in the song, can't be bounced either. Each says why.
 
 ## Recording
 

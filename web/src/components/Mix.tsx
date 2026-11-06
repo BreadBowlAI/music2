@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, Check, CodeXml, Drum, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, AudioWaveform, Check, CodeXml, Drum, Merge, Pencil, Plus, Spline, Trash2, VolumeX } from "lucide-react";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import { beatNow, onFrame } from "../lib/clock";
 import {
@@ -34,7 +34,7 @@ import { Bubble, FINE, focusNext, KnobMenu, MiniKnob, NOTCH, useKnobDrag, useKno
 import { useGlows } from "../lib/notice";
 import Meter, { ClipDot } from "./Meter";
 import { StripMuteSolo } from "./MuteSolo";
-import { Colours, makeKit, openChangeInstrument } from "./Tracks";
+import { bounceTrack, Colours, makeKit, openChangeInstrument } from "./Tracks";
 import TrackName from "./TrackName";
 import { Button, EmptyState, MenuRow, Popover } from "./ui";
 
@@ -646,6 +646,19 @@ function StripMenu({
           {machine && (
             <MenuRow icon={<Drum size={14} />} disabled={!!locked} title={locked ?? undefined} data-testid="make-kit" detail={keeps} onClick={run(() => void makeKit(module))}>
               Make it a kit
+            </MenuRow>
+          )}
+          {/* RENDER-40: a bus plays what it is sent, and a track muted in the song would bounce silence. */}
+          {!bus && !inSong && (
+            <MenuRow
+              icon={<AudioWaveform size={14} />}
+              disabled={!!locked}
+              title={locked ?? undefined}
+              data-testid="bounce"
+              detail="Turns it into audio you can chop. The song sounds the same."
+              onClick={run(() => void bounceTrack(module))}
+            >
+              Bounce to audio
             </MenuRow>
           )}
           <MenuRow
