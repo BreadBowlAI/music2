@@ -31,6 +31,7 @@ const DRUMS = [
   "snare 2",
   "clap",
   "hats",
+  "open hat",
   "tom",
   "rim",
   "claves",
@@ -52,9 +53,15 @@ const DRUMS = [
  * count: how many hits the lane has played, never how long the engine has run, so live playback
  * from 0 is the export.
  */
-function machine(notes: Events, voice: "@m2/drums:drum" | "@m2/drums:one", voices: number, patch: Record<string, Value | Choice>): Audio {
+function machine(notes: Events, voice: "@m2/drums:drum" | "@m2/drums:one", voices: number, patch: Record<string, Value | Choice>, cutBy?: Events): Audio {
   const hits = poly(notes, (n) => kernel("std:drumhit", { pitch: n.pitch, model: -1 }), { voices: 8 });
   const count = kernel("std:hitcount", { hits });
+  if (cutBy !== undefined) {
+    // Another track's hits (KIT-27), marked as a tom's are (a start, in no choke group): every voice
+    // hears them, and fades out at each, whatever it plays. Left out, the Drum is what it was.
+    const cut = poly(cutBy, (n) => kernel("std:drumhit", { pitch: n.pitch, model: 4 }), { voices: 8 });
+    return poly(notes, (n) => kernel("@m2/drums:cut", { pitch: n.pitch, velocity: n.velocity, hits, count, ...patch, cut }), { voices });
+  }
   return poly(notes, (n) => kernel(voice, { pitch: n.pitch, velocity: n.velocity, hits, count, ...patch }), { voices });
 }
 
@@ -165,13 +172,16 @@ export const drums = {
    * One drum on every note, the one its menu picks: kick, snare, clap, hats (G#2 pedal, A#2 open),
    * tom (chromatic: A2 is the drum's own pitch), rim, cowbell, cymbal (a crash) or shaker, or another
    * drum the drum machine plays (kick 2, snare 2, claves, cymbal 2, ride, ride 2, shaker 2, tambourine:
-   * KIT-20), as the drum machine plays it at its note. The menu is a
+   * KIT-20; open hat, the hats' open one: KIT-28), as the drum machine plays it at its note. The menu is a
    * control: a pick plays from the next hit, and a lane can automate it. Its knobs move whichever it
    * plays: `tune` in semitones from the drum's own, `decay` times its own length, and `punch` more or
    * less of a kick's thump or a snare's snap, or on the others of the hit's first 15 ms. At 0, 1
    * and 0 it is the drum as the drum machine plays it, and at its single's voices (4, or 6 for the
    * hats and the tom) the drum each removed single played (CARD-33). Its kits are several of it,
-   * each on a track of its own, going to one Drums bus (KIT-4).
+   * each on a track of its own, going to one Drums bus (KIT-4). `cutBy`, another track's hits, cuts
+   * it at each, whatever it plays (KIT-27): an open hat cut by the closed one,
+   * `drums.drum(lane.notes("hits"), { drum: "open hat", cutBy: hats.hits })`, where the Hats track
+   * returns its lane beside its sound, `({ out: drums.drum(…), hits: lane.notes("hits") })`.
    */
   drum: component(
     {
@@ -179,7 +189,8 @@ export const drums = {
       // The one building block (KIT-2): + Track lists the kits apart, as "Drum kit (several tracks)".
       label: "Drum",
       signature: signature<(notes: Events) => Audio>(),
-      inputs: { notes: port.notes() },
+      // `cutBy`: another track's hits, which cut it (KIT-27): `{ cutBy: hats.hits }`.
+      inputs: { notes: port.notes(), cutBy: port.notes().optional() },
       controls: {
         drum: control.choice(DRUMS, "kick").label("sound"),
         tune: control.semis(0).range(-24, 24),
@@ -193,8 +204,10 @@ export const drums = {
         category: "Drums",
         description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal, shaker, ride, tambourine, claves and more",
         groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
-        // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The hats
-        // are one Hats track, closed, pedal and open by the note, so a closed hat cuts an open one.
+        // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The 808's
+        // and the 909's hats are two tracks, Hats (closed) and Open hat, cut by the Hats' hits, so a
+        // beat grid has a row for each (KIT-28); the Basic kit's are one Hats track, closed, pedal and
+        // open by the note, so a closed hat cuts an open one inside it.
         // The 808's kick is a long boom (punch -0.5), its snare more tone than snap, its toms and
         // cymbal ring long; the 909's kick thumps (punch 0.5), its snare snaps, its hats and cymbal
         // are brighter and its toms shorter. Each kit's bus fader (db) keeps its beat under -1 dBTP,
@@ -207,6 +220,7 @@ export const drums = {
               { name: "Snare", drum: "snare", punch: -0.3 },
               { name: "Clap", drum: "clap" },
               { name: "Hats", drum: "hats" },
+              { name: "Open hat", drum: "open hat", cutBy: "Hats" },
               { name: "Toms", drum: "tom", decay: 1.5 },
               { name: "Rim", drum: "rim" },
               { name: "Cowbell", drum: "cowbell" },
@@ -220,6 +234,7 @@ export const drums = {
               { name: "Snare", drum: "snare", punch: 0.3 },
               { name: "Clap", drum: "clap" },
               { name: "Hats", drum: "hats", tune: 2 },
+              { name: "Open hat", drum: "open hat", tune: 2, cutBy: "Hats" },
               { name: "Toms", drum: "tom", decay: 0.8 },
               { name: "Rim", drum: "rim" },
               { name: "Cymbal", drum: "cymbal", tune: 2 },
@@ -236,7 +251,7 @@ export const drums = {
         },
       },
     },
-    (notes: Events, { drum, voices, tune, decay, punch, drive }: Params): Audio =>
-      machine(notes, "@m2/drums:one", voices, { drum, tune, decay, push: punch, drive }),
+    (notes: Events, cutBy: Events | undefined, { drum, voices, tune, decay, punch, drive }: Params): Audio =>
+      machine(notes, "@m2/drums:one", voices, { drum, tune, decay, push: punch, drive }, cutBy),
   ),
 };

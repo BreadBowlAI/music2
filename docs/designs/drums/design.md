@@ -78,6 +78,11 @@ built the same way (a track is a function, a bus is a track), so FL's way fits i
 - **Across tracks** (a cut group, as FL has) needs a Drum to hear another track's hits. Kernels can read note events
   since track `events` (ABI-8), so a Drum could take a second events input fed by the other tracks' lanes. It waits
   until a real case needs it; this note doesn't build it.
+- *Amended by track `choke` (2026-11-06):* built, as TypeScript over what is there: a Drum takes another track's hits as
+  an optional input, `drums.drum(lane.notes("hits"), { drum: "open hat", cutBy: hats.hits })`, the cutting track
+  returning its lane beside its sound; the Drum's card writes it from a **Cut by** menu; the 808 and 909 kits play
+  their hats on Hats and Open hat, the Open hat cut by the Hats (KIT-27, KIT-28). No events input on the kernel was
+  needed: the other track's hits are marked by `drumhit` outside the voices, as the Drum's own are.
 
 ## 5. What goes
 

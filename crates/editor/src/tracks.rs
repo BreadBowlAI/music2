@@ -281,6 +281,19 @@ pub(crate) fn track_call_text(inst: &Instrument, key: &str, label: &str, values:
     format!("track({}{options}, ({{ lane }}) => {}(lane.notes({}){values}))", quoted(key), inst.name, quoted(&inst.lane))
 }
 
+/// [`track_call_text`] for a track whose lane another track reads (KIT-27): it returns its lane, by
+/// its key, beside its sound, `({ out: drums.drum(lane.notes("hits")), hits: lane.notes("hits") })`.
+pub(crate) fn exporting_call_text(inst: &Instrument, key: &str, label: &str, values: &str) -> String {
+    let options = if label == key { String::new() } else { format!(", {{ name: {} }}", quoted(label)) };
+    let lane = quoted(&inst.lane);
+    format!(
+        "track({}{options}, ({{ lane }}) => ({{ out: {}(lane.notes({lane}){values}), {}: lane.notes({lane}) }}))",
+        quoted(key),
+        inst.name,
+        prop_key(&inst.lane)
+    )
+}
+
 /// What a new track's call writes after its notes for `values` of instrument `d` (a kit's, KIT-5):
 /// `, { drum: "kick", punch: -0.5 }`, each as its card writes it (a choice by its name, a switch
 /// true or false, a number in its spelling), and the unit constructors that needs from `@m2/core`;
@@ -322,7 +335,15 @@ pub(crate) fn instrument_binding(inst: &Instrument) -> &str {
 
 /// The text of a new track file playing `inst` from its lane, writing `values` after its notes,
 /// with the unit constructors `ctors` they need imported beside `track`.
-fn track_text(inst: &Instrument, key: &str, label: &str, file: &str, (values, ctors): &(String, Vec<String>)) -> String {
+fn track_text(
+    inst: &Instrument,
+    key: &str,
+    label: &str,
+    file: &str,
+    (values, ctors): &(String, Vec<String>),
+    reads: &[(String, String)],
+    exports: bool,
+) -> String {
     // A project's own instrument is imported by its path from the track's folder.
     let from = match inst.module.ends_with(".ts") {
         true => specifier(file, &inst.module),
@@ -330,12 +351,15 @@ fn track_text(inst: &Instrument, key: &str, label: &str, file: &str, (values, ct
     };
     let mut core: Vec<&str> = ctors.iter().map(String::as_str).chain(["track"]).collect();
     core.sort();
+    // The tracks whose lanes it reads, each by its binding and file (KIT-27).
+    let others: String =
+        reads.iter().map(|(binding, other)| format!("import {binding} from {};\n", quoted(&specifier(file, other)))).collect();
+    let call = if exports { exporting_call_text(inst, key, label, values) } else { track_call_text(inst, key, label, values) };
     format!(
-        "import {{ {} }} from \"@m2/core\";\nimport {{ {} }} from {};\n\nexport default {};\n",
+        "import {{ {} }} from \"@m2/core\";\nimport {{ {} }} from {};\n{others}\nexport default {call};\n",
         core.join(", "),
         instrument_binding(inst),
         quoted(&from),
-        track_call_text(inst, key, label, values)
     )
 }
 
@@ -479,6 +503,10 @@ pub struct NewTrack {
     /// Lanes of its own beside the one it plays, each its key and its file's text (a knob's lane,
     /// KIT-23).
     pub lanes: Vec<(String, String)>,
+    /// Optional notes inputs of its instrument, each given the hits of an earlier track of this
+    /// list, by its place: `("cutBy", 4)` writes `cutBy: hats.hits`, imports that track, and has it
+    /// return its lane beside its sound (a kit's Open hat, cut by its Hats, KIT-28).
+    pub hits_of: Vec<(String, usize)>,
 }
 
 /// A track that becomes a bus in the same Tx as the tracks added to go to it (Make it a kit,
@@ -675,7 +703,27 @@ pub(crate) fn add_tracks_as(
         let text = match (inst, plugin, bus) {
             (Some(i), ..) => {
                 let d = &s.catalog().components[&i.component];
-                track_text(i, &key, &label, &file, &values_text(d, &t.values, &t.code, &rev.compiled.units)?)
+                // The lanes of earlier tracks it reads (KIT-27): each imported by a name of its own.
+                let mut code = t.code.clone();
+                let mut reads: Vec<(String, String)> = vec![];
+                for (slot, j) in &t.hits_of {
+                    let (Some(other), Some(other_file), Some(Play::Instrument(c))) =
+                        (keys_made.get(*j), files.get(*j), tracks.get(*j).map(|o| &o.play))
+                    else {
+                        return Err(EditError::Rejected("a new track reads the hits of a new track listed before it".into()));
+                    };
+                    let lane = &catalog.iter().find(|x| x.component == *c).ok_or_else(|| EditError::NotFound(c.clone()))?.lane;
+                    let taken: Vec<&str> =
+                        ["track", instrument_binding(i)].into_iter().chain(reads.iter().map(|(b, _)| b.as_str())).collect();
+                    let mut binding = camel(other);
+                    while taken.contains(&binding.as_str()) {
+                        binding.push_str("Track");
+                    }
+                    code.push((slot.clone(), format!("{binding}.{lane}")));
+                    reads.push((binding, other_file.clone()));
+                }
+                let exports = tracks.iter().any(|o| o.hits_of.iter().any(|(_, j)| *j == n));
+                track_text(i, &key, &label, &file, &values_text(d, &t.values, &code, &rev.compiled.units)?, &reads, exports)
             }
             (None, Some((id, _)), _) => crate::plugins::track_text(id, &key, &label),
             (None, None, Some(kind)) => {

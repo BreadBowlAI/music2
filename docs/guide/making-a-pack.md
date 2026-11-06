@@ -197,6 +197,8 @@ editor: {
 
 A value the instrument doesn't have (`drum: "kik"`, a knob it hasn't got, `hz(2)` on a knob in semitones) is a red line under that track, and the build refuses it in words; so are kits on an instrument that isn't a drum. A kit's name and a track's are one line of 1 to 24 characters. Kits need `@m2/core` 2.2: say `"@m2/core" = "2.2"` in `m2pkg.toml`.
 
+**Optional inputs.** An input a call may leave out is `port.notes().optional()` (or any kind of port): a call gives it by its name, among the options (`drums.drum(notes, { cutBy: hats.hits })`), and the body gets `undefined` when it is left out. An instrument may have such inputs after its notes. In a kit, a track gives an optional notes input another track's hits by that track's name, an earlier one in the kit: `{ name: "Open hat", drum: "open hat", cutBy: "Hats" }`. Adding the kit writes the import and the export that takes ([Cut by](sounds.md#cut-by)).
+
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 
 ## Kernels of its own
@@ -299,7 +301,7 @@ m2 pack import-sfz "Felt Piano.sfz" felt-piano --name @alice/felt-piano --label 
 | `README.md` | the credits in the SFZ's first comments, and what the import couldn't keep |
 | `LICENSE` | the licence file beside the SFZ (`LICENSE`, `LICENCE` or `COPYING`), when there is one |
 
-It reads SFZ's headers (`<control>`, `<global>`, `<master>`, `<group>`, `<region>`), `#define`, `#include`, `default_path`, `octave_offset` and `note_offset`, notes as numbers or names (`c4` is 60), and the opcodes that map to a region: `sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `seq_length`, `seq_position`, `trigger`, `loop_mode`, `loop_start`, `loop_end`, `tune`, `transpose`, `volume`, `pan`, `offset`, `amp_veltrack`, `ampeg_attack` and `ampeg_release`. Everything else it names when it ends:
+It reads SFZ's headers (`<control>`, `<global>`, `<master>`, `<group>`, `<region>`), `#define`, `#include`, `default_path`, `octave_offset` and `note_offset`, notes as numbers or names (`c4` is 60), and the opcodes that map to a region: `sample`, `key`, `lokey`, `hikey`, `pitch_keycenter`, `lovel`, `hivel`, `seq_length`, `seq_position`, `trigger`, `loop_mode`, `loop_start`, `loop_end`, `tune`, `transpose`, `volume`, `pan`, `offset`, `group`, `off_by`, `amp_veltrack`, `ampeg_attack` and `ampeg_release`. Everything else it names when it ends:
 
 ```
 made @alice/felt-piano in felt-piano: felt-piano plays 208 regions from 208 recordings
@@ -308,6 +310,8 @@ key switches: kept the default one's regions (c0)
 ```
 
 A value it can't read leaves its region out and says so (`tune=+5c`; `pitch_keycenter=sample`, the root note stored in the WAV), rather than reading it as 0.
+
+Choke groups come in as they are: a closed hat stops an open one as in the SFZ (`group` and `off_by`, [the Sampler](sounds.md)). Once any region has an `off_by`, every region gets its `group`, SFZ's 0 where the SFZ writes none. A cut region stops in 4 ms; one the SFZ fades by its release instead (`off_mode=normal`) stops in 4 ms too, and the import says so.
 
 The instrument's `velocity`, `attack` and `release` are one value for all its regions, so the import takes the one that 9 in 10 of the regions played at a key's start agree on. When they don't agree, it keeps the Sampler's own and says so. The Sampler's `velocity` makes the level follow a straight line where SFZ's `amp_veltrack` follows a curve, so soft notes come out a little louder; the import says by how much.
 

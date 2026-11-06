@@ -17,6 +17,7 @@ pub mod cable;
 pub mod changed;
 pub mod clips;
 pub mod controls;
+pub mod cut;
 pub mod data;
 pub mod drums;
 pub mod effect;

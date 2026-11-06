@@ -28,4 +28,10 @@ impl Graph {
         let (call, track) = (call.to_string(), track.to_string());
         self.edit(token, move |s| m2_editor::effect::sidechain(s, revision, &call, &track))
     }
+
+    /// Cut the Drum of track `track` by the hits of Drum track `by`, or by none (KIT-27).
+    pub fn kit_cut(&self, token: u64, track: &str, by: Option<&str>) -> Result<Value> {
+        let (track, by) = (track.to_string(), by.map(str::to_string));
+        self.edit(token, move |s| m2_editor::cut::cut_by(s, &track, by.as_deref()))
+    }
 }

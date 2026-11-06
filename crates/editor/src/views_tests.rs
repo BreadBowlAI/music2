@@ -589,7 +589,8 @@ fn music2s_own_sounds_show_their_groups_and_views() {
     }
     // The Drum's menu (review Y11): its drums, a control, so a pick plays with no rebuild and can be
     // automated, labelled "sound" so its undo step reads "Drum sound" (KIT-2); its voices the one setting.
-    // Since KIT-20 every drum the drum machine plays, the nine first, then its others.
+    // Since KIT-20 every drum the drum machine plays, the nine first, then its others; since KIT-28
+    // the open hat after the hats.
     let drum = view.modules.iter().find(|m| m.key == "t13").unwrap().nodes.iter().find(|n| n.title.as_deref() == Some("Drum")).unwrap();
     let menu = drum.knobs.iter().find(|k| k.slot.as_deref() == Some("drum")).expect("the Drum's menu");
     assert_eq!((menu.kind, menu.label.as_str()), (crate::kind::Kind::Choice, "sound"));
@@ -603,6 +604,7 @@ fn music2s_own_sounds_show_their_groups_and_views() {
             "snare 2",
             "clap",
             "hats",
+            "open hat",
             "tom",
             "rim",
             "claves",

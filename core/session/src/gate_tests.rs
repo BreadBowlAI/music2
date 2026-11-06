@@ -999,3 +999,116 @@ fn the_named_sounds_play_the_bits_they_did() {
         assert_eq!(render_y(call, five_notes()), want, "{name} plays other bits than it did");
     }
 }
+
+/// A song of two tracks, as a kit's Hats and Open hat are: `hats` plays the closed hat on `closed`
+/// and returns its lane beside its sound; `open` plays `open`'s call on its own lane (an open hat at
+/// beat 0), which may read `hats.hits`. The song plays the open hat's track alone.
+fn cut_song(f: &Fixture, open: &str, closed: &[f64]) {
+    // Its music2.toml, as one drum's song asks for what this tree bundles; not its lane.
+    notes_song(f, "drums.drum(lane.notes(\"notes\"))", vec![]);
+    std::fs::remove_dir_all(f.0.join("data/beat")).unwrap();
+    let note = |start: f64| serde_json::json!({"pitch": 46, "start": start, "length": 0.25, "velocity": 0.8});
+    let closed: Vec<_> = closed.iter().map(|b| serde_json::json!({"pitch": 42, "start": b, "length": 0.25, "velocity": 0.8})).collect();
+    f.write("data/hats/hits.json", serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 4, "notes": closed}]}).to_string());
+    f.write("data/open/hits.json", serde_json::json!({"clips": [{"id": "c2", "start": 0, "length": 4, "notes": [note(0.0)]}]}).to_string());
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\n\n\
+             const hats = track(\"hats\", ({{ lane }}) => ({{ out: drums.drum(lane.notes(\"hits\"), {{ drum: \"hats\" }}), hits: lane.notes(\"hits\") }}));\n\
+             const open = track(\"open\", ({{ lane }}) => {open});\n\nexport default song(() => open.out);\n"
+        ),
+    );
+}
+
+fn cut_render(open: &str, closed: &[f64]) -> Vec<[f32; 2]> {
+    let f = Fixture::new();
+    cut_song(&f, open, closed);
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{open}: {:?} {:?}", s.draft_errors, s.problems());
+    render_song(&s)
+}
+
+// KIT-27: an open hat cut by the Hats track's hits stops at the closed hat's hit, in a fade of 4 ms
+// to exact silence that doesn't click, and plays every bit as before up to it; with no cut, or cut by
+// a track that doesn't play, it is the open hat it was. The open hat (KIT-28) is the hats' open one.
+#[test]
+fn a_drum_cut_by_another_tracks_hits_stops_at_each() {
+    let uncut = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\" })", &[0.25]);
+    let cut = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\", cutBy: hats.hits })", &[0.25]);
+    let at = 6_000; // beat 0.25 at 120 bpm, 48 kHz
+    let left = |x: &[[f32; 2]], a: usize, b: usize| x[a..b].iter().map(|f| f[0].abs()).fold(0.0f32, f32::max);
+    assert!(left(&uncut, at, at + 4_800) > 0.01, "the open hat rings past the closed hat");
+    assert_eq!(cut[..at], uncut[..at], "the same up to the cut");
+    assert!(left(&cut, at, at + 96) > 0.0, "it fades, it doesn't stop");
+    assert_eq!(left(&cut, at + 193, cut.len()), 0.0, "silent 4 ms after the closed hat");
+    let step = |x: &[[f32; 2]], a: usize, b: usize| x[a..b].windows(2).map(|w| (w[1][0] - w[0][0]).abs()).fold(0.0f32, f32::max);
+    assert!(step(&cut, at, at + 200) <= 1.5 * step(&uncut, at - 480, at + 200), "no click");
+    // Cut by a track that plays no hits, or with `cutBy` left out: the open hat as it was.
+    assert_eq!(bits(&cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"open hat\", cutBy: hats.hits })", &[])), bits(&uncut));
+    // The open hat is the hats' A#2, at every note.
+    let hats = cut_render("drums.drum(lane.notes(\"hits\"), { drum: \"hats\" })", &[0.25]);
+    assert_eq!(bits(&hats), bits(&uncut), "the hats at A#2 are the open hat");
+}
+
+/// A song whose one track plays std's Sampler on `regions` over `notes` (pitch, beat), from two
+/// recordings in its assets, `open.wav` (a second of a 500 Hz tone) and `closed.wav` (a short click).
+fn sampler_song(f: &Fixture, regions: &str, notes: &[(u8, f64)]) {
+    let wav = |name: &str, frames: u32| {
+        let spec = hound::WavSpec { channels: 1, sample_rate: 48_000, bits_per_sample: 16, sample_format: hound::SampleFormat::Int };
+        std::fs::create_dir_all(f.0.join("assets")).unwrap();
+        let mut w = hound::WavWriter::create(f.0.join("assets").join(name), spec).unwrap();
+        for i in 0..frames {
+            w.write_sample(((i as f64 * 500.0 / 48_000.0 * std::f64::consts::TAU).sin() * 16_000.0) as i16).unwrap();
+        }
+        w.finalize().unwrap();
+    };
+    wav("open.wav", 48_000);
+    wav("closed.wav", 480);
+    let std = m2_song::Version::parse(&std_packages().get("std").unwrap().version).unwrap();
+    f.write(
+        "music2.toml",
+        format!(
+            "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"{}.{}\"\n",
+            std.0, std.1
+        ),
+    );
+    let notes: Vec<_> = notes.iter().map(|(p, b)| serde_json::json!({"pitch": p, "start": b, "length": 0.25, "velocity": 0.8})).collect();
+    f.write("data/hats/notes.json", serde_json::json!({"clips": [{"id": "c1", "start": 0, "length": 4, "notes": notes}]}).to_string());
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from \"@m2/core\";\nimport {{ sampler }} from \"std/sampler\";\n\n\
+             const hats = track(\"hats\", ({{ lane }}) => sampler(lane.notes(\"notes\"), {{ regions: {regions} }}));\n\nexport default song(() => hats.out);\n"
+        ),
+    );
+}
+
+fn sampler_render(regions: &str, notes: &[(u8, f64)]) -> Vec<[f32; 2]> {
+    let f = Fixture::new();
+    sampler_song(&f, regions, notes);
+    let s = f.open();
+    assert!(s.draft_errors.is_empty() && s.problems().is_empty(), "{regions}: {:?} {:?}", s.draft_errors, s.problems());
+    render_song(&s)
+}
+
+// PKG-16 rule 8: in std's Sampler a closed hat (group 1) cuts the open one (off_by 1) ringing in
+// another voice, in 4 ms to exact silence, and the closed hat plays on; with no off_by, both ring, and
+// the regions render as before (`std:regions`). As SFZ's `group` and `off_by` say.
+#[test]
+fn a_sampler_region_is_cut_by_its_off_by_group() {
+    let regions = |cut: &str| {
+        format!("[{{ file: \"open.wav\", keys: [46, 46], root: 46{cut} }}, {{ file: \"closed.wav\", keys: [42, 42], root: 42, group: 1 }}]")
+    };
+    let notes = [(46, 0.0), (42, 0.25)];
+    let open_alone = sampler_render(&regions(", off_by: 1"), &[(46, 0.0)]);
+    let both_ring = sampler_render(&regions(""), &notes);
+    let cut = sampler_render(&regions(", off_by: 1"), &notes);
+    let closed_alone = sampler_render(&regions(", off_by: 1"), &[(42, 0.25)]);
+    let at = 6_000; // beat 0.25 at 120 bpm, 48 kHz
+    assert_eq!(cut[..at], open_alone[..at], "the open hat as it was, up to the closed one");
+    assert_ne!(both_ring[at + 600..at + 4_800], closed_alone[at + 600..at + 4_800], "with no off_by the open hat rings on");
+    assert_eq!(cut[at + 193..], closed_alone[at + 193..], "4 ms after the closed hat, it alone");
+    let step = |x: &[[f32; 2]], a: usize, b: usize| x[a..b].windows(2).map(|w| (w[1][0] - w[0][0]).abs()).fold(0.0f32, f32::max);
+    assert!(step(&cut, at, at + 200) <= 1.5 * step(&both_ring, at - 480, at + 200), "no click");
+}

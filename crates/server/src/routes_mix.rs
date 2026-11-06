@@ -37,6 +37,9 @@ crate::api::routes! {
     POST "/api/graph/kit/drum" => kit_drum; writes, agents,
         "Add a Drum track to a drum kit, by its bus: playing a sound of the Drum's, named by it, going to the bus",
         r#"{"session": 7, "bus": "drums", "sound": "snare"}"#;
+    POST "/api/graph/kit/cut" => kit_cut; writes, agents,
+        "Cut a Drum track's drum by another Drum track's hits, as its card's Cut by does (by: null for none)",
+        r#"{"session": 7, "track": "open-hat", "by": "hats"}"#;
 }
 
 async fn blocking<T: Send + 'static>(f: impl FnOnce() -> anyhow::Result<T> + Send + 'static) -> Result<T, ApiError> {
@@ -167,6 +170,24 @@ struct DrumReq {
 async fn kit_drum(State(s): S, Json(r): Json<DrumReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || state.graph.kit_drum(r.session, &r.bus, &r.sound)).await;
+    s.graph_changed();
+    Ok(Json(result?))
+}
+
+#[derive(Deserialize)]
+struct CutReq {
+    session: u64,
+    /// The Drum track to cut, by its key.
+    track: String,
+    /// The Drum track whose hits cut it, by its key; null for none.
+    by: Option<String>,
+}
+
+/// A Drum card's Cut by (KIT-27): `{session, track, by}`, one Tx and one undo step. A write. Answers
+/// `{file, before, after, revision}`; refused in words where the code isn't in a shape it can be sure of.
+async fn kit_cut(State(s): S, Json(r): Json<CutReq>) -> ApiResult {
+    let state = s.clone();
+    let result = blocking(move || state.graph.kit_cut(r.session, &r.track, r.by.as_deref())).await;
     s.graph_changed();
     Ok(Json(result?))
 }

@@ -39,10 +39,23 @@ export interface Listens {
   refused?: string;
 }
 
+/** A Drum's "Cut by" row (KIT-27): the Drum track whose hits cut it, the ones that could, or why it can't change here. */
+export interface CutBy {
+  /** The track the Drum is on, by key. */
+  track: string;
+  /** The track whose hits cut it now, by key; none for None. */
+  by?: string;
+  /** The Drum tracks that can cut it: key and name. */
+  choices: [string, string][];
+  refused?: string;
+}
+
 declare module "./graph" {
   interface ViewNode {
     /** A Duck's "Listens to" row. */
     listens?: Listens;
+    /** A Drum's "Cut by" row. */
+    cut_by?: CutBy;
     /** An effect turned off: `bypass: true` in its call. Its sound goes on without it. */
     bypassed?: boolean;
     /** What its ⋯ menu offers, on an effect's card. */
@@ -120,4 +133,15 @@ export function moveEffect(node: ViewNode, title: string, other: string, earlier
 export function listenTo(node: ViewNode, key: string, name: string) {
   const whose = node.listens?.ducks ? `${node.listens.ducks}'s duck` : "the duck";
   return edit("/api/graph/effect/sidechain", { node: node.id, track: key }, { name: `${whose} listens to ${name}` });
+}
+
+/**
+ * Cut the Drum of card `node` (on track `name`) by the hits of Drum track `by` (called `byName`),
+ * or by none (`by` null). The row says so at once, so there is no toast: one undo step, "Open hat
+ * cut by Hats".
+ */
+export function cutBy(node: ViewNode, name: string, by: string | null, byName: string) {
+  const track = node.cut_by?.track;
+  if (!track) return;
+  return edit("/api/graph/kit/cut", { node: node.id, track, by }, { name: by ? `${name} cut by ${byName}` : `${name} cut by nothing` });
 }

@@ -42,13 +42,16 @@ pub struct GmDrum {
 /// very drum of its sound (KIT-20), but the toms, which it spreads 1.5 semitones a step where the
 /// Drum's tom is chromatic, and 52, 53 and 55, where it is silent (a MIDI file's Chinese cymbal and
 /// splash are the Cymbal's, its ride bell the Ride's).
-pub const GM: [GmDrum; 17] = [
+pub const GM: [GmDrum; 18] = [
     GmDrum { sound: "kick", notes: &[36], own: 36, name: "Kick" },
     GmDrum { sound: "kick 2", notes: &[35], own: 35, name: "Kick 2" },
     GmDrum { sound: "snare", notes: &[38], own: 38, name: "Snare" },
     GmDrum { sound: "snare 2", notes: &[40], own: 40, name: "Snare 2" },
     GmDrum { sound: "clap", notes: &[39], own: 39, name: "Clap" },
     GmDrum { sound: "hats", notes: &[42, 44, 46], own: 42, name: "Hats" },
+    // The hats' open hat on its own track (KIT-28): 46 is the hats', so it answers to no note, and
+    // writes 46.
+    GmDrum { sound: "open hat", notes: &[], own: 46, name: "Open hat" },
     GmDrum { sound: "tom", notes: &[41, 43, 45, 47, 48, 50], own: 45, name: "Toms" },
     GmDrum { sound: "rim", notes: &[37], own: 37, name: "Rim" },
     GmDrum { sound: "claves", notes: &[75], own: 75, name: "Claves" },
@@ -187,11 +190,14 @@ pub fn add_kit(s: &mut Session, component: &str, kit: &str, after: Option<&str>)
             _ => format!("{} has no kit called {kit}: its kits are {}.", inst.label, crate::listed(&names)),
         }));
     };
+    // A track cut by an earlier one (KIT-28) reads its hits by its place in the list, after the bus.
+    let place = |name: &str| k.tracks.iter().position(|t| t.name == name).map(|i| i + 1);
     let made = k.tracks.iter().map(|t| NewTrack {
         play: Play::Instrument(component.to_string()),
         label: Some(t.name.clone()),
         values: t.values.clone(),
         to: Some(Goes::New(0)),
+        hits_of: t.inputs.iter().filter_map(|(slot, by)| Some((slot.clone(), place(by)?))).collect(),
         ..NewTrack::default()
     });
     tracks::add_tracks(s, &std::iter::once(kit_bus(k.db.clone())).chain(made).collect::<Vec<_>>(), after, None)

@@ -493,6 +493,76 @@ pub fn properties(source: &str, span: (u32, u32)) -> Option<Vec<Property>> {
     find.found.flatten()
 }
 
+/// What the function written at a span returns, as Cut by reads it to add an export (KIT-27): the
+/// returned expression's bytes, the object literal's when it is one (inside any parentheses), and
+/// whether it is an arrow's expression body, where an object written in its place needs parentheses.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FnResult {
+    pub start: u32,
+    pub end: u32,
+    pub object: Option<(u32, u32)>,
+    pub arrow: bool,
+}
+
+/// What the outermost function written inside `span` of `source` returns: its expression body, or
+/// the one `return` of its block, written last in it (no other return in it, nor in a block of it).
+/// None when that isn't so.
+pub fn fn_result(source: &str, span: (u32, u32)) -> Option<FnResult> {
+    use oxc::ast::ast::{ArrowFunctionBody, Expression, FunctionBody, ReturnStatement};
+    struct Returns(usize);
+    impl<'a> Visit<'a> for Returns {
+        fn visit_return_statement(&mut self, it: &ReturnStatement<'a>) {
+            self.0 += 1;
+            walk::walk_return_statement(self, it);
+        }
+        // A function inside has returns of its own.
+        fn visit_function(&mut self, _: &Function<'a>, _: ScopeFlags) {}
+        fn visit_arrow_function_expression(&mut self, _: &ArrowFunctionExpression<'a>) {}
+    }
+    fn of(e: &Expression<'_>, arrow: bool) -> FnResult {
+        let s = e.span();
+        let inner = e.without_parentheses();
+        let object = matches!(inner, Expression::ObjectExpression(_)).then(|| (inner.span().start, inner.span().end));
+        FnResult { start: s.start, end: s.end, object, arrow }
+    }
+    fn body(b: &FunctionBody<'_>) -> Option<FnResult> {
+        let mut count = Returns(0);
+        for st in &b.statements {
+            count.visit_statement(st);
+        }
+        match (b.statements.last(), count.0) {
+            (Some(Statement::ReturnStatement(r)), 1) => r.argument.as_ref().map(|e| of(e, false)),
+            _ => None,
+        }
+    }
+    struct Find {
+        within: (u32, u32),
+        found: Option<Option<FnResult>>,
+    }
+    impl<'a> Visit<'a> for Find {
+        fn visit_arrow_function_expression(&mut self, it: &ArrowFunctionExpression<'a>) {
+            if self.found.is_none() && it.span.start >= self.within.0 && it.span.end <= self.within.1 {
+                self.found = Some(match &it.body {
+                    ArrowFunctionBody::FunctionBody(b) => body(b),
+                    e => e.as_expression().map(|e| of(e, true)),
+                });
+            }
+            walk::walk_arrow_function_expression(self, it);
+        }
+        fn visit_function(&mut self, it: &Function<'a>, flags: ScopeFlags) {
+            if self.found.is_none() && it.span.start >= self.within.0 && it.span.end <= self.within.1 {
+                self.found = Some(it.body.as_ref().and_then(|b| body(b)));
+            }
+            walk::walk_function(self, it, flags);
+        }
+    }
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut find = Find { within: span, found: None };
+    find.visit_program(&ret.program);
+    find.found.flatten()
+}
+
 /// A function's parameter, as far as automate reads it.
 enum Param {
     /// `ctx`, with the span of its name.
@@ -586,6 +656,27 @@ impl<'a> Visit<'a> for FindFn {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // KIT-27: what a track's function returns, in each form it is written, and none where that
+    // isn't certain.
+    #[test]
+    fn what_a_function_returns_is_found() {
+        let at = |src: &str| {
+            fn_result(src, (0, src.len() as u32)).map(|r| {
+                (src[r.start as usize..r.end as usize].to_string(), r.object.map(|(a, b)| src[a as usize..b as usize].to_string()), r.arrow)
+            })
+        };
+        assert_eq!(at("({ lane }) => drums.drum(lane.notes(\"hits\"))"), Some(("drums.drum(lane.notes(\"hits\"))".into(), None, true)));
+        assert_eq!(at("({ lane }) => ({ out: x, env })"), Some(("({ out: x, env })".into(), Some("{ out: x, env }".into()), true)));
+        assert_eq!(
+            at("({ lane }) => {\n  const k = f(lane);\n  return { out: k };\n}"),
+            Some(("{ out: k }".into(), Some("{ out: k }".into()), false))
+        );
+        assert_eq!(at("function ({ lane }) { return f(() => { return 1; }); }"), Some(("f(() => { return 1; })".into(), None, false)));
+        assert_eq!(at("({ lane }) => { if (a) return x; return y; }"), None);
+        assert_eq!(at("({ lane }) => { if (a) { return x; } }"), None);
+        assert_eq!(at("({ lane }) => { f(); }"), None);
+    }
 
     // HOME-2: automate reaches `lane` from inside a module's function in each form it is written,
     // adding it to the parameters only where that is certain.

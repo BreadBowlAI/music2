@@ -56,7 +56,7 @@ import {
   type Setting,
   type ViewNode,
 } from "../lib/graph";
-import { listenTo, moveEffect, turnEffect } from "../lib/effects";
+import { cutBy, listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
 import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
@@ -394,7 +394,9 @@ function geometry(n: ViewNode, folded = false) {
   }
   const rows: number[] = [];
   // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
-  let y = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + PAD;
+  // A Drum's Cut by row too (KIT-27).
+  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.plugin ? ROW_H : 0) + (n.cut_by ? ROW_H : 0);
+  let y = top + PAD;
   const all = items(n, folded);
   for (const x of all) {
     const h = itemHeight(x);
@@ -410,7 +412,7 @@ function geometry(n: ViewNode, folded = false) {
   });
   const roomy = n.inputs.length || all.some((x) => x.t === "setting" || x.t === "view");
   const w = roomy && n.outputs.length ? NODE_W : (n.views?.length ? NODE_W : SLIM_W);
-  return { w, h: all.length ? y + PAD : HEAD_H + (n.voices ? VOICES_H : 0), ins, outs };
+  return { w, h: all.length ? y + PAD : top, ins, outs };
 }
 
 
@@ -1029,6 +1031,7 @@ function NodeCard({
       </div>
       {node.voices && !small && <VoicesLine words={node.voices} />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
+      {node.cut_by && !small && <CutByRow node={node} editable={editable} />}
       {presets && (
         <PresetPopover
           node={node.id}
@@ -1480,6 +1483,61 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: 
                 if (key !== l.track) void listenTo(node, key, label);
               }}
             >
+              {label}
+            </MenuRow>
+          ))}
+        </Popover>
+      )}
+    </div>
+  );
+}
+
+/**
+ * A Drum's Cut by row (KIT-27), under its header: "Cut by: Hats ▾". Its list has None and the song's
+ * other Drum tracks; one picked is written in the Drum's call, the other track's hits imported. Where
+ * it can't change, the button is greyed and its tooltip says why.
+ */
+function CutByRow({ node, editable }: { node: ViewNode; editable: boolean }) {
+  const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const c = node.cut_by!;
+  const name = (key: string) => c.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
+  const now = c.by ? name(c.by) : "None";
+  const mine = tracks(c.track) ?? c.track;
+  const off = why ?? (editable ? null : "This song can't be edited here") ?? c.refused ?? null;
+  const pick = (key: string | null, label: string) => {
+    setAnchor(null);
+    if (key !== (c.by ?? null)) void cutBy(node, mine, key, label);
+  };
+  return (
+    <div className="relative h-7 shrink-0 px-3 flex items-center gap-1.5 text-xs min-w-0 border-b border-line" data-cut-by>
+      <span className="shrink-0 text-fg-muted">Cut by:</span>
+      <button
+        data-testid="cut-by"
+        className={clsx(
+          "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
+          off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
+          anchor && "bg-accent-soft text-accent-strong",
+        )}
+        aria-haspopup="menu"
+        aria-expanded={!!anchor}
+        aria-disabled={!!off || undefined}
+        title={off ?? (c.by ? `It stops when ${now} plays. Choose another track, or None` : "Choose a track whose hits stop it, as a closed hat stops an open one")}
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={(e) => {
+          if (off) return;
+          const b = e.currentTarget;
+          setAnchor((a) => (a ? null : b));
+        }}
+      >
+        <span className="truncate">{now}</span>
+        <ChevronDown size={12} className="shrink-0" />
+      </button>
+      {anchor && (
+        <Popover anchor={anchor} onClose={() => setAnchor(null)} role="menu" aria-label="Cut by" data-testid="cut-by-menu" className="w-[200px]">
+          {[[null, "None"] as const, ...c.choices].map(([key, label]) => (
+            <MenuRow key={key ?? ""} data-track={key ?? ""} icon={<Check size={14} className={key === (c.by ?? null) ? undefined : "invisible"} />} onClick={() => pick(key, label)}>
               {label}
             </MenuRow>
           ))}

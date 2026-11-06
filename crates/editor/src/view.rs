@@ -174,6 +174,9 @@ pub struct ViewNode {
     /// A Duck's "Listens to" row (D3): the track its side input hears, and the ones it could.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub listens: Option<Listens>,
+    /// A Drum's "Cut by" row (KIT-27): the track whose hits cut it, and the ones that could.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cut_by: Option<crate::cut::CutBy>,
     /// A hosted plugin's call: its node in the checked graph (`<module>/<node>`), by which the
     /// graph state's `plugins` and the plugin routes name it (HOST-7).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -849,6 +852,10 @@ pub fn view(session: &Session) -> GraphView {
                 Group::Site(s) if kind == "call" => listens(session, sites[s]),
                 _ => None,
             };
+            let cut_by = match g {
+                Group::Site(s) if kind == "call" => crate::cut::row(session, sites[s]),
+                _ => None,
+            };
             let voices = match g {
                 Group::Site(s) if kind == "call" => voices::card(&rev.compiled, *s),
                 _ => None,
@@ -876,6 +883,7 @@ pub fn view(session: &Session) -> GraphView {
                 bypassed,
                 menu,
                 listens,
+                cut_by,
                 plugin: plugins.get(g).cloned(),
                 voices,
                 settings,
@@ -987,6 +995,7 @@ pub fn view(session: &Session) -> GraphView {
                 bypassed: false,
                 menu: None,
                 listens: None,
+                cut_by: None,
                 plugin: None,
                 voices: None,
                 settings: vec![],

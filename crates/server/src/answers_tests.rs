@@ -432,6 +432,11 @@ fn every_change_answers_its_revision_step_and_moved() {
         .map(String::from)
         .unwrap_or_else(|| r.modules().difference(&had).next().unwrap().clone());
     r.change("POST", "/api/graph/kit/drum", PAGE, json!({"bus": kit, "sound": "clap"}), Made::Revision(Some(true)));
+    // The clap it added, cut by the kit's first row (KIT-27).
+    let rows = r.state()["view"]["drum_kits"].as_array().unwrap().iter().find(|k| k["bus"] == kit.as_str()).unwrap()["rows"].clone();
+    let track = |row: &serde_json::Value| row["track"].as_str().unwrap().to_string();
+    let (first, last) = (track(&rows[0]), track(rows.as_array().unwrap().last().unwrap()));
+    r.change("POST", "/api/graph/kit/cut", PAGE, json!({"track": last, "by": first}), Made::Revision(None));
     let imported = r.change(
         "POST",
         "/api/graph/audio/import",

@@ -139,15 +139,32 @@ fn declared_refused(inputs: &str, extra: &str, says: &str) {
 // and an effect may have one after their first input, and still no second required one.
 #[test]
 fn an_optional_input_is_declared_by_these_rules() {
-    declared_refused("{ notes: port.notes(), more: (port.notes().optional() as any).many() }", "", "the input \"more\" is optional, so it can't take many signals");
-    declared_refused("{ notes: port.notes(), more: port.notes().many().optional() }", "", "the input \"more\" is optional, so it can't take many signals");
-    declared_refused("{ notes: port.notes(), cut: port.notes().optional() }", ", positional: [\"notes\", \"cut\", \"x\"]", "positional names \"cut\", an optional input: it is given by its name in the options");
+    declared_refused(
+        "{ notes: port.notes(), more: (port.notes().optional() as any).many() }",
+        "",
+        "the input \"more\" is optional, so it can't take many signals",
+    );
+    declared_refused(
+        "{ notes: port.notes(), more: port.notes().many().optional() }",
+        "",
+        "the input \"more\" is optional, so it can't take many signals",
+    );
+    declared_refused(
+        "{ notes: port.notes(), cut: port.notes().optional() }",
+        ", positional: [\"notes\", \"cut\", \"x\"]",
+        "positional names \"cut\", an optional input: it is given by its name in the options",
+    );
     let instrument = ", editor: { category: \"Drums\" }";
     declared("{ notes: port.notes(), cut: port.notes().optional() }", instrument).unwrap_or_else(|e| panic!("{e:?}"));
-    declared_refused("{ notes: port.notes(), cut: port.notes() }", instrument, "an instrument (editor.category, notes first) has one input, not \"cut\" too");
+    declared_refused(
+        "{ notes: port.notes(), cut: port.notes() }",
+        instrument,
+        "an instrument (editor.category, notes first) has one input, not \"cut\" too",
+    );
     let effect = ", editor: { category: \"Mixing\" }";
     let lib = "import { component, kernel, port, type Audio } from \"@m2/core\";\n\
                export const c = component({ id: \"c\", inputs: { in: port.audio(), key: port.audio({ sidechain: true }).optional() }, output: port.audio(), editor: { category: \"Mixing\" } }, (x: Audio) => x);\n";
-    let song = "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(({ lane }) => c(lane.audio(\"a\")));\n";
+    let song =
+        "import { song } from \"@m2/core\";\nimport { c } from \"./lib/c\";\nexport default song(({ lane }) => c(lane.audio(\"a\")));\n";
     build_of(&[("lib/c.ts", lib), ("song.ts", song)]).unwrap_or_else(|e| panic!("{effect}: {e:?}"));
 }
