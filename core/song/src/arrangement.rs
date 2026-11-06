@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::diag::Diagnostic;
 use crate::lane::number;
 use crate::path::DataPath;
+use crate::songkey::{SongKey, Written};
 
 #[derive(Clone, Copy, Debug, PartialEq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -51,12 +52,28 @@ pub struct Arrangement {
     /// Empty means 4/4 from beat 0.
     #[serde(default)]
     pub meter: Vec<Meter>,
+    /// The song's key as the file writes it, or none (VOX-10): one the table knows is kept in its
+    /// spelling; one it doesn't is kept as written, and is no key (VOX-11). Read it with
+    /// [`Arrangement::key`].
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "key_of")]
+    pub key: Option<Written>,
+}
+
+/// The `key` entry: a root and a scale as text, or `null` (FMT-13). Any other shape is refused,
+/// naming the entry.
+fn key_of<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Written>, D::Error> {
+    match Option::<serde_json::Value>::deserialize(d)? {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => serde_json::from_value(v).map(Some).map_err(|e| {
+            serde::de::Error::custom(format!("`key` is a root and a scale, as {{\"root\": \"A\", \"scale\": \"minor\"}}, or null ({e})"))
+        }),
+    }
 }
 
 /// 120 bpm in 4/4: a project without `data/arrangement.json`.
 impl Default for Arrangement {
     fn default() -> Arrangement {
-        Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![] }
+        Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![], key: None }
     }
 }
 
@@ -66,8 +83,12 @@ impl Arrangement {
     pub fn read(text: &str) -> Result<Arrangement, Diagnostic> {
         let file = DataPath::Arrangement;
         let invalid = |m: String| Diagnostic::error("arrangement.invalid", format!("{file}: {m}")).file(&file);
-        let a: Arrangement = serde_json::from_str(text).map_err(|e| invalid(e.to_string()))?;
+        let mut a: Arrangement = serde_json::from_str(text).map_err(|e| invalid(e.to_string()))?;
         a.check().map_err(invalid)?;
+        // A key the table knows is kept in its spelling (FMT-13).
+        if let Some(k) = a.key() {
+            a.key = Some(k.written());
+        }
         Ok(a)
     }
 
@@ -122,6 +143,40 @@ impl Arrangement {
         Ok(())
     }
 
+    /// The song's key, if it has one music2 knows (VOX-10, VOX-11).
+    pub fn key(&self) -> Option<SongKey> {
+        self.key.as_ref().and_then(|w| SongKey::new(&w.root, &w.scale).ok())
+    }
+
+    /// The key's notes as `time.key` gives them (VOX-12).
+    pub fn keyset(&self) -> u16 {
+        self.key().map_or(crate::songkey::EVERY_NOTE, |k| k.keyset())
+    }
+
+    /// What isn't wrong enough to block, but plays otherwise than the file says (VOX-11).
+    pub fn warnings(&self) -> Vec<Diagnostic> {
+        let Some(w) = &self.key else { return vec![] };
+        let Err(why) = SongKey::new(&w.root, &w.scale) else { return vec![] };
+        let file = DataPath::Arrangement;
+        let said = format!("{} {}", w.root, w.scale);
+        vec![
+            Diagnostic::warning(
+                "arrangement.key-unknown",
+                format!(
+                    "{file}: the key {said:?} isn't one music2 knows ({why}), so the song plays as if it had no key. Set the key again"
+                ),
+            )
+            .file(&file),
+        ]
+    }
+
+    /// Whether `other` puts music at the same times: the same tempo, and the same meter, no meter
+    /// written being 4/4 from the start. The key isn't time.
+    pub fn same_time(&self, other: &Arrangement) -> bool {
+        let meters = |x: &Arrangement| if x.meter.is_empty() { vec![Meter::COMMON] } else { x.meter.clone() };
+        self.tempo == other.tempo && meters(self) == meters(other)
+    }
+
     /// The tempo map. The arrangement must have been read (checked).
     pub fn tempo_map(&self) -> TempoMap {
         TempoMap::new(&self.tempo)
@@ -157,7 +212,12 @@ impl Arrangement {
         let meter: Vec<String> =
             self.meter.iter().map(|m| format!("{{\"beat\": {}, \"beats\": {}, \"unit\": {}}}", number(m.beat), m.beats, m.unit)).collect();
         let list = |items: Vec<String>| if items.is_empty() { "[]".to_string() } else { format!("[\n    {}\n  ]", items.join(",\n    ")) };
-        format!("{{\n  \"tempo\": {},\n  \"meter\": {}\n}}\n", list(tempo), list(meter))
+        let text = |s: &str| serde_json::to_string(s).expect("a string writes as JSON");
+        let key = match &self.key {
+            Some(k) => format!(",\n  \"key\": {{\"root\": {}, \"scale\": {}}}", text(&k.root), text(&k.scale)),
+            None => String::new(),
+        };
+        format!("{{\n  \"tempo\": {},\n  \"meter\": {}{key}\n}}\n", list(tempo), list(meter))
     }
 }
 
@@ -209,6 +269,8 @@ impl TempoMap {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::diag::Severity;
+    use crate::songkey::SongKey;
 
     fn read(text: &str) -> Result<Arrangement, String> {
         Arrangement::read(text).map_err(|d| {
@@ -273,6 +335,54 @@ mod tests {
         assert!(read(r#"{"tempo": [{"beat": 0, "bpm": 120}], "beats_per_bar": 4}"#).unwrap_err().contains("beats_per_bar"));
         assert!(read(r#"{"tempo": [{"beat": 0, "bpm": 120, "curve": 1}]}"#).unwrap_err().contains("curve"));
         assert!(read(r#"{"tempo": [{"beat": 0, "bpm": 120}], "meter": [{"beat": 0, "beats": 4, "unit": 4, "x": 1}]}"#).is_err());
+    }
+
+    // FMT-13, VOX-10: the key is read by any spelling, written after the meter by the table's, and
+    // left out when there is none.
+    #[test]
+    fn a_key_is_read_written_and_kept() {
+        let a = read(r#"{"tempo": [{"beat": 0, "bpm": 120}], "meter": [], "key": {"root": "D♭", "scale": "Major Pentatonic"}}"#).unwrap();
+        assert_eq!(a.key(), Some(SongKey::new("C#", "major-pentatonic").unwrap()));
+        let text = a.canonical();
+        assert_eq!(
+            text,
+            "{\n  \"tempo\": [\n    {\"beat\": 0, \"bpm\": 120}\n  ],\n  \"meter\": [],\n  \"key\": {\"root\": \"C#\", \"scale\": \"major-pentatonic\"}\n}\n"
+        );
+        assert_eq!(read(&text).unwrap().canonical(), text);
+        for none in [r#"{"tempo": [{"beat": 0, "bpm": 120}], "key": null}"#, r#"{"tempo": [{"beat": 0, "bpm": 120}]}"#] {
+            let a = read(none).unwrap();
+            assert_eq!((a.key(), a.keyset()), (None, crate::songkey::EVERY_NOTE));
+            assert_eq!(a.canonical(), Arrangement::default().canonical());
+        }
+        let a = read(r#"{"tempo": [{"beat": 0, "bpm": 120}], "key": {"root": "A", "scale": "minor"}}"#).unwrap();
+        assert_eq!(a.keyset(), SongKey::new("C", "major").unwrap().keyset());
+        assert!(a.warnings().is_empty());
+        // A key of another shape is an entry that breaks FMT-13.
+        let e = |key: &str| read(&format!(r#"{{"tempo": [{{"beat": 0, "bpm": 120}}], "key": {key}}}"#)).unwrap_err();
+        for bad in
+            [r#""A minor""#, r#"{"root": "A"}"#, r#"{"root": "A", "scale": "minor", "mode": 1}"#, r#"{"root": 1, "scale": "minor"}"#, "[]"]
+        {
+            assert!(e(bad).contains("key"), "{bad}: {}", e(bad));
+        }
+    }
+
+    // VOX-11: a root or a scale music2 doesn't know is a Warning, plays as no key, and stays in the
+    // file as written.
+    #[test]
+    fn an_unknown_key_is_a_warning_and_no_key() {
+        for (key, said) in [(r#"{"root": "A", "scale": "hijaz"}"#, "A hijaz"), (r#"{"root": "H", "scale": "minor"}"#, "H minor")] {
+            let a = read(&format!(r#"{{"tempo": [{{"beat": 0, "bpm": 120}}], "key": {key}}}"#)).unwrap();
+            assert_eq!((a.key(), a.keyset()), (None, crate::songkey::EVERY_NOTE));
+            let w = a.warnings();
+            assert_eq!(w.len(), 1);
+            assert_eq!(
+                (w[0].code, w[0].severity, w[0].src.as_deref()),
+                ("arrangement.key-unknown", Severity::Warning, Some("data/arrangement.json"))
+            );
+            assert!(w[0].message.contains(said) && w[0].message.contains("plays as if it had no key"), "{}", w[0].message);
+            assert!(a.canonical().contains(&format!("\"key\": {key}")), "{}", a.canonical());
+            assert_eq!(read(&a.canonical()).unwrap(), a);
+        }
     }
 
     #[test]

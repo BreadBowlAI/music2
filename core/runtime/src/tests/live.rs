@@ -357,6 +357,61 @@ fn time_playing_follows_the_transport() {
     assert!(!rig.e.status().playing);
 }
 
+// VOX-13: a key change while the song plays rebuilds nothing. The activation that carries the new
+// arrangement keeps the kernel that reads `time.key`, which hears the new key from the activation's
+// block on, its state going on; an offline render of the new arrangement plays it from sample 0.
+#[test]
+fn a_key_change_while_playing_reaches_the_kernel_at_once() {
+    // Its output is the keyset plus a count of the frames it has played, kept in its state.
+    let body = format!(
+        "(f32.store (i32.const 4096) (f32.add (f32.load (i32.const 4096)) (f32.const 1))) {}",
+        out_v1("(f32.add (local.get $x) (f32.load (i32.const 4096)))")
+    );
+    let dir = package_with(&module_v1(&kernel_v1("k", &body)), "inputs = [\"key: control<keyset> = 4095\"]\noutputs = [\"out: audio<1>\"]");
+    let mut pk = own_packages();
+    pk.load(&dir).unwrap();
+    let ir = song(
+        json!([{"id": "t", "op": "time", "of": "key"}, {"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"key": "t"}}]),
+        "k",
+        json!([]),
+    );
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let in_key = |key: Value| {
+        let a = Arrangement::read(&json!({"tempo": [{"beat": 0, "bpm": 120}], "key": key}).to_string()).unwrap();
+        DataSet::with_lanes(a, [])
+    };
+    let (none, c_major) = (in_key(Value::Null), in_key(json!({"root": "C", "scale": "major"})));
+    let k = flat.nodes.iter().position(|n| n.name == "song/k").unwrap();
+    let mut r = Renderer::new(&flat, &none, &pk, SR).unwrap();
+    r.set_strict(false);
+    r.set_transport(Transport::new(0, false));
+    let mut rig = Rig::of(&flat, &none, r);
+    rig.cmd(Cmd::Play);
+    let block = |rig: &mut Rig| {
+        rig.run(BLOCK);
+        rig.e.current().unwrap().plan.graph.bufs[k][0].clone()
+    };
+    let mut count = 0.0;
+    for _ in 0..3 {
+        for x in block(&mut rig) {
+            count += 1.0;
+            assert_eq!(x, 4095.0 + count, "no key: every note");
+        }
+    }
+    let next = rig.prepare(&flat, &c_major, &pk);
+    rig.send(Msg::Activate { renderer: Box::new(next) });
+    for _ in 0..3 {
+        for x in block(&mut rig) {
+            count += 1.0;
+            assert_eq!(x, 2741.0 + count, "C major from the activation's block on, the same instance counting on");
+        }
+    }
+    assert_eq!((rig.e.resets(), rig.e.activations()), (0, 1));
+    let out = Renderer::new(&flat, &c_major, &pk, SR).unwrap().render(0.01).unwrap();
+    assert_eq!(out[0][0], 2742.0, "an export plays its arrangement's key from sample 0");
+    std::fs::remove_dir_all(dir).ok();
+}
+
 // RENDER-9 item 5: an audio lane crossfades over 5 ms at a loop wrap, which falls on its exact
 // frame mid-block; once the fade is done it plays the material bit for bit.
 #[test]

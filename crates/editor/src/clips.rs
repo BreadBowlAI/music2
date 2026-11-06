@@ -991,7 +991,7 @@ fn clean(x: f64) -> f64 {
 
 /// The song's key, to `what` with: refused in words while the song has none.
 fn song_key(rev: &Revision, what: &str) -> Result<SongKey, EditError> {
-    crate::songkey::of(&rev.project.dir).ok_or_else(|| match what {
+    rev.project.arrangement.key().ok_or_else(|| match what {
         "stamp a chord" => EditError::Rejected("Set the song's key first: a chord stamp is built on its notes.".into()),
         _ => EditError::Rejected(format!("Set the song's key first: {what}.")),
     })

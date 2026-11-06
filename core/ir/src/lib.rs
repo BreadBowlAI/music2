@@ -387,6 +387,8 @@ pub enum TimeOf {
     Seconds,
     /// 1 on a frame where the song plays (the transport moves), else 0.
     Playing,
+    /// The song's key, as a [`Unit::Keyset`] (VOX-12).
+    Key,
 }
 
 impl TimeOf {
@@ -396,6 +398,7 @@ impl TimeOf {
             TimeOf::Beats => Unit::Beats,
             TimeOf::Seconds => Unit::Seconds,
             TimeOf::Playing => Unit::Unit01,
+            TimeOf::Key => Unit::Keyset,
         }
     }
 }

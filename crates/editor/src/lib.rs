@@ -53,7 +53,7 @@ pub mod rekey;
 pub mod rename;
 pub mod render;
 pub mod sampler;
-pub mod scales;
+pub use m2_song::scales;
 pub mod scope;
 pub mod sections;
 pub mod settings;

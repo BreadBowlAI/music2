@@ -330,8 +330,8 @@ function Upgrade({ graph, state, onDone }: { graph: GraphState; state: State; on
           </Button>
         }
       >
-        Upgrade it rewrites the song for this music2, in one step: the versions it asks for, where its sounds come from, and the knobs that were
-        renamed. Undo takes it all back.
+        Upgrade it rewrites the song for this music2, in one step: the versions it asks for, where its sounds come from, the knobs that were
+        renamed, and where it keeps the song's key. Undo takes it all back.
       </Item>
       {left && (
         <ul data-testid="upgrade-left" className="px-2 pb-2 pl-8 space-y-1 text-sm select-text break-words">

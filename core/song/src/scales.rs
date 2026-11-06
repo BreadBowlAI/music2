@@ -2,9 +2,9 @@
 //! them to any pitch (NOTE-3), and the chords built on them (NOTE-4). A scale is the set of notes
 //! that sound right together; a key is a scale from a root.
 //!
-//! Everything that knows a scale reads it here: `layout.json`'s key (FMT-19), the key field and
-//! agents (`GET /api/theory`), and the roll, through what the timeline publishes of the song's key
-//! ([`KeyView`], NOTE-2). The page works out no scale, snap or chord of its own.
+//! Everything that knows a scale reads it here: `data/arrangement.json`'s key (FMT-13, VOX-10) and
+//! `time.key` (VOX-12), the key field and agents (`GET /api/theory`), and the roll, through what the
+//! timeline publishes of the song's key ([`KeyView`], NOTE-2). The page works out no scale, snap or chord of its own.
 
 use std::collections::BTreeMap;
 
@@ -451,7 +451,7 @@ impl SongKey {
     pub fn stamp(&self, root: f64, chord: Chord, inversion: usize) -> Result<Vec<f64>, String> {
         let p = root.round() as i32;
         if !(0..=TOP).contains(&p) {
-            return Err(format!("A chord's root is a pitch from 0 (C-1) to 127 (G9), not {}", m2_song::lane::number(root)));
+            return Err(format!("A chord's root is a pitch from 0 (C-1) to 127 (G9), not {}", crate::lane::number(root)));
         }
         let pc = p.rem_euclid(12) as u8;
         let Some(d) = self.chords().into_iter().find(|d| d.root == pc) else {
@@ -470,7 +470,7 @@ impl SongKey {
         })?;
         let notes: Vec<f64> = shape.iter().map(|o| (p + *o as i32) as f64).collect();
         if notes.iter().any(|n| *n > TOP as f64) {
-            let from = m2_song::lane::pitch_name(p as f64).unwrap_or_else(|| p.to_string());
+            let from = crate::lane::pitch_name(p as f64).unwrap_or_else(|| p.to_string());
             return Err(format!("{} from {from} goes above the highest note, G9", stamp.name));
         }
         Ok(notes)

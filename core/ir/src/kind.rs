@@ -26,6 +26,9 @@ pub enum Unit {
     /// One of a list of named options, as its place in the list, 0 to n − 1 (CARD-10). Its unit is
     /// the list, so it fits only a port of exactly those options, in their order (CARD-12).
     Choice(Names),
+    /// A set of the twelve pitch classes, as a whole number whose bit n is pitch class n (0 is C):
+    /// the song's key, `time.key` (VOX-12). It fits only itself.
+    Keyset,
 }
 
 impl Unit {
@@ -48,6 +51,7 @@ impl Unit {
             Unit::Scalar => "scalar",
             Unit::Switch => "switch",
             Unit::Choice(_) => "choice",
+            Unit::Keyset => "keyset",
         }
     }
 
@@ -59,9 +63,10 @@ impl Unit {
         }
     }
 
-    /// Whether it is a number's unit: not a switch or a choice, which no math reads (CARD-12).
+    /// Whether it is a number's unit: not a switch, a choice or a keyset, which no math reads
+    /// (CARD-12, VOX-12).
     pub fn is_number(self) -> bool {
-        !matches!(self, Unit::Switch | Unit::Choice(_))
+        !matches!(self, Unit::Switch | Unit::Choice(_) | Unit::Keyset)
     }
 
     /// Whether `v` is a value of this unit, and if not, what the unit holds (CARD-12): a choice
@@ -71,19 +76,22 @@ impl Unit {
         let ok = match self {
             Unit::Switch => v == 0.0 || v == 1.0,
             Unit::Choice(n) => v.fract() == 0.0 && v >= 0.0 && v < n.len() as f64,
+            // An empty set has no note to move to (VOX-12).
+            Unit::Keyset => v.fract() == 0.0 && (1.0..=4095.0).contains(&v),
             _ => return Ok(()),
         };
         match self {
             _ if ok => Ok(()),
             Unit::Switch => Err("0 or 1".into()),
             Unit::Choice(n) => Err(format!("a whole number from 0 to {}", n.len() - 1)),
+            Unit::Keyset => Err("a set of at least one note, a whole number from 1 to 4095".into()),
             _ => unreachable!("a number's unit holds any number"),
         }
     }
 
     /// Whether a value in `self` may flow into a port expecting `into`.
-    /// 0..1 is a valid linear gain; every unitless range is a scalar. A switch and a choice fit
-    /// only themselves (CARD-12).
+    /// 0..1 is a valid linear gain; every unitless range is a scalar. A switch, a choice and a
+    /// keyset fit only themselves (CARD-12, VOX-12).
     pub fn fits(self, into: Unit) -> bool {
         self == into
             || matches!(
@@ -107,6 +115,9 @@ impl FromStr for Unit {
     fn from_str(s: &str) -> Result<Unit, String> {
         if s == "switch" {
             return Ok(Unit::Switch);
+        }
+        if s == "keyset" {
+            return Ok(Unit::Keyset);
         }
         if let Some(names) = s.strip_prefix("choice<").and_then(|r| r.strip_suffix('>')) {
             return Names::new(names.split('|')).map(Unit::Choice).map_err(|e| format!("`{s}`: {e}"));

@@ -190,6 +190,8 @@ struct Block {
     seconds: [f32; BLOCK],
     /// Beat of each frame, in full precision, for lane lookups.
     beats64: [f64; BLOCK],
+    /// The song's key, the same at every frame (VOX-12).
+    keyset: f32,
     sample_rate: f64,
     strict: bool,
     /// Played by the live [`Engine`]: a node that fails stops alone (RENDER-25).
@@ -1889,6 +1891,10 @@ fn step<R: Reads>(
             out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
             Ok(())
         }
+        Exec::Time(TimeOf::Key) => {
+            out[0][seg.range(0)].fill(b.keyset);
+            Ok(())
+        }
         // From the block's runs, as plugins are told (HOST-6): 1 where the transport moves.
         Exec::Time(TimeOf::Playing) => {
             for run in b.runs.as_slice() {
@@ -2758,6 +2764,8 @@ pub struct Renderer {
     lanes: Lanes,
     tempo: TempoMap,
     arrangement: Arc<Arrangement>,
+    /// The song's key as `time.key` reads it (VOX-12), worked out with the plan, off the audio thread.
+    keyset: f32,
     sample_rate: f64,
     transport: Transport,
     /// The engine clock of the next block.
@@ -3166,6 +3174,7 @@ impl Renderer {
             lanes: lanes.lanes,
             tempo,
             arrangement: data.arrangement.clone(),
+            keyset: data.arrangement.keyset() as f32,
             sample_rate: rate,
             transport: Transport::new(0, true),
             clock: 0,
@@ -3298,6 +3307,7 @@ impl Renderer {
             beats: [0.0; BLOCK],
             seconds: [0.0; BLOCK],
             beats64: [0.0; BLOCK],
+            keyset: self.keyset,
             sample_rate: self.sample_rate,
             strict: self.strict,
             live: self.live,

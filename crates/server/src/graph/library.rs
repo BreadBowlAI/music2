@@ -36,7 +36,7 @@ impl Graph {
                 let rev = o.session.accepted();
                 let bpm = rev.compiled.data.tempo().bpm_at(beat.max(0.0));
                 // The key with the song key's notes (a mode's major key); none for chromatic.
-                let key = m2_editor::songkey::of(&rev.project.dir).and_then(|k| k.sample_key()).map(|(root, minor)| Key { root, minor });
+                let key = rev.project.arrangement.key().and_then(|k| k.sample_key()).map(|(root, minor)| Key { root, minor });
                 Fits { bpm, key }
             }))
         })

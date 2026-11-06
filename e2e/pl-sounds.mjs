@@ -207,18 +207,14 @@ check(outs > 0 && hatLabel === "Closed hat" && spill.length === 0, `a hat ${Math
 for (let i = 0; i < outs; i++) await key("Meta+Equal");
 // A key set for the song never shades a drum machine's rows: it has no key (X26, review PL-T3).
 const shading = () => page.$eval("[data-testid=roll-grid]", (e) => e.dataset.shaded).catch(() => null);
-let layoutWas = null;
-try {
-  layoutWas = read("layout.json");
-} catch {}
-write("layout.json", JSON.stringify({ ...(layoutWas ? JSON.parse(layoutWas) : { order: [], tracks: {} }), key: { root: "E", scale: "minor" } }, null, 2));
-check(await until(async () => (await page.$eval("[data-testid=key-field]", (e) => e.textContent).catch(() => null)) === "E minor"), "E minor is set in layout.json");
+const arrangementWas = read("data/arrangement.json");
+write("data/arrangement.json", JSON.stringify({ ...JSON.parse(arrangementWas), key: { root: "E", scale: "minor" } }, null, 2));
+check(await until(async () => (await page.$eval("[data-testid=key-field]", (e) => e.textContent).catch(() => null)) === "E minor"), "E minor is set in data/arrangement.json");
 await new Promise((r) => setTimeout(r, 300));
 check((await shading()) === "", `the drum machine's rows stay unshaded, not by E minor nor as black keys: it has rows, not keys (next D4c): ${await shading()}`);
 check(await openClip("keys.chords"), "Keys' clip opens in Notes");
 check(await until(async () => (await shading()) === "1,3,5,8,10"), `Keys' roll is shaded by E minor: ${await shading()}`);
-if (layoutWas === null) fs.rmSync(`${PROJ}/layout.json`);
-else write("layout.json", layoutWas);
+write("data/arrangement.json", arrangementWas);
 check((await keyLabel(48)) === "C3" && (await keyLabel(36)) === "C2" && (await keysWidth()) === 56, `Keys' roll still says C3, in 56 px (${await keyLabel(48)}, ${await keysWidth()})`);
 
 // ---------------------------------------------------------------- how an instrument plays (track pm)

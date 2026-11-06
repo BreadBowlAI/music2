@@ -517,7 +517,11 @@ impl Session {
             let batch = changed_paths(&self.draft, &draft);
             self.settling(&draft, &batch)
         });
-        let as_written = |s: &Snapshot| files.iter().all(|(f, _, t)| s.files.get(f).map(|x| &**x) == Some(t.as_str()));
+        // `layout.json`, which no revision holds (FMT-19), is written as given and not looked for in
+        // one: an upgrade moves the song's key out of it (VOX-14).
+        let held = |f: &Path| DataPath::parse(f).class() != m2_song::path::Class::Presentation;
+        let as_written =
+            |s: &Snapshot| files.iter().filter(|(f, ..)| held(f)).all(|(f, _, t)| s.files.get(f).map(|x| &**x) == Some(t.as_str()));
         let lands = match &settled {
             Some(Settle::Accept { built, .. }) => as_written(&built.0),
             // The files are the revision that plays, so it builds as it is: a save that must go in
@@ -569,6 +573,7 @@ impl Session {
         }
         // The revision it makes is by who saved it (AGENT-2).
         self.accepting = Some(self.by.clone());
+        let was = self.accepted.project.arrangement.clone();
         let taken = match settled {
             Some(settled) => self.take_in_settled(draft, settled),
             None => TakenIn::default(),
@@ -578,7 +583,8 @@ impl Session {
         // (an outside change that waited for the code) is outside the app's.
         if let Some(accepted) = &taken.accepted {
             let wrote: BTreeSet<String> = written.iter().map(|(_, p, _)| p.to_string()).collect();
-            let beats = wrote.iter().any(|p| p == "data/arrangement.json");
+            // Music moved in time only when the tempo or the meter did, not the key (VOX-10).
+            let beats = !was.same_time(&self.accepted.project.arrangement);
             self.authored_as(accepted.number, &wrote, &step.moved, beats);
         }
         // Taken into the revision that plays as written: one step, whatever the draft's errors (a

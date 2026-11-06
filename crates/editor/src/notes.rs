@@ -858,8 +858,11 @@ mod tests {
     // FMT-13: bars are counted in the arrangement's meter.
     #[test]
     fn places_follow_the_meter() {
-        let three =
-            Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }], meter: vec![m2_song::Meter { beat: 0.0, beats: 3, unit: 4 }] };
+        let three = Arrangement {
+            tempo: vec![Tempo { beat: 0.0, bpm: 120.0 }],
+            meter: vec![m2_song::Meter { beat: 0.0, beats: 3, unit: 4 }],
+            key: None,
+        };
         assert_eq!(place(&three, 0.0), "bar 1 beat 1");
         assert_eq!(place(&three, 4.5), "bar 2 beat 2.5");
         assert_eq!(place(&Arrangement::default(), 4.5), "bar 2 beat 1.5");

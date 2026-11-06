@@ -1,7 +1,7 @@
 // The song's key in the top bar (the polish plan's D2, taste.md §3.3 at 472): "Key" in `fg-faint`
 // while none is set, "A minor" once one is. A click opens a picker: the twelve roots, the scales
 // of the one table (NOTE-1: Major, Minor, the modes, the pentatonics…), and No key. Saved in
-// layout.json, one undo step each, no toast.
+// data/arrangement.json, one undo step each, no toast.
 
 import clsx from "clsx";
 import { useEffect, useState } from "react";
@@ -10,7 +10,7 @@ import { loadTheory, ROOTS, rootName, setSongKey, useTheory, type SongKey } from
 import { useStore } from "../lib/store";
 import { Button, keepFocus, Popover, Segment } from "./ui";
 
-const HELP = "The song's key. In Notes, rows not in the key are shaded. Saved in layout.json.\nIts scale is the set of notes that sound right together: Notes can lock notes to it and stamp its chords.";
+const HELP = "The song's key. In Notes, rows not in the key are shaded. Saved in data/arrangement.json.\nIts scale is the set of notes that sound right together: Notes can lock notes to it and stamp its chords.";
 
 export default function KeyField({ graph }: { graph: GraphState }) {
   const connected = useStore((s) => s.connected);

@@ -58,7 +58,7 @@ pub fn write(dir: &Path, r: &Reference) -> Result<()> {
     if !(1..=99).contains(&r.tracks) || r.stems > 99 || r.repeats == 0 {
         bail!("a reference project has 1 to 99 tracks, at most 99 stems and at least one repeat");
     }
-    let arrangement = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: r.bpm }], meter: vec![] };
+    let arrangement = Arrangement { tempo: vec![Tempo { beat: 0.0, bpm: r.bpm }], meter: vec![], key: None };
     Arrangement::read(&arrangement.canonical()).map_err(|d| anyhow::anyhow!("{d}"))?;
     if dir.read_dir().is_ok_and(|mut d| d.next().is_some()) {
         bail!("{} isn't empty: a reference project is written into a new folder", dir.display());

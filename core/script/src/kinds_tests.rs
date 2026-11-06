@@ -516,3 +516,40 @@ fn the_sdk_writes_a_settings_label_only_when_given() {
     assert_eq!(settings[0]["label"], "table A", "{c}");
     assert!(!settings[1].as_object().unwrap().contains_key("label"), "a setting with no label has no label key: {}", settings[1]);
 }
+
+// VOX-12: `time.key` is a `time` node of `key`, one per module outside any call, the same node as
+// `ctx.time.key`'s, as `time.beats` is. The checker types it a keyset (`a_keyset_fits_only_a_keyset`
+// in `core/ir/src/check.rs`), and TypeScript refuses it where a number goes (`sdk/check/kinds.ts`).
+#[test]
+fn time_key_is_a_keyset_signal() {
+    let song = r#"import { kernel, song, time } from "@m2/core";
+export default song((ctx) => kernel("test:tune", { in: kernel("std:saw"), key: time.key, again: ctx.time.key }));
+"#;
+    let b = build_of(&[("song.ts", song)]).unwrap_or_else(|e| panic!("{e:?}"));
+    let m = &b.ir.modules[0];
+    let keys: Vec<&Node> = m.nodes.iter().filter(|n| matches!(&n.op, Op::Time { of: m2_ir::TimeOf::Key })).collect();
+    assert_eq!(keys.len(), 1, "one node");
+    let tune = m.nodes.iter().find(|n| matches!(&n.op, Op::Kernel { kernel, .. } if kernel == "test:tune")).unwrap();
+    let Op::Kernel { inputs, .. } = &tune.op else { unreachable!() };
+    for port in ["key", "again"] {
+        assert_eq!(split_ref(&inputs[port]).0, keys[0].id, "{port}");
+    }
+}
+
+// VOX-12: the song's key is no knob and no lane: a control, an input or a lane of the unit keyset is
+// refused in words that say where the key is read, even past the types.
+#[test]
+fn a_keyset_is_no_knob_and_no_lane() {
+    let says = "the song's key is no knob or lane: read it with time.key";
+    let lib = |decl: &str| {
+        format!(
+            "import {{ component, control, kernel, port, type Audio }} from \"@m2/core\";\nexport const k = component({{ id: \"k\", {decl}, output: port.audio() }}, () => kernel<Audio>(\"std:saw\"));\n"
+        )
+    };
+    for decl in ["controls: { key: control.hz(800).accepts(\"keyset\" as any) }", "inputs: { key: port.control(\"keyset\" as any) }"] {
+        let song = "import { song } from \"@m2/core\";\nimport { k } from \"./lib/k\";\nexport default song(() => k());\n";
+        let e = build_of(&[("lib/k.ts", &lib(decl)), ("song.ts", song)]).err().unwrap_or_else(|| panic!("{decl} builds"));
+        assert!(e.iter().any(|d| d.message.contains(says)), "{decl}: {e:?}");
+    }
+    refused("return lane.control(\"key\", \"keyset\" as any);", says);
+}

@@ -495,12 +495,13 @@ fn every_change_answers_its_revision_step_and_moved() {
     let (status, named) =
         ask(&r.url, "POST", "/api/graph/step", PAGE, &json!({"session": session, "step": marked["step"], "name": "adding Chorus"}));
     assert_eq!((status, &named["named"], &named["undo_name"]["name"]), (200, &json!(true), &json!("adding Chorus")), "{named}");
-    r.change("POST", "/api/graph/song-key", PAGE, json!({"key": {"root": "A", "scale": "minor"}}), Made::NoRevision);
+    r.change("POST", "/api/graph/song-key", PAGE, json!({"key": {"root": "A", "scale": "minor"}}), Made::Revision(Some(false)));
     r.change("POST", "/api/graph/upgrade", PAGE, json!({"check": false}), Made::Nothing);
 
     // Undo and redo: the revision they make, the step they took back. An undo of a track's add (it
     // writes layout.json first) still names its revision.
-    r.change("POST", "/api/graph/undo", PAGE, json!({}), Made::NoRevision);
+    // The key's step, a revision since it moved into the arrangement (VOX-10).
+    r.change("POST", "/api/graph/undo", PAGE, json!({}), Made::TookBack(Some(false)));
     let had = r.modules();
     r.change(
         "POST",

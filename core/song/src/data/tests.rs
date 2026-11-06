@@ -355,6 +355,24 @@ fn unknown_data_files_are_noticed() {
     assert!(diags.iter().all(|d| d.severity == Severity::Notice));
 }
 
+// VOX-11: a key music2 doesn't know never blocks: the data's warnings say so, and the song plays as
+// with no key.
+#[test]
+fn a_key_music2_doesnt_know_plays_as_none() {
+    let d = Dir::new(&[(
+        "data/arrangement.json",
+        b"{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"key\": {\"root\": \"A\", \"scale\": \"bebop\"}}",
+    )]);
+    let p = d.project();
+    let (data, diags) = p.data(&Decls::default(), None);
+    assert_eq!(codes(&diags), ["arrangement.key-unknown"]);
+    assert_eq!(data.arrangement.keyset(), crate::songkey::EVERY_NOTE);
+    d.write("data/arrangement.json", b"{\"tempo\": [{\"beat\": 0, \"bpm\": 120}], \"key\": {\"root\": \"A\", \"scale\": \"minor\"}}");
+    let (data, diags) = d.project().data(&Decls::default(), None);
+    assert!(diags.is_empty(), "{diags:?}");
+    assert_eq!(data.arrangement.key().map(|k| k.name()), Some("A minor".to_string()));
+}
+
 // FMT-1, FMT-3, FMT-9: there is no reader for format 0, and format errors stop the open; manifest
 // and arrangement errors block; lanes never.
 #[test]

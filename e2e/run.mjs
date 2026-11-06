@@ -121,7 +121,7 @@ export const SUITES = [
   ["io-record", "fix", { expect: 38, s: 7 }],
   ["rec-takes", "fix", { expect: 41, s: 12 }],
   ["comp", "fix", { expect: 27, s: 3 }],
-  ["pl-notes", "fix", { expect: 102, s: 16 }],
+  ["pl-notes", "fix", { expect: 104, s: 16 }],
   ["nt-notes", "fix", { expect: 63, s: 10 }],
   ["pl-lanes", "fix", { expect: 28, s: 4 }],
   ["ports", "proj", { expect: 49, s: 14 }],
