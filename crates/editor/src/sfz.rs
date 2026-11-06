@@ -598,6 +598,9 @@ pub struct Mapped {
     pub volume: f64,
     pub pan: f64,
     pub offset: i64,
+    /// Its choke group and the group that cuts it (PKG-16, rule 8), as SFZ writes them.
+    pub group: Option<i64>,
+    pub off_by: Option<i64>,
     pub one_shot: bool,
     /// For the instrument: its `amp_veltrack`, `ampeg_attack` and `ampeg_release`, when given.
     pub veltrack: Option<f64>,
@@ -631,6 +634,10 @@ const READ: &[&str] = &[
     "volume",
     "pan",
     "offset",
+    "group",
+    "off_by",
+    "off_mode",
+    "off_time",
     "amp_veltrack",
     "ampeg_attack",
     "ampeg_release",
@@ -765,6 +772,20 @@ pub fn map(r: &SfzRegion, control: &BTreeMap<String, String>) -> Result<Mapped, 
     {
         notes.push("don't follow the key in SFZ (pitch_keytrack): here they are pitched by it".into());
     }
+    // Choke groups (PKG-16, rule 8): whole numbers, as SFZ's; how a cut region stops is the Sampler's.
+    let whole = |k: &str| -> Result<Option<i64>, String> {
+        match num(k)? {
+            Some(n) if n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_991.0 => Ok(Some(n as i64)),
+            Some(_) => Err(format!("have `{k}={}`, which isn't a whole number", get(k).unwrap_or_default())),
+            None => Ok(None),
+        }
+    };
+    let (group, off_by) = (whole("group")?, whole("off_by")?);
+    match get("off_mode").map(str::trim) {
+        Some("normal") => notes.push("stop by their release in SFZ (off_mode=normal): here they stop in 4 ms".into()),
+        Some("time") => notes.push("stop over their own time in SFZ (off_mode=time): here they stop in 4 ms".into()),
+        _ => {}
+    }
     let ignored = o
         .keys()
         .filter(|k| !READ.contains(&k.as_str()) && !k.starts_with("locc") && !k.starts_with("hicc") && *k != "lorand" && *k != "hirand")
@@ -788,6 +809,8 @@ pub fn map(r: &SfzRegion, control: &BTreeMap<String, String>) -> Result<Mapped, 
         volume,
         pan,
         offset: num("offset")?.map_or(0, |v| v.max(0.0) as i64),
+        group,
+        off_by,
         one_shot: mode == "one_shot",
         veltrack: num("amp_veltrack")?,
         attack: num("ampeg_attack")?,
@@ -1143,6 +1166,9 @@ pub fn import(i: &Import) -> Result<Imported, String> {
     t.push_str("voices = 32\n");
     // SFZ counts a round robin's turns by key, not by lane (PKG-16 §3).
     t.push_str("turns = \"key\"\n");
+    // Choke groups (PKG-16, rule 8): once any region is cut by a group, every region marks its own,
+    // SFZ's 0 where none is written, so an `off_by=0` cuts the regions that set none, as in SFZ.
+    let choking = kept.iter().any(|m| m.off_by.is_some());
     for m in &kept {
         t.push_str(&format!("\n[[region]]\nfile = {}\nroot = {}\nkeys = [{}, {}]\n", quote(pack_path(m)), m.root, m.keys.0, m.keys.1));
         if m.velocity != (1, 127) {
@@ -1164,6 +1190,12 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         }
         if m.offset != 0 {
             t.push_str(&format!("offset = {}\n", m.offset));
+        }
+        if choking {
+            t.push_str(&format!("group = {}\n", m.group.unwrap_or(0)));
+            if let Some(g) = m.off_by {
+                t.push_str(&format!("off_by = {g}\n"));
+            }
         }
     }
     // It must read as a data instrument does.

@@ -402,10 +402,22 @@ export type Region = {
   pan?: number;
   /** Frames into the file it starts from. */
   offset?: number;
+  /** The choke group its start marks (SFZ's `group`), a whole number (PKG-16, rule 8). */
+  group?: number;
+  /** The group whose start cuts it (SFZ's `off_by`): an open hat's is the closed hat's group. */
+  off_by?: number;
 };
 
 /** A region's fields, in order. */
-const REGION_FIELDS = ["file", "root", "keys", "velocity", "round_robin", "trigger", "loop", "tune", "volume", "pan", "offset"];
+const REGION_FIELDS = ["file", "root", "keys", "velocity", "round_robin", "trigger", "loop", "tune", "volume", "pan", "offset", "group", "off_by"];
+
+/** The most choke groups a Sampler's regions may name in `off_by` (PKG-16, rule 8): its marks' slots. */
+const CUT_GROUPS = 8;
+
+/** The groups the regions name in `off_by`, each once, in order: the slots their marks take (std/sampler's too). */
+function cutGroups(regions: readonly Region[]): number[] {
+  return [...new Set(regions.flatMap((r) => (r.off_by === undefined ? [] : [r.off_by])))];
+}
 
 /**
  * What is wrong with `v` as a list of regions (PKG-15), naming the region by its place from 1, or
@@ -418,7 +430,10 @@ function checkRegions(v: unknown): string | undefined {
     if (wrong) return `: region ${i + 1}: ${wrong}`;
   }
   const turns = turnsProblem(v as Region[]);
-  return turns && `: ${turns}`;
+  if (turns) return `: ${turns}`;
+  const groups = cutGroups(v as Region[]);
+  if (groups.length > CUT_GROUPS) return `: ${groups.length} groups are named in off_by (${groups.join(", ")}): a Sampler cuts by ${CUT_GROUPS} at most`;
+  return undefined;
 }
 
 /**
@@ -498,6 +513,9 @@ function regionProblem(r: unknown): string | undefined {
   if (o.volume !== undefined && !number(o.volume, -120, 24)) return `volume must be dB, a number from -120 to 24, not ${shown(o.volume)}`;
   if (o.pan !== undefined && !number(o.pan, -1, 1)) return `pan must be a number from -1 (left) to 1 (right), not ${shown(o.pan)}`;
   if (o.offset !== undefined && !whole(o.offset, 0, Number.MAX_SAFE_INTEGER)) return `offset must be a whole number of frames from 0, not ${shown(o.offset)}`;
+  for (const k of ["group", "off_by"]) {
+    if (o[k] !== undefined && !whole(o[k], -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER)) return `${k} must be a whole number, not ${shown(o[k])}`;
+  }
   return undefined;
 }
 
@@ -1506,7 +1524,15 @@ type KitValueProblem<C, P extends string, V> =
     : `"${P}" isn't a control of this sound`;
 /** What is wrong with track `T`, if anything: a field that isn't a control, or a value it can't take. */
 type KitTrackProblem<D, T> = {
-  [P in keyof T]: P extends "name" ? never : P extends keyof Ctls<D> ? KitValueProblem<Ctls<D>[P], P & string, T[P]> : `"${P & string}" isn't a control of this sound`;
+  [P in keyof T]: P extends "name"
+    ? never
+    : P extends keyof Ctls<D>
+      ? KitValueProblem<Ctls<D>[P], P & string, T[P]>
+      : P extends OptIns<D>
+        ? T[P] extends string
+          ? never
+          : `${P & string} names an earlier track of its kit, by its name, not ${Shown<T[P]>}`
+        : `"${P & string}" isn't a control of this sound`;
 }[keyof T];
 // Each mapped over a type parameter, so a kit's tuple maps to a tuple.
 type TracksProblems<D, T extends readonly unknown[]> = { [I in keyof T]: KitTrackProblem<D, T[I]> }[number];
@@ -1932,8 +1958,21 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
         if (seen.has(tname)) fail(`${at}: the track ${JSON.stringify(tname)} is named twice`);
         seen.add(tname);
         const said = `${at}: its track ${JSON.stringify(tname)}`;
+        // An optional notes input gets the hits of an earlier track of the kit, by its name (KIT-28).
+        const given: Record<string, string> = {};
+        for (const [slot, v] of Object.entries(fields)) {
+          const i = inputs.find((x) => x.name === slot && x.spec.optional);
+          if (!i) continue;
+          if (i.spec.kind !== "notes") fail(`${said} sets the input ${slot}: a kit gives a track's hits to a notes input only`);
+          const earlier = [...seen].filter((n) => n !== tname);
+          if (typeof v !== "string" || !earlier.includes(v)) {
+            const which = earlier.length ? `its tracks before it: ${earlier.join(", ")}` : "it is the kit's first";
+            fail(`${said}: ${slot} names an earlier track of its kit, by its name, not ${shown(v)} (${which})`);
+          }
+          given[slot] = v as string;
+        }
         const values = Object.entries(fields)
-          .filter(([slot]) => slot !== "name")
+          .filter(([slot]) => slot !== "name" && !(slot in given))
           .map(([slot, v]) => {
             const c = controls.find((x) => x.name === slot && !x.each);
             if (!c) fail(`${said} sets ${JSON.stringify(slot)}, which isn't a control of this sound (controls: ${controls.map((x) => x.name).join(", ")})`);
@@ -1955,7 +1994,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
             }
             return { slot, ...n! };
           });
-        return { name: tname, values };
+        return { name: tname, values, ...(Object.keys(given).length ? { inputs: given } : {}) };
       }),
       ...(fader ? { db: fader } : {}),
     };

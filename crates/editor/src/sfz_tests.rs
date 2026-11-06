@@ -112,9 +112,13 @@ fn each_opcode_becomes_its_field() {
     assert!(one("<region> sample=x.wav loop_mode=one_shot").one_shot);
     let m = one("<region> sample=x.wav tune=-12 transpose=2 volume=-6.5 pan=-50 offset=480");
     assert_eq!((m.tune, m.volume, m.pan, m.offset), (188.0, -6.5, -0.5, 480));
-    let m = one("<region> sample=x.wav amp_veltrack=73 ampeg_attack=0.01 ampeg_release=0.8 off_mode=normal");
+    let m = one("<region> sample=x.wav amp_veltrack=73 ampeg_attack=0.01 ampeg_release=0.8 fil_type=lpf_2p");
     assert_eq!((m.veltrack, m.attack, m.release_time), (Some(73.0), Some(0.01), Some(0.8)));
-    assert_eq!(m.ignored, ["off_mode"], "what music2 doesn't play is named");
+    assert_eq!(m.ignored, ["fil_type"], "what music2 doesn't play is named");
+    // Since track choke (PKG-16, rule 8) a choke group is read, and how a cut region stops is said.
+    let m = one("<region> sample=x.wav group=-3 off_by=2 off_mode=normal");
+    assert_eq!((m.group, m.off_by, m.ignored.len()), (Some(-3), Some(2), 0));
+    assert!(m.notes[0].contains("off_mode=normal"), "{:?}", m.notes);
     let m = one("<control> default_path=Samples\\Piano\\\n<region> sample=Soft\\A0.wav");
     assert_eq!(m.source, "Samples/Piano/Soft/A0.wav", "Windows' \\ is /");
 }
@@ -695,4 +699,26 @@ fn a_pack_check_refuses_leaves_nothing() {
     assert!(whole && checked.parent() == folder.parent() && checked != folder, "checked whole, beside it: {checked:?}");
     assert_eq!(std::fs::read_dir(d.join("out")).unwrap().count(), 0, "nothing is left");
     std::fs::remove_dir_all(&d).ok();
+}
+
+// PACK-14, PKG-16 rule 8: `group` and `off_by` come in as the region's own, and once any region has
+// an `off_by`, every region gets its `group`, SFZ's 0 where none is written; a region that asks to
+// stop another way than at once (`off_mode=normal`, `off_mode=time`) stops in the Sampler's 4 ms,
+// and the import says so. A whole number is needed: another value leaves its region out.
+#[test]
+fn an_sfz_with_off_by_imports_its_choke_groups() {
+    let sfz = "<group> group=1 off_by=2\n<region> sample=a.wav key=46 off_mode=normal\n<group> group=2\n<region> sample=a.wav key=42\n\
+               <group>\n<region> sample=a.wav key=36\n<region> sample=a.wav key=37 group=1.5\n";
+    let (t, said) = imported_text("choke", sfz);
+    let inst = m2_song::instrument::DataInstrument::read(&t).unwrap_or_else(|p| panic!("{}: {t}", p.message));
+    assert_eq!(inst.regions.len(), 3, "{t}");
+    let regions: Vec<&str> = t.split("[[region]]").skip(1).collect();
+    assert!(regions[0].contains("group = 1\noff_by = 2\n"), "{t}");
+    assert!(regions[1].contains("group = 2\n") && !regions[1].contains("off_by"), "{t}");
+    assert!(regions[2].contains("group = 0\n"), "a region with no group is SFZ's group 0: {t}");
+    assert!(said.iter().any(|l| l.contains("1 region stops by its release in SFZ (off_mode=normal): here it stops in 4 ms")), "{said:?}");
+    assert!(said.iter().any(|l| l.contains("has `group=1.5`, which isn't a whole number")), "{said:?}");
+    // No off_by: no group is written, as before.
+    let (t, _) = imported_text("nochoke", "<group> group=3\n<region> sample=a.wav key=46\n");
+    assert!(!t.contains("group"), "{t}");
 }

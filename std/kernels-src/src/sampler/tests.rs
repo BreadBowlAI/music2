@@ -166,6 +166,9 @@ struct R {
     volume: f64,
     pan: f64,
     offset: f64,
+    /// The choke group its start marks, and the one whose start cuts it: a slot, 0 to 7, or -1.
+    group: f64,
+    cut: f64,
 }
 
 impl R {
@@ -183,6 +186,8 @@ impl R {
             volume: 0.0,
             pan: 0.0,
             offset: 0.0,
+            group: -1.0,
+            cut: -1.0,
         }
     }
 
@@ -192,7 +197,7 @@ impl R {
         let [p, of] = self.turn;
         let [l0, l1] = self.looped;
         let trigger = if self.release { 1.0 } else { 0.0 };
-        [self.file, self.root, k0, k1, v0, v1, p, of, trigger, l0, l1, self.tune, self.volume, self.pan, self.offset]
+        [self.file, self.root, k0, k1, v0, v1, p, of, trigger, l0, l1, self.tune, self.volume, self.pan, self.offset, self.group, self.cut]
     }
 }
 
@@ -549,4 +554,98 @@ fn no_control_or_value_breaks_regions() {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------- choke groups (PKG-16, rule 8)
+
+const MARK_NAMES: [&str; 3] = ["pitch", "velocity", "count"];
+const CUT_NAMES: [&str; 11] = ["pitch", "gate", "velocity", "tune", "level", "attack", "release", "mode", "veltrack", "count", "marks"];
+
+#[test]
+fn the_choke_kernels_ports_match_the_manifest() {
+    defaults("regionmark", &MARK_NAMES);
+    defaults("regioncut", &CUT_NAMES);
+}
+
+/// What `std:regionmark` marks for `note` with `regions`, sample by sample, over `frames`.
+fn marks(assets: &[Asset], regions: &[R], note: Note, frames: usize) -> Played {
+    let values = layout(regions);
+    let cfg = Cfg { values: Vec::leak(values), assets: Vec::leak(assets.to_vec()), ..Cfg::new(SR, BLOCK, 1) };
+    play_cfg::<RegionMark>(cfg, frames, 37, &|p, _, _| match p {
+        0 => note.pitch,
+        1 => note.velocity,
+        _ => note.count,
+    })
+}
+
+// PKG-16 rule 8: a note's marks, on its first sample alone, are 8^slot for each choke group its
+// attack regions start (once a group, however many of its regions play), matched as the voices match
+// them (key, velocity, turn); a release region, and a region in no group, marks nothing.
+#[test]
+fn a_notes_marks_are_the_groups_its_regions_start() {
+    let (_, assets) = files(400, 4);
+    let open = R { keys: [46.0, 46.0], group: 0.0, cut: 1.0, ..R::of(0) };
+    let closed = R { keys: [42.0, 42.0], group: 1.0, ..R::of(1) };
+    let closed2 = R { keys: [42.0, 42.0], velocity: [100.0, 127.0], group: 1.0, ..R::of(2) };
+    let pedal = R { keys: [44.0, 44.0], turn: [2.0, 2.0], group: 2.0, ..R::of(3) };
+    let tail = R { keys: [44.0, 44.0], release: true, group: 3.0, ..R::of(3) };
+    let regions = [open, closed, closed2, pedal, tail];
+    let at = |pitch: f32, count: f32| marks(&assets, &regions, Note { pitch, count, ..NOTE }, 100);
+    let first = |p: &Played| (p.left()[0], p.left()[1..].iter().all(|&v| v == 0.0));
+    assert_eq!(first(&at(46.0, 1.0)), (1.0, true), "the open hat marks its group, 8^0, once");
+    assert_eq!(first(&at(42.0, 1.0)), (8.0, true), "two closed hats of one group mark it once");
+    assert_eq!(first(&at(44.0, 1.0)), (0.0, true), "the pedal's turn is 2: nothing starts");
+    assert_eq!(first(&at(44.0, 2.0)), (64.0, true), "on its turn, its group; never its release's");
+    assert_eq!(first(&at(60.0, 1.0)), (0.0, true), "no region, no mark");
+    assert!(!at(46.0, 1.0).active[1], "it is done after its first sample");
+}
+
+/// `std:regioncut` with `assets` and `regions`, playing `note`, with `marks` on its marks input.
+fn play_cut(assets: &[Asset], regions: &[R], note: Note, frames: usize, marks: &dyn Fn(usize) -> f32) -> Played {
+    let mut patch = defaults("regioncut", &CUT_NAMES);
+    patch[VELOCITY] = note.velocity;
+    patch[VELTRACK] = 0.0;
+    patch[COUNT] = note.count;
+    let values = layout(regions);
+    let cfg = Cfg { values: Vec::leak(values), assets: Vec::leak(assets.to_vec()), ..Cfg::new(SR, BLOCK, 2) };
+    play_cfg::<Sampler<true, true>>(cfg, frames, 37, &|p, _, t| match p {
+        PITCH => note.pitch,
+        GATE => (t < note.held) as u8 as f32,
+        MARKS => marks(t),
+        _ => patch[p],
+    })
+}
+
+// PKG-16 rule 8: a region whose off_by group is marked fades to exact silence over 4 ms, a raised
+// cosine, smoothly; its voice's other regions play on; a mark of another group, or on the sample it
+// starts, cuts nothing. With no marks, `std:regioncut` plays `std:regions`' bits.
+#[test]
+fn a_region_is_cut_when_its_off_by_group_starts() {
+    let (x, assets) = files(4_000, 2);
+    let open = R { cut: 1.0, ..R::of(0) };
+    let under = R { ..R::of(1) };
+    let at = 1_000;
+    let uncut = play_cut(&assets, &[open, under], NOTE, 4_000, &|_| 0.0);
+    let plain = play_regions(&assets, &[open, under], NOTE, 4_000, 37, &[]);
+    assert_eq!(uncut.left(), plain.left(), "no marks: the regions' own bits");
+    let cut = play_cut(&assets, &[open, under], NOTE, 4_000, &|t| if t == at { 8.0 } else { 0.0 }).left();
+    assert_eq!(cut[..at], uncut.left()[..at], "the same up to the mark");
+    let fade = 192; // 4 ms at 48 kHz
+    for t in at + fade + 1..4_000 {
+        assert_eq!(cut[t], x[1][t], "after its fade, the other region alone at {t}");
+    }
+    let open_alone = |marks: &dyn Fn(usize) -> f32| play_cut(&assets, &[open], NOTE, 4_000, marks).left();
+    let alone = open_alone(&|t| if t == at { 8.0 } else { 0.0 });
+    assert!(alone[at + 1..at + fade / 2].iter().any(|&v| v != 0.0), "it fades, it doesn't stop");
+    assert!(alone[at + fade + 1..].iter().all(|&v| v == 0.0), "silent after 4 ms");
+    let step = |y: &[f32]| y.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    assert!(step(&alone[at..at + fade + 2]) <= 1.5 * step(&x[0][at - 400..at + fade + 2]), "no click");
+    // Another group's mark, several of its own at once, and one on its first sample.
+    assert_eq!(open_alone(&|t| if t == at { 1.0 + 64.0 } else { 0.0 }), open_alone(&|_| 0.0), "another group cuts nothing");
+    assert_eq!(
+        open_alone(&|t| if t == at { 3.0 * 8.0 + 1.0 } else { 0.0 })[at + fade + 1..],
+        [0.0; 4_000][at + fade + 1..],
+        "three marks of its group cut it"
+    );
+    assert_eq!(open_alone(&|t| if t == 0 { 8.0 } else { 0.0 }), open_alone(&|_| 0.0), "a mark on its own first sample is no cut");
 }
