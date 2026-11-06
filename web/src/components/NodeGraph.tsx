@@ -335,6 +335,8 @@ const GROUP_H = 24;
  */
 type Item =
   | { t: "input"; port: InputPort }
+  // "Listens to" with no input row of its own: the call leaves its key out (CARD-35).
+  | { t: "listens" }
   | { t: "group"; name: string; first: boolean }
   | { t: "setting"; x: Setting }
   | { t: "view"; v: CardView }
@@ -342,6 +344,17 @@ type Item =
   | { t: "fold"; hidden: number; hides: string[] };
 
 function items(n: ViewNode, folded: boolean): Item[] {
+  const all = itemsOf(n, folded);
+  // A "Listens to" whose call leaves its input out stands alone, right after the sound it works
+  // on, where its input's row would be (CARD-35).
+  if (n.listens && !n.listens.port) {
+    const at = all.findIndex((x) => x.t === "input");
+    all.splice(at + 1, 0, { t: "listens" });
+  }
+  return all;
+}
+
+function itemsOf(n: ViewNode, folded: boolean): Item[] {
   const settings = settingsOf(n);
   const views = n.views ?? [];
   if (!n.groups?.length) {
@@ -376,7 +389,7 @@ function items(n: ViewNode, folded: boolean): Item[] {
 
 /** How tall a row of a card is. */
 const itemHeight = (x: Item) =>
-  x.t === "input" ? inputHeight(x.port) : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
+  x.t === "input" ? inputHeight(x.port) : x.t === "listens" ? ROW_H : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
 
 /**
  * A node's height and where its ports are, from its top. Each input is a row; output `i` sits on
@@ -1094,6 +1107,8 @@ function NodeCard({
                 revision={revision}
                 editable={editable}
               />
+            ) : x.t === "listens" ? (
+              <ListensRow key="listens" node={node} filled={false} editable={editable} />
             ) : x.t === "fill" ? (
               <div key={`fill:${x.id}`} className="h-7" />
             ) : x.t === "setting" ? (
@@ -1387,7 +1402,7 @@ function InputRow({
     );
   }
 
-  // A Duck's side input: what it listens to, and a list of the tracks it could (next D3).
+  // An input that listens (a duck's side, a key): what it hears, and a list of the tracks it could (CARD-35).
   if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
 
   // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
@@ -1431,33 +1446,38 @@ function InputRow({
 }
 
 /**
- * A Duck's side input (next D3, X28): "Listens to: Kick ▾". Its list has the song's other tracks;
- * one picked is written in the Duck's call. Where it can't change (a Duck in a track's file), the
- * button is greyed and its tooltip says why.
+ * An input that listens (CARD-35): "Listens to: Kick ▾", a duck's side or a compressor's or a
+ * gate's key, whatever the effect. Its list has the song's tracks but the one the effect works on,
+ * and None when the call may leave the input out; one picked is written in the call. With the
+ * input left out the row has no port and says None. Where it can't change (an effect in a track's
+ * file), the button is greyed and its tooltip says why.
  */
-function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: InputPort; filled: boolean; editable: boolean }) {
+function ListensRow({ node, input, filled, editable }: { node: ViewNode; input?: InputPort; filled: boolean; editable: boolean }) {
   const tracks = useContext(Tracks);
   const why = useContext(Locked);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const l = node.listens!;
   const name = (key: string) => l.choices.find(([k]) => k === key)?.[1] ?? tracks(key) ?? key;
-  const now = l.track ? name(l.track) : "another sound";
+  const now = l.track ? name(l.track) : l.given ? "another sound" : "None";
   const off = why ?? (editable ? null : "This song can't be edited here") ?? l.refused ?? null;
+  const what = node.title ?? "It";
+  const title = l.given ? `${what} listens to ${now}. Choose another track` : `${what} listens to no other track. Choose one`;
   return (
-    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input.label} data-listens>
-      <Dot id={input.id} kind={input.kind} filled={filled} />
+    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input?.label ?? l.input} data-listens>
+      {input && <Dot id={input.id} kind={input.kind} filled={filled} />}
       <span className="shrink-0 text-fg-muted">Listens to:</span>
       <button
         data-testid="listens-to"
         className={clsx(
           "min-w-0 h-ctl-xs px-1 -mx-1 flex items-center gap-1 rounded-sm text-xs font-medium transition-colors duration-80 ease-linear",
           off ? "text-fg-muted cursor-default" : "text-fg hover:bg-hover cursor-pointer",
+          !l.given && !off && "text-fg-muted",
           anchor && "bg-accent-soft text-accent-strong",
         )}
         aria-haspopup="menu"
         aria-expanded={!!anchor}
         aria-disabled={!!off || undefined}
-        title={off ?? `It ducks when ${now} plays. Choose another track`}
+        title={off ?? title}
         onMouseDown={(e) => e.preventDefault()}
         onClick={(e) => {
           if (off) return;
@@ -1483,6 +1503,19 @@ function ListensRow({ node, input, filled, editable }: { node: ViewNode; input: 
               {label}
             </MenuRow>
           ))}
+          {l.optional && (
+            <MenuRow
+              key="none"
+              data-track=""
+              icon={<Check size={14} className={l.given ? "invisible" : undefined} />}
+              onClick={() => {
+                setAnchor(null);
+                if (l.given) void listenTo(node, null, "nothing");
+              }}
+            >
+              None
+            </MenuRow>
+          )}
         </Popover>
       )}
     </div>
