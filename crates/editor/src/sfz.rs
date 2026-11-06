@@ -1091,6 +1091,22 @@ pub fn import(i: &Import) -> Result<Imported, String> {
             *said.entry(how.into()).or_default() += 1;
         }
     }
+    // Choke groups (PKG-16, rule 8): a Sampler cuts by 8 groups at most, the first 8 that off_by
+    // names; the regions past them keep their group and lose their off_by, said.
+    let mut cutting: Vec<i64> = vec![];
+    for g in kept.iter().filter_map(|m| m.off_by) {
+        if !cutting.contains(&g) {
+            cutting.push(g);
+        }
+    }
+    let dropped: Vec<i64> = cutting.split_off(cutting.len().min(8));
+    if !dropped.is_empty() {
+        let n = kept.iter().filter(|m| m.off_by.is_some_and(|g| dropped.contains(&g))).count();
+        let which: Vec<String> = dropped.iter().map(|g| g.to_string()).collect();
+        *said
+            .entry(format!("have their off_by left out (off_by={}): a Sampler cuts by 8 groups at most", which.join(", ")))
+            .or_default() += n;
+    }
     for (what, n) in &said {
         left_out.push(format!("changed: {n} region{} {}", plural(*n), agree(*n, what)));
     }
@@ -1193,7 +1209,7 @@ pub fn import(i: &Import) -> Result<Imported, String> {
         }
         if choking {
             t.push_str(&format!("group = {}\n", m.group.unwrap_or(0)));
-            if let Some(g) = m.off_by {
+            if let Some(g) = m.off_by.filter(|g| cutting.contains(g)) {
                 t.push_str(&format!("off_by = {g}\n"));
             }
         }

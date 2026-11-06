@@ -722,3 +722,23 @@ fn an_sfz_with_off_by_imports_its_choke_groups() {
     let (t, _) = imported_text("nochoke", "<group> group=3\n<region> sample=a.wav key=46\n");
     assert!(!t.contains("group"), "{t}");
 }
+
+// PACK-14, PKG-16 rule 8 (review C4): an SFZ that names more choke groups in off_by than a Sampler
+// cuts by (8) still imports: the first 8 groups are kept, and the off_by of the regions past them is
+// left out, said in words; each region keeps its group.
+#[test]
+fn an_sfz_with_more_choke_groups_than_eight_keeps_the_first_eight() {
+    let sfz: String = (1..=9).map(|g| format!("<region> sample=a.wav key={} group={g} off_by={g}\n", 31 + g)).collect();
+    let (t, said) = imported_text("nine", &sfz);
+    let regions: Vec<&str> = t.split("[[region]]").skip(1).collect();
+    assert_eq!(regions.len(), 9, "{t}");
+    for (i, r) in regions.iter().enumerate() {
+        let g = i + 1;
+        assert!(r.contains(&format!("group = {g}\n")), "{r}");
+        assert_eq!(r.contains(&format!("off_by = {g}\n")), g <= 8, "region {g}: {r}");
+    }
+    assert!(
+        said.iter().any(|l| l == "changed: 1 region has its off_by left out (off_by=9): a Sampler cuts by 8 groups at most"),
+        "{said:?}"
+    );
+}
