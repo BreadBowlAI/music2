@@ -141,7 +141,20 @@ const node = state.view.modules.find((m) => m.key === "tone").nodes.find((n) => 
 const asked = await agent("/api/graph/picture", { session: state.session, revision: state.view.revision, client: "reader", module: "tone", node: node.id, view: "curve", on: true });
 const response = asked.picture?.shapes?.find((s) => s.kind === "response");
 check(response?.name === "curve" && response?.points?.length === 512, `an agent reads the measured curve: ${response?.points?.length} numbers`);
-check(await until(async () => (await curve()).split(" ").length * 2 === response.points.length), "the same count the window drew");
+// Each point the agent reads, placed on the picture as the window places it (a log axis across, dB
+// up, above the axis's labels), is a point the window drew (review M11).
+const placed = async () => {
+  const [w, h] = (await page.$eval(`${pic} svg`, (e) => e.dataset.size)).split("x").map(Number);
+  const plot = Math.max(1, h - 12);
+  const out = [];
+  for (let i = 0; i + 1 < response.points.length; i += 2) {
+    const x = (Math.log(response.points[i] / 20) / Math.log(1000)) * w;
+    const y = (1 - (response.points[i + 1] + 24) / 48) * plot;
+    out.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+  }
+  return out.join(" ");
+};
+check(await until(async () => (await curve()) === (await placed())), "the points the window drew are the agent's, one for one");
 const near1k = response.points.findIndex((x, i) => i % 2 === 0 && x >= 1000);
 check(Math.abs(response.points[near1k + 1]) < 1, `below the cutoff a lowpass passes the sound: ${response.points[near1k + 1]} dB at ${Math.round(response.points[near1k])} Hz`);
 const top = response.points.length - 1;

@@ -567,7 +567,7 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
         g.globalAlpha = 1;
       } else if (l.kind === "level" && last?.peak) {
         const db = 20 * Math.log10(Math.max(1e-6, Math.max(...last.peak)));
-        const on = l.on ? (flatShapes(shapes).find((s) => (s.kind === "line" || s.kind === "response") && s.name === l.on) as { points: number[] } | undefined) : undefined;
+        const on = l.on ? (flatShapes(shapes).find((s) => s.kind === "line" && s.name === l.on) as { points: number[] } | undefined) : undefined;
         if (on && view.x.unit === "db") {
           // A dot riding its line: x the level, y the line there (CARD-73).
           const x = px(db, view.x) * c.width;
