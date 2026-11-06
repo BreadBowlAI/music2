@@ -524,8 +524,8 @@ fn a_cards_face_and_code_are_in_the_view() {
     );
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { wobble } from \"./lib/wobble\";\n\
-         const lead = track(\"lead\", ({ lane }) =>\n  lowpass(wobble(lane.notes(\"notes\"), { shape: \"square\", // its wave\n    cutoff: 1200 }), { cutoff: 900 }),\n);\n\
+        "import { song, track } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\nimport { wobble } from \"./lib/wobble\";\n\
+         const lead = track(\"lead\", ({ lane }) =>\n  gain(wobble(lane.notes(\"notes\"), { shape: \"square\", // its wave\n    cutoff: 1200 }), { db: -3 }),\n);\n\
          export default song(() => lead.out);\n",
     );
     let s = f.open();
@@ -537,10 +537,10 @@ fn a_cards_face_and_code_are_in_the_view() {
     assert_eq!(wobble.face, [View("amp".into()), Input(input("cutoff")), Input(input("attack")), Input(input("release"))]);
     assert_eq!(wobble.code.as_deref(), Some("wobble(lane.notes(\"notes\"), { shape: \"square\", cutoff: 1200 })"));
     let v = s.view();
-    let lowpass = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Lowpass")).expect("the lowpass card");
-    assert!(lowpass.face.is_empty());
-    assert_eq!(lowpass.code.as_deref(), Some("lowpass(…, { cutoff: 900 })"));
-    let sent = serde_json::to_value(lowpass).unwrap();
+    let gain = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Gain")).expect("the gain card");
+    assert!(gain.face.is_empty());
+    assert_eq!(gain.code.as_deref(), Some("gain(…, { db: -3 })"));
+    let sent = serde_json::to_value(gain).unwrap();
     assert!(sent.get("face").is_none(), "no face, no field: {sent}");
     assert_eq!(serde_json::to_value(&wobble).unwrap()["face"][0], json!({"view": "amp"}));
 }

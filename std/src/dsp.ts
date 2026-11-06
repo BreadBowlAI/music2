@@ -3,6 +3,7 @@
 
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Control, type Events, type Params, type Signal, type Value } from "@m2/core";
 import { mtof } from "./math";
+import { envelope, envelopePicture, envelopeWords } from "./pictures";
 
 /** Oscillators take a frequency, or a pitch in semitones (converted for you). */
 function freq(x: Signal): Value {
@@ -68,9 +69,15 @@ export const adsr = component(
       release: control.secs(0.2).range(0.001, 10).log(),
     },
     output: port.control("unit01"),
+    // Its shape, drawn by its own sums: drag its corners (CARD-96).
+    editor: { views: { shape: envelopePicture() } },
   },
   (gate: Value, { attack, decay, sustain, release }: Params) => kernel("std:adsr", { gate, attack, decay, sustain, release }),
+  { shape: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
 );
+
+/** The names of an envelope's four values, as adsr's and most sounds' are. */
+const ENVELOPE = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
 /** Envelope follower: how loud `x` is right now, 0..1. */
 export const follow = component(
