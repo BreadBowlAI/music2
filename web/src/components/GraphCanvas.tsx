@@ -3,6 +3,8 @@ import {
   attention,
   barAt,
   editorHooks,
+  clipIndex,
+  findLane,
   findNoteClip,
   graphApi,
   lockReason,
@@ -152,10 +154,14 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     const m = modules.find((x) => x.key === module);
     if (m) shown.current = { key: m.key, file: fileOf(m), keys: modules.map((x) => x.key) };
   });
-  // A selected clip an edit removed is let go.
+  // A selected clip an edit removed is let go: a notes clip, or an audio clip whose notes Notes shows (VOX-46).
   const clips = useShell((s) => s.clips);
   useEffect(() => {
-    const gone = Object.entries(clips).filter(([, c]) => !findNoteClip(timeline, c));
+    const voice = (c: ClipRef) => {
+      const l = findLane(timeline, c.module, c.lane);
+      return l?.kind === "audio" && clipIndex(l.clips, c) >= 0;
+    };
+    const gone = Object.entries(clips).filter(([, c]) => !findNoteClip(timeline, c) && !voice(c));
     for (const [m] of gone) useShell.getState().setClip(m, null);
   }, [timeline, clips]);
 
