@@ -245,7 +245,7 @@ Each line is one small gap, without a number.
 
 ### Notes
 
-- **A song made before the key moved** into `data/arrangement.json` (it was in `layout.json`) shows no key until it is upgraded: `m2 upgrade <song>` moves it ([VOX-14](architecture.md#vocals)), but the app's status offers **Upgrade it** only to a song that doesn't build. A MIDI file's key signature isn't read either: the song keeps its own key.
+- **A song made before the key moved** into `data/arrangement.json` (it was in `layout.json`) shows no key until it is upgraded. The status says it is made for an older music2 and offers **Upgrade it**, which moves the key ([VOX-14](architecture.md#vocals)). A MIDI file's key signature isn't read: the song keeps its own key.
 - **A groove of sixteenths after one of eighths** sees the swung eighths as off its grid, so it leaves those beats as they are: undo, or Quantize, before changing the step. Grooves of one step (the swings of a step; Laid back and Pushed) replace each other's places.
 - **A stamp's chord names spell a note of the key with its own letter** (G♯ in A harmonic minor), but a key's root keeps the app's one spelling (E♭ minor, never D♯ minor), so a few keys spell notes as C♭, F♭ or E♯ (a note whose letter would need a double sharp or flat is spelled on its own: E♭ Locrian's fifth is A).
 - **A note dragged in Notes right after your own edit changed that very note** (an undo a moment before, the roll not showing it yet) is refused, with words that say the clip changed. A drag that adds notes, or moves notes your edit left alone, goes from your edit (AGENT-2); a key, a tool or the menu is made from the notes as your edit left them.

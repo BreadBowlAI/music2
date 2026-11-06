@@ -26,8 +26,8 @@ pub struct TimelineView {
     pub tracks: Vec<TimelineTrack>,
     /// The ruler's markers, by beat, from `layout.json` (Q13): none while it doesn't read.
     pub markers: Vec<crate::markers::Marker>,
-    /// The song's key, from `layout.json` (the polish plan's D2), with what it means (NOTE-2):
-    /// None when it says none.
+    /// The song's key, from the accepted revision's arrangement (VOX-10), with what it means
+    /// (NOTE-2): None when it has none, or one music2 doesn't know (VOX-11).
     pub key: Option<crate::scales::KeyView>,
 }
 

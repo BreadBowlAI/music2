@@ -2,9 +2,9 @@
 //! them to any pitch (NOTE-3), and the chords built on them (NOTE-4). A scale is the set of notes
 //! that sound right together; a key is a scale from a root.
 //!
-//! Everything that knows a scale reads it here: `layout.json`'s key (FMT-19), the key field and
-//! agents (`GET /api/theory`), and the roll, through what the timeline publishes of the song's key
-//! ([`KeyView`], NOTE-2). The page works out no scale, snap or chord of its own.
+//! Everything that knows a scale reads it here: `data/arrangement.json`'s key (FMT-13, VOX-10) and
+//! `time.key` (VOX-12), the key field and agents (`GET /api/theory`), and the roll, through what the
+//! timeline publishes of the song's key ([`KeyView`], NOTE-2). The page works out no scale, snap or chord of its own.
 
 use std::collections::BTreeMap;
 
