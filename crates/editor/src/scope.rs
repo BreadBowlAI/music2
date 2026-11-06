@@ -160,14 +160,14 @@ pub fn look(rev: &Revision, kernels: &dyn Kernels, module: &str, node: &str, at:
 
 /// The nodes a call is made of: those made inside its frame (ID-15), or, for a call with no frame
 /// (a kernel's own, a plain function's), those it made itself.
-enum Inside {
+pub(crate) enum Inside {
     Frame(u32),
     Site(u32),
 }
 
 impl Inside {
     /// The call at site `site` in module `m`: None when it ran more than once there.
-    fn of(m: &Module, site: u32) -> Option<Inside> {
+    pub(crate) fn of(m: &Module, site: u32) -> Option<Inside> {
         let frames: Vec<usize> = (0..m.frames.len()).filter(|&i| m.frames[i].site == site && m.frames[i].component.is_some()).collect();
         match frames[..] {
             [] => Some(Inside::Site(site)),
@@ -182,7 +182,7 @@ impl Inside {
     }
 
     /// Whether frame `frame` is the call's, or inside it.
-    fn frame(&self, m: &Module, mut frame: Option<u32>) -> bool {
+    pub(crate) fn frame(&self, m: &Module, mut frame: Option<u32>) -> bool {
         let Inside::Frame(of) = *self else { return false };
         while let Some(i) = frame {
             if i == of {
@@ -195,7 +195,7 @@ impl Inside {
     }
 
     /// Whether node `n` is part of the call.
-    fn has(&self, m: &Module, n: &Node) -> bool {
+    pub(crate) fn has(&self, m: &Module, n: &Node) -> bool {
         match *self {
             Inside::Frame(_) => self.frame(m, n.frame),
             Inside::Site(site) => n.origin.as_ref().is_some_and(|o| o.site == site),
@@ -209,7 +209,7 @@ fn twice(callee: &str) -> String {
 }
 
 /// The flat node and the output that reference `r` of module `module` names in `rev`.
-fn port_of(rev: &Revision, kernels: &dyn Kernels, module: &str, r: &str) -> Option<(usize, usize)> {
+pub(crate) fn port_of(rev: &Revision, kernels: &dyn Kernels, module: &str, r: &str) -> Option<(usize, usize)> {
     let (module, r) = follow(rev, module, r)?;
     let (id, port) = split_ref(r);
     let compiled = &rev.compiled;
