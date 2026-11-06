@@ -284,7 +284,7 @@ function Frame({
       </div>
       {node.voices && size !== "folded" && <VoicesLine words={node.voices} />}
       {node.plugin && size !== "folded" && <PluginRow node={node.plugin} title={titled} session={graph.session} />}
-      <div className={clsx("flex flex-col min-w-0", off && "opacity-50")}>
+      <div data-node-body className={clsx("flex flex-col min-w-0", off && "opacity-50")}>
         {mixer != null ? (
           <div className="h-9 px-3 flex items-center gap-2 text-xs min-w-0">
             <span className="text-fg-muted truncate">

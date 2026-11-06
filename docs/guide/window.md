@@ -70,7 +70,8 @@ It shows the selected track (or the Song) in one of four views, picked with the 
   | **Chain** (at first) | one card for each sound, left to right, as the sound flows: the instrument, then its effects. No cables. |
   | **Patch** | every part of the sound as boxes, with the cables between them. |
 
-  The window keeps your pick; it changes nothing in the song. A sound made of two sounds mixed, or built from parts (oscillators, filters), has no chain: Device shows its patch and says "This sound is built from parts. Showing its patch." A part that moves a knob without making sound (an LFO, a follower) has no card in the chain: the knob it moves reads "← LFO", and Patch shows it.
+  The window keeps your pick; it changes nothing in the song. In Patch, a sound that has a chain says so in the dock's header: "This sound is a chain: Chain shows it as cards." A sound made of two sounds mixed, or built from parts (oscillators, filters), has no chain: Device shows its patch and says why ("Saw and Saw are mixed here. Showing its patch."). A part that moves a knob without making sound (an LFO, a follower) has no card in the chain: the knob it moves reads "← LFO", and Patch shows it. Nor does a part you don't hear (one whose sound goes nowhere).
+  - **The Song's chain** is its mix: a row for each track's sound it mixes, with the track's name, a **+** to add an effect after it, and the effects on it (a Duck on the Bass), then the mixer and the master. The Duck's code line names what it ducks: `duck(bass.out, kick.env, …)`.
   - **A card in the chain:**
 
     | Part | What it is |
@@ -78,9 +79,9 @@ It shows the selected track (or the Song) in one of four views, picked with the 
     | header | the sound's name, its pack (`std` for music2's own basics), its three sizes, Presets, ⋯, the bin and **+**. An instrument's card has its track's colour along the top |
     | face | the few knobs and pictures that matter most, drawn big. The sound chooses them; without a choice it is the sound's first group |
     | tabs | the sound's other groups, then **All**, every value in one list (each one's id, for `m2 set`, is in its tooltip). ← and → move between tabs. A dot on a tab is that tab's on/off switch, filled when on (an EQ's bands) |
-    | code line | the call as your code writes it, such as `lowpass(…, { cutoff: 900 })` (`…` is the sound it works on). It changes as you change the card |
+    | code line | the call as your code writes it, such as `lowpass(…, { cutoff: 900 })` (`…` is the sound it works on, when your code writes it right there; a name, as in `lowpass(w, …)`, stays). It wraps, up to three lines, and changes as you change the card |
 
-    The three sizes, from the buttons in the header: **Fold** (–) shows one line of the face's values; **Normal** (▢) the face, one tab and the code line; **Expand** (⤢) everything, every tab side by side, with All behind a click. The size is this window's own: it changes nothing in the song.
+    The three sizes, from the buttons in the header: **Fold** (–) shows the name and one line of the face's values; **Normal** (▢) the face, one tab and the code line; **Expand** (⤢) everything, the face's knobs bigger, every tab side by side, with **All values** behind a click. The size is this window's own: it changes nothing in the song.
   - A choice of five or fewer sits on the card as buttons side by side (saw · square · sine): one click picks one. A longer one is a menu.
   - A knob on a tab you aren't looking at is still there: when an agent changes it, its tab lights, and **Show** on an agent's pointer opens that tab.
   - Drag a knob up or down to hear it (300 pixels take it across its whole range; hold ⇧ for a tenth of that, to fine-tune); let go to write the number into the code. ⌥-click a knob to put it back at its default (the middle of its range when its control declares no default).

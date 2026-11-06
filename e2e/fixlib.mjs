@@ -31,13 +31,14 @@ export const check = (ok, what) => {
  * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
  *
  * `device`: what Device shows where a sound is a chain (CARD-42), as the window's own choice is kept.
- * These suites drive the patch, its ports, cables and rows, unless one asks for `"chain"` (frame).
+ * These suites drive the patch, its ports, cables and rows, unless one asks for `"chain"` (frame),
+ * or runs as the `chain` kind (`E2E_DEVICE=chain`: their checks that aren't the patch's own).
  *
  * `late` (ms; by default `E2E_LATE_READS`, else none): the page's own reads of the song's state
  * (`GET /api/graph`) are held back that long, as on a page that hears of each change late. The
  * suite's own reads (`api`, `state`) never wait.
  */
-export async function open(width = 1440, height = 900, { browser: side = false, pc = false, device = "patch", late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false, device = process.env.E2E_DEVICE ?? "patch", late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
   const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
