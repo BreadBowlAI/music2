@@ -843,6 +843,18 @@ pub fn db_to_gain(db: f32) -> f32 {
     if db <= -96.0 { 0.0 } else { 10f32.powf(db / 20.0) }
 }
 
+/// **Meters** (ABI-13): numbers for the window to show, such as how far a compressor turns down,
+/// which nothing in the song reads. The manifest lists them in `meters`, after `outputs`; they are
+/// the kernel's last outputs, counted in [`Kernel::OUTPUTS`], one channel each. (Written here, at the
+/// file's end, so the lines above keep their numbers, and with them every module's bytes.)
+impl Io<'_> {
+    /// Output `o`, a meter: `value` in every frame of this call, so the host finds it in the
+    /// block's last frame.
+    pub fn meter(&mut self, o: usize, value: f32) {
+        self.output(o).fill(value);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

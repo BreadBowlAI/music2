@@ -79,8 +79,8 @@ await page.mouse.click(10, 10);
 const s0 = (await api("")).body;
 const leadId = s0.view.modules.find((m) => m.key === "lead").nodes.find((n) => n.title === "Lead").id;
 const scope = async () => {
-  const r = await agent("/api/graph/scope", { session: s0.session, client: "dressed", module: "lead", node: leadId, on: true });
-  const x = r.body.scope?.frames?.[0] ?? [];
+  const r = await agent("/api/graph/look", { session: s0.session, client: "dressed", module: "lead", node: leadId, on: true });
+  const x = r.body.look?.frames?.[0] ?? [];
   let e = 0, d = 0;
   for (let i = 1; i < x.length; i++) {
     e += x[i] * x[i];
@@ -117,7 +117,7 @@ await until(async () => {
 }, 15000);
 check(sineEdge !== null && sawEdge !== null && sineEdge < sawEdge / 3, `and the sound turns round: the frames' slope energy ${sawEdge?.toFixed(4)} → ${sineEdge?.toFixed(4)}`);
 await post("/transport", { action: "stop" });
-await agent("/api/graph/scope", { session: s0.session, client: "dressed", module: "lead", node: leadId, on: false });
+await agent("/api/graph/look", { session: s0.session, client: "dressed", module: "lead", node: leadId, on: false });
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes the code back, byte for byte");

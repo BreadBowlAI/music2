@@ -56,7 +56,7 @@ Measure the song as an agent can't hear it: loudness (LUFS), true peak, crest, t
 m2 kernels [--json]
 ```
 
-List every kernel and its typed ports: std's, and those of the packs music2 comes with.
+List every kernel and its typed ports, and the meters it gives: std's, and those of the packs music2 comes with.
 
 ## m2 bounce
 

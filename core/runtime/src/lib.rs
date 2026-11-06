@@ -88,7 +88,7 @@ pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, Plu
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};
 pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
-pub use taps::{Copies, Copying, Peaks, RING, RINGS, TapAt, TapSlots};
+pub use taps::{Copies, Copying, METERS, Peaks, RING, RINGS, Reading, TapAt, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
 
@@ -3112,14 +3112,29 @@ impl Renderer {
                 _ => 0,
             });
         }
-        let audio = |k: Option<&Kind>| if let Some(Kind::Audio(c)) = k { *c } else { 0 };
-        let sound: Box<[(u8, u32)]> = flat.nodes.iter().zip(&arrive).map(|(n, &a)| (audio(n.outputs.first()), a)).collect();
+        // Each node's outputs, for a tap (TAP-11): its channels of sound, none, or a kernel's meter,
+        // which are its last outputs (ABI-13).
+        let ports = |n: &FNode| -> Box<[u8]> {
+            let meters = match &n.op {
+                FOp::Kernel { kernel, .. } => m2_ir::Kernels::kernel(packages, kernel).map_or(0, |k| k.meters.len()),
+                _ => 0,
+            };
+            let first = n.outputs.len().saturating_sub(meters);
+            let out = |(i, k): (usize, &Kind)| match k {
+                _ if i >= first => taps::METER_PORT,
+                Kind::Audio(c) => *c,
+                _ => 0,
+            };
+            n.outputs.iter().enumerate().map(out).collect()
+        };
+        let sound: Box<[(Box<[u8]>, u32)]> = flat.nodes.iter().zip(&arrive).map(|(n, &a)| (ports(n), a)).collect();
         let copy_sites: Box<[(usize, u8, u32)]> =
             flat.overlays.iter().enumerate().map(|(k, s)| (base + k, placed.nodes[k].channels, arrive[s.src.node])).collect();
         // A live plan's taps (TAP-1): its rings, and what may be a point. Its meters are the
         // server's to lay out ([`Renderer::tap`]).
-        let taps = (mode == m2_plugins::RenderMode::Realtime)
-            .then(|| Taps::new(taps::TapSlots::new(sound.iter().map(|s| s.0).collect(), copy_sites.iter().map(|s| (s.0, s.1)).collect())));
+        let taps = (mode == m2_plugins::RenderMode::Realtime).then(|| {
+            Taps::new(taps::TapSlots::new(sound.iter().map(|s| s.0.clone()).collect(), copy_sites.iter().map(|s| (s.0, s.1)).collect()))
+        });
         for (i, e) in graph.exec.iter_mut().enumerate().take(checked.nodes.len()) {
             if let Exec::Plugin(p) = e {
                 p.reports = Some((report.clone(), i));
@@ -3259,13 +3274,18 @@ impl Renderer {
         for &a in at {
             let (node, channels, late) = match a {
                 TapAt::Out => (None, 2, self.latency),
-                TapAt::Node(i) => match self.plan.sound.get(i) {
-                    Some(&(c, late)) if c > 0 => (Some(i), c, late),
-                    Some(_) => bail!("node {i} makes no sound to copy"),
-                    None => bail!("there's no node {i}"),
-                },
+                TapAt::Port(i, p) => {
+                    match self.plan.sound.get(i).map(|(ports, late)| (ports.get(p), *late)) {
+                        // A meter is one channel (ABI-13).
+                        Some((Some(&taps::METER_PORT), late)) => (Some((i, p)), 1, late),
+                        Some((Some(&c), late)) if c > 0 => (Some((i, p)), c, late),
+                        Some((Some(_), _)) => bail!("node {i} makes no sound to copy"),
+                        Some((None, _)) => bail!("node {i} has no output {p}"),
+                        None => bail!("there's no node {i}"),
+                    }
+                }
                 TapAt::Site(k) => match self.plan.sites.get(k) {
-                    Some(&(node, c, late)) => (Some(node), c, late),
+                    Some(&(node, c, late)) => (Some((node, 0)), c, late),
                     None => bail!("there's no overlay site {k}"),
                 },
             };

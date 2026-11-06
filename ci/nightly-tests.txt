@@ -65,3 +65,4 @@ m2-session tx::kill_tests::killed_at_every_commit_step_the_project_recovers  slo
 m2-session tx::kill_tests::killed_at_every_commit_step_without_a_swap_the_project_recovers  slow: 160 s
 m2-play::bit_identity live_on_n_threads_is_the_export_on_1  slow: 86 s
 m2-play::bit_identity every_pure_fixture_renders_the_same_bits_on_1_and_n_threads  slow: 81 s
+m2-editor spectrum::tests::thirty_one_spectra_fit_in_a_read_with_room  speed: 31 spectra under 16.5 ms, half a meters read (TAP-13; 5.8 ms measured on the Linux server; crates/editor/src/spectrum_tests.rs)

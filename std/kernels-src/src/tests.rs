@@ -223,3 +223,54 @@ fn kernels_with_lines_reset_in_place_to_where_they_started() {
     use crate::testkit::assert_reset_starts_over;
     assert_reset_starts_over::<crate::fx::Chorus>(&[0.5, 1.0, 0.5, 0.5, 1.0], 5_000);
 }
+
+// ---------------------------------------------------------------- meters (ABI-13, ABI-14)
+
+/// The meter a dynamics kernel played, block by block (its output after the sound): each block's
+/// one number, checked to fill every frame of the block.
+fn meter_blocks(played: &crate::testkit::Played) -> Vec<f32> {
+    let m = &played.out[1];
+    m.chunks(BLOCK)
+        .map(|b| {
+            assert!(b.iter().all(|f| f[0].to_bits() == b[0][0].to_bits()), "a meter holds one number for the block: {b:?}");
+            b[0][0]
+        })
+        .collect()
+}
+
+// ABI-14: std's duck gives how far it turns down, in dB: none while its side is quiet, its depth
+// once its side is high, the largest of each block's frames.
+#[test]
+fn the_duck_says_how_far_it_turns_down() {
+    let frames = 24_000;
+    let side = |t: usize| if t < 12_000 { 0.0 } else { 1.0 };
+    let played = play_at::<crate::Duck>(SR, 2, frames, BLOCK, &|port, c, t| match port {
+        0 => audio(c, t),
+        1 => side(t),
+        _ => -8.0,
+    });
+    let m = meter_blocks(&played);
+    assert!(m[..12_000 / BLOCK].iter().all(|&x| x == 0.0), "quiet side, nothing turned down: {:?}", &m[..8]);
+    assert!((m[m.len() - 1] - 8.0).abs() < 1e-3, "settled at its depth: {}", m[m.len() - 1]);
+    // The most of each block: the sound itself fell by at least that much at one of its frames.
+    let main = played.main();
+    for (k, &x) in m.iter().enumerate() {
+        let fell = (k * BLOCK..((k + 1) * BLOCK).min(frames))
+            .filter(|&t| audio(0, t).abs() > 1e-3)
+            .map(|t| -20.0 * (main[t][0] / audio(0, t)).abs().log10())
+            .fold(0.0f32, f32::max);
+        assert!((x - fell).abs() < 2e-3, "block {k}: the meter says {x} dB, the sound fell by {fell} dB");
+    }
+}
+
+// ABI-14: std's limit gives how far it turns down to stay under its ceiling: none under it, about
+// 6 dB for a sound at full scale under a ceiling of −6 dB.
+#[test]
+fn the_limit_says_how_far_it_turns_down() {
+    let sine = |amp: f32| move |t: usize| amp * (std::f32::consts::TAU * 220.0 * t as f32 / SR).sin();
+    let quiet = play_at::<crate::Limit>(SR, 1, 9_600, BLOCK, &|port, _, t| if port == 0 { sine(0.25)(t) } else { -6.0 });
+    assert!(meter_blocks(&quiet).iter().all(|&x| x == 0.0), "under its ceiling it leaves the sound alone");
+    let loud = play_at::<crate::Limit>(SR, 1, 9_600, BLOCK, &|port, _, t| if port == 0 { sine(1.0)(t) } else { -6.0 });
+    let m = meter_blocks(&loud);
+    assert!(m[m.len() / 2..].iter().all(|&x| (x - 6.0).abs() < 0.1), "about 6 dB down: {:?}", &m[m.len() - 4..]);
+}

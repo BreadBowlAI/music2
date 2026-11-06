@@ -50,9 +50,9 @@ crate::api::routes! {
     POST "/api/graph/plugin/latch" => plugin_latch; reads, musician,
         "Let a lane or a cable drive a plugin's parameter again",
         r#"{"session": 7, "node": "synth"}"#;
-    POST "/api/graph/scope" => graph_scope; reads, agents,
-        "Show a box's sound as it plays: its last frames, to the window that asks (and in each answer), while you ask again within 10 s; or stop",
-        r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "on": true}"#;
+    POST "/api/graph/look" => graph_look; reads, agents,
+        "Look at a box as it plays: its sound's last frames (kind scope), its spectrum, its level, or a meter its sound gives (kind meter, at its name); at its output (at out) or its input (at in); in the asking window's looks message, and in each answer (what it saw since your last ask), while you ask again within 10 s; or stop",
+        r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "kind": "spectrum", "at": "in", "on": true}"#;
     POST "/api/graph/loudness" => graph_loudness; reads, agents,
         "Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop",
         r#"{"session": 7, "client": "w1", "on": true}"#;
@@ -239,23 +239,32 @@ async fn graph_audition(State(s): S, Json(r): Json<AuditionReq>) -> ApiResult {
 }
 
 #[derive(Deserialize)]
-struct ScopeReq {
+struct LookReq {
     session: u64,
-    /// The window, or the agent, asking: the scope lasts while one asks.
+    /// The window, or the agent, asking: the look lasts while one asks.
     client: String,
     /// The box, by its module's key and its id in the graph view.
     module: String,
     node: String,
+    /// `scope` (the default), `spectrum`, `level` or `meter` (TAP-12).
+    #[serde(default)]
+    kind: Option<String>,
+    /// `out` (the default), `in`, or a meter's name (TAP-11).
+    #[serde(default)]
+    at: Option<String>,
     on: bool,
 }
 
-/// Start, keep or stop a scope (TAP-8): `{session, client, module, node, on}`. While a client
-/// asks (again within 10 s), its window's socket gets the box's last frames with the meters. Not a
-/// write: it works read-only. Answers `{scope: {module, node, channels, frames}}`, or `{}` for a
-/// stop; what isn't a sound at the top of its track is refused in words.
-async fn graph_scope(State(s): S, Json(r): Json<ScopeReq>) -> ApiResult {
+/// Start, keep or stop a look (TAP-8, TAP-12): `{session, client, module, node, kind?, at?, on}`.
+/// While a client asks (again within 10 s), its window's socket gets what the look sees with the
+/// meters. Not a write: it works read-only. Answers `{look: {module, node, kind, at, channels,
+/// …}}`, or `{}` for a stop; what doesn't fit is refused in words.
+async fn graph_look(State(s): S, Json(r): Json<LookReq>) -> ApiResult {
     let client = own(&r.client);
-    Ok(Json(blocking(move || s.graph.scope(r.session, &client, &r.module, &r.node, r.on)).await?))
+    let kind = r.kind.as_deref().unwrap_or("scope").parse().map_err(anyhow::Error::msg)?;
+    let at = m2_editor::scope::At::parse(r.at.as_deref().unwrap_or("out"));
+    let look = crate::graph::scope::Look { module: r.module, node: r.node, kind, at };
+    Ok(Json(blocking(move || s.graph.look(r.session, &client, &look, r.on)).await?))
 }
 
 /// The client an ask is filed under: an agent's own name after `agent:`, so an agent never stops

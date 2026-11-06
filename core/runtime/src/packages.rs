@@ -24,6 +24,9 @@ struct KernelDecl {
     #[serde(default)]
     inputs: Vec<String>,
     outputs: Vec<String>,
+    /// Its meters (ABI-13): numbers for the window, after its outputs, which nothing reads.
+    #[serde(default)]
+    meters: Vec<String>,
     #[serde(default)]
     latency: u32,
     /// An offline kernel (kernel ABI v1, flags bit 0): run by the host to make a clip's render, off
@@ -382,8 +385,8 @@ impl PackageSet {
                 offline.insert(id);
                 continue;
             }
-            let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).map_err(anyhow::Error::msg)?;
-            sigs.insert(id, sig);
+            let sig = KernelSig::parse(&id, &k.description, &k.inputs, &k.outputs, k.latency).and_then(|s| s.with_meters(&k.meters));
+            sigs.insert(id, sig.map_err(anyhow::Error::msg)?);
         }
         Ok(Package {
             name,
@@ -697,6 +700,7 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
         description: "not installed".into(),
         inputs,
         outputs: vec![port("out", PortKind::Audio(Some(2)))],
+        meters: vec![],
         latency: 0,
     }
 }
@@ -776,6 +780,7 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
         description: format!("{} by {}", info.found.name, info.found.vendor),
         inputs,
         outputs: vec![m2_ir::PortSig { name: "out".into(), kind: m2_ir::PortKind::Audio(Some(out)), default: None, range: None }],
+        meters: vec![],
         latency: info.latency,
     };
     Ok(sig)
@@ -787,8 +792,8 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
 fn check_offline(id: &str, k: &KernelDecl) -> Result<()> {
     let outputs = k.outputs.iter().map(|o| m2_ir::PortSig::parse(o).map_err(|e| anyhow::anyhow!("kernel `{id}`: {e}")));
     let outputs = outputs.collect::<Result<Vec<_>>>()?;
-    if !k.inputs.is_empty() || k.latency > 0 || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]) {
-        bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0) and has one audio output");
+    if !k.inputs.is_empty() || k.latency > 0 || !k.meters.is_empty() || !matches!(outputs[..], [PortSig { kind: PortKind::Audio(_), .. }]) {
+        bail!("kernel `{id}` is offline: it takes no inputs (its source is its asset 0), gives no meters and has one audio output");
     }
     Ok(())
 }

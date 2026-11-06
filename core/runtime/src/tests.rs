@@ -384,14 +384,7 @@ fn std_manifest_matches_its_kernels() {
     for id in ids {
         let sig = m2_ir::Kernels::kernel(&pk, &id).unwrap().clone();
         let inputs: Vec<Input> = sig.inputs.iter().map(|_| Input::Const(0.0)).collect();
-        let node = FNode {
-            name: id.clone(),
-            module: "t".into(),
-            src: None,
-            origin: None,
-            op: FOp::Const(0.0),
-            outputs: sig.outputs.iter().map(|_| Kind::Audio(1)).collect(),
-        };
+        let node = FNode { name: id.clone(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs: ports_of(&sig, 1) };
         plain_kernel(&pk, &node, &id, 1, &inputs, 48_000.0).unwrap_or_else(|e| panic!("{e:#}"));
     }
 }
@@ -408,14 +401,8 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
     let mut held: Vec<(usize, String)> = vec![];
     for sig in pk.kernel_sigs() {
         let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
-        let node = FNode {
-            name: sig.id.clone(),
-            module: "t".into(),
-            src: None,
-            origin: None,
-            op: FOp::Const(0.0),
-            outputs: sig.outputs.iter().map(|_| Kind::Audio(2)).collect(),
-        };
+        let node =
+            FNode { name: sig.id.clone(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs: ports_of(sig, 2) };
         let id = &sig.id;
         let mut k = plain_kernel(&pk, &node, id, 2, &inputs, RATE).unwrap_or_else(|e| panic!("{id}: {e:#}"));
         k.prewarm(&mut []).unwrap_or_else(|e| panic!("{id}: {e:#}"));
@@ -433,6 +420,13 @@ fn every_std_kernel_fits_its_memory_at_the_highest_rate() {
 }
 
 /// Kernel `id` for node `n`, with no settings, in a sandbox of its own.
+/// A kernel's node's buffers, as the checker types them: its outputs as audio of `channels`, then
+/// its meters (ABI-13).
+fn ports_of(sig: &m2_ir::KernelSig, channels: u8) -> Vec<Kind> {
+    let meters = sig.meters.iter().map(|_| Kind::Control(Some(m2_ir::Unit::Db)));
+    sig.outputs.iter().map(|_| Kind::Audio(channels)).chain(meters).collect()
+}
+
 fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[Input], sample_rate: f64) -> Result<KernelInst> {
     KernelInst::new(pk, n, &Kernel { id, channels, inputs, values: &[], assets: &[], sample_rate, notes: &[] }, 0, pk.limits.of(false))
 }
@@ -441,8 +435,7 @@ fn plain_kernel(pk: &PackageSet, n: &FNode, id: &str, channels: u8, inputs: &[In
 fn std_kernel(pk: &PackageSet, id: &str, rate: f64) -> KernelInst {
     let sig = m2_ir::Kernels::kernel(pk, id).unwrap();
     let inputs: Vec<Input> = sig.inputs.iter().map(|p| Input::Const(p.default.unwrap_or(0.0))).collect();
-    let outputs = sig.outputs.iter().map(|_| Kind::Audio(2)).collect();
-    let node = FNode { name: id.to_string(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs };
+    let node = FNode { name: id.to_string(), module: "t".into(), src: None, origin: None, op: FOp::Const(0.0), outputs: ports_of(sig, 2) };
     plain_kernel(pk, &node, id, 2, &inputs, rate).unwrap_or_else(|e| panic!("{id}: {e:#}"))
 }
 

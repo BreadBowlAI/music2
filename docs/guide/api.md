@@ -89,5 +89,19 @@ Every route is in one table, declared once with its method, its path, the larges
 | `take` | a recording's count-in, its end, and the take written |
 | `midi` | a MIDI keyboard came or went, or what it plays changed |
 | `meters` | the meters, about 30 times a second while the song sounds, to a window's socket, and to an agent's that asks for them (`m2 watch --meters`): each track's (`tracks`) and each mixer channel's (`channels`) loudest sample, linear, after its fader; the song's (`out`); and its `loudness` (`short`, the last 3 s in LUFS, and `true_peak` in dBTP) while someone asks for it with `POST /api/graph/loudness` |
-| `scopes` | with the meters, to the window that asked for scopes with `POST /api/graph/scope` alone: each one's `module`, `node` and its last 1,024 `frames`, a list per channel, or `why` it can't show now. An agent gets a scope's last frames in each answer to its ask |
+| `looks` | with the meters, to the window that asked for looks with `POST /api/graph/look` alone: each look's `module`, `node`, `kind` and `at`, and what it saw ([Looks](#looks)), or `why` it can't show now. An agent gets the same in each answer to its ask |
 | `audition` | why a note this window asked to hear plays nothing |
+
+## Looks
+
+`POST /api/graph/look` asks to look at a box (a call, by its `module` and its id in the view) while the song plays. Ask again within 10 s to keep it, or send `"on": false` to stop. What it sees comes in the `looks` message of the window that asked, beside the meters, and in each answer, `{"look": {…}}`.
+
+| `kind` | What each `looks` message (or answer) brings | `at` |
+|---|---|---|
+| `scope` (the default) | `frames`: the last 1,024 frames, a list per channel | `out` (the default): the call's own sound (a call turned off: what plays through it). `in`: the one sound going into it |
+| `spectrum` | `bins`: how loud the sound is at each pitch, in dB, for bands a twelfth of an octave wide. Band `k` is centred on 20 × 2^(k/12) Hz: 120 bands at 44.1 kHz and over. A sine at full scale reads 0 dB: within half a dB from 80 Hz up, within 1 dB below. Below about 100 Hz two notes a semitone apart run together, and below about 150 Hz noise reads louder than it is. The answer to the ask gives each band's centre, `hz` | `out` or `in` |
+| `level` | `peak` and `rms` for each channel since the message before (an agent: since its answer before, as far back as about a third of a second), linear (1.0 is full scale) | `out` or `in` |
+| `meter` | `now` and `most`: a number the sound's own code sends, as it is now and the most since the message before (an agent: since its answer before), in its `unit` (the answer names it) | the meter's name: `reduction` for std's `compress`, `duck` and `limit`, how far they turn the sound down, in dB |
+
+- A plan shows 31 points of sound at once (looks at one point share it) and 256 meters. Past that, an ask is refused in words.
+- A call with no sound going in, or more than one, has no `in`. A meter the call doesn't give is refused, naming the ones it gives.
