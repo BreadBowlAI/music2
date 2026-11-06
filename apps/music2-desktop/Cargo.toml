@@ -6,6 +6,11 @@ license.workspace = true
 publish.workspace = true
 description = "music2 as a native app: the React UI in a system webview around the Rust server"
 
+[features]
+# The pictures' bench (CARD-75): the shell prints what a bench build's window measured. Test-only:
+# a debug build prints it too; the app music2 ships has neither.
+bench = []
+
 [build-dependencies]
 tauri-build = { version = "2.7.2", features = [] }
 

@@ -53,6 +53,12 @@ export async function pictures() {
     const gesture = `bench-${Date.now()}`;
     const took: number[] = [];
     const heard: number[] = [];
+    // Each sample's own: since the message before, and the meters messages while it waited (review G6).
+    const since: number[] = [];
+    const meters: number[] = [];
+    let last = performance.now();
+    let metered = 0;
+    const offMeters = on("meters", () => void (metered += 1));
     let lost = 0;
     for (let i = 1; i <= 200; i++) {
       // A new value each time, as a drag gives: a 1% step up, forty times, then back down at once.
@@ -60,6 +66,7 @@ export async function pictures() {
       const drawn = Number(shown.dataset.drawn ?? 0);
       const t0 = performance.now();
       let at = 0;
+      metered = 0;
       const came = new Promise<void>((r) => {
         const off = on<{ t: "pictures"; pictures: { node: string; view: string }[] }>("pictures", (msg) => {
           if (!msg.pictures.some((p) => p.node === found.node.id && p.view === found.view)) return;
@@ -78,15 +85,20 @@ export async function pictures() {
       }
       heard.push(at - t0);
       took.push(performance.now() - t0);
+      since.push(t0 - last);
+      meters.push(metered);
+      last = at;
       await sleep(16);
     }
+    offMeters();
     await graphApi.cancel(graph.session, knob, gesture).catch(() => {});
     const q = (xs: number[], p: number) => {
       const s = [...xs].sort((a, b) => a - b);
       return Math.round(s[Math.min(s.length - 1, Math.floor(s.length * p))] * 100) / 100;
     };
     const both = (xs: number[]) => ({ median_ms: q(xs, 0.5), p99_ms: q(xs, 0.99), max_ms: q(xs, 1) });
-    say(JSON.stringify({ n: took.length, lost, heard: both(heard), on_screen: both(took), agent: navigator.userAgent }));
+    const frames = (xs: number[]) => Math.ceil(q(xs, 0.99) / (1000 / 60));
+    say(JSON.stringify({ n: took.length, lost, heard: both(heard), on_screen: both(took), frames_p99: frames(took), since_last_ms: both(since), meters_while: both(meters), agent: navigator.userAgent }));
   } catch (e) {
     say(JSON.stringify({ error: String(e) }));
   }

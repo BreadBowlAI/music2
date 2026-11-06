@@ -265,8 +265,8 @@ fn perform(app: &AppHandle, id: &str) -> anyhow::Result<()> {
         }
         "ready" => println!("music2: UI connected to the native shell"),
         // What a bench build's window measured (`?bench=pictures`, CARD-75): to the log, in a debug
-        // build only (review G13).
-        #[cfg(debug_assertions)]
+        // build or one with the `bench` feature only (review G13).
+        #[cfg(any(debug_assertions, feature = "bench"))]
         id if id.starts_with("bench ") => println!("music2: {id}"),
         "quit" => {
             if keep_export(app)? && keep_code(app)? {
