@@ -54,7 +54,7 @@ fn a_measure_writes_its_numbers_each_hop_and_keeps_them() {
     let kept: Vec<_> = std::fs::read_dir(&folder).unwrap().map(|e| e.unwrap().path()).collect();
     assert_eq!(kept.len(), 1, "kept once, no part file left: {kept:?}");
     let notes = first.output("note").unwrap();
-    assert!(notes.iter().any(|&n| n == 1.0) && notes.iter().all(|&n| n == 0.0 || n == 1.0), "one note");
+    assert!(notes.contains(&1.0) && notes.iter().all(|&n| n == 0.0 || n == 1.0), "one note");
     let at = notes.iter().position(|&n| n == 1.0).unwrap() as f64 * 256.0 / rate as f64;
     assert!((at - 0.2).abs() < 0.02, "it starts where it was sung: {at}");
     let centre = first.output("centre").unwrap().iter().cloned().fold(0.0f32, f32::max);

@@ -704,7 +704,7 @@ fn apply_then(
                 match p {
                     crate::comp::Piece::Same(k) => kept[k] = true,
                     crate::comp::Piece::Made(k, a) => {
-                        let mut a = Clip::Audio(a);
+                        let mut a = Clip::Audio(*a);
                         if std::mem::replace(&mut kept[k], true) {
                             a.set_id(None);
                             l.added.push((a, false));

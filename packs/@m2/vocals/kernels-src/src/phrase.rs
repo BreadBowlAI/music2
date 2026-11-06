@@ -444,7 +444,9 @@ impl Kernel for Voice {
         let mut notes: Vec<Note> = v
             .get(3..)
             .unwrap_or(&[])
-            .chunks_exact(5)
+            .as_chunks::<5>()
+            .0
+            .iter()
             .take(NOTES)
             .filter(|n| n.iter().all(|x| x.is_finite()) && n[1] > 0.0)
             .map(|n| Note {
