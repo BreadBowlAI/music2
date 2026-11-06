@@ -194,6 +194,18 @@ pub enum Gesture {
     Record {
         takes: Vec<Taken>,
     },
+    /// A comp (VOX-1): take `take` (from 0) of the clip's file plays from beat `from` to `to` of the
+    /// clip's comp, the clips of its file in a row with it (VOX-2); `takes` are where each take
+    /// starts in the file, as its note lists them (MON-11). The Takes route's own, which reads the
+    /// note: never read from or written to the wire.
+    #[serde(skip)]
+    Comp {
+        clip: ClipRef,
+        takes: Vec<f64>,
+        take: usize,
+        from: f64,
+        to: f64,
+    },
     /// The beat grid's steps (KIT-12) on a Drum track's notes lane: each from a beat of `at` to the
     /// next line of a grid of `step` beats, cut at its bar's end; `to` says what each becomes.
     Hits {
@@ -637,6 +649,50 @@ fn apply_then(
                             None => l.added.push((c, true)),
                         }
                     }
+                }
+            }
+        }
+        Gesture::Comp { clip, takes, take, from, to } => {
+            let tempo = rev.compiled.data.tempo();
+            let (lane, named) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Audio(c) = &l.was[named] else {
+                return Err(EditError::Rejected("Only an audio clip's takes are comped.".into()));
+            };
+            // The lane's clips of its file that can be pieces, and the one named, by their place
+            // in the lane (VOX-2): a reversed or pitched clip ends a comp's row.
+            let can = |i: usize| matches!(&l.was[i], Clip::Audio(a) if a.asset == c.asset && (i == named || crate::comp::plays(a)));
+            let file: Vec<usize> = (0..l.was.len()).filter(|i| can(*i)).collect();
+            let audio = |i: usize| match &l.was[i] {
+                Clip::Audio(a) => a,
+                _ => unreachable!("an audio clip"),
+            };
+            let of_file: Vec<&AudioClip> = file.iter().map(|i| audio(*i)).collect();
+            let here = file.iter().position(|i| *i == named).expect("its own file");
+            let at: Vec<usize> = crate::comp::pieces(&of_file, here, takes, tempo).into_iter().map(|k| file[k]).collect();
+            let pieces: Vec<&AudioClip> = at.iter().map(|i| audio(*i)).collect();
+            let seconds = rev.compiled.data.asset_path(&c.asset).and_then(|p| asset_seconds(&p));
+            let place = |b: f64| crate::notes::place(arr, (b * 1000.0).round() / 1000.0);
+            let made = crate::comp::comp(&pieces, &crate::comp::File { takes, seconds }, *take, (*from, *to), tempo, &place)?;
+            // Of the pieces a clip is made from, the earliest keeps its id; one joined in goes.
+            let mut kept = vec![false; at.len()];
+            for p in made {
+                match p {
+                    crate::comp::Piece::Same(k) => kept[k] = true,
+                    crate::comp::Piece::Made(k, a) => {
+                        let mut a = Clip::Audio(a);
+                        if std::mem::replace(&mut kept[k], true) {
+                            a.set_id(None);
+                            l.added.push((a, false));
+                        } else {
+                            l.keep[at[k]] = Some(a);
+                        }
+                    }
+                }
+            }
+            for (k, i) in at.iter().enumerate() {
+                if !kept[k] {
+                    l.keep[*i] = None;
                 }
             }
         }
@@ -1762,6 +1818,7 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Notes { clip, .. }
         | Gesture::Points { clip, .. }
         | Gesture::Audio { clip, .. }
+        | Gesture::Comp { clip, .. }
         | Gesture::Stamp { clip, .. }
         | Gesture::Paste { into: Some(clip), .. } => pin(clip)?,
         Gesture::Create { .. }
@@ -1790,7 +1847,9 @@ pub fn edit_since(s: &mut Session, g: &Gesture, tx_id: &str, since: Option<u64>)
     {
         crate::beats_since(s, since, "where the song's music is")?;
     }
-    if let (Gesture::Hits { lane, .. }, Some(since)) = (g, since) {
+    // A comp acts on every piece of its comp, not only the clip it names (VOX-1), as the Beat
+    // grid's steps act on their lane.
+    if let (Gesture::Hits { lane, .. } | Gesture::Comp { clip: ClipRef { lane, .. }, .. }, Some(since)) = (g, since) {
         let file = DataPath::lane(lane).to_string();
         let folder = format!("data/{}/", lane.module);
         crate::unchanged_since(s, since, &file, |p| p == file || p == folder.trim_end_matches('/'))?;

@@ -35,8 +35,8 @@ crate::api::routes! {
         "Arm a track to record, or disarm it, and choose the input channels it records",
         r#"{"session": 7, "module": "vox", "lane": "clips", "armed": true, "channels": "3-4"}"#;
     POST "/api/graph/take" => take; writes, agents,
-        "Choose which take an audio clip over a loop plays (from 1)",
-        r#"{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2}"#;
+        "Choose which take an audio clip over a loop plays (from 1); with `from` and `to` (beats), only there: a comp",
+        r#"{"session": 7, "module": "vox", "lane": "clips", "id": "k3f9q2zt", "take": 2, "from": 4, "to": 6}"#;
     POST "/api/graph/input/inject" => input_inject; reads, musician,
         "What the sound input would hear next (only with M2_AUDIO_INPUT=inject, for the browser suites)",
         r#"{"tone": {"hz": 440, "seconds": 1}, "channel": 3}"#;
@@ -160,19 +160,30 @@ struct TakeReq {
     clip: m2_editor::clips::ClipRef,
     /// Which take, from 1.
     take: usize,
+    /// Only from this beat to `to`, in the clip's comp (VOX-1).
+    #[serde(default)]
+    from: Option<f64>,
+    #[serde(default)]
+    to: Option<f64>,
     /// The revision the pick goes from (AGENT-2): a clip changed since is refused.
     #[serde(default)]
     revision: Option<u64>,
 }
 
-/// `POST /api/graph/take {session, module, lane, id, take}`: the audio clip `id` plays take `take`
-/// (from 1) of its file's takes over a loop (MON-11): its offset moves to the same place in that
-/// pass. One Tx, one undo step ("Vox take 2"). Answers the edit.
+/// `POST /api/graph/take {session, module, lane, id, take, from?, to?}`: the audio clip `id` plays
+/// take `take` (from 1) of its file's takes over a loop (MON-11): its offset moves to the same place
+/// in that pass. One Tx, one undo step ("Vox take 2"). With `from` and `to`, in beats, the take
+/// plays there only, in the clip's comp: a comp (VOX-1), "Comp on Vox". Answers the edit.
 async fn take(State(s): S, Json(r): Json<TakeReq>) -> ApiResult {
     let state = s.clone();
     let result = blocking(move || {
         let take = r.take.checked_sub(1).ok_or_else(|| anyhow::anyhow!("Takes count from 1."))?;
-        state.graph.choose_take(r.session, r.clip, take, r.revision)
+        let range = match (r.from, r.to) {
+            (Some(from), Some(to)) => Some((from, to)),
+            (None, None) => None,
+            _ => anyhow::bail!("A comp's range is two beats: give `from` and `to`."),
+        };
+        state.graph.choose_take(r.session, r.clip, take, range, r.revision)
     })
     .await;
     s.graph_changed();
