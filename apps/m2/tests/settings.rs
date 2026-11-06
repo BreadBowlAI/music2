@@ -202,3 +202,32 @@ fn m2_graph_prints_a_face_and_the_code() {
     assert!(at("Face") < line("amp") && line("amp") < line("release") && line("release") < at("Sound"), "{out}");
     assert!(line("code: tone({ shape: \"saw\" })") < at("Face"), "{out}");
 }
+
+// CARD-74: `m2 graph` prints each picture by its name and its axes, and runs no pack's code: a
+// picture whose code would hang every load is printed at once (review G1, G8).
+#[test]
+fn m2_graph_prints_a_picture_and_runs_no_code() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-picture-cli-{}", std::process::id())));
+    let song = temp.0.join("song");
+    put(
+        &song,
+        "music2.toml",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n",
+    );
+    put(
+        &song,
+        "song.ts",
+        "import { axis, component, control, port, song, track, view } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+         const tone = component({ id: \"tone\", label: \"Tone\", controls: { cutoff: control.hz(1000) }, output: port.audio(),\n\
+           editor: { views: { curve: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24) }) } } },\n\
+           ({ cutoff }) => lowpass(osc.saw(110), { cutoff }),\n\
+           { curve: { draw: (v, p) => { for (;;) {} }, words: (v) => `cuts at ${v.cutoff} Hz` } });\n\
+         const lead = track(\"lead\", () => tone({ cutoff: 2400 }));\nexport default song(() => lead.out);\n",
+    );
+    let t = std::time::Instant::now();
+    let o = m2(&["graph", song.to_str().unwrap()]);
+    let out = said(&o);
+    assert!(o.status.success(), "{out}");
+    assert!(out.lines().any(|l| l.trim() == "curve          picture over hz (log) and db (lin); its words are in the app's view"), "{out}");
+    assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+}

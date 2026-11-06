@@ -359,6 +359,34 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
     }
     out.extend(presets_problems(dir, &name, &ours));
     out.extend(builds(dir, std, &name, &ours, &catalog));
+    out.extend(pictures_drawn(dir, std, &name, &ours));
+    out
+}
+
+/// Each picture of the pack's components, drawn at its defaults as the app first draws it: twice,
+/// so one that keeps something between its draws is said, as is any mistake the runner finds
+/// (CARD-64, CARD-65).
+fn pictures_drawn(dir: &Path, std: &Path, name: &PackName, ours: &[std::sync::Arc<m2_script::Descriptor>]) -> Vec<String> {
+    let runner = m2_script::pictures::Runner::new();
+    let packages = vec![(pack::STD.to_string(), std.to_path_buf()), (name.as_str().to_string(), dir.to_path_buf())];
+    let mut out = vec![];
+    for d in ours {
+        for v in d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })) {
+            let ask = m2_script::pictures::Ask {
+                key: format!("pack check {name}"),
+                packages: packages.clone(),
+                song: None,
+                module: d.module.clone(),
+                descriptor: d.clone(),
+                view: v.name.clone(),
+                values: m2_script::pictures::defaults(d),
+                memo: "pack check".into(),
+            };
+            if let m2_script::pictures::Drawn::Cant(why) = runner.draw(ask) {
+                out.push(format!("{}'s picture {} {} (drawn at its defaults)", d.id, v.name, why.trim_end_matches('.')));
+            }
+        }
+    }
     out
 }
 

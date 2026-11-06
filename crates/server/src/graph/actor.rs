@@ -875,7 +875,9 @@ impl Open {
         // A `layout.json` that doesn't read is a problem of its own, with Reset layout (FMT-19).
         // Each in plain words too, where a rule knows it (the studio plan's D2).
         let problems = files::plain_problems(s, &[s.problems(), &m2_editor::layout::problems(s)[..]].concat());
+        let view = Arc::new(s.view());
         Shown {
+            view: view.clone(),
             revision: rev.number,
             timeline: self.timeline.clone(),
             state: json!({
@@ -884,7 +886,7 @@ impl Open {
                 "types": self.types_of.1,
                 "name": rev.project.manifest.project.name,
                 "dir": rev.project.dir,
-                "view": s.view(),
+                "view": &*view,
                 // The Mix view's strips and master, by the view's knob ids (design-8b §5.4).
                 "mix": s.mix(),
                 "can_undo": s.can_undo(),

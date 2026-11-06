@@ -315,6 +315,9 @@ async fn ws(State(s): S, Query(q): Query<WsQuery>, upgrade: WebSocketUpgrade) ->
 async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<String>, page: bool, listens: bool) {
     let (unheard, mut events, _page) = state.subscribe(page);
     let mut meters = listens.then(|| state.meters.subscribe());
+    // A window's pictures (CARD-68): each sent once, its newest, by the version it was drawn at.
+    let mut pictures = client.as_ref().map(|_| state.pictures.subscribe());
+    let mut sent: std::collections::HashMap<(String, String, String), u64> = Default::default();
     for text in unheard {
         if socket.send(Message::Text(text.into())).await.is_err() {
             return;
@@ -332,6 +335,28 @@ async fn ws_loop(state: Arc<AppState>, mut socket: WebSocket, client: Option<Str
                 if let Some((_, text)) = mine
                     && socket.send(Message::Text(text.clone().into())).await.is_err()
                 {
+                    break;
+                }
+            }
+            Ok(()) = async { pictures.as_mut().expect("a window").changed().await }, if pictures.is_some() => {
+                let Some(p) = pictures.as_mut() else { continue };
+                let out = p.borrow_and_update().clone();
+                let Some((_, list)) = client.as_ref().and_then(|c| out.clients.iter().find(|(w, _)| w == c)) else { continue };
+                let mut new = vec![];
+                for pic in list {
+                    let key = ["module", "node", "view"].map(|k| pic.json[k].as_str().unwrap_or_default().to_string());
+                    let key = (key[0].clone(), key[1].clone(), key[2].clone());
+                    if sent.get(&key).is_some_and(|v| *v >= pic.version) {
+                        continue;
+                    }
+                    sent.insert(key, pic.version);
+                    new.push((*pic.json).clone());
+                }
+                if new.is_empty() {
+                    continue;
+                }
+                let text = json!({"t": "pictures", "session": out.session, "pictures": new}).to_string();
+                if socket.send(Message::Text(text.into())).await.is_err() {
                     break;
                 }
             }

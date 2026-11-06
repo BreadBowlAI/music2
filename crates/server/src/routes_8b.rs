@@ -53,6 +53,9 @@ crate::api::routes! {
     POST "/api/graph/look" => graph_look; reads, agents,
         "Look at a box as it plays: its sound's last frames (kind scope), its spectrum, its level, or a meter its sound gives (kind meter, at its name); at its output (at out) or its input (at in); in the asking window's looks message, and in each answer (what it saw since your last ask), while you ask again within 10 s; or stop",
         r#"{"session": 7, "client": "w1", "module": "bass", "node": "tracks/bass.ts#3", "kind": "spectrum", "at": "in", "on": true}"#;
+    POST "/api/graph/picture" => graph_picture; reads, agents,
+        "Show a card's picture: its shapes in its axes' units, each dot's values with the knobs that move them, and its words, drawn from what plays, the card by its id in the view of the revision named (refused when the song's code changed since); its window's socket gets it again as its values change, while you ask again within 10 s; or stop",
+        r#"{"session": 7, "revision": 42, "client": "w1", "module": "keys", "node": "tracks/keys.ts#2", "view": "curve", "on": true}"#;
     POST "/api/graph/loudness" => graph_loudness; reads, agents,
         "Measure the song's loudness as it plays (LUFS, and its true peak), in the meters and each answer, while you ask again within 10 s; or stop",
         r#"{"session": 7, "client": "w1", "on": true}"#;
@@ -265,6 +268,30 @@ async fn graph_look(State(s): S, Json(r): Json<LookReq>) -> ApiResult {
     let at = m2_editor::scope::At::parse(r.at.as_deref().unwrap_or("out"));
     let look = crate::graph::scope::Look { module: r.module, node: r.node, kind, at };
     Ok(Json(blocking(move || s.graph.look(r.session, &client, &look, r.on)).await?))
+}
+
+#[derive(Deserialize)]
+struct PictureReq {
+    session: u64,
+    /// The view the card's id is from: refused when the song's code changed since (CARD-67).
+    revision: u64,
+    /// The window, or the agent, asking: the picture is drawn again while one asks.
+    client: String,
+    /// The card, by its module's key and its id in the graph view, and the picture by its name.
+    module: String,
+    node: String,
+    view: String,
+    on: bool,
+}
+
+/// Start, keep or stop a card's picture (CARD-67): `{session, client, module, node, view, on}`.
+/// While a client asks (again within 10 s), its window's socket gets the picture again in its
+/// `pictures` message whenever what it is drawn from changes (CARD-68). Not a write: it works
+/// read-only. Answers `{picture: {module, node, view, words, shapes}}`, `{picture: {…, why}}` when
+/// it can't be drawn, or `{}` for a stop.
+async fn graph_picture(State(s): S, Json(r): Json<PictureReq>) -> ApiResult {
+    let client = own(&r.client);
+    Ok(Json(blocking(move || s.graph.picture(r.session, r.revision, &client, (&r.module, &r.node, &r.view), r.on)).await?))
 }
 
 /// The client an ask is filed under: an agent's own name after `agent:`, so an agent never stops

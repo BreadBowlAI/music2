@@ -161,7 +161,28 @@ export type CardView = { name: string } & (
   | { kind: "filter"; cutoff: ViewPart; q: ViewPart }
   | { kind: "keys"; setting: string; regions: KeyRegion[]; lane?: LaneRef; why?: string }
   | { kind: "scope" }
+  | {
+      kind: "picture";
+      x: PictureAxis;
+      y: PictureAxis;
+      /** Its live layers, as declared (CARD-73). */
+      live?: { kind: string; at?: string; tone?: string; on?: string; name?: string; from?: string; of?: unknown }[];
+      /** Each value its draw reads (CARD-63): what plays, the knob that moves it, or why not. */
+      values: { name: string; value: number | string | boolean | null; knob?: string; why?: string }[];
+      /** Its words at these values, once the server worked them out (CARD-63); null until then. */
+      words?: string | null;
+      /** Why it can't be drawn, when it can't. */
+      why?: string;
+    }
 );
+
+/** A picture's axis (CARD-60). */
+export interface PictureAxis {
+  scale: "lin" | "log" | "time";
+  unit: string;
+  lo: number;
+  hi: number;
+}
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
 export interface PluginBox {
@@ -1002,6 +1023,9 @@ export const graphApi = {
       at,
       on,
     }),
+  /** Ask for a card's picture (CARD-67), again within 10 s to keep it, or stop: it comes again on this window's socket as its values change. */
+  picture: (session: number, revision: number, module: string, node: string, view: string, on: boolean) =>
+    call<{ picture?: import("../components/PictureView").Drawn }>("/picture", { session, revision, client: clientId, module, node, view, on }),
   /** A setting's value, or a knob's as a menu or a switch sets it (CARD-4): one edit of its call, one undo step. */
   setValue: (session: number, revision: number, id: string, value: Choice["value"], step: Step) =>
     edit(session, step, gated(session, revision, [fileOf(id)], (at, as) => call<Edit>("/set", { session, revision: at, id: as(id), gesture: "set", value, client: clientId }))),

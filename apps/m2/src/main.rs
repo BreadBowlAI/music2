@@ -658,6 +658,11 @@ fn run(args: Vec<String>) -> Result<()> {
                     };
                     // A view (CARD-26): its name and what it draws.
                     let view_line = |v: &m2_editor::views::CardView| {
+                        // A picture by its axes: its words are the app's to work out, never this command's (CARD-74).
+                        if let m2_editor::views::Drawn::Picture { x, y, .. } = &v.of {
+                            let (xs, ys) = (format!("{} ({})", x.unit.name(), x.scale), format!("{} ({})", y.unit.name(), y.scale));
+                            return format!("      {:14} picture over {xs} and {ys}; its words are in the app's view", v.name);
+                        }
                         let what =
                             serde_json::to_value(&v.of).ok().and_then(|o| o["kind"].as_str().map(str::to_string)).unwrap_or_default();
                         format!("      {:14} {what} view", v.name)

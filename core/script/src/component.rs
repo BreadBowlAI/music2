@@ -223,6 +223,25 @@ pub enum ViewOf {
     Keys { regions: String },
     /// The sound's output as it plays.
     Scope,
+    /// A picture its pack or song draws (CARD-60): its axes and its live layers. Its code is not
+    /// here: the picture runner runs it (`crate::pictures`).
+    Picture {
+        x: Axis,
+        y: Axis,
+        /// Each live layer as declared (CARD-73): `{"kind": "spectrum", "at": "in"}`. Written only when
+        /// there are some.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        live: Vec<serde_json::Value>,
+    },
+}
+
+/// A picture's axis (CARD-60): `lin`, `log` or `time`, its unit, and where it starts and ends.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Axis {
+    pub scale: String,
+    pub unit: Unit,
+    pub lo: f64,
+    pub hi: f64,
 }
 
 /// A group of a card (CARD-17): its name, and the values and views in it, in order.
