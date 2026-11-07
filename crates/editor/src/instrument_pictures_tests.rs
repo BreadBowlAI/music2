@@ -329,3 +329,58 @@ fn the_drawn_partials_are_the_fm_synths_sound() {
         assert!(checked >= 2, "{a:?}: {checked} partials checked");
     }
 }
+
+// CARD-136: each sound's note picture has a y range that fits its sound: middle C at its defaults,
+// as `p.hit` measures it, peaks inside the picture and fills at least a third of its height, so its
+// attack and decay can be read (review U4: on ±1 the polysynth's note was a band a few px tall).
+#[test]
+fn each_note_fits_its_picture() {
+    use crate::measure::{Layer, copy};
+    let sounds = [
+        ("@m2/synths:synth-custom", "synth.custom"),
+        ("@m2/synths:synth-pluck", "synth.pluck"),
+        ("@m2/synths:synth-sub", "synth.sub"),
+        ("@m2/synths:synth-bass", "synth.bass"),
+        ("@m2/synths:fm-keys", "fm.keys"),
+        ("@m2/synths:fm-bell", "fm.bell"),
+        ("@m2/synths:fm-metal", "fm.metal"),
+    ];
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    let tracks: Vec<String> = sounds
+        .iter()
+        .enumerate()
+        .map(|(i, (_, call))| format!("const t{i} = track('t{i}', ({{ lane }}) => {call}(lane.notes('notes')));\n"))
+        .collect();
+    let outs: Vec<String> = (0..sounds.len()).map(|i| format!("t{i}: t{i}.out")).collect();
+    f.write(
+        "song.ts",
+        format!(
+            "import {{ song, track }} from '@m2/core';\nimport {{ fm, synth }} from '@m2/synths';\nimport {{ mixer }} from 'std/mix';\n{}export default song(() => mixer({{ {} }}));\n",
+            tracks.concat(),
+            outs.join(", ")
+        ),
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let rev = s.accepted();
+    let catalog = m2_script::describe(&packages());
+    for (i, (cid, call)) in sounds.iter().enumerate() {
+        let m2_script::component::ViewOf::Picture { y, .. } =
+            &catalog.components[*cid].editor.views.iter().find(|v| v.name == "note").unwrap_or_else(|| panic!("{cid}'s note")).of
+        else {
+            panic!("{cid}'s note is a picture")
+        };
+        let site = rev.compiled.sites.iter().find(|x| x.file == "song.ts" && &x.callee == call).unwrap();
+        let node = format!("{}#{}", site.file, site.ordinal);
+        let c = copy(rev, &s.packages, &format!("t{i}"), &node, &serde_json::Map::new(), Layer::Hit { note: 60, seconds: 1.0 }).unwrap();
+        let peak = c
+            .frames(&s.packages, std::time::Duration::from_secs(5))
+            .unwrap()
+            .iter()
+            .map(|f| (0.5 * (f[0] + f[1]) as f64).abs())
+            .fold(0.0, f64::max);
+        assert!(peak <= y.hi && -peak >= y.lo, "{cid}: middle C peaks at {peak:.3}, past its picture's {}..{}", y.lo, y.hi);
+        assert!(peak >= y.hi / 3.0, "{cid}: middle C peaks at {peak:.3}, under a third of its picture's {}", y.hi);
+    }
+}

@@ -15,9 +15,16 @@ const figures = (v: number) => String(Math.round(v * 100) / 100);
 /** The note a picture plays: middle C. */
 export const NOTE = 60;
 
-/** One note (CARD-136): its sound across, in seconds from its start, as a waveform from −1 to 1. */
+/**
+ * The most a note's picture shows up and down: these sounds play middle C at about 0.2 at their
+ * defaults (−14 dBFS, their kernels' output gain), so it fills half the picture and has room for a
+ * louder patch; past it a waveform is cut at the picture's edge (review U4).
+ */
+const NOTE_RANGE = 0.4;
+
+/** One note (CARD-136): its sound across, in seconds from its start, as a waveform from −0.4 to 0.4. */
 export function notePicture(): PictureDecl<"seconds", "bipolar"> {
-  return view.picture({ x: axis.time(1), y: axis.lin("bipolar", -1, 1) });
+  return view.picture({ x: axis.time(1), y: axis.lin("bipolar", -NOTE_RANGE, NOTE_RANGE) });
 }
 
 /**
@@ -28,7 +35,7 @@ export function notePicture(): PictureDecl<"seconds", "bipolar"> {
 export function note(p: Painter<any, "seconds", "bipolar">, seconds: number): Shape[] {
   const s = Math.min(1, Math.max(0.1, seconds));
   // The place over the hit, so a click anywhere on it plays it.
-  return [p.hit({ note: NOTE, seconds: s }), p.play([0, -1, s, 1], { note: NOTE })];
+  return [p.hit({ note: NOTE, seconds: s }), p.play([0, -NOTE_RANGE, s, NOTE_RANGE], { note: NOTE })];
 }
 
 /** How long a note's picture lasts: its attack and decay, and a little of what it holds, from 0.3 s to 1 s. */
