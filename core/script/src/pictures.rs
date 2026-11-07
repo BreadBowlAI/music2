@@ -531,6 +531,9 @@ pub enum Shape {
         tone: Option<Tone>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<String>,
+        /// Its click's level in dB, within [`CLICK`]; the loudest when left out.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        level: Option<f64>,
     },
     /// One note's sound, as a copy of the call plays it (CARD-80): its points are the server's.
     Hit {
@@ -543,6 +546,9 @@ pub enum Shape {
 
 /// The points a measured layer is filled with (CARD-80): a response's, and a hit's columns.
 pub const MEASURED: (usize, usize) = (256, 256);
+/// The quietest and the loudest a response's click plays, in dB (CARD-80): a draw that gives no
+/// level plays the loudest, −20.
+pub const CLICK: (f64, f64) = (-80.0, -20.0);
 
 /// A draw, as checked (CARD-65): its shapes and its words.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -657,7 +663,7 @@ fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit, f64), numbers: 
                     return Err(format!("gives p.play the note {note}: a note is a whole number 0 to 127"));
                 }
             }
-            Shape::Response { name, .. } => {
+            Shape::Response { name, level, .. } => {
                 if (axes.0, axes.1) != (Unit::Hz, Unit::Db) {
                     return Err(format!(
                         "gives p.response an x axis in {} and a y axis in {}: a response is drawn across hz and up db",
@@ -669,6 +675,11 @@ fn check(shapes: &[Shape], desc: &Descriptor, axes: (Unit, Unit, f64), numbers: 
                     && !(fits(n, 1, 32) && plain(n))
                 {
                     return Err(format!("gives p.response the name {:?}: a line's name is a plain name of up to 32 characters", cut(n)));
+                }
+                if let Some(l) = level
+                    && !(CLICK.0..=CLICK.1).contains(l)
+                {
+                    return Err(format!("gives p.response the level {l}: its click plays at −80 to −20 dB"));
                 }
                 count(numbers, 2 * MEASURED.0)?;
             }

@@ -218,7 +218,7 @@ fn the_drawn_lowpass_is_stds_filter_up_to_a_twelfth_of_the_rate() {
         let rev = s.accepted();
         let site = rev.compiled.sites.iter().find(|x| x.file == "song.ts" && x.callee == "lowpass").unwrap();
         let node = format!("{}#{}", site.file, site.ordinal);
-        let c = copy(rev, &s.packages, "t", &node, &Map::new(), Layer::Response).unwrap();
+        let c = copy(rev, &s.packages, "t", &node, &Map::new(), Layer::Response { level: crate::measure::LEVEL }).unwrap();
         let span = Span { log: true, lo: 20.0, hi: 20_000.0 };
         let measured = c.measure(&s.packages, span, Duration::from_secs(5), Pass::Rest).unwrap();
         // Between the two measured points either side, on the log scale the points are spaced on.

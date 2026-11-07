@@ -106,7 +106,7 @@ export const inline = component(
   },
 );
 
-/** The layers music2 measures (CARD-80), each only on the axes it draws them on. */
+/** The layers music2 measures (CARD-80), each only on the axes it draws them on; a response's click at a level in dB. */
 export const measured = component(
   {
     id: "measured",
@@ -117,6 +117,7 @@ export const measured = component(
       views: {
         curve: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }),
         hit: view.picture({ x: axis.time(0.5), y: axis.lin("bipolar", -1, 1) }),
+        quiet: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }),
       },
     },
   },
@@ -131,6 +132,15 @@ export const measured = component(
       // @ts-expect-error a response is drawn across hz and up db, not across seconds
       draw: (_v, p) => [p.hit({ note: 36, seconds: 0.5, tone: "faint" }), p.response()],
       words: () => "its hit",
+    },
+    quiet: {
+      draw: (_v, p) => [
+        // A click quieter than its thresholds (2.6).
+        p.response({ level: -80 }),
+        // @ts-expect-error a click's level is a number of dB
+        p.response({ level: "quiet" }),
+      ],
+      words: () => "its curve under its thresholds",
     },
   },
 );

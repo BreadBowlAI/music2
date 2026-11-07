@@ -30,10 +30,12 @@ use serde_json::{Map, Value};
 
 use crate::scope::{Inside, port_of};
 
-/// The step's level: 0.1 (−20 dBFS), quiet enough to keep most sounds in their straight-line range;
-/// and the quieter one it is checked against, 32 times quieter (−50 dBFS).
-pub const LEVEL: f64 = 0.1;
-const SOFT: f64 = LEVEL / 32.0;
+/// The step's level, in dBFS, when a draw gives none: −20 (0.1), quiet enough to keep most sounds in
+/// their straight-line range. A draw may give a quieter one, down to −80, so a sound with
+/// thresholds rests under them (CARD-80). Each is checked against one 32 times quieter (CARD-82).
+pub const LEVEL: f64 = m2_script::pictures::CLICK.1;
+/// How much quieter the step it is checked against is.
+const SOFTER: f64 = 32.0;
 /// How long the click must stay quiet, in seconds, for the copy to stop listening; and the longest
 /// it may ring before it falls quiet.
 pub const QUIET: f64 = 0.5;
@@ -88,8 +90,8 @@ pub enum Failed {
 /// Which layer is measured.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Layer {
-    /// The click's spectrum.
-    Response,
+    /// The click's spectrum, its step at `level` dBFS.
+    Response { level: f64 },
     /// One note of `note`, `seconds` long.
     Hit { note: u8, seconds: f64 },
 }
@@ -151,7 +153,7 @@ impl Put {
                 true => Body {
                     nodes: vec![
                         node("k", Op::Lane { lane: "keyCount".into() }),
-                        node(LEVEL_NODE, Op::Const { value: LEVEL, unit: None }),
+                        node(LEVEL_NODE, Op::Const { value: amplitude(LEVEL), unit: None }),
                         node(
                             "g",
                             Op::Kernel {
@@ -340,7 +342,7 @@ pub fn copy(
     if let Some(why) = refused {
         return Err(why);
     }
-    if moves && layer == Layer::Response {
+    if moves && matches!(layer, Layer::Response { .. }) {
         return Err(
             "one of its values moves as the song plays (a lane, a cable or the song's beat drives it), so it has no one curve".into()
         );
@@ -354,7 +356,9 @@ pub fn copy(
     };
     let (sound, notes) = (mine(true), mine(false));
     match layer {
-        Layer::Response if sound.is_empty() => return Err("it takes no sound in, so p.response has nothing to play through it".into()),
+        Layer::Response { .. } if sound.is_empty() => {
+            return Err("it takes no sound in, so p.response has nothing to play through it".into());
+        }
         Layer::Hit { .. } if notes.is_empty() => return Err("it plays no notes, so p.hit has no note to play".into()),
         _ => {}
     }
@@ -623,6 +627,14 @@ impl Copy {
         (seconds * self.rate as f64).round() as usize
     }
 
+    /// How loud its step is: its response's level (CARD-80), as a sample's size.
+    fn loudness(&self) -> f64 {
+        match self.layer {
+            Layer::Response { level } => amplitude(level),
+            Layer::Hit { .. } => amplitude(LEVEL),
+        }
+    }
+
     /// Its graph with the step at `level`, and its data with the click's note from frame `start`
     /// (a response's), held past anything it plays.
     fn click(&self, level: f64, start: usize) -> (Ir, m2_song::DataSet) {
@@ -696,10 +708,10 @@ impl Copy {
         Ok(got)
     }
 
-    /// The click's sound, `frames` of it, as a step at [`LEVEL`] from sample 0 gives it: each
+    /// The click's sound, `frames` of it, as a step at its level from sample 0 gives it: each
     /// sample the step's first difference, the mean of its two sides, over the level.
     pub fn step(&self, packages: &PackageSet, frames: usize) -> Result<Vec<f64>, Failed> {
-        self.clicked(packages, LEVEL, 0, frames, &Spent::new(Duration::from_secs(600)), &mut |_| Ok(false))
+        self.clicked(packages, self.loudness(), 0, frames, &Spent::new(Duration::from_secs(600)), &mut |_| Ok(false))
     }
 
     /// The click's sound from a step at `level` from frame `start`, from that frame on, `frames` at
@@ -738,8 +750,9 @@ impl Copy {
         }
         // Listen until the click has stayed quiet for QUIET, as long as it rings up to LISTEN.
         let (quiet, cap) = (self.frames_in(QUIET), self.frames_in(LISTEN));
+        let level = self.loudness();
         let mut end = 0;
-        let mut h = self.clicked(packages, LEVEL, 0, cap + quiet, until, &mut |h| {
+        let mut h = self.clicked(packages, level, 0, cap + quiet, until, &mut |h| {
             let peak = h.iter().fold(0.0f64, |a, x| a.max(x.abs()));
             let floor = (peak * QUIETER).max(FLOATS);
             end = h.iter().rposition(|x| x.abs() > floor).map_or(0, |i| i + 1);
@@ -765,8 +778,8 @@ impl Copy {
         // every level and every time gives the same click (review M2).
         let check = self.frames_in(CHECK);
         let later = self.frames_in(LATER).div_ceil(BLOCK) * BLOCK;
-        let soft = self.clicked(packages, SOFT, 0, check, until, &mut |_| Ok(false))?;
-        let moved = self.clicked(packages, LEVEL, later, check, until, &mut |_| Ok(false))?;
+        let soft = self.clicked(packages, level / SOFTER, 0, check, until, &mut |_| Ok(false))?;
+        let moved = self.clicked(packages, level, later, check, until, &mut |_| Ok(false))?;
         let mut own = h.clone();
         own.resize(check, 0.0);
         let at = |v: &[f64]| response(v, self.rate, x);
@@ -902,6 +915,11 @@ fn goertzel(h: &[f64], w: &[f64; WIDE]) -> [f64; WIDE] {
     }
     // The last step's phase aside, the power at each w (the Goertzel filter's result).
     std::array::from_fn(|k| (s1[k] * s1[k] + s2[k] * s2[k] - c[k] * s1[k] * s2[k]).max(0.0))
+}
+
+/// A level in dBFS as a sample's size: −20 is 0.1.
+fn amplitude(db: f64) -> f64 {
+    10f64.powf(db / 20.0)
 }
 
 /// A power in dB, never under [`FLOOR`].

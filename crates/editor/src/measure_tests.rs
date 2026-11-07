@@ -68,7 +68,8 @@ const ROOMY: Duration = Duration::from_secs(5);
 
 /// The response of `module`'s call of `callee` at `v`, measured as a picture's is.
 fn measured(s: &Session, module: &str, callee: &str, v: serde_json::Value) -> Result<Vec<f64>, Failed> {
-    let c = copy(s.accepted(), &s.packages, module, &id_in(s, module, callee), &values(v), Layer::Response).map_err(Failed::Cant)?;
+    let c = copy(s.accepted(), &s.packages, module, &id_in(s, module, callee), &values(v), Layer::Response { level: LEVEL })
+        .map_err(Failed::Cant)?;
     c.measure(&s.packages, HZ, ROOMY, Pass::Rest)
 }
 
@@ -157,7 +158,7 @@ fn a_response_listens_until_its_click_dies_away() {
             assert!(worst < 0.5, "{callee} at {rate} Hz: {worst} dB from the textbook");
         }
         // The short delay against a fixed listen of 2^19 frames, worked out the same way.
-        let c = copy(s.accepted(), &s.packages, "d", &id_in(&s, "d", "delay"), &Map::new(), Layer::Response).unwrap();
+        let c = copy(s.accepted(), &s.packages, "d", &id_in(&s, "d", "delay"), &Map::new(), Layer::Response { level: LEVEL }).unwrap();
         let points = c.measure(&s.packages, HZ, ROOMY, Pass::Rest).unwrap();
         let long = response(&c.step(&s.packages, 1 << 19).unwrap(), rate, HZ);
         let worst =
@@ -191,6 +192,29 @@ fn a_sound_that_changes_with_level_or_time_is_refused() {
     assert_eq!(measured(&s, "ch", "chorus", json!({})), time, "chorus");
 }
 
+// CARD-80, CARD-82, CARD-84: a response's click may be quieter, down to −80 dBFS. std's compress at
+// a threshold of −30 dB and a ratio of 10 is refused at −20 dBFS, its sound changing with how loud
+// it is; at −80 dBFS, under its threshold, it leaves the sound as it is: flat at 0 dB, passing the
+// checks at a 32nd of the level at rest. The click's level is part of what the copy is made from.
+#[test]
+fn a_quiet_click_measures_a_sound_below_its_threshold() {
+    let body = "const c = track('c', () => compress(osc.saw(110), { threshold: -30, ratio: 10, makeup: 0 }));\n\
+                export default song(() => c.out);\n";
+    let (_f, s) = open_at(48_000, body);
+    let at = |level: f64| {
+        let c = copy(s.accepted(), &s.packages, "c", &id_in(&s, "c", "compress"), &Map::new(), Layer::Response { level }).unwrap();
+        (c.key.clone(), c.measure(&s.packages, HZ, ROOMY, Pass::Rest))
+    };
+    let (loud, refused) = at(LEVEL);
+    assert!(matches!(&refused, Err(Failed::Cant(w)) if w.starts_with("its sound changes with how loud it is")), "at −20 dBFS: {refused:?}");
+    let (quiet, measured) = at(-80.0);
+    let points = measured.unwrap();
+    assert_eq!(points.len(), 2 * POINTS);
+    let worst = points.chunks(2).map(|p| p[1].abs()).fold(0.0, f64::max);
+    assert!(worst < 0.001, "under its threshold it leaves the sound as it is: {worst} dB from 0 dB at most");
+    assert_ne!(loud, quiet, "a copy is kept by its click's level too");
+}
+
 // CARD-85: a drag's frame measures the click alone, so it stays smooth; the checks of level and
 // time run at rest. A compressor's curve is drawn while its knob moves, and greyed at rest.
 #[test]
@@ -200,7 +224,7 @@ fn a_drag_frame_measures_the_click_alone() {
                 export default song(() => sum(c.out, l.out));\n";
     let (_f, s) = open_at(48_000, body);
     let measure = |module: &str, callee: &str, pass| {
-        let c = copy(s.accepted(), &s.packages, module, &id_in(&s, module, callee), &Map::new(), Layer::Response).unwrap();
+        let c = copy(s.accepted(), &s.packages, module, &id_in(&s, module, callee), &Map::new(), Layer::Response { level: LEVEL }).unwrap();
         c.measure(&s.packages, HZ, ROOMY, pass)
     };
     assert_eq!(measure("c", "compress", Pass::Drag).map(|p| p.len()), Ok(2 * POINTS), "while dragged: its click's curve");
@@ -219,7 +243,9 @@ fn a_drag_frame_of_the_eq_stays_under_8_ms() {
         .map(|i| {
             let t = m2_os::thread::cpu_time();
             let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(BUDGET);
-            let c = copy(rev, &packages, "e", &node, &values(json!({"gain4": (i % 48) as f64 / 2.0 - 12.0})), Layer::Response).unwrap();
+            let c =
+                copy(rev, &packages, "e", &node, &values(json!({"gain4": (i % 48) as f64 / 2.0 - 12.0})), Layer::Response { level: LEVEL })
+                    .unwrap();
             assert_eq!(c.measure(&packages, HZ, BUDGET, Pass::Drag).unwrap().len(), 2 * POINTS);
             m2_os::thread::cpu_time() - t
         })
@@ -294,18 +320,21 @@ fn a_copy_is_refused_in_words() {
     let rev = s.accepted();
     let why =
         |module: &str, callee: &str, layer| copy(rev, &s.packages, module, &id_in(&s, module, callee), &Map::new(), layer).err().unwrap();
-    assert_eq!(why("kick", "drums.drum", Layer::Response), "it takes no sound in, so p.response has nothing to play through it");
+    assert_eq!(
+        why("kick", "drums.drum", Layer::Response { level: LEVEL }),
+        "it takes no sound in, so p.response has nothing to play through it"
+    );
     assert_eq!(why("lead", "lowpass", Layer::Hit { note: 60, seconds: 1.0 }), "it plays no notes, so p.hit has no note to play");
-    let gone = copy(rev, &s.packages, "lead", "song.ts#999", &Map::new(), Layer::Response).err().unwrap();
+    let gone = copy(rev, &s.packages, "lead", "song.ts#999", &Map::new(), Layer::Response { level: LEVEL }).err().unwrap();
     assert_eq!(gone, "there's no call song.ts#999 in lead now");
-    assert_eq!(why("m", "notch", Layer::Response), "it is called more than once");
-    assert_eq!(why("v", "highpass", Layer::Response), "it plays inside an instrument's voices");
-    assert_eq!(why("o", "notch", Layer::Response), "one of its values comes from another track");
-    assert_eq!(why("p", "wrap", Layer::Response), "it hosts a plugin, which music2 can't measure yet");
-    assert_eq!(why("g", "xrange", Layer::Response), "it gives no sound");
+    assert_eq!(why("m", "notch", Layer::Response { level: LEVEL }), "it is called more than once");
+    assert_eq!(why("v", "highpass", Layer::Response { level: LEVEL }), "it plays inside an instrument's voices");
+    assert_eq!(why("o", "notch", Layer::Response { level: LEVEL }), "one of its values comes from another track");
+    assert_eq!(why("p", "wrap", Layer::Response { level: LEVEL }), "it hosts a plugin, which music2 can't measure yet");
+    assert_eq!(why("g", "xrange", Layer::Response { level: LEVEL }), "it gives no sound");
     let moves = "one of its values moves as the song plays (a lane, a cable or the song's beat drives it), so it has no one curve";
-    assert_eq!(why("w", "lowpass", Layer::Response), moves, "a cable from the beat");
-    assert_eq!(why("ln", "highpass", Layer::Response), moves, "a lane");
+    assert_eq!(why("w", "lowpass", Layer::Response { level: LEVEL }), moves, "a cable from the beat");
+    assert_eq!(why("ln", "highpass", Layer::Response { level: LEVEL }), moves, "a lane");
 }
 
 // CARD-84 (review M7): a copy is named by what it plays: the same call at the same values is the
@@ -317,16 +346,21 @@ fn a_copy_is_named_by_what_it_is_made_from() {
     let rev = s.accepted();
     let node = id(&s, "lowpass");
     let key = |v: serde_json::Value, layer| copy(rev, &s.packages, "lead", &node, &values(v), layer).unwrap().key;
-    let at = key(json!({"cutoff": 300}), Layer::Response);
-    assert_eq!(at, key(json!({"cutoff": 300}), Layer::Response));
-    assert_ne!(at, key(json!({"cutoff": 301}), Layer::Response));
-    assert_eq!(key(json!({}), Layer::Response), key(json!({"cutoff": 2400}), Layer::Response), "the code's own value");
+    let at = key(json!({"cutoff": 300}), Layer::Response { level: LEVEL });
+    assert_eq!(at, key(json!({"cutoff": 300}), Layer::Response { level: LEVEL }));
+    assert_ne!(at, key(json!({"cutoff": 301}), Layer::Response { level: LEVEL }));
+    assert_eq!(
+        key(json!({}), Layer::Response { level: LEVEL }),
+        key(json!({"cutoff": 2400}), Layer::Response { level: LEVEL }),
+        "the code's own value"
+    );
     let kick = id(&s, "drums.drum");
     let hit = |seconds| copy(rev, &s.packages, "kick", &kick, &Map::new(), Layer::Hit { note: 36, seconds }).unwrap().key;
     assert_ne!(hit(0.5), hit(0.25));
     let (_f2, moved) = open_at(48_000, &format!("// a line above it\n\n{SONG}"));
-    let there = copy(moved.accepted(), &moved.packages, "lead", &id(&moved, "lowpass"), &Map::new(), Layer::Response).unwrap().key;
-    assert_eq!(there, key(json!({}), Layer::Response), "the same sound, lines further down");
+    let there =
+        copy(moved.accepted(), &moved.packages, "lead", &id(&moved, "lowpass"), &Map::new(), Layer::Response { level: LEVEL }).unwrap().key;
+    assert_eq!(there, key(json!({}), Layer::Response { level: LEVEL }), "the same sound, lines further down");
 }
 
 /// A song that plays the spin pack's two sounds (`core/session/tests/fixtures/packs/spin`).
@@ -353,7 +387,7 @@ fn a_measure_is_stopped_past_its_budget() {
     let rev = s.accepted();
     for (m, callee) in [("a", "spin"), ("b", "slow")] {
         let packages = s.packages.clone().with_offline_limit(BUDGET);
-        let c = copy(rev, &packages, m, &id(&s, callee), &Map::new(), Layer::Response).unwrap();
+        let c = copy(rev, &packages, m, &id(&s, callee), &Map::new(), Layer::Response { level: LEVEL }).unwrap();
         let t = Instant::now();
         assert_eq!(c.measure(&packages, HZ, BUDGET, Pass::Rest), Err(Failed::Slow), "{callee}");
         assert!(t.elapsed() < Duration::from_millis(250), "{callee} stopped at {:?}", t.elapsed());
@@ -382,7 +416,7 @@ fn a_measure_follows_a_drag_inside_its_budget() {
                     let t = m2_os::thread::cpu_time();
                     let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(most);
                     let c = copy(rev, &packages, module, &node, &values(at(i)), layer).unwrap();
-                    let span = if layer == Layer::Response { HZ } else { Span { log: false, lo: 0.0, hi: 1.0 } };
+                    let span = if matches!(layer, Layer::Response { .. }) { HZ } else { Span { log: false, lo: 0.0, hi: 1.0 } };
                     assert!(!c.measure(&packages, span, most, Pass::Rest).unwrap().is_empty());
                     m2_os::thread::cpu_time() - t
                 })
@@ -390,8 +424,9 @@ fn a_measure_follows_a_drag_inside_its_budget() {
             took.sort();
             (took[took.len() / 2], took[took.len() * 99 / 100])
         };
-        let lowpass = time("lead", "lowpass", Layer::Response, &|i| json!({"cutoff": 200 + 40 * i, "q": 0.5 + (i % 7) as f64}));
-        let eq = time("e", "eq", Layer::Response, &|i| json!({"gain4": (i % 24) as f64 - 12.0}));
+        let lowpass =
+            time("lead", "lowpass", Layer::Response { level: LEVEL }, &|i| json!({"cutoff": 200 + 40 * i, "q": 0.5 + (i % 7) as f64}));
+        let eq = time("e", "eq", Layer::Response { level: LEVEL }, &|i| json!({"gain4": (i % 24) as f64 - 12.0}));
         let hit = time("kick", "drums.drum", Layer::Hit { note: 36, seconds: 1.0 }, &|i| json!({"decay": 0.2 + 0.01 * i as f64}));
         eprintln!("at {rate} Hz: a lowpass {lowpass:?}, the EQ {eq:?}, a hit of 1 s {hit:?} (median, p99)");
         for (what, (_, p99)) in [("a lowpass's response", lowpass), ("the EQ's response", eq), ("a hit of 1 s", hit)] {

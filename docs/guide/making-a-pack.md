@@ -61,6 +61,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | a card's face, `editor.face` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than stop at a field it doesn't know |
 | a picture, `view.picture` (new in 2.4) | `"2.4"` | the same: an older music2 says in words that your pack needs 2.4 |
 | a note effect, or the song's tempo, `time.tempo` (new in 2.5) | `"2.5"` | the same: an older music2 says in words that your pack needs 2.5 |
+| a quiet click for a measured curve, `p.response({ level })` (new in 2.6) | `"2.6"` | the same: an older music2 says in words that your pack needs 2.6 |
 
 ### music2's promise to your pack
 
@@ -263,7 +264,7 @@ A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a co
 
 | Word | Draws | Axes |
 |---|---|---|
-| `p.response({ tone, name })` | the curve of an EQ or a filter: a click played through the copy, and how loud each frequency comes out | `x` in `hz`, `y` in `db` |
+| `p.response({ tone, name, level })` | the curve of an EQ or a filter: a click played through the copy, and how loud each frequency comes out. `level` is how loud the click is, −80 to −20 dB (−20 if left out): play it quieter than a sound's thresholds, and its compressors rest (new in 2.6) | `x` in `hz`, `y` in `db` |
 | `p.hit({ note, seconds, tone })` | one note of an instrument: `note` (60 if left out) held for `seconds` (1 at most, and no longer than the x axis; left out, the axis's end or 1), drawn as its wave | `x` in `seconds` (`axis.time`), `y` in `bipolar` (−1 to 1) |
 
 Each may be in a picture once. They follow every drag at once, and the same values are measured only once. A measure has 20 ms (more at a higher rate); past that the picture greys, and it is tried again 10 s later.
@@ -272,7 +273,7 @@ music2 draws a response only where it is exact. It checks that when no knob is b
 
 | The picture greys when the sound | For example | Draw instead |
 |---|---|---|
-| changes with how loud it is | a compressor, drive, a gate | its transfer curve, from your maths |
+| changes with how loud it is | a compressor, drive, a gate | its transfer curve, from your maths; or, for what it does under its thresholds, a quiet click: `p.response({ level: -80 })` |
 | changes over time | a chorus, a phaser, a filter an LFO moves | its curve at the knobs' values, from your maths |
 | rings longer than 2 s, or echoes after more than half a second of quiet | a long delay, a big reverb | its echoes as bars, its tail as a line |
 | has a value a lane or a cable moves | an automated cutoff | (the curve has no one shape) |

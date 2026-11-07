@@ -384,8 +384,8 @@ fn the_runner_checks_each_draw_in_words() {
 }
 
 // CARD-80, CARD-65: the layers music2 measures are given with no points, each at most once, on the
-// axes it draws them on, and counted as the points they are filled with; each mistake greys the
-// picture in words, as the runner finds it and again in Rust.
+// axes it draws them on, and counted as the points they are filled with; a response's click from
+// −80 to −20 dB; each mistake greys the picture in words, as the runner finds it and again in Rust.
 #[test]
 fn a_measured_layer_is_checked_in_words() {
     let hz = "x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24)";
@@ -419,6 +419,11 @@ fn a_measured_layer_is_checked_in_words() {
             Err("gives p.response the name \"a b\": a line's name is a plain name of up to 32 characters"),
         ),
         (hz, "p.response(), p.line(new Array(19490).fill(1))", Err("draws more than 20,000 numbers")),
+        // A quieter click, for a sound with thresholds to rest under (measure2 §6.2).
+        (hz, "p.response({ level: -80 })", Ok(json!([{"kind": "response", "level": -80.0}]))),
+        (hz, "p.response({ level: -90 })", Err("gives p.response the level -90: its click plays at −80 to −20 dB")),
+        (hz, "p.response({ level: -10 })", Err("gives p.response the level -10: its click plays at −80 to −20 dB")),
+        (hz, "p.response({ level: \"quiet\" })", Err("gives p.response the level \"quiet\": its click plays at −80 to −20 dB")),
     ];
     let views: Vec<String> =
         draws.iter().enumerate().map(|(i, (axes, ..))| format!("        m{i}: view.picture({{ {axes} }}),\n")).collect();
@@ -452,6 +457,11 @@ fn a_measured_layer_is_checked_in_words() {
         "gives p.response twice: a picture holds one at most"
     );
     assert!(forged("m1", "[{\"kind\":\"response\"}]").unwrap_err().contains("a response is drawn across hz and up db"));
+    assert_eq!(
+        forged("m0", "[{\"kind\":\"response\",\"level\":-90}]").unwrap_err(),
+        "gives p.response the level -90: its click plays at −80 to −20 dB"
+    );
+    assert!(forged("m0", "[{\"kind\":\"response\",\"level\":-80}]").is_ok());
     assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":2}]").unwrap_err().contains("at most 1 second"));
     assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":0.75}]").unwrap_err().contains("past its x axis's end at 0.5 s"));
     assert!(
