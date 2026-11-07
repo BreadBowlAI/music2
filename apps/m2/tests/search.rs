@@ -93,7 +93,7 @@ fn with_the_app_closed_m2_searches_std_and_your_presets() {
 
     let o = m2_in(&home.0, &["search", "pad", "--kind", "synth"]);
     assert!(
-        !o.status.success() && String::from_utf8_lossy(&o.stderr).contains("--kind is instrument, sound, effect, sample or plugin"),
+        !o.status.success() && String::from_utf8_lossy(&o.stderr).contains("--kind is instrument, sound, effect, note-effect, sample or plugin, not synth"),
         "{o:?}"
     );
 }
