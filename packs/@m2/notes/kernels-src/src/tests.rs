@@ -10,7 +10,7 @@
 //! 120 bpm and 48 kHz (a beat is 24,000 frames, a sixteenth 6,000) unless a test says otherwise.
 
 use m2_dsp::testing::defaults_in;
-use m2_kernel::{Cfg, Event, Host, Kernel};
+use m2_kernel::{Cfg, Event, Host, Kernel, LIVE, live};
 
 use super::*;
 
@@ -35,17 +35,24 @@ const SCALE: [&str; 3] = ["notes", "key", "shift"];
 
 // ---------------------------------------------------------------- a run, as the host plays one
 
-/// A note of a run's input: from frame `on` to frame `off` of the run, at `pitch`, as hard as `velocity`.
+/// A note of a run's input: from frame `on` to frame `off` of the run, at `pitch`, as hard as
+/// `velocity`; a clip's, or a key played live, whose id has the live bit (RENDER-14).
 #[derive(Clone, Copy, Debug)]
 struct N {
     on: u64,
     off: u64,
     pitch: f32,
     velocity: f32,
+    live: bool,
 }
 
 fn n(on: u64, off: u64, pitch: f32) -> N {
-    N { on, off, pitch, velocity: 0.8 }
+    N { on, off, pitch, velocity: 0.8, live: false }
+}
+
+/// `notes` as keys played live.
+fn keys(notes: &[N]) -> Vec<N> {
+    notes.iter().map(|x| N { live: true, ..*x }).collect()
 }
 
 /// What a kernel gave, each at its frame from the run's start, with the kernel's own id.
@@ -113,7 +120,8 @@ fn host<K: Kernel>(seed: f64) -> Host<K> {
     h
 }
 
-/// The events of block `b`'s frames, as a lane gives them: the notes' ids are their place + 1.
+/// The events of block `b`'s frames, as a lane gives them: the notes' ids are their place + 1, with
+/// the live bit for a key played live.
 fn block_events(r: &Run, b: u64) -> Vec<Event> {
     let (from, to) = (b * BLOCK, (b + 1) * BLOCK);
     let mut ev: Vec<(u64, u8, Event)> = vec![];
@@ -123,7 +131,7 @@ fn block_events(r: &Run, b: u64) -> Vec<Event> {
         }
     }
     for (i, x) in r.notes.iter().enumerate() {
-        let id = i as u32 + 1;
+        let id = (i as u32 + 1) | if x.live { LIVE } else { 0 };
         if (from..to).contains(&x.off) {
             ev.push((x.off, 1, Event::Off { frame: (x.off - from) as usize, id, velocity: 0.0 }));
         }
@@ -462,11 +470,11 @@ fn a_bar_plays_the_same_from_any_bar() {
     assert_eq!(heard, want);
 }
 
-// PACK-30, Hold: while the song is stopped, keys let go keep playing until a new key (a new chord),
-// and Play, a seek, a reset (Stop pressed again) or Hold turned off let go of them.
+// PACK-30, Hold: while the song is stopped, keys played live and let go keep playing until a new key
+// (a new chord), and Play, a seek, a reset (Stop pressed again) or Hold turned off let go of them.
 #[test]
 fn hold_latches_keys_while_stopped_until_a_new_key_play_or_a_seek() {
-    let held = [c_major(0, 10_000), vec![n(40_000, 45_000, 65.0)]].concat();
+    let held = keys(&[c_major(0, 10_000), vec![n(40_000, 45_000, 65.0)]].concat());
     // Stopped: C E G let go at 10,000 keep playing; F at 40,000 is a new chord; Play at 60,000 lets go.
     let song = |f: u64| if f < 60_000 { (false, 0.0) } else { (true, (f - 60_000) as f64 / BEAT as f64) };
     let r = Run::new("arp", &ARP, 80_000).notes(&held).with("hold", 1.0).song(&song);
@@ -478,10 +486,10 @@ fn hold_latches_keys_while_stopped_until_a_new_key_play_or_a_seek() {
     assert!(o.iter().all(|x| x.0 < 60_000), "Play let go of it: {o:?}");
     // A seek while stopped lets go too; so does Hold turned off.
     let seek = |f: u64| (false, if f < 20_000 { 0.0 } else { 3.0 });
-    let r = Run::new("arp", &ARP, 40_000).notes(&c_major(0, 10_000)).with("hold", 1.0).song(&seek);
+    let r = Run::new("arp", &ARP, 40_000).notes(&keys(&c_major(0, 10_000))).with("hold", 1.0).song(&seek);
     assert!(ons(&run::<Arp>(&r).0).iter().all(|x| x.0 < 20_000), "a seek let go");
     let mut h = host::<Arp>(1.0);
-    let mut r = Run::new("arp", &ARP, 40_000).notes(&c_major(0, 10_000)).with("hold", 1.0).song(&stopped);
+    let mut r = Run::new("arp", &ARP, 40_000).notes(&keys(&c_major(0, 10_000))).with("hold", 1.0).song(&stopped);
     let mut g = vec![];
     for b in 0..100 {
         play_block(&mut h, &r, b, &mut g);
@@ -495,7 +503,7 @@ fn hold_latches_keys_while_stopped_until_a_new_key_play_or_a_seek() {
     assert!(g[turned..].iter().all(|e| !matches!(e, Gave::On { .. })), "Hold off let go");
     // A reset (Stop pressed while stopped) forgets the latch.
     let mut h = host::<Arp>(1.0);
-    let r = Run::new("arp", &ARP, 40_000).notes(&c_major(0, 10_000)).with("hold", 1.0).song(&stopped);
+    let r = Run::new("arp", &ARP, 40_000).notes(&keys(&c_major(0, 10_000))).with("hold", 1.0).song(&stopped);
     let mut g = vec![];
     for b in 0..100 {
         play_block(&mut h, &r, b, &mut g);
@@ -508,11 +516,63 @@ fn hold_latches_keys_while_stopped_until_a_new_key_play_or_a_seek() {
     assert!(g[kept..].is_empty(), "a reset let go: {:?}", &g[kept..]);
 }
 
-// PACK-30, Hold: while the song plays it latches nothing, so an export never plays a latched chord.
+// PACK-30, Hold: a clip's notes never latch, so a clip's chord ends with its notes and an export
+// never plays a latched chord.
 #[test]
-fn hold_latches_nothing_while_the_song_plays() {
+fn hold_never_latches_a_clips_notes() {
     let g = arp(&c_major(0, BEAT), &[("hold", 1.0)], 3 * BEAT);
     assert_eq!(ons(&g).len(), 4, "the chord's beat, and no more");
+}
+
+// PACK-30, Hold: while the song plays it latches keys played live: let go, they keep playing until a
+// new key starts a new chord; a seek lets go of them.
+#[test]
+fn hold_latches_live_keys_while_the_song_plays() {
+    let held = keys(&[c_major(0, BEAT), vec![n(2 * BEAT, 2 * BEAT + 1000, 65.0)]].concat());
+    let g = arp(&held, &[("hold", 1.0)], 3 * BEAT);
+    let o = ons(&g);
+    let early: Vec<f32> = o.iter().filter(|x| x.0 < 2 * BEAT).map(|x| x.1).collect();
+    assert_eq!(early, [60.0, 64.0, 67.0, 60.0, 64.0, 67.0, 60.0, 64.0], "C E G, latched past beat 1");
+    let late: Vec<(u64, f32)> = o.iter().filter(|x| x.0 >= 2 * BEAT).copied().collect();
+    assert_eq!(late, [(48_000, 65.0), (54_000, 65.0), (60_000, 65.0), (66_000, 65.0)], "F alone, a new chord, latched too");
+    all_playable_and_ended(&g);
+    let seek = |f: u64| (true, if f < BEAT + BEAT / 2 { f } else { f + 10 * BEAT } as f64 / BEAT as f64);
+    let r = Run::new("arp", &ARP, 3 * BEAT).notes(&keys(&c_major(0, BEAT))).with("hold", 1.0).song(&seek);
+    assert!(ons(&run::<Arp>(&r).0).iter().all(|x| x.0 < BEAT + BEAT / 2), "a seek let go");
+}
+
+// PACK-30, Hold: nothing latches at the frame where the song stops: keys played live and let go at
+// a Stop's own frame are let go, not held.
+#[test]
+fn keys_let_go_at_a_stops_frame_are_not_latched() {
+    let stop: u64 = 235 * BLOCK;
+    let song = move |f: u64| if f < stop { (true, f as f64 / BEAT as f64) } else { (false, stop as f64 / BEAT as f64) };
+    let r = Run::new("arp", &ARP, stop + 4 * BEAT).notes(&keys(&c_major(0, stop))).with("hold", 1.0).song(&song);
+    let g = run::<Arp>(&r).0;
+    assert!(ons(&g).iter().all(|x| x.0 < stop), "{:?}", ons(&g));
+}
+
+// PACK-30, ABI-15: each keeps a live key's bit on the notes it makes from it, so an Arpeggiator after
+// it can hold them; the notes it makes from a clip's have none.
+#[test]
+fn each_keeps_the_live_bit() {
+    for is_live in [false, true] {
+        let notes = |ns: &[N]| if is_live { keys(ns) } else { ns.to_vec() };
+        let runs = [
+            ("arp", run::<Arp>(&Run::new("arp", &ARP, BEAT).notes(&notes(&c_major(0, BEAT)))).0),
+            ("chord", run::<Chord>(&Run::new("chord", &CHORD, 30_000).notes(&notes(&[n(0, 20_000, 60.0)]))).0),
+            ("echo", run::<Echo>(&Run::new("echo", &ECHO, 3 * BEAT).notes(&notes(&[n(0, 6000, 60.0)]))).0),
+            ("scale", run::<Scale>(&Run::new("scale", &SCALE, 30_000).notes(&notes(&[n(0, 20_000, 61.0)])).with("key", C_MAJOR)).0),
+        ];
+        for (name, g) in runs {
+            assert!(g.len() >= 2, "{name}");
+            for e in &g {
+                if let Gave::On { id, .. } | Gave::Off { id, .. } = *e {
+                    assert_eq!(live(id), is_live, "{name}: {e:?}");
+                }
+            }
+        }
+    }
 }
 
 // PACK-30, Hold: nothing latches at the frame where the song stops. The lane ends a clip's chord at

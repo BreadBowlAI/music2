@@ -4,7 +4,7 @@
 //! clock of its own at `time.tempo` while it is stopped; Play, a Stop, a seek and a loop's wrap end
 //! those sounding and forget those to come. A note's echoes keep the values it started with.
 
-use m2_kernel::{Cfg, Event, Give, Io, Kernel};
+use m2_kernel::{Cfg, Event, Give, Io, Kernel, LIVE};
 
 use crate::key::TOP;
 use crate::time::{self, RATES, Song};
@@ -53,9 +53,10 @@ impl Echoed {
     }
 }
 
-/// The id of echo `k` of the note `id` (the note itself is echo 0): eight to a note.
+/// The id of echo `k` of the note `id` (the note itself is echo 0): eight to a note, each with the
+/// note's live bit (ABI-15).
 fn id_of(id: u32, k: usize) -> u32 {
-    id.wrapping_mul(REPEATS as u32 + 1).wrapping_add(k as u32)
+    ((id & !LIVE).wrapping_mul(REPEATS as u32 + 1).wrapping_add(k as u32) & !LIVE) | (id & LIVE)
 }
 
 pub struct Echo {

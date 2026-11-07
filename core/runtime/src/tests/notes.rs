@@ -13,7 +13,7 @@ use m2_song::{Arrangement, LaneData, LaneKind};
 
 use super::goldens::addr;
 use super::*;
-use crate::event::Event;
+use crate::event::{Event, LIVE_BIT};
 
 /// A poly of sine voices playing `events`: what reads a note effect's notes, as an instrument does.
 fn voice(id: &str, events: &str) -> Value {
@@ -260,31 +260,130 @@ fn step_place(k: usize) -> f32 {
     ((k % 3) as f64 * 0.25 + 0.5 * 0.8 * 0.25) as f32
 }
 
+/// The Arpeggiator with Hold on, reading the lane.
+fn held_arp() -> Ir {
+    let more = json!([{"id": "hold", "op": "const", "value": 1, "unit": "switch"}]);
+    song_of(&[("a".to_string(), "arp", json!({"beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "hold"}))], more)
+}
+
+/// A clip of C, E and G from beat 0, `beats` long.
+fn c_chord(beats: f64) -> Value {
+    json!({"clips": [{"start": 0, "length": 16, "notes": [
+        {"pitch": "C4", "start": 0, "length": beats}, {"pitch": "E4", "start": 0, "length": beats}, {"pitch": "G4", "start": 0, "length": beats}]}]})
+}
+
+/// `ir` over `data`, live and playing from beat 0, and its note effects' slots.
+fn playing(ir: &Ir, data: &DataSet) -> (Renderer, BTreeMap<String, usize>) {
+    let pk = own_packages();
+    let flat = check(ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let mut r = Renderer::new(&flat, data, &pk, SR).unwrap();
+    r.set_strict(false);
+    r.set_transport(Transport::new(0, true));
+    r.live = true;
+    let at = slots(&r, &flat);
+    (r, at)
+}
+
+/// The ids of the Ons slot `slot` gives over the next `blocks` blocks.
+fn ons_of(r: &mut Renderer, slot: usize, blocks: usize) -> Vec<u32> {
+    let mut out = vec![];
+    for _ in 0..blocks {
+        r.render_block(r.clock()).unwrap();
+        out.extend(r.lane_events(slot).iter().filter_map(|e| if let Event::On { id, .. } = *e { Some(id) } else { None }));
+    }
+    out
+}
+
+/// A key played live on the lane, and let go.
+fn key(handle: u32, pitch: f32) -> LiveEv {
+    LiveEv::On { source: 1, handle, pitch, velocity: 0.8 }
+}
+fn let_go(handle: u32) -> LiveEv {
+    LiveEv::Off { source: 1, handle }
+}
+
+/// Four beats of blocks.
+const FOUR_BEATS: usize = 4 * 24_000 / BLOCK;
+
 // PACK-30, Hold, RENDER-9: in the engine, a Stop ends a clip's arpeggio with Hold on. The lane ends
 // the chord at the Stop's own frame, where `time.playing` is already 0, and nothing latches there.
 #[test]
 fn a_stop_ends_a_clips_arpeggio_with_hold_on_in_wasm() {
-    let more = json!([{"id": "hold", "op": "const", "value": 1, "unit": "switch"}]);
-    let inputs = json!({"beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "hold"});
-    let ir = song_of(&[("a".to_string(), "arp", inputs)], more);
-    let pk = own_packages();
-    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
-    let chord = json!({"clips": [{"start": 0, "length": 16, "notes": [
-        {"pitch": "C4", "start": 0, "length": 8}, {"pitch": "E4", "start": 0, "length": 8}, {"pitch": "G4", "start": 0, "length": 8}]}]});
-    let mut r = Renderer::new(&flat, &data(chord, None), &pk, SR).unwrap();
-    r.set_strict(false);
-    r.set_transport(Transport::new(0, true));
-    r.live = true;
-    let slot = slots(&r, &flat)["a"];
-    let ons = |r: &mut Renderer, blocks: usize| {
-        let mut n = 0;
-        for _ in 0..blocks {
-            r.render_block(r.clock()).unwrap();
-            n += r.lane_events(slot).iter().filter(|e| matches!(e, Event::On { .. })).count();
-        }
-        n
-    };
-    assert!(ons(&mut r, 200) > 0, "it plays the chord");
+    let (mut r, at) = playing(&held_arp(), &data(c_chord(8.0), None));
+    assert!(!ons_of(&mut r, at["a"], 200).is_empty(), "it plays the chord");
     r.transport_cmd(Cmd::Stop);
-    assert_eq!(ons(&mut r, 4 * 24_000 / BLOCK), 0, "no step after the Stop");
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS), Vec::<u32>::new(), "no step after the Stop");
+}
+
+// PACK-30, Hold, RENDER-14: in the engine, Hold latches keys played live while the song plays: let
+// go, they keep playing, until a Stop lets go of them.
+#[test]
+fn hold_latches_live_keys_while_the_song_plays_in_wasm() {
+    let (mut r, at) = playing(&held_arp(), &data(json!({"clips": []}), None));
+    for (h, p) in [(1, 60.0), (2, 64.0), (3, 67.0)] {
+        assert!(r.live(0, key(h, p)));
+    }
+    assert!(!ons_of(&mut r, at["a"], 100).is_empty(), "the keys play");
+    for h in 1..=3 {
+        r.live(0, let_go(h));
+    }
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS).len(), 16, "let go, the chord plays on: 16 sixteenths in 4 beats");
+    r.transport_cmd(Cmd::Stop);
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS), Vec::<u32>::new(), "a Stop lets go of it");
+}
+
+// PACK-30, Hold: in the engine, a clip's chord never latches, while the song plays too.
+#[test]
+fn hold_never_latches_a_clips_chord_in_wasm() {
+    let (mut r, at) = playing(&held_arp(), &data(c_chord(1.0), None));
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS / 2).len(), 4, "the chord's beat, and no more");
+}
+
+// PACK-30, RENDER-42, RENDER-14: a key played live stays live through a Chord: the guard keeps the
+// bit on the notes it gives from it, so the Arpeggiator after holds the chord one finger played.
+#[test]
+fn a_live_key_stays_live_through_a_chord_in_wasm() {
+    let nodes = json!([
+        {"id": "n", "op": "lane", "lane": "notes"},
+        {"id": "key", "op": "time", "of": "key"},
+        {"id": "beats", "op": "time", "of": "beats"},
+        {"id": "playing", "op": "time", "of": "playing"},
+        {"id": "tempo", "op": "time", "of": "tempo"},
+        {"id": "hold", "op": "const", "value": 1, "unit": "switch"},
+        {"id": "c", "op": "kernel", "kernel": "@m2/notes:chord", "inputs": {"notes": "n", "key": "key"}},
+        {"id": "a", "op": "kernel", "kernel": "@m2/notes:arp", "inputs": {"notes": "c", "beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "hold"}},
+        voice("v", "a"),
+    ]);
+    let ir = song(nodes, "v", json!([{"key": "notes", "kind": "events<note>"}]));
+    let (mut r, at) = playing(&ir, &data(json!({"clips": []}), None));
+    assert!(r.live(0, key(1, 60.0)));
+    let chord = ons_of(&mut r, at["c"], 1);
+    assert_eq!(chord.len(), 3, "C E G from one key");
+    assert!(chord.iter().all(|id| id & LIVE_BIT != 0), "the chord's notes are live: {chord:?}");
+    ons_of(&mut r, at["a"], 99);
+    r.live(0, let_go(1));
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS).len(), 16, "let go, the chord plays on");
+}
+
+// RENDER-14, MON-7: a key played live has the live bit on its id, and a clip's note hasn't.
+#[test]
+fn a_live_keys_id_has_the_live_bit_and_a_clips_note_hasnt() {
+    let clip = json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "C4", "start": 0, "length": 1}]}]});
+    let (mut r, _) = playing(&song_of(&[("s".to_string(), "scale", json!({"key": "key"}))], json!([])), &data(clip, None));
+    assert!(r.live(0, key(1, 67.0)));
+    r.render_block(r.clock()).unwrap();
+    let ons: Vec<(f32, u32)> =
+        r.lane_events(0).iter().filter_map(|e| if let Event::On { pitch, id, .. } = *e { Some((pitch, id)) } else { None }).collect();
+    assert_eq!(ons.len(), 2, "{ons:?}");
+    for (pitch, id) in ons {
+        assert_eq!(id & LIVE_BIT != 0, pitch == 67.0, "{pitch}: {id:#x}");
+    }
+}
+
+// RENDER-14: the engine's one counter wraps below the live bit, so only a key played live has it.
+#[test]
+fn the_note_counter_wraps_below_the_live_bit() {
+    let mut next = LIVE_BIT - 1;
+    assert_eq!(crate::event::take_id(&mut next), LIVE_BIT - 1);
+    assert_eq!((crate::event::take_id(&mut next), next), (1, 2), "then 1 again");
 }

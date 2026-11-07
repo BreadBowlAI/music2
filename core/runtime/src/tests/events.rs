@@ -148,7 +148,8 @@ fn a_kernel_reads_its_lanes_events() {
 }
 
 // ABI-8, RENDER-14: live, the lane's controllers reach the kernel too, at the block's first frame
-// before the notes there: a MIDI message's three bytes in the low bytes of its first value.
+// before the notes there: a MIDI message's three bytes in the low bytes of its first value. The key
+// played live has the live bit on its id.
 #[test]
 fn a_kernel_hears_the_lanes_wheels() {
     let pkg = probe("");
@@ -162,7 +163,8 @@ fn a_kernel_hears_the_lanes_wheels() {
     assert!(r.live(0, LiveEv::On { source: 1, handle: 7, pitch: 62.0, velocity: 0.75 }));
     let got = read(r.render_block(0).unwrap());
     let mod_wheel = f32::from(0xB0u16 | 1 << 8) + 100.0 * 65_536.0;
-    assert_eq!(got.events, [[4.0, 0.0, 0.0, mod_wheel, 0.0, 0.0], [0.0, 0.0, 1.0, 62.0, 0.75, -1.0]]);
+    let id = (1 | crate::event::LIVE_BIT) as f32;
+    assert_eq!(got.events, [[4.0, 0.0, 0.0, mod_wheel, 0.0, 0.0], [0.0, 0.0, id, 62.0, 0.75, -1.0]]);
     std::fs::remove_dir_all(pkg).ok();
 }
 

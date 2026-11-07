@@ -201,7 +201,7 @@ fn the_arpeggiators_steps_are_its_pattern_for_c_major() {
     }
     assert!(order[5] > order[4] && order[6] < order[5] && order[9] > order[0], "up to G5, then back down: {order:?}");
     assert_eq!(marks(&d), [0.0, 5.0], "a turn of ten eighths");
-    assert_eq!(d["words"], "Up and down, eighth notes, 2 octaves, held while stopped");
+    assert_eq!(d["words"], "Up and down, eighth notes, 2 octaves, holding the keys you let go");
     // Random draws the notes it picks from, low to high; Down from the top.
     let d = draw(&runner, "arp", "steps", arp_values(json!({"style": "down", "rate": "1/8T"})));
     assert_eq!(labels(&d).iter().map(|l| l.1.as_str()).collect::<Vec<_>>(), ["G4", "E4", "C4"]);

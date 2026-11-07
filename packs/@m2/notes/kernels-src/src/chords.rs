@@ -4,7 +4,7 @@
 //! stamp counts them (NOTE-4); else each shape's notes are fixed. It keeps nothing between notes:
 //! the notes of a note's chord are known by its id (four to a note), so its Off ends all four.
 
-use m2_kernel::{Cfg, Event, Io, Kernel};
+use m2_kernel::{Cfg, Event, Io, Kernel, LIVE};
 
 use crate::key::{Key, TOP};
 use crate::time;
@@ -72,9 +72,10 @@ pub fn chord(pitch: f32, key: Option<Key>, shape: usize, inversion: usize) -> ([
     (notes, kept)
 }
 
-/// The id of note `j` of the chord of the note `id`: four to a note, so its Off finds them.
+/// The id of note `j` of the chord of the note `id`: four to a note, so its Off finds them, each
+/// with the note's live bit (ABI-15).
 fn id_of(id: u32, j: usize) -> u32 {
-    id.wrapping_mul(FAN as u32).wrapping_add(j as u32)
+    ((id & !LIVE).wrapping_mul(FAN as u32).wrapping_add(j as u32) & !LIVE) | (id & LIVE)
 }
 
 pub struct Chord;

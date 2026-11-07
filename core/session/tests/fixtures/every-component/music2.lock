@@ -18,7 +18,7 @@ hash = "sha256:7b711ae2ff1bae47e29f8a9943203c6b4e0456586622a8635cd9e90bd5f468ca"
 [[pack]]
 name = "@m2/notes"
 version = "0.1.0"
-hash = "sha256:5a1d9ca5afa3c325dbcf2d1b82a05f36ea5804703569e7b8f2bf1694a0141eca"
+hash = "sha256:746414a00cd61154ee93d8b33fcc5836acef8600e4c1983b12e730fd43e0ffd8"
 
 [[pack]]
 name = "@m2/synths"

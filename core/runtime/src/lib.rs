@@ -794,16 +794,18 @@ fn plugin_events(
 ) -> (u32, Option<u32>) {
     use m2_plugins::Event as P;
     out.clear();
+    // A plugin is told the counter's own number: no live bit (RENDER-14), so never a negative id.
+    let clap = |id: u32| (id & !event::LIVE_BIT) as i32;
     let (mut offs, mut last) = (0, None);
     // A choke ends a note at once where the plugin knows how; the NoteOff releases it where not.
     for &(id, key) in ended {
-        out.push(P::NoteChoke { time: 0, id: id as i32, key });
-        out.push(P::NoteOff { time: 0, id: id as i32, key });
+        out.push(P::NoteChoke { time: 0, id: clap(id), key });
+        out.push(P::NoteOff { time: 0, id: clap(id), key });
         (offs, last) = (offs + 1, Some(0));
     }
     // Let go, with their release: the edit only stopped them (RENDER-26a).
     for &(id, key) in release {
-        out.push(P::NoteOff { time: 0, id: id as i32, key });
+        out.push(P::NoteOff { time: 0, id: clap(id), key });
         (offs, last) = (offs + 1, Some(0));
     }
     // And the old lane's wheels and pedal at rest, so a pedal its old lane held down holds nothing
@@ -819,10 +821,10 @@ fn plugin_events(
     if let Some(s) = again {
         keys.retain(|&(id, key)| {
             let Some((pitch, velocity)) = s.sounding_note(id) else { return false };
-            out.push(P::NoteOn { time: 0, id: id as i32, key, velocity: velocity as f64 });
+            out.push(P::NoteOn { time: 0, id: clap(id), key, velocity: velocity as f64 });
             let tune = pitch as f64 - key as f64;
             if tune.abs() > 1e-6 {
-                out.push(P::Tuning { time: 0, id: id as i32, key, semitones: tune });
+                out.push(P::Tuning { time: 0, id: clap(id), key, semitones: tune });
             }
             true
         });
@@ -831,10 +833,10 @@ fn plugin_events(
         Event::On { frame, id, pitch, velocity, .. } => {
             let key = pitch.round().clamp(0.0, 127.0) as i16;
             let time = frame - lo as u32;
-            out.push(P::NoteOn { time, id: id as i32, key, velocity: velocity as f64 });
+            out.push(P::NoteOn { time, id: clap(id), key, velocity: velocity as f64 });
             let tune = pitch as f64 - key as f64;
             if tune.abs() > 1e-6 {
-                out.push(P::Tuning { time, id: id as i32, key, semitones: tune });
+                out.push(P::Tuning { time, id: clap(id), key, semitones: tune });
             }
             if keys.len() < keys.capacity() {
                 keys.push((id, key));
@@ -845,7 +847,7 @@ fn plugin_events(
         Event::Off { frame, id, .. } => {
             if let Some(i) = keys.iter().position(|k| k.0 == id) {
                 let (_, key) = keys.swap_remove(i);
-                out.push(P::NoteOff { time: frame - lo as u32, id: id as i32, key });
+                out.push(P::NoteOff { time: frame - lo as u32, id: clap(id), key });
                 (offs, last) = (offs + 1, Some(frame - lo as u32));
             }
         }

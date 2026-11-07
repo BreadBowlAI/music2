@@ -1126,3 +1126,14 @@ mod tests {
         Host::<Wrong>::new(48_000.0, 128, 1).process(128);
     }
 }
+
+/// **A key played live** (RENDER-14, ABI-15): the host sets this top bit of a note's id when the note
+/// is a key played live, and keeps it on each note a note effect gives from one. A kernel that makes
+/// notes from a note keeps it on their ids, `(made & !LIVE) | (id & LIVE)`, so a live key stays one
+/// through it. (Written here, at the file's end, so the lines above keep their numbers.)
+pub const LIVE: u32 = 1 << 31;
+
+/// Whether note `id` is a key played live: its [`LIVE`] bit.
+pub fn live(id: u32) -> bool {
+    id & LIVE != 0
+}

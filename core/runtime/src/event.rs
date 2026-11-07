@@ -2,6 +2,18 @@
 //! in the block. The shape is reserved whole; note on and note off are produced, and `Midi` for a
 //! lane's pitch wheel and mod wheel from live input (D8 of track pm).
 
+/// The **live bit** of a note's id (RENDER-14): a key played live has it, and a note effect's guard
+/// keeps it on the notes it gives from one, so a note effect tells a key from a clip's note. Ids come
+/// from the engine's one counter, which wraps below it.
+pub const LIVE_BIT: u32 = 1 << 31;
+
+/// The id the engine's counter `next` holds, which it moves on, wrapping below [`LIVE_BIT`] to 1.
+pub(crate) fn take_id(next: &mut u32) -> u32 {
+    let id = *next;
+    *next = if id + 1 >= LIVE_BIT { 1 } else { id + 1 };
+    id
+}
+
 /// What a note expression changes (reserved: MPE and per-note pitch come later).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Expression {

@@ -29,7 +29,7 @@ std = "0.10"
 
 [[kernel]]
 name = "arp"
-description = "The Arpeggiator (PACK-30): the notes held, one at a time, in a pattern, on the song's grid while it plays and at time.tempo from the first key while it is stopped. style: up, down, up and down, as played, random (from values[0], the seed); rate: a step of 1, 1/2, 1/3, 1/4, 1/6 or 1/8 of a beat; octaves 1 to 4; gate times each step; hold latches the keys while the song is stopped; swing moves the second step of each pair. Its meter step is where its picture draws the step playing, in beats, -1 while no note is held"
+description = "The Arpeggiator (PACK-30): the notes held, one at a time, in a pattern, on the song's grid while it plays and at time.tempo from the first key while it is stopped. style: up, down, up and down, as played, random (from values[0], the seed); rate: a step of 1, 1/2, 1/3, 1/4, 1/6 or 1/8 of a beat; octaves 1 to 4; gate times each step; hold latches the keys played live (ids with the kit's LIVE bit) once let go, playing or stopped, until a new key, Play, a Stop or a seek; swing moves the second step of each pair. Its meter step is where its picture draws the step playing, in beats, -1 while no note is held"
 inputs = [
   "notes: events<note>",
   "beats: control<beats>",

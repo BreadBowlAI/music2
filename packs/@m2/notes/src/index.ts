@@ -34,9 +34,9 @@ import {
  * on the song's grid while it plays and at its tempo from the first key while it is stopped.
  * `style` up, down, updown (up and down), played (as played) or random; `rate` the length of a step
  * (a T is a triplet); `octaves` how many octaves the pattern climbs; `gate` how long each step
- * sounds, as a share of the step (over 1 overlaps the next); `hold` keeps playing the keys you let
- * go while the song is stopped; `swing` moves every second step later. Random's choices come from
- * the setting `seed`.
+ * sounds, as a share of the step (over 1 overlaps the next); `hold` keeps playing the keys you play
+ * live and let go, until a new key, Play, a Stop or a seek (never a clip's notes); `swing` moves
+ * every second step later. Random's choices come from the setting `seed`.
  */
 export const arp = component(
   {

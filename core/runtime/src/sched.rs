@@ -414,8 +414,8 @@ impl NoteScheduler {
                 let held = self.live.iter().flatten().filter(|n| !n.off).count();
                 match self.live.iter_mut().find(|n| n.is_none()).filter(|_| held < LIVE) {
                     Some(free) => {
-                        let id = *next;
-                        *next = next.checked_add(1).unwrap_or(1);
+                        // A key played live: its id has the live bit (RENDER-14).
+                        let id = crate::event::take_id(next) | crate::event::LIVE_BIT;
                         *free = Some(LiveNote { source, handle, id, pitch, velocity, on: true, off: false });
                     }
                     None => self.events.drop_on(),
@@ -590,8 +590,7 @@ impl NoteScheduler {
                 events.drop_on();
                 continue;
             }
-            let id = *next_id;
-            *next_id = next_id.checked_add(1).unwrap_or(1);
+            let id = crate::event::take_id(next_id);
             let frame = run.off + (n.start - run.at) as u32;
             events.push(Event::On { frame, id, pitch: n.pitch, velocity: n.velocity, from_pitch: None });
             if n.end < end {

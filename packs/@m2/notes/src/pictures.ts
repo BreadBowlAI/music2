@@ -133,7 +133,7 @@ export function stepsWords(v: Values): string {
     return "Plays the notes you hold one at a time: its style, rate or octaves is set by a lane or the code";
   }
   const n = Number(octaves);
-  const held = v.hold === true ? ", held while stopped" : "";
+  const held = v.hold === true ? ", holding the keys you let go" : "";
   return `${STYLE_WORDS[style] ?? style}, ${RATE_WORDS[rate as Rate] ?? rate}, ${n} ${n === 1 ? "octave" : "octaves"}${held}`;
 }
 

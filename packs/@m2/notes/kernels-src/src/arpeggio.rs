@@ -11,7 +11,7 @@
 //! them (half a frame on from the frame's own), so a grid line or a gate's end that falls on a
 //! frame is that frame, whatever the 32-bit beat rounds to.
 
-use m2_kernel::{Cfg, Event, Give, Io, Kernel};
+use m2_kernel::{Cfg, Event, Give, Io, Kernel, LIVE, live};
 
 use crate::time::{self, RATES, Song};
 
@@ -77,8 +77,9 @@ pub struct Arp {
     n_held: usize,
     sounding: [Sounding; SOUNDING],
     n_sounding: usize,
-    /// The order, worked out as each step starts: each note's pitch and velocity.
-    order: [(f32, f32); ORDER],
+    /// The order, worked out as each step starts: each note's pitch and velocity, and whether it is
+    /// a key played live, which its steps' ids say too.
+    order: [(f32, f32, bool); ORDER],
     /// The held notes by place, as the order sorts them.
     sorted: [u8; HELD],
     /// The song at the frame before.
@@ -131,14 +132,14 @@ pub fn pick(seed: u64, k: i64, len: usize) -> usize {
 }
 
 impl Arp {
-    /// A key pressed: it joins the held notes (and restarts the pattern), unless 64 are held. With
-    /// Hold latching, a key pressed while none is down starts a new chord.
+    /// A note pressed: it joins the held notes (and restarts the pattern), unless 64 are held. With
+    /// Hold latching, a key played live while none is down starts a new chord.
     fn press(&mut self, id: u32, pitch: f32, velocity: f32) -> bool {
         if !(0.0..=127.0).contains(&pitch) {
             return false;
         }
-        if self.n_held > 0 && !self.held[..self.n_held].iter().any(|h| h.down) {
-            self.n_held = 0;
+        if live(id) && !self.held[..self.n_held].iter().any(|h| h.down && live(h.id)) {
+            self.let_go();
         }
         self.drop_held(|h| h.id == id);
         if self.n_held == HELD {
@@ -149,9 +150,9 @@ impl Arp {
         true
     }
 
-    /// A key let go: its note leaves the held notes, or stays latched while `hold`.
+    /// A note let go: it leaves the held notes, or, a key played live, stays latched while `hold`.
     fn release(&mut self, id: u32, hold: bool) {
-        match hold {
+        match hold && live(id) {
             true => self.held[..self.n_held].iter_mut().filter(|h| h.id == id).for_each(|h| h.down = false),
             false => self.drop_held(|h| h.id == id),
         }
@@ -201,7 +202,7 @@ impl Arp {
                 let h = self.held[self.sorted[i] as usize];
                 let p = h.pitch + 12.0 * o as f32;
                 if p <= 127.0 {
-                    self.order[len] = (p, h.velocity);
+                    self.order[len] = (p, h.velocity, live(h.id));
                     len += 1;
                 }
             }
@@ -236,7 +237,7 @@ impl Arp {
             Style::Random => pick(self.seed, n - self.n0, len),
             _ => (n - self.n0).rem_euclid(len as i64) as usize,
         };
-        let (pitch, velocity) = self.order[k];
+        let (pitch, velocity, is_live) = self.order[k];
         let (start, steps) = step_of(n, rate, swing);
         // Its gate's end, from its step's start; never before the frame after it starts.
         let end = (start + gate * steps).max(pos + per_frame);
@@ -244,8 +245,9 @@ impl Arp {
             let oldest = self.sounding[0].id;
             self.end_where(give, f, |s| s.id == oldest);
         }
-        let id = self.next_id;
-        self.next_id = self.next_id.wrapping_add(1);
+        // A step from a key played live is live too (ABI-15).
+        let id = self.next_id | if is_live { LIVE } else { 0 };
+        self.next_id = self.next_id.wrapping_add(1) & !LIVE;
         if give.push(Event::On { frame: f, id, pitch, velocity, from_pitch: None }) {
             self.sounding[self.n_sounding] = Sounding { id, step: n, end };
             self.n_sounding += 1;
@@ -283,7 +285,7 @@ impl Kernel for Arp {
             n_held: 0,
             sounding: [Sounding::default(); SOUNDING],
             n_sounding: 0,
-            order: [(0.0, 0.0); ORDER],
+            order: [(0.0, 0.0, false); ORDER],
             sorted: [0; HELD],
             last: None,
             clock: None,
@@ -313,9 +315,9 @@ impl Kernel for Arp {
                 restart = true;
             }
             self.last = Some(song);
-            // Hold latches only while the song is stopped, and nothing at the frame where it moved:
-            // the Offs a lane sends at a Stop's own frame are a clip's, which a Stop ends.
-            let hold = io.input(HOLD)[f] >= 0.5 && !song.playing && !moved;
+            // Hold latches keys played live, playing or stopped, and nothing at the frame where the
+            // song moved: Play, a Stop and a seek let go of it.
+            let hold = io.input(HOLD)[f] >= 0.5 && !moved;
             if !hold {
                 self.let_go();
             }

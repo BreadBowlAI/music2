@@ -552,8 +552,9 @@ impl Guard {
                     if self.len == self.notes.len() {
                         self.end_one(self.first, frame, 0.0);
                     }
-                    if self.start(e, *next) {
-                        *next = next.checked_add(1).unwrap_or(1);
+                    // The engine's next id, with the live bit of the kernel's (RENDER-14).
+                    if self.start(e, *next | id & crate::event::LIVE_BIT) {
+                        crate::event::take_id(next);
                     } else {
                         dropped = true;
                     }
