@@ -311,9 +311,6 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
     std::fs::remove_dir_all(dir).ok();
 }
 
-// RENDER-7, HOST-6's twin for kernels: `time.playing` is 1 on every frame where the song plays,
-// through a seek and through a loop wrap that falls mid-block, and 0 while stopped, from the block
-// line the stop lands on.
 // RENDER-7: `time.tempo` is the tempo map's at each frame's beat, in bpm, from the block's runs as
 // `time.beats` is: the first tempo at the start, stopped or playing; the next from the frame whose
 // beat passes the change, inside a block; stopped there, it holds. (Its node copies this, as
@@ -335,6 +332,9 @@ fn time_tempo_follows_the_tempo_map() {
     assert!(tempo(48_384, false).iter().all(|&x| x == 90.0), "stopped after the change: it holds");
 }
 
+// RENDER-7, HOST-6's twin for kernels: `time.playing` is 1 on every frame where the song plays,
+// through a seek and through a loop wrap that falls mid-block, and 0 while stopped, from the block
+// line the stop lands on.
 #[test]
 fn time_playing_follows_the_transport() {
     let ir = song(
