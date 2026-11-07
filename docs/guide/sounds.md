@@ -1,7 +1,7 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump) and `@m2/vocals` (Tune, which moves a voice onto the song's key: [Tune a voice](audio.md#tune-a-voice)).
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key: [Tune a voice](audio.md#tune-a-voice)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and a scale, [Note effects](#note-effects)).
 - std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 25 effects in eight groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
@@ -207,6 +207,47 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 **Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how.
 
 `m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `@m2/effects:delay` or `std:eq3`) and where they can go.
+
+## Note effects
+
+**In short:** a note effect changes notes before an instrument plays them. It takes notes and gives notes. music2's four are in `@m2/notes`: the **Arpeggiator**, **Chord**, **Note echo** and **Scale**.
+
+| Word | Meaning |
+|---|---|
+| **Note effect** | A sound that takes notes and gives notes, before the instrument. Ableton calls these MIDI effects, Logic MIDI FX |
+| **Arpeggio** | A chord played one note at a time, in a pattern, over and over. An **arpeggiator** makes one from the keys you hold |
+| **Step** | One note of an arpeggio. The **rate** is how long a step is: `1/16` is a sixteenth note, a quarter of a beat; a T (`1/8T`) is a triplet, three in the time of two |
+| **Gate** | How long each step sounds, as a share of the step: 0.5 is short and choppy, 1 joins the steps |
+
+Notes go left to right, then sound does:
+
+```
+keys you hold → Arpeggiator → Chord → Pluck → Reverb → the mixer
+                note effects           instrument   effect
+```
+
+| Note effect | What it does | Its knobs |
+|---|---|---|
+| **Arpeggiator** (`arp`) | Plays the notes you hold (or a chord in a clip) one at a time, in a pattern, on the song's beat. Stopped, it plays from the first key you press, at the song's tempo | **Style**: up, down, up and down (`updown`), as played (`played`), random. **Rate**: how long a step is. **Octaves**: how many octaves the pattern climbs. **Gate**. **Hold**: while the song is stopped, the keys you let go of keep playing until you press new ones, Play, or Stop. **Swing**, under All: moves every second step later (50% is straight, 66% a shuffle) |
+| **Chord** (`chord`) | Plays a whole chord from each note you play | **Shape**: octave, fifth, triad, 7th, sus2, sus4, add9. **In key**: on, the chord is built from the song's key, so one finger on D in C major plays D minor, the chord the roll's chord stamp places; off, the shapes are fixed (a triad is major, a 7th a dominant 7th). **Inversion**: 0 to 3, the lowest notes moved up an octave |
+| **Note echo** (`echo`) | Plays each note again, later and quieter, a few times: a delay of notes, not of sound | **Time**: how far apart, on the beat. **Repeats**: 1 to 8. **Fall**: how much quieter each one is. **Pitch**: how many semitones higher each one is (12 climbs by octaves) |
+| **Scale** (`scale`) | Moves every note you play onto the song's key, so no note is wrong. A note between two goes down | **Shift**: then moves each note that many notes of the key up (or down): 2 in C major turns C E G into E G B, a harmony |
+
+**Add one.** The window shows a note effect's card on the track, but its **+** doesn't list note effects yet: that comes with the Graph's **+** on a wire. Until then, add one in code, or with `m2`:
+
+| How | What to do |
+|---|---|
+| In the track's code | Wrap the instrument's notes: `synth.pluck(lane.notes("chords"))` becomes `synth.pluck(arp(lane.notes("chords")))`. Add `import { arp } from "@m2/notes";` at the top of the file, and `"@m2/notes" = "0.1"` under `[dependencies]` in `music2.toml` |
+| With `m2` | `m2 add-effect <song> <call> @m2/notes:arp`, where `<call>` is the instrument's call (`tracks/keys.ts#1`; `m2 controls <song>` lists them). It goes before that instrument, with its import and the dependency, as one undo step |
+
+More than one chain left to right, as they are written inside out: `synth.pluck(arp(chord(lane.notes("chords"))))` plays a chord from each note, then arpeggiates it.
+
+- **The cards.** Each card's face is a picture, drawn for C, since a picture shows the card's values, not the notes that play: the Arpeggiator's pattern for a C major chord, with a line on the step it plays now; Chord's chord on C, on a small keyboard; Note echo's echoes as fading bars; Scale's twelve notes, C major's lit. Chord's and Scale's cards say the song's key under their name, or **Set the key** when it has none: with no key, Scale plays notes as they are, and Chord plays its fixed shapes.
+- **Playing live.** Hold keys on a MIDI keyboard, or the computer's keys, on the track: the Arpeggiator plays them, in time with the song while it plays. A key pressed a little after a step still plays that step at once. **Stop** stops it.
+- **The same every time.** Each step comes from where the song is, never from what played before: the song plays from any bar as it exports there (a chord that started before that bar starts at its next new note, as on any instrument).
+- **Recording** keeps the keys you pressed, not the arpeggio's notes: change the rate afterwards and the take plays the new pattern.
+- **Knobs move with the song.** Every knob and menu can be drawn on the timeline as automation. An LFO or another track's sound can't move them yet.
+- **Agents:** `arp(notes, { style, rate, octaves, gate, hold, swing })`, `chord(notes, { shape, inKey, inversion })`, `echo(notes, { time, repeats, fall, pitch })` and `scale(notes, { shift })` from `"@m2/notes"`; a menu takes its name (`rate: "1/16"`, `octaves: "2"`). A part the musician should see and edit in the roll is notes written into a clip (`m2 clips`), not a note effect. A file that also imports `scale` from `std/math` imports one under another name: `import { scale as toKey } from "@m2/notes"`.
 
 ## Drum kits
 

@@ -36,7 +36,7 @@ Below, `.` is this song's folder.
 | `m2 set . <id> <value>` | turn one knob |
 | `m2 add-track . <instrument>` | add a track (`synth.pluck`, `drums.drum`…) |
 | `m2 add-kit . "808 kit"` | add a drum kit: a Drums bus and a Drum track for each drum (`808 kit`, `909 kit`, `Basic kit`) |
-| `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound |
+| `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound, or a note effect (`@m2/notes:arp`) before an instrument |
 | `m2 clips . <gesture> <clip>…` | make, move, split, join or delete clips |
 | `m2 clips . json -` | any other clip gesture, as JSON: a chord built on the song's key (`stamp`), a feel (`groove`), notes pasted into a clip (`paste` with `into`), a drum's steps as the beat grid writes them (`hits`); `m2 call . /api/theory` lists the scales, chords and grooves |
 | `m2 edit . <file> --old <text> --new <text>` | change text in one file of the song |
@@ -48,6 +48,10 @@ Below, `.` is this song's folder.
 | `m2 routes`, `m2 call . <path>` | every other change the app can make |
 
 `m2 docs commands` lists every command; `m2 <command> --help` says how to call one.
+
+A note effect (`@m2/notes`: the Arpeggiator, Chord, Note echo, Scale) goes before an instrument and
+changes its notes as they play: `synth.pluck(arp(lane.notes("chords")))`. Its notes never show in
+the roll. A part the musician should see and edit is notes written into a clip (`m2 clips`).
 
 ## Rules
 
