@@ -6,7 +6,7 @@
 import clsx from "clsx";
 import { ChevronRight, Maximize2, Minus, Square } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
+import { controlLabel, display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
 import { ALL, chainOf, frameOf, knobsOf, packOf, type Branch, type FrameTab } from "../lib/frame";
 import { useCards, type CardSize } from "../lib/folded";
 import { useNotice } from "../lib/notice";
@@ -442,7 +442,8 @@ function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
       const k = p?.knob ? node.knobs.find((x) => x.id === p.knob) : undefined;
       if (!p || !k) return [];
       const value = picks(k) ? (k.options?.find((o) => o.value === k.value)?.label ?? String(k.value)) : display(k, k.value);
-      return [`${p.label.charAt(0).toUpperCase()}${p.label.slice(1)} ${value}`];
+      // Named as its knob is, by the one rule (a level is Volume, never "Db"; review S7).
+      return [`${controlLabel(k)} ${value}`];
     })
     .slice(0, 4)
     .join(" · ");

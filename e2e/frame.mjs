@@ -119,6 +119,14 @@ check(!!(await page.$(`${songChain} [data-testid=open-mix]`)) && !(await page.$(
 // A card with no picture on its face is 380 px at Normal (CARD-44): the Master.
 const masterWidth = Math.round((await box(`${songChain} [data-node="master"]`)).width);
 check(masterWidth === 380, `Normal: 380 px with no picture on its face: the Master's ${masterWidth}`);
+// Folded, a card with no picture on its face says its face's values in one sentence (CARD-44).
+const master = `${songChain} [data-node="master"]`;
+await page.click(`${master} [data-size-to="folded"]`);
+check(await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "folded"), "Fold folds the Master");
+const masterSentence = await page.$eval(`${master} [data-sentence]`, (e) => e.textContent).catch(() => null);
+check(/^Volume [−\d.]+ dB · Ceiling [−\d.]+ dB$/.test(masterSentence ?? ""), `Folded, one sentence of its values: ${masterSentence}`);
+await page.click(`${master} [data-size-to="normal"]`);
+await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "normal");
 // An instrument's card wears its track's colour along its top (CARD-43, review F13); an effect's doesn't.
 await page.click('[data-module-tab="keys"] [data-testid=track-label]');
 const bar = '[data-testid=chain] [data-module="keys"] [data-node="pluck"] [data-colour-bar]';

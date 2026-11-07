@@ -39,6 +39,21 @@ export default track("hook", { name: "Hook" }, ({ lane }) => {
 `,
 );
 
+// A track whose LFO, of 3 beats, sets how loud its saw is: its card is the patch's.
+write(
+  "tracks/wobble.ts",
+  `import { time, track } from "@m2/core";
+import { lfo } from "std/control";
+import { osc, vca } from "std/dsp";
+
+export default track("wobble", { name: "Wobble" }, () => vca(osc.saw(110), lfo(time.beats, { period: 3, shape: "saw" })));
+`,
+);
+write(
+  "song.ts",
+  read("song.ts").replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport wobble from "./tracks/wobble";').replace("hook: { in: hook.out, db: db(4) },", "hook: { in: hook.out, db: db(4) },\n        wobble: { in: wobble.out, db: db(-24) },"),
+);
+
 const { page, errors, api, view, box, key } = await open(1920, 1080, { device: "chain" });
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const linted = async (sel, what) => {
@@ -114,20 +129,50 @@ await linted(pluck, "the pluck's card");
 const attackBefore = Number(/attack: ([0-9.]+)/.exec(read("tracks/hook.ts"))?.[1] ?? 0);
 const corner = await box(`${amp} [data-dot="0"]`);
 const [cx, cy] = [corner.x + corner.width / 2, corner.y + corner.height / 2];
+const span0 = await page.$eval(`${amp} svg`, (e) => e.dataset.xSpan);
+/** The envelope's peak, in px across the page: where its line is highest. */
+const peakX = () =>
+  page.$eval(`${amp} svg`, (svg) => {
+    const pts = (svg.querySelector('polyline[data-line="envelope"]')?.getAttribute("points") ?? "").split(" ").map((p) => p.split(",").map(Number));
+    const top = pts.reduce((b, p) => (p[1] < b[1] ? p : b), [0, Infinity]);
+    const r = svg.getBoundingClientRect();
+    return r.left + (top[0] / Number(svg.dataset.size.split("x")[0])) * r.width;
+  });
+const ampDrawn = () => page.$eval(amp, (e) => Number(e.dataset.drawn ?? 0));
+const ampDrawn0 = await ampDrawn();
 await page.mouse.move(cx, cy);
 await page.mouse.down();
 for (let i = 1; i <= 10; i++) {
   await page.mouse.move(cx + i * 4, cy);
   await sleep(30);
 }
+check(await until(async () => (await ampDrawn()) > ampDrawn0 && Math.abs((await peakX()) - (cx + 40)) <= 4, 8000), `while held, the curve's peak stays under the pointer (CARD-102): ${Math.round(await peakX())} px against ${Math.round(cx + 40)}`);
+check((await page.$eval(`${amp} svg`, (e) => e.dataset.xSpan)) === span0, `and the picture's span is the one at the press: ${span0}`);
 await page.mouse.up();
 check(await until(() => /attack: [0-9.]+/.test(read("tracks/hook.ts")), 8000), `dragging the attack corner right writes the attack: ${/attack: [0-9.]+/.exec(read("tracks/hook.ts"))?.[0]}`);
 const attack = Number(/attack: ([0-9.]+)/.exec(read("tracks/hook.ts"))?.[1]);
 check(attack > attackBefore, `a longer attack: ${attackBefore || "its default"} → ${attack}`);
-check(await until(async () => /^Undo Synth pluck attack|^Undo .* attack/.test((await undoTitle()) ?? "")), `one undo step: ${await undoTitle()}`);
+check(await until(async () => /^Undo Synth pluck attack/.test((await undoTitle()) ?? "")), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/hook.ts") === hookCode, 8000), "⌘Z takes the corner back");
+// The decay's corner, dragged up: a higher sustain.
+await until(async () => !!(await page.$(`${amp} [data-dot="1"]`)), 8000);
+await shown(`${amp} [data-dot="1"]`);
+await sleep(200);
+const dk = await box(`${amp} [data-dot="1"]`);
+await page.mouse.move(dk.x + dk.width / 2, dk.y + dk.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 8; i++) {
+  await page.mouse.move(dk.x + dk.width / 2, dk.y + dk.height / 2 - i * 2);
+  await sleep(30);
+}
+await page.mouse.up();
+check(await until(() => /sustain: [0-9.]+/.test(read("tracks/hook.ts")), 8000), `dragging the decay's corner up writes the sustain: ${/sustain: [0-9.]+/.exec(read("tracks/hook.ts"))?.[0]}`);
+await page.mouse.click(10, 10);
+// Only a write of its own is taken back: an ⌘Z with none would take back the Starter beat's files.
+if (read("tracks/hook.ts") !== hookCode) await key("Meta+z");
+check(await until(() => read("tracks/hook.ts") === hookCode, 8000), "⌘Z takes it back");
 
 // ---------------------------------------------------------------- the mix's compressor (CARD-93)
 
@@ -136,22 +181,88 @@ const comp = '[data-testid=chain] [data-module="song"] [data-node="compress"]';
 check(await until(async () => !!(await page.$(comp)), 20000), "the mix's chain has its compressor");
 await shown(comp);
 const transfer = `${comp} [data-picture="transfer"]`;
-const down = `${comp} [data-picture="down"]`;
+const history = `${comp} [data-picture="history"]`;
 check(await until(async () => (await points(`${transfer} polyline[data-line="transfer"]`)) === 121, 20000), "its face draws its transfer curve, from its own sum");
-check((await page.$$(`${transfer} [data-dot]`)).length === 2, "two dots: the threshold and the makeup");
+check((await page.$$(`${transfer} [data-dot]`)).length === 2, "two dots: the threshold's corner and the ratio's, on the line");
 const tWords = await page.$eval(`${transfer} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null);
-check(tWords === "Above −12 dB the level rises only 1 dB for each 2, then up 3 dB", `its words: ${tWords}`);
-check(!!(await page.$(down)), "and how far it turns down, beside it");
+check(tWords === "Above −12 dB the level rises only 1 dB for each 2, then up 3 dB. Drag the corner for the threshold, the line for the ratio", `its words: ${tWords}`);
+check(!!(await page.$(history)), "and its last seconds, beside it");
 await linted(comp, "the compressor's card");
-const reads = (sel) => page.$eval(`${sel} canvas[data-live]`, (e) => Number(e.dataset.reads ?? 0)).catch(() => 0);
-const [level0, meter0] = [await reads(transfer), await reads(down)];
+
+// The ratio's dot, dragged across, writes the ratio; its wheel steps it.
+const songCode = read("song.ts");
+const rd = await box(`${transfer} [data-dot="1"]`);
+await page.mouse.move(rd.x + rd.width / 2, rd.y + rd.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 8; i++) {
+  await page.mouse.move(rd.x + rd.width / 2 + i * 4, rd.y + rd.height / 2);
+  await sleep(30);
+}
+await page.mouse.up();
+const ratio = () => Number(/ratio: ([0-9.]+)/.exec(read("song.ts"))?.[1]);
+check(await until(() => ratio() > 2, 8000), `dragging the line's dot right raises the ratio: ${ratio()}`);
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => read("song.ts") === songCode, 8000), "⌘Z takes it back");
+const rd2 = await box(`${transfer} [data-dot="1"]`);
+await page.mouse.move(rd2.x + rd2.width / 2, rd2.y + rd2.height / 2);
+await page.mouse.wheel({ deltaY: -130 });
+check(await until(() => ratio() > 2, 8000), `its wheel steps the ratio up: ${ratio()}`);
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => read("song.ts") === songCode, 8000), "⌘Z takes that back too");
+
+// While the song plays: the level dot rides the curve, the meter turns down, and the history's
+// layers sit where its axis puts their values (CARD-103).
+const said = (sel) => page.$eval(`${sel} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
+const KNEE = 6;
+const out = (l) => {
+  const over = l + 12, slope = 1 - 1 / 2;
+  const down = over <= -KNEE / 2 ? 0 : over < KNEE / 2 ? (slope * (over + KNEE / 2) ** 2) / (2 * KNEE) : slope * over;
+  return l - down + 3;
+};
+const clamp = (v) => Math.min(1, Math.max(0, v));
 await post("/loop", { start: 0, end: 8, on: true });
 await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
-check(await until(async () => (await reads(transfer)) > level0 + 5, 15000), `while the song plays, the level going in rides the curve (${(await reads(transfer)) - level0} reads)`);
-check(await until(async () => (await reads(down)) > meter0 + 5, 15000), `and the meter of how far it turns down moves (${(await reads(down)) - meter0} reads)`);
-await sleep(1500);
+let rides = false, turned = 0, placed = true, seenHistory = false;
+for (let i = 0; i < 60 && !(rides && turned > 0 && seenHistory); i++) {
+  await sleep(150);
+  const [dot] = await said(transfer);
+  if (dot && dot.v > -60) rides = Math.abs(dot.y - clamp(1 - (out(dot.v) + 60) / 72)) < 0.01 && Math.abs(dot.x - clamp((dot.v + 60) / 60)) < 0.01;
+  const h = await said(history);
+  for (const layer of h.slice(0, 3)) {
+    if (!layer) continue;
+    seenHistory = true;
+    if (Math.abs(layer.y - clamp(1 - (layer.v + 60) / 84)) > 0.005) placed = false;
+  }
+  if (h[3]) turned = Math.max(turned, h[3].v);
+}
+check(rides, "while the song plays, the level going in rides the curve: its dot is on the line at its level");
+check(turned > 0, `and the compressor turns it down, by its own meter: up to ${turned.toFixed(2)} dB`);
+check(seenHistory && placed, "the history's layers (in, out, how far) sit where its dB axis puts their values");
+await sleep(500);
 await page.screenshot({ path: `${ROOT}/dress-mix.png` });
+
+// ---------------------------------------------------------------- the LFO's playhead (CARD-98, CARD-104)
+
+await page.click('[data-module-tab="wobble"] [data-testid=track-label]');
+if (await page.$('[data-device="patch"]')) await page.click('[data-device="patch"]');
+const lfoCard = '[data-testid=graph] [data-module="wobble"] [data-node="lfo"]';
+check(await until(async () => !!(await page.$(lfoCard)), 15000), "the Wobble's LFO has its card in the patch");
+await shown(`${lfoCard} [data-picture="wave"]`);
+const wave = `${lfoCard} [data-picture="wave"]`;
+check(await until(async () => (await page.$eval(`${wave} svg`, (e) => e.dataset.xSpan).catch(() => "")) === "0,6", 15000), `an LFO of 3 beats is drawn over two whole cycles, 6 beats: ${await page.$eval(`${wave} svg`, (e) => e.dataset.xSpan).catch(() => "")}`);
+let round = 0, ok = true;
+for (let i = 0; i < 30 && round < 5; i++) {
+  await sleep(120);
+  const [ph] = await said(wave);
+  if (!ph || ph.v <= 0) continue;
+  round += 1;
+  if (Math.abs(ph.x - (ph.v % 6) / 6) > 0.01) ok = false;
+}
+check(round >= 5 && ok, `its playhead is the song's beat gone round its 6 beats, where the LFO is (${round} reads)`);
+await page.screenshot({ path: `${ROOT}/dress-lfo.png` });
 await page.keyboard.press("Space");
 
 done(errors);

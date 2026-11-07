@@ -337,14 +337,17 @@ export const curve = component(
 
 | Picture | Declare it | Draw it | Its dots |
 |---|---|---|---|
-| an envelope: how loud a note is over time | `envelopePicture()` | `envelope(p, v, { attack, decay, sustain, release })`, `envelopeWords(v, names)` | the peak (attack), the decay's corner (decay across, sustain up), the end (release) |
-| a filter inside a voice, drawn from maths (12 dB per octave) | `curvePicture({ live: false })` | `lowpass(p, v, { cutoff, q })` or `{ cutoff, resonance }`, `lowpassWords(v, names)` | one: the cutoff across, the q up |
+| an envelope: how loud a note is over time, in seconds | `envelopePicture()` | `envelope(p, v, { attack, decay, sustain, release })`, `envelopeWords(v, names)`; its times controls in seconds, its sustain a level from 0 to 1 | the peak (attack), the decay's corner (decay across, sustain up), the end (release): each stays under the pointer as you drag |
+| a filter inside a voice, drawn from maths | `curvePicture({ live: false })` | `lowpass(p, v, { cutoff, q })` (a plain number) or `{ cutoff, resonance }` (0 to 1), `lowpassWords(v, names)` | one: the cutoff across, the q up |
 | a filter or EQ you play on its own | `curvePicture()` (its spectrum under it as it plays) | `p.response()` and your dots | yours |
-| a compressor's curve, level in against level out | `transferPicture()` | `transfer(p, v, { threshold, ratio, makeup })`, `transferWords(v, names)` | the threshold across, the makeup up; the wheel on either is the ratio |
+| a compressor's curve, level in against level out | `transferPicture()` | `transfer(p, v, { threshold, ratio, makeup })`, `transferWords(v, names)` | the corner: the threshold, across; the line above it: the ratio, across (and the wheel) |
+| a compressor's last seconds: in, out and how far it turned down | `historyPicture()` | a guide line at 0 dB (`p.mark`) | none |
 | how far a sound is turned down as it plays | `reductionPicture({ most, meter })` | `reduction(p, { most })` | none: a meter your kernel gives (`reduction`) |
-| an LFO's shape over a bar | `lfoPicture()` | `lfo(p, v, { period, shape, phase })`, `lfoWords(v, names)` | the end of its first cycle: the period |
+| an LFO's shape, whole cycles of it, with the song's playhead | `lfoPicture()` | `lfo(p, v, { period, shape, phase })`, `lfoWords(v, names)` | the end of its first cycle: the period |
 
-The envelope and the lowpass draw std's own sums (std's `adsr` and its state-variable filter), and the compressor's curve std's `compress`'s; each is checked against the sound itself. A filter you play on its own is better measured: `p.response()` can't be wrong about it.
+The envelope draws std's `adsr`'s own sums and the compressor's curve std's `compress`'s, each checked against those sounds. The lowpass is a two-pole drawing, checked against std's own filter only: on another filter (a synth's ladder falls faster) it is a drawing, and its words say so, naming no slope. A filter you play on its own is better measured: `p.response()` can't be wrong about it.
+
+A picture whose x axis is time (in seconds or beats) is drawn up to the furthest point its shapes reach, so a short envelope fills it as a long one does; while you drag a dot, the axis stays as it was, so the dot stays under the pointer. A live level is drawn on the picture's own y axis when that is in dB.
 
 ## Kernels of its own
 
