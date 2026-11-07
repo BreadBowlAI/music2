@@ -282,3 +282,34 @@ fn a_face_picture_is_on_no_tab() {
     }
     assert_eq!(checked, 16);
 }
+
+// CARD-135, CARD-138, CARD-139, CARD-141, CARD-143, CARD-144: each card's face is the one its rule
+// lists, in its order (review U6); the Drum's is its one group, Drum.
+#[test]
+fn each_face_is_the_one_its_rule_lists() {
+    let catalog = m2_script::describe(&packages());
+    let face = |cid: &str| {
+        let d = catalog.components.get(cid).unwrap_or_else(|| panic!("no {cid}"));
+        if d.editor.face.is_empty() { d.editor.groups[0].items.clone() } else { d.editor.face.clone() }
+    };
+    for (cid, want) in [
+        ("@m2/wavetable:wavetable", &["wavesA", "positionA", "cutoff", "attack", "release"][..]),
+        ("@m2/synths:synth-custom", &["note", "amp", "shape", "cutoff", "resonance", "attack", "release"]),
+        ("@m2/synths:synth-supersaw", &["filter", "amp", "shape", "detune", "spread", "cutoff"]),
+        ("@m2/synths:synth-lead", &["filter", "amp", "shape", "glide", "vibrato", "cutoff"]),
+        ("@m2/synths:synth-pad", &["filter", "amp", "shape", "spread", "cutoff"]),
+        ("@m2/synths:synth-strings", &["filter", "amp", "shape", "ensemble", "cutoff"]),
+        ("@m2/synths:synth-pluck", &["note", "amp", "shape", "brightness", "spread"]),
+        ("@m2/synths:synth-sub", &["note", "amp", "drop", "drive", "glide"]),
+        ("@m2/synths:synth-bass", &["note", "amp", "shape", "glide"]),
+        ("@m2/synths:fm-custom", &["partials", "amp", "amountA", "amountB", "mixB", "tone"]),
+        ("@m2/synths:fm-keys", &["note", "amp", "tone", "tine"]),
+        ("@m2/synths:fm-bell", &["note", "amp", "tone"]),
+        ("@m2/synths:fm-metal", &["note", "tone", "feedback", "drop"]),
+        ("@m2/drums:drum", &["hit", "drum", "tune", "decay", "punch", "drive"]),
+        ("std:limit", &["level", "ceiling"]),
+        ("std:master", &["level", "db", "ceiling"]),
+    ] {
+        assert_eq!(face(cid), want, "{cid}'s face");
+    }
+}
