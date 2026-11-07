@@ -14,6 +14,11 @@ fn repo() -> PathBuf {
 
 /// Picture `view` of `@m2/<pack>`'s `component`, drawn at `values` (what plays, by name, CARD-63).
 fn draw(runner: &Runner, pack: &str, component: &str, view: &str, values: Value) -> Result<Value, String> {
+    draw_at(runner, 48_000, pack, component, view, values)
+}
+
+/// [`draw`], for a song at `rate` (CARD-87).
+fn draw_at(runner: &Runner, rate: u32, pack: &str, component: &str, view: &str, values: Value) -> Result<Value, String> {
     let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
     let catalog = m2_script::describe(&packages);
     let cid = format!("@m2/{pack}:{component}");
@@ -27,7 +32,7 @@ fn draw(runner: &Runner, pack: &str, component: &str, view: &str, values: Value)
         view: view.into(),
         values: values.to_string(),
         memo: format!("{component}\u{0}{view}"),
-        rate: 48_000,
+        rate,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
@@ -285,6 +290,36 @@ fn the_reverb_draws_its_tail() {
     assert!(d["words"].as_str().unwrap().starts_with("Its tail fades 30 dB in "), "{}", d["words"]);
 }
 
+// CARD-87, CARD-118 (review S3): the reverb's words say the time its dot shows, at every rate, as
+// std's secondsWords writes it: at 96 kHz, fully damped at size 1, where words worked out at 48 kHz
+// said 3.84 s for a dot at 3.98 s.
+#[test]
+fn the_reverbs_words_say_the_time_its_dot_shows() {
+    fn figures(v: f64) -> String {
+        let r = if v.abs() >= 100.0 {
+            v.round()
+        } else if v.abs() >= 10.0 {
+            (v * 10.0).round() / 10.0
+        } else {
+            (v * 100.0).round() / 100.0
+        };
+        format!("{r}")
+    }
+    let seconds = |s: f64| if s < 1.0 { format!("{} ms", figures(s * 1000.0)) } else { format!("{} s", figures(s)) };
+    let runner = Runner::new();
+    for rate in [44_100, 48_000, 96_000] {
+        for (size, damping) in [(1.0, 1.0), (0.5, 0.5), (0.2, 0.0)] {
+            let d = draw_at(&runner, rate, "effects", "reverb", "tail", json!({"size": size, "damping": damping, "mix": 0.25})).unwrap();
+            let words = d["words"].as_str().unwrap();
+            let dot = places(&d)[0].0;
+            assert!(
+                words.starts_with(&format!("Its tail fades 30 dB in {}", seconds(dot))),
+                "at {rate} Hz, size {size}, damping {damping}: the dot at {dot:.4} s, the words {words:?}"
+            );
+        }
+    }
+}
+
 // CARD-119 to CARD-121: the moving effects draw a second of their motion from their own sums: the
 // chorus's two copies drifting apart, the phaser's three notches round its sweep, the tremolo's
 // level; none has a dot.
@@ -434,12 +469,13 @@ fn a_misnamed_value_is_said_as_one() {
 
 // CARD-75 (a fifth of CARD-64's limit): every picture of both packs draws in 4 ms at most, its first
 // draw too (which works out its kept sums, CARD-110), once its module is loaded (a limit of its own):
-// at its defaults, then at five more values. It judges speed, so it runs in the nightly tier.
+// at its defaults, then at five more values; at 44.1, 48 and 96 kHz, each rate's first draws working
+// out its sums again (CARD-87). It judges speed, so it runs in the nightly tier.
 #[test]
 fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
     let fifth = std::time::Duration::from_millis(4);
     let mut slow = vec![];
-    for pack in ["mixing", "effects"] {
+    for (pack, rate) in ["mixing", "effects"].into_iter().flat_map(|p| [44_100, 48_000, 96_000].map(|r| (p, r))) {
         let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
         let catalog = m2_script::describe(&packages);
         let runner = Runner::new();
@@ -476,7 +512,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                         view: view.name.clone(),
                         values: defaults(nudge),
                         memo: format!("{cid}\u{0}{}", view.name),
-                        rate: 48_000,
+                        rate,
                     };
                     // The module's load first: it has a limit of its own (CARD-64).
                     if !loaded {
@@ -489,7 +525,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                     let took = t.elapsed();
                     assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
                     if took > fifth {
-                        slow.push(format!("{cid}'s {} draw {i}: {took:?}", view.name));
+                        slow.push(format!("{cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name));
                     }
                 }
             }

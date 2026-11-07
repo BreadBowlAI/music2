@@ -146,7 +146,14 @@ export const measured = component(
           p.mark("x", p.rate / 2, "half the rate"),
         ];
       },
-      words: () => "its curve under its thresholds",
+      // Words read the song's rate too (2.5), and can't change it either.
+      words: (_v, p) => {
+        // @ts-expect-error the words' p holds the rate, read only
+        p.rate = 44100;
+        // @ts-expect-error the words' p draws nothing
+        p.line([0, 0]);
+        return `its curve under its thresholds, at ${p.rate / 1000} kHz`;
+      },
     },
   },
 );

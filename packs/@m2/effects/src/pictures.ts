@@ -3,7 +3,7 @@
 // can be measured with a click (CARD-82: a delay's or a reverb's click rings past 2 s, drive changes
 // with how loud it is, the moving effects change over time), and each is checked against a render
 // of the sound within 0.5 dB (CARD-99), at 44.1, 48 and 96 kHz. Each is worked out at the song's
-// sample rate (`p.rate`, CARD-87), as its kernel works; words, which get no rate, at 48 kHz.
+// sample rate (`p.rate`, CARD-87), as its kernel works, its words too.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
@@ -13,8 +13,6 @@ import { dbWords, figures, known, secondsWords, type In, type Num, type Values }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
-/** The rate a picture's words work their sums out at: words get no song's rate (CARD-87). */
-const WORDS = 48_000;
 /** The nearest 32-bit float to a number: what a kernel holds. */
 const f32 = Math.fround;
 
@@ -60,11 +58,11 @@ export function echoes<D>(p: Painter<D, "seconds", "db">, v: Values, names: { ti
   ];
 }
 
-/** What `echoes` draws, in words. */
-export function echoesWords(v: Values, names: { time: string; feedback: string; mix: string }): string {
+/** What `echoes` draws, in words, at the song's rate `sr` (the words' `p.rate`). */
+export function echoesWords(v: Values, names: { time: string; feedback: string; mix: string }, sr: number): string {
   const [t, fb, m] = [v[names.time], v[names.feedback], v[names.mix]];
   if (typeof t !== "number" || typeof fb !== "number" || typeof m !== "number") return "Echoes that repeat and fade: one of its values is set by a cable or the code";
-  const n = echoLevels(t, fb, m, WORDS).length - 1;
+  const n = echoLevels(t, fb, m, sr).length - 1;
   const fading = fb > 0 ? `, each ${dbWords(-db(clamp(fb, 0, 0.95)))} quieter` : ", only one";
   return `An echo every ${secondsWords(t)}${fading}: ${n} ${n === 1 ? "echo" : "echoes"} before −60 dB. Drag the first for its time and mix, the second for the feedback`;
 }
@@ -335,12 +333,12 @@ export function tail<D>(p: Painter<D, "seconds", "db">, v: Values, names: { size
   ];
 }
 
-/** What `tail` draws, in words. */
-export function tailWords(v: Values, names: { size: string; damping: string }): string {
+/** What `tail` draws, in words, at the song's rate `sr` (the words' `p.rate`): the time its dot shows, from the tail the draw kept. */
+export function tailWords(v: Values, names: { size: string; damping: string }, sr: number): string {
   const [s, d] = [v[names.size], v[names.damping]];
   if (typeof s !== "number" || typeof d !== "number") return "A room's tail as it fades: its size or damping is set by a cable or the code";
   const highs = d > 0 ? `; damping ${figures(d)} makes its highs fade sooner` : "";
-  return `Its tail fades 30 dB in ${secondsWords(tailShape(s, d, WORDS).half)}${highs}. Drag the dot for the size`;
+  return `Its tail fades 30 dB in ${secondsWords(tailShape(s, d, sr).half)}${highs}. Drag the dot for the size`;
 }
 
 // ---------------------------------------------------------------- moving effects

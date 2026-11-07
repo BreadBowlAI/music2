@@ -1402,10 +1402,13 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
   /**
    * The song's sample rate, in Hz (CARD-87): a kernel works its sums out at it, so a picture drawn
-   * from them does too (2.5). 48000 where no song plays (`m2 pack check`). Words get no rate.
+   * from them does too (2.5). 48000 where no song plays (`m2 pack check`). Its words get it too.
    */
   readonly rate: number;
 }
+
+/** What a picture's words read besides its values (CARD-87): the song's sample rate, as the draw's `p.rate`. */
+export type Heard = { readonly rate: number };
 
 /** What a control plays, for types only: a number, a choice's name, or a switch's true or false. */
 type PlayedOf<K> = [K] extends [Unit] ? number : [K] extends [ChoiceKind<infer O>] ? O[number] : [K] extends [SwitchKind] ? boolean : never;
@@ -1421,7 +1424,7 @@ export type Played<D = any> = {
 /** A picture's code (CARD-60): its draw and its words, typed by the descriptor (CARD-62). */
 export type PictureCode<D = any, X extends Unit = Unit, Y extends Unit = Unit> = {
   draw: (v: Played<D>, p: Painter<D, X, Y>) => readonly Shape[];
-  words: (v: Played<D>) => string;
+  words: (v: Played<D>, p: Heard) => string;
 };
 /** The pictures of `D`, by name. */
 type PicturesIn<D> = { [K in keyof ViewsOf<D> as ViewsOf<D>[K] extends PictureDecl<any, any> ? K : never]: ViewsOf<D>[K] };
@@ -1510,7 +1513,7 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   const pic = c?.pictures.get(name);
   if (!c || !pic) return JSON.stringify({ why: `can't be drawn: no picture "${name}" of ${cid} was loaded` });
   const draw = pic.draw as (v: Played, p: Painter) => unknown;
-  const said = pic.words as (v: Played) => unknown;
+  const said = pic.words as (v: Played, p: Heard) => unknown;
   const ax = { x: specOf<AxisSpec>(pic.x as object), y: specOf<AxisSpec>(pic.y as object) };
   const given = JSON.parse(values) as Record<string, unknown>;
   const target: Record<string, unknown> = {};
@@ -1688,7 +1691,7 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   };
   try {
     const shapes = shapesOf(draw(v as Played, p), "its draw");
-    const words = said(v as Played);
+    const words = said(v as Played, Object.freeze({ rate }));
     if (missed) bad(missed);
     if (!fits(words, 1, 400) || !words.trim()) bad(`its words must be one line of 1 to 400 characters, not ${shown(words)}`);
     return JSON.stringify({ shapes, words });

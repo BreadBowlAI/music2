@@ -252,7 +252,7 @@ A picture has two parts:
 | `x`, `y` | The axes: `axis.log("hz", 20, 20000)` (a log scale starts above 0), `axis.lin("db", -24, 24)`, `axis.time(2)` (0 to 2 seconds). music2 draws the grid and its labels. |
 | `live` | Optional: layers that move with the sound (below). |
 | `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`; each may be `null` (a cable or the code works it out), so write `v.freq1 ?? 1000` where you need a number. `p` makes the shapes, and `p.rate` is the song's sample rate in Hz (44100, 48000, 96000…; new in 2.5): your kernel works at it, so a picture drawn from your kernel's maths must too. |
-| `words` | Required: a function of `v` that says the picture in one sentence, 1 to 400 characters, one line. The card, agents (`GET /api/graph`) and screen readers read it. |
+| `words` | Required: a function `(v, p) => string` that says the picture in one sentence, 1 to 400 characters, one line. `p.rate` is the song's sample rate, as in `draw` (new in 2.5), so words that name what your maths works out say what the picture shows. The card, agents (`GET /api/graph`) and screen readers read it. |
 
 The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1, …]`.
 

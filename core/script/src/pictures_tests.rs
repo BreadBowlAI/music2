@@ -492,7 +492,7 @@ export const rated = component(
   {
     pic: {
       draw: (v, p) => [p.label(100, 0, `at ${p.rate} Hz`), p.part("half", () => [p.mark("x", p.rate / 2, `made ${(made = (made % 9) + 1)}`)])],
-      words: () => "the song's rate",
+      words: (v, p) => `the song's rate, ${p.rate} Hz`,
     },
   },
 );
@@ -502,9 +502,11 @@ export const rated = component(
     let draw = |rate: u32| shapes(runner.draw(Ask { rate, ..pack.ask("rated", "pic", json!({"freq": 1000})) }));
     let low = draw(44_100);
     assert_eq!(low["shapes"][0]["words"], "at 44100 Hz");
+    assert_eq!(low["words"], "the song's rate, 44100 Hz", "the words get it too (review S3)");
     assert_eq!((&low["shapes"][1]["shapes"][0]["at"], &low["shapes"][1]["shapes"][0]["words"]), (&json!(22_050.0), &json!("made 1")));
     let high = draw(96_000);
     assert_eq!(high["shapes"][0]["words"], "at 96000 Hz");
+    assert_eq!(high["words"], "the song's rate, 96000 Hz");
     assert_eq!(
         (&high["shapes"][1]["shapes"][0]["at"], &high["shapes"][1]["shapes"][0]["words"]),
         (&json!(48_000.0), &json!("made 2")),
