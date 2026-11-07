@@ -8,7 +8,7 @@ hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 [[pack]]
 name = "@m2/effects"
 version = "1.4.0"
-hash = "sha256:b4386fd494ebc611b6a770b1ccca4667a693039732ba2d820d911ecf6bf6ae0d"
+hash = "sha256:a71378da2d56117bb30a2fc49bf2aa3c0c0ee43f781961f73c9cb980b104907f"
 
 [[pack]]
 name = "@m2/mixing"
