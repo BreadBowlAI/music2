@@ -353,13 +353,17 @@ const MOTION_POINTS = 241;
 /** A second's times. */
 const second = () => Array.from({ length: MOTION_POINTS }, (_, i) => i / (MOTION_POINTS - 1));
 
+/** Where an LFO is `t` seconds in, from 0 to 1 of its cycle, from the song's start, at the song's rate `sr` (at most `most` cycles a second): the exact phase, which the phaser's and the tremolo's sums use. */
+const phaseAt = (rate: number, t: number, sr: number, most = 20) => ((clamp(rate, 0, most) * Math.round(t * sr)) / sr) % 1;
+
 /**
- * Where an LFO is, from 0 to 1 of its cycle, as the kernels' `Phase` counts it from the song's
- * start: `rate` (at most `most` cycles a second) over the song's rate `sr` added each sample, in
- * 32-bit floats, so it drifts from the exact phase as the kernel's does (most at a high rate: about
- * 5 × 10⁻⁴ of a cycle by 0.8 s at 96 kHz). The function given is the phase at sample `n`, asked for
- * `n` that only grow. A 32-bit float in [2^e, 2^(e+1)) is a whole number of 2^(e − 23), so each step
- * inside it adds the step rounded to that: the phase is walked a run of such steps at a time.
+ * Where the chorus's LFO is, from 0 to 1 of its cycle, as its kernel's `Phase` counts it from the
+ * song's start: `rate` (at most `most` cycles a second) over the song's rate `sr` added each sample,
+ * in 32-bit floats, so it drifts from the exact phase as the kernel's does (most at a high rate:
+ * about 5 × 10⁻⁴ of a cycle by 0.8 s at 96 kHz, which moves the chorus's level near its notch by
+ * 0.6 dB). The function given is the phase at sample `n`, asked for `n` that only grow. A 32-bit
+ * float in [2^e, 2^(e+1)) is a whole number of 2^(e − 23), so each step inside it adds the step
+ * rounded to that: the phase is walked a run of such steps at a time.
  */
 function phases(rate: number, sr: number, most: number): (n: number) => number {
   const step = f32(f32(clamp(rate, 0, most)) / f32(sr));
@@ -424,12 +428,13 @@ export function chorusMotion<D>(p: Painter<D, "seconds", "seconds">, v: Values, 
 const PHASER = { centre: 640, octaves: 2.5 } as const;
 
 /**
- * Where the phaser's notches are with its LFO at `phase`, at the song's rate `sr`, in Hz
- * (`@m2/effects:phaser`'s own sum): six all-pass stages around a frequency that sweeps with the LFO,
- * mixed with the sound, cut the sound where their turn is half a cycle, at three places round it.
+ * Where the phaser's notches are `t` seconds in, at the song's rate `sr`, in Hz
+ * (`@m2/effects:phaser`'s own sum): six all-pass stages around a frequency that sweeps `rate` times
+ * a second, mixed with the sound, cut the sound where their turn is half a cycle, at three places
+ * round that frequency.
  */
-export function notchesAt(depth: number, phase: number, sr: number): [number, number, number] {
-  const s = Math.sin(2 * Math.PI * phase);
+export function notchesAt(rate: number, depth: number, t: number, sr: number): [number, number, number] {
+  const s = Math.sin(2 * Math.PI * phaseAt(rate, t, sr));
   const f = clamp(PHASER.centre * 2 ** (PHASER.octaves * clamp(depth, 0, 1) * s), 10, 0.45 * sr);
   const g = Math.tan((Math.PI * f) / sr), back = sr / Math.PI;
   return [back * Math.atan(g * TURNS[0]), back * Math.atan(g * TURNS[1]), back * Math.atan(g * TURNS[2])];
@@ -440,10 +445,9 @@ const TURNS = [1, 3, 5].map((k) => Math.tan((k * Math.PI) / 12));
 /** A phaser's motion over a second (CARD-120): its three notches across frequency, the lines `low`, `mid` and `high`. */
 export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
-  const phase = phases(rate, p.rate, 20);
   const lines: number[][] = [[], [], []];
   for (const t of second()) {
-    const [low, mid, high] = notchesAt(depth, phase(Math.round(t * p.rate)), p.rate);
+    const [low, mid, high] = notchesAt(rate, depth, t, p.rate);
     lines[0].push(t, low);
     lines[1].push(t, mid);
     lines[2].push(t, high);
@@ -451,16 +455,15 @@ export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names
   return [p.line(lines[0], { name: "low", tone: "soft" }), p.line(lines[1], { name: "mid" }), p.line(lines[2], { name: "high", tone: "soft" })];
 }
 
-/** How loud the tremolo leaves a sound with its LFO at `phase`, from 0 to 1 (its kernel's own sum). */
-export function tremoloAt(depth: number, phase: number): number {
-  return 1 - clamp(depth, 0, 1) * (0.5 - 0.5 * Math.cos(2 * Math.PI * phase));
+/** How loud the tremolo leaves a sound `t` seconds in, at the song's rate `sr`, from 0 to 1 (its kernel's own sum). */
+export function tremoloAt(rate: number, depth: number, t: number, sr: number): number {
+  return 1 - clamp(depth, 0, 1) * (0.5 - 0.5 * Math.cos(2 * Math.PI * phaseAt(rate, t, sr, 40)));
 }
 
 /** A tremolo's motion over a second (CARD-121): how loud it leaves the sound, the line `level`. */
 export function tremoloMotion<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
-  const phase = phases(rate, p.rate, 40);
-  const points = second().flatMap((t) => [t, tremoloAt(depth, phase(Math.round(t * p.rate)))]);
+  const points = second().flatMap((t) => [t, tremoloAt(rate, depth, t, p.rate)]);
   return [p.fill(points, { base: 0, tone: "faint" }), p.line(points, { name: "level" })];
 }
 
