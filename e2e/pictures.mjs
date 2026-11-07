@@ -1,11 +1,12 @@
 // Track pictures: a pack's picture on its card (CARD-60 to CARD-70). A test pack, @test/curve, has an
-// EQ-like sound, Curve EQ, whose face is its picture: a curve worked out from its two bands, and a
-// dot for each band (across its frequency, up and down its gain, the wheel its q, a double-click its
+// EQ-like sound, Curve EQ, whose face is its picture and its two gains: a curve worked out from its
+// two bands, and a dot for each band (across its frequency, up and down its gain, the wheel its q, a double-click its
 // on). Device's chain draws the curve; dragging band 2's dot moves the curve while the dot is held
 // (the server draws it again from the drag's leases, CARD-68), and the release writes both values in
 // one edit, one undo step, which ⌘Z takes back byte for byte. Picking a dot shows its band's tab
 // (taste.md DV-18); a double-click turns its band off (one write). An agent asking for the picture reads
 // the same shapes the window drew, as numbers, and each dot's knob ids (CARD-67). Each state linted.
+// No axis label covers the curve, at each height a picture is drawn (taste.md DV-17, DV-19).
 //
 //   node e2e/pictures.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -70,7 +71,7 @@ export const curve = component(
         }),
       },
       groups: { "Band 1": ["on1", "freq1", "gain1", "q1"], "Band 2": ["on2", "freq2", "gain2", "q2"] },
-      face: ["curve"],
+      face: ["curve", "gain1", "gain2"],
     },
   },
   (x, { freq2, q2 }) => lowpass(x, { cutoff: freq2, q: q2 }),
@@ -234,5 +235,59 @@ check(await until(async () => (await liveReads()) >= 5, 10000), `while the song 
 const looks = posts.filter((p) => p.url === "/api/graph/look").map((p) => JSON.parse(p.body));
 check(looks.some((l) => l.kind === "spectrum" && l.at === "out" && l.on), `asked for as a look at the call's output: ${JSON.stringify(looks.slice(0, 2))}`);
 await page.keyboard.press("Space");
+
+// ---------------------------------------------------------------- the axes' labels never cover a line (taste.md DV-17)
+
+// Band 1 at 20 Hz, 23 dB up and wide (q 0.1): the curve starts high at the picture's left edge,
+// where the y axis's labels go. At each height a picture is drawn (104 px beside a Normal face's values, 132 Expanded,
+// 48 on the patch's card, taste.md DV-19), no label's box holds a point of the curve's line or sits
+// on a fill, where the curve shows.
+write("tracks/eq.ts", `import { track } from "@m2/core";\nimport { osc } from "std/dsp";\nimport { curve } from "@test/curve";\n\nexport default track("eq", { name: "EQ" }, () => curve(osc.saw(110), { freq1: 20, gain1: 23, q1: 0.1, freq2: 2000, gain2: 3 }));\n`);
+await until(async () => (await words()) === "Band 1: 23 dB at 20 Hz; Band 2: 3 dB at 2000 Hz", 10000);
+/** What a picture's axis labels cover, at the size it is drawn: each label's box against every point of its lines and fills, where they show. */
+const covered = (sel) =>
+  page.$eval(`${sel} svg`, (svg) => {
+    const shown = svg.querySelector("clipPath rect")?.getBBox() ?? { x: -1e9, y: -1e9, width: 2e9, height: 2e9 };
+    const inside = (x, y, b) => x > b.x && x < b.x + b.width && y > b.y && y < b.y + b.height;
+    const boxes = [...svg.querySelectorAll("text[data-tick]")].map((t) => t.getBBox());
+    const hits = new Set();
+    for (const shape of svg.querySelectorAll("polyline, polygon")) {
+      const pts = (shape.getAttribute("points") ?? "").trim().split(/\s+/).filter(Boolean).map((p) => p.split(",").map(Number));
+      if (shape.tagName === "polygon" && pts.length) pts.push(pts[0]);
+      for (let i = 1; i < pts.length; i++) {
+        const [[x0, y0], [x1, y1]] = [pts[i - 1], pts[i]];
+        const n = Math.max(1, Math.ceil(2 * Math.hypot(x1 - x0, y1 - y0)));
+        for (let k = 0; k <= n; k++) {
+          const x = x0 + ((x1 - x0) * k) / n, y = y0 + ((y1 - y0) * k) / n;
+          if (!inside(x, y, shown)) continue;
+          boxes.forEach((b, j) => inside(x, y, b) && hits.add(j));
+        }
+      }
+      if (shape.tagName === "polygon") boxes.forEach((b, j) => shape.isPointInFill(new DOMPoint(b.x + b.width / 2, b.y + b.height / 2)) && hits.add(j));
+    }
+    return { size: svg.dataset.size, labels: boxes.length, covered: [...hits].map((j) => svg.querySelectorAll("text[data-tick]")[j].textContent) };
+  });
+/** The picture `sel` once its row is `tall` px (its view's row, taste.md DV-19), and what its labels cover. */
+const uncovered = async (sel, tall, where) => {
+  // Its row's own height, unscaled: the patch is drawn at its zoom.
+  const row = (s) => page.$eval(s, (e) => e.closest("[data-view]")?.offsetHeight ?? 0).catch(() => 0);
+  await until(async () => (await row(sel)) === tall, 5000);
+  await sleep(300);
+  const [c, h] = [await covered(sel), await row(sel)];
+  check(h === tall && c.labels > 0 && c.covered.length === 0, `${where}, ${h} px tall: no axis label covers the curve (${c.size}, ${c.labels} labels; covered: ${c.covered.join(" ") || "none"})`);
+};
+await uncovered(pic, 104, "beside the Normal face's values");
+await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-normal.png` });
+await page.click(`${card} [data-size-to="expanded"]`);
+await uncovered(pic, 132, "Expanded");
+await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-expanded.png` });
+await page.click(`${card} [data-size-to="normal"]`);
+await page.click('[data-device="patch"]');
+const patchPic = '[data-testid=graph] [data-node="curve"] [data-picture="curve"]';
+await until(async () => !!(await page.$(patchPic)), 15000);
+await page.$eval(patchPic, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
+await until(async () => !!(await page.$(`${patchPic}[data-drawn] polyline[data-line="curve"]`)), 15000);
+await uncovered(patchPic, 48, "on the patch's card");
+await (await page.$('[data-testid=graph] [data-node="curve"]'))?.screenshot({ path: `${ROOT}/pictures-labels-patch.png` });
 
 done(errors);
