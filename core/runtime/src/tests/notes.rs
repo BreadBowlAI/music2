@@ -223,3 +223,39 @@ fn the_scale_moves_notes_onto_the_songs_key_in_wasm() {
     }
     assert_eq!(s, [61.0, 63.0, 62.0]);
 }
+
+// PACK-30, ABI-13, TAP-15: the Arpeggiator's meter `step`, which a note effect's kernel writes in the
+// lane pass, reaches a look as the steps picture's live layer reads it: where the picture draws the
+// step playing (the middle of its box, in beats from the turn's start), and -1 once no note is held.
+#[test]
+fn the_arpeggiators_step_reaches_a_look() {
+    let inputs = json!({"beats": "beats", "playing": "playing", "tempo": "tempo"});
+    let ir = song_of(&[("a".to_string(), "arp", inputs)], json!([]));
+    let pk = own_packages();
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let chord = json!({"clips": [{"start": 0, "length": 4, "notes": [
+        {"pitch": "C4", "start": 0, "length": 1}, {"pitch": "E4", "start": 0, "length": 1}, {"pitch": "G4", "start": 0, "length": 1}]}]});
+    let mut r =
+        Renderer::prepare(&flat, &data(chord, None), &pk, SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh)
+            .unwrap();
+    r.set_transport(Transport::new(0, true));
+    let taps = r.info().taps.clone().expect("a live plan has taps");
+    let node = flat.nodes.iter().position(|n| n.name == "song/a").expect("the arpeggiator's node");
+    taps.point_meter(0, Some(TapAt::Port(node, 1))).unwrap();
+    // A sixteenth is 6,000 frames at 120 bpm: block 70 ends in step 1, block 160 in step 3.
+    let mut read = |until: usize| {
+        while (r.clock() as usize) < until * BLOCK {
+            r.render_block(r.clock()).unwrap();
+        }
+        taps.meter(0).expect("a reading").now
+    };
+    assert_eq!(read(70), step_place(1), "step 1");
+    assert_eq!(read(160), step_place(3), "step 3: the turn's first again");
+    assert_eq!(read(400), -1.0, "the chord let go at beat 1");
+}
+
+/// Where the steps picture draws step `k` of a sixteenth's turn at gate 0.8 and no swing, in beats:
+/// its box starts at k × 0.25 and is 0.8 of it long, and the line is at its middle (PACK-30).
+fn step_place(k: usize) -> f32 {
+    ((k % 3) as f64 * 0.25 + 0.5 * 0.8 * 0.25) as f32
+}
