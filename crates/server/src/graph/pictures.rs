@@ -241,8 +241,9 @@ fn found(cp: &ControlPlane, module: &str, node: &str, view: &str) -> Result<Foun
     let playing = |id: &str| cp.leases.live.iter().find(|l| l.token == token && l.control.id == id).map(|l| l.playing);
     let ask = call.at(playing);
     let dragged = call.values.iter().any(|v| v.knob.as_deref().and_then(playing).is_some());
-    // A drag's frame and the same values at rest are drawn apart: only at rest is it checked.
-    let from = format!("{}\n{}\n{view}\n{}\n{dragged}", ask.key, ask.descriptor.id, ask.values);
+    // A drag's frame and the same values at rest are drawn apart: only at rest is it checked. A new
+    // song rate draws it again (CARD-87).
+    let from = format!("{}\n{}\n{view}\n{}\n{dragged}\n{}", ask.key, ask.descriptor.id, ask.values, ask.rate);
     let rev = accepted.clone();
     Ok(Found { module: module.into(), node: node.into(), view: view.into(), code, revision: shown.revision, call, ask, from, rev, dragged })
 }
@@ -266,7 +267,7 @@ fn fill_in(f: &Found, measures: &Measures, shapes: &mut [Value], packages: &mut 
             continue;
         }
         let layer = match s["kind"].as_str() {
-            Some("response") => Layer::Response,
+            Some("response") => Layer::Response { level: s["level"].as_f64().unwrap_or(measure::LEVEL) },
             Some("hit") => Layer::Hit { note: s["note"].as_u64().unwrap_or(60) as u8, seconds: s["seconds"].as_f64().unwrap_or(1.0) },
             _ => continue,
         };

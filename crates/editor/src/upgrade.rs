@@ -377,18 +377,25 @@ fn plural(n: usize) -> &'static str {
 // ---------------------------------------------------------------- the tables
 
 /// Where an import from a module std moved in std 0.7 goes now: the pack (`m2_script::MOVED`,
-/// the one table), or, for what std kept of `std/synth`, `std/dsp`. None: it stays.
+/// the one table), or, for what std kept of `std/synth`, `std/dsp`. None: it stays (a name std
+/// took out goes nowhere: the build says what to do instead).
 fn moved_import(module: &str, name: &str) -> Option<&'static str> {
     if module == "std/synth" && matches!(name, "mono" | "Voice") {
         return Some("std/dsp");
     }
     let sub = module.strip_prefix("std/")?;
-    m2_script::MOVED.iter().find(|(m, names, ..)| *m == sub && (names.is_empty() || names.contains(&name))).map(|(_, _, pack, _)| *pack)
+    m2_script::MOVED.iter().find(|(m, names, _)| *m == sub && (names.is_empty() || names.contains(&name))).and_then(|(.., went)| match went
+    {
+        m2_script::Went::To(pack, _) => Some(*pack),
+        m2_script::Went::Out(_) => None,
+    })
 }
 
 /// Whether `module` is one of std's that moved into the packs (`m2_script::MOVED`).
 fn moved_module(module: &str) -> bool {
-    module.strip_prefix("std/").is_some_and(|sub| m2_script::MOVED.iter().any(|(m, ..)| *m == sub))
+    module
+        .strip_prefix("std/")
+        .is_some_and(|sub| m2_script::MOVED.iter().any(|(m, _, went)| *m == sub && matches!(went, m2_script::Went::To(..))))
 }
 
 /// How a knob of a drum the Drum plays now reads there (wave 3, CARD-33). Each is exact for the

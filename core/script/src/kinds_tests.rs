@@ -13,9 +13,11 @@ use crate::component::{Group, View, ViewOf};
 
 /// A sound that uses every kind a descriptor declares: `every` in `sdk/check/kinds.ts`, which `tsc`
 /// checks as the code editor does. `tone` and `wave` are for handing a choice on.
-const EVERY: &str = r#"import { component, control, kernel, port, setting, view, type Audio } from "@m2/core";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+const EVERY: &str = r#"import { component, control, kernel, knob, port, setting, view, type Audio } from "@m2/core";
+import { curvePicture, envelope, envelopePicture, envelopeWords } from "std/pictures";
 const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+/** A lowpass's curve in dB at `f`, from its cutoff `c` and q, drawn from the sound's own maths. */
+const cut = (f: number, c: number, q: number) => -10 * Math.log10((1 - (f / c) ** 2) ** 2 + (f / c / q) ** 2);
 export const every = component(
   {
     id: "every", label: "Every kind", inputs: { notes: port.notes() },
@@ -35,7 +37,14 @@ export const every = component(
   (notes, { shape, sub, cutoff }) => kernel<Audio>("test:every", { shape, sub, cutoff }),
   {
     amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
-    filter: { draw: (v, p) => lowpass(p, v, { cutoff: "cutoff", q: "q" }), words: (v) => lowpassWords(v, { cutoff: "cutoff" }) },
+    filter: {
+      draw: (v, p) => {
+        const [c, q] = [v.cutoff ?? 800, v.q ?? 0.7];
+        const points = Array.from({ length: 61 }, (_, i) => 20 * 1000 ** (i / 60)).flatMap((f) => [f, Math.max(-24, cut(f, c, q))]);
+        return [p.line(points, { name: "curve" }), p.handle(c, 20 * Math.log10(q), { x: "cutoff", y: knob("q"), wheel: "q" })];
+      },
+      words: (v) => `Cuts the highs above ${v.cutoff} Hz`,
+    },
   },
 );
 export const tone = component(
@@ -299,7 +308,7 @@ fn views_are_checked_against_their_descriptor() {
         ),
         (
             "{ views: { lp: (view as any).filter(\"f\", \"q\") } }",
-            "view.filter is gone from @m2/core 2.4: a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-30)",
+            "view.filter is gone from @m2/core 2.4: a filter is a picture of std/pictures, curvePicture() with p.response() (CARD-91)",
         ),
         (
             "{ views: { map: view.keys(\"file\") } }",

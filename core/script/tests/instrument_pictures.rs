@@ -35,6 +35,7 @@ fn draw(runner: &Runner, cid: &str, view: &str, values: Value) -> Result<Value, 
         view: view.into(),
         values: values.to_string(),
         memo: format!("{cid}\u{0}{view}"),
+        rate: 48_000,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
