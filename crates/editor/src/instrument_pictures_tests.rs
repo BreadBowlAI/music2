@@ -115,9 +115,35 @@ fn wavetable(inputs: &str, table: usize) -> String {
     )
 }
 
+/// Harmonic `h` of `F0` in `x` (`WINDOW` samples of whole cycles) as a complex number, `(re, im)`.
+fn phasor(x: &[f64], h: f64) -> (f64, f64) {
+    let w = 2.0 * std::f64::consts::PI * h * F0 / RATE;
+    let (mut re, mut im) = (0.0, 0.0);
+    for (n, v) in x.iter().enumerate() {
+        re += v * (w * n as f64).cos();
+        im -= v * (w * n as f64).sin();
+    }
+    (2.0 * re / x.len() as f64, 2.0 * im / x.len() as f64)
+}
+
+/// The harmonics `(size, phase)` of a cycle, each turned back by h times the fundamental's phase, so
+/// two cycles of one shape compare whatever their start and their delay.
+fn aligned(c: &[(f64, f64)]) -> Vec<(f64, f64)> {
+    let first = c[0].1.atan2(c[0].0);
+    c.iter().enumerate().map(|(i, (re, im))| ((re * re + im * im).sqrt(), im.atan2(*re) - (i + 1) as f64 * first)).collect()
+}
+
+/// An angle wrapped to −π..π.
+fn wrapped(a: f64) -> f64 {
+    let t = std::f64::consts::TAU;
+    a - t * (a / t).round()
+}
+
 // CARD-132: each built-in table, drawn at a position between two of its frames, is what the
-// Wavetable plays there: every harmonic up to the 20th the drawing holds above −40 dB is the
-// played one's, against the loudest of them, within 0.5 dB.
+// Wavetable plays there, in shape and not only in size: every harmonic up to the 20th the drawing
+// holds above −40 dB is the played one's, against the loudest of them, within 0.5 dB, and its phase
+// against the fundamental's within 5° (review U2: a frame drawn upside down, or backwards in time,
+// has the right sizes and the wrong shape).
 #[test]
 fn the_drawn_tables_are_the_wavetables_sound() {
     for (t, table, position) in [(0, "basic", 0.5), (1, "pulse", 0.7), (2, "vowels", 0.35), (3, "harmonics", 0.6), (4, "digital", 0.4)] {
@@ -126,7 +152,7 @@ fn the_drawn_tables_are_the_wavetables_sound() {
         let frame: Vec<f64> = points(&pic, "line", Some("frame")).iter().map(|p| p.1).collect();
         let n = frame.len() - 1;
         // The drawing's harmonics: one cycle of n points.
-        let drew: Vec<f64> = (1..=20)
+        let drew: Vec<(f64, f64)> = (1..=20)
             .map(|h| {
                 let (mut re, mut im) = (0.0, 0.0);
                 for (i, y) in frame[..n].iter().enumerate() {
@@ -134,21 +160,35 @@ fn the_drawn_tables_are_the_wavetables_sound() {
                     re += y * th.cos();
                     im -= y * th.sin();
                 }
-                2.0 * (re * re + im * im).sqrt() / n as f64
+                (2.0 * re / n as f64, 2.0 * im / n as f64)
             })
             .collect();
-        // Its filter a highpass at 20 Hz: nothing it plays is touched.
+        // Its filter a highpass at 20 Hz, whose own turn of each harmonic (its digital curve: the
+        // analog one at tan(π f / rate) over tan(π 20 / rate)) is taken back.
         let out = render(&wavetable(&format!("a_position: {position}, filter: 2, cutoff: 20, q: 0.707"), t), 0.5);
-        let heard: Vec<f64> = (1..=20).map(|h| harmonic(&out, h as f64)).collect();
-        let (dtop, htop) = (drew.iter().cloned().fold(0.0, f64::max), heard.iter().cloned().fold(0.0, f64::max));
+        let heard: Vec<(f64, f64)> = (1..=20)
+            .map(|h| {
+                let (re, im) = phasor(&out, h as f64);
+                let w = (std::f64::consts::PI * h as f64 * F0 / RATE).tan() / (std::f64::consts::PI * 20.0 / RATE).tan();
+                // H = −w² / (1 − w² + i w / q).
+                let (dr, di) = (1.0 - w * w, w / 0.707);
+                let (hr, hi) = (-w * w * dr / (dr * dr + di * di), w * w * di / (dr * dr + di * di));
+                let m = hr * hr + hi * hi;
+                ((re * hr + im * hi) / m, (im * hr - re * hi) / m)
+            })
+            .collect();
+        let (drew, heard) = (aligned(&drew), aligned(&heard));
+        let (dtop, htop) = (drew.iter().map(|x| x.0).fold(0.0, f64::max), heard.iter().map(|x| x.0).fold(0.0, f64::max));
         let mut checked = 0;
         for h in 0..20 {
-            let d = db(drew[h] / dtop);
+            let d = db(drew[h].0 / dtop);
             if d < -40.0 {
                 continue;
             }
-            let m = db(heard[h] / htop);
+            let m = db(heard[h].0 / htop);
             assert!((m - d).abs() <= 0.5, "{table} at {position}: harmonic {} is drawn {d:.2} dB, played {m:.2} dB", h + 1);
+            let turn = wrapped(drew[h].1 - heard[h].1).to_degrees();
+            assert!(turn.abs() <= 5.0, "{table} at {position}: harmonic {} is drawn {turn:.1}° from where it is played", h + 1);
             checked += 1;
         }
         assert!(checked >= 5, "{table}: {checked} harmonics checked");
