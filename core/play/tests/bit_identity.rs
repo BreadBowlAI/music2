@@ -21,7 +21,8 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 7] = [
+const PURE: [&str; 8] = [
+    "examples/arp",
     "examples/first-song",
     "examples/resample",
     "examples/sounds",

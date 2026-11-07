@@ -1,0 +1,16 @@
+# The exact version of each pack this song uses, made by music2 (PACK-8). Don't edit it by hand.
+
+[[pack]]
+name = "@m2/drums"
+version = "2.2.0"
+hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
+
+[[pack]]
+name = "@m2/notes"
+version = "0.1.0"
+hash = "sha256:95c382733254f8e7bbf22d934c1c325501849e9025eb949727c8710d17cd9f0b"
+
+[[pack]]
+name = "@m2/synths"
+version = "2.2.0"
+hash = "sha256:e96f2437295933e8c3bdba97fe463719f1f9b86ee176abc7d34a017a70f2e2d8"

@@ -198,9 +198,9 @@ The nightly runs and why:
 
 ## Byte-identity of renders
 
-`baseline.sh` renders the pure fixtures, fourteen renders in all (full renders of `examples/first-song`,
-`examples/resample`, `examples/sounds`, `examples/sampler`, `templates/starter`, `templates/empty`,
-`core/session/tests/fixtures/sampler-regions`, and `--from 4 --seconds 6` of each) into a folder with a
+`baseline.sh` renders the pure fixtures, sixteen renders in all (full renders of `examples/arp`,
+`examples/first-song`, `examples/resample`, `examples/sounds`, `examples/sampler`, `templates/starter`,
+`templates/empty`, `core/session/tests/fixtures/sampler-regions`, and `--from 4 --seconds 6` of each) into a folder with a
 `SHA256SUMS`:
 
 ```sh
