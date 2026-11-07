@@ -308,15 +308,16 @@ pub const COMMANDS: &[Command] = &[
         name: "effects",
         also: &[],
         usage: "m2 effects <project>",
-        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after",
+        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after; a note effect's row \
+                says `note-effect`, and it goes before a call that plays notes",
         more: "",
     },
     Command {
         name: "add-effect",
         also: &[],
         usage: "m2 add-effect <project> <call> <effect>",
-        words: "wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export \
-                (`@m2/effects.delay`), verified",
+        words: "wrap a call's audio in an effect, or the notes a call plays in a note effect (it goes before the call), named \
+                by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified",
         more: "",
     },
     Command {
@@ -586,7 +587,7 @@ pub const COMMANDS: &[Command] = &[
         more: "With the app open it asks the app, whose list has the open song's own instruments and the plugins it \
                has listed; with the app closed it searches music2's sounds, the packs you installed, your presets and \
                your sample folders itself. Every word must \
-               match. `--kind` is `instrument`, `sound`, `effect`, `sample` or `plugin`; the same words typed in \
+               match. `--kind` is `instrument`, `sound`, `effect`, `note-effect`, `sample` or `plugin`; the same words typed in \
                the search filter too, and so do `loop`, `one-shot`, a tempo (`90 bpm`) and a key (`Am`, `F#`), \
                which only samples carry (a tempo within 2 bpm, a key or its relative). `--json` prints each item with all it knows: its `kind`, `id`, `label`, \
                `category`, `description`, `tags`, `package`, `component` (what `m2 add-effect` or a new track \

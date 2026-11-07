@@ -215,3 +215,46 @@ fn m2_edit_fixes_a_song_that_doesnt_build_with_the_app_closed() {
     assert!(std::fs::read_to_string(&kick).unwrap().contains("release: ms(120)"));
     assert!(m2_in(&home, &["check", dir], &[]).status.success(), "it builds");
 }
+
+// PKG-21 (review N3): `m2 effects` says which of its rows are note effects, which go before a call
+// that plays notes, not after a sound.
+#[test]
+fn m2_effects_says_a_note_effect_goes_before() {
+    let temp = Temp::new("effects-notes");
+    let (song, pack) = (temp.0.join("song"), temp.0.join("notes"));
+    std::fs::create_dir_all(pack.join("src")).unwrap();
+    std::fs::write(
+        pack.join("m2pkg.toml"),
+        "[package]\nname = \"@test/notes\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\ndescription = \"A note effect\"\n\
+         authors = [\"music2\"]\ntags = [\"test\"]\n\n[dependencies]\n\"@m2/core\" = \"2.5\"\nstd = \"0.10\"\n",
+    )
+    .unwrap();
+    std::fs::write(
+        pack.join("src/index.ts"),
+        "import { component, port, type Events } from \"@m2/core\";\n\
+         export const arp = component({ id: \"arp\", label: \"Arpeggiator\", inputs: { notes: port.notes() }, output: port.notes(), \
+         editor: { category: \"Arpeggiator\" } }, (notes: Events) => notes);\n",
+    )
+    .unwrap();
+    std::fs::create_dir_all(&song).unwrap();
+    std::fs::write(
+        song.join("music2.toml"),
+        format!(
+            "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\
+             \"@test/notes\" = {{ path = {:?} }}\n",
+            pack.to_string_lossy()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        song.join("song.ts"),
+        "import { song } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nexport default song(() => osc.saw(110));\n",
+    )
+    .unwrap();
+    let o = m2_in(&temp.0.join("home"), &["effects", song.to_str().unwrap()], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    let out = String::from_utf8_lossy(&o.stdout);
+    let row = out.lines().find(|l| l.contains("@test/notes:arp")).unwrap_or_else(|| panic!("{out}"));
+    assert!(row.starts_with("note-effect @test/notes:arp") && row.ends_with("(goes before)"), "{row}");
+    assert!(out.lines().filter(|l| !l.contains("@test/notes")).any(|l| l.starts_with("effect ") && !l.ends_with("(goes before)")), "{out}");
+}

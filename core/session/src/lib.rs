@@ -539,11 +539,14 @@ export default song(() => v.out);
         // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
         // instrument names kits (KIT-3), `"2.3"` once an input may be left out (PKG-18), what its
         // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12), or its descriptors
-        // draw a picture or name a face (CARD-60, CARD-40); a pack of recordings alone may ask for none.
+        // draw a picture or name a face (CARD-60, CARD-40), or `"2.5"` once it has a note effect (PKG-21)
+        // or its code reads the song's tempo (RENDER-7); a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         // The packs whose components read `time.key`: a time node of the key in a frame of one of
         // theirs (review U5), in every-component's graph.
         let mut keyed = std::collections::BTreeSet::new();
+        // And those whose components read `time.tempo`, found the same way.
+        let mut timed = std::collections::BTreeSet::new();
         let s = crate::gate_tests::every_component().open();
         for m in &s.accepted().compiled.ir.modules {
             fn walk(nodes: &[m2_ir::Node], f: &mut dyn FnMut(&m2_ir::Node)) {
@@ -555,10 +558,12 @@ export default song(() => v.out);
                 }
             }
             walk(&m.nodes, &mut |n| {
-                if matches!(n.op, m2_ir::Op::Time { of: m2_ir::TimeOf::Key }) {
-                    let packs =
-                        m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
-                    keyed.extend(packs);
+                let packs =
+                    || m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
+                match n.op {
+                    m2_ir::Op::Time { of: m2_ir::TimeOf::Key } => keyed.extend(packs()),
+                    m2_ir::Op::Time { of: m2_ir::TimeOf::Tempo } => timed.extend(packs()),
+                    _ => {}
                 }
             });
         }
@@ -579,7 +584,10 @@ export default song(() => v.out);
             // The song's key, `time.key` (2.4, VOX-12), is read in a body, which no descriptor shows:
             // the graph of every-component, which calls every component of every bundled pack, does.
             let keyed = keyed.contains(name);
+            // A note effect (2.5, PKG-21), which the descriptor shows, or the song's tempo read (2.5, RENDER-7).
+            let noted = timed.contains(name) || mine.clone().any(|(_, d)| d.is_note_effect());
             match (major.as_deref(), optional, kits, labelled) {
+                (Some(m), ..) if noted => format!("{m}.5"),
                 (Some(m), ..) if keyed || pictured => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
                 (Some(m), false, true, _) => format!("{m}.2"),

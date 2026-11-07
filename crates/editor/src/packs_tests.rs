@@ -488,6 +488,17 @@ fn a_component_with_no_category_is_named_unless_it_says_unlisted() {
     assert!(!crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-plain"), "no list offers it");
 }
 
+// PACK-12, PKG-21: a note effect is no forgotten kind: the check builds it between a notes lane and
+// a plain voice, and says nothing of it.
+#[test]
+fn a_note_effect_passes_the_pack_check() {
+    let f = Fixture::new();
+    let dir = f.0.join("notes");
+    crate::testing::notes_pack(&dir, false);
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    assert_eq!(check(&dir, &std_dir), Vec::<String>::new());
+}
+
 // PACK-19 (review S9, S13): music2's own is a pack version music2 comes with, by its files, never
 // by its name: a folder's `@m2/fake` is everyone else's. Every list ranks by that one rule, std's
 // and music2's own first: + Effect as the search; and the library marks music2's alone `own`.

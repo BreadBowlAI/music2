@@ -353,8 +353,11 @@ pub fn check(dir: &Path, std: &Path) -> Vec<String> {
                  if only code plays it",
                 d.id, d.at
             ));
-        } else if !d.is_instrument() && !d.is_effect() {
-            out.push(format!("{} ({}) is neither an instrument (notes in, sound out) nor an effect (sound in, sound out)", d.id, d.at));
+        } else if !d.is_instrument() && !d.is_effect() && !d.is_note_effect() {
+            out.push(format!(
+                "{} ({}) is neither an instrument (notes in, sound out), an effect (sound in, sound out) nor a note effect (notes in, notes out)",
+                d.id, d.at
+            ));
         }
     }
     out.extend(presets_problems(dir, &name, &ours));
@@ -469,8 +472,9 @@ fn presets_problems(dir: &Path, name: &PackName, ours: &[std::sync::Arc<m2_scrip
     out
 }
 
-/// Every instrument and effect of the pack builds in a song, and every package file its code
-/// names is there: a song in a scratch folder that plays each (PACK-12).
+/// Every instrument, effect and note effect of the pack builds in a song, and every package file its
+/// code names is there: a song in a scratch folder that plays each (PACK-12); a note effect between a
+/// lane and a plain voice of std's blocks (PKG-21).
 fn builds(
     dir: &Path,
     std: &Path,
@@ -492,6 +496,11 @@ fn builds(
             plays.push(format!("const t{i} = track(\"t{i}\", ({{ lane }}) => {}(lane.notes(\"notes\")));", e.name));
         } else if d.is_effect() {
             plays.push(format!("const t{i} = track(\"t{i}\", () => {}(osc.saw(hz(110))));", e.name));
+        } else if d.is_note_effect() {
+            plays.push(format!(
+                "const t{i} = track(\"t{i}\", ({{ lane }}) => poly({}(lane.notes(\"notes\")), (n) => osc.saw(n.pitch)));",
+                e.name
+            ));
         }
     }
     let channels: Vec<String> = (0..ours.len())
@@ -499,7 +508,7 @@ fn builds(
         .map(|i| format!("t{i}: t{i}.out"))
         .collect();
     let code = format!(
-        "import {{ hz, song, track }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ master, mixer }} from \"std/mix\";\n{}\n{}\nexport default song(() => master(mixer({{ {} }})));\n",
+        "import {{ hz, poly, song, track }} from \"@m2/core\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ master, mixer }} from \"std/mix\";\n{}\n{}\nexport default song(() => master(mixer({{ {} }})));\n",
         imports.into_iter().collect::<Vec<_>>().join("\n"),
         plays.join("\n"),
         channels.join(", ")

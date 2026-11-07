@@ -323,6 +323,8 @@ fn item_of(p: &CatalogPack, v: &CatalogVersion, f: &ItemFacts) -> Item {
         component: f.component.clone(),
         instrument: f.instrument,
         effect: f.effect,
+        // Not in a registry's facts yet (REG-4's kinds): a note effect of a pack not installed isn't listed.
+        note_effect: false,
         preview: f.preview.is_some(),
         no_preview: match f.preview {
             Some(_) => None,

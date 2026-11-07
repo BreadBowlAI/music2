@@ -1775,6 +1775,7 @@ fn descriptors_and_the_unit_table_are_emitted() {
             ("frac", "unit01", 1.0, true),
             ("bipolar", "bipolar", 1.0, true),
             ("scalar", "scalar", 1.0, true),
+            ("bpm", "bpm", 1.0, true),
         ]
     );
     for u in m2_ir::Unit::ALL {

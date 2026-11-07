@@ -137,12 +137,14 @@ export default function Browser({ graph, module }: { graph: GraphState; module: 
   // The Plugins groups: open when opened, or searched once the list is there (a search doesn't scan).
   const pluginsOpen = (k: string) => opened.has(k) || (!blank && plugins.state === "listed");
   /** The browser's groups and its one keyboard list, from `hits` (the search's), else the window's filter of the words typed. */
+  // The effects that go after a sound: a note effect goes before what plays notes (PKG-21).
+  const afterSounds = graph.effects.filter((e) => !e.notes);
   const lists = (hits: LibraryItem[] | null) => {
     const ranked = <T,>(kind: LibraryItem["kind"], find: (component: string) => T | undefined): T[] =>
       (hits ?? []).filter((h) => h.kind === kind).flatMap((h) => find(h.component) ?? []);
     const groups = hits
-      ? byCategory(ranked("effect", (c) => graph.effects.find((e) => e.component === c))).map((g) => ({ name: g.name, items: g.items.map((effect) => ({ effect, score: 0 })) }))
-      : search(graph.effects, query);
+      ? byCategory(ranked("effect", (c) => afterSounds.find((e) => e.component === c))).map((g) => ({ name: g.name, items: g.items.map((effect) => ({ effect, score: 0 })) }))
+      : search(afterSounds, query);
     const instruments = hits
       ? instrumentGroups(ranked("instrument", (c) => graph.instruments?.find((i) => i.component === c)), "")
       : instrumentGroups(graph.instruments ?? [], query);

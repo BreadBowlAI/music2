@@ -150,6 +150,7 @@ fn bucket(root: &Path, newer: bool) -> (PathBuf, PathBuf) {
         from: None,
         made: "2026-10-30T12:00:00Z",
         std: &std,
+        own: &m2_song::pack::test_packs(),
         work: &root.join("work"),
         to_delete: None,
         limit: m2_editor::registry::LONGEST,

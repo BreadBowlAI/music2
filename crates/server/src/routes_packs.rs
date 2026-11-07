@@ -25,7 +25,7 @@ async fn packs_get(State(_): S) -> ApiResult {
 }
 
 /// `{packs: [{name, versions, license, description, items: [{component, label, kind, category}]}]}`:
-/// each item is an instrument or an effect of the newest version.
+/// each item is an instrument, an effect or a note effect of the newest version.
 fn installed() -> Value {
     let Some(store) = m2_song::pack::Store::here() else { return json!({"packs": []}) };
     let std = crate::resources::std_dir();
@@ -39,7 +39,11 @@ fn installed() -> Value {
                 .values()
                 .filter(|d| d.id.starts_with(&prefix) && d.editor.category.is_some())
                 .map(|d| {
-                    let kind = if d.is_instrument() { "instrument" } else { "effect" };
+                    let kind = match () {
+                        _ if d.is_instrument() => "instrument",
+                        _ if d.is_note_effect() => "note-effect",
+                        _ => "effect",
+                    };
                     json!({"component": d.id, "label": d.label, "kind": kind, "category": d.editor.category})
                 })
                 .collect();

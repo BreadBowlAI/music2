@@ -121,6 +121,7 @@ A number in the code can carry a unit, written as a function. Plugging a value w
 | `frac(0.5)` | a fraction from 0 to 1 |
 | `bipolar(-0.3)` | a value from -1 to 1, like pan |
 | `scalar(2)` | a number with no unit |
+| `bpm(120)` | a tempo in beats per minute |
 
 A choice and a switch aren't numbers. A choice is written by one of its names (`shape: "square"`), and a switch as `true` or `false`. Neither fits a number's input, and a choice fits only a choice with the same names in the same order.
 
@@ -133,6 +134,7 @@ A choice and a switch aren't numbers. A choice is written by one of its names (`
 | `lane.notes(key)`, `lane.control(key, unit, fallback)`, `lane.mask(key)`, `lane.audio(key)` | the timeline lanes, each with an optional last argument `{ name, shared }`. For a choice the unit is `"choice"` and the fallback a name (`lane.control("shape", "choice", "saw")`); for a switch, `"switch"` and `true` or `false` |
 | `key(k, fn)` | runs `fn` in a frame named `k`, which files the saved settings of the plugins built inside it under `k` |
 | `time.beats`, `time.seconds`, `time.playing` | the song's position, and 1 while it plays (0 while stopped). A track gets `time` in its `fn`; a component's body imports it from `@m2/core` |
+| `time.tempo` | the song's tempo where it is, in beats per minute (`bpm`): for a sound that keeps time while the song is stopped. Only an input in `bpm` takes it |
 | `time.key` | the song's key, as a set of notes: for a kernel that follows the key, as a tuner does. It isn't a number, so only a kernel's `control<keyset>` input takes it: bit 0 is C, bit 1 C♯, … bit 11 B, and with no key all twelve are on (4095). Changing the key while the song plays reaches it at once, and rebuilds nothing |
 | `poly(notes, voice, { voices, mode, retrigger, steal, glide })` | plays a voice for each note at once (`voices`, 16); or one note at a time, each starting again (`mode: "mono"`) or sliding from the one held (`"legato"`) over `glide` seconds; `retrigger: false` carries a voice on into its next note; `steal` says which note stops when too many are held: `"oldest"`, `"quietest"` or `"none"`. Inside the voice, its note gives `pitch`, `gate`, `velocity`, `modWheel` and `keyCount` (how many notes its key has played on the lane, this one included: what `turns: "key"` counts) |
 | `feedback(kind)` | a loop with a short delay; give its input later with `.set()` |
