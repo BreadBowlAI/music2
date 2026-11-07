@@ -54,7 +54,7 @@ const EACH = RATE / 1000;
 const pole = (time: number) => Math.exp(-1 / (time * RATE));
 
 /** What the transient shaper hears of the hit, at each millisecond: see `heard`. */
-export type Heard = { level: number[]; start: number[]; tail: number[] };
+export type Heard = { level: number[]; start: number[]; tail: number[]; before: number[] };
 /** `heard`'s sums, once worked out; and how many times they have been (for the test that a build never does, CARD-113). */
 let shares: Heard | null = null;
 let worked = 0;
@@ -73,7 +73,7 @@ export const sumsWorked = () => worked;
 export function heard(): Heard {
   if (shares) return shares;
   worked += 1;
-  const out: Heard = { level: [], start: [], tail: [] };
+  const out: Heard = { level: [], start: [], tail: [], before: [] };
   // The hit, as std:adsr plays it.
   const rise = 1 / (HIT.attack * RATE);
   const fall = Math.exp(-6.9 / (HIT.decay * RATE));
@@ -88,32 +88,40 @@ export function heard(): Heard {
   // and the level it was given last.
   let glided = 0, glidedLast = 0, riser = 0, riserLast = 0, faller = 0, fallerLast = 0;
   const [glide, slow, hang] = [pole(0.002), pole(0.02), pole(0.3)];
-  const step = (value: number, last: number, level: number, coef: number) => {
-    if (value === level) return value;
-    const y = level + (value - level) * coef;
-    const landed = level === last && (y === value || Math.abs(y - level) <= 1e-6 * Math.abs(level));
-    return landed ? level : Math.abs(y) < 1e-15 ? 0 : y;
-  };
-  for (let n = 0; n <= HIT_SECONDS * RATE; n++) {
+  // Each follower's step, written out in the loop (a call costs more than the step): toward
+  // `level` by its coefficient, landing on it once it holds still and the step no longer moves it.
+  const last = HIT_SECONDS * RATE;
+  for (let n = 0; n <= last; n++) {
     // Once the hit falls with no start left and all of a tail, it stays so: the level only falls,
     // the riser falls with it, and the faller, 0.3 s slow, only falls further behind. The rest is
     // the hit's own fall.
     const i = out.start.length - 1;
     if (!attacking && n % EACH === 0 && i > 0 && out.start[i] === 0 && out.tail[i] >= 1) {
-      for (let m = n; m <= HIT_SECONDS * RATE; m += EACH) {
+      for (let m = n; m <= last; m += EACH) {
         out.level.push(x * fall ** (m - n + 1));
         out.start.push(0);
         out.tail.push(1);
       }
       break;
     }
+    // From 2 ms the hit only falls, so the window's loudest steps only at each millisecond's end:
+    // each millisecond is worked out at once, as the kernel's samples sum (`falling`).
+    if (n === 2 * EACH + 1) {
+      falling(n - 1);
+      break;
+    }
     if (attacking) {
       x += rise;
-      if (x >= 1) [x, attacking] = [1, false];
+      if (x >= 1) {
+        x = 1;
+        attacking = false;
+      }
     } else x *= fall;
     let loudest: number;
     if (x === 0 && now === 0 && finished === 0) {
-      [at, left, loudest] = [0, len, 0];
+      at = 0;
+      left = len;
+      loudest = 0;
     } else {
       if (x > now) now = x;
       loudest = now > finished ? now : finished;
@@ -122,22 +130,85 @@ export function heard(): Heard {
         at = (at + 1) % PIECES;
         finished = 0;
         for (let i = 0; i < PIECES; i++) if (pieces[i] > finished) finished = pieces[i];
-        [now, left] = [0, len];
+        now = 0;
+        left = len;
       }
     }
-    glided = step(glided, glidedLast, loudest, glide);
+    if (glided !== loudest) {
+      const y = loudest + (glided - loudest) * glide;
+      glided = loudest === glidedLast && (y === glided || Math.abs(y - loudest) <= 1e-6 * Math.abs(loudest)) ? loudest : Math.abs(y) < 1e-15 ? 0 : y;
+    }
     glidedLast = loudest;
     const level = glided;
     if (level <= riser) riser = riserLast = level;
-    else [riser, riserLast] = [step(riser, riserLast, level, slow), level];
+    else {
+      const y = level + (riser - level) * slow;
+      riser = level === riserLast && (y === riser || Math.abs(y - level) <= 1e-6 * Math.abs(level)) ? level : Math.abs(y) < 1e-15 ? 0 : y;
+      riserLast = level;
+    }
     if (level >= faller) faller = fallerLast = level;
-    else [faller, fallerLast] = [step(faller, fallerLast, level, hang), level];
+    else {
+      const y = level + (faller - level) * hang;
+      faller = level === fallerLast && (y === faller || Math.abs(y - level) <= 1e-6 * Math.abs(level)) ? level : Math.abs(y) < 1e-15 ? 0 : y;
+      fallerLast = level;
+    }
     if (n % EACH === 0) {
       out.level.push(x);
       out.start.push(Math.min(1, (db(level) - db(riser)) / 6));
       out.tail.push(Math.min(1, (db(faller) - db(level)) / 6));
     }
   }
+  /**
+   * The hit's sums after sample `n0` (a millisecond's start, already summed), a millisecond at a time,
+   * once the hit only falls: the window's loudest finished piece holds through each millisecond but
+   * its last sample; the
+   * glide approaches it by its pole each sample; the riser rises toward the level by its pole until
+   * the falling level meets it, then falls with it; the faller follows the level by its own pole;
+   * each worked out as the sum of its samples' steps.
+   */
+  function falling(n0: number) {
+    const g47 = glide ** (len - 1);
+    // A follower of pole `h` after `k` samples of a level gliding from `g0` toward `l`, from `f0`.
+    const after = (f0: number, h: number, g0: number, l: number, k: number) =>
+      h ** k * f0 + l * (1 - h ** k) + ((1 - h) * (g0 - l) * glide * (h ** k - glide ** k)) / (h - glide);
+    for (let n = n0 + EACH; n <= last; n += EACH) {
+      // The samples n − 47 to n − 1 chase the window's loudest as it was; the piece of the
+      // millisecond that began at n − 48 finishes at n − 1, its loudest its first sample.
+      const before = finished;
+      // The millisecond's first sample is its loudest: the hit only falls.
+      const first = x;
+      x *= fall ** EACH;
+      // The faller follows a falling level, and is set to a rising one.
+      const fell = after(faller, hang, glided, before, len - 1);
+      // The riser rises toward the level until the falling level meets it, then falls with it.
+      const rose = riser < glided ? after(riser, slow, glided, before, len - 1) : riser;
+      glided = before + (glided - before) * g47;
+      riser = Math.min(rose, glided);
+      faller = Math.max(fell, glided);
+      pieces[at] = first;
+      at = (at + 1) % PIECES;
+      finished = 0;
+      for (let i = 0; i < PIECES; i++) if (pieces[i] > finished) finished = pieces[i];
+      // Sample n: the new loudest, one step of each.
+      glided = finished + (glided - finished) * glide;
+      faller = glided >= faller ? glided : glided + (faller - glided) * hang;
+      riser = glided <= riser ? glided : glided + (riser - glided) * slow;
+      const start = Math.min(1, (db(glided) - db(riser)) / 6), tail = Math.min(1, (db(faller) - db(glided)) / 6);
+      out.level.push(x);
+      out.start.push(start);
+      out.tail.push(tail);
+      if (start === 0 && tail >= 1) {
+        for (let m = n + EACH; m <= last; m += EACH) {
+          out.level.push(x * fall ** (m - n));
+          out.start.push(0);
+          out.tail.push(1);
+        }
+        return;
+      }
+    }
+  }
+  // The hit as it goes in, drawn the same at any values: from its first millisecond (a log axis).
+  for (let i = 1; i < out.level.length; i++) out.before.push(i / 1000, Math.max(-120, db(out.level[i])));
   return (shares = out);
 }
 
@@ -161,16 +232,12 @@ export function hitPicture(): PictureDecl<"seconds", "db"> {
 export function hit<D>(p: Painter<D, "seconds", "db">, v: Values, names: { attack: In<D, "db">; sustain: In<D, "db"> }): Shape[] {
   const a = clamp(known(v, names.attack, "attack"), -24, 24);
   const s = clamp(known(v, names.sustain, "sustain"), -24, 24);
-  const before: number[] = [], after: number[] = [];
-  const { level, start, tail } = heard();
-  level.forEach((x, i) => {
-    // From its first millisecond: the axis is a log one.
-    if (i === 0) return;
-    const t = i / 1000;
-    const y = Math.max(-120, db(x));
-    before.push(t, y);
-    after.push(t, x > 0 ? y + clamp(a * start[i] + s * tail[i], -24, 24) : -120);
-  });
+  const { level, start, tail, before } = heard();
+  const after: number[] = [];
+  for (let i = 1; i < level.length; i++) {
+    const y = before[2 * i - 1];
+    after.push(before[2 * i - 2], level[i] > 0 ? y + Math.min(24, Math.max(-24, a * start[i] + s * tail[i])) : -120);
+  }
   const on = (t: number) => after[2 * (Math.round(t * 1000) - 1) + 1];
   return [
     p.fill(before, { base: -48, tone: "faint" }),
@@ -241,32 +308,26 @@ const SPLIT_POINTS = 241;
  * each band is turned by its gain. With every gain at 0 dB it is flat.
  */
 export function splitDb(f: number, lowMid: number, midHigh: number, gains: readonly [number, number, number]): number {
-  const warp = (hz: number) => Math.tan((Math.PI * clamp(hz, 10, 0.45 * SPLIT_RATE)) / SPLIT_RATE);
-  const w = warp(f);
-  // At a crossover at `hz`: the Butterworth pair's denominator, (1 − x²) + j√2·x, at x = w / its own.
-  const at = (hz: number) => {
-    const x = w / warp(hz);
-    return { x, re: 1 - x * x, im: Math.SQRT2 * x };
-  };
-  type C = { re: number; im: number };
-  const mul = (a: C, b: C): C => ({ re: a.re * b.re - a.im * b.im, im: a.re * b.im + a.im * b.re });
-  const div = (a: C, b: C): C => {
-    const n = b.re * b.re + b.im * b.im;
-    return { re: (a.re * b.re + a.im * b.im) / n, im: (a.im * b.re - a.re * b.im) / n };
-  };
-  const [lo, hi] = [at(Math.min(lowMid, midHigh)), at(Math.max(lowMid, midHigh))];
-  const one = { re: 1, im: 0 };
-  // Linkwitz-Riley: a low-pass 1 / B², a high-pass x⁴ / B², and the all-pass B̄ / B.
-  const lp = (c: typeof lo) => div(one, mul(c, c));
-  const hp = (c: typeof lo) => div({ re: c.x ** 4, im: 0 }, mul(c, c));
-  const ap = (c: typeof lo) => div({ re: c.re, im: -c.im }, c);
-  const g = gains.map((x) => 10 ** (x / 20));
-  const low = mul(ap(hi), lp(lo));
-  const mid = mul(lp(hi), hp(lo));
-  const high = mul(hp(hi), hp(lo));
-  const re = g[0] * low.re + g[1] * mid.re + g[2] * high.re, im = g[0] * low.im + g[1] * mid.im + g[2] * high.im;
-  return 10 * Math.log10(Math.max(1e-12, re * re + im * im));
+  return splitOf(lowMid, midHigh, gains)(f);
 }
+
+/** `splitDb` at any frequency, for one split: what doesn't hang on the frequency worked out once. */
+export function splitOf(lowMid: number, midHigh: number, gains: readonly [number, number, number]): (f: number) => number {
+  const warp = (hz: number) => Math.tan((Math.PI * clamp(hz, 10, 0.45 * SPLIT_RATE)) / SPLIT_RATE);
+  // x⁴ at each crossover, x the frequency over the crossover's, each warped as the kernel's filters are.
+  const wlo = warp(Math.min(lowMid, midHigh)), whi = warp(Math.max(lowMid, midHigh));
+  // A crossover's Butterworth pair has the denominator B = (1 − x²) + j√2·x, so |B|² = 1 + x⁴; its
+  // Linkwitz-Riley low-pass is 1 / B², its high-pass x⁴ / B², its all-pass B̄ / B = |B|² / B². So
+  // the low band, AP(hi)·LP(lo), the mid, LP(hi)·HP(lo), and the high, HP(hi)·HP(lo), share the one
+  // phase 1 / (B_hi² B_lo²), and their sum, each turned by its gain, is a real number over it.
+  const [g0, g1, g2] = gains.map((x) => 10 ** (x / 20));
+  return (f) => {
+    const w = warp(f), lo = (w / wlo) ** 4, hi = (w / whi) ** 4;
+    const sum = g0 * (1 + hi) + g1 * lo + g2 * hi * lo;
+    return 20 * Math.log10(Math.max(1e-6, Math.abs(sum) / ((1 + hi) * (1 + lo))));
+  };
+}
+
 
 /**
  * A multiband compressor's split (CARD-115), on `curvePicture()`'s axes: how it turns each
@@ -284,10 +345,11 @@ export function split<D>(
   // Crossed, the lower one splits low from mid (the kernel's own rule).
   const [lm, mh] = [Math.min(a, b), Math.max(a, b)];
   const g = names.gains.map((n, i) => known(v, n, `${BANDS[i].toLowerCase()} gain`)) as [number, number, number];
+  const curve = splitOf(lm, mh, g);
   const points: number[] = [];
   for (let i = 0; i < SPLIT_POINTS; i++) {
     const f = 20 * 1000 ** (i / (SPLIT_POINTS - 1));
-    points.push(f, clamp(splitDb(f, lm, mh, g), -24, 24));
+    points.push(f, clamp(curve(f), -24, 24));
   }
   const edges = [20, lm, mh, 20000];
   const centre = (i: number) => Math.sqrt(edges[i] * edges[i + 1]);
