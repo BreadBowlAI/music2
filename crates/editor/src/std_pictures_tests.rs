@@ -118,7 +118,8 @@ fn the_compressors_transfer_curve_is_its_sound() {
 #[test]
 fn the_envelope_is_adsrs_sound() {
     let (a, d, s, r): (f64, f64, f64, f64) = (0.05, 0.3, 0.4, 0.45);
-    let hold: f64 = (0.25 * (a + d + r)).max(0.05);
+    // The hold is a quarter of the attack and decay, 50 ms at least (CARD-96).
+    let hold: f64 = (0.25 * (a + d)).max(0.05);
     let total = a + d + hold + r;
     let v = json!({"attack": a, "decay": d, "sustain": s, "release": r});
     let env = line(&drawn(vec![("std".into(), std_dir())], "std:adsr", "shape", v), "envelope");
@@ -131,14 +132,16 @@ fn the_envelope_is_adsrs_sound() {
         ),
         total + 0.05,
     );
+    assert!(env.last().is_some_and(|p| (p.0 - total).abs() < 1e-9), "it ends where the release does: {:?}", env.last());
     let mut checked = 0;
+    // Its x is in seconds (CARD-96).
     for &(x, y) in &env {
-        let i = (x * total * RATE).round() as usize;
+        let i = (x * RATE).round() as usize;
         if y < 0.01 || i < SETTLED || i >= out.len() {
             continue;
         }
         let heard = out[i];
-        assert!((db(heard) - db(y)).abs() <= 0.5, "at {:.4} s the envelope says {y:.4}, adsr plays {heard:.4}", x * total);
+        assert!((db(heard) - db(y)).abs() <= 0.5, "at {x:.4} s the envelope says {y:.4}, adsr plays {heard:.4}");
         checked += 1;
     }
     assert!(checked > 100, "{checked} points checked");

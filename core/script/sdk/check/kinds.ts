@@ -6,7 +6,7 @@
 
 import { component, control, kernel, port, setting, time, view, type Audio, type Choice, type Control, type Ctx, type Events, type Keyset, type Switch } from "@m2/core";
 import { lowpass } from "std/filter";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawLowpass, lowpassWords } from "std/pictures";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawLowpass, lowpassWords, transfer, transferPicture } from "std/pictures";
 
 const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
@@ -133,6 +133,99 @@ export const views = [
         // @ts-expect-error an envelope's dot naming a control this descriptor doesn't have
         draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "rel" }),
         words: () => "an envelope",
+      },
+    },
+  ),
+  // std's pictures name controls in the unit they draw (CARD-62, review S1): an envelope's times in
+  // seconds and its sustain a level from 0 to 1, a drawn filter's q a plain number (or a resonance
+  // from 0 to 1), a compressor's ratio a plain number. Each mistake is marked where it is named.
+  component(
+    {
+      id: "envelope-in-hz",
+      controls: { a: control.hz(100), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error an attack that is a frequency
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
+  ),
+  component(
+    {
+      id: "envelope-in-beats",
+      controls: { a: control.secs(0.1), d: control.beats(1), s: control.frac(1), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error a decay in beats: the picture draws seconds
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
+  ),
+  component(
+    {
+      id: "sustain-a-choice",
+      controls: { a: control.secs(0.1), d: control.secs(0.1), s: control.choice(["low", "high"], "low"), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error a sustain that is a choice
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
+  ),
+  component(
+    {
+      id: "q-in-db",
+      controls: { cutoff: control.hz(800), boost: control.db(0) },
+      editor: { views: { lp: curvePicture({ live: false }) } },
+    },
+    () => x,
+    {
+      lp: {
+        // @ts-expect-error a q that is a level in dB
+        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "boost" }),
+        words: () => "a filter",
+      },
+    },
+  ),
+  component(
+    {
+      id: "resonance-in-db",
+      controls: { cutoff: control.hz(800), resonance: control.db(0) },
+      editor: { views: { lp: curvePicture({ live: false }) } },
+    },
+    () => x,
+    {
+      lp: {
+        // @ts-expect-error a resonance that is a level in dB, not one from 0 to 1
+        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }),
+        words: () => "a filter",
+      },
+    },
+  ),
+  component(
+    {
+      id: "ratio-in-db",
+      controls: { threshold: control.db(-18), ratio: control.db(3), makeup: control.db(0) },
+      editor: { views: { tr: transferPicture() } },
+    },
+    () => x,
+    {
+      tr: {
+        // @ts-expect-error a ratio that is a level in dB
+        draw: (v, p) => transfer(p, v, { threshold: "threshold", ratio: "ratio", makeup: "makeup" }),
+        words: () => "a compressor",
       },
     },
   ),

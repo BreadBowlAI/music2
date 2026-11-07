@@ -1303,7 +1303,8 @@ export class Live {
 /**
  * A picture's live layers (CARD-73), at the call's input (`"in"`) or output (`"out"`):
  * `live.spectrum("in", { tone: "faint" })`, `live.level("in", { on: "curve" })` (a dot riding the
- * line named `curve`), `live.meter("reduction")`, `live.history(live.meter("reduction"))`,
+ * line named `curve`), `live.meter("reduction")`, `live.history(live.meter("reduction"))` (a
+ * `tone` of its own, as a spectrum's),
  * `live.playhead("beat")`, `live.scope("out")`.
  */
 export const live = {
@@ -1316,8 +1317,8 @@ export const live = {
   meter(name: string): Live {
     return new Live({ kind: "meter", name });
   },
-  history(of: Live): Live {
-    return new Live({ kind: "history", of });
+  history(of: Live, o?: { tone?: Tone }): Live {
+    return new Live({ kind: "history", of, ...(o?.tone !== undefined ? { tone: o.tone } : {}) });
   },
   playhead(from: string): Live {
     return new Live({ kind: "playhead", from });

@@ -9,11 +9,11 @@
 //
 // Their cards' faces (CARD-92 to CARD-95): eq3's curve, measured from its own sound, with a dot for
 // each band; the compressor's transfer curve, drawn from its own sum since a compressor's sound
-// changes with its level (D13), with the live level riding it, and how far it turns down as it
-// plays, from its own meter (D8); the limiter's and the duck's how far, the same way.
+// changes with its level (D13), with the live level riding it and how far it turns down, from its
+// own meter (D8), and its last seconds in and out beside it; the limiter's and the duck's how far.
 
 import { component, control, kernel, port, signature, type Audio, type Params, type Value } from "@m2/core";
-import { curvePicture, dbWords, hzWords, reduction, reductionPicture, transfer, transferPicture, transferWords } from "./pictures";
+import { curvePicture, dbWords, historyPicture, hzWords, reduction, reductionPicture, transfer, transferPicture, transferWords } from "./pictures";
 
 /**
  * Turn `x` down by `depth` dB while `side` is high: `duck(bass.out, kick.env)`, or
@@ -42,7 +42,7 @@ export const duck = component(
   (x: Audio, side: Value | undefined, { depth }: Params) => kernel("std:duck", { in: x, side: side ?? 0, depth }),
   {
     down: {
-      draw: (v, p) => reduction(p, { most: v.depth === null ? null : -v.depth }),
+      draw: (v, p) => reduction(p, { most: v.depth === null ? null : -v.depth, top: 24 }),
       words: (v) => `Turns down by up to ${v.depth === null ? "a depth set elsewhere" : dbWords(-v.depth)} while what it listens to plays`,
     },
   },
@@ -99,8 +99,8 @@ export const compress = component(
       category: "Dynamics",
       description: "Evens out loud and quiet moments so the sound sits steady",
       insert: { threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 },
-      views: { transfer: transferPicture(), down: reductionPicture() },
-      face: ["transfer", "down", "threshold", "ratio", "attack", "release", "makeup"],
+      views: { transfer: transferPicture(), history: historyPicture() },
+      face: ["transfer", "history", "threshold", "ratio", "attack", "release", "makeup"],
     },
   },
   // With no key its detector hears `x` itself, as it did before it took one.
@@ -111,7 +111,10 @@ export const compress = component(
       draw: (v, p) => transfer(p, v, { threshold: "threshold", ratio: "ratio", makeup: "makeup" }),
       words: (v) => transferWords(v, { threshold: "threshold", ratio: "ratio", makeup: "makeup" }),
     },
-    down: { draw: (v, p) => reduction(p), words: () => "How far it turned the sound down in the last 3 seconds" },
+    history: {
+      draw: (v, p) => [p.mark("y", 0, "0 dB: the levels below, how far it turned down above")],
+      words: () => "The last 3 seconds: the level going in (faint) and coming out, below 0 dB, and how far it turned the sound down, above it",
+    },
   },
 );
 

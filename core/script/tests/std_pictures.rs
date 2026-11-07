@@ -98,30 +98,44 @@ fn eq3_draws_its_measured_curve_and_a_dot_for_each_band() {
 }
 
 // CARD-93: compress draws its transfer curve from its own sum (the line `transfer` its live level
-// rides), a faint line where in is out, a dot at the threshold (across, the ratio by the wheel) and
-// one at the curve's end (the makeup up and down, the ratio by the wheel); and how far it turns
-// down, from its meter, beside it.
+// rides), a faint line where in is out, a dot at the threshold (across) and one on the line above the
+// knee (the ratio, across as its knob's drag does, and by the wheel; review S4); and its last
+// seconds beside it, in, out and how far it turned down, on one axis.
 #[test]
-fn compress_draws_its_transfer_curve_and_how_far_it_turns_down() {
+fn compress_draws_its_transfer_curve_and_its_last_seconds() {
     let runner = Runner::new();
     let v = json!({"threshold": -18, "ratio": 4, "attack": 0.01, "release": 0.15, "makeup": 3});
     let d = draw(&runner, "compress", "transfer", v.clone()).unwrap();
     assert_eq!(kinds(&d), ["line", "line", "handle", "handle"]);
     assert_eq!(d["shapes"][1]["name"], "transfer");
-    assert_eq!(dots(&d), ["wheel=ratio x=threshold", "wheel=ratio y=makeup"]);
+    assert_eq!(dots(&d), ["x=threshold", "wheel=ratio x=ratio(knob)"]);
     let points: Vec<f64> = d["shapes"][1]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
     // Below the knee it is a straight line up by the makeup; above it 1 dB out for each 4 in.
     let at = |level: f64| points.chunks(2).find(|p| (p[0] - level).abs() < 1e-9).unwrap()[1];
     assert!((at(-40.0) - (-37.0)).abs() < 1e-9);
     assert!((at(0.0) - (-18.0 + 18.0 / 4.0 + 3.0)).abs() < 1e-9);
-    assert_eq!(d["words"], "Above −18 dB the level rises only 1 dB for each 4, then up 3 dB");
-    let down = draw(&runner, "compress", "down", v).unwrap();
-    assert_eq!(kinds(&down), Vec::<&str>::new());
-    assert_eq!(down["words"], "How far it turned the sound down in the last 3 seconds");
+    // The ratio's dot is on the line, above the knee: halfway from the threshold to 0 dB in.
+    let r = &d["shapes"][3];
+    assert_eq!(r["x"], -9.0);
+    assert!((r["y"].as_f64().unwrap() - (-18.0 + 9.0 / 4.0 + 3.0)).abs() < 1e-9, "{r}");
+    assert_eq!(
+        d["words"],
+        "Above −18 dB the level rises only 1 dB for each 4, then up 3 dB. Drag the corner for the threshold, the line for the ratio"
+    );
+    let history = draw(&runner, "compress", "history", v).unwrap();
+    assert_eq!(
+        history["shapes"],
+        json!([{"kind": "mark", "axis": "y", "at": 0.0, "words": "0 dB: the levels below, how far it turned down above"}])
+    );
+    assert!(
+        history["words"].as_str().unwrap().starts_with("The last 3 seconds: the level going in (faint) and coming out"),
+        "{}",
+        history["words"]
+    );
 }
 
 // CARD-94, CARD-95: limit and duck draw how far they turn down, from their meters; the duck's most
-// as a guide line.
+// as a guide line, kept on the picture past its top, and saying so (review S9).
 #[test]
 fn limit_and_duck_draw_how_far_they_turn_down() {
     let runner = Runner::new();
@@ -131,32 +145,40 @@ fn limit_and_duck_draw_how_far_they_turn_down() {
     let d = draw(&runner, "duck", "down", json!({"depth": -8})).unwrap();
     assert_eq!(d["shapes"], json!([{"kind": "mark", "axis": "y", "at": 8.0, "words": "The most it turns down: 8 dB"}]));
     assert_eq!(d["words"], "Turns down by up to 8 dB while what it listens to plays");
+    let d = draw(&runner, "duck", "down", json!({"depth": -40})).unwrap();
+    assert_eq!(
+        d["shapes"],
+        json!([{"kind": "mark", "axis": "y", "at": 24.0, "words": "The most it turns down: 40 dB, past this picture's top (24 dB)"}])
+    );
 }
 
-// CARD-96: adsr draws its envelope from its own sums across the whole picture, its three corners
-// moving its four values; a value a cable sets greys it, saying which.
+// CARD-96: adsr draws its envelope from its own sums, in seconds, its three corners moving its four
+// values across from where they are (each a control in seconds, the sustain up and down); a value a
+// cable sets greys it, saying which.
 #[test]
 fn adsr_draws_its_envelope_and_three_corners() {
     let runner = Runner::new();
     let v = json!({"attack": 0.01, "decay": 0.2, "sustain": 0.5, "release": 0.3});
     let d = draw(&runner, "adsr", "shape", v).unwrap();
     assert_eq!(kinds(&d), ["fill", "line", "handle", "handle", "handle"]);
-    assert_eq!(dots(&d), ["x=attack(knob)", "x=decay(knob) y=sustain", "x=release(knob)"]);
+    assert_eq!(dots(&d), ["x=attack", "x=decay y=sustain", "x=release"]);
     let line: Vec<f64> = d["shapes"][1]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
     assert_eq!((line[0], line[1]), (0.0, 0.0));
-    assert_eq!((line[line.len() - 2], line[line.len() - 1]), (1.0, 0.0), "it ends at the picture's end");
-    // The hold is a quarter of the rest: (0.01 + 0.2 + 0.3) / 4.
-    let total = 0.01 + 0.2 + 0.1275 + 0.3;
-    assert!((d["shapes"][2]["x"].as_f64().unwrap() - 0.01 / total).abs() < 1e-9);
+    // The hold is a quarter of the attack and decay, 50 ms at least: (0.01 + 0.2) / 4 = 0.0525 s.
+    let end = 0.01 + 0.2 + 0.0525 + 0.3;
+    assert!((line[line.len() - 2] - end).abs() < 1e-9 && line[line.len() - 1] == 0.0, "it ends at the release's end, in seconds");
+    let xs: Vec<f64> = d["shapes"].as_array().unwrap()[2..].iter().map(|h| h["x"].as_f64().unwrap()).collect();
+    assert!((xs[0] - 0.01).abs() < 1e-12 && (xs[1] - 0.21).abs() < 1e-12 && (xs[2] - end).abs() < 1e-9, "{xs:?}");
     assert_eq!(d["words"], "How loud a note is over time: attack 10 ms, decay 200 ms, sustain 0.5, release 300 ms");
     let why = draw(&runner, "adsr", "shape", json!({"attack": null, "decay": 0.2, "sustain": 0.5, "release": 0.3})).unwrap_err();
     assert!(why.contains("its attack is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
 }
 
-// CARD-98: the LFO draws its shape over one bar of 4 beats, from its own sum, with a dot at the end
-// of its first cycle that moves its period.
+// CARD-98: the LFO draws its shape over whole cycles, the fewest that reach a bar of 4/4, from its
+// own sum, with a dot at the end of its first cycle that moves its period; so the song's beat, gone
+// round the picture, is where it is, for any period (review S3).
 #[test]
-fn the_lfo_draws_its_shape_over_one_bar() {
+fn the_lfo_draws_whole_cycles_of_its_shape() {
     let runner = Runner::new();
     let d = draw(&runner, "lfo", "wave", json!({"period": 2, "phase": 0, "shape": "saw"})).unwrap();
     assert_eq!(kinds(&d), ["line", "handle"]);
@@ -166,6 +188,20 @@ fn the_lfo_draws_its_shape_over_one_bar() {
     let at = line.chunks(2).find(|p| p[0] > 1.0).unwrap();
     assert!((at[1] - at[0] / 2.0).abs() < 1e-9, "a saw over 2 beats: {at:?}");
     assert_eq!(d["words"], "A saw wave from 0 to 1, once every 2 beats");
+    for (period, span) in [(0.75, 4.5), (1.0, 4.0), (3.0, 6.0), (6.0, 6.0), (8.0, 8.0), (16.0, 16.0), (0.0625, 4.0)] {
+        let d = draw(&runner, "lfo", "wave", json!({"period": period, "phase": 0.25, "shape": "sine"})).unwrap();
+        let line: Vec<f64> = d["shapes"][0]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        let last = line[line.len() - 2];
+        assert!((last - span).abs() < 1e-9, "period {period}: drawn over {last} beats, not {span}");
+        // Whole cycles: at the picture's end it is where it starts, as the beat going round is.
+        assert!(
+            (line[line.len() - 1] - line[1]).abs() < 1e-6,
+            "period {period}: {} at its end, {} at its start",
+            line[line.len() - 1],
+            line[1]
+        );
+        assert_eq!(d["shapes"][1]["x"].as_f64(), Some(period), "the dot at the end of its first cycle");
+    }
 }
 
 // CARD-30, CARD-97: a drawn lowpass reads a q or a resonance from 0 to 1: `@m2/synths`' lead draws
@@ -208,10 +244,7 @@ fn a_drawn_lowpass_reads_a_resonance() {
     let h = &d["shapes"][2];
     let q = 0.5 * 60f64.powf(0.5);
     assert!((h["y"].as_f64().unwrap() - 20.0 * q.log10()).abs() < 1e-9, "{h}");
-    assert_eq!(
-        d["words"],
-        "Cuts the highs above 1.2 kHz, resonance 0.5: a drawing of a 12 dB per octave filter, not measured from the sound"
-    );
+    assert_eq!(d["words"], "Cuts the highs above 1.2 kHz, resonance 0.5: a drawing, not measured from the sound");
 }
 
 // CARD-75, CARD-90: every picture std and music2's own packs draw does draw, at its defaults: each
@@ -265,4 +298,68 @@ fn every_bundled_picture_draws_at_its_defaults() {
     }
     assert!(wrong.is_empty(), "{}", wrong.join("\n"));
     assert!(drew >= 30, "{drew} pictures drawn");
+}
+
+/// A test pack's sound whose envelope picture names `controls` past the types (`as any`).
+fn wrong_envelope(controls: &str) -> String {
+    format!(
+        r#"import {{ component, control, kernel, port, type Audio }} from "@m2/core";
+import {{ envelope, envelopePicture, envelopeWords }} from "std/pictures";
+const N = {{ attack: "a", decay: "d", sustain: "s", release: "r" }} as any;
+export const wrong = component(
+  {{ id: "wrong", label: "Wrong", controls: {{ {controls} }}, output: port.audio(), editor: {{ views: {{ env: envelopePicture() }} }} }},
+  () => kernel<Audio>("test:wrong", {{}}),
+  {{ env: {{ draw: (v: any, p: any) => envelope(p, v, N), words: (v: any) => envelopeWords(v, N) }} }} as any,
+);
+"#
+    )
+}
+
+// CARD-62, CARD-65, CARD-96 (review S1): an envelope whose values aren't in the units it draws,
+// named past the types, is refused as it draws, in words naming the value: an attack in Hz or a
+// decay in beats isn't a time in seconds, and a sustain that is a choice isn't a level.
+#[test]
+fn an_envelope_over_values_in_other_units_is_refused_in_words() {
+    let runner = Runner::new();
+    for (controls, values, says) in [
+        (
+            "a: control.hz(100), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1)",
+            json!({"a": 100, "d": 0.1, "s": 1, "r": 0.1}),
+            "moves a across, a control in hz, but its x axis is in seconds",
+        ),
+        (
+            "a: control.secs(0.1), d: control.beats(1), s: control.frac(1), r: control.secs(0.1)",
+            json!({"a": 0.1, "d": 1, "s": 1, "r": 0.1}),
+            "moves d across, a control in beats, but its x axis is in seconds",
+        ),
+        (
+            "a: control.secs(0.1), d: control.secs(0.1), s: control.choice([\"lo\", \"hi\"], \"lo\"), r: control.secs(0.1)",
+            json!({"a": 0.1, "d": 0.1, "s": 0.5, "r": 0.1}),
+            "moves s up and down",
+        ),
+    ] {
+        let dir = std::env::temp_dir().join(format!("m2-std-pictures-wrong-{}-{}", std::process::id(), says.len()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(dir.join("src/index.ts"), wrong_envelope(controls)).unwrap();
+        let packages = vec![("@test/wrong".to_string(), dir.clone()), ("std".to_string(), std_dir())];
+        let catalog = m2_script::describe(&packages);
+        let descriptor = catalog.components.get("@test/wrong:wrong").cloned().unwrap_or_else(|| panic!("{:?}", catalog.problems));
+        let ask = Ask {
+            key: format!("wrong{}", says.len()),
+            packages,
+            song: None,
+            module: descriptor.module.clone(),
+            descriptor,
+            view: "env".into(),
+            values: values.to_string(),
+            memo: "wrong\u{0}env".into(),
+        };
+        let why = match runner.draw(ask) {
+            Drawn::Cant(why) => why,
+            other => panic!("{controls}: it drew: {other:?}"),
+        };
+        assert!(why.contains(says), "{controls}: {why}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
