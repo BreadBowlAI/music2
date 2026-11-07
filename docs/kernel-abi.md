@@ -167,7 +167,7 @@ A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track 
 | 3 | a parameter (reserved: not sent yet) | value (f32), 0, 0 |
 | 4 | a MIDI message | its 3 bytes in the low 3 bytes of the first (status at 12, data at 13 and 14, 0 at 15), 0, 0 |
 
-`id` is the note's: an On and its Off share it, and no two notes sounding at once have the same. Its top bit (`1 << 31`, the live bit) says the note is a key played live ([RENDER-14](architecture.md#events)); the kit's `live(id)` reads it. A MIDI message's `id` is 0.
+`id` is the note's: an On and its Off share it, and no two notes sounding at once have the same. Its top bit (`1 << 31`, the live bit) says the note is a key played live ([RENDER-14](architecture.md#events)), and only while the song plays live: offline no note has it. The kit's `live(id)` reads it. A MIDI message's `id` is 0.
 
 The Rust kit reads all this for you (ABI-9): name the inputs in `Kernel::NOTES`, and `io.events(i)` gives this call's events, each as an `Event`, its frame counted from the call's first frame, so `frame` indexes the call's other inputs. A kind the kit doesn't know is skipped.
 
@@ -183,7 +183,7 @@ A kernel's output of kind `events<note>` in its manifest: `outputs = ["out: even
 | `fan` | in its `[[kernel]]`: how many notes it may give for each note it takes, 1 to 8 (1 when left out): a chord of four says 4, a note and seven echoes 8. Only a kernel with a notes output may say it |
 | Table | one entry: the address of the header, as an input's |
 | Header (16 bytes) | as an input's: `count` u32 at 0, `cap` u32 at 4, `events` address at 8, 4 bytes kept at 12. The host writes `cap` and `events` at birth, and sets `count` to 0 before each call |
-| What the kernel does | writes up to `cap` events at `events`, 24 bytes each as an input's, each with its frame in the block, and sets `count`. Any order: the host sorts them. A note it makes from a note keeps that note's live bit on its own id (`id & LIVE`), so a key played live stays one |
+| What the kernel does | writes up to `cap` events at `events`, 24 bytes each as an input's, each with its frame in the block, and sets `count`. Any order: the host sorts them. It MUST set the live bit only on a note it makes from a live one, and keeps it on each note it makes from one (`(made & !LIVE) \| (id & LIVE)`), so a key played live stays one. Offline the host gives no note the bit |
 | What the host reads | `count` events, never more than its own room, from the place it put them: never the header's `cap` or `events`, which a kernel could overwrite. A `count` past the room is a fault, as a note left out is |
 | Room (`cap`) | its source's room, live notes counted in, times `fan`; never more than 8 times a lane's smallest room, or its source's when that is more |
 
