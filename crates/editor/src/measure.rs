@@ -284,9 +284,9 @@ pub fn copy(
     let mut outside: Vec<(String, Kind, bool)> = vec![];
     let mut fallbacks: BTreeMap<String, (f64, Kind)> = BTreeMap::new();
     let mut refused: Option<String> = None;
-    // Whether a value of it moves as the song plays: a lane drives it, or its track works it out from
-    // the song's beat, its tempo (which changes along the song) or from a sound (review M2). A
-    // response has no one curve then.
+    // Whether a value of it moves as the song plays by a cable: its track works it out from the song's
+    // beat, its tempo (which changes along the song) or from a sound (review M2). A response has no
+    // one curve then. A lane is its fallback, for a response as for a hit (measure2's review S2).
     let mut moves = false;
     while let Some((n, own)) = todo.pop() {
         if matches!(n.op, Op::Plugin { .. }) {
@@ -320,7 +320,6 @@ pub fn copy(
                     keep.insert(id);
                 }
                 (Op::Lane { .. }, Some((k @ Kind::Control(_), default))) => {
-                    moves = true;
                     fallbacks.insert(id.to_string(), (default.unwrap_or(0.0), k));
                     keep.insert(id);
                 }
@@ -343,9 +342,7 @@ pub fn copy(
         return Err(why);
     }
     if moves && matches!(layer, Layer::Response { .. }) {
-        return Err(
-            "one of its values moves as the song plays (a lane, a cable or the song's beat drives it), so it has no one curve".into()
-        );
+        return Err("one of its values moves as the song plays (a cable or the song's beat drives it), so it has no one curve".into());
     }
 
     // The sound and the notes it takes in: what the call reads that its sidechains alone don't.

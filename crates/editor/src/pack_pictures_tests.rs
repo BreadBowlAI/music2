@@ -184,6 +184,43 @@ fn pumps_dip_is_its_sound() {
     }
 }
 
+// CARD-81, CARD-115 (review S2): a value a lane drives is measured at the lane's fallback, as a
+// hit's is, so an automated multiband keeps its split: a threshold, an attack and a gain on lanes
+// measure the split of those values written, bit for bit, the lows turned up by the gain's fallback.
+#[test]
+fn an_automated_multiband_measures_its_split_at_its_lanes_fallbacks() {
+    use crate::measure::{Layer, Pass, Span, copy};
+    let f = Fixture::new();
+    f.write("music2.toml", manifest(48_000.0));
+    f.write(
+        "song.ts",
+        "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { sum } from 'std/math';\nimport { multiband } from '@m2/mixing';\n\
+         const lanes = track('lanes', ({ lane }) => multiband(osc.saw(110), { lowThreshold: lane.control('t', 'db', -18), \
+         lowAttack: lane.control('a', 'seconds', 0.01), lowGain: lane.control('g', 'db', 6) }));\n\
+         const written = track('written', () => multiband(osc.saw(110), { lowThreshold: -18, lowAttack: 0.01, lowGain: 6 }));\n\
+         export default song(() => sum(lanes.out, written.out));\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let rev = s.accepted();
+    let measure = |module: &str| {
+        let c = &rev.compiled;
+        let site =
+            c.sites.iter().find(|x| x.callee == "multiband" && c.outputs.iter().any(|o| o.site == x.id && o.module == module)).unwrap();
+        let node = format!("{}#{}", site.file, site.ordinal);
+        let copied = copy(rev, &s.packages, module, &node, &serde_json::Map::new(), Layer::Response { level: -80.0 });
+        let span = Span { log: true, lo: 20.0, hi: 20_000.0 };
+        copied
+            .unwrap_or_else(|e| panic!("{module}: {e}"))
+            .measure(&s.packages, span, std::time::Duration::from_secs(5), Pass::Rest)
+            .unwrap()
+    };
+    let (lanes, written) = (measure("lanes"), measure("written"));
+    assert_eq!(lanes, written, "on lanes, at their fallbacks: the split of those values written");
+    let low = lanes.chunks(2).find(|p| p[0] >= 30.0).unwrap()[1];
+    assert!((low - 6.0).abs() < 0.25, "the lows at 30 Hz: {low} dB, the gain's fallback 6 dB");
+}
+
 // CARD-115, CARD-80 (measure2 §8): the multiband's split is measured from its own sound with a quiet
 // click, `p.response({ level: -80 })`, under every threshold its card allows (−60 dB), so its
 // compressors rest whatever they are set to. Through a multiband at thresholds of −60 dB and a ratio

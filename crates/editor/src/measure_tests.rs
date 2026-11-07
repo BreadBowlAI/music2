@@ -299,7 +299,9 @@ fn a_hit_is_a_render_of_one_note_bit_for_bit() {
 // CARD-81 (review M2, M5): a copy is refused in words where its layer can't be measured: a response
 // of a sound that takes no sound in, a hit of one that plays no notes, a call that isn't there, is
 // called more than once, plays inside an instrument's voices, gives no sound, hosts a plugin, reads
-// a value from another track; and a response of one whose values move as the song plays.
+// a value from another track; and a response of one whose values a cable or the beat moves as the
+// song plays. A value a lane drives is the lane's fallback, for a response as for a hit (measure2's
+// review S2): the curve of that value written.
 #[test]
 fn a_copy_is_refused_in_words() {
     m2_plugins::probe::install();
@@ -313,9 +315,10 @@ fn a_copy_is_refused_in_words() {
                 const o = track('o', () => notch(osc.saw(110), { cutoff: src.cut }));\n\
                 const w = track('w', () => lowpass(osc.saw(110), { cutoff: xrange(lfo(time.beats, { period: 0.25 }), 200, 4000), q: 4 }));\n\
                 const ln = track('ln', ({ lane }) => highpass(osc.saw(110), { cutoff: lane.control('cut', 'hz', 300) }));\n\
+                const hp = track('hp', () => highpass(osc.saw(110), { cutoff: 300 }));\n\
                 const g = track('g', () => osc.sine(xrange(lfo(1), 200, 400)));\n\
                 const p = track('p', () => wrap(osc.saw(110)));\n\
-                export default song(() => sum(lead.out, kick.out, m.out, v.out, src.out, o.out, w.out, ln.out, g.out, p.out));\n";
+                export default song(() => sum(lead.out, kick.out, m.out, v.out, src.out, o.out, w.out, ln.out, hp.out, g.out, p.out));\n";
     let (_f, s) = open_at(48_000, body);
     let rev = s.accepted();
     let why =
@@ -332,9 +335,10 @@ fn a_copy_is_refused_in_words() {
     assert_eq!(why("o", "notch", Layer::Response { level: LEVEL }), "one of its values comes from another track");
     assert_eq!(why("p", "wrap", Layer::Response { level: LEVEL }), "it hosts a plugin, which music2 can't measure yet");
     assert_eq!(why("g", "xrange", Layer::Response { level: LEVEL }), "it gives no sound");
-    let moves = "one of its values moves as the song plays (a lane, a cable or the song's beat drives it), so it has no one curve";
+    let moves = "one of its values moves as the song plays (a cable or the song's beat drives it), so it has no one curve";
     assert_eq!(why("w", "lowpass", Layer::Response { level: LEVEL }), moves, "a cable from the beat");
-    assert_eq!(why("ln", "highpass", Layer::Response { level: LEVEL }), moves, "a lane");
+    let at = |module: &str| measured(&s, module, "highpass", json!({})).unwrap_or_else(|e| panic!("{module}: {e:?}"));
+    assert_eq!(at("ln"), at("hp"), "a lane: at its fallback, 300 Hz");
 }
 
 // CARD-84 (review M7): a copy is named by what it plays: the same call at the same values is the
