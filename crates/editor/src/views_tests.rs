@@ -8,15 +8,16 @@ use crate::testing::{Fixture, MANIFEST};
 use crate::{Gestures, Knob, ViewNode};
 
 /// A sound with a choice, a switch, an envelope's and a filter's controls, regions, its four views
-/// (its envelope and its filter std's pictures, CARD-96, CARD-30) and three groups (the design's
-/// §3.5 example).
-pub(crate) const WOBBLE: &str = "import { component, control, port, setting, view } from \"@m2/core\";
+/// (its envelope std's picture, CARD-96; its filter's curve its own maths, on std's curve) and three
+/// groups (the design's §3.5 example).
+pub(crate) const WOBBLE: &str = "import { component, control, knob, port, setting, view } from \"@m2/core\";
 import { lowpass } from \"std/filter\";
 import { sampler } from \"std/sampler\";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawn, lowpassWords } from \"std/pictures\";
+import { curvePicture, envelope, envelopePicture, envelopeWords } from \"std/pictures\";
 
 const ENV = { attack: \"attack\", decay: \"decay\", sustain: \"sustain\", release: \"release\" } as const;
-const CUT = { cutoff: \"cutoff\", q: \"q\" } as const;
+/** A lowpass's curve in dB at `f`, from its cutoff `c` and q, drawn from the sound's own maths. */
+const cut = (f: number, c: number, q: number) => -10 * Math.log10((1 - (f / c) ** 2) ** 2 + (f / c / q) ** 2);
 
 export const wobble = component(
   {
@@ -44,7 +45,14 @@ export const wobble = component(
   (notes, { cutoff, q, attack, release, regions }) => lowpass(sampler(notes, { regions, attack, release }), { cutoff, q }),
   {
     amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
-    filter: { draw: (v, p) => drawn(p, v, CUT), words: (v) => lowpassWords(v, CUT) },
+    filter: {
+      draw: (v, p) => {
+        const [c, q] = [v.cutoff ?? 800, v.q ?? 0.7];
+        const points = Array.from({ length: 61 }, (_, i) => 20 * 1000 ** (i / 60)).flatMap((f) => [f, Math.max(-24, cut(f, c, q))]);
+        return [p.line(points, { name: \"curve\" }), p.handle(c, 20 * Math.log10(q), { x: \"cutoff\", y: knob(\"q\"), wheel: \"q\" })];
+      },
+      words: (v) => `Cuts the highs above ${v.cutoff} Hz`,
+    },
   },
 );
 ";
@@ -459,11 +467,11 @@ fn a_view_moves_only_a_knob_in_a_unit_it_draws() {
     f.write("music2.toml", MANIFEST);
     f.write(
         "lib/tone.ts",
-        "import { component, control, port } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
-         import { curvePicture, lowpass as drawn, lowpassWords } from \"std/pictures\";\n\
+        "import { component, control, knob, port } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+         import { curvePicture } from \"std/pictures\";\n\
          export const tone = component(\n  { id: \"tone\", label: \"Tone\", controls: { cutoff: control.hz(1000).range(20, 20000).log().accepts(\"semitones\", 0, 127), q: control.scalar(0.7) },\n\
          output: port.audio(), editor: { views: { filter: curvePicture({ live: false }) } } },\n  ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),\n\
-         { filter: { draw: (v, p) => drawn(p, v, { cutoff: \"cutoff\", q: \"q\" }), words: (v) => lowpassWords(v, { cutoff: \"cutoff\", q: \"q\" }) } },\n);\n",
+         { filter: { draw: (v, p) => [p.handle(v.cutoff ?? 1000, 0, { x: \"cutoff\", y: knob(\"q\"), wheel: \"q\" })], words: (v) => `a filter at ${v.cutoff}` } },\n);\n",
     );
     f.write(
         "song.ts",

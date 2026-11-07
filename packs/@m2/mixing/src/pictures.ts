@@ -1,8 +1,8 @@
 // @m2/mixing's pictures (CARD-110 to CARD-116): what each of its cards draws, in TypeScript over
-// the picture words (CARD-61), with no kernel. The EQ's curve is measured from its own sound
-// (`p.response()`); the transient shaper's hit and Pump's dip are drawn from the pack's own sums,
-// each checked against a render of the sound within 0.5 dB (CARD-99); the gate, the de-esser and
-// the multiband draw their values over the sound as it plays.
+// the picture words (CARD-61), with no kernel. The EQ's curve, and the multiband's split under its
+// thresholds, are measured from their own sound (`p.response()`); the transient shaper's hit and
+// Pump's dip are drawn from the pack's own sums, each checked against a render of the sound within
+// 0.5 dB (CARD-99); the gate and the de-esser draw their values over the sound as it plays.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
@@ -295,46 +295,18 @@ export function bandWords(v: Values, names: { freq: string; threshold: string; a
 /** The bands' names, low to high: the card's groups. */
 const BANDS = ["Low", "Mid", "High"] as const;
 
-/** The rate the split is worked out at. */
-const SPLIT_RATE = 48_000;
-/** How many points the split's curve is drawn with: one each twenty-fourth of the 10 octaves. */
-const SPLIT_POINTS = 241;
-
 /**
- * How the multiband turns each frequency `f`, in dB, below its thresholds (its compressors
- * resting): its kernel's own sum. Its lower crossover splits the low band (a Linkwitz-Riley
- * low-pass, 24 dB per octave) from the rest (the high-pass), its upper splits the rest into the mid
- * and the high band, and the low band goes through the upper's all-pass so the three sum in step;
- * each band is turned by its gain. With every gain at 0 dB it is flat.
+ * The click the split is measured with, in dB: under the lowest threshold its card allows (−60 dB),
+ * so its compressors rest however they are set (CARD-115).
  */
-export function splitDb(f: number, lowMid: number, midHigh: number, gains: readonly [number, number, number]): number {
-  return splitOf(lowMid, midHigh, gains)(f);
-}
-
-/** `splitDb` at any frequency, for one split: what doesn't hang on the frequency worked out once. */
-export function splitOf(lowMid: number, midHigh: number, gains: readonly [number, number, number]): (f: number) => number {
-  const warp = (hz: number) => Math.tan((Math.PI * clamp(hz, 10, 0.45 * SPLIT_RATE)) / SPLIT_RATE);
-  // x⁴ at each crossover, x the frequency over the crossover's, each warped as the kernel's filters are.
-  const wlo = warp(Math.min(lowMid, midHigh)), whi = warp(Math.max(lowMid, midHigh));
-  // A crossover's Butterworth pair has the denominator B = (1 − x²) + j√2·x, so |B|² = 1 + x⁴; its
-  // Linkwitz-Riley low-pass is 1 / B², its high-pass x⁴ / B², its all-pass B̄ / B = |B|² / B². So
-  // the low band, AP(hi)·LP(lo), the mid, LP(hi)·HP(lo), and the high, HP(hi)·HP(lo), share the one
-  // phase 1 / (B_hi² B_lo²), and their sum, each turned by its gain, is a real number over it.
-  const [g0, g1, g2] = gains.map((x) => 10 ** (x / 20));
-  return (f) => {
-    const w = warp(f), lo = (w / wlo) ** 4, hi = (w / whi) ** 4;
-    const sum = g0 * (1 + hi) + g1 * lo + g2 * hi * lo;
-    return 20 * Math.log10(Math.max(1e-6, Math.abs(sum) / ((1 + hi) * (1 + lo))));
-  };
-}
-
+const UNDER = -80;
 
 /**
  * A multiband compressor's split (CARD-115), on `curvePicture()`'s axes: how it turns each
- * frequency below its thresholds, the line `split` from its own sum (`splitDb`); the two crossovers
- * as guide lines, a dot on each that moves it across; and a dot in each band, at its gain, that moves
- * the gain up and down and shows its tab. How far its compressors turn down as it plays isn't drawn:
- * its kernel sends no meter (gaps.md).
+ * frequency below its thresholds, the line `split`, measured from its own sound with a click at
+ * −80 dB (`p.response`); the two crossovers as guide lines, a dot on each that moves it across; and
+ * a dot in each band, at its gain, that moves the gain up and down and shows its tab. How far its
+ * compressors turn down as it plays isn't drawn: its kernel sends no meter (gaps.md).
  */
 export function split<D>(
   p: Painter<D, "hz", "db">,
@@ -344,17 +316,11 @@ export function split<D>(
   const a = known(v, names.lowMid, "low to mid crossover"), b = known(v, names.midHigh, "mid to high crossover");
   // Crossed, the lower one splits low from mid (the kernel's own rule).
   const [lm, mh] = [Math.min(a, b), Math.max(a, b)];
-  const g = names.gains.map((n, i) => known(v, n, `${BANDS[i].toLowerCase()} gain`)) as [number, number, number];
-  const curve = splitOf(lm, mh, g);
-  const points: number[] = [];
-  for (let i = 0; i < SPLIT_POINTS; i++) {
-    const f = 20 * 1000 ** (i / (SPLIT_POINTS - 1));
-    points.push(f, clamp(curve(f), -24, 24));
-  }
+  const g = names.gains.map((n, i) => known(v, n, `${BANDS[i].toLowerCase()} gain`));
   const edges = [20, lm, mh, 20000];
   const centre = (i: number) => Math.sqrt(edges[i] * edges[i + 1]);
   return [
-    p.line(points, { name: "split" }),
+    p.response({ name: "split", level: UNDER }),
     p.mark("x", lm, `Low to mid: ${hzWords(lm)}`),
     p.mark("x", mh, `Mid to high: ${hzWords(mh)}`),
     p.handle(a, 18, { x: names.lowMid } as Moves<D, "hz", "db">),

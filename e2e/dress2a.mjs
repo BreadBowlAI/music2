@@ -16,8 +16,11 @@ import { lint } from "./lintlib.mjs";
 // ---------------------------------------------------------------- the song: two tracks of the packs' effects
 
 const versions = fs.readFileSync(path.join(import.meta.dirname, "../packs/versions.toml"), "utf8");
+// A pack's lock at the version music2 comes with, its m2pkg.toml's (the record keeps older ones too).
 const locked = (name) => {
-  const [, version, hash] = new RegExp(`^"${name} ([0-9.]+)" = "([^"]+)"$`, "m").exec(versions);
+  const pkg = fs.readFileSync(path.join(import.meta.dirname, `../packs/${name}/m2pkg.toml`), "utf8");
+  const [, version] = /^version = "([0-9.]+)"$/m.exec(pkg);
+  const [, hash] = new RegExp(`^"${name} ${version.replaceAll(".", "\\.")}" = "([^"]+)"$`, "m").exec(versions);
   return `\n[[pack]]\nname = "${name}"\nversion = "${version}"\nhash = "${hash}"\n`;
 };
 write("music2.toml", `${read("music2.toml")}"@m2/effects" = "1"\n"@m2/mixing" = "1"\n`);
@@ -168,7 +171,7 @@ await drag(dePic, 0, 30, 0, "tracks/mixa.ts", (c) => num(c, "freq") > 6000, "De-
 const mb = `${mixa} [data-node="multiband"]`;
 const mbPic = `${mb} [data-face] [data-picture="split"]`;
 await shown(mb);
-check(await until(async () => (await points(`${mbPic} polyline[data-line="split"]`)) === 241, 20000), "the multiband's face draws its split, from its crossovers' sums");
+check(await until(async () => (await points(`${mbPic} polyline[data-response][data-line="split"]`)) === 256, 20000), "the multiband's face draws its split, measured from its sound under its thresholds");
 const opens = await page.$$eval(`${mbPic} [data-dot]`, (els) => els.map((e) => e.dataset.opens ?? ""));
 check(JSON.stringify(opens) === JSON.stringify(["", "", "Low", "Mid", "High"]), `a dot on each crossover, and one for each band's gain that shows its tab: ${JSON.stringify(opens)}`);
 await linted(mb, "the multiband's card");

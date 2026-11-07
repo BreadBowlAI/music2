@@ -69,7 +69,7 @@ export const delay = component(
   {
     echoes: {
       draw: (v, p) => echoes(p, v, { time: "time", feedback: "feedback", mix: "mix" }),
-      words: (v) => echoesWords(v, { time: "time", feedback: "feedback", mix: "mix" }),
+      words: (v, p) => echoesWords(v, { time: "time", feedback: "feedback", mix: "mix" }, p.rate),
     },
   },
 );
@@ -101,7 +101,7 @@ export const reverb = component(
     },
   },
   (x: Audio, { size, damping, mix }: Params) => kernel("@m2/effects:reverb", { in: x, size, damping, mix }),
-  { tail: { draw: (v, p) => tail(p, v, { size: "size", damping: "damping" }), words: (v) => tailWords(v, { size: "size", damping: "damping" }) } },
+  { tail: { draw: (v, p) => tail(p, v, { size: "size", damping: "damping" }), words: (v, p) => tailWords(v, { size: "size", damping: "damping" }, p.rate) } },
 );
 
 // ---------------------------------------------------------------- modulation

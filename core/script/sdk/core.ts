@@ -1229,7 +1229,7 @@ export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
  * Declare a view in `editor.views` (CARD-16): `view.keys("regions")` (a `regions` or `keymap`
  * setting), `view.scope()`, or `view.picture(…)`, a picture the sound draws (CARD-60). An envelope
  * and a filter are std's pictures: `envelopePicture()` and `curvePicture()` in std/pictures
- * (CARD-96, CARD-30).
+ * (CARD-96, CARD-91).
  */
 export const view = {
   keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
@@ -1251,7 +1251,7 @@ export const view = {
 // Gone since 2.4.0 (CARD-100): a sound that still calls one, past the types, is told in words what to draw instead.
 for (const [gone, now] of [
   ["envelope", "an envelope is a picture of std/pictures, envelopePicture() and envelope() (CARD-96)"],
-  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-30)"],
+  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() (CARD-91)"],
 ] as const) {
   Object.defineProperty(view, gone, {
     value: () => {
@@ -1391,14 +1391,24 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
   /**
    * The curve music2 measures from this sound itself (CARD-80): a click played through a copy of
    * the call at these values, its gain at each frequency. Only on an `hz` x axis and a `db` y axis.
+   * `level` is the click's, in dB from −80 to −20 (−20 when left out): a quieter click stays under
+   * a sound's thresholds, so its compressors rest (2.5).
    */
-  response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string }) => Shape : never;
+  response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string; level?: number }) => Shape : never;
   /**
    * One note's sound, as a copy of the call plays it at these values (CARD-80): `note` (60) held
    * `seconds` (the x axis's end, 1 at most). Only on an x axis in `seconds` and a `bipolar` y axis.
    */
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
+  /**
+   * The song's sample rate, in Hz (CARD-87): a kernel works its sums out at it, so a picture drawn
+   * from them does too (2.5). 48000 where no song plays (`m2 pack check`). Its words get it too.
+   */
+  readonly rate: number;
 }
+
+/** What a picture's words read besides its values (CARD-87): the song's sample rate, as the draw's `p.rate`. */
+export type Heard = { readonly rate: number };
 
 /** What a control plays, for types only: a number, a choice's name, or a switch's true or false. */
 type PlayedOf<K> = [K] extends [Unit] ? number : [K] extends [ChoiceKind<infer O>] ? O[number] : [K] extends [SwitchKind] ? boolean : never;
@@ -1414,7 +1424,7 @@ export type Played<D = any> = {
 /** A picture's code (CARD-60): its draw and its words, typed by the descriptor (CARD-62). */
 export type PictureCode<D = any, X extends Unit = Unit, Y extends Unit = Unit> = {
   draw: (v: Played<D>, p: Painter<D, X, Y>) => readonly Shape[];
-  words: (v: Played<D>) => string;
+  words: (v: Played<D>, p: Heard) => string;
 };
 /** The pictures of `D`, by name. */
 type PicturesIn<D> = { [K in keyof ViewsOf<D> as ViewsOf<D>[K] extends PictureDecl<any, any> ? K : never]: ViewsOf<D>[K] };
@@ -1476,14 +1486,16 @@ class PictureError extends Error {}
 
 /** Every shape `p` made: a draw gives back only these. */
 const made = new WeakSet<object>();
-/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, and what it drew. */
-const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number }>();
+/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, what it drew, and what of 2.5 it used. */
+const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number; uses: readonly string[] }>();
 /** The parts kept at most: the oldest goes first. */
 const KEPT = 512;
 /** The numbers a draw may give in all (CARD-65). */
 const NUMBERS = 20000;
 /** The points a measured layer is filled with (CARD-80): a response's, and a hit's columns. */
 const MEASURED = { response: 256, hit: 256 };
+/** The quietest and the loudest a response's click plays, in dB (CARD-80): −20 when a draw gives none. */
+const CLICK = { quietest: -80, loudest: -20 };
 /** A control character, or a line or paragraph break: no text of a picture holds one (CARD-61). */
 const CONTROL = /[\p{Cc}\u2028\u2029]/u;
 /** Whether `t` is text of `lo` to `hi` characters (code points), with no control character (CARD-61). */
@@ -1494,14 +1506,14 @@ const fits = (t: unknown, lo: number, hi: number): t is string =>
 /**
  * Draw picture `name` of the component `cid` at `values` (the JSON of what plays, by name), for
  * the picture runner: `{shapes, words}`, or `{why}` when it can't be drawn. `memo` names the
- * picture asked for, which its parts are kept by.
+ * picture asked for, which its parts are kept by, each for the song's sample `rate` (CARD-87).
  */
-export function __picture(cid: string, name: string, values: string, memo: string): string {
+export function __picture(cid: string, name: string, values: string, memo: string, rate: number): string {
   const c = registry.get(cid);
   const pic = c?.pictures.get(name);
   if (!c || !pic) return JSON.stringify({ why: `can't be drawn: no picture "${name}" of ${cid} was loaded` });
   const draw = pic.draw as (v: Played, p: Painter) => unknown;
-  const said = pic.words as (v: Played) => unknown;
+  const said = pic.words as (v: Played, p: Heard) => unknown;
   const ax = { x: specOf<AxisSpec>(pic.x as object), y: specOf<AxisSpec>(pic.y as object) };
   const given = JSON.parse(values) as Record<string, unknown>;
   const target: Record<string, unknown> = {};
@@ -1509,6 +1521,14 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   Object.freeze(target);
   // Who reads: each part being made, which is made again only when what it read changes.
   const readers: Set<string>[] = [];
+  // What of @m2/core 2.5 the draw used (CARD-87, PACK-23): the song's rate read, a click other than
+  // −20 dB; and what the part being made used, kept with it, so one given again marks the draw too.
+  const uses = new Set<string>();
+  let making: Set<string> | undefined;
+  const use = (what: string) => {
+    uses.add(what);
+    making?.add(what);
+  };
   let missed: string | undefined;
   // Each value an accessor that says who read it; a name the sound doesn't have reaches the
   // prototype, which refuses it; nothing can be changed. Faster than a proxy over every read.
@@ -1628,33 +1648,40 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (!fits(partName, 1, 32)) bad(`gives p.part a name of 1 to 32 characters, as "grid", not ${shown(partName)}`);
       if (readers.length) bad(`makes a part inside a part: parts don't nest`);
       if (typeof make !== "function") bad(`gives p.part a function that makes its shapes, as () => [p.line(points)]`);
-      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}`;
+      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}\u0000${rate}`;
       const was = kept.get(key);
       if (was && [...was.read].every(([k, x]) => Object.is(target[k], x))) {
         numbers += was.numbers;
         if (numbers > NUMBERS) bad(`draws more than 20,000 numbers: draw fewer points`);
+        for (const u of was.uses) use(u);
         return shape({ kind: "part", name: partName, shapes: was.shapes });
       }
       const read = new Set<string>();
       const before = numbers;
+      const marks = new Set<string>();
       readers.push(read);
+      making = marks;
       let shapes: readonly object[];
       try {
         shapes = shapesOf(make(), `p.part("${partName}")'s function`);
       } finally {
         readers.pop();
+        making = undefined;
       }
       kept.delete(key);
       if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before });
+      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before, uses: [...marks] });
       return shape({ kind: "part", name: partName, shapes });
     },
-    response: ((o?: { tone?: unknown; name?: unknown }) => {
+    response: ((o?: { tone?: unknown; name?: unknown; level?: unknown }) => {
       if (ax.x.unit !== "hz" || ax.y.unit !== "db") bad(`gives p.response an x axis in ${ax.x.unit} and a y axis in ${ax.y.unit}: a response is drawn across hz and up db`);
       if (o?.name !== undefined && !(fits(o.name, 1, 32) && NAME.test(o.name as string))) bad(`gives p.response the name ${shown(o.name)}: a line's name is a plain name of up to 32 characters`);
+      const level = o?.level;
+      if (level !== undefined && !(typeof level === "number" && level >= CLICK.quietest && level <= CLICK.loudest)) bad(`gives p.response the level ${shown(level)}: its click plays at −80 to −20 dB`);
+      if (level !== undefined && level !== CLICK.loudest) use("level");
       const t = tone("p.response", o?.tone);
       once("p.response", 2 * MEASURED.response);
-      return shape({ kind: "response", tone: t, name: o?.name });
+      return shape({ kind: "response", tone: t, name: o?.name, level });
     }) as Painter["response"],
     hit: ((o?: { note?: unknown; seconds?: unknown; tone?: unknown }) => {
       if (ax.x.unit !== "seconds" || ax.y.unit !== "bipolar") bad(`gives p.hit an x axis in ${ax.x.unit} and a y axis in ${ax.y.unit}: a hit is drawn across seconds and up bipolar`);
@@ -1668,6 +1695,10 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       once("p.hit", 4 * MEASURED.hit);
       return shape({ kind: "hit", note, seconds, tone: t });
     }) as Painter["hit"],
+    get rate() {
+      use("rate");
+      return rate;
+    },
   };
   const shapesOf = (out: unknown, what: string): readonly object[] => {
     if (!Array.isArray(out)) bad(`${what} returns ${shown(out)}: it returns a list of shapes, made with p`);
@@ -1676,10 +1707,16 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   };
   try {
     const shapes = shapesOf(draw(v as Played, p), "its draw");
-    const words = said(v as Played);
+    const heard: Heard = Object.freeze({
+      get rate() {
+        use("rate");
+        return rate;
+      },
+    });
+    const words = said(v as Played, heard);
     if (missed) bad(missed);
     if (!fits(words, 1, 400) || !words.trim()) bad(`its words must be one line of 1 to 400 characters, not ${shown(words)}`);
-    return JSON.stringify({ shapes, words });
+    return JSON.stringify(uses.size ? { shapes, words, uses: [...uses].sort() } : { shapes, words });
   } catch (e) {
     if (e instanceof PictureError) return JSON.stringify({ why: missed ?? e.message });
     // Out of memory, an interrupt, a stack that ran out: the runner's to say, and its runtime to make again (CARD-64).

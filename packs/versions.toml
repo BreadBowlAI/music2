@@ -3,10 +3,14 @@
 # version, and a new line. Until a release ships one, a branch records the one version of each pack
 # it will ship, never one for each step. `m2_song::pack::own` reads this to say which installed packs
 # are music2's (PACK-19); `every_bundled_pack_is_the_version_its_record_names` checks it against
-# packs/@m2/*. No release has shipped music2's own packs yet, so it holds one version of each.
+# packs/@m2/*. Release 0.2.0 shipped one version of each, so those lines stay; a pack changed since
+# gets one more line, for the version the next release will ship.
 "@m2/drums 2.2.0" = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 "@m2/effects 1.3.0" = "sha256:fded980dde2058f04326b18f06064bd2dfdfedc77faa7ccdb0a04b9273e1eaf3"
+"@m2/effects 1.4.0" = "sha256:d3d6fbbe49fc266561128d43c129d805a1129c657f836f0a7ee9a243394320e8"
 "@m2/mixing 1.2.0" = "sha256:7b711ae2ff1bae47e29f8a9943203c6b4e0456586622a8635cd9e90bd5f468ca"
+"@m2/mixing 1.3.0" = "sha256:62fb27e1f8cd4c4ec7d4b5f8e230348119e154ca87066ddfbf7f9cc73cbeb9b7"
 "@m2/synths 2.2.0" = "sha256:e96f2437295933e8c3bdba97fe463719f1f9b86ee176abc7d34a017a70f2e2d8"
+"@m2/synths 2.3.0" = "sha256:67107346158017f4a19b5246ad9530e7436d08e5803cd197f392d0441ea3d0ed"
 "@m2/vocals 1.1.0" = "sha256:cf640aaca58780ba44381f639446c5b8770946338567771d8ba78ee5b139764b"
 "@m2/wavetable 1.2.0" = "sha256:dfc122d7ff2dde76d2f171d8648fc8ef8fba9525f82ec1d44823dcf6a4eef1cb"

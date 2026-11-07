@@ -6,7 +6,7 @@
 // `pictures` message the server sends as the values change (CARD-68).
 
 import clsx from "clsx";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { beatNow, playingNow } from "../lib/clock";
@@ -63,6 +63,11 @@ const ASK_MS = 4000;
 export const PICTURE_H = 132;
 /** Room at the foot for the x axis's labels. */
 const FOOT = 12;
+/** How wide a label's character is at most, its 9 px text drawn (a minus sign's), and the gap either side of it. */
+const CHAR = 6.4;
+const GAP = 3;
+/** How far apart two y labels are at the least, in pixels, so they never touch: a tick between is left bare. */
+const APART = 12;
 
 /** Where `v` sits along `a`, from 0 to 1. */
 function along(a: Axis, v: number) {
@@ -94,14 +99,17 @@ export function fitted(a: Axis, shapes: Shape[]): Axis {
   return Number.isFinite(far) && far < a.hi ? { ...a, hi: far } : a;
 }
 
-/** An axis's grid: a log axis at 1, 2 and 5 of each decade, a plain one at a round step; labelled where it reads. */
-function ticks(a: Axis): { v: number; label?: string }[] {
-  const out: { v: number; label?: string }[] = [];
+/**
+ * An axis's grid: a log axis at 1, 2 and 5 of each decade, a plain one at a round step; labelled
+ * where it reads, a log axis's decades `first` (taste.md DV-17: 100, 1k, 10k are what it is read by).
+ */
+function ticks(a: Axis): { v: number; label?: string; first?: boolean }[] {
+  const out: { v: number; label?: string; first?: boolean }[] = [];
   if (a.scale === "log") {
     for (let d = Math.floor(Math.log10(a.lo)); d <= Math.ceil(Math.log10(a.hi)); d++) {
       for (const m of [1, 2, 5]) {
         const v = m * 10 ** d;
-        if (v >= a.lo && v <= a.hi) out.push({ v, label: m === 1 || m === 5 ? spelled(v, a.unit) : undefined });
+        if (v >= a.lo && v <= a.hi) out.push({ v, label: m === 1 || m === 5 ? spelled(v, a.unit) : undefined, first: m === 1 });
       }
     }
     return out;
@@ -111,6 +119,31 @@ function ticks(a: Axis): { v: number; label?: string }[] {
   const step = [1, 2, 5, 10].map((m) => m * p).find((s) => s >= raw) ?? raw;
   for (let v = Math.ceil(a.lo / step) * step; v <= a.hi + 1e-9; v += step) out.push({ v, label: spelled(v, a.unit) });
   return out;
+}
+
+/**
+ * The y axis's labelled ticks on a plot `plot` px tall (taste.md DV-17): every tick's label, or one
+ * each `APART` px at the least, counted from 0 where 0 is a tick, so they never touch.
+ */
+function yLabels(a: Axis, plot: number): { v: number; label: string }[] {
+  const all = ticks(a).filter((t): t is { v: number; label: string } => t.label !== undefined);
+  if (all.length < 2) return all;
+  const gap = (plot * Math.abs(along(a, all[1].v) - along(a, all[0].v))) || plot;
+  const every = Math.max(1, Math.ceil(APART / gap));
+  const from = Math.max(0, all.findIndex((t) => t.v === 0));
+  return all.filter((_, i) => (i - from) % every === 0);
+}
+
+/**
+ * Where a picture's values sit, `w` × `h` pixels: its plot, above the x axis's labels and right of
+ * the y axis's, which have room of their own, so no label ever sits on a line (taste.md DV-17).
+ */
+function layout(view: PictureView, w: number, h: number) {
+  const plot = Math.max(1, h - FOOT);
+  const labels = yLabels(view.y, plot);
+  const left = labels.length ? Math.ceil(2 * GAP + CHAR * Math.max(...labels.map((t) => [...t.label].length))) : 0;
+  const span = Math.max(1, w - left);
+  return { plot, left, span, labels, X: (v: number) => left + along(view.x, v) * span, Y: (v: number) => (1 - along(view.y, v)) * plot };
 }
 
 /** A value as taste.md writes its unit, short: "1k" for 1000 Hz, "−12" for dB. */
@@ -156,6 +189,10 @@ function useSize(el: React.RefObject<Element | null>): { w: number; h: number } 
 /** A card's picture (taste.md DV-17): asked for while it shows, drawn from its shapes, its dots moving the card's values. */
 export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const box = useRef<HTMLDivElement>(null);
+  // One size, rounded, for the shapes and the live layers alike, so both lay the same plot out at
+  // any zoom of the patch (taste.md DV-17, review S10): a zoom is a transform, which no size follows.
+  const frame = useRef<HTMLDivElement>(null);
+  const size = useSize(frame);
   const [drawn, setDrawn] = useState<Drawn | null>(null);
   const [asked, setAsked] = useState<string | null>(null);
   const count = useRef(0);
@@ -210,31 +247,43 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   return (
     <div ref={box} className="h-full" data-picture={name} data-asking={looking || undefined}>
       <div
+        ref={frame}
         className={clsx("relative h-full rounded-sm ring-1 ring-line bg-canvas overflow-hidden", why && "opacity-60")}
         data-greyed={why ? true : undefined}
         role="group"
         aria-label={words}
         title={words}
       >
-        {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} {...p} /> : null}
-        {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} {...p} />}
+        {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} size={size} {...p} /> : null}
+        {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} size={size} {...p} />}
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </div>
     </div>
   );
 }
 
-/** Where values sit on a picture of `w` × `h` pixels: x and y on the plot, above the x axis's labels. */
-function placer(view: PictureView, w: number, h: number) {
-  const plot = Math.max(1, h - FOOT);
-  return { plot, X: (v: number) => along(view.x, v) * w, Y: (v: number) => (1 - along(view.y, v)) * plot };
-}
-
 /** The grid and the shapes, at the picture's own size in pixels, and its dots. */
-function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; shapes: Shape[]; hold: (x: Axis | null) => void }) {
+function Shapes({ view, shapes, hold, size, ...p }: ViewProps & { view: PictureView; shapes: Shape[]; hold: (x: Axis | null) => void; size: { w: number; h: number } }) {
   const svg = useRef<SVGSVGElement>(null);
-  const { w, h } = useSize(svg);
-  const { plot, X, Y } = placer(view, w, h);
+  const { w, h } = size;
+  const { plot, left, span, labels, X, Y } = layout(view, w, h);
+  // The x axis's labels that fit, none past the right edge and each clear of the others: a log
+  // axis's decades first, then the rest where they fit, each in order across (taste.md DV-17).
+  const taken: [number, number][] = [];
+  const xLabels = new Set(
+    ticks(view.x)
+      .filter((t) => t.label)
+      .map((t) => ({ v: t.v, first: !!t.first, x: X(t.v) + 2, wide: CHAR * [...t.label!].length }))
+      .sort((a, b) => Number(b.first) - Number(a.first))
+      .filter((t) => {
+        if (t.x + t.wide > w || taken.some(([a, b]) => t.x < b + GAP && a < t.x + t.wide + GAP)) return false;
+        taken.push([t.x, t.x + t.wide]);
+        return true;
+      })
+      .map((t) => t.v),
+  );
+  // The plot the shapes are drawn in: none spills over the axes' labels (taste.md DV-17).
+  const clip = `plot${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const drag = useViewDrag(p);
   const tab = useCards((s) => s.tabs[p.node.id]);
   const [held, setHeld] = useState<{ i: number; x: number | null; y: number | null } | null>(null);
@@ -290,7 +339,7 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
     const values = (ev: PointerEvent) => {
       const dx = ev.clientX - x0, dy = -(ev.clientY - y0);
       const out: number[] = [];
-      if (kx && mx) out.push(rounded(inRange(kx, moved(mx, kx, view.x, start[0], dx, Math.max(1, w))), kx.unit));
+      if (kx && mx) out.push(rounded(inRange(kx, moved(mx, kx, view.x, start[0], dx, span)), kx.unit));
       if (ky && my) out.push(rounded(inRange(ky, moved(my, ky, view.y, start[knobs.length - 1], dy, plot)), ky.unit));
       return out;
     };
@@ -339,11 +388,14 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
   };
   return (
     <svg ref={svg} viewBox={w && h ? `0 0 ${w} ${h}` : undefined} className="block w-full h-full" data-shapes={flat.length} data-size={`${w}x${h}`} data-x-span={`${view.x.lo},${view.x.hi}`}>
+      <clipPath id={clip}>
+        <rect x={left} y={0} width={span} height={plot} />
+      </clipPath>
       {w > 0 &&
         ticks(view.x).map((t) => (
           <g key={`x${t.v}`}>
             <line x1={X(t.v)} x2={X(t.v)} y1={0} y2={plot} stroke="var(--color-line)" strokeWidth={0.5} />
-            {t.label && (
+            {xLabels.has(t.v) && (
               <text x={X(t.v) + 2} y={h - 2} fontSize={9} fill="var(--color-fg-faint)" data-tick>
                 {t.label}
               </text>
@@ -351,69 +403,68 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
           </g>
         ))}
       {w > 0 &&
-        ticks(view.y).map((t, j) => (
-          <g key={`y${t.v}`}>
-            <line x1={0} x2={w} y1={Y(t.v)} y2={Y(t.v)} stroke="var(--color-line)" strokeWidth={0.5} />
-            {/* The lowest y label would sit on the x axis's first one, in the corner: it is left out. */}
-            {t.label && !(j === 0 && t.v === view.y.lo && ticks(view.x)[0]?.label !== undefined && ticks(view.x)[0]?.v === view.x.lo) && (
-              <text x={2} y={Y(t.v) - 2} fontSize={9} fill="var(--color-fg-faint)" data-tick>
-                {t.label}
-              </text>
-            )}
-          </g>
-        ))}
+        ticks(view.y).map((t) => <line key={`y${t.v}`} x1={left} x2={w} y1={Y(t.v)} y2={Y(t.v)} stroke="var(--color-line)" strokeWidth={0.5} />)}
+      {/* The y labels in their own room at the left, each by its line, kept whole inside the plot's height. */}
       {w > 0 &&
-        flat.map((s, i) => {
-          switch (s.kind) {
-            case "line":
-              return <polyline key={i} data-line={s.name} points={points(s.points)} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
-            case "response":
-              return <polyline key={i} data-response data-line={s.name} points={points(s.points ?? [])} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
-            case "hit":
-              return (
-                <polygon key={i} data-hit points={points(s.points ?? [])} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke={TONE[s.tone ?? "main"]} strokeWidth={0.5} />
-              );
-            case "fill": {
-              const pts = s.points;
-              const closed = s.base === undefined ? pts : [...pts, pts[pts.length - 2], s.base, pts[0], s.base];
-              return <polygon key={i} points={points(closed)} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke="none" />;
+        labels.map((t) => (
+          <text key={`l${t.v}`} x={left - GAP} y={Math.min(plot - 4.5, Math.max(4.5, Y(t.v)))} fontSize={9} textAnchor="end" dominantBaseline="central" fill="var(--color-fg-faint)" data-tick>
+            {t.label}
+          </text>
+        ))}
+      <g clipPath={`url(#${clip})`}>
+        {w > 0 &&
+          flat.map((s, i) => {
+            switch (s.kind) {
+              case "line":
+                return <polyline key={i} data-line={s.name} points={points(s.points)} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
+              case "response":
+                return <polyline key={i} data-response data-line={s.name} points={points(s.points ?? [])} fill="none" stroke={TONE[s.tone ?? "main"]} strokeWidth={1.25} />;
+              case "hit":
+                return (
+                  <polygon key={i} data-hit points={points(s.points ?? [])} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke={TONE[s.tone ?? "main"]} strokeWidth={0.5} />
+                );
+              case "fill": {
+                const pts = s.points;
+                const closed = s.base === undefined ? pts : [...pts, pts[pts.length - 2], s.base, pts[0], s.base];
+                return <polygon key={i} points={points(closed)} fill={TONE[s.tone ?? "main"]} fillOpacity={0.12} stroke="none" />;
+              }
+              case "bars":
+                return (
+                  <g key={i} fill={TONE[s.tone ?? "main"]}>
+                    {Array.from({ length: s.points.length / 2 }, (_, j) => {
+                      const x = X(s.points[2 * j]), y = Y(s.points[2 * j + 1]), b = Y(s.base ?? 0);
+                      return <rect key={j} x={x - 1} width={2} y={Math.min(y, b)} height={Math.abs(b - y)} />;
+                    })}
+                  </g>
+                );
+              case "mark": {
+                const v = s.axis === "x" ? X(s.at) : Y(s.at);
+                return (
+                  <line key={i} x1={s.axis === "x" ? v : left} x2={s.axis === "x" ? v : w} y1={s.axis === "x" ? 0 : v} y2={s.axis === "x" ? plot : v} stroke="var(--color-fg-faint)" strokeDasharray="3 3" strokeWidth={1}>
+                    {s.words && <title>{s.words}</title>}
+                  </line>
+                );
+              }
+              case "label":
+                return (
+                  <text key={i} x={X(s.x)} y={Y(s.y)} fontSize={10} fill="var(--color-fg-muted)">
+                    {s.words}
+                  </text>
+                );
+              case "play": {
+                const [x0, y0, x1, y1] = s.box;
+                const title = !notes ? "This card plays no notes lane, so it can't play here" : hearing ? "Click to hear it: higher plays it harder" : "Audition is off (in Notes' header): turn it on to hear it";
+                return (
+                  <rect key={i} data-play={s.note} x={Math.min(X(x0), X(x1))} width={Math.abs(X(x1) - X(x0))} y={Math.min(Y(y0), Y(y1))} height={Math.abs(Y(y1) - Y(y0))} fill="transparent" className={notes ? "cursor-pointer" : undefined} onPointerDown={(e) => play(e, s)} onPointerUp={lift} onPointerCancel={lift}>
+                    <title>{title}</title>
+                  </rect>
+                );
+              }
+              default:
+                return null;
             }
-            case "bars":
-              return (
-                <g key={i} fill={TONE[s.tone ?? "main"]}>
-                  {Array.from({ length: s.points.length / 2 }, (_, j) => {
-                    const x = X(s.points[2 * j]), y = Y(s.points[2 * j + 1]), b = Y(s.base ?? 0);
-                    return <rect key={j} x={x - 1} width={2} y={Math.min(y, b)} height={Math.abs(b - y)} />;
-                  })}
-                </g>
-              );
-            case "mark": {
-              const v = s.axis === "x" ? X(s.at) : Y(s.at);
-              return (
-                <line key={i} x1={s.axis === "x" ? v : 0} x2={s.axis === "x" ? v : w} y1={s.axis === "x" ? 0 : v} y2={s.axis === "x" ? plot : v} stroke="var(--color-fg-faint)" strokeDasharray="3 3" strokeWidth={1}>
-                  {s.words && <title>{s.words}</title>}
-                </line>
-              );
-            }
-            case "label":
-              return (
-                <text key={i} x={X(s.x)} y={Y(s.y)} fontSize={10} fill="var(--color-fg-muted)">
-                  {s.words}
-                </text>
-              );
-            case "play": {
-              const [x0, y0, x1, y1] = s.box;
-              const title = !notes ? "This card plays no notes lane, so it can't play here" : hearing ? "Click to hear it: higher plays it harder" : "Audition is off (in Notes' header): turn it on to hear it";
-              return (
-                <rect key={i} data-play={s.note} x={Math.min(X(x0), X(x1))} width={Math.abs(X(x1) - X(x0))} y={Math.min(Y(y0), Y(y1))} height={Math.abs(Y(y1) - Y(y0))} fill="transparent" className={notes ? "cursor-pointer" : undefined} onPointerDown={(e) => play(e, s)} onPointerUp={lift} onPointerCancel={lift}>
-                  <title>{title}</title>
-                </rect>
-              );
-            }
-            default:
-              return null;
-          }
-        })}
+          })}
+      </g>
       {w > 0 &&
         handles.map((hd, i) => {
           const x = held?.i === i ? held.x : hd.x, y = held?.i === i ? held.y : hd.y;
@@ -550,7 +601,7 @@ const DB_FOOT = -90;
  * the picture shows (`useLook`, one ask for each look in this window), and is drawn as its reads
  * come. A layer that can't come says why, small, in the corner; the shapes stay.
  */
-function Live({ view, shapes, looking, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean }) {
+function Live({ view, shapes, looking, size, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean; size: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const seen = useRef(new Map<number, Seen[]>());
   const [why, setWhy] = useState<string | null>(null);
@@ -583,20 +634,29 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     };
   }, [playhead, looking]);
   const latest = useRef(() => {});
+  // The size the shapes are laid out at, the newest: a draw may come from a frame asked for earlier;
+  // drawn again when it changes, so the layers never wait for a read to follow the shapes.
+  const sized = useRef(size);
+  sized.current = size;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => paint(), [size.w, size.h]);
   const draw = () => {
     const c = canvas.current;
     const g = c?.getContext("2d");
-    if (!c || !g) return;
-    const r = c.getBoundingClientRect();
-    if (c.width !== Math.round(r.width * 2) || c.height !== Math.round(r.height * 2)) [c.width, c.height] = [Math.round(r.width * 2), Math.round(r.height * 2)];
+    const { w, h } = sized.current;
+    if (!c || !g || !w || !h) return;
+    if (c.width !== 2 * w || c.height !== 2 * h) [c.width, c.height] = [2 * w, 2 * h];
     // The greys read once, not at every frame.
     if (!greys.current) {
       const css = getComputedStyle(c);
       greys.current = { faint: css.getPropertyValue("--color-fg-faint").trim() || "#8a8f96", soft: css.getPropertyValue("--color-fg-muted").trim() || "#8a8f96" };
     }
     const grey = (t?: string) => (t === "faint" ? greys.current!.faint : greys.current!.soft);
-    // Above the x axis's labels, at the canvas's twice-the-pixels scale.
-    const plot = c.height - 2 * FOOT;
+    // The plot the shapes are drawn on (`layout`, from their size), above the x axis's labels and
+    // right of the y axis's, at the canvas's twice-the-pixels scale: `across(f)` is `f`, 0 to 1, across it.
+    const lay = layout(view, w, h);
+    const plot = 2 * lay.plot;
+    const across = (f: number) => 2 * (lay.left + f * lay.span);
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
     // A level's bar or history in dB on the picture's own y axis when that is in dB (CARD-103); else,
     // and for a spectrum always, from −90 dB at the foot to 0 dB at the top.
@@ -616,11 +676,11 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
         // so a quiet sound still shows (CARD-103).
         g.globalAlpha = 0.35;
         g.beginPath();
-        g.moveTo(0, plot);
-        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, ownY(db)));
+        g.moveTo(across(0), plot);
+        last.bins.forEach((db, j) => g.lineTo(across(px(20 * 2 ** (j / 12), view.x)), ownY(db)));
         const loudest = Math.max(...last.bins);
         said[i] = { v: loudest, y: ownY(loudest) / plot };
-        g.lineTo(c.width, plot);
+        g.lineTo(across(1), plot);
         g.closePath();
         g.fill();
         g.globalAlpha = 1;
@@ -629,19 +689,19 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
         const on = l.on ? (flatShapes(shapes).find((s) => s.kind === "line" && s.name === l.on) as { points: number[] } | undefined) : undefined;
         if (on && view.x.unit === "db") {
           // A dot riding its line: x the level, y the line there (CARD-73).
-          const x = px(db, view.x) * c.width;
+          const x = across(px(db, view.x));
           const y = (1 - px(onLine(on.points, db), view.y)) * plot;
           g.beginPath();
           g.arc(x, y, 6, 0, 2 * Math.PI);
           g.fill();
-          said[i] = { v: db, x: x / c.width, y: y / plot };
+          said[i] = { v: db, x: px(db, view.x), y: y / plot };
         } else if (view.y.unit === "db") {
           // A bar at the left edge, from the foot up to the level on the y axis.
           const y = dbY(db);
-          g.fillRect(0, y, 8, plot - y);
+          g.fillRect(across(0), y, 8, plot - y);
           said[i] = { v: db, y: y / plot };
         } else {
-          g.fillRect(0, plot - 4, ((db - DB_FOOT) / -DB_FOOT) * c.width, 4);
+          g.fillRect(across(0), plot - 4, across((db - DB_FOOT) / -DB_FOOT) - across(0), 4);
           said[i] = { v: db, y: 1 };
         }
       } else if (l.kind === "meter" && last?.now !== undefined) {
@@ -654,7 +714,7 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
         all.forEach((s, j) => {
           const v = s.peak ? 20 * Math.log10(Math.max(1e-6, Math.max(...s.peak))) : (s.now ?? 0);
           const y = s.peak ? dbY(v) : (1 - px(v, view.y)) * plot;
-          const x = ((j + HISTORY - all.length) / (HISTORY - 1)) * c.width;
+          const x = across((j + HISTORY - all.length) / (HISTORY - 1));
           if (j) g.lineTo(x, y);
           else g.moveTo(x, y);
           said[i] = { v, y: y / plot };
@@ -676,14 +736,14 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
           }
           if (t !== null) said[i] = { v: beat, x: t, y: 0 };
         } else if (last?.now !== undefined) t = px(last.now, view.x);
-        if (t !== null) g.fillRect(t * c.width - 1, 0, 2, plot);
+        if (t !== null) g.fillRect(across(t) - 1, 0, 2, plot);
       } else if (l.kind === "scope" && last?.frames?.length) {
         const f = last.frames;
         g.beginPath();
         for (let j = 0; j < f[0].length; j++) {
           let v = 0;
           for (const ch of f) v += ch[j] ?? 0;
-          const x = (j / Math.max(1, f[0].length - 1)) * c.width, y = (1 - (Math.max(-1, Math.min(1, v / f.length)) + 1) / 2) * plot;
+          const x = across(j / Math.max(1, f[0].length - 1)), y = (1 - (Math.max(-1, Math.min(1, v / f.length)) + 1) / 2) * plot;
           if (j) g.lineTo(x, y);
           else g.moveTo(x, y);
         }
@@ -691,6 +751,8 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       }
     });
     c.dataset.reads = String(reads.current);
+    // Where it laid the plot out, in pixels, for the suites to hold against the shapes' (taste.md DV-17).
+    c.dataset.plot = `${lay.left},${lay.span},${lay.plot}`;
     c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4) }));
     c.dataset.span = `${view.x.lo},${view.x.hi}`;
   };

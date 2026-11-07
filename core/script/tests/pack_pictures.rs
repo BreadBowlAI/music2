@@ -14,6 +14,11 @@ fn repo() -> PathBuf {
 
 /// Picture `view` of `@m2/<pack>`'s `component`, drawn at `values` (what plays, by name, CARD-63).
 fn draw(runner: &Runner, pack: &str, component: &str, view: &str, values: Value) -> Result<Value, String> {
+    draw_at(runner, 48_000, pack, component, view, values)
+}
+
+/// [`draw`], for a song at `rate` (CARD-87).
+fn draw_at(runner: &Runner, rate: u32, pack: &str, component: &str, view: &str, values: Value) -> Result<Value, String> {
     let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
     let catalog = m2_script::describe(&packages);
     let cid = format!("@m2/{pack}:{component}");
@@ -27,6 +32,7 @@ fn draw(runner: &Runner, pack: &str, component: &str, view: &str, values: Value)
         view: view.into(),
         values: values.to_string(),
         memo: format!("{component}\u{0}{view}"),
+        rate,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
@@ -185,10 +191,11 @@ fn the_deesser_draws_its_band_over_the_spectrum() {
     );
 }
 
-// CARD-115: the multiband draws its split: how it turns each frequency below its thresholds (the
-// line `split`, flat with every gain at 0 dB, each band's gain in its middle), the crossovers as
-// guide lines with a dot each that moves it across, and a dot in each band that moves its gain and
-// shows its tab; crossed, the lower one splits low from mid, as the kernel does.
+// CARD-115: the multiband draws its split: how it turns each frequency below its thresholds,
+// measured with a click at −80 dB (the line `split`, a response the server fills in, whose curve
+// `the_multiband_split_is_measured_under_its_thresholds` checks), the crossovers as guide lines
+// with a dot each that moves it across, and a dot in each band that moves its gain and shows its
+// tab; crossed, the lower one splits low from mid, as the kernel does.
 #[test]
 fn the_multiband_draws_its_split() {
     let runner = Runner::new();
@@ -198,17 +205,18 @@ fn the_multiband_draws_its_split() {
             v[format!("{band}{k}")] = json!(x);
         }
     }
-    let flat = draw(&runner, "mixing", "multiband", "split", v.clone()).unwrap();
-    assert!(line(&flat, "split").iter().all(|p| p.1.abs() < 1e-6), "flat with every gain at 0 dB");
     (v["lowGain"], v["midGain"], v["highGain"]) = (json!(3), json!(-2), json!(0));
     let d = draw(&runner, "mixing", "multiband", "split", v.clone()).unwrap();
-    assert_eq!(kinds(&d), ["line", "mark", "mark", "handle", "handle", "handle", "handle", "handle"]);
+    assert_eq!(kinds(&d), ["response", "mark", "mark", "handle", "handle", "handle", "handle", "handle"]);
+    let split = &d["shapes"][0];
+    assert_eq!(
+        (&split["name"], &split["level"], &split["points"]),
+        (&json!("split"), &json!(-80.0), &Value::Null),
+        "measured, under its thresholds"
+    );
     assert_eq!(dots(&d), ["x=lowMid", "x=midHigh", "y=lowGain", "y=midGain", "y=highGain"]);
     let opens: Vec<&str> = handles(&d).iter().filter_map(|h| h["opens"].as_str()).collect();
     assert_eq!(opens, ["Low", "Mid", "High"]);
-    let split = line(&d, "split");
-    let near = |hz: f64| split.iter().min_by(|a, b| (a.0 / hz).ln().abs().total_cmp(&(b.0 / hz).ln().abs())).unwrap().1;
-    assert!((near(40.0) - 3.0).abs() < 0.1 && (near(700.0) + 2.0).abs() < 0.2 && near(15000.0).abs() < 0.1, "{split:?}");
     let mid = places(&d)[3];
     assert!(close(mid, ((200.0f64 * 2500.0).sqrt(), -2.0)), "the mid's dot in its middle, at its gain: {mid:?}");
     assert_eq!(
@@ -280,6 +288,36 @@ fn the_reverb_draws_its_tail() {
     let at30 = |d: &Value| places(d)[0].0;
     assert!(at30(&tail(0.9, 0.5)) > at30(&d) && at30(&tail(0.6, 1.0)) < at30(&d), "bigger is longer, damped is shorter");
     assert!(d["words"].as_str().unwrap().starts_with("Its tail fades 30 dB in "), "{}", d["words"]);
+}
+
+// CARD-87, CARD-118 (review S3): the reverb's words say the time its dot shows, at every rate, as
+// std's secondsWords writes it: at 96 kHz, fully damped at size 1, where words worked out at 48 kHz
+// said 3.84 s for a dot at 3.98 s.
+#[test]
+fn the_reverbs_words_say_the_time_its_dot_shows() {
+    fn figures(v: f64) -> String {
+        let r = if v.abs() >= 100.0 {
+            v.round()
+        } else if v.abs() >= 10.0 {
+            (v * 10.0).round() / 10.0
+        } else {
+            (v * 100.0).round() / 100.0
+        };
+        format!("{r}")
+    }
+    let seconds = |s: f64| if s < 1.0 { format!("{} ms", figures(s * 1000.0)) } else { format!("{} s", figures(s)) };
+    let runner = Runner::new();
+    for rate in [44_100, 48_000, 96_000] {
+        for (size, damping) in [(1.0, 1.0), (0.5, 0.5), (0.2, 0.0)] {
+            let d = draw_at(&runner, rate, "effects", "reverb", "tail", json!({"size": size, "damping": damping, "mix": 0.25})).unwrap();
+            let words = d["words"].as_str().unwrap();
+            let dot = places(&d)[0].0;
+            assert!(
+                words.starts_with(&format!("Its tail fades 30 dB in {}", seconds(dot))),
+                "at {rate} Hz, size {size}, damping {damping}: the dot at {dot:.4} s, the words {words:?}"
+            );
+        }
+    }
 }
 
 // CARD-119 to CARD-121: the moving effects draw a second of their motion from their own sums: the
@@ -419,6 +457,7 @@ fn a_misnamed_value_is_said_as_one() {
         view: "tail".into(),
         values: json!({"size": 0.5, "damping": 0.5}).to_string(),
         memo: "room\u{0}tail".into(),
+        rate: 48_000,
     };
     let why = match Runner::new().draw(ask) {
         Drawn::Cant(why) => why,
@@ -430,12 +469,13 @@ fn a_misnamed_value_is_said_as_one() {
 
 // CARD-75 (a fifth of CARD-64's limit): every picture of both packs draws in 4 ms at most, its first
 // draw too (which works out its kept sums, CARD-110), once its module is loaded (a limit of its own):
-// at its defaults, then at five more values. It judges speed, so it runs in the nightly tier.
+// at its defaults, then at five more values; at 44.1, 48 and 96 kHz, each rate's first draws working
+// out its sums again (CARD-87). It judges speed, so it runs in the nightly tier.
 #[test]
 fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
     let fifth = std::time::Duration::from_millis(4);
     let mut slow = vec![];
-    for pack in ["mixing", "effects"] {
+    for (pack, rate) in ["mixing", "effects"].into_iter().flat_map(|p| [44_100, 48_000, 96_000].map(|r| (p, r))) {
         let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
         let catalog = m2_script::describe(&packages);
         let runner = Runner::new();
@@ -472,6 +512,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                         view: view.name.clone(),
                         values: defaults(nudge),
                         memo: format!("{cid}\u{0}{}", view.name),
+                        rate,
                     };
                     // The module's load first: it has a limit of its own (CARD-64).
                     if !loaded {
@@ -484,7 +525,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                     let took = t.elapsed();
                     assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
                     if took > fifth {
-                        slow.push(format!("{cid}'s {} draw {i}: {took:?}", view.name));
+                        slow.push(format!("{cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name));
                     }
                 }
             }

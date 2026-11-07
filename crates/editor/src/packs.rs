@@ -384,6 +384,7 @@ fn pictures_drawn(dir: &Path, std: &Path, name: &PackName, ours: &[std::sync::Ar
                 view: v.name.clone(),
                 values: m2_script::pictures::defaults(d),
                 memo: "pack check".into(),
+                rate: m2_script::pictures::RATE,
             };
             if let m2_script::pictures::Drawn::Cant(why) = runner.draw(ask) {
                 out.push(format!("{}'s picture {} {} (drawn at its defaults)", d.id, v.name, why.trim_end_matches('.')));
