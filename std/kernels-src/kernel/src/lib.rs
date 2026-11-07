@@ -239,7 +239,7 @@ pub const SETTINGS_BYTES: u32 = 60;
 pub trait Kernel: Sized {
     const INPUTS: usize;
     const OUTPUTS: usize;
-    /// Its inputs of kind `events<note>`, by place: the ones [`Io::events`] reads (ABI-8).
+    /// Its `events<note>` ports by place among all: inputs [`Io::events`] reads (ABI-8), a notes output [`Io::give`] writes (ABI-15).
     const NOTES: &'static [usize] = &[];
     /// Build a state. It may take memory: it runs only while its sandbox is born.
     fn new(cfg: &Cfg) -> Self;
@@ -875,9 +875,10 @@ pub fn latency_frames(seconds: f64, sample_rate: f64) -> u32 {
 impl<'a> Io<'a> {
     /// A writer for output `o`, the kernel's notes output: each [`Give::push`] writes one event. It
     /// borrows nothing of `self`, so a kernel reads its notes with [`Io::events`] while it gives.
-    /// Output `o` must be a notes output.
+    /// Output `o` must be one [`Kernel::NOTES`] names, by its place among all ports (`INPUTS + o`).
     pub fn give(&self, o: usize) -> Give<'a> {
-        assert!(self.inputs + o < self.ports.len(), "no output {o}");
+        let at = self.inputs + o;
+        assert!(self.notes.contains(&at) && at < self.ports.len(), "output {o} isn't the kernel's `events<note>` output");
         let head = self.table[self.ports[self.inputs + o].first as usize] as *mut Notes;
         Give { head, from: self.from, to: self.from + self.frames, _out: PhantomData }
     }
@@ -947,7 +948,7 @@ mod tests {
     impl Kernel for Up {
         const INPUTS: usize = 1;
         const OUTPUTS: usize = 1;
-        const NOTES: &'static [usize] = &[0];
+        const NOTES: &'static [usize] = &[0, 1];
 
         fn new(_: &Cfg) -> Self {
             Up
@@ -995,6 +996,26 @@ mod tests {
         host.process_range(64, 128);
         assert_eq!(host.given(0), [Event::Off { frame: 90, id: 3, velocity: 0.5 }], "frames in the block, from a call at 64");
         assert_eq!(host.given(0), [], "asked again: nothing new");
+    }
+
+    // ABI-9: a kernel gives notes only through an output it names in `NOTES`, as it reads them only
+    // from an input it names there.
+    #[test]
+    #[should_panic(expected = "output 0 isn't the kernel's `events<note>` output")]
+    fn notes_given_to_another_output_are_refused() {
+        struct Wrong;
+        impl Kernel for Wrong {
+            const INPUTS: usize = 1;
+            const OUTPUTS: usize = 1;
+            const NOTES: &'static [usize] = &[0];
+            fn new(_: &Cfg) -> Self {
+                Wrong
+            }
+            fn process(&mut self, io: &mut Io) {
+                io.give(0);
+            }
+        }
+        Host::<Wrong>::new(48_000.0, 128, 1).process(128);
     }
 
     // ABI-15: a notes output takes no more than its `cap`: the rest are refused, nothing written.
