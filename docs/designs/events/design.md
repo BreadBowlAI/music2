@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed, for the owner's yes. Revised after the skeptic's review (E1 to E19, answered in §12). Nothing here is built. |
+| **Status** | **Accepted** 2026-11-07: the owner said yes to D1 to D13 as recommended, and asked for it as simple as it can be; so the Arpeggiator has six controls, not eight (§7.1). Revised after the skeptic's review (E1 to E19, answered in §12). Nothing here is built. |
 | **Written** | 2026-11-07, from `main` at `c653658c` |
 | **Serves** | gap #16 (an arpeggiator, scales in code). It touches gap #24 (recording the wheels and the pedal), the Deferred row for event outputs ([ABI-2](../../architecture.md#kernel-abi-reservations)) and the `std/gen` tools [song-as-program.md](../../song-as-program.md) designs |
 | **Mockup** | [a picture](images/mockup.png) of the Arpeggiator's card before a Pluck. The page it was taken from is kept outside the repo, on the maintainer's server (`$SCRATCH/events-note/mockup.html`, [paths](../README.md#paths-in-these-notes)). |
@@ -224,7 +224,7 @@ Each rule is a function of the song's position and the notes held, never of what
 |---|---|
 | **Held notes** | The notes on now in its input, after the block's events at this frame are applied (Offs, then Ons). |
 | **Order** | By `style`: by pitch for Up, Down and Up & down (the top and bottom once each turn); by the order they started for As played (notes that start on one frame, by pitch); then `octaves` times, an octave higher each time. |
-| **Step index** | While the song plays: `n = floor(beats / rate)`, the step of the song's grid the frame is in (a sixteenth is a quarter of a beat; triplets two thirds of that). |
+| **Step index** | While the song plays: `n = floor(beats / rate)`, the step of the song's grid the frame is in (a sixteenth is a quarter of a beat; a T rate two thirds of its plain one). |
 | **Retrigger** | The pattern restarts with each new note held: when a note joins the held notes, its step is step 0. A chord drawn on the beat starts its pattern on that beat, every time, from any bar. Not a knob. |
 | **Which note** | The `(n − n₀) mod L`th of the order, where `n₀` is the step the pattern restarted on and `L` its length. |
 | **Catch** | A note that joins within a quarter of a step after a grid line (and at least 2 frames) plays that step at once, at its own frame. Later than that, it waits for the next step. This forgives a late finger, and the frame or so by which `time.beats`, a 32-bit number, can be off late in a long song (`core/runtime/src/lib.rs:3347`). |
@@ -232,7 +232,7 @@ Each rule is a function of the song's position and the notes held, never of what
 | **Play pressed while keys are held** | The pattern restarts on the grid: its first step at the first grid line at or after where the song starts (within the catch, at once). |
 | **Gate** | Each step's note sounds `gate` × the step, from the step's start: under 1 is choppy, over 1 overlaps the next. |
 | **Swing** | The second step of each pair later, as the roll's swing ([NOTE-7](../../architecture.md#notes-and-scales)): 50% straight, 66% a shuffle. |
-| **Velocity** | The velocity of the note it plays, or a fixed 0.8. |
+| **Velocity** | The velocity of the note it plays. |
 | **Random** | The step's note is `hash(seed, n − n₀) mod L`: no running random number, so a step plays the same note every time the song passes it. |
 | **Hold** | Latches only keys played live: let go, they keep playing until a new key is pressed. Stop, Play and a seek let go of it. A clip's chord always ends with its notes, so an export never plays a latched chord to its end. |
 | **Controllers** | The wheels and the pedal are passed on as they come (the kit's `pass` in one line). |
@@ -391,12 +391,10 @@ export const arp = component(
     inputs: { notes: port.notes() },
     controls: {
       style: control.choice(["up", "down", "updown", "played", "random"], "up"),
-      rate: control.choice(["1/4", "1/8", "1/16", "1/32"], "1/16"),
+      rate: control.choice(["1/4", "1/8", "1/8T", "1/16", "1/16T", "1/32"], "1/16"),
       octaves: control.choice(["1", "2", "3", "4"], "1"),
       gate: control.scalar(0.8).range(0.1, 2),
       hold: control.bool(false),
-      triplet: control.bool(false),
-      velocity: control.choice(["played", "fixed"], "played"),
       swing: control.frac(0.5).range(0.5, 0.71),
     },
     settings: { seed: setting.int(1) },
@@ -405,13 +403,12 @@ export const arp = component(
       category: "Arpeggiator",
       views: { steps: stepsPicture() }, // drawn for a C major chord; its step lit by the kernel's `step` meter
       face: ["steps", "style", "rate", "octaves", "gate", "hold"],
-      groups: { Feel: ["velocity", "swing", "triplet"] },
     },
   },
-  (notes: Events, { style, rate, octaves, gate, hold, triplet, velocity, swing, seed }: Params) =>
+  (notes: Events, { style, rate, octaves, gate, hold, swing, seed }: Params) =>
     kernel<EventsKind>(
       "@m2/notes:arp",
-      { notes, beats: time.beats, playing: time.playing, tempo: time.tempo, style, rate, octaves, gate, hold, triplet, velocity, swing },
+      { notes, beats: time.beats, playing: time.playing, tempo: time.tempo, style, rate, octaves, gate, hold, swing },
       { values: [seed] },
     ),
 );
@@ -419,7 +416,7 @@ export const arp = component(
 
 It plays by §5's rules. Its card:
 - **The face** is the steps picture: the pattern drawn as short bars, low to high, **for a C major chord**, since a picture draws from the card's values and never sees the notes that play ([CARD-63](../../architecture.md#pictures-on-the-card)). The step playing now is lit by the kernel's meter `step` ([ABI-13](../../architecture.md#kernel-abi-reservations), a meter read by a live layer). Its words say what the values say: "Up, sixteenth notes, 2 octaves".
-- The face's knobs: Style (a segmented control: five options), Rate, Octaves, Gate and Hold. **Feel** holds velocity, swing and triplets. Then All.
+- The face's knobs: Style (a segmented control: five options), Rate, Octaves, Gate and Hold. Swing is under All. A rate with a T is a triplet. There is no velocity choice: each step plays as hard as its key was played (a Velocity note effect, §7.5, makes them alike).
 - Drawing the notes actually held would need a live layer of notes, which pictures don't have; it waits for someone to miss it.
 
 ### 7.2 Chord
@@ -481,7 +478,7 @@ Tracks 1 and 2 can start together, and the pack's kernel code (3) beside them ag
 
 ## 10. Decisions for the owner
 
-| # | Question | Recommended |
+| # | Question | Recommended (all accepted, 2026-11-07) |
 |---|---|---|
 | D1 | Should the arpeggiator, chord tool, note echo and scale be **sounds that play** (they follow the keys you hold, and you can change them any time), rather than tools that write notes into a clip once? | **Sounds that play.** It is how Ableton, Logic and Bitwig do it, and the only way an arpeggiator follows a keyboard. |
 | D2 | Should a note effect sit **before the instrument on the same track**, shown left of it, with its own **+ Note effect** button? | **Yes.** Notes go left to right, then sound does. |
