@@ -294,4 +294,32 @@ await until(async () => !!(await page.$(`${patchPic}[data-drawn] polyline[data-l
 await uncovered(patchPic, 48, "on the patch's card");
 await (await page.$('[data-testid=graph] [data-node="curve"]'))?.screenshot({ path: `${ROOT}/pictures-labels-patch.png` });
 
+// The live layers on the shapes' plot at any zoom (taste.md DV-17, review S10): zoomed, after it
+// showed, to where the picture is 40.65 px tall on screen (a size that isn't whole: its y labels fit
+// three at 41 px and one at 40.65), its live layers' plot, as the song plays, is the curve's.
+const onScreen = () => page.$eval(`${patchPic} svg`, (e) => e.getBoundingClientRect().height);
+const zoomNow = () => page.$eval("[data-zoom]", (e) => Number(e.dataset.zoom));
+await page.click('button[aria-label="Actual size"]');
+await until(async () => (await zoomNow()) === 1, 3000);
+await sleep(300);
+const cssTall = await onScreen();
+// The wheel where the graph is bare: on a picture it would move a dot.
+const bare = await box("[data-testid=graph]");
+await page.mouse.move(bare.x + 6, bare.y + 6);
+await page.keyboard.down("Control");
+await page.mouse.wheel({ deltaY: -240 * Math.log(40.65 / cssTall) });
+await page.keyboard.up("Control");
+await until(async () => Math.abs((await onScreen()) - 40.65) < 0.05, 3000);
+await page.$eval(patchPic, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
+await until(async () => !!(await page.$(`${patchPic}[data-asking]`)), 5000);
+const plotted = () => page.$eval(patchPic, (e) => ({ live: e.querySelector("canvas[data-live]")?.dataset.plot, reads: Number(e.querySelector("canvas[data-live]")?.dataset.reads ?? 0), shapes: ["x", "width", "height"].map((k) => e.querySelector("svg clipPath rect")?.getAttribute(k)).join(","), size: e.querySelector("svg")?.dataset.size }));
+const r0 = (await plotted()).reads;
+await api("/transport", { method: "POST", body: JSON.stringify({ action: "play" }) });
+await until(async () => (await plotted()).reads >= r0 + 3, 10000);
+const laid = await plotted();
+await (await page.$(patchPic))?.screenshot({ path: `${ROOT}/pictures-live-zoomed.png` });
+await api("/transport", { method: "POST", body: JSON.stringify({ action: "stop" }) });
+check(laid.reads >= r0 + 3 && laid.live === laid.shapes, `zoomed to ${(await onScreen()).toFixed(2)} px tall on screen (laid out at ${laid.size}), the live layers' plot is the curve's: ${laid.live} against ${laid.shapes} (left, width, height; ${laid.reads - r0} reads)`);
+await page.click('button[aria-label="Fit to panel"]');
+
 done(errors);

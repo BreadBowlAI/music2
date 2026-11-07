@@ -189,6 +189,10 @@ function useSize(el: React.RefObject<Element | null>): { w: number; h: number } 
 /** A card's picture (taste.md DV-17): asked for while it shows, drawn from its shapes, its dots moving the card's values. */
 export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const box = useRef<HTMLDivElement>(null);
+  // One size, rounded, for the shapes and the live layers alike, so both lay the same plot out at
+  // any zoom of the patch (taste.md DV-17, review S10): a zoom is a transform, which no size follows.
+  const frame = useRef<HTMLDivElement>(null);
+  const size = useSize(frame);
   const [drawn, setDrawn] = useState<Drawn | null>(null);
   const [asked, setAsked] = useState<string | null>(null);
   const count = useRef(0);
@@ -243,14 +247,15 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   return (
     <div ref={box} className="h-full" data-picture={name} data-asking={looking || undefined}>
       <div
+        ref={frame}
         className={clsx("relative h-full rounded-sm ring-1 ring-line bg-canvas overflow-hidden", why && "opacity-60")}
         data-greyed={why ? true : undefined}
         role="group"
         aria-label={words}
         title={words}
       >
-        {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} {...p} /> : null}
-        {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} {...p} />}
+        {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} size={size} {...p} /> : null}
+        {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} size={size} {...p} />}
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </div>
     </div>
@@ -258,9 +263,9 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
 }
 
 /** The grid and the shapes, at the picture's own size in pixels, and its dots. */
-function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; shapes: Shape[]; hold: (x: Axis | null) => void }) {
+function Shapes({ view, shapes, hold, size, ...p }: ViewProps & { view: PictureView; shapes: Shape[]; hold: (x: Axis | null) => void; size: { w: number; h: number } }) {
   const svg = useRef<SVGSVGElement>(null);
-  const { w, h } = useSize(svg);
+  const { w, h } = size;
   const { plot, left, span, labels, X, Y } = layout(view, w, h);
   // The x axis's labels that fit, none past the right edge and each clear of the others: a log
   // axis's decades first, then the rest where they fit, each in order across (taste.md DV-17).
@@ -596,7 +601,7 @@ const DB_FOOT = -90;
  * the picture shows (`useLook`, one ask for each look in this window), and is drawn as its reads
  * come. A layer that can't come says why, small, in the corner; the shapes stay.
  */
-function Live({ view, shapes, looking, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean }) {
+function Live({ view, shapes, looking, size, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean; size: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const seen = useRef(new Map<number, Seen[]>());
   const [why, setWhy] = useState<string | null>(null);
@@ -629,21 +634,27 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     };
   }, [playhead, looking]);
   const latest = useRef(() => {});
+  // The size the shapes are laid out at, the newest: a draw may come from a frame asked for earlier;
+  // drawn again when it changes, so the layers never wait for a read to follow the shapes.
+  const sized = useRef(size);
+  sized.current = size;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => paint(), [size.w, size.h]);
   const draw = () => {
     const c = canvas.current;
     const g = c?.getContext("2d");
-    if (!c || !g) return;
-    const r = c.getBoundingClientRect();
-    if (c.width !== Math.round(r.width * 2) || c.height !== Math.round(r.height * 2)) [c.width, c.height] = [Math.round(r.width * 2), Math.round(r.height * 2)];
+    const { w, h } = sized.current;
+    if (!c || !g || !w || !h) return;
+    if (c.width !== 2 * w || c.height !== 2 * h) [c.width, c.height] = [2 * w, 2 * h];
     // The greys read once, not at every frame.
     if (!greys.current) {
       const css = getComputedStyle(c);
       greys.current = { faint: css.getPropertyValue("--color-fg-faint").trim() || "#8a8f96", soft: css.getPropertyValue("--color-fg-muted").trim() || "#8a8f96" };
     }
     const grey = (t?: string) => (t === "faint" ? greys.current!.faint : greys.current!.soft);
-    // The plot the shapes are drawn on (`layout`), above the x axis's labels and right of the y
-    // axis's, at the canvas's twice-the-pixels scale: `across(f)` is `f`, 0 to 1, across it.
-    const lay = layout(view, r.width, r.height);
+    // The plot the shapes are drawn on (`layout`, from their size), above the x axis's labels and
+    // right of the y axis's, at the canvas's twice-the-pixels scale: `across(f)` is `f`, 0 to 1, across it.
+    const lay = layout(view, w, h);
     const plot = 2 * lay.plot;
     const across = (f: number) => 2 * (lay.left + f * lay.span);
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
@@ -740,6 +751,8 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       }
     });
     c.dataset.reads = String(reads.current);
+    // Where it laid the plot out, in pixels, for the suites to hold against the shapes' (taste.md DV-17).
+    c.dataset.plot = `${lay.left},${lay.span},${lay.plot}`;
     c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4) }));
     c.dataset.span = `${view.x.lo},${view.x.hi}`;
   };
