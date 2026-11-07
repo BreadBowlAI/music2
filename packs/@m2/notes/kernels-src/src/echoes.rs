@@ -65,6 +65,9 @@ pub struct Echo {
     clock: f64,
 }
 
+/// The frames one pass works out the places of: a block's, or a part of a longer call's.
+const CHUNK: usize = 128;
+
 impl Echo {
     /// Every echo sounding ends at frame `f`, and every one to come is forgotten.
     fn end_all(&mut self, give: &mut Give, f: usize) {
@@ -77,31 +80,72 @@ impl Echo {
         }
         self.n = 0;
     }
-}
 
-impl Kernel for Echo {
-    const INPUTS: usize = 8;
-    const OUTPUTS: usize = 1;
-    const NOTES: &'static [usize] = &[NOTES, 8];
-
-    fn new(cfg: &Cfg) -> Self {
-        Echo { sample_rate: cfg.sample_rate, notes: [Echoed::default(); ROOM], n: 0, last: None, clock: 0.0 }
+    /// Each echo that starts or ends within frames `lo..hi` of a pass whose frames from `base` are
+    /// at the places `at` (only climbing from `lo`, the last jump), at the first frame its place
+    /// reaches; then the notes whose echoes are all over go. A search over those frames for each
+    /// echo, so a pass costs little however many notes it echoes.
+    fn due(&mut self, give: &mut Give, at: &[f64], base: usize, lo: usize, hi: usize) {
+        if lo >= hi {
+            return;
+        }
+        let places = &at[lo - base..hi - base];
+        let last = places[places.len() - 1];
+        let frame = |target: f64| lo + places.partition_point(|&x| x < target);
+        let mut i = 0;
+        while i < self.n {
+            let e = &mut self.notes[i];
+            for k in 1..=e.repeats {
+                let bit = 1 << k;
+                let on = e.start + k as f64 * e.every;
+                if e.started & bit == 0 && last >= on {
+                    e.started |= bit;
+                    match e.echo(k) {
+                        Some((pitch, velocity)) => {
+                            let from_pitch = e.from_pitch.map(|x| x + pitch - e.pitch).filter(|x| (0.0..=TOP as f32).contains(x));
+                            give.push(Event::On { frame: frame(on), id: id_of(e.id, k), pitch, velocity, from_pitch });
+                        }
+                        // One that would be silent or past 0 or 127 is left out, as if over.
+                        None => e.ended |= bit,
+                    }
+                }
+                if let Some(end) = e.end
+                    && e.started & !e.ended & bit != 0
+                    && last >= end + k as f64 * e.every
+                {
+                    e.ended |= bit;
+                    give.push(Event::Off { frame: frame(end + k as f64 * e.every), id: id_of(e.id, k), velocity: 0.0 });
+                }
+            }
+            let all = ((1u16 << (e.repeats + 1)) - 1) & !1;
+            if e.end.is_some() && e.ended & all == all {
+                self.notes.copy_within(i + 1..self.n, i);
+                self.n -= 1;
+            } else {
+                i += 1;
+            }
+        }
     }
 
-    fn process(&mut self, io: &mut Io) {
-        let mut give = io.give(0);
-        let mut events = io.events(NOTES).peekable();
-        for f in 0..io.frames {
+    /// Frames `from..to` of a call (at most a [`CHUNK`]): each frame's transport and notes, then
+    /// the echoes that fall in them.
+    fn pass(&mut self, give: &mut Give, io: &Io, events: &mut std::iter::Peekable<m2_kernel::Events<'_>>, from: usize, to: usize) {
+        let mut at = [0.0f64; CHUNK];
+        let mut lo = from;
+        for f in from..to {
             let song = Song::at(io.input(PLAYING)[f], io.input(BEATS)[f]);
             let per_frame = time::beats_per_frame(io.input(TEMPO)[f], self.sample_rate);
             if song.moved(self.last) {
-                self.end_all(&mut give, f);
+                // The echoes due before the jump still play; then those sounding end.
+                self.due(give, &at, from, lo, f);
+                self.end_all(give, f);
                 self.clock = 0.0;
+                lo = f;
             }
             self.last = Some(song);
             let pos = if song.playing { song.beats as f64 } else { self.clock };
             // Judged at the frame nearest each place, as the Arpeggiator judges its steps.
-            let at = pos + 0.5 * per_frame;
+            at[f - from] = pos + 0.5 * per_frame;
             while let Some(e) = events.next_if(|e| e.frame() <= f) {
                 match e {
                     Event::On { id, pitch, velocity, from_pitch, .. } => {
@@ -137,42 +181,31 @@ impl Kernel for Echo {
                     _ => {}
                 }
             }
-            // Each echo starts k × its time after its note starts, and ends as long after it ends.
-            let mut i = 0;
-            while i < self.n {
-                let e = &mut self.notes[i];
-                for k in 1..=e.repeats {
-                    let bit = 1 << k;
-                    if e.started & bit == 0 && at >= e.start + k as f64 * e.every {
-                        e.started |= bit;
-                        match e.echo(k) {
-                            Some((pitch, velocity)) => {
-                                let from_pitch = e.from_pitch.map(|x| x + pitch - e.pitch).filter(|x| (0.0..=TOP as f32).contains(x));
-                                give.push(Event::On { frame: f, id: id_of(e.id, k), pitch, velocity, from_pitch });
-                            }
-                            // One that would be silent or past 0 or 127 is left out, as if over.
-                            None => e.ended |= bit,
-                        }
-                    }
-                    if let Some(end) = e.end
-                        && e.started & !e.ended & bit != 0
-                        && at >= end + k as f64 * e.every
-                    {
-                        e.ended |= bit;
-                        give.push(Event::Off { frame: f, id: id_of(e.id, k), velocity: 0.0 });
-                    }
-                }
-                let all = ((1u16 << (e.repeats + 1)) - 1) & !1;
-                if e.end.is_some() && e.ended & all == all {
-                    self.notes.copy_within(i + 1..self.n, i);
-                    self.n -= 1;
-                } else {
-                    i += 1;
-                }
-            }
             if !song.playing {
                 self.clock += per_frame;
             }
+        }
+        self.due(give, &at, from, lo, to);
+    }
+}
+
+impl Kernel for Echo {
+    const INPUTS: usize = 8;
+    const OUTPUTS: usize = 1;
+    const NOTES: &'static [usize] = &[NOTES, 8];
+
+    fn new(cfg: &Cfg) -> Self {
+        Echo { sample_rate: cfg.sample_rate, notes: [Echoed::default(); ROOM], n: 0, last: None, clock: 0.0 }
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        let mut give = io.give(0);
+        let mut events = io.events(NOTES).peekable();
+        let mut from = 0;
+        while from < io.frames {
+            let to = (from + CHUNK).min(io.frames);
+            self.pass(&mut give, io, &mut events, from, to);
+            from = to;
         }
     }
 
