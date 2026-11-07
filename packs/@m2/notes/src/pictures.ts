@@ -264,7 +264,7 @@ export function chordWords(v: Values): string {
 
 /** Note echo's echoes (PACK-32): beats across from the note's start (fitted to them, CARD-102), how hard each plays up. */
 export function echoesPicture(): PictureDecl<"beats", "unit01"> {
-  return view.picture({ x: axis.lin("beats", 0, 9), y: axis.lin("unit01", 0, 1) });
+  return view.picture({ x: axis.lin("beats", 0, 8), y: axis.lin("unit01", 0, 1) });
 }
 
 /** The note and each echo: where it starts, in beats, how hard it plays (the note at 1), and how far it moves. None silent or past 127. */
@@ -280,7 +280,7 @@ export function echoLevels(every: number, repeats: number, fall: number, pitch: 
 /** The echoes as fading bars, each named by how far it moves when `pitch` isn't 0 (PACK-32). */
 export function echoBars<D>(p: Painter<D, "beats", "unit01">, v: Values): Shape[] {
   const every = RATES[named(v, "time", "time") as Rate] ?? RATES["1/8"];
-  const repeats = within(Math.round(known(v, "repeats", "repeats")), 1, 8);
+  const repeats = within(Math.round(known(v, "repeats", "repeats")), 1, 7);
   const fall = within(known(v, "fall", "fall"), 0, 1);
   const pitch = within(Math.round(known(v, "pitch", "pitch")), -12, 12);
   const shapes: Shape[] = [];
@@ -297,7 +297,7 @@ export function echoWords(v: Values): string {
   if (typeof time !== "string" || typeof repeats !== "number" || typeof fall !== "number" || typeof pitch !== "number") {
     return "Plays each note again, later and quieter: one of its values is set by a lane or the code";
   }
-  const n = within(Math.round(repeats), 1, 8);
+  const n = within(Math.round(repeats), 1, 7);
   const quieter = within(fall, 0, 1) > 0 ? `each ${Math.round(within(fall, 0, 1) * 100)}% quieter` : "each as loud";
   const by = within(Math.round(pitch), -12, 12);
   const climbs = by === 0 ? "" : `, each ${Math.abs(by)} ${Math.abs(by) === 1 ? "semitone" : "semitones"} ${by > 0 ? "higher" : "lower"}`;

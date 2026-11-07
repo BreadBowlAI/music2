@@ -259,3 +259,32 @@ fn the_arpeggiators_step_reaches_a_look() {
 fn step_place(k: usize) -> f32 {
     ((k % 3) as f64 * 0.25 + 0.5 * 0.8 * 0.25) as f32
 }
+
+// PACK-30, Hold, RENDER-9: in the engine, a Stop ends a clip's arpeggio with Hold on. The lane ends
+// the chord at the Stop's own frame, where `time.playing` is already 0, and nothing latches there.
+#[test]
+fn a_stop_ends_a_clips_arpeggio_with_hold_on_in_wasm() {
+    let more = json!([{"id": "hold", "op": "const", "value": 1, "unit": "switch"}]);
+    let inputs = json!({"beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "hold"});
+    let ir = song_of(&[("a".to_string(), "arp", inputs)], more);
+    let pk = own_packages();
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let chord = json!({"clips": [{"start": 0, "length": 16, "notes": [
+        {"pitch": "C4", "start": 0, "length": 8}, {"pitch": "E4", "start": 0, "length": 8}, {"pitch": "G4", "start": 0, "length": 8}]}]});
+    let mut r = Renderer::new(&flat, &data(chord, None), &pk, SR).unwrap();
+    r.set_strict(false);
+    r.set_transport(Transport::new(0, true));
+    r.live = true;
+    let slot = slots(&r, &flat)["a"];
+    let ons = |r: &mut Renderer, blocks: usize| {
+        let mut n = 0;
+        for _ in 0..blocks {
+            r.render_block(r.clock()).unwrap();
+            n += r.lane_events(slot).iter().filter(|e| matches!(e, Event::On { .. })).count();
+        }
+        n
+    };
+    assert!(ons(&mut r, 200) > 0, "it plays the chord");
+    r.transport_cmd(Cmd::Stop);
+    assert_eq!(ons(&mut r, 4 * 24_000 / BLOCK), 0, "no step after the Stop");
+}

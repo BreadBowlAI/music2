@@ -305,15 +305,17 @@ impl Kernel for Arp {
             // Play, a Stop, a seek, a loop's wrap: the notes it plays end, Hold lets go, and the
             // pattern restarts here.
             let mut restart = false;
-            if song.moved(self.last) {
+            let moved = song.moved(self.last);
+            if moved {
                 self.end_where(&mut give, f, |_| true);
                 self.let_go();
                 self.clock = None;
                 restart = true;
             }
             self.last = Some(song);
-            // Hold latches only while the song is stopped.
-            let hold = io.input(HOLD)[f] >= 0.5 && !song.playing;
+            // Hold latches only while the song is stopped, and nothing at the frame where it moved:
+            // the Offs a lane sends at a Stop's own frame are a clip's, which a Stop ends.
+            let hold = io.input(HOLD)[f] >= 0.5 && !song.playing && !moved;
             if !hold {
                 self.let_go();
             }

@@ -112,7 +112,7 @@ export const echo = component(
     inputs: { notes: port.notes() },
     controls: {
       time: control.choice(RATE_NAMES, "1/8"),
-      repeats: control.scalar(3).range(1, 8),
+      repeats: control.scalar(3).range(1, 7),
       fall: control.frac(0.3).range(0, 1),
       pitch: control.semis(0).range(-12, 12),
     },

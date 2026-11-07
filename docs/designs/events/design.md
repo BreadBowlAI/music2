@@ -433,7 +433,7 @@ It plays by §5's rules. Its card:
 
 ### 7.3 Note echo
 
-`echo(notes, { time: "1/8", repeats: 3, fall: 0.3, pitch: 0 })`: each note played again `repeats` times (up to 8, `fan` 8), `time` apart in beats, each `fall` quieter, and `pitch` semitones higher (+12 climbs by octaves). Echoes are placed from each note's start on the beat; stopped, they keep time by `time.tempo`. Stop and a seek end them. The face: the echoes drawn as fading bars.
+`echo(notes, { time: "1/8", repeats: 3, fall: 0.3, pitch: 0 })`: each note played again `repeats` times (up to 7, so a note and its echoes are 8, its `fan`; the review's P3 found 8 one too many), `time` apart in beats, each `fall` quieter, and `pitch` semitones higher (+12 climbs by octaves). Echoes are placed from each note's start on the beat; stopped, they keep time by `time.tempo`. Stop and a seek end them. The face: the echoes drawn as fading bars.
 
 ### 7.4 Scale
 

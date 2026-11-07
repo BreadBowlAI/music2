@@ -515,6 +515,21 @@ fn hold_latches_nothing_while_the_song_plays() {
     assert_eq!(ons(&g).len(), 4, "the chord's beat, and no more");
 }
 
+// PACK-30, Hold: nothing latches at the frame where the song stops. The lane ends a clip's chord at
+// a Stop's own frame (the stopped block's first, where `playing` is already 0): it is let go there,
+// not held, so the arpeggio stops with the song.
+#[test]
+fn hold_lets_go_of_a_clips_chord_at_a_stop() {
+    let stop: u64 = 235 * BLOCK; // a block line, as a Stop always is
+    let song = move |f: u64| if f < stop { (true, f as f64 / BEAT as f64) } else { (false, stop as f64 / BEAT as f64) };
+    let r = Run::new("arp", &ARP, stop + 4 * BEAT).notes(&c_major(0, stop)).with("hold", 1.0).song(&song);
+    let g = run::<Arp>(&r).0;
+    let after: Vec<(u64, f32)> = ons(&g).into_iter().filter(|x| x.0 >= stop).collect();
+    assert!(after.is_empty(), "it played on after the Stop: {after:?}");
+    assert!(ons(&g).len() > 4, "it played before it");
+    all_playable_and_ended(&g);
+}
+
 // PACK-30, Play, a Stop: keys held live go on through a Stop, their pattern started again from it
 // on its own clock; the note it played ends at the Stop.
 #[test]
@@ -524,6 +539,48 @@ fn keys_held_through_a_stop_start_again_from_it() {
     let g = run::<Arp>(&r).0;
     assert_eq!(ons(&g).iter().filter(|x| x.0 >= 30_000).copied().collect::<Vec<_>>(), [(30_000, 60.0), (36_000, 64.0), (42_000, 67.0)]);
     assert_eq!(spans(&g)[4].1, Some(30_000), "the note it played ends at the Stop");
+}
+
+// PACK-30, Held notes: 64 at most; a note past that is left out.
+#[test]
+fn at_most_64_notes_are_held() {
+    let held: Vec<N> = (0..65).map(|i| n(0, 100 * BEAT, 40.0 + i as f32)).collect();
+    let p = pitches(&arp(&held, &[("rate", 5.0)], 66 * BEAT / 8));
+    assert_eq!(p[..64], (0..64).map(|i| 40.0 + i as f32).collect::<Vec<_>>(), "Up through the 64 held");
+    assert_eq!(p[64], 40.0, "then the first again: the order is 64 long");
+    assert!(!p.contains(&104.0), "the 65th, 104, is left out");
+}
+
+// PACK-30, Steps: a new rate starts the pattern again at its next step.
+#[test]
+fn a_new_rate_starts_the_pattern_again_at_its_next_step() {
+    let mut h = host::<Arp>(1.0);
+    let sixteenths = Run::new("arp", &ARP, 0).notes(&c_major(0, 4 * BEAT));
+    let eighths = Run::new("arp", &ARP, 0).notes(&c_major(0, 4 * BEAT)).with("rate", 1.0);
+    // Sixteenths, then eighths from beat 1.1: the next eighth, beat 1.5, plays the order's first note.
+    let turn = (1.1 * BEAT as f64 / BLOCK as f64) as u64;
+    let mut g = vec![];
+    for b in 0..3 * BEAT / BLOCK {
+        play_block(&mut h, if b < turn { &sixteenths } else { &eighths }, b, &mut g);
+    }
+    let want = [(0, 60.0), (6000, 64.0), (12_000, 67.0), (18_000, 60.0), (24_000, 64.0), (36_000, 60.0), (48_000, 64.0), (60_000, 67.0)];
+    assert_eq!(ons(&g), want);
+}
+
+// PACK-30, Steps: a swing that moves while it plays never starts a step twice.
+#[test]
+fn a_moving_swing_never_starts_a_step_twice() {
+    let mut h = host::<Arp>(1.0);
+    let swung = Run::new("arp", &ARP, 0).notes(&c_major(0, 4 * BEAT)).with("swing", 0.71);
+    let straight = Run::new("arp", &ARP, 0).notes(&c_major(0, 4 * BEAT)).with("swing", 0.5);
+    let mut g = vec![];
+    for b in 0..4 * BEAT / BLOCK {
+        play_block(&mut h, if b % 2 == 0 { &swung } else { &straight }, b, &mut g);
+    }
+    let steps: Vec<u64> = ons(&g).iter().map(|x| x.0 / SIXTEENTH).collect();
+    let mut once = steps.clone();
+    once.dedup();
+    assert_eq!((steps.len(), once.len()), (16, 16), "each of 16 sixteenths once: {:?}", ons(&g));
 }
 
 // PACK-30, Its step: the meter says where the steps picture draws the step playing (the middle of
@@ -741,6 +798,24 @@ fn a_place_comes_free_after_its_frame() {
     all_playable_and_ended(&g);
 }
 
+// PACK-32, ABI-15: a note and its echoes are 8 at most, its kernel's fan: repeats run 1 to 7, and
+// 8, past the range, plays as 7.
+#[test]
+fn a_note_and_its_echoes_are_its_fan_at_most() {
+    let g = echo(&[n(0, 2 * BEAT, 60.0)], &[("time", 5.0), ("repeats", 8.0), ("fall", 0.1)], 4 * BEAT, &from_0);
+    assert_eq!(spans(&g).len(), 8, "the note and 7 echoes: {:?}", spans(&g));
+}
+
+// PACK-32, PACK-29: a note given past 0 to 127 is left out, and so are its echoes, even ones its
+// pitch would bring back between them.
+#[test]
+fn a_note_given_past_127_or_below_0_is_left_out_with_its_echoes() {
+    for pitch in [-12.0, 12.0] {
+        let g = echo(&[n(0, 1000, 130.0), n(100, 1100, -2.0)], &[("pitch", pitch)], 2 * BEAT, &from_0);
+        assert!(g.iter().all(|e| !matches!(e, Gave::On { .. })), "pitch {pitch}: {g:?}");
+    }
+}
+
 // ---------------------------------------------------------------- Scale (PACK-33)
 
 /// What Scale gives for each note of `played`, with `set`.
@@ -920,10 +995,12 @@ fn a_reset_starts_over() {
 }
 
 // PACK-29: whatever they are given (values that aren't numbers, or far past their ranges, notes
-// at the ends of the keyboard), each gives only notes the guard plays, and ends each.
+// at the ends of the keyboard and past them), each gives only notes the guard plays, and ends each.
 #[test]
 fn nothing_makes_them_give_a_note_the_guard_drops() {
-    let edge = [n(0, 30_000, 0.0), n(0, 30_000, 127.0), n(500, 31_000, 126.5), n(9000, 40_000, 3.0)];
+    // A lane takes any number as a clip note's pitch: 130 and -2 too.
+    let edge =
+        [n(0, 30_000, 0.0), n(0, 30_000, 127.0), n(500, 31_000, 126.5), n(9000, 40_000, 3.0), n(0, 30_000, 130.0), n(100, 31_000, -2.0)];
     let frames = 100_000;
     for v in [f32::NAN, -1e9, 1e9, f32::INFINITY, -0.4, 0.49] {
         let all = |names: &'static [&'static str]| {

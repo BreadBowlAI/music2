@@ -11,8 +11,8 @@ use crate::time::{self, RATES, Song};
 
 /// The most notes it echoes at once (PACK-32): a note past that plays alone.
 pub const ROOM: usize = 256;
-/// The most echoes of a note: its `fan`.
-pub const REPEATS: usize = 8;
+/// The most echoes of a note: with the note itself, its `fan` of 8.
+pub const REPEATS: usize = 7;
 
 // Its inputs, by place (as m2pkg.toml lists them).
 const NOTES: usize = 0;
@@ -53,7 +53,7 @@ impl Echoed {
     }
 }
 
-/// The id of echo `k` of the note `id` (the note itself is echo 0): nine to a note.
+/// The id of echo `k` of the note `id` (the note itself is echo 0): eight to a note.
 fn id_of(id: u32, k: usize) -> u32 {
     id.wrapping_mul(REPEATS as u32 + 1).wrapping_add(k as u32)
 }
@@ -156,6 +156,8 @@ impl Echo {
             at[f - from] = if f > lo { here.max(at[f - from - 1]) } else { here };
             while let Some(e) = events.next_if(|e| e.frame() <= f) {
                 match e {
+                    // A note given past 0 or 127 is left out, and so are its echoes (PACK-29).
+                    Event::On { pitch, .. } if !(0.0..=TOP as f32).contains(&pitch) => {}
                     Event::On { id, pitch, velocity, from_pitch, .. } => {
                         give.push(Event::On { frame: f, id: id_of(id, 0), pitch, velocity, from_pitch });
                         if self.n == ROOM {
