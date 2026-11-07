@@ -127,7 +127,8 @@ export default function EffectBrowser({
   const list = useRef<HTMLDivElement>(null);
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => wantPlugins(), []);
-  const groups = useMemo(() => search([...effects, ...pluginEffects(plugins)], query), [effects, plugins, query]);
+  // A note effect goes before what plays notes, never after a sound (PKG-21): + Effect lists none.
+  const groups = useMemo(() => search([...effects.filter((e) => !e.notes), ...pluginEffects(plugins)], query), [effects, plugins, query]);
   const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
   const current = flat[Math.min(active, flat.length - 1)];
 

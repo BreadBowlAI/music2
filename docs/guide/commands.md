@@ -226,7 +226,7 @@ Write the input's declared default in place of the name, verified.
 m2 effects <project>
 ```
 
-The effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after.
+The effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after; a note effect's row says `note-effect`, and it goes before a call that plays notes.
 
 ## m2 add-effect
 
@@ -234,7 +234,7 @@ The effects packages offer, by id (`@m2/effects:delay`), and the calls they can 
 m2 add-effect <project> <call> <effect>
 ```
 
-Wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified.
+Wrap a call's audio in an effect, or the notes a call plays in a note effect (it goes before the call), named by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified.
 
 ## m2 remove-effect
 

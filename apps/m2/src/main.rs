@@ -1056,7 +1056,9 @@ change that code first",
             let s = reader(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for e in s.effects() {
-                println!("effect {:18} {:14} {:16} {}", e.component, e.label, e.category, e.description);
+                // A note effect goes before a call that plays notes (PKG-21), an effect after a sound.
+                let (kind, goes) = if e.notes { ("note-effect", "  (goes before)") } else { ("effect", "") };
+                println!("{kind} {:18} {:14} {:16} {}{goes}", e.component, e.label, e.category, e.description);
             }
             for m in s.view().modules {
                 for n in m.nodes.iter().filter(|n| n.audio || n.effect.is_some()) {

@@ -308,15 +308,16 @@ pub const COMMANDS: &[Command] = &[
         name: "effects",
         also: &[],
         usage: "m2 effects <project>",
-        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after",
+        words: "the effects packages offer, by id (`@m2/effects:delay`), and the calls they can go after; a note effect's row \
+                says `note-effect`, and it goes before a call that plays notes",
         more: "",
     },
     Command {
         name: "add-effect",
         also: &[],
         usage: "m2 add-effect <project> <call> <effect>",
-        words: "wrap a call's audio in an effect, named by its component id (`@m2/effects:delay`) or its export \
-                (`@m2/effects.delay`), verified",
+        words: "wrap a call's audio in an effect, or the notes a call plays in a note effect (it goes before the call), named \
+                by its component id (`@m2/effects:delay`) or its export (`@m2/effects.delay`), verified",
         more: "",
     },
     Command {
