@@ -81,7 +81,7 @@ const TAIL_SECONDS = 12;
 const BANDS = 32;
 const LOWEST = 100;
 /** How many times round its combs the eight of them cancel or add, each time, in the all-passes: see `room`. */
-const TOGETHER = 16;
+const TOGETHER = 10;
 
 /** A reverb's tail (CARD-118): seconds across, −60 to 0 dB up. */
 export function tailPicture(): PictureDecl<"seconds", "db"> {
@@ -110,71 +110,71 @@ const at48 = (l: number) => Math.floor((l * RATE) / 44_100);
  *   n from 1 to 40: the combs ring the same click, so where their times round, through the
  *   all-passes, land on the same samples, they cancel or add. Worked out from the all-passes' own
  *   echoes of themselves: each all-pass's is 7/3 at once and −(2/3) × 0.5^j at j lengths either way,
- *   to 6 lengths (within 0.01 dB of every length).
+ *   to 4 lengths (within 0.02 dB of every length).
  */
 export function room(): Room {
   if (rooms) return rooms;
   worked += 1;
   const stages = ALLPASSES.map(at48), combs = COMBS.map(at48);
   // The energies, each all-pass after the last, gathered in 1 ms as they go (each bin its energy
-  // and its energy × time).
-  const ms = RATE / 1000;
-  let energy: number[] = [1], timed: number[] = [0];
+  // and its energy × time), as far as 0.5 s.
+  const ms = RATE / 1000, bins = 500;
+  let energy = new Float64Array(bins), timed = new Float64Array(bins);
+  energy[0] = 1;
   for (const m of stages) {
-    const e2: number[] = [], t2: number[] = [];
-    for (let b = 0; b < energy.length; b++) {
+    const e2 = new Float64Array(bins), t2 = new Float64Array(bins);
+    for (let b = 0; b < bins; b++) {
       const e = energy[b];
-      if (!(e > 0)) continue;
+      if (e === 0) continue;
       const at = timed[b] / e;
       for (let k = 0, a2 = 1; a2 > 1e-6; k++, a2 = k === 1 ? 1 : a2 * 0.25) {
         const when = at + k * m, bin = Math.floor(when / ms);
-        e2[bin] = (e2[bin] ?? 0) + e * a2;
-        t2[bin] = (t2[bin] ?? 0) + e * a2 * when;
+        if (bin >= bins) break;
+        e2[bin] += e * a2;
+        t2[bin] += e * a2 * when;
       }
     }
-    [energy, timed] = [e2, t2];
+    energy = e2;
+    timed = t2;
   }
   // How much of it all comes before each moment, every quarter of a millisecond, from 0 to 1:
   // `before[i]` is the share that comes before i quarters.
   const grid = RATE / 4000;
   let all = 0;
-  for (const e of energy) if (e > 0) all += e;
-  const before: number[] = [0];
-  for (let b = 0; b < energy.length; b++) {
-    if (!(energy[b] > 0)) continue;
-    const i = Math.floor(timed[b] / energy[b] / grid) + 1;
-    while (before.length <= i) before.push(0);
-    before[i] += energy[b] / all;
-  }
-  for (let i = 1; i < before.length; i++) before[i] += before[i - 1];
-  // Past where all but a millionth has come, it has all come.
-  while (before.length > 1 && before[before.length - 2] > 1 - 1e-6) before.pop();
-  before[before.length - 1] = 1;
-  // The all-passes' echo of themselves: the first two's together as a list of lags, the last two's
-  // laid out at every lag, so each lag the combs need is one pass over the first list.
+  for (let b = 0; b < bins; b++) all += energy[b];
+  const quarters = new Float64Array(4 * bins + 1);
+  for (let b = 0; b < bins; b++) if (energy[b] > 0) quarters[Math.floor(timed[b] / energy[b] / grid) + 1] += energy[b] / all;
+  for (let i = 1; i < quarters.length; i++) quarters[i] += quarters[i - 1];
+  // Past where all but a ten-thousandth has come (40 dB under it all), it has all come.
+  let end = 1;
+  while (end < quarters.length && quarters[end - 1] <= 1 - 1e-4) end++;
+  const before = Array.from(quarters.subarray(0, end));
+  before[end - 1] = 1;
+  // The all-passes' echo of themselves, at every lag, to 4 lengths of each: the first two's
+  // together as a list of lags, the last two's, each pair of them added at each.
   const own = (j: number) => (j === 0 ? 7 / 3 : -(2 / 3) * 0.5 ** Math.abs(j));
   const lags: number[] = [], values: number[] = [];
-  for (let i = -6; i <= 6; i++)
-    for (let j = -6; j <= 6; j++) {
+  for (let i = -4; i <= 4; i++)
+    for (let j = -4; j <= 4; j++) {
       const x = own(i) * own(j);
-      if (Math.abs(x) > 1e-2) [lags[lags.length], values[values.length]] = [i * stages[0] + j * stages[1], x];
+      if (Math.abs(x) > 1e-2) {
+        lags.push(i * stages[0] + j * stages[1]);
+        values.push(x);
+      }
     }
-  const reach = 6 * (stages[2] + stages[3]);
-  const later = new Array<number>(2 * reach + 1).fill(0);
-  for (let i = -6; i <= 6; i++) for (let j = -6; j <= 6; j++) later[reach + i * stages[2] + j * stages[3]] += own(i) * own(j);
-  const echo = (lag: number) => {
-    let sum = 0;
-    for (let k = 0; k < lags.length; k++) {
-      const d = lag - lags[k] + reach;
-      if (d >= 0 && d < later.length) sum += values[k] * later[d];
+  const reach = 4 * (stages[0] + stages[1] + stages[2] + stages[3]);
+  const echo = new Float64Array(2 * reach + 1);
+  for (let i = -4; i <= 4; i++)
+    for (let j = -4; j <= 4; j++) {
+      const x = own(i) * own(j), at = reach + i * stages[2] + j * stages[3];
+      for (let k = 0; k < lags.length; k++) echo[at + lags[k]] += x * values[k];
     }
-    return sum;
-  };
-  const whole = echo(0);
+  const whole = echo[reach];
+  const at = (lag: number) => (Math.abs(lag) <= reach ? echo[reach + lag] : 0);
   const together: number[] = [];
   for (let n = 1; n <= TOGETHER; n++) {
     let sum = combs.length * whole;
-    for (let a = 0; a < combs.length; a++) for (let b = a + 1; b < combs.length; b++) sum += 2 * echo(n * (combs[a] - combs[b]));
+    for (let a = 0; a < combs.length; a++) for (let b = a + 1; b < combs.length; b++) sum += 2 * at(n * (combs[a] - combs[b]));
     together.push(sum / (combs.length * whole));
   }
   return (rooms = { before, grid, together });
@@ -194,7 +194,6 @@ export function tailLevel(size: number, damping: number): (t: number) => number 
   if (last && last.size === size && last.damping === damping) return last.level;
   const { before, grid, together } = room();
   const fb = 0.7 + 0.28 * clamp(size, 0, 1), d = 0.4 * clamp(damping, 0, 1);
-  // Each time round, its low-pass holds the lows back d / (1 − d) of a sample more.
   const lengths = COMBS.map(at48);
   // Each band's share of a click (its lows cut) and its loop's gain, squared.
   const share: number[] = [], gain: number[] = [];
@@ -230,20 +229,29 @@ export function tailLevel(size: number, damping: number): (t: number) => number 
       after.push(sum);
     }
   };
-  // The share of the all-passes' spread that comes before `when` samples.
-  const sooner = (when: number) => (when <= 0 ? 0 : before[Math.min(before.length - 1, Math.floor(when / grid))]);
-  const span = before.length * grid;
-  const shortest = Math.min(...lengths);
+  // The share of the all-passes' spread that comes before `when` samples: `before`, every `grid`.
+  const top = before.length - 1, span = before.length * grid, shortest = Math.min(...lengths);
   // What is left at `t`: for each comb, what comes after `t` of each time round, by where in the
   // spread it lands: the k-th time round's (from 0) for what comes k to k + 1 lengths before `t`.
+  // Each share is read once, as the end of one span and the start of the next.
   const left = (t: number) => {
     const now = t * RATE;
     upTo(Math.ceil(now / shortest) + 1);
     let e = 0;
-    for (const l of lengths) {
-      e += after[0] * (1 - sooner(now - l));
-      const first = Math.max(1, Math.floor((now - span) / l));
-      for (let k = first; k * l < now; k++) e += after[k] * (sooner(now - k * l) - sooner(now - (k + 1) * l));
+    for (let c = 0; c < lengths.length; c++) {
+      const l = lengths[c];
+      let w = now - l;
+      let s = w <= 0 ? 0 : before[Math.min(top, Math.floor(w / grid))];
+      e += after[0] * (1 - s);
+      let k = Math.max(1, Math.floor((now - span) / l));
+      w = now - k * l;
+      s = w <= 0 ? 0 : before[Math.min(top, Math.floor(w / grid))];
+      for (; w > 0; k++) {
+        w -= l;
+        const next = w <= 0 ? 0 : before[Math.min(top, Math.floor(w / grid))];
+        e += after[k] * (s - next);
+        s = next;
+      }
     }
     return e;
   };
@@ -255,18 +263,28 @@ export function tailLevel(size: number, damping: number): (t: number) => number 
 /** The last tail `tailLevel` worked out. */
 let last: { size: number; damping: number; level: (t: number) => number } | null = null;
 
-/** When a tail of `level` has fallen `down` dB, in seconds, to 1 ms: `TAIL_SECONDS` at most. */
+/**
+ * When a tail of `level` has fallen `down` dB, in seconds: `TAIL_SECONDS` at most. Doubled from a
+ * quarter of a second until past it, then found between by where a straight line through the two
+ * ends crosses it (the tail falls nearly straight in dB), each end moved in turn, to a millisecond
+ * or 0.02 dB.
+ */
 export function tailFalls(level: (t: number) => number, down: number): number {
-  // Doubled from a quarter of a second until past it, then halved.
-  let [lo, hi] = [0, 0.25];
-  while (level(hi) > -down) {
+  let lo = 0, hi = 0.25, ylo = 0, yhi = level(hi);
+  while (yhi > -down) {
     if (hi >= TAIL_SECONDS) return TAIL_SECONDS;
-    [lo, hi] = [hi, Math.min(TAIL_SECONDS, 2 * hi)];
+    [lo, ylo] = [hi, yhi];
+    hi = Math.min(TAIL_SECONDS, 2 * hi);
+    yhi = level(hi);
   }
-  while (hi - lo > 0.001) {
-    const mid = (lo + hi) / 2;
-    if (level(mid) > -down) lo = mid;
-    else hi = mid;
+  for (let i = 0; i < 12 && hi - lo > 0.001; i++) {
+    // Where the line crosses, kept a tenth of the way in from either end, so each step halves at worst.
+    const across = (ylo + down) / (ylo - yhi);
+    const t = lo + (hi - lo) * Math.min(0.9, Math.max(0.1, across));
+    const y = level(t);
+    if (Math.abs(y + down) < 0.02) return t;
+    if (y > -down) [lo, ylo] = [t, y];
+    else [hi, yhi] = [t, y];
   }
   return hi;
 }
@@ -368,15 +386,22 @@ const PHASER = { centre: 640, octaves: 2.5 } as const;
 export function notchesAt(rate: number, depth: number, t: number): [number, number, number] {
   const s = Math.sin(2 * Math.PI * phaseAt(rate, t));
   const f = clamp(PHASER.centre * 2 ** (PHASER.octaves * clamp(depth, 0, 1) * s), 10, 0.45 * RATE);
-  const g = Math.tan((Math.PI * f) / RATE);
-  return [1, 3, 5].map((k) => (RATE / Math.PI) * Math.atan(g * Math.tan((k * Math.PI) / 12))) as [number, number, number];
+  const g = Math.tan((Math.PI * f) / RATE), back = RATE / Math.PI;
+  return [back * Math.atan(g * TURNS[0]), back * Math.atan(g * TURNS[1]), back * Math.atan(g * TURNS[2])];
 }
+/** Where the six stages' turn is half a cycle, against the sweep's frequency: tan(π/12), tan(3π/12), tan(5π/12). */
+const TURNS = [1, 3, 5].map((k) => Math.tan((k * Math.PI) / 12));
 
 /** A phaser's motion over a second (CARD-120): its three notches across frequency, the lines `low`, `mid` and `high`. */
 export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
   const lines: number[][] = [[], [], []];
-  for (const t of second()) notchesAt(rate, depth, t).forEach((f, i) => lines[i].push(t, f));
+  for (const t of second()) {
+    const [low, mid, high] = notchesAt(rate, depth, t);
+    lines[0].push(t, low);
+    lines[1].push(t, mid);
+    lines[2].push(t, high);
+  }
   return [p.line(lines[0], { name: "low", tone: "soft" }), p.line(lines[1], { name: "mid" }), p.line(lines[2], { name: "high", tone: "soft" })];
 }
 

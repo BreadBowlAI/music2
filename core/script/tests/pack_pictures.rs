@@ -427,3 +427,68 @@ fn a_misnamed_value_is_said_as_one() {
     assert!(why.contains("dampin, which this sound doesn't have") && !why.contains("cable"), "{why}");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// CARD-75 (a fifth of CARD-64's limit): every picture of both packs draws in 4 ms at most, its first
+// draw too (which works out its kept sums, CARD-110), once its module is loaded (a limit of its own):
+// at its defaults, then at five more values. It judges speed, so it runs in the nightly tier.
+#[test]
+fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
+    let fifth = std::time::Duration::from_millis(4);
+    let mut slow = vec![];
+    for pack in ["mixing", "effects"] {
+        let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
+        let catalog = m2_script::describe(&packages);
+        let runner = Runner::new();
+        let mut loaded = false;
+        for (cid, d) in catalog.components.iter().filter(|(c, _)| c.starts_with(&format!("@m2/{pack}:"))) {
+            for view in d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })) {
+                let defaults = |nudge: f64| {
+                    let mut values = serde_json::Map::new();
+                    for c in d.controls.iter().filter(|c| c.each.is_none()) {
+                        let at = c.default.as_ref().map_or(0.0, |s| s.value);
+                        values.insert(
+                            c.name.clone(),
+                            match c.unit {
+                                Some(m2_ir::Unit::Switch) => json!(at != 0.0),
+                                _ => match c.options() {
+                                    Some(names) => json!(names.name(at as usize).unwrap_or_default()),
+                                    None => json!(at * nudge),
+                                },
+                            },
+                        );
+                    }
+                    for s in &d.settings {
+                        values.insert(s.name.clone(), s.default.clone().filter(|v| v.is_number() || v.is_string()).unwrap_or(Value::Null));
+                    }
+                    Value::Object(values).to_string()
+                };
+                for (i, nudge) in [1.0, 0.9, 0.8, 1.1, 0.7, 0.95].into_iter().enumerate() {
+                    let ask = Ask {
+                        key: pack.into(),
+                        packages: packages.clone(),
+                        song: None,
+                        module: d.module.clone(),
+                        descriptor: d.clone(),
+                        view: view.name.clone(),
+                        values: defaults(nudge),
+                        memo: format!("{cid}\u{0}{}", view.name),
+                    };
+                    // The module's load first: it has a limit of its own (CARD-64).
+                    if !loaded {
+                        let _ = runner.draw(ask.clone());
+                        loaded = true;
+                        continue;
+                    }
+                    let t = std::time::Instant::now();
+                    let drawn = runner.draw(ask);
+                    let took = t.elapsed();
+                    assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
+                    if took > fifth {
+                        slow.push(format!("{cid}'s {} draw {i}: {took:?}", view.name));
+                    }
+                }
+            }
+        }
+    }
+    assert!(slow.is_empty(), "past a fifth of a draw's 20 ms: {slow:#?}");
+}
