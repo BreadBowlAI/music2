@@ -7,9 +7,10 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+use m2_ir::Op;
 use m2_script::component::ViewOf;
-use m2_script::describe;
 use m2_script::pictures::{Ask, Drawn, Runner};
+use m2_script::{Options, build_full, describe};
 use serde_json::{Value, json};
 
 fn repo() -> PathBuf {
@@ -44,6 +45,31 @@ fn port_defaults() -> BTreeMap<(String, String), f64> {
 }
 
 /// A control's name as its kernel's port: `inKey` is `in_key`.
+/// The kernel each of `@m2/notes`' components calls, by its ComponentId: read from a song that plays
+/// all four, each kernel node in the frame of the call that made it.
+fn kernels_called() -> BTreeMap<String, String> {
+    let code = "import { song } from \"@m2/core\";\nimport { arp, chord, echo, lockToKey } from \"@m2/notes\";\n\
+                import { mono, osc } from \"std/dsp\";\nimport { mixer } from \"std/mix\";\n\
+                export default song(({ lane }) => {\n  const n = lane.notes(\"notes\");\n  const play = (x) => mono(x, (v) => osc.saw(v.pitch));\n\
+                return mixer({ a: play(arp(n)), b: play(chord(n)), c: play(echo(n)), d: play(lockToKey(n)) });\n});\n";
+    let mut o = Options::new([("song.ts".to_string(), code.to_string())].into(), "song.ts");
+    for (name, dir) in packages() {
+        o.dependencies.push(name.clone());
+        o.packages.push((name, dir));
+    }
+    let b = build_full(&o).unwrap_or_else(|e| panic!("{e:?}"));
+    let m = &b.ir.modules[0];
+    m.nodes
+        .iter()
+        .filter_map(|n| match &n.op {
+            Op::Kernel { kernel, .. } if kernel.starts_with("@m2/notes:") => {
+                Some((m.frames[n.frame? as usize].component.clone()?, kernel.clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
 fn snake(name: &str) -> String {
     name.chars().flat_map(|c| if c.is_ascii_uppercase() { vec!['_', c.to_ascii_lowercase()] } else { vec![c] }).collect()
 }
@@ -58,6 +84,8 @@ fn the_note_effects_start_where_their_kernels_do() {
     let ids: Vec<&str> = catalog.components.keys().filter_map(|k| k.strip_prefix("@m2/notes:")).collect();
     assert_eq!(ids, ["arp", "chord", "echo", "lock-to-key"], "the pack's sounds");
     let ports = port_defaults();
+    let called = kernels_called();
+    assert_eq!(called.len(), 4, "each calls one kernel of the pack's: {called:?}");
     for (id, label, category, face, controls) in [
         ("arp", "Arpeggiator", "Arpeggiator", ["steps", "style", "rate", "octaves", "gate", "hold"].as_slice(), 6),
         ("chord", "Chord", "Chords", &["keyboard", "shape", "inKey", "inversion"], 3),
@@ -73,8 +101,7 @@ fn the_note_effects_start_where_their_kernels_do() {
         let views: Vec<&str> = d.editor.views.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(views, [face[0]], "{id} draws one picture");
         assert!(matches!(d.editor.views[0].of, ViewOf::Picture { .. }), "{id}'s view is a picture");
-        // Its kernel is the component's own name, but Lock to key's: `lock`, a kernel's name being one word.
-        let kernel = if d.id == "@m2/notes:lock-to-key" { "@m2/notes:lock".to_string() } else { d.id.clone() };
+        let kernel = &called[&d.id];
         for c in &d.controls {
             let port = (kernel.clone(), snake(&c.name));
             let kernel = ports.get(&port).unwrap_or_else(|| panic!("{id}.{}: its kernel has no port {}", c.name, port.1));
