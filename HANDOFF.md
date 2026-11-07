@@ -262,9 +262,11 @@ whether it is one of these or a real failure, and fixes the real ones (most were
    141, with the 0.2.0 file).
 2. **Sounds that make notes** (gap #62): an arpeggiator, chords, note repeat, a scale and generators, each a pack
    put before an instrument; a pack's kernel needs event outputs (ABI-2). The design note, `docs/designs/events/`,
-   isn't on `main` yet: it waits for the owner's yes.
-3. **The small measuring steps** (gap #63): pictures measured from the sound itself instead of copies of a kernel's
-   sums (a design note first, `docs/designs/measure2/`).
+   is accepted (#96, 2026-11-07); tracks `notes-out` and `notes-sdk` are being built, then `notes-pack` and
+   `notes-chain` (its §8).
+3. **The small measuring steps** (gap #63): `docs/designs/measure2/`, accepted (#96), keeps the copied sums and takes
+   three small steps (track `measure2-small`, its §8), with the keyed compressor's dot (M2-21) and the cards'
+   overlapping axis labels.
 4. **The owner's own items**, open:
    - **The registry, live**: the Cloudflare R2 bucket and its address (D10), then the repo
      `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
