@@ -25,6 +25,7 @@
 | `cards2/` | cards you play with: a face and tabs on every card, and pictures a pack draws as shapes that music2 draws in its style (accepted, with a mockup) |
 | `drums/` | drums the FL way: one drum per track, a kit is a group of tracks under one bus, a beat grid across them (proposed) |
 | `vocals/` | vocals: Tune (pitch correction as an effect), editing a recorded voice's notes, comping the best take from a loop's passes (accepted) |
+| `events/` | sounds that make notes: note effects (an arpeggiator, chords, note echo, scale) before the instrument, a kernel that gives notes, and Bake to notes (accepted, with a mockup) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 
