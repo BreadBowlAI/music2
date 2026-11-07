@@ -515,6 +515,48 @@ export const rated = component(
     assert_eq!(draw(44_100), low, "and kept for each");
 }
 
+// CARD-87, PACK-23 (review S4): a draw is marked by what it used that came in 2.5: `rate` when it or
+// its words read p.rate, a part given again from where it was kept marking it as when it was made
+// (so a picture's first draw, run twice, is the same both times); `level` for a response's level
+// other than −20. One that used neither has no mark.
+#[test]
+fn a_draw_is_marked_by_what_of_2_5_it_used() {
+    let index = r#"import { axis, component, control, kernel, port, view, type Audio } from "@m2/core";
+const curve = () => view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) });
+export const marks = component(
+  {
+    id: "marks",
+    label: "Marks",
+    inputs: { x: port.audio() },
+    controls: { freq: control.hz(1000) },
+    output: port.audio(),
+    editor: { views: { plain: curve(), drawn: curve(), said: curve(), parted: curve(), quiet: curve(), loud: curve(), both: curve() } },
+  },
+  (x, v) => kernel<Audio>("test:marks", { x, ...v }),
+  {
+    plain: { draw: (v, p) => [p.response(), p.mark("x", v.freq ?? 1000, "its frequency")], words: () => "nothing of 2.5" },
+    drawn: { draw: (v, p) => [p.mark("x", p.rate / 4, "a quarter of the rate")], words: () => "the rate, drawn" },
+    said: { draw: (v, p) => [p.mark("x", v.freq ?? 1000, "its frequency")], words: (v, p) => `the rate, said: ${p.rate} Hz` },
+    parted: { draw: (v, p) => [p.part("half", () => [p.mark("x", p.rate / 2, "half the rate")])], words: () => "the rate, in a part" },
+    quiet: { draw: (v, p) => [p.response({ level: -80 })], words: () => "a quiet click" },
+    loud: { draw: (v, p) => [p.response({ level: -20 })], words: () => "a click at −20 dB, as with none" },
+    both: { draw: (v, p) => [p.response({ level: -60 }), p.mark("x", p.rate / 4, "a quarter of the rate")], words: () => "both" },
+  },
+);
+"#;
+    let pack = Pack::new("marks", index);
+    let runner = Runner::new();
+    let uses = |view: &str| shapes(runner.draw(pack.ask("marks", view, json!({"freq": 1000}))))["uses"].clone();
+    assert_eq!(uses("plain"), Value::Null, "nothing of 2.5: no mark");
+    assert_eq!(uses("drawn"), json!(["rate"]));
+    assert_eq!(uses("said"), json!(["rate"]), "its words read the rate");
+    assert_eq!(uses("parted"), json!(["rate"]), "a part made, then given again on the first draw's second run");
+    assert_eq!(uses("parted"), json!(["rate"]), "and on a later draw");
+    assert_eq!(uses("quiet"), json!(["level"]));
+    assert_eq!(uses("loud"), Value::Null, "a click at −20 dB plays as one with no level");
+    assert_eq!(uses("both"), json!(["level", "rate"]));
+}
+
 // CARD-61, CARD-65: words are one line of 1 to 400 characters, counted as characters, with no
 // control character: 400 é is drawn, 401 isn't, nor words with an escape or U+2028 (review G2, G10).
 #[test]

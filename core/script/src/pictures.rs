@@ -555,12 +555,25 @@ pub const MEASURED: (usize, usize) = (256, 256);
 /// level plays the loudest, −20.
 pub const CLICK: (f64, f64) = (-80.0, -20.0);
 
-/// A draw, as checked (CARD-65): its shapes and its words.
+/// A draw, as checked (CARD-65): its shapes, its words, and what of `@m2/core` 2.5 it used.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Drawing {
     pub shapes: Vec<Shape>,
     pub words: String,
+    /// What it used that came in 2.5 (CARD-87), for checks only (PACK-23): none, mostly.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub uses: Vec<Use>,
+}
+
+/// What a draw used that came in `@m2/core` 2.5 (CARD-87).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Use {
+    /// The song's rate: the draw, or its words, read `p.rate`.
+    Rate,
+    /// A response's click at a level other than −20 dB (CARD-80).
+    Level,
 }
 
 /// Whether `t` is text of `lo` to `hi` characters (code points), with no control character, nor a

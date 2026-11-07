@@ -1486,8 +1486,8 @@ class PictureError extends Error {}
 
 /** Every shape `p` made: a draw gives back only these. */
 const made = new WeakSet<object>();
-/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, and what it drew. */
-const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number }>();
+/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, what it drew, and what of 2.5 it used. */
+const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number; uses: readonly string[] }>();
 /** The parts kept at most: the oldest goes first. */
 const KEPT = 512;
 /** The numbers a draw may give in all (CARD-65). */
@@ -1521,6 +1521,14 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   Object.freeze(target);
   // Who reads: each part being made, which is made again only when what it read changes.
   const readers: Set<string>[] = [];
+  // What of @m2/core 2.5 the draw used (CARD-87, PACK-23): the song's rate read, a click other than
+  // −20 dB; and what the part being made used, kept with it, so one given again marks the draw too.
+  const uses = new Set<string>();
+  let making: Set<string> | undefined;
+  const use = (what: string) => {
+    uses.add(what);
+    making?.add(what);
+  };
   let missed: string | undefined;
   // Each value an accessor that says who read it; a name the sound doesn't have reaches the
   // prototype, which refuses it; nothing can be changed. Faster than a proxy over every read.
@@ -1645,20 +1653,24 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (was && [...was.read].every(([k, x]) => Object.is(target[k], x))) {
         numbers += was.numbers;
         if (numbers > NUMBERS) bad(`draws more than 20,000 numbers: draw fewer points`);
+        for (const u of was.uses) use(u);
         return shape({ kind: "part", name: partName, shapes: was.shapes });
       }
       const read = new Set<string>();
       const before = numbers;
+      const marks = new Set<string>();
       readers.push(read);
+      making = marks;
       let shapes: readonly object[];
       try {
         shapes = shapesOf(make(), `p.part("${partName}")'s function`);
       } finally {
         readers.pop();
+        making = undefined;
       }
       kept.delete(key);
       if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before });
+      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before, uses: [...marks] });
       return shape({ kind: "part", name: partName, shapes });
     },
     response: ((o?: { tone?: unknown; name?: unknown; level?: unknown }) => {
@@ -1666,6 +1678,7 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (o?.name !== undefined && !(fits(o.name, 1, 32) && NAME.test(o.name as string))) bad(`gives p.response the name ${shown(o.name)}: a line's name is a plain name of up to 32 characters`);
       const level = o?.level;
       if (level !== undefined && !(typeof level === "number" && level >= CLICK.quietest && level <= CLICK.loudest)) bad(`gives p.response the level ${shown(level)}: its click plays at −80 to −20 dB`);
+      if (level !== undefined && level !== CLICK.loudest) use("level");
       const t = tone("p.response", o?.tone);
       once("p.response", 2 * MEASURED.response);
       return shape({ kind: "response", tone: t, name: o?.name, level });
@@ -1682,7 +1695,10 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       once("p.hit", 4 * MEASURED.hit);
       return shape({ kind: "hit", note, seconds, tone: t });
     }) as Painter["hit"],
-    rate,
+    get rate() {
+      use("rate");
+      return rate;
+    },
   };
   const shapesOf = (out: unknown, what: string): readonly object[] => {
     if (!Array.isArray(out)) bad(`${what} returns ${shown(out)}: it returns a list of shapes, made with p`);
@@ -1691,10 +1707,16 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   };
   try {
     const shapes = shapesOf(draw(v as Played, p), "its draw");
-    const words = said(v as Played, Object.freeze({ rate }));
+    const heard: Heard = Object.freeze({
+      get rate() {
+        use("rate");
+        return rate;
+      },
+    });
+    const words = said(v as Played, heard);
     if (missed) bad(missed);
     if (!fits(words, 1, 400) || !words.trim()) bad(`its words must be one line of 1 to 400 characters, not ${shown(words)}`);
-    return JSON.stringify({ shapes, words });
+    return JSON.stringify(uses.size ? { shapes, words, uses: [...uses].sort() } : { shapes, words });
   } catch (e) {
     if (e instanceof PictureError) return JSON.stringify({ why: missed ?? e.message });
     // Out of memory, an interrupt, a stack that ran out: the runner's to say, and its runtime to make again (CARD-64).

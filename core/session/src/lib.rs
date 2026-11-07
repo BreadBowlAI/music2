@@ -591,29 +591,22 @@ export default song(() => v.out);
             let noted = timed.contains(name) || mine.clone().any(|(_, d)| d.is_note_effect());
             // A curve measured with a quiet click (2.5, CARD-80), or the song's rate read (2.5,
             // CARD-87), which only a draw shows: each picture drawn at its defaults, as `m2 pack
-            // check` draws it, at 48 and at 96 kHz, a picture that reads the rate drawing apart.
+            // check` draws it, and its mark read (review S4).
             let quiet = mine.clone().any(|(_, d)| {
                 d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })).any(|v| {
-                    let at = |rate: u32| {
-                        let ask = m2_script::pictures::Ask {
-                            key: format!("uses {name}"),
-                            packages: packages.clone(),
-                            song: None,
-                            module: d.module.clone(),
-                            descriptor: d.clone(),
-                            view: v.name.clone(),
-                            values: m2_script::pictures::defaults(d),
-                            memo: "uses".into(),
-                            rate,
-                        };
-                        let m2_script::pictures::Drawn::Shapes(json) = runner.draw(ask) else { return serde_json::Value::Null };
-                        serde_json::from_str(&json).unwrap_or_default()
+                    let ask = m2_script::pictures::Ask {
+                        key: format!("uses {name}"),
+                        packages: packages.clone(),
+                        song: None,
+                        module: d.module.clone(),
+                        descriptor: d.clone(),
+                        view: v.name.clone(),
+                        values: m2_script::pictures::defaults(d),
+                        memo: "uses".into(),
+                        rate: m2_script::pictures::RATE,
                     };
-                    let drawn = at(m2_script::pictures::RATE);
-                    fn quietly(shapes: &serde_json::Value) -> bool {
-                        shapes.as_array().into_iter().flatten().any(|s| s.get("level").is_some() || quietly(&s["shapes"]))
-                    }
-                    quietly(&drawn["shapes"]) || at(96_000) != drawn
+                    let m2_script::pictures::Drawn::Shapes(json) = runner.draw(ask) else { return false };
+                    serde_json::from_str::<m2_script::pictures::Drawing>(&json).is_ok_and(|d| !d.uses.is_empty())
                 })
             });
             match (major.as_deref(), optional, kits, labelled) {
