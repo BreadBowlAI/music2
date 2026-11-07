@@ -2428,6 +2428,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const [kind, what] = noteEffect ? ["notes", "a note effect (editor.category, notes first and notes out)"] : ["audio", "an effect (editor.category)"];
     const [first, ...rest] = inputs;
     if (!first || first.spec.kind !== kind || lead[0] !== first) fail(`${what} takes ${kind} as its first argument`);
+    // One input of notes a call must give: what a wrap writes around, and a bypass passes on.
+    if (noteEffect && (first.spec.optional || first.spec.many)) fail("a note effect's notes are one input a call must give: not .optional() or .many()");
     // Others it may take only as a call may leave them out (PKG-18): a key it listens to.
     const must = rest.find((i) => !i.spec.many && !i.spec.optional);
     if (must) fail(`${what} has one input a call must give, not "${must.name}" too: declare it .optional()`);

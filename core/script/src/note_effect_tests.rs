@@ -183,6 +183,15 @@ fn a_note_effect_is_checked_as_an_effect_is() {
             format!("{{ id: \"c\", inputs: {{ notes: port.notes() }}, controls: {{ rate: control.scalar() }}, {out} }} }}"),
             "a note effect (editor.category, notes first and notes out) must build from its insert alone, which leaves out \"rate\"",
         ),
+        // Review N2: its notes are one input a call must give, so a wrap and a bypass have one to pass on.
+        (
+            format!("{{ id: \"c\", inputs: {{ notes: port.notes().optional() }}, {out} }} }}"),
+            "a note effect's notes are one input a call must give: not .optional() or .many()",
+        ),
+        (
+            format!("{{ id: \"c\", inputs: {{ notes: port.notes().many() }}, {out} }} }}"),
+            "a note effect's notes are one input a call must give: not .optional() or .many()",
+        ),
         (
             format!("{{ id: \"c\", inputs: {{ notes: port.notes(), x: port.control() }}, positional: [\"x\", \"notes\"], {out} }} }}"),
             "a note effect (editor.category, notes first and notes out) takes notes as its first argument",
