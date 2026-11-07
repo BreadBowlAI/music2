@@ -84,6 +84,8 @@ export function chainOf(m: ModuleView): ChainOf | null {
   for (const n of all) if (reaches(n.id)) heard.add(n.id);
   const cards = all.filter((n) => heard.has(n.id));
   if (!cards.length) return null;
+  // A note effect (notes in, notes out) is no card in the chain yet: the patch shows it (DV-11).
+  if (m.nodes.some((n) => n.kind === "call" && n.outputs[0]?.kind === "notes")) return { why: "This sound has a note effect, which the chain can't show yet." };
   const title = (n: ViewNode) => n.title ?? n.label;
   const parts = { why: "This sound is built from parts." };
   // What feeds each card's sound: its audio coming in, but what a "Listens to" row stands for.

@@ -233,7 +233,7 @@ keys you hold → Arpeggiator → Chord → Pluck → Reverb → the mixer
 | **Note echo** (`echo`) | Plays each note again, later and quieter, a few times: a delay of notes, not of sound | **Time**: how far apart, on the beat. **Repeats**: 1 to 7. **Fall**: how much quieter each one is. **Pitch**: how many semitones higher each one is (12 climbs by octaves) |
 | **Lock to key** (`lockToKey`) | Moves every note you play onto the song's key, so no note is wrong, as the roll's Lock to key moves drawn notes. A note between two goes down | **Shift**: then moves each note that many notes of the key up (or down): 2 in C major turns C E G into E G B, a harmony |
 
-**Add one.** The window shows a note effect's card on the track, but its **+** doesn't list note effects yet: that comes with the Graph's **+** on a wire. Until then, add one in code, or with `m2`:
+**Add one.** Device shows a sound with a note effect as its patch, with the note effect's card in it, since the chain can't show one yet; and its **+** doesn't list note effects. Both come with the Graph's **+** on a wire. Until then, add one in code, or with `m2`:
 
 | How | What to do |
 |---|---|
