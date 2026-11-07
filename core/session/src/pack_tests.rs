@@ -163,7 +163,7 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
 // (KIT-3), which reach its descriptor, every other byte of it as it was but its category. A descriptor that names none has
 // no `kits` at all, so a 2.1 pack's keeps its bytes. One made for 2.4 may read the song's key and name a face (CARD-40);
 // one made for 2.5 may declare a note effect (PKG-21) and read the song's tempo (RENDER-7); one made for 2.6 may draw a
-// curve measured with a quiet click (CARD-80).
+// curve measured with a quiet click (CARD-80), and read the song's rate (CARD-87).
 #[test]
 fn a_pack_made_for_an_older_minor_of_core_still_builds() {
     let mut first: Option<String> = None;
@@ -198,7 +198,7 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
             "2.6" => code.replace("import { component, control,", "import { axis, component, control, view,")
                 + "\n/** A lowpass whose curve is measured with a quiet click. */\nexport const quietCurve = component(\n  { id: \"quiet-curve\", label: \"Quiet curve\", inputs: { in: port.audio() }, controls: { cutoff: control.hz(1000) }, output: port.audio(),\n    \
                    editor: { category: \"Filter\", views: { curve: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24) }) } } },\n  \
-                   (x: Audio, { cutoff }: Params): Audio => svf.lowpass(x, cutoff),\n  { curve: { draw: (v: any, p: any) => [p.response({ level: -80 })], words: () => \"measured quietly\" } },\n);\n",
+                   (x: Audio, { cutoff }: Params): Audio => svf.lowpass(x, cutoff),\n  { curve: { draw: (v: any, p: any) => [p.response({ level: -80 }), p.mark(\"x\", p.rate / 2, \"half the rate\")], words: () => \"measured quietly\" } },\n);\n",
             _ => code,
         };
         std::fs::write(&index, code).unwrap();

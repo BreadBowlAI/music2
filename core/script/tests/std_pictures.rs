@@ -27,6 +27,7 @@ fn draw(runner: &Runner, component: &str, view: &str, values: Value) -> Result<V
         view: view.into(),
         values: values.to_string(),
         memo: format!("{component}\u{0}{view}"),
+        rate: 48_000,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
@@ -244,6 +245,7 @@ fn every_bundled_picture_draws_at_its_defaults() {
                 view: view.name.clone(),
                 values: Value::Object(values).to_string(),
                 memo: format!("{cid}\u{0}{}", view.name),
+                rate: 48_000,
             };
             match runner.draw(ask) {
                 Drawn::Shapes(_) => drew += 1,
@@ -309,6 +311,7 @@ fn an_envelope_over_values_in_other_units_is_refused_in_words() {
             view: "env".into(),
             values: values.to_string(),
             memo: "wrong\u{0}env".into(),
+            rate: 48_000,
         };
         let why = match runner.draw(ask) {
             Drawn::Cant(why) => why,

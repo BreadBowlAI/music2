@@ -27,6 +27,7 @@ fn draw(runner: &Runner, pack: &str, component: &str, view: &str, values: Value)
         view: view.into(),
         values: values.to_string(),
         memo: format!("{component}\u{0}{view}"),
+        rate: 48_000,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
@@ -421,6 +422,7 @@ fn a_misnamed_value_is_said_as_one() {
         view: "tail".into(),
         values: json!({"size": 0.5, "damping": 0.5}).to_string(),
         memo: "room\u{0}tail".into(),
+        rate: 48_000,
     };
     let why = match Runner::new().draw(ask) {
         Drawn::Cant(why) => why,
@@ -474,6 +476,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                         view: view.name.clone(),
                         values: defaults(nudge),
                         memo: format!("{cid}\u{0}{}", view.name),
+                        rate: 48_000,
                     };
                     // The module's load first: it has a limit of its own (CARD-64).
                     if !loaded {

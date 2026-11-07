@@ -388,6 +388,7 @@ pub fn picture_call(rev: &m2_session::Revision, node: &ViewNode, view: &str) -> 
         view: view.to_string(),
         values: String::new(),
         memo: format!("{}\u{0}{view}", node.id),
+        rate: rev.project.sample_rate(),
     };
     let label = node.title.clone().unwrap_or_else(|| node.label.clone());
     Some(PictureCall { ask, values: values.clone(), label })

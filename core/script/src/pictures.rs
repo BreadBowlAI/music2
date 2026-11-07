@@ -75,7 +75,12 @@ pub struct Ask {
     pub values: String,
     /// The picture asked for, which its parts are kept by (CARD-64).
     pub memo: String,
+    /// The song's sample rate, which a draw reads as `p.rate` (CARD-87): [`RATE`] where no song plays.
+    pub rate: u32,
 }
+
+/// The rate a picture is drawn at where no song plays (`m2 pack check`, CARD-87).
+pub const RATE: u32 = 48_000;
 
 /// What a draw gave.
 #[derive(Clone, Debug, PartialEq)]
@@ -402,7 +407,7 @@ impl One {
         let out = self.ctx.with(|ctx| {
             let run = || -> rquickjs::Result<String> {
                 let f = call.restore(&ctx)?;
-                f.call((ask.descriptor.id.as_str(), ask.view.as_str(), ask.values.as_str(), ask.memo.as_str()))
+                f.call((ask.descriptor.id.as_str(), ask.view.as_str(), ask.values.as_str(), ask.memo.as_str(), ask.rate))
             };
             run().catch(&ctx).map_err(|e| caught(&mut state.borrow_mut(), e, false).message)
         });

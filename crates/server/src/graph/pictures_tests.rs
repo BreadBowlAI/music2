@@ -235,6 +235,28 @@ fn an_edited_folder_pack_draws_its_new_code() {
     let _ = std::fs::remove_dir_all(&pack);
 }
 
+// CARD-87: a picture is drawn at its song's sample rate: a song at 96 kHz draws `p.rate` as 96000.
+#[test]
+fn a_picture_is_drawn_at_the_songs_rate() {
+    let fixture = Fixture::new();
+    let manifest = std::fs::read_to_string(fixture.0.join("music2.toml")).unwrap();
+    fixture.put("music2.toml", &manifest.replace("sample_rate = 48000", "sample_rate = 96000"));
+    fixture.put(
+        "lib/tone.ts",
+        &TONE.replace(
+            "broken: { draw: (v, p) => [p.handle(1, 1, { x: `cut${9}` as any })], words: () => 'x' },",
+            "broken: { draw: (v, p) => [p.label(100, 0, `at ${p.rate} Hz`)], words: () => 'x' },",
+        ),
+    );
+    fixture.put("song.ts", SONG);
+    let (p, _driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    let rig = Rig { fixture, graph };
+    let answer = rig.ask("w1", "broken", true);
+    assert_eq!(answer["picture"]["shapes"][0]["words"], "at 96000 Hz", "{answer}");
+}
+
 // CARD-63: every picture's words are in the view, worked out by the runner after the view is made:
 // null until then, its words, or why it can't be drawn; again for a new revision's values.
 #[test]

@@ -37,6 +37,7 @@ fn drawn(pack: &str, component: &str, view: &str, values: Value) -> Value {
         view: view.into(),
         values: values.to_string(),
         memo: format!("{cid}\u{0}{view}"),
+        rate: 48_000,
     };
     match Runner::new().draw(ask) {
         Drawn::Shapes(json) => serde_json::from_str(&json).unwrap(),

@@ -134,12 +134,18 @@ export const measured = component(
       words: () => "its hit",
     },
     quiet: {
-      draw: (_v, p) => [
-        // A click quieter than its thresholds (2.6).
-        p.response({ level: -80 }),
-        // @ts-expect-error a click's level is a number of dB
-        p.response({ level: "quiet" }),
-      ],
+      draw: (_v, p) => {
+        // @ts-expect-error a picture reads the song's rate (2.6), and can't change it
+        p.rate = 44100;
+        return [
+          // A click quieter than its thresholds (2.6).
+          p.response({ level: -80 }),
+          // @ts-expect-error a click's level is a number of dB
+          p.response({ level: "quiet" }),
+          // The song's rate, a number (2.6).
+          p.mark("x", p.rate / 2, "half the rate"),
+        ];
+      },
       words: () => "its curve under its thresholds",
     },
   },

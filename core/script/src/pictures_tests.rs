@@ -129,6 +129,7 @@ impl Pack {
             view: view.into(),
             values: values.to_string(),
             memo: "song#1".into(),
+            rate: 48_000,
         }
     }
 
@@ -471,6 +472,47 @@ fn a_measured_layer_is_checked_in_words() {
     );
 }
 
+// CARD-87: a draw reads the song's sample rate, `p.rate`, as the ask gives it; a part made at one
+// rate is made again at another, never drawn from what another rate made, and kept for each.
+#[test]
+fn a_draw_reads_the_songs_rate() {
+    let index = r#"import { axis, component, control, kernel, port, view, type Audio } from "@m2/core";
+/** How many times the part was made: what shows it is made again at another rate, and kept for each. */
+let made = 0;
+export const rated = component(
+  {
+    id: "rated",
+    label: "Rated",
+    inputs: { x: port.audio() },
+    controls: { freq: control.hz(1000) },
+    output: port.audio(),
+    editor: { views: { pic: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }) } },
+  },
+  (x, v) => kernel<Audio>("test:rated", { x, ...v }),
+  {
+    pic: {
+      draw: (v, p) => [p.label(100, 0, `at ${p.rate} Hz`), p.part("half", () => [p.mark("x", p.rate / 2, `made ${(made = (made % 9) + 1)}`)])],
+      words: () => "the song's rate",
+    },
+  },
+);
+"#;
+    let pack = Pack::new("rated", index);
+    let runner = Runner::new();
+    let draw = |rate: u32| shapes(runner.draw(Ask { rate, ..pack.ask("rated", "pic", json!({"freq": 1000})) }));
+    let low = draw(44_100);
+    assert_eq!(low["shapes"][0]["words"], "at 44100 Hz");
+    assert_eq!((&low["shapes"][1]["shapes"][0]["at"], &low["shapes"][1]["shapes"][0]["words"]), (&json!(22_050.0), &json!("made 1")));
+    let high = draw(96_000);
+    assert_eq!(high["shapes"][0]["words"], "at 96000 Hz");
+    assert_eq!(
+        (&high["shapes"][1]["shapes"][0]["at"], &high["shapes"][1]["shapes"][0]["words"]),
+        (&json!(48_000.0), &json!("made 2")),
+        "the part is made again at another rate"
+    );
+    assert_eq!(draw(44_100), low, "and kept for each");
+}
+
 // CARD-61, CARD-65: words are one line of 1 to 400 characters, counted as characters, with no
 // control character: 400 é is drawn, 401 isn't, nor words with an escape or U+2028 (review G2, G10).
 #[test]
@@ -703,6 +745,7 @@ fn a_songs_own_sound_draws_from_its_code() {
         view: "curve".into(),
         values: at_defaults().to_string(),
         memo: "song#1".into(),
+        rate: 48_000,
     };
     assert_eq!(shapes(runner.draw(ask))["words"], "Band 1: 0 dB at 200 Hz; Band 2: 0 dB at 2000 Hz");
 }

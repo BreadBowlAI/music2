@@ -1400,6 +1400,11 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
    * `seconds` (the x axis's end, 1 at most). Only on an x axis in `seconds` and a `bipolar` y axis.
    */
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
+  /**
+   * The song's sample rate, in Hz (CARD-87): a kernel works its sums out at it, so a picture drawn
+   * from them does too (2.6). 48000 where no song plays (`m2 pack check`). Words get no rate.
+   */
+  readonly rate: number;
 }
 
 /** What a control plays, for types only: a number, a choice's name, or a switch's true or false. */
@@ -1498,9 +1503,9 @@ const fits = (t: unknown, lo: number, hi: number): t is string =>
 /**
  * Draw picture `name` of the component `cid` at `values` (the JSON of what plays, by name), for
  * the picture runner: `{shapes, words}`, or `{why}` when it can't be drawn. `memo` names the
- * picture asked for, which its parts are kept by.
+ * picture asked for, which its parts are kept by, each for the song's sample `rate` (CARD-87).
  */
-export function __picture(cid: string, name: string, values: string, memo: string): string {
+export function __picture(cid: string, name: string, values: string, memo: string, rate: number): string {
   const c = registry.get(cid);
   const pic = c?.pictures.get(name);
   if (!c || !pic) return JSON.stringify({ why: `can't be drawn: no picture "${name}" of ${cid} was loaded` });
@@ -1632,7 +1637,7 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (!fits(partName, 1, 32)) bad(`gives p.part a name of 1 to 32 characters, as "grid", not ${shown(partName)}`);
       if (readers.length) bad(`makes a part inside a part: parts don't nest`);
       if (typeof make !== "function") bad(`gives p.part a function that makes its shapes, as () => [p.line(points)]`);
-      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}`;
+      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}\u0000${rate}`;
       const was = kept.get(key);
       if (was && [...was.read].every(([k, x]) => Object.is(target[k], x))) {
         numbers += was.numbers;
@@ -1674,6 +1679,7 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       once("p.hit", 4 * MEASURED.hit);
       return shape({ kind: "hit", note, seconds, tone: t });
     }) as Painter["hit"],
+    rate,
   };
   const shapesOf = (out: unknown, what: string): readonly object[] => {
     if (!Array.isArray(out)) bad(`${what} returns ${shown(out)}: it returns a list of shapes, made with p`);

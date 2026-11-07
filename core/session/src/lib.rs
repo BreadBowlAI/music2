@@ -541,7 +541,8 @@ export default song(() => v.out);
         // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12), or its descriptors
         // draw a picture or name a face (CARD-60, CARD-40), or `"2.5"` once it has a note effect (PKG-21)
         // or its code reads the song's tempo (RENDER-7), or `"2.6"` once a picture measures its curve
-        // with a quiet click (CARD-80); a pack of recordings alone may ask for none.
+        // with a quiet click (CARD-80) or reads the song's rate (CARD-87); a pack of recordings alone
+        // may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         // The packs whose components read `time.key`: a time node of the key in a frame of one of
         // theirs (review U5), in every-component's graph.
@@ -589,26 +590,31 @@ export default song(() => v.out);
             let keyed = keyed.contains(name);
             // A note effect (2.5, PKG-21), which the descriptor shows, or the song's tempo read (2.5, RENDER-7).
             let noted = timed.contains(name) || mine.clone().any(|(_, d)| d.is_note_effect());
-            // A curve measured with a quiet click (2.6, CARD-80), which only a draw shows: each picture
-            // drawn at its defaults, as `m2 pack check` draws it.
+            // A curve measured with a quiet click (2.6, CARD-80), or the song's rate read (2.6,
+            // CARD-87), which only a draw shows: each picture drawn at its defaults, as `m2 pack
+            // check` draws it, at 48 and at 96 kHz, a picture that reads the rate drawing apart.
             let quiet = mine.clone().any(|(_, d)| {
                 d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })).any(|v| {
-                    let ask = m2_script::pictures::Ask {
-                        key: format!("uses {name}"),
-                        packages: packages.clone(),
-                        song: None,
-                        module: d.module.clone(),
-                        descriptor: d.clone(),
-                        view: v.name.clone(),
-                        values: m2_script::pictures::defaults(d),
-                        memo: "uses".into(),
+                    let at = |rate: u32| {
+                        let ask = m2_script::pictures::Ask {
+                            key: format!("uses {name}"),
+                            packages: packages.clone(),
+                            song: None,
+                            module: d.module.clone(),
+                            descriptor: d.clone(),
+                            view: v.name.clone(),
+                            values: m2_script::pictures::defaults(d),
+                            memo: "uses".into(),
+                            rate,
+                        };
+                        let m2_script::pictures::Drawn::Shapes(json) = runner.draw(ask) else { return serde_json::Value::Null };
+                        serde_json::from_str(&json).unwrap_or_default()
                     };
-                    let m2_script::pictures::Drawn::Shapes(json) = runner.draw(ask) else { return false };
-                    let drawn: serde_json::Value = serde_json::from_str(&json).unwrap_or_default();
+                    let drawn = at(m2_script::pictures::RATE);
                     fn quietly(shapes: &serde_json::Value) -> bool {
                         shapes.as_array().into_iter().flatten().any(|s| s.get("level").is_some() || quietly(&s["shapes"]))
                     }
-                    quietly(&drawn["shapes"])
+                    quietly(&drawn["shapes"]) || at(96_000) != drawn
                 })
             });
             match (major.as_deref(), optional, kits, labelled) {
