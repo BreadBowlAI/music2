@@ -199,7 +199,9 @@ fn a_note_effect_is_bypassed_moved_and_removed_as_an_effect_is() {
 fn music2s_own_note_effects_go_before_an_instrument_each_value_a_knob() {
     let text = "import { song } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\
                 export default song(({ lane }) => synth.pluck(lane.notes(\"chords\")));\n";
-    let ours = |s: &Session| -> Vec<crate::effect::EffectInfo> { s.effects().into_iter().filter(|e| e.component.starts_with("@m2/notes:")).collect() };
+    let ours = |s: &Session| -> Vec<crate::effect::EffectInfo> {
+        s.effects().into_iter().filter(|e| e.component.starts_with("@m2/notes:")).collect()
+    };
     let f = Fixture::new();
     f.write("music2.toml", format!("{}\"@m2/notes\" = \"0.1\"\n", crate::testing::MANIFEST));
     f.write("song.ts", text);

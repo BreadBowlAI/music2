@@ -45,7 +45,9 @@ fn song_of(effects: &[(String, &str, Value)], more: Value) -> Ir {
         sum = Some(match sum {
             None => format!("v{id}"),
             Some(acc) => {
-                nodes.push(json!({"id": format!("a{id}"), "op": "kernel", "kernel": "std:add", "inputs": {"a": acc, "b": format!("v{id}")}}));
+                nodes.push(
+                    json!({"id": format!("a{id}"), "op": "kernel", "kernel": "std:add", "inputs": {"a": acc, "b": format!("v{id}")}}),
+                );
                 format!("a{id}")
             }
         });
@@ -93,7 +95,11 @@ fn the_chord_is_the_rolls_stamp_in_every_seven_note_key() {
             let id = format!("c{place}{inversion}");
             more.push(shape(&format!("s{id}"), place));
             more.push(json!({"id": format!("i{id}"), "op": "const", "value": inversion}));
-            effects.push((id.clone(), "chord", json!({"key": "key", "shape": format!("s{id}"), "in_key": "on", "inversion": format!("i{id}")})));
+            effects.push((
+                id.clone(),
+                "chord",
+                json!({"key": "key", "shape": format!("s{id}"), "in_key": "on", "inversion": format!("i{id}")}),
+            ));
         }
     }
     assert_eq!(effects.len(), 16, "every kind, every inversion");

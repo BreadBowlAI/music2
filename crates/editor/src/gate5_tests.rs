@@ -351,7 +351,10 @@ fn planned_call_forms_are_current() {
     for e in s.effects() {
         match e.notes {
             // A note effect goes before what plays notes (PKG-21): here, the polysynth's pluck.
-            true => forms.push(format!("    // {} added before a sound\n    synth.pluck({}(lane.notes(\"chords\"){})),\n", e.component, e.name, e.insert)),
+            true => forms.push(format!(
+                "    // {} added before a sound\n    synth.pluck({}(lane.notes(\"chords\"){})),\n",
+                e.component, e.name, e.insert
+            )),
             false => forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert)),
         }
     }

@@ -567,7 +567,11 @@ export default song(() => v.out);
                 }
             });
         }
-        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/notes", "@m2/vocals"], "the packs whose sounds read the song's key");
+        assert_eq!(
+            keyed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["@m2/notes", "@m2/vocals"],
+            "the packs whose sounds read the song's key"
+        );
         let uses = |name: &str, dir: &Path| -> String {
             let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
             let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));

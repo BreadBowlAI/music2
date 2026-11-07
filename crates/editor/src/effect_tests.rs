@@ -224,7 +224,9 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
 // goes before a sound that plays notes: `note_effect_tests.rs`.)
 #[test]
 fn every_effect_goes_after_a_sound_and_every_control_it_declares_is_a_knob() {
-    for effect in Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects().into_iter().filter(|e| !e.notes) {
+    for effect in
+        Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects().into_iter().filter(|e| !e.notes)
+    {
         let fixture = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
         let mut s = fixture.open();
         let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{}: {e}", effect.component));

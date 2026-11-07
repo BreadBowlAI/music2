@@ -136,7 +136,11 @@ fn boxes(d: &Value) -> Vec<((f64, f64, f64, f64), bool)> {
 
 /// The labels a picture drew: (x, words).
 fn labels(d: &Value) -> Vec<(f64, String)> {
-    shapes(d).iter().filter(|s| s["kind"] == "label").map(|s| (s["x"].as_f64().unwrap(), s["words"].as_str().unwrap().to_string())).collect()
+    shapes(d)
+        .iter()
+        .filter(|s| s["kind"] == "label")
+        .map(|s| (s["x"].as_f64().unwrap(), s["words"].as_str().unwrap().to_string()))
+        .collect()
 }
 
 /// The guide lines across a picture's x axis: where.
@@ -179,7 +183,12 @@ fn the_arpeggiators_steps_are_its_pattern_for_c_major() {
     assert_eq!(d["words"], "Up, sixteenth notes, 1 octave");
     // Up and down, two octaves, eighths, swung 60%, gate 1.5: C E G C' E' G' E' C' G E, the second
     // of each pair at 60% of it, each box 1.5 times its own step.
-    let d = draw(&runner, "arp", "steps", arp_values(json!({"style": "updown", "octaves": "2", "rate": "1/8", "swing": 0.6, "gate": 1.5, "hold": true})));
+    let d = draw(
+        &runner,
+        "arp",
+        "steps",
+        arp_values(json!({"style": "updown", "octaves": "2", "rate": "1/8", "swing": 0.6, "gate": 1.5, "hold": true})),
+    );
     let b = boxes(&d);
     assert_eq!(b.len(), 10);
     let order: Vec<f64> = b.iter().map(|((_, _, y0, _), _)| *y0).collect();
@@ -215,8 +224,7 @@ fn key_at(x: f64, black: bool) -> i32 {
 
 /// The keys a keyboard picture lights, and the name it gives each key, by semitones from C.
 fn keys(d: &Value) -> (Vec<i32>, Vec<(i32, String)>) {
-    let mut lit: Vec<i32> =
-        boxes(d).into_iter().filter(|(_, l)| *l).map(|((x0, _, y0, _), _)| key_at(x0, y0 > 0.2)).collect();
+    let mut lit: Vec<i32> = boxes(d).into_iter().filter(|(_, l)| *l).map(|((x0, _, y0, _), _)| key_at(x0, y0 > 0.2)).collect();
     lit.sort();
     let mut names: Vec<(i32, String)> = shapes(d)
         .iter()
@@ -298,7 +306,10 @@ fn scales_keyboard_names_where_each_note_goes() {
     assert_eq!(lit, [0, 2, 4, 5, 7, 9, 11], "C major's notes");
     let words = |names: Vec<(i32, String)>| names.into_iter().map(|n| n.1).collect::<Vec<_>>();
     assert_eq!(words(names), ["C", "C", "D", "D", "E", "F", "F", "G", "G", "A", "A", "B"], "a tie goes down");
-    assert_eq!(d["words"], "Moves each note to the nearest note of the key, a tie going down. Drawn in C major: the card says your song's key");
+    assert_eq!(
+        d["words"],
+        "Moves each note to the nearest note of the key, a tie going down. Drawn in C major: the card says your song's key"
+    );
     let d = draw(&runner, "scale", "keyboard", json!({"shift": 2}));
     assert_eq!(words(keys(&d).1), ["E", "E", "F", "F", "G", "A", "A", "B", "B", "C", "C", "D"]);
     assert_eq!(
