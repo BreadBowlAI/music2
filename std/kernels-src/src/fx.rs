@@ -21,7 +21,7 @@ use m2_kernel::{Cfg, Io, Kernel, db_to_gain, export};
 
 // ---------------------------------------------------------------- modulation
 
-/// Each chorus tap sweeps between `CHORUS_BASE` and `CHORUS_BASE + depth × CHORUS_SWEEP`
+/// Each chorus tap sweeps between `CHORUS_BASE` and `CHORUS_BASE + depth × CHORUS_SWEEP` [copied: @m2/effects src/pictures.ts `chorusDelays`, CARD-119]
 /// seconds: at full depth and 1 Hz that bends pitch by about ±30 cents.
 const CHORUS_BASE: f32 = 0.008;
 const CHORUS_SWEEP: f32 = 0.006;

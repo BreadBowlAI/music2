@@ -1078,6 +1078,8 @@ struct Limit {
     started: Instant,
     worked: Duration,
     limit: Duration,
+    /// The backstop by the clock.
+    clock: Duration,
 }
 
 /// How many times its limit a run may take by the clock, whatever CPU it got.
@@ -1086,14 +1088,19 @@ const BACKSTOP: u32 = 10;
 impl Limit {
     /// From now, on the calling thread: the thread that runs the sandbox.
     fn new(limit: Duration) -> Limit {
-        Limit { started: Instant::now(), worked: m2_os::thread::cpu_time(), limit }
+        Limit::clocked(limit, limit * BACKSTOP)
+    }
+
+    /// From now, `limit` of work and `clock` by the clock at most (a picture's draw: as long as an ask waits, CARD-64).
+    fn clocked(limit: Duration, clock: Duration) -> Limit {
+        Limit { started: Instant::now(), worked: m2_os::thread::cpu_time(), limit, clock }
     }
 
     /// Whether the run worked longer than its limit, or took the backstop's time by the clock:
     /// asked on its own thread.
     fn passed(&self) -> bool {
         let took = self.started.elapsed();
-        took > self.limit * BACKSTOP || (took > self.limit && m2_os::thread::cpu_time().saturating_sub(self.worked) > self.limit)
+        took > self.clock || (took > self.limit && m2_os::thread::cpu_time().saturating_sub(self.worked) > self.limit)
     }
 }
 

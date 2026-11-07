@@ -84,7 +84,7 @@ impl Squeeze {
     }
 }
 
-/// Multiband compressor. Inputs: in, low_mid and mid_high (Hz), then for the low, mid and high bands
+/// Multiband compressor. Inputs: in, low_mid and mid_high (Hz), then for the low, mid and high bands [its split is copied: src/pictures.ts `splitDb`, CARD-115]
 /// each its threshold (dB), ratio, attack and release (seconds) and gain (dB).
 pub struct Multiband {
     sr: f32,

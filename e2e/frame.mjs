@@ -116,15 +116,17 @@ check(!!(await page.$(`${songChain} [data-branch="Bass"] button[aria-label="Add 
 check((await page.$eval(`${songChain} [data-node="duck"] [data-code-line]`, (e) => e.textContent).catch(() => "")) === "duck(bass.out, kick.env, { depth: db(-9) })", "the Duck's code line names the track it ducks");
 check(/Listens to:\s*Kick/.test(await page.$eval(`${songChain} [data-node="duck"] [data-listens]`, (e) => e.textContent).catch(() => "")), "the Duck's card says it listens to Kick");
 check(!!(await page.$(`${songChain} [data-testid=open-mix]`)) && !(await page.$(`${songChain} [data-node="mixer"] [data-knob]`)), "the mixer is one compact card, its levels in Mix");
-// A card with no picture on its face is 380 px at Normal (CARD-44): the Master.
+// A card with a picture on its face is 460 px at Normal (CARD-44): the Master, its ceiling's picture
+// on its face (CARD-144). One with none is 380 px: Keys' Pluck, below.
 const masterWidth = Math.round((await box(`${songChain} [data-node="master"]`)).width);
-check(masterWidth === 380, `Normal: 380 px with no picture on its face: the Master's ${masterWidth}`);
-// Folded, a card with no picture on its face says its face's values in one sentence (CARD-44).
+check(masterWidth === 460, `Normal: 460 px with a picture on its face: the Master's ${masterWidth}`);
+// Folded, a card says its face's first picture's words in one sentence (CARD-44).
 const master = `${songChain} [data-node="master"]`;
 await page.click(`${master} [data-size-to="folded"]`);
 check(await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "folded"), "Fold folds the Master");
-const masterSentence = await page.$eval(`${master} [data-sentence]`, (e) => e.textContent).catch(() => null);
-check(/^Volume [−\d.]+ dB · Ceiling [−\d.]+ dB$/.test(masterSentence ?? ""), `Folded, one sentence of its values: ${masterSentence}`);
+// The words come once the server has worked them out (CARD-63), after the view: until then the sentence is the values.
+const masterSentence = () => page.$eval(`${master} [data-sentence]`, (e) => e.textContent).catch(() => null);
+check(await until(async () => /^The song's last 3 seconds: no peak passes its ceiling, [−\d.]+ dB/.test((await masterSentence()) ?? "")), `Folded, one sentence: its picture's words: ${await masterSentence()}`);
 await page.click(`${master} [data-size-to="normal"]`);
 await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "normal");
 // An instrument's card wears its track's colour along its top (CARD-43, review F13); an effect's doesn't.
@@ -133,6 +135,8 @@ const bar = '[data-testid=chain] [data-module="keys"] [data-node="pluck"] [data-
 check(await until(async () => !!(await page.$(bar))), "Keys' Pluck has its track's colour bar");
 const chip = await page.$eval("[data-testid=dock-chip] span", (e) => getComputedStyle(e).backgroundColor);
 check((await page.$eval(bar, (e) => getComputedStyle(e).backgroundColor)) === chip && (await page.$eval(bar, (e) => e.getBoundingClientRect().height)) === 3, `in the track's own colour, 3 px tall: ${chip}`);
+const pluckWidth = Math.round((await box('[data-testid=chain] [data-module="keys"] [data-node="pluck"]')).width);
+check(pluckWidth === 380, `Normal: 380 px with no picture on its face: Keys' Pluck's ${pluckWidth}`);
 await page.click('[data-module-tab="wob"] [data-testid=track-label]');
 await until(async () => !!(await page.$(wob)));
 check(!(await page.$(`${lp} [data-colour-bar]`)), "the Lowpass, an effect, has none");

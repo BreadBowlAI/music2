@@ -24,6 +24,13 @@ pub fn cpu_time() -> Duration {
     os::cpu_time()
 }
 
+/// Keeps the calling thread, and every thread it starts after, on one CPU, the first it may use:
+/// for tests that share a CPU on purpose (a picture's draw is limited by its own CPU time, not by
+/// its wait for a CPU, CARD-64). Linux only: macOS sets no affinity, and says so (`Unsupported`).
+pub fn one_cpu() -> io::Result<()> {
+    os::one_cpu()
+}
+
 /// Marks the calling thread latency-sensitive, as an audio thread is: on macOS the user-interactive
 /// QoS class, which also keeps it on a performance core. Linux has no such class and changes
 /// nothing: it says so (`Unsupported`). Never fatal: the caller reports what it got (step 7's G7f

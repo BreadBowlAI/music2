@@ -581,7 +581,8 @@ fn the_code_line_keeps_a_named_sound_and_reads_code_safely() {
 }
 
 // CARD-31: every sound music2's own packs list is dressed, and its card shows it: the groups its
-// descriptor declares, in their order (More last, for what no group names), and its views. Every
+// descriptor declares, in their order (More last, for what no group names), or none when it declares
+// none (the reverb and the phaser, whose knobs are all on their faces, CARD-110), and its views. Every
 // instrument of @m2/synths and @m2/drums has groups; every polysynth sound with a wave to pick has
 // its shape as a menu; every sound with a whole envelope has one to drag; every sound with a cutoff
 // and a resonance its filter's curve.
@@ -604,9 +605,11 @@ fn music2s_own_sounds_show_their_groups_and_views() {
         ("@m2/drums:drum", "drums.drum(lane.notes(\"n\"))"),
         ("@m2/effects:reverb", "reverb(osc.saw(110))"),
         ("@m2/effects:phaser", "phaser(osc.saw(110))"),
+        ("@m2/mixing:eq", "eq(osc.saw(110))"),
+        ("@m2/mixing:multiband", "multiband(osc.saw(110))"),
     ];
     let f = Fixture::new();
-    f.write("music2.toml", MANIFEST);
+    f.write("music2.toml", format!("{MANIFEST}\"@m2/mixing\" = \"1\"\n"));
     let tracks: Vec<String> =
         calls.iter().enumerate().map(|(i, (_, call))| format!("const t{i} = track(\"t{i}\", ({{ lane }}) => {call});")).collect();
     let outs: Vec<String> = (0..calls.len()).map(|i| format!("t{i}: t{i}.out")).collect();
@@ -614,6 +617,7 @@ fn music2s_own_sounds_show_their_groups_and_views() {
         "song.ts",
         format!(
             "import {{ song, track }} from \"@m2/core\";\nimport {{ drums }} from \"@m2/drums\";\nimport {{ phaser, reverb }} from \"@m2/effects\";\n\
+             import {{ eq, multiband }} from \"@m2/mixing\";\n\
              import {{ fm, synth }} from \"@m2/synths\";\nimport {{ osc }} from \"std/dsp\";\nimport {{ mixer }} from \"std/mix\";\n\n{}\n\n\
              export default song(() => mixer({{ {} }}));\n",
             tracks.join("\n"),
@@ -632,7 +636,7 @@ fn music2s_own_sounds_show_their_groups_and_views() {
         let grouped: Vec<&str> = d.editor.groups.iter().flat_map(|g| g.items.iter().map(String::as_str)).collect();
         let values = d.controls.iter().map(|c| c.name.as_str()).chain(d.settings.iter().map(|x| x.name.as_str()));
         let views = d.editor.views.iter().map(|v| v.name.as_str());
-        if values.chain(views).any(|v| !grouped.contains(&v)) {
+        if !want.is_empty() && values.chain(views).any(|v| !grouped.contains(&v)) {
             want.push("More");
         }
         let got: Vec<&str> = card.groups.iter().map(|g| g.name.as_str()).collect();
@@ -891,4 +895,29 @@ fn tune_goes_into_an_audio_tracks_own_code() {
     assert!(f.read("tracks/vox.ts").contains("import { tune } from \"@m2/vocals\";"));
     assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.1\""), "{}", f.read("music2.toml"));
     assert!(f.read("song.ts").contains("vox: vox.out"), "the song reads the track as it did");
+}
+
+// CARD-72: a picture knows the notes lane that plays its call, as the keys view does (CARD-28), so
+// its `p.play` place plays there: the Drum's hit on its track's hits; an effect's picture, which no
+// notes lane plays, none.
+#[test]
+fn a_picture_knows_the_notes_lane_that_plays_its_call() {
+    use crate::views::Drawn;
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { limit } from \"std/fx\";\n\
+         const kick = track(\"kick\", ({ lane }) => limit(drums.drum(lane.notes(\"hits\"))));\nexport default song(() => kick.out);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let m = s.view().modules.into_iter().find(|m| m.key == "kick").unwrap();
+    let lane_of = |title: &str| {
+        let card = m.nodes.iter().find(|n| n.title.as_deref() == Some(title)).unwrap_or_else(|| panic!("{title}'s card"));
+        let Drawn::Picture { lane, .. } = &card.views[0].of else { panic!("not a picture: {:?}", card.views[0].of) };
+        lane.as_ref().map(|l| (l.module.clone(), l.lane.clone()))
+    };
+    assert_eq!(lane_of("Drum"), Some(("kick".to_string(), "hits".to_string())));
+    assert_eq!(lane_of("Limit"), None);
 }

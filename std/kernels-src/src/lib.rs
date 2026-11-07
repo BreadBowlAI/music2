@@ -126,7 +126,7 @@ pub struct Adsr {
 }
 
 fn decay_coef(time: f32, sr: f32) -> f32 {
-    // Reach about -60 dB in `time` seconds.
+    // Reach about -60 dB in `time` seconds. (Copied: std/src/pictures.ts `envelope`, @m2/mixing src/pictures.ts `heard`.)
     (-6.9 / (time.max(0.0005) * sr)).exp()
 }
 
@@ -561,7 +561,7 @@ export!(svf, Svf);
 
 // ---------------------------------------------------------------- dynamics and colour
 
-/// Soft saturation, peak-normalised. Inputs: in, amount (dB of drive).
+/// Soft saturation, peak-normalised. Inputs: in, amount (dB of drive). Copied: @m2/effects src/pictures.ts `driven` (CARD-122).
 pub struct Drive;
 
 impl Kernel for Drive {
@@ -585,7 +585,7 @@ impl Kernel for Drive {
 
 export!(drive, Drive);
 
-/// Sidechain ducking. Inputs: in, side (0..1, e.g. a follower), depth (dB at side = 1). Its meter
+/// Sidechain ducking. Inputs: in, side (0..1, e.g. a follower), depth (dB at side = 1). Its meter [Pump's dip copies it: @m2/mixing src/pictures.ts `dipDb`, CARD-116]
 /// `reduction` (ABI-14): how far it turns down, in dB, the most of the call's frames.
 pub struct Duck(Smooth);
 

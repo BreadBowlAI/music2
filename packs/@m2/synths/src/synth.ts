@@ -17,15 +17,17 @@
 // note at velocity 0 is silent, and at 0.5 one at 0.3 is 10 dB below one at 1.
 //
 // Each sound's card is put in order by its groups (CARD-17): what it sounds like first, then its
-// filter and its loudness over time, each with a picture to drag (CARD-16): the filter's curve over
-// its cutoff and resonance, the envelope over its attack, decay, sustain and release. `shape` (a
+// filter and its loudness over time. Its face (CARD-136 to CARD-139) holds its pictures to drag: one
+// note as it sounds (measured), or its ladder's curve over its cutoff and resonance, and the
+// envelope over its attack, decay, sustain and release; a picture on the face is on no tab. `shape` (a
 // menu) says what the stack plays: its saws and pulses (the sound as it was made), or a square, a
 // triangle or a sine alone, as loud (CARD-32).
 
-import { component, control, kernel, poly, port, setting, signature, time, type Audio, type Events, type Params, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, time, type Audio, type Events, type Painter, type Params, type Played, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
 import { scale } from "std/math";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+import { curvePicture, envelope, envelopePicture, envelopeWords } from "std/pictures";
+import { heldFor, ladder, ladderWords, note, notePicture, noteWords } from "./pictures";
 
 /** One note at a time with `glide` when `voices` is 1, else one voice per note. */
 function play(notes: Events, voices: number, glide: Value, voice: (note: Voice) => Audio): Audio {
@@ -47,9 +49,13 @@ const RESONANCE = (r: number) => control.frac(r).range(0, 1);
 const LEVEL01 = (v: number) => control.frac(v).range(0, 1);
 /** The stack's main wave, a menu: the saw is the sound as it always was. */
 const SHAPE = control.choice(["saw", "square", "triangle", "sine"], "saw");
-/** The names the pictures of a sound with a filter and a whole envelope read (std/pictures, CARD-96, CARD-97). */
+/** The names the pictures of a sound with a filter and a whole envelope read (std/pictures' envelope, CARD-96; the ladder, CARD-136). */
 const ENVELOPE = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 const FILTER = { cutoff: "cutoff", resonance: "resonance" } as const;
+/** How long one note's picture holds its note: its attack and decay, and a little more (CARD-136). */
+const HELD = { attack: "attack", decay: "decay" } as const;
+/** One note's picture's code, the same for every sound here that has one: it names no value. */
+const NOTE = { draw: (v: Played, p: Painter<any, "seconds", "bipolar">) => note(p, heldFor(v, HELD)), words: (v: Played) => noteWords(heldFor(v, HELD)) };
 
 export const synth = {
   /** The whole engine, every knob out: start here to design a sound of your own. */
@@ -102,11 +108,13 @@ export const synth = {
       editor: {
         category: "Sound design",
         description: "The polysynth with every knob: saws, pulses, a sub, a ladder filter, envelopes",
-        views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
+        views: { note: notePicture(), amp: envelopePicture(), filter: curvePicture({ live: false }) },
+        // One note and its envelope on the face (CARD-136); the ladder's curve on its Filter tab.
+        face: ["note", "amp", "shape", "cutoff", "resonance", "attack", "release"],
         groups: {
           Oscillators: ["shape", "saw", "square", "width", "sub", "subOctave", "noise", "unison", "detune", "spread"],
           Filter: ["filter", "cutoff", "resonance", "keytrack", "filterEnv", "filterAttack", "filterDecay", "filterSustain", "drive"],
-          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
+          Loudness: ["attack", "decay", "sustain", "release", "velSens", "level"],
           Pitch: ["vibrato", "drop", "dropTime", "glide"],
         },
       },
@@ -144,10 +152,7 @@ export const synth = {
           seed: p.seed,
         }),
       ),
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 
   /** Bright, wide seven-saw stack, for big chords and hooks: the filter starts open, as on a JP-8000. */
@@ -175,7 +180,8 @@ export const synth = {
         category: "Instruments",
         description: "Seven detuned saws, bright and wide: big chords and hooks",
         views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
-        groups: { Sound: ["shape", "detune", "spread"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        face: ["filter", "amp", "shape", "detune", "spread", "cutoff"],
+        groups: { Sound: ["shape", "detune", "spread"], Filter: ["cutoff", "resonance"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, detune, spread, cutoff, resonance, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -200,10 +206,7 @@ export const synth = {
           level: -4.5,
         }),
       ),
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 
   /** A singing lead, one note at a time: glides between overlapping notes, vibrato that fades in. */
@@ -232,7 +235,8 @@ export const synth = {
         category: "Instruments",
         description: "A singing mono lead that slides between overlapping notes",
         views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
-        groups: { Sound: ["shape", "glide", "vibrato", "drive"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        face: ["filter", "amp", "shape", "glide", "vibrato", "cutoff"],
+        groups: { Sound: ["shape", "glide", "vibrato", "drive"], Filter: ["cutoff", "resonance"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, cutoff, resonance, glide, vibrato, drive, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -260,10 +264,7 @@ export const synth = {
           level: 3,
         }),
       ),
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 
   /** A big, slow, wide pad that swells open. */
@@ -291,7 +292,8 @@ export const synth = {
         category: "Instruments",
         description: "A big, slow, wide pad that swells open",
         views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
-        groups: { Sound: ["shape", "spread"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        face: ["filter", "amp", "shape", "spread", "cutoff"],
+        groups: { Sound: ["shape", "spread"], Filter: ["cutoff", "resonance"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, cutoff, resonance, attack, decay, sustain, release, spread, velSens, voices }: Params): Audio =>
@@ -319,10 +321,7 @@ export const synth = {
           level: -2,
         }),
       ),
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 
   /** A wide pluck for arps and chords: a filter that snaps shut, brighter when played harder. */
@@ -350,8 +349,9 @@ export const synth = {
         category: "Instruments",
         description: "A bright, wide pluck for arps: a filter that snaps shut",
         // No filter picture: the brightness is where the filter starts, not a cutoff that holds.
-        views: { amp: envelopePicture() },
-        groups: { Sound: ["shape", "brightness", "spread"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        views: { note: notePicture(), amp: envelopePicture() },
+        face: ["note", "amp", "shape", "brightness", "spread"],
+        groups: { Sound: ["shape", "brightness", "spread"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, brightness, spread, attack, decay, sustain, release, velSens, voices }: Params): Audio => {
@@ -378,7 +378,7 @@ export const synth = {
         }),
       );
     },
-    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** An 808 bass: a sine that drops into each note and rings out over `decay`, driven, sliding between overlapping notes. */
@@ -407,8 +407,9 @@ export const synth = {
         category: "Instruments",
         description: "An 808 bass: a deep sine with a punchy drop that rings out, sliding between notes",
         // A sine with no filter: no wave to pick, and no filter to draw.
-        views: { amp: envelopePicture() },
-        groups: { Sound: ["drop", "drive", "glide"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        views: { note: notePicture(), amp: envelopePicture() },
+        face: ["note", "amp", "drop", "drive", "glide"],
+        groups: { Sound: ["drop", "drive", "glide"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { drop, drive, glide, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -431,7 +432,7 @@ export const synth = {
           level: 1.5,
         }),
       ),
-    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** A synth bass, one note at a time: a saw and a pulse with a sine under them, and a filter that bites on each note. */
@@ -461,11 +462,12 @@ export const synth = {
       editor: {
         category: "Instruments",
         description: "A punchy mono synth bass: saw, pulse and sine, a filter that bites, glide",
-        views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
+        views: { note: notePicture(), amp: envelopePicture(), filter: curvePicture({ live: false }) },
+        face: ["note", "amp", "shape", "glide"],
         groups: {
           Sound: ["shape", "glide"],
           Filter: ["filter", "cutoff", "resonance", "bite", "biteDecay"],
-          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"],
+          Loudness: ["attack", "decay", "sustain", "release", "velSens"],
         },
       },
     },
@@ -493,10 +495,7 @@ export const synth = {
           level: 1.5,
         }),
       ),
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 
   /** A string machine: slow, slightly detuned saws through an ensemble chorus. */
@@ -524,7 +523,8 @@ export const synth = {
         category: "Instruments",
         description: "A string machine: soft saws through a lush ensemble chorus",
         views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
-        groups: { Sound: ["shape", "ensemble"], Filter: ["filter", "cutoff", "resonance"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        face: ["filter", "amp", "shape", "ensemble", "cutoff"],
+        groups: { Sound: ["shape", "ensemble"], Filter: ["cutoff", "resonance"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { shape, ensemble, cutoff, resonance, attack, decay, sustain, release, velSens, voices }: Params): Audio => {
@@ -549,9 +549,6 @@ export const synth = {
       // std's chorus kernel, as @m2/effects' chorus plays it: a pack never imports another (PACK-3).
       return kernel("std:chorus", { in: v, rate: 0.6, depth: 0.6, mix: ensemble, playing: time.playing });
     },
-    {
-      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
-      filter: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
-    },
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) }, filter: { draw: (v, p) => ladder(p, v, FILTER), words: (v) => ladderWords(v, FILTER) } },
   ),
 };

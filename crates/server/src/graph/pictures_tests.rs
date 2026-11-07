@@ -484,3 +484,18 @@ fn a_sound_greyed_at_rest_stays_greyed_through_a_drag() {
     let rest = sent(&rig.graph.pictures_frame(), "w1", 0);
     assert_eq!(rest.last().unwrap()["why"], greyed, "at rest again");
 }
+
+// CARD-67: a stop for a song no longer open (the window's card goes as the song closes, or as
+// another opens) ends nothing, since its asks ended with the song, and is answered `{}`, never
+// refused: a window that lets go of its picture as the song closes is not told off for it. An ask
+// for it is refused, saying to refresh.
+#[test]
+fn a_stop_for_a_song_no_longer_open_is_answered() {
+    let rig = Rig::new();
+    let (token, rev, node) = (rig.token(), rig.revision(), rig.card()["id"].as_str().unwrap().to_string());
+    rig.ask("w1", "curve", true);
+    let _ = rig.graph.close();
+    assert_eq!(rig.graph.picture(token, rev, "w1", ("lead", &node, "curve"), false).unwrap(), json!({}));
+    let e = rig.graph.picture(token, rev, "w1", ("lead", &node, "curve"), true).unwrap_err();
+    assert!(e.to_string().contains("refresh it first"), "{e}");
+}

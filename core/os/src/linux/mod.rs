@@ -128,6 +128,26 @@ pub(crate) fn interactive() -> io::Result<()> {
     Err(crate::unsupported("Linux has no QoS class: the thread keeps its priority"))
 }
 
+/// The calling thread on the first CPU it may use (threads it starts after inherit it).
+pub(crate) fn one_cpu() -> io::Result<()> {
+    // SAFETY: plain system calls on the calling thread (0), with a set that outlives them.
+    unsafe {
+        let mut set: libc::cpu_set_t = std::mem::zeroed();
+        if libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut set) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let Some(cpu) = (0..libc::CPU_SETSIZE as usize).find(|&c| libc::CPU_ISSET(c, &set)) else {
+            return Err(io::Error::other("the thread may run on no CPU"));
+        };
+        let mut one: libc::cpu_set_t = std::mem::zeroed();
+        libc::CPU_SET(cpu, &mut one);
+        if libc::sched_setaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &one) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 /// A nice of 10 for the calling thread (on Linux nice is per thread), or the one it has when that
 /// is higher: raising nice is always allowed, lowering it needs rights.
 pub(crate) fn background() -> io::Result<()> {
@@ -374,5 +394,25 @@ mod tests {
     fn interactive_says_linux_has_no_qos_class() {
         let e = std::thread::spawn(crate::thread::interactive).join().unwrap().unwrap_err();
         assert_eq!(e.kind(), std::io::ErrorKind::Unsupported, "{e}");
+    }
+
+    // CARD-64's test helper: one_cpu leaves the calling thread, and a thread it starts after, on one CPU.
+    #[test]
+    fn one_cpu_keeps_a_thread_and_its_children_on_one_cpu() {
+        let cpus = || {
+            // SAFETY: reads the calling thread's own set into one that outlives the call.
+            unsafe {
+                let mut set: libc::cpu_set_t = std::mem::zeroed();
+                assert_eq!(libc::sched_getaffinity(0, std::mem::size_of::<libc::cpu_set_t>(), &mut set), 0);
+                libc::CPU_COUNT(&set)
+            }
+        };
+        let (mine, child) = std::thread::spawn(move || {
+            crate::thread::one_cpu().unwrap();
+            (cpus(), std::thread::spawn(cpus).join().unwrap())
+        })
+        .join()
+        .unwrap();
+        assert_eq!((mine, child), (1, 1));
     }
 }

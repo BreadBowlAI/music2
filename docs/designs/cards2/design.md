@@ -419,6 +419,16 @@ This covers every component shipped today, from `std/src/*.ts` and `packs/@m2/*/
 | std Lowpass, Highpass, Bandpass, Notch | the filter's real curve; one dot (cutoff and Q) | All | curve (measured) |
 | std Gain, Pan | knobs only (pan as its usual knob) | none | none |
 
+*As built (track `dress2a`, [CARD-110 to CARD-126](../../architecture.md#the-mixing-and-effects-packs-pictures)): where it parts from this table, and why.*
+
+| Row | This table | As built | Why |
+|---|---|---|---|
+| Reverb, Phaser | tabs Room, Mix, All; Sweep, Mix (phaser), All | no groups, so no tabs | Every knob they have is on their face beside the picture; a tab would only show the face again. Their group headings also pushed a patch's cards past its panel. |
+| Pump | the rate as a segmented control | the rate is its menu, on its face | The rate is a setting, which takes a row (CARD-45); a segmented control is a choice knob's. Making it one would change Pump's graph. |
+| De-esser | band (measured) | the band drawn from its values: its edges a box over the whole height; the threshold in its words and on its dot's knob, not on the spectrum's scale | Its click can't show the band (under its threshold it is flat), and the kernel compares the band's whole peaks with its threshold, which no bar of the spectrum reads. Checked against its sound (CARD-125). |
+| Delay, Reverb | echoes, tail (measured) | drawn from their own sums, checked against their sound | Their clicks ring past the 2 s music2 listens for (§4.7 as built). |
+| Multiband, Gate, De-esser | their reductions, whether the gate is open (meters) | not shown | Their kernels send no meter; one is a kernel change, not a picture's (CARD-126). |
+
 ### 5.3 Building blocks and the mix
 
 | Component | Card |

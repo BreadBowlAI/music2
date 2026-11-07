@@ -9,9 +9,10 @@
 // `.smooth()`. `voices: 1` plays one note at a time, as the polysynth does. Each card is put in
 // order by its groups (CARD-17), and a sound with a whole envelope draws it, to drag (CARD-16).
 
-import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Painter, type Params, type Played, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
 import { envelope, envelopePicture, envelopeWords } from "std/pictures";
+import { heldFor, note, notePicture, noteWords, partials, partialsPicture, partialsWords } from "./pictures";
 
 /** The engine for a note, with a patch of kernel inputs (see `@m2/synths:fm` in the pack's `m2pkg.toml`). */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
@@ -31,6 +32,13 @@ const VEL_SENS = (v: number) => control.frac(v).range(0, 1).label("vel sens");
 const LEVEL01 = (v: number) => control.frac(v).range(0, 1);
 /** The names a sound's envelope picture reads: how loud a note is over time, to drag (std/pictures, CARD-96). */
 const ENVELOPE = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+/** One note's picture's code, the same for every sound here that has one: it names no value (CARD-136). */
+const HELD = { attack: "attack", decay: "decay" } as const;
+const NOTE = { draw: (v: Played, p: Painter<any, "seconds", "bipolar">) => note(p, heldFor(v, HELD)), words: (v: Played) => noteWords(heldFor(v, HELD)) };
+/** The names the FM synth's partials read (CARD-140): each pair's, pair B's mix, the tone and the feedback. */
+const PAIR_A = { carrier: "carrierA", modulator: "modulatorA", amount: "amountA" } as const;
+const PAIR_B = { carrier: "carrierB", modulator: "modulatorB", amount: "amountB" } as const;
+const MIXED = { mix: "mixB", tone: "tone", feedback: "feedback" } as const;
 
 export const fm = {
   /** The whole FM engine, every knob out: start here for a sound of your own. */
@@ -75,12 +83,14 @@ export const fm = {
       editor: {
         category: "Sound design",
         description: "The FM synth with every knob: two operator pairs, feedback, envelopes",
-        views: { amp: envelopePicture() },
+        views: { partials: partialsPicture(), amp: envelopePicture() },
+        // Its partials, both pairs as bars, and its envelope on the face (CARD-140).
+        face: ["partials", "amp", "amountA", "amountB", "mixB", "tone"],
         groups: {
           "Pair A": ["carrierA", "modulatorA", "amountA", "brightDecayA", "feedback"],
           "Pair B": ["carrierB", "modulatorB", "amountB", "brightDecayB", "mixB", "detune"],
           Tone: ["tone", "drop", "dropTime"],
-          Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens", "level"],
+          Loudness: ["attack", "decay", "sustain", "release", "velSens", "level"],
         },
       },
     },
@@ -109,7 +119,10 @@ export const fm = {
           level: p.level,
         }),
       ),
-    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
+    {
+      partials: { draw: (v, p) => partials(p, v, PAIR_A, PAIR_B, MIXED), words: (v) => partialsWords(v, PAIR_A, PAIR_B, MIXED) },
+      amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) },
+    },
   ),
 
   /** An electric piano: a soft, round body and a bright tine that barks when played hard. */
@@ -135,8 +148,9 @@ export const fm = {
       editor: {
         category: "Instruments",
         description: "An electric piano: a warm body and a tine that barks when played hard",
-        views: { amp: envelopePicture() },
-        groups: { Sound: ["tone", "tine"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        views: { note: notePicture(), amp: envelopePicture() },
+        face: ["note", "amp", "tone", "tine"],
+        groups: { Sound: ["tone", "tine"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { tone, tine, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -159,7 +173,7 @@ export const fm = {
           vel_amount: velSens,
         }),
       ),
-    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** A glassy bell: inharmonic, bright and long. */
@@ -182,8 +196,9 @@ export const fm = {
       editor: {
         category: "Instruments",
         description: "A glassy bell: bright, shimmering and long",
-        views: { amp: envelopePicture() },
-        groups: { Sound: ["tone"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
+        views: { note: notePicture(), amp: envelopePicture() },
+        face: ["note", "amp", "tone"],
+        groups: { Sound: ["tone"], Loudness: ["attack", "decay", "sustain", "release", "velSens"] },
       },
     },
     (notes: Events, { tone, attack, decay, sustain, release, velSens, voices }: Params): Audio =>
@@ -207,7 +222,7 @@ export const fm = {
           vel_amount: velSens,
         }),
       ),
-    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
+    { note: NOTE, amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** Metallic FM percussion: a short, clangy, inharmonic hit that zaps down into its note. */
@@ -233,6 +248,8 @@ export const fm = {
       editor: {
         category: "Drums",
         description: "Metallic FM percussion: a clangy, inharmonic hit with a zap",
+        views: { note: notePicture() },
+        face: ["note", "tone", "feedback", "drop"],
         groups: { Sound: ["tone", "feedback", "drop"], Loudness: ["decay", "velSens"] },
       },
     },
@@ -260,5 +277,6 @@ export const fm = {
           vel_amount: velSens,
         }),
       ),
+    { note: { draw: (v, p) => note(p, heldFor(v, { decay: "decay" })), words: (v) => noteWords(heldFor(v, { decay: "decay" })) } },
   ),
 };

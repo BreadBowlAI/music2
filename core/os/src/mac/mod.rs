@@ -158,6 +158,11 @@ pub(crate) fn interactive() -> io::Result<()> {
     }
 }
 
+/// macOS sets no thread affinity.
+pub(crate) fn one_cpu() -> io::Result<()> {
+    Err(crate::unsupported("macOS keeps no thread on one CPU"))
+}
+
 /// The background QoS class: the thread runs on the efficiency cores, beside playback.
 pub(crate) fn background() -> io::Result<()> {
     // SAFETY: sets the calling thread's own QoS class.

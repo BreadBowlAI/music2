@@ -13,6 +13,7 @@ import { beatNow, playingNow } from "../lib/clock";
 import { useCards } from "../lib/folded";
 import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
 import { barAt, controlLabel, graphApi, inSentence, picks, stepValue, type CardView, type Knob, type NumberKnob } from "../lib/graph";
+import { shown as showing, showsOwn } from "../lib/history";
 import { useStore } from "../lib/store";
 import { useViewDrag, type ViewProps } from "./CardViews";
 import { NOTCH, useKnobGesture } from "./Knob";
@@ -175,11 +176,18 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
     };
     // By its id in the view of `revision`: a stop names the same, so it never ends an ask made by a
     // renumbered card's id (CARD-67).
-    const ask = (on: boolean) =>
-      graphApi.picture(session, revision, module, node, name, on).then(
-        (a) => (on && a.picture ? take(a.picture) : undefined),
-        (e) => alive && on && setAsked(said(e)),
+    const ask = (on: boolean): Promise<void> => {
+      // Never by a revision older than the window's own last change (AGENT-2), which the server
+      // refuses (CARD-67): it waits, as a gesture does, until the window shows that change, then
+      // asks; the change's answer may come after the song's new state (review U1). Had the
+      // revision moved meanwhile, the effect runs again for it.
+      const graph = useStore.getState().graph;
+      if (on && graph && !showsOwn(graph)) return showing(session).then((g) => (alive && g && g.view.revision === revision ? ask(true) : undefined));
+      return graphApi.picture(session, revision, module, node, name, on).then(
+        (a) => void (on && a.picture && take(a.picture)),
+        (e) => void (alive && on && setAsked(said(e))),
       );
+    };
     void ask(true);
     const again = setInterval(() => void ask(true), ASK_MS);
     const off = on<PicturesIn>("pictures", (msg) => {
@@ -242,7 +250,8 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
   }, [tab]);
   useEffect(() => attach(), []);
   const hearing = useAudition((s) => s.on);
-  const notes = p.node.inputs.find((i) => i.kind === "notes" && i.lane)?.lane;
+  // The notes lane that plays the call (CARD-72), as the keys view's (CARD-28).
+  const notes = view.lane;
   const playing = useRef<number | null>(null);
   const knobOf = (m?: Moved): NumberKnob | null => {
     const k: Knob | undefined = m?.knob ? p.node.knobs.find((x) => x.id === m.knob) : undefined;

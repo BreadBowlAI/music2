@@ -5,7 +5,7 @@
 //!   the song's code at each code revision, each on a thread of its own: a pack that hangs, or is
 //!   slow to load, holds only its own pictures. [`KEPT`] at most, the one used longest ago let go.
 //! - **Limits.** Loading the module that declares a sound may work [`LOAD`]; each draw [`DRAW`],
-//!   counted from its start. A load that fails or is stopped, and a draw stopped for its time or its
+//!   counted from its start, of its own thread's CPU time, and [`DRAW_CLOCK`] by the clock. A load that fails or is stopped, and a draw stopped for its time or its
 //!   memory, is remembered: that runtime's pictures (or that picture) are refused at once, in words,
 //!   until the code changes, which makes a new runtime.
 //! - **Pure draws.** Each draw runs twice; one that gives anything else the second time, at the same
@@ -34,8 +34,12 @@ const KEPT: usize = 16;
 const MEMORY: usize = 64 << 20;
 /// How long loading a picture's module may work: its build already ran it once.
 const LOAD: Duration = Duration::from_secs(1);
-/// How long one draw may work (CARD-64), and by the clock ten times that.
+/// How long one draw may work (CARD-64): its own thread's CPU time, so a draw that waits for a CPU
+/// on a busy machine is never stopped for the wait.
 const DRAW: Duration = Duration::from_millis(20);
+/// How long one draw may take by the clock: as long as an ask waits for it (the server's 2 s), so a
+/// draw that gets almost no CPU still ends.
+const DRAW_CLOCK: Duration = Duration::from_secs(2);
 /// The most a draw may give, as JSON (CARD-65).
 pub const BYTES: usize = 256 << 10;
 /// The most numbers a draw may give in all (CARD-65).
@@ -392,7 +396,7 @@ impl One {
 
     /// One call of `__picture` for `ask`, with a draw's limit: its JSON, or why it gave none.
     fn call(&mut self, ask: &Ask) -> Result<String, Stop> {
-        *self.limit.lock().expect("the limit") = Limit::new(DRAW);
+        *self.limit.lock().expect("the limit") = Limit::clocked(DRAW, DRAW_CLOCK);
         let state = self.state.clone();
         let call = self.call.clone();
         let out = self.ctx.with(|ctx| {

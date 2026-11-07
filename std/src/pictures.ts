@@ -16,19 +16,23 @@
 // | an envelope: how loud a note is over time | `envelopePicture()` | `envelope(p, v, names)` |
 // | an LFO's shape over one bar, with the song's playhead | `lfoPicture()` | `lfo(p, v, names)` |
 
-import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
+import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Played, type Shape, type Unit } from "@m2/core";
 
 /** The name of one of the sound's number controls: what a dot moves by the wheel, or as its knob (CARD-62). */
-type Num<D> = NonNullable<Moves<D>["wheel"]>;
+export type Num<D> = NonNullable<Moves<D>["wheel"]>;
 /** What a dot may move along an axis in `U`: a control in that unit, or `knob(name)` (CARD-62). */
-type Across<D, U extends Unit> = NonNullable<Moves<D, U, U>["x"]>;
+export type Across<D, U extends Unit> = NonNullable<Moves<D, U, U>["x"]>;
 /** The name of one of the sound's controls in `U` (CARD-62): a time in seconds, a q, a level from 0 to 1. */
-type In<D, U extends Unit> = Extract<Across<D, U>, string>;
+export type In<D, U extends Unit> = Extract<Across<D, U>, string>;
+/** The name of one of the sound's values a picture only reads (CARD-63): a control's or a setting's. */
+export type Read<D> = Extract<keyof Played<D>, string>;
+/** What plays, by the name of each of the card's values (CARD-63), as a shape function reads it. */
+export type Values = { readonly [k: string]: unknown };
 
 // ---------------------------------------------------------------- words
 
 /** A number in plain words: at most three figures, a minus sign as taste.md writes it. */
-function figures(v: number): string {
+export function figures(v: number): string {
   const r = Math.abs(v) >= 100 ? Math.round(v) : Math.abs(v) >= 10 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100;
   return String(r).replace("-", "−");
 }
@@ -39,10 +43,15 @@ export const dbWords = (db: number) => `${figures(db)} dB`;
 /** A time in words: "5 ms", "1.2 s". */
 export const secondsWords = (s: number) => (s < 1 ? `${figures(s * 1000)} ms` : `${figures(s)} s`);
 
-/** `v`, which a cable or the code may hold (CARD-63): else the picture can't be drawn, said in words. */
-function known(v: number | boolean | string | null | undefined, what: string): number {
-  if (typeof v !== "number") throw new Error(`its ${what} is set by a cable or worked out by the code, so it can't be drawn`);
-  return v;
+/**
+ * The number `v` holds by `name` (CARD-63), shared by every pack's pictures: one a cable sets or the
+ * code works out (null) greys the picture, saying which; a name the sound hasn't got says so.
+ */
+export function known(v: Values, name: string, what: string): number {
+  const x = v[name];
+  if (x === undefined) throw new Error(`names ${name}, which this sound doesn't have`);
+  if (typeof x !== "number") throw new Error(`its ${what} is set by a cable or worked out by the code, so it can't be drawn`);
+  return x;
 }
 
 // ---------------------------------------------------------------- curves across frequency
@@ -84,10 +93,10 @@ export function lowpass<D>(
   v: { readonly [k: string]: unknown },
   names: { cutoff: Across<D, "hz">; q: In<D, "scalar"> } | { cutoff: Across<D, "hz">; resonance: In<D, "unit01"> },
 ): Shape[] {
-  const cutoff = known(v[nameOf(names.cutoff)] as number | null, "cutoff");
+  const cutoff = known(v, nameOf(names.cutoff), "cutoff");
   const resonant = "resonance" in names;
   const qName = resonant ? names.resonance : names.q;
-  const raw = known(v[qName] as number | null, resonant ? "resonance" : "q");
+  const raw = known(v, qName, resonant ? "resonance" : "q");
   const q = resonant ? resonanceQ(raw) : raw;
   const points: number[] = [];
   for (let i = 0; i < CURVE_POINTS; i++) {
@@ -152,9 +161,9 @@ export function transfer<D>(
   v: { readonly [k: string]: unknown },
   names: { threshold: Across<D, "db">; ratio: In<D, "scalar">; makeup: string },
 ): Shape[] {
-  const threshold = Math.min(12, Math.max(-80, known(v[nameOf(names.threshold)] as number | null, "threshold")));
-  const ratio = known(v[names.ratio] as number | null, "ratio");
-  const makeup = Math.min(24, Math.max(-60, known(v[nameOf(names.makeup)] as number | null, "makeup")));
+  const threshold = Math.min(12, Math.max(-80, known(v, nameOf(names.threshold), "threshold")));
+  const ratio = known(v, names.ratio, "ratio");
+  const makeup = Math.min(24, Math.max(-60, known(v, nameOf(names.makeup), "makeup")));
   const out = (level: number) => level - turnedDown(level - threshold, ratio) + makeup;
   const points: number[] = [];
   for (let i = 0; i <= 120; i++) points.push(-60 + i / 2, out(-60 + i / 2));
@@ -249,10 +258,10 @@ export function envelope<D>(
   v: { readonly [k: string]: unknown },
   names: { attack: In<D, "seconds">; decay: In<D, "seconds">; sustain: In<D, "unit01">; release: In<D, "seconds"> },
 ): Shape[] {
-  const a = Math.max(0.0005, known(v[names.attack] as number | null, "attack"));
-  const d = Math.max(0.0005, known(v[names.decay] as number | null, "decay"));
-  const s = Math.min(1, Math.max(0, known(v[names.sustain] as number | null, "sustain")));
-  const r = Math.max(0.0005, known(v[names.release] as number | null, "release"));
+  const a = Math.max(0.0005, known(v, names.attack, "attack"));
+  const d = Math.max(0.0005, known(v, names.decay, "decay"));
+  const s = Math.min(1, Math.max(0, known(v, names.sustain, "sustain")));
+  const r = Math.max(0.0005, known(v, names.release, "release"));
   const hold = holdOf(a, d);
   const level = (t: number) => (t <= a ? t / a : s + (1 - s) * Math.exp((-FALL * (t - a)) / d));
   const points = [0, 0];
@@ -319,7 +328,7 @@ export function lfo<D>(
   v: { readonly [k: string]: unknown },
   names: { period: Across<D, "beats">; shape: string; phase: string },
 ): Shape[] {
-  const period = Math.max(1e-4, known(v[nameOf(names.period)] as number | null, "period"));
+  const period = Math.max(1e-4, known(v, nameOf(names.period), "period"));
   const shape = typeof v[names.shape] === "string" ? (v[names.shape] as string) : "sine";
   const phase = typeof v[names.phase] === "number" ? (v[names.phase] as number) : 0;
   const at = (beat: number) => lfoAt(shape, (((beat / period + phase) % 1) + 1) % 1);
@@ -337,4 +346,30 @@ export function lfoWords(v: { readonly [k: string]: unknown }, names: { period: 
   const period = v[names.period], shape = v[names.shape];
   const every = typeof period === "number" ? `every ${figures(period)} ${period === 1 ? "beat" : "beats"}` : "at a rate set elsewhere";
   return `A ${typeof shape === "string" ? shape : "sine"} wave from 0 to 1, once ${every}`;
+}
+
+// ---------------------------------------------------------------- a ceiling
+
+/**
+ * A limiter's last 3 seconds (CARD-143): the level going in (faint) and coming out, from −36 dB at
+ * the foot to +6 dB at the top, on the picture's own axis in dB (CARD-103). How far it turned down
+ * is the gap between the two where the sound going in rises past the ceiling: drawn above 0 dB on
+ * the same axis, it put the ceiling's line on the 0 dB one (review U11).
+ */
+export function ceilingPicture(): PictureDecl<"seconds", "db"> {
+  return view.picture({ x: axis.time(3), y: axis.lin("db", -36, 6), live: [live.history(live.level("in"), { tone: "faint" }), live.history(live.level("out"))] });
+}
+
+/**
+ * A ceiling's shapes (CARD-143): a guide line at the right edge (now), the ceiling's line, and a
+ * dot on it, in the middle, that moves the ceiling up and down, under the pointer. Its ceiling is a
+ * control in dB (checked by type, CARD-62).
+ */
+export function ceiling<D>(p: Painter<D, "seconds", "db">, v: { readonly [k: string]: unknown }, names: { ceiling: In<D, "db"> }): Shape[] {
+  const c = known(v, names.ceiling, "ceiling");
+  return [
+    p.mark("x", 3, "Now: the last 3 seconds run from the left"),
+    p.mark("y", c, `The ceiling: ${dbWords(c)}`),
+    p.handle(1.5, c, { y: names.ceiling } as Moves<D, "seconds", "db">),
+  ];
 }

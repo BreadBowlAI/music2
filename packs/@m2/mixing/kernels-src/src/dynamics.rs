@@ -108,7 +108,7 @@ impl Kernel for Gate {
 
 // ---------------------------------------------------------------- the transient shaper
 
-/// The level the transient shaper follows: the loudest sample of the last 25 to 26 ms, kept as
+/// The level the transient shaper follows: the loudest sample of the last 25 to 26 ms, kept as [copied: src/pictures.ts `heard`, CARD-113]
 /// the loudest of each 1 ms piece. A low note's waves read as one steady level, and a sound that
 /// fades reads as a level that only falls. Silence after its last piece empties brings it back to
 /// its birth.
@@ -163,7 +163,7 @@ const FULL_DB: f32 = 6.0;
 /// The most a transient shaper turns a sound up or down.
 const MOST_DB: f32 = 24.0;
 
-/// Transient shaper. Inputs: in, attack, sustain (dB, each −24 to 24).
+/// Transient shaper. Inputs: in, attack, sustain (dB, each −24 to 24). Its card's picture copies its sums: src/pictures.ts `heard` (CARD-113, tested by crates/editor's pack_pictures_tests).
 ///
 /// Two followers watch the level: one rises slowly (`RISE_TIME`) and falls with it at once, so it
 /// lags each hit's start; one falls slowly (`FALL_TIME`) and rises with it at once, so it hangs over
@@ -223,7 +223,7 @@ impl Kernel for Transient {
 
 // ---------------------------------------------------------------- the de-esser
 
-/// The width of the band a de-esser turns down: a bell of Q 1, about an octave and a half.
+/// The width of the band a de-esser turns down: a bell of Q 1, about an octave and a half. Its card draws it: src/pictures.ts `bandEdges` (CARD-114).
 const DEESS_Q: f32 = 1.0;
 /// How fast its detector grabs the band's level, and lets it go.
 const DEESS_ATTACK: f32 = 0.0005;
