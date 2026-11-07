@@ -13,7 +13,7 @@
 
 ## Status
 
-music2 is young: 0.1.0 is its first release, an alpha (an early test version). Download it, or build it from source. Before 1.0 the song format, the SDK and std can still change, and an old song may need a line changed to open ([goals](docs/goals.md)).
+music2 is young: 0.2.0 is its newest release, an alpha (an early test version). Download it, or build it from source. Before 1.0 the song format, the SDK and std can still change, and an old song may need upgrading to open: **Upgrade it** in the app, or `m2 upgrade` ([goals](docs/goals.md)).
 
 | System | State |
 |---|---|
@@ -27,12 +27,14 @@ What works today:
 | You can | |
 |---|---|
 | Start a song from a template, or open an example | the start screen |
-| Add tracks: 22 built-in sounds, a Sampler, or audio | **+ Track** (⌘T) |
-| Draw and edit notes, clips and automation | the piano roll and the timeline |
-| Turn knobs, add effects, connect cables | **Device** (⌥1) |
-| Mix: faders, pans, mute, solo, meters, buses and sends | **Mix** (⌥3) |
-| Play a MIDI keyboard or the computer's keys, and record notes or audio | ⌘K, or plug a keyboard in; R records |
-| Bring in WAV and MIDI files | drag them onto the window |
+| Add tracks: music2's own synths and drums, drum kits, a Sampler, a pack's sound, or audio | **+ Track** (⌘T) |
+| Find any sound, effect, sample or plugin, and hear it first | ⌘F |
+| Draw and edit notes, clips and automation; write a beat on a grid | the piano roll, the timeline and **Beat** (⌥5) |
+| Turn knobs, drag pictures, add effects (a sidechain too), connect cables | **Device** (⌥1) |
+| Mix: faders, pans, mute, solo, meters, loudness, buses and sends | **Mix** (⌥3) |
+| Play a MIDI keyboard or the computer's keys; record notes or audio, with takes and comping | ⌘K, or plug a keyboard in; R records |
+| Tune a voice, and fix its notes one by one | **+** ▸ **Tune** in its Device view; **Find notes** on its clip |
+| Bring in WAV, FLAC and MIDI files | drag them onto the window |
 | Play CLAP plugins, and open their own windows | the browser's **Plugins** |
 | Export the song, its stems, or the notes as MIDI | **Export** (⇧⌘E) |
 | Edit the song's code, with type checks | **Code** (⌥4) |
@@ -47,9 +49,9 @@ Get the file for your computer from the [Releases page](https://github.com/Bread
 
 | Your computer | The file |
 |---|---|
-| A Mac with Apple silicon (M1 or newer) | `music2-0.1.0-macos-arm64.zip`: unzip it, and drag `music2.app` into Applications |
-| Ubuntu 22.04 or newer, Debian 12 or newer | `music2_0.1.0_amd64.deb`: `sudo apt install ./music2_0.1.0_amd64.deb` |
-| Another Linux on an x86_64 PC | `music2-0.1.0-linux-x86_64.AppImage`: `chmod +x` it, then run it |
+| A Mac with Apple silicon (M1 or newer) | `music2-0.2.0-macos-arm64.zip`: unzip it, and drag `music2.app` into Applications |
+| Ubuntu 22.04 or newer, Debian 12 or newer | `music2_0.2.0_amd64.deb`: `sudo apt install ./music2_0.2.0_amd64.deb` |
+| Another Linux on an x86_64 PC | `music2-0.2.0-linux-x86_64.AppImage`: `chmod +x` it, then run it |
 
 On a Mac, the first time you open it, macOS stops it, as it isn't signed by Apple yet. On macOS 15, click **Done**, then in **System Settings → Privacy & Security** click **Open Anyway** (once); on macOS 11 to 14, Control-click the app and choose **Open**. Every step, `m2` from each file, and how to check a download: [Install and run music2](docs/guide/install.md#download).
 

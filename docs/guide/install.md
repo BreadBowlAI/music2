@@ -1,7 +1,7 @@
 # Install and run music2
 
 **In short**
-- Download music2 from the [Releases page](https://github.com/BreadBowlAI/music2/releases): for a Mac with Apple silicon, or for Linux on an x86_64 PC. 0.1.0 is the first release, an early test version (an alpha).
+- Download music2 from the [Releases page](https://github.com/BreadBowlAI/music2/releases): for a Mac with Apple silicon, or for Linux on an x86_64 PC. 0.2.0 is the newest release, an early test version (an alpha).
 - On a Mac, the first time you open it, macOS asks you to allow it once in System Settings (below).
 - Or build music2 from source: you need [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 24, and on Linux some system libraries.
 
@@ -37,7 +37,7 @@ If you use the Terminal, this one line does steps 3 to 5 instead: `xattr -dr com
 ### On Linux, the .deb
 
 ```bash
-sudo apt install ./music2_0.1.0_amd64.deb      # use the name of the file you downloaded
+sudo apt install ./music2_0.2.0_amd64.deb      # use the name of the file you downloaded
 ```
 
 apt also installs what music2 needs: WebKitGTK 4.1 (the window's web view), GTK 3, ALSA (sound) and D-Bus, if they aren't there yet. It needs glibc 2.35 or newer, so apt refuses it on an older system. It was tried on Ubuntu 24.04 only. Then open music2 from your apps, or type `music2`. `m2` is installed as `/usr/bin/m2`. To remove it: `sudo apt remove music2`.
@@ -45,13 +45,13 @@ apt also installs what music2 needs: WebKitGTK 4.1 (the window's web view), GTK 
 ### On Linux, the AppImage
 
 ```bash
-chmod +x music2-0.1.0-linux-x86_64.AppImage     # once: let it run
-./music2-0.1.0-linux-x86_64.AppImage
+chmod +x music2-0.2.0-linux-x86_64.AppImage     # once: let it run
+./music2-0.2.0-linux-x86_64.AppImage
 ```
 
 The AppImage needs glibc 2.38 or newer, ALSA's library, and FUSE's `fusermount` program, which desktop Ubuntu and Debian have (the `fuse3` package); not FUSE 2. Without `fusermount`, run the AppImage with `--appimage-extract-and-run` at the end.
 
-For `m2` beside the AppImage, download `m2-<version>-linux-x86_64.tar.gz` too and unpack it anywhere: `tar xzf m2-0.1.0-linux-x86_64.tar.gz`. Its `bin/m2` finds what it needs in its `lib/` folder, so keep the two together. It needs glibc 2.35 or newer and ALSA's library (`libasound2`, or `libasound2t64` on Ubuntu 24.04 and newer).
+For `m2` beside the AppImage, download `m2-<version>-linux-x86_64.tar.gz` too and unpack it anywhere: `tar xzf m2-0.2.0-linux-x86_64.tar.gz`. Its `bin/m2` finds what it needs in its `lib/` folder, so keep the two together. It needs glibc 2.35 or newer and ALSA's library (`libasound2`, or `libasound2t64` on Ubuntu 24.04 and newer).
 
 Each download carries music2's licences (`LICENSE-MIT`, `LICENSE-APACHE`) and `THIRD-PARTY-NOTICES.txt`, the licences of the code inside it that others wrote: in `music2.app/Contents/Resources`, in `/usr/share/doc/music2` (the `.deb`, and inside the AppImage), and beside `bin` in m2's `.tar.gz`.
 

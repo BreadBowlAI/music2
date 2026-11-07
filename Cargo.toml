@@ -4,7 +4,7 @@ members = ["crates/*", "core/*", "apps/*"]
 exclude = ["std/kernels-src"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 # None of our crates goes to crates.io (cargo-deny allows path dependencies only in crates that say so).

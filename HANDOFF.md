@@ -1,10 +1,54 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-02 (the packs night, the registry day, the typed-sounds build, then drum kits and quick gestures). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-07 (the vocals and cards plans, and 0.2.0 made ready). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
+- **0.2.0 is ready to release** (branch `rel-0.2.0`): version 0.2.0 in the workspace, `tauri.conf.json` and
+  `web/package.json` (`Cargo.lock`: only our own crates' version lines); the notes in
+  [docs/releases/0.2.0.md](docs/releases/0.2.0.md) (what's new since 0.1.0, upgrading songs from 0.1.0, the known
+  gaps by number); README, SECURITY and the install page name 0.2.0. The Linux files were built and checked here as
+  `release.yml` does (`ci/release.sh build`, `check` with the test plugins, `app` on Xvfb: start screen, a new song,
+  with-plugins). Every 0.1.0 template and example upgrades with the 0.2.0 `m2` (`m2 upgrade`), then checks and
+  renders. The server has no `file` program, which linuxdeploy's AppImage tool needs: the build here put an unpacked
+  copy on `PATH` (`apt-get download file`); `release.yml` installs it. The tag, the workflow's run and publishing the
+  draft are the lead's and the owner's.
+- **The cards plan (2026-11-06 to 11-07) gave every sound a card that draws its sound** (#85, #87, #90, #92, #93,
+  #94, #95). Design: [docs/designs/cards2/design.md](docs/designs/cards2/design.md), accepted (#85).
+  - **The frame** (#87, CARD-40 to CARD-47): the Device view's **Chain**, a card for each sound in the order it
+    flows, each with a face, tabs (and **All**), and three sizes (Fold, Normal, Expand); **Patch** keeps the boxes
+    and cables.
+  - **Pictures** (#90, CARD-60 to CARD-75): a pack draws shapes in TypeScript (`view.picture`, `@m2/core` 2.4);
+    music2 draws them in its style, owns the gestures (drag, scroll, ⌥-arrows, one undo step), and gives agents the
+    same picture as numbers (`POST /api/graph/picture`). A draw has a budget: 20 ms of its own thread's CPU time,
+    2 s by the clock at most (CARD-64).
+  - **Measured curves** (#92, CARD-80 to CARD-86): `p.response` and `p.hit` measure a sound's curve or one hit
+    from the sound itself, so the EQ's whole curve is what it plays.
+  - **Dressed** (#93 std's cards, std 0.10.0, CARD-90 to CARD-105; #94 the packs' cards, CARD-110 to CARD-144):
+    every card music2 ships has its picture: envelopes, filters, one note, the Wavetable's table, the FM partials,
+    the Limit's and Master's ceiling, the EQ over its live spectrum. Pictures drawn from a kernel's sums are each
+    checked against a render (CARD-99); gap #63 would measure them instead.
+  - **Tidy** (#95): the window's card rules moved from the contract to `taste.md`, six rules said twice merged;
+    gaps.md made honest (#59 built; #62 and #63 new); a flaky CPU-sharing draw test fixed (its busy threads
+    added until the draw really waits).
+- **The vocals plan (2026-11-06)** (#82 to #91). Design: [docs/designs/vocals/design.md](docs/designs/vocals/design.md),
+  accepted (#82).
+  - **Comping** (#84, VOX-1 to VOX-7): **Takes** on a track, a row per take, a swipe plays that take there.
+  - **The song's key** in `data/arrangement.json`, read by sound as `time.key` (#86, VOX-10 to VOX-14); `m2 upgrade`
+    moves an older song's key from `layout.json`.
+  - **Tune** (#89, VOX-20 to VOX-26, gap #50): pitch correction in `@m2/vocals`, Glide and Amount, presets Natural
+    and Robot. The whole song plays 15 ms later while a Tune is on.
+  - **A voice's notes** (#91, VOX-40 to VOX-47, gap #51): Find notes, the notes over the waveform in Notes, drag
+    pitch, timing and length, Straighten; only the edited phrases render through `@m2/vocals`' own kernel.
+  - **Live looks** (#88, TAP-10 to TAP-16, ABI-13, ABI-14): 32 rings, meters from a kernel (a compressor's
+    reduction), a spectrum.
+- **Mix and sound tracks (2026-11-06)**: **Bounce to audio** (#80, RENDER-40, gap #53; `m2 bounce --in-place`);
+  **sidechain by clicking** (#81, gap #21): **Listens to** on a Duck, a compressor or a gate, and Pump in
+  `@m2/mixing`; **choke groups** (#83, gap #22): **Cut by** on a Drum, the Sampler's `off_by`.
+- **CI and the Mac nightly**: the Mac nightly's failures fixed (#74: a kernel's time limit is clock time, a timeline
+  drag goes from the revision it was pressed at, three tests); `ci/check.sh` waits for Xvfb's display, not 10 s
+  (#79); gaps.md put in the owner's order, what a pop producer needs first (#78); Dependabot's #29 merged.
 - **Drum kits, the FL way, and quick gestures (2026-11-01 to 11-02)** (#68 to #72; each track reviewed by an agent,
   every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each). Design:
   [docs/designs/drums/design.md](docs/designs/drums/design.md), the owner's "Yes" to D1 to D4.
@@ -49,7 +93,6 @@ design for whatever you pick up. Older versions of this page, with each track's 
     scales, lock to key, chord stamps and grooves (#6, #15, #16, #3), undo that survives closing and unsaved code
     through a crash (#29, #30; snapshots dropped for git, the owner's choice), meters after the fader (#20), `m2`
     refusing flags it doesn't know (#50), the Mac graph's flicker (a Fit/scrollbar loop, #60).
-  - Next: the drums design note's tracks (the owner said yes on 2026-11-01), then `m2 upgrade` on the owner's own songs.
 - **The registry day (2026-10-30) let music2 get packs from the internet** (#39 to #46; each track reviewed by a
   skeptic agent, every finding fixed with a test seen failing first, `ci/check.sh --pr` passed on each):
   - **FLAC** is read wherever WAV is (the `claxon` crate, FMT-24). A FLAC brought into a song lands as a WAV of the same
@@ -80,49 +123,15 @@ design for whatever you pick up. Older versions of this page, with each track's 
   - Songs asking for std "0.4" need `std = "0.5"`; `@m2/core` is 1.7.0. **macOS: unverified since `e38c131`.**
   - Design: [docs/designs/packs/design.md](docs/designs/packs/design.md). Not built then: the registry (built the
     next day, above) and streaming (below).
-- **Every planned step is built on Linux** (steps 1 to 9), and so are the five tracks of the agents design. All of it is on `main` at `a1e3c77`, pushed.
-- Each track was reviewed, its findings fixed or listed in [docs/gaps.md](docs/gaps.md), and `ci/check.sh --gates`
-  passed on Linux with nothing passed only on a retry. The last one, track `ex` at `6d212a8`: 1,717 Rust tests,
-  71/71 browser suites, 12 of 12 renders, the 7 gate runs, 33 minutes.
-- **The finish check passed first time** (`ci/check.sh --gates` at `6dfb235`, branch `fa`: the code tidy and this docs pass): 1,717 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes.
-- **The transport works as in GarageBand** (landed `34dcfc4`): Space stops where the song is, and plays on from there; Return goes to bar 1. ⇧Space and Continue are gone. `ci/check.sh --gates` passed at `5707f46`: 1,718 Rust tests, 71/71 browser suites, 12 of 12 renders, the 7 gate runs, 37 minutes, nothing on a retry. Its first run caught the playhead moving a block after a stop; now a stop holds exactly there. By ear: mac-run step 28.
-- **Track `bus` landed** (`444a2d0`, 2026-10-19): buses, sends and groups, in song
-  code (RENDER-34, `@m2/core` 1.5.0, std 0.4.0) and in the Mix view (Add bus, a send knob per bus, an output
-  picker). Gap #27 is closed. No sound changed. A song asking for std "0.3" needs `std = "0.4"` (below). Its
-  `ci/check.sh --gates` passed at `7bb44f3`: 1,770 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate
-  runs, 34 minutes. Notes: `docs/designs/step9/build-notes-bus.md`.
-- **Draw mode (B) draws as GarageBand does** (landed `40685ca`): a press adds a note, a drag sets its length, ⌥-drag paints one a grid step. `ci/check.sh --gates` passed at `ce91acb`: 1,771 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 35 minutes, nothing on a retry. Its first run caught two old races, now fixed: a take started right after the one before on the same track failed ("File exists"), and the playhead lagged Follow by a frame. By ear: mac-run step 133.
-- **The Mac ran everything at `e7518f4`** (2026-10-18): 11 of 13 rows. Two tests failed, fixed on branch `mf2`
-  (`7482009`, `e505d0b`). G12 failed only because the output was at 44.1 kHz, not 48. G7f passed ab's layout by
-  far. 8a's sweep is done.
-- **The Mac ran everything again at `a1e3c77`** (2026-10-25): 13 of 16 rows. Branch `mf3` fixes what failed, from the
-  logs, on Linux: macOS read a plugin host's background state wrongly; a song's build counted its wait for a CPU as
-  work, so listens at background priority stopped as "endless loops"; a forwarded commit's fixes named the song
-  through `/private/var`; the listen tests ran ten listens at once; G13's listens of 8 bars didn't land in its minute
-  on the slow cores (now 2 bars); the check named a line of JSON as a test. G12 failed only its set-up again: the
-  output was at 44.1 kHz. G13's first Mac numbers, recorded: callback p99 1,292 µs (45%), 0 dropouts, with one listen
-  at work all the minute. Notes: `docs/designs/agents/build-notes-mac.md`. **One more `ci/check.sh` on the Mac is
-  owed, with the output at 48 kHz.**
-- **Track `br` landed** (2026-10-18, `054e338`): add an installed plugin from the app (#32), and presets for std
-  sounds and plugins (#26, FMT-22, HOST-8). Linux green at `1fb6caa`; macOS owed (in the next Mac run). Build notes
-  `docs/designs/step9/build-notes-br.md`.
-- **Checks on Linux are faster, and check no less** (track `cs`): `ci/check.sh --gates=auto` skips the timing gates only when HEAD holds, in every file they read, what an earlier check on this machine passed them on, and the browser suites run 4 at a time; its own check passed at `b5e3a0f` with the gates (`ci/` changed): 1,771 Rust tests, 74/74 browser suites in 2.7 min, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry. See "The check" below.
-- **Ready to open up** (track `os`): MIT OR Apache-2.0, a fast pull request tier on GitHub (`ci/check.sh --pr` runs the same here), a nightly tier, the timing gates every night on a quiet machine (`ci/nightly.sh`), and the docs for contributors and agents (README, CONTRIBUTING, AGENTS, goals, SECURITY). `ci/check.sh --gates=auto` passed at `e405740` with the gates (`ci/` changed): its new lint, advisories and nightly list rows, 1,772 Rust tests, 74/74 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry; `ci/check.sh --pr` passed there too, cold and warm (341 s), nothing on a retry. The commits after it change only docs. The owner's GitHub steps: [docs/maintainers.md](docs/maintainers.md). See "The tiers" below.
-- **Track `ag-steps`** (the agents design's track 1, on `main`): every change the app accepts is one undo step with an id and a source; a text file saved in another program is one, shown as it lands with a notice and a glow; undo never takes back your own save with someone else's change, and a step it can't take back can be skipped. `ci/check.sh --gates=auto` at `36b015d`: all but `advisories` passed (1,799 Rust tests, 75/75 browser suites, 12 of 12 renders, the 7 gate runs, 26 minutes, nothing on a retry). `advisories` failed there on RUSTSEC-2026-0386 (tokio 1.53.2); `main` now has tokio 1.53.3 (`8c4cb2b`). Notes: `docs/designs/agents/build-notes-steps.md`.
-- **Track `ag-fwd`** (the agents design's track 2, on `main`): with the song open, every `m2` write goes through the app as one undo step, the agent's, named by `--as` and `--why`; two keys (the page's, and the tools key in `session.json`, written whole); an agent's change to what you hold is refused, on arrival and again just before it is heard, and taken back if you began holding it as it landed (`m2` exits 3); `m2 edit`, `m2 write` and `m2 undo`. Notes: `docs/designs/agents/build-notes-fwd.md`.
-- **The review's fixes for `ag-fwd`** (F1 to F12, on `ag-fwd`): an agent's change that would end a drag or a plugin window not saved yet is taken back, whatever file it touched; the tools key can't touch what you hold; plain names; bigger forwarded writes; and `m2 edit` and `m2 write` fix a song whose code doesn't build, in the app, as one undo step. `ci/check.sh --gates=auto` at `0d3cf13`: PASS, 1,859 Rust tests, 75/75 browser suites, 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-see`** (the agents design's track 3, on `main`): an agent sees what you look at (`m2 focus`), follows everything that happens in the app (`m2 watch`) and points at things to show you where they are (`m2 point`), and none of it is saved; press V to hear before and after the newest change an agent or another program made, while agents wait. `ci/check.sh --pr` at `841b7ca`: PASS, 1,837 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-see.md`.
-- **The review's fixes for `ag-see`** (F1 to F11, on `ag-see`): Compare only plays: Before is built in memory and never written, so a quit or a crash on Before leaves the song as it was, and Esc on Before is one undo step, said with Redo; the pill shows only what the server says, one V at a time; while it is open an agent can't close or open a song; `m2 watch` follows one song, ends quietly, and keeps so much; every event says its session; a pointer never selects. `ci/check.sh --gates=auto` at `7177f17`: PASS, 1,891 Rust tests, 76/76 browser suites (3,288 checks), 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-routes`** (the agents design's track 4, on `main`): every route of the app's API is declared once, in one table the router, the read-only 423 and the tools key's 403 are made from; agents get 403 on your controls (play, record, solo, the view, plugin windows, exports, settings, songs); `m2 routes` lists the table and `m2 call` sends any route for agents, so every change the window can make is reachable from `m2`; an agent's set can't commit your drag, and a change taken back answers busy. `ci/check.sh --pr` at `e435c65`: PASS, 1,866 Rust tests, 54/54 browser suites, nothing on a retry. Notes: `docs/designs/agents/build-notes-routes.md`.
-- **The review's fixes for `ag-routes`** (F1 to F10, on `ag-routes`): an agent's socket can't end your drags; an agent's import or Sampler file copies nothing while you hold the song, and a refused one leaves nothing (`m2 import` goes through the app's own import); every step is named by the agent's words; MIDI files never go into the song's folder; Look again is yours; each route carries its body limit, and no route outside the table answers. `ci/check.sh --gates=auto` at `31633f5`: PASS, 1,918 Rust tests, 76/76 browser suites (3,288 checks), 12 of 12 renders, the 7 gate runs, 27 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Track `ag-listen`** (the agents design's track 5, the last, on `main`): `m2 listen` measures what an agent can't hear, for the mix and each track (its own sound, and as it reaches the mix): loudness, true peak, crest, octave bands, stereo and masking; `--with` measures a change before it is made, `--as-heard` hears your listening mute and solo, `--png` draws the bands over time. It renders in its own process at background priority, its plugin host too, one at a time, and its copy taps change no bit. Gate G13 plays p50 while agents listen and edit beside it; its timings are recorded until its first Mac runs are, then judged. All five tracks of the design are built. `ci/check.sh --pr` at `ba42c67`: PASS, 1,899 Rust tests, 54/54 browser suites, 6 min, nothing on a retry; the 8 gate runs of `ci/gates.txt` pass on Linux. [build-notes-listen.md](docs/designs/agents/build-notes-listen.md).
-- **The review's fixes for `ag-listen`** (F1 to F17, on `ag-listen`): the meters start warm, so a range that starts on a loud note reads no false true peak; masking is judged moment by moment among what the master adds up, a group bus as one, with how much of the range each pair holds; copy taps live only on an offline type the live engine can't take; mute and solo follow track names into a change, which compares the same bars; `m2 listen` refuses what it doesn't know, never waits long on a busy app, and names unsaved plugin windows; on Linux it runs in `SCHED_IDLE` (it still costs playback what one busy core does: gaps), and G13 listens to a song with plugins too. `ci/check.sh --gates=auto` at `bfe1a4c`: PASS, 1,957 Rust tests, 76/76 browser suites, 12 of 12 renders, the 8 gate runs, 29 minutes, nothing on a retry. Notes: the build notes' "The review's fixes".
-- **Two hand-written pieces are crates now** (landed `c928f5d`): `m2 watch`'s WebSocket client is `tungstenite`'s, which also checks `Sec-WebSocket-Accept` (that gap is closed), and `m2 listen --png` writes with the `png` crate, compressed (first-song's picture: 598 KB to 56 KB, the same pixels). Both were in `Cargo.lock` already: it gains four dependency lines, no crate and no version. `ci/check.sh --gates=auto` at `c928f5d`: PASS, 1,958 Rust tests, 76/76 browser suites, 12 of 12 renders, the 8 gate runs, 31 minutes, nothing on a retry.
-- **The docs plan** (branch `docsite`; [design](docs/designs/docs/design.md), [build notes](docs/designs/docs/build-notes.md)): the user docs are **the guide**, `docs/guide/` (the manual split one page a topic, in four parts), also a website (mdBook, published by `.github/workflows/pages.yml` from `main` once the repo is public) and built into `m2` (`m2 docs`). Every `m2` command is declared once (`apps/m2/src/commands.rs`): the usage and the guide's commands page are made from it, and an unknown command exits 2. Every new song gets `AGENTS.md`, naming its `m2` by its exact path, and `CLAUDE.md` (FMT-23); `music2.app` carries `m2` at `Contents/MacOS/m2` (AGENT-12, FMT-23). A link check covers every Markdown file. A change to `docs/guide/` or the contract runs the whole PR tier. `ci/check.sh --pr` passed at `941d887`: 1,938 Rust tests, 54/54 browser suites, 12 of 12 renders. Owed: the owner's clicks for Pages (the design's section 4), mac-run steps 134 to 136, and the full `ci/check.sh`.
-- **The first release, 0.1.0 (alpha)** (branch `release`, made from `docsite`; [build notes](docs/designs/release/build-notes.md), PLAT-8): a pushed tag `v0.1.0` runs `.github/workflows/release.yml`, which builds `music2-0.1.0-macos-arm64.zip` (signed ad hoc), `music2_0.1.0_amd64.deb`, `music2-0.1.0-linux-x86_64.AppImage` and `m2-0.1.0-linux-x86_64.tar.gz`, checks each with `ci/release.sh check`, and makes a draft pre-release with `SHA256SUMS` and the notes in `docs/releases/0.1.0.md`. The owner publishes it by hand. A pull request that changes the bundle builds both platforms without a release. The Linux files were built and run here under Xvfb (start screen, New Song, play, export, plugins); **the Mac build is owed to the workflow's first run** (what it must show: the build notes), then mac-run steps 137 to 141.
+- **Before the packs night (2026-10-18 to 10-26)**: every planned step (1 to 9) and the five tracks of the agents
+  design were built on Linux (`m2` writes through the app as one undo step, `m2 watch`, `m2 focus`, `m2 point`,
+  `m2 routes`, `m2 call`, `m2 listen`); buses, sends and groups; the GarageBand transport; plugins added from the app
+  and presets; the PR, nightly and gates tiers, and the docs for contributors and agents; the guide (`docs/guide/`,
+  also a website and `m2 docs`); and the first release, **0.1.0 (alpha)**, made by `.github/workflows/release.yml`
+  from a pushed tag ([build notes](docs/designs/release/build-notes.md), PLAT-8). Each track's story is in its build
+  notes under `docs/designs/` and in this page's history in git.
 - What the app does: the guide, [docs/guide/](docs/guide/welcome.md) (`m2 docs` prints it). What is missing: [docs/gaps.md](docs/gaps.md). The checks by ear:
   [docs/mac-run.md](docs/mac-run.md).
-- Next: merge `mf3`, then one more Mac run at 48 kHz, then fix what it finds. Then Windows, as its own step, or the top gaps.
 
 ## Mac runs owed
 
@@ -134,9 +143,10 @@ design for whatever you pick up. Older versions of this page, with each track's 
 | 4 | By ear, steps 7 to 141 | [docs/mac-run.md](docs/mac-run.md): step 7 (7–17), `sounds` (18–21), `taste-next` (22–31), `8b-ui` (32–38), `polish` (39–50), `next` (51–60), `studio` (61–72), `io` (73–82), `ab` (83–87), `ph` (88–95), `sx` (96–102), `pm` (103–110), `ex` (111–116), `br` (117–125), `bus` (126–132), `dn` (133), `docsite` (134–136), `release` (137–141) | about 2 hours, in parts |
 | 5 | `ci/check.sh` on `main` (the same run as row 1's next one) | **Done at `a1e3c77`** (2026-10-25): `br`'s plugin preset search and preset load passed on a Mac (HOST-8: its preset tests, `br-presets` and `br-plugins`). The run's other failures are fixed on `mf3`; one more run, at 48 kHz, is owed | about 45 min |
 
-**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` once `mf3` is
-merged. The run at `a1e3c77` (2026-10-25) covered `br`, `gb`, `bus` and the agents tracks, and passed 13 of 16 rows;
-`mf3` fixes the rest but G12's rate, which is the Mac's setting
+**Next: one more `ci/check.sh` on the Mac, with the output at 48 kHz** (Audio MIDI Setup), on `main` (`mf3` is
+merged). The run at `a1e3c77` (2026-10-25) covered `br`, `gb`, `bus` and the agents tracks, and passed 13 of 16 rows;
+`mf3` fixed the rest but G12's rate, which is the Mac's setting. Everything since (packs, drums, vocals, cards) has
+run on a Mac only on GitHub's Mac runner
 ([build-notes-mac.md](docs/designs/agents/build-notes-mac.md) says what each row should show next). The next run
 judges G12 at its designed set-up, reads the plugin host's background state with the new macOS code, and shows how
 long a listen of 2 bars takes on the efficiency cores. G13's first Mac numbers are recorded (callback p99 1,292 µs,
@@ -247,23 +257,33 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **The owner's own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"); then Make it
-   a kit on any Drum machine track, if wanted. Presets saved for the old single drums are named, not converted
-   (gaps). A song made from main on 2026-11-01 between #69 and #70 has an earlier `@m2/drums` 2.1.0 hash in its lock:
-   `m2 pack update <song> @m2/drums` moves it (the first nine sounds' bits are pinned).
-2. **The Mac's one more `ci/check.sh`**, at 48 kHz. macOS is unverified since `e38c131`; everything since has run
-   only on Linux and GitHub's Mac runner.
-3. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
+1. **Release 0.2.0**: land `rel-0.2.0`, push the tag `v0.2.0`, let `release.yml` build both platforms and make the
+   draft pre-release, then the owner publishes it. The Mac file is proved only by that run (mac-run steps 137 to
+   141, with the 0.2.0 file).
+2. **Sounds that make notes** (gap #62): an arpeggiator, chords, note repeat, a scale and generators, each a pack
+   put before an instrument; a pack's kernel needs event outputs (ABI-2). The design note, `docs/designs/events/`,
+   is accepted (#96, 2026-11-07); tracks `notes-out` and `notes-sdk` are being built, then `notes-pack` and
+   `notes-chain` (its §8).
+3. **The small measuring steps** (gap #63): `docs/designs/measure2/`, accepted (#96), keeps the copied sums and takes
+   three small steps (track `measure2-small`, its §8), with the keyed compressor's dot (M2-21) and the cards'
+   overlapping axis labels.
+4. **The owner's own items**, open:
+   - **The registry, live**: the Cloudflare R2 bucket and its address (D10), then the repo
+     `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
+     `DEFAULT_REGISTRY` set, `@m2/grand-piano` listed, then the `@m2/` packs.
+   - **An Apple Developer ID** (gap #43): the repo's Apple secrets turn on signing and notarizing; the hardened
+     runtime's entitlements have never been tried on a Mac.
+   - **The Mac's one more `ci/check.sh`**, at 48 kHz (above). macOS is unverified by hand since `e38c131`.
+   - **Tune and a voice's notes, by ear** (gaps #50, #51): the tests use a made-up singer; a real voice is owed.
+   - **Their own songs**: `m2 upgrade <song>` (or Upgrade it) on each, e.g. "Beat Pack" (std "0.4"); then Make it a
+     kit on any drum machine track, if wanted.
+5. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
    few clean nightlies.
-4. **The registry, live**: the owner makes the Cloudflare R2 bucket and its address (D10), then the repo
-   `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
-   `m2 registry`, `DEFAULT_REGISTRY` set, and `@m2/grand-piano` listed, then the five `@m2/` packs listed too.
-5. **More sounds, inside packs** (the owner's rule): a flanger and a convolution reverb in `@m2/effects`, sampled
-   drum kits (free-licence recordings; big ones need the bucket), an EQ view of the whole curve (a new view word,
-   CARD), and the arpeggiator, which needs kernels that can play notes (ABI-2's event outputs): a design note first.
-   The beat grid's gaps: a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks (D3).
-6. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
-7. **Open owner decisions** (below).
+6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
+   macro knobs #57), each inside a pack where it can be; the beat grid's gaps (a sound when a step is clicked,
+   copying a pattern, cut groups across a kit's tracks, D3).
+7. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
+8. **Open owner decisions** (below).
 
 The owner wants music2 to be a novel, type-safe DAW built from first principles, simple yet elegant, with std as
 small as possible and most sounds in packs (2026-10-31).
@@ -272,7 +292,6 @@ small as possible and most sounds in packs (2026-10-31).
 
 | Question | What was built | Recommendation |
 |---|---|---|
-| Dependabot #29 (Swatinem/rust-cache 2.9.3 in `release.yml`). | Waits: a workflow change needs the owner's review. | Approve it. |
 | The bucket's address (packs design D10). D1 is decided: Cloudflare R2, the list on GitHub (2026-10-30). | Everything but the bucket: `DEFAULT_REGISTRY` is empty, so the library shows only with `M2_REGISTRY` or the setting. | The bucket's own `r2.dev` address to start (the robot must read it, not a cache); a name of ours (`packs.<domain>`) in front for the app later. |
 | A Settings field for the registry's address. | None: the environment or `settings.json`. | Not until there is a default; then a field for a mirror. |
 | How big the cache of previews and got files may grow. | Never pruned. | A limit (2 GB), the oldest out first. |
@@ -298,8 +317,8 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 
 | | |
 |---|---|
-| Which songs | Any song asking for std "0.2" to "0.8", or using the old drums and synths from before the sounds moved into packs. |
-| What it changes | The std line and the pack lines, the imports, the single drums (now One drum, with their knob values converted), and the lock. Nothing else. |
+| Which songs | Any song asking for std "0.2" to "0.9" (a song from 0.1.0 asks for "0.4"), or using the old drums and synths from before the sounds moved into packs. |
+| What it changes | The std line and the pack lines, the imports, the single drums (now the Drum, with their knob values converted), the song's key (from `layout.json` into `data/arrangement.json`), and the lock. Nothing else. |
 | The sound | The same, bit for bit, where it can be; anything it can't convert exactly is named with its file and line, and then nothing is written. |
 | Presets | Your saved presets for the old single drums aren't changed: the upgrade names them, so you can save them again. |
 | First try | `m2 upgrade <song> --check` shows what it would change, and writes nothing. |
@@ -310,7 +329,7 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | What | Where |
 |---|---|
 | The contract, and the order of work | `docs/architecture.md` |
-| What each step and track built, decided and left | `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `agents/` (the agents design and its five tracks' build notes); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
+| What each step and track built, decided and left | `docs/designs/cards2/`, `vocals/`, `drums/`, `cards/`, `packs/` (the designs since 0.1.0, each with its accepted decisions); `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `agents/` (the agents design and its five tracks' build notes); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
 | Each check's logs and summary | `$SCRATCH/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`, `-bus`) |
