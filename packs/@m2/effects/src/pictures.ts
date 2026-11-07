@@ -8,27 +8,7 @@
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
 
 import { axis, knob, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
-import { dbWords, secondsWords } from "std/pictures";
-
-/** The name of one of the sound's number controls: what a dot moves by the wheel, or as its knob. */
-type Num<D> = NonNullable<Moves<D>["wheel"]>;
-/** The name of one of the sound's controls in `U` (CARD-62). */
-type In<D, U extends Unit> = Extract<NonNullable<Moves<D, U, U>["x"]>, string>;
-/** What plays, by name (CARD-63). */
-type Values = { readonly [k: string]: unknown };
-
-/** `v[name]`, which a cable or the code may hold (CARD-63): else the picture can't be drawn, said in words. */
-function known(v: Values, name: string, what: string): number {
-  const x = v[name];
-  if (typeof x !== "number") throw new Error(`its ${what} is set by a cable or worked out by the code, so it can't be drawn`);
-  return x;
-}
-
-/** A number in plain words: at most three figures, a minus sign as taste.md writes it. */
-function figures(v: number): string {
-  const r = Math.abs(v) >= 100 ? Math.round(v) : Math.abs(v) >= 10 ? Math.round(v * 10) / 10 : Math.round(v * 100) / 100;
-  return String(r).replace("-", "−");
-}
+import { dbWords, figures, known, secondsWords, type In, type Num, type Values } from "std/pictures";
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
@@ -59,18 +39,21 @@ export function echoLevels(time: number, feedback: number, mix: number): { at: n
  * A delay's echoes (CARD-117), from its own sum: a click (faint, as loud as the mix leaves it), then
  * an echo each `time`, the first as loud as `mix`, each next one `feedback` times the last, as
  * bars down to −60 dB; a dot on the first echo that moves the time across and the mix as its knob
- * does (up, more), and one on the second that moves the feedback as its knob does.
+ * does (up, more), and one on the second that moves the feedback as its knob does, each resting at
+ * the foot when its echo is under it.
  */
 export function echoes<D>(p: Painter<D, "seconds", "db">, v: Values, names: { time: In<D, "seconds">; feedback: Num<D>; mix: Num<D> }): Shape[] {
   const time = known(v, names.time, "time"), fb = known(v, names.feedback, "feedback"), mix = known(v, names.mix, "mix");
   const all = echoLevels(time, fb, mix);
   const bar = (e: { at: number; db: number }) => [e.at, Math.max(FLOOR, e.db)];
-  const first = all[1], second = all[2] ?? { at: 2 * clamp(time, 1 / RATE, 2), db: FLOOR };
+  // Each dot rests at the foot when its echo is under it (a mix of 0), so it can be dragged back up (review T9).
+  const t = clamp(time, 1 / RATE, 2);
+  const first = all[1] ?? { at: t, db: FLOOR }, second = all[2] ?? { at: 2 * t, db: FLOOR };
   return [
     p.bars(bar(all[0]), { base: FLOOR, tone: "faint" }),
     p.bars(all.slice(1).flatMap(bar), { base: FLOOR }),
-    ...(first ? [p.handle(first.at, Math.max(FLOOR, first.db), { x: names.time, y: knob(names.mix) } as unknown as Moves<D, "seconds", "db">)] : []),
-    ...(first && second.at <= ECHO_SECONDS ? [p.handle(second.at, Math.max(FLOOR, second.db), { y: knob(names.feedback), wheel: names.feedback } as unknown as Moves<D, "seconds", "db">)] : []),
+    p.handle(first.at, Math.max(FLOOR, first.db), { x: names.time, y: knob(names.mix) } as unknown as Moves<D, "seconds", "db">),
+    ...(second.at <= ECHO_SECONDS ? [p.handle(second.at, Math.max(FLOOR, second.db), { y: knob(names.feedback), wheel: names.feedback } as unknown as Moves<D, "seconds", "db">)] : []),
   ];
 }
 
@@ -91,96 +74,188 @@ const ALLPASSES = [556, 441, 341, 225];
 const CUT = 200;
 /** The longest a tail is drawn, in seconds. */
 const TAIL_SECONDS = 12;
-/** How many frequencies the tail is summed over, evenly to half the rate. */
-const BINS = 24;
+/**
+ * The frequencies the tail is summed over: 32 bands, each the same share of an octave, from 100 Hz
+ * to half the rate, so the lows just above the cut, which ring longest in a damped room, are many.
+ */
+const BANDS = 32;
+const LOWEST = 100;
+/** How many times round its combs the eight of them cancel or add, each time, in the all-passes: see `room`. */
+const TOGETHER = 16;
 
 /** A reverb's tail (CARD-118): seconds across, −60 to 0 dB up. */
 export function tailPicture(): PictureDecl<"seconds", "db"> {
   return view.picture({ x: axis.time(TAIL_SECONDS), y: axis.lin("db", -60, 0) });
 }
 
+/** What every tail is drawn with, whatever its size and damping: see `room`. */
+export type Room = { before: number[]; grid: number; together: number[] };
+/** `room`'s sums, once worked out; and how many times they have been (for the test that a build never does). */
+let rooms: Room | null = null;
+let worked = 0;
+/** How many times this module has worked out its sums: a song's build never does (review T1). */
+export const sumsWorked = () => worked;
+
+/** The lengths, at 48 kHz, of the reverb's combs and all-passes, in samples (the kernel's own rounding). */
+const at48 = (l: number) => Math.floor((l * RATE) / 44_100);
+
 /**
- * Where the reverb's four all-passes, one after the other, send each moment of the combs' sound
- * (worked out once): the samples it comes out after and its energy, gathered in 5 ms, leaving out
- * what holds less than a ten-thousandth of it all. Each all-pass
- * gives what goes in at once, upside down, then again after its length, then half of that after
- * each length more (the kernel's own sum).
+ * What the reverb's four all-passes do to its combs' sound, the same for any size and damping, so
+ * worked out on a tail's first draw and kept (never as a song builds, which loads this module too):
+ * - `before`: where they send each moment of it, and how much: each all-pass gives what goes in at
+ *   once, upside down, then again after its length, then half of that after each length more (the
+ *   kernel's own sum); their energies, one after the other, gathered in 1 ms, as the share of it all
+ *   that comes before each `grid` (a quarter of a millisecond).
+ * - `together`: how loud the eight combs' n-th times round are together, against eight apart, for
+ *   n from 1 to 40: the combs ring the same click, so where their times round, through the
+ *   all-passes, land on the same samples, they cancel or add. Worked out from the all-passes' own
+ *   echoes of themselves: each all-pass's is 7/3 at once and −(2/3) × 0.5^j at j lengths either way,
+ *   to 6 lengths (within 0.01 dB of every length).
  */
-const SPREAD: readonly { at: number; energy: number }[] = (() => {
-  let taps = new Map<number, number>([[0, 1]]);
-  for (const len of ALLPASSES) {
-    const m = Math.floor((len * RATE) / 44_100);
-    const one: [number, number][] = [[0, -1]];
-    for (let n = 1, a = 1; a > 1e-6; n++, a *= 0.5) one.push([n * m, a]);
-    const next = new Map<number, number>();
-    for (const [t1, a1] of taps) for (const [t2, a2] of one) next.set(t1 + t2, (next.get(t1 + t2) ?? 0) + a1 * a2);
-    taps = new Map([...next].filter(([, a]) => Math.abs(a) > 1e-5));
+export function room(): Room {
+  if (rooms) return rooms;
+  worked += 1;
+  const stages = ALLPASSES.map(at48), combs = COMBS.map(at48);
+  // The energies, each all-pass after the last, gathered in 1 ms as they go (each bin its energy
+  // and its energy × time).
+  const ms = RATE / 1000;
+  let energy: number[] = [1], timed: number[] = [0];
+  for (const m of stages) {
+    const e2: number[] = [], t2: number[] = [];
+    for (let b = 0; b < energy.length; b++) {
+      const e = energy[b];
+      if (!(e > 0)) continue;
+      const at = timed[b] / e;
+      for (let k = 0, a2 = 1; a2 > 1e-6; k++, a2 = k === 1 ? 1 : a2 * 0.25) {
+        const when = at + k * m, bin = Math.floor(when / ms);
+        e2[bin] = (e2[bin] ?? 0) + e * a2;
+        t2[bin] = (t2[bin] ?? 0) + e * a2 * when;
+      }
+    }
+    [energy, timed] = [e2, t2];
   }
-  const bins = new Map<number, [number, number]>();
+  // How much of it all comes before each moment, every quarter of a millisecond, from 0 to 1:
+  // `before[i]` is the share that comes before i quarters.
+  const grid = RATE / 4000;
   let all = 0;
-  for (const [t, a] of taps) {
-    const b = Math.floor(t / (RATE / 200));
-    const [e, at] = bins.get(b) ?? [0, 0];
-    bins.set(b, [e + a * a, at + a * a * t]);
-    all += a * a;
+  for (const e of energy) if (e > 0) all += e;
+  const before: number[] = [0];
+  for (let b = 0; b < energy.length; b++) {
+    if (!(energy[b] > 0)) continue;
+    const i = Math.floor(timed[b] / energy[b] / grid) + 1;
+    while (before.length <= i) before.push(0);
+    before[i] += energy[b] / all;
   }
-  return [...bins.values()].filter(([energy]) => energy > 1e-4 * all).map(([energy, at]) => ({ at: at / energy, energy }));
-})();
+  for (let i = 1; i < before.length; i++) before[i] += before[i - 1];
+  // Past where all but a millionth has come, it has all come.
+  while (before.length > 1 && before[before.length - 2] > 1 - 1e-6) before.pop();
+  before[before.length - 1] = 1;
+  // The all-passes' echo of themselves: the first two's together as a list of lags, the last two's
+  // laid out at every lag, so each lag the combs need is one pass over the first list.
+  const own = (j: number) => (j === 0 ? 7 / 3 : -(2 / 3) * 0.5 ** Math.abs(j));
+  const lags: number[] = [], values: number[] = [];
+  for (let i = -6; i <= 6; i++)
+    for (let j = -6; j <= 6; j++) {
+      const x = own(i) * own(j);
+      if (Math.abs(x) > 1e-2) [lags[lags.length], values[values.length]] = [i * stages[0] + j * stages[1], x];
+    }
+  const reach = 6 * (stages[2] + stages[3]);
+  const later = new Array<number>(2 * reach + 1).fill(0);
+  for (let i = -6; i <= 6; i++) for (let j = -6; j <= 6; j++) later[reach + i * stages[2] + j * stages[3]] += own(i) * own(j);
+  const echo = (lag: number) => {
+    let sum = 0;
+    for (let k = 0; k < lags.length; k++) {
+      const d = lag - lags[k] + reach;
+      if (d >= 0 && d < later.length) sum += values[k] * later[d];
+    }
+    return sum;
+  };
+  const whole = echo(0);
+  const together: number[] = [];
+  for (let n = 1; n <= TOGETHER; n++) {
+    let sum = combs.length * whole;
+    for (let a = 0; a < combs.length; a++) for (let b = a + 1; b < combs.length; b++) sum += 2 * echo(n * (combs[a] - combs[b]));
+    together.push(sum / (combs.length * whole));
+  }
+  return (rooms = { before, grid, together });
+}
 
 /**
  * How loud what is left of a reverb's tail is `t` seconds in, in dB from its start: all the sound
  * still to come after that time, as a click's tail gives it (its energy from then on). By the
  * kernel's own sums: a click with its lows below 200 Hz cut goes into eight combs, each sending
  * back `0.7 + 0.28 × size` of what went round, through a one-pole low-pass of `0.4 × damping` that
- * makes the highs fade sooner; then through the four all-passes (`SPREAD`). Each comb's energy at
- * each frequency is the loop's gain, squared, smaller each time round it.
+ * makes the highs fade sooner; then through the four all-passes (`room`). Each comb's energy at
+ * each frequency is the loop's gain, squared, smaller each time round it, and its first times round
+ * are as loud together as `room` says.
  */
 export function tailLevel(size: number, damping: number): (t: number) => number {
+  // The last tail asked for is kept, so a draw and its words work its sums out once.
+  if (last && last.size === size && last.damping === damping) return last.level;
+  const { before, grid, together } = room();
   const fb = 0.7 + 0.28 * clamp(size, 0, 1), d = 0.4 * clamp(damping, 0, 1);
-  const lengths = COMBS.map((l) => Math.floor((l * RATE) / 44_100));
-  // What is still to come after each time round a comb, summed over the frequencies: a click's
-  // share at each (its lows cut, the comb's whole ringing), times its loop's gain, squared, each
-  // time round; worked out as far as it is asked for.
+  // Each time round, its low-pass holds the lows back d / (1 − d) of a sample more.
+  const lengths = COMBS.map(at48);
+  // Each band's share of a click (its lows cut) and its loop's gain, squared.
   const share: number[] = [], gain: number[] = [];
-  for (let i = 0; i < BINS; i++) {
-    const f = ((i + 0.5) / BINS) * (RATE / 2);
-    const r = (f / CUT) ** 4;
+  for (let i = 0; i < BANDS; i++) {
+    const [a, b] = [LOWEST * (RATE / 2 / LOWEST) ** (i / BANDS), LOWEST * (RATE / 2 / LOWEST) ** ((i + 1) / BANDS)];
+    const f = Math.sqrt(a * b), r = (f / CUT) ** 4;
     const g = (fb * (1 - d)) ** 2 / (1 - 2 * d * Math.cos((2 * Math.PI * f) / RATE) + d * d);
-    share.push(r / (1 + r) / (1 - g));
+    share.push(((b - a) * r) / (1 + r));
     gain.push(g);
   }
+  // What is still to come from the k-th time round on (k from 0): every later time round's energy,
+  // summed over the bands, the first `TOGETHER` as loud together as `room` says; worked out as far as
+  // it is asked for, from what is left of each band's whole ringing.
+  const ringing = share.map((x, i) => x / (1 - gain[i]));
+  const near: number[] = [];
+  for (let k = 0, now = share.slice(); k < TOGETHER; k++) {
+    let sum = 0;
+    for (let i = 0; i < BANDS; i++) {
+      sum += now[i];
+      now[i] *= gain[i];
+    }
+    near.push(sum * (together[k] - 1));
+  }
+  for (let k = TOGETHER - 2; k >= 0; k--) near[k] += near[k + 1];
   const after: number[] = [];
   const upTo = (k: number) => {
     while (after.length <= k) {
-      let sum = 0;
-      for (let i = 0; i < BINS; i++) {
-        sum += share[i];
-        share[i] *= gain[i];
+      let sum = after.length < TOGETHER ? near[after.length] : 0;
+      for (let i = 0; i < BANDS; i++) {
+        sum += ringing[i];
+        ringing[i] *= gain[i];
       }
       after.push(sum);
     }
   };
+  // The share of the all-passes' spread that comes before `when` samples.
+  const sooner = (when: number) => (when <= 0 ? 0 : before[Math.min(before.length - 1, Math.floor(when / grid))]);
+  const span = before.length * grid;
   const shortest = Math.min(...lengths);
+  // What is left at `t`: for each comb, what comes after `t` of each time round, by where in the
+  // spread it lands: the k-th time round's (from 0) for what comes k to k + 1 lengths before `t`.
   const left = (t: number) => {
     const now = t * RATE;
-    upTo(Math.ceil(now / shortest));
+    upTo(Math.ceil(now / shortest) + 1);
     let e = 0;
     for (const l of lengths) {
-      for (let j = 0; j < SPREAD_AT.length; j++) {
-        const x = (now - SPREAD_AT[j]) / l;
-        e += SPREAD_ENERGY[j] * after[x > 0 ? Math.ceil(x) - 1 : 0];
-      }
+      e += after[0] * (1 - sooner(now - l));
+      const first = Math.max(1, Math.floor((now - span) / l));
+      for (let k = first; k * l < now; k++) e += after[k] * (sooner(now - k * l) - sooner(now - (k + 1) * l));
     }
     return e;
   };
   const whole = left(0);
-  return (t) => 10 * Math.log10(Math.max(1e-12, left(t) / whole));
+  const level = (t: number) => 10 * Math.log10(Math.max(1e-12, left(t) / whole));
+  last = { size, damping, level };
+  return level;
 }
+/** The last tail `tailLevel` worked out. */
+let last: { size: number; damping: number; level: (t: number) => number } | null = null;
 
-/** `SPREAD` as two lists, for `tailLevel`'s sums. */
-const SPREAD_AT = SPREAD.map((s) => s.at), SPREAD_ENERGY = SPREAD.map((s) => s.energy);
-
-/** When a tail of `level` has fallen `down` dB, in seconds, to 5 ms: `TAIL_SECONDS` at most. */
+/** When a tail of `level` has fallen `down` dB, in seconds, to 1 ms: `TAIL_SECONDS` at most. */
 export function tailFalls(level: (t: number) => number, down: number): number {
   // Doubled from a quarter of a second until past it, then halved.
   let [lo, hi] = [0, 0.25];
@@ -188,7 +263,7 @@ export function tailFalls(level: (t: number) => number, down: number): number {
     if (hi >= TAIL_SECONDS) return TAIL_SECONDS;
     [lo, hi] = [hi, Math.min(TAIL_SECONDS, 2 * hi)];
   }
-  while (hi - lo > 0.005) {
+  while (hi - lo > 0.001) {
     const mid = (lo + hi) / 2;
     if (level(mid) > -down) lo = mid;
     else hi = mid;
@@ -199,23 +274,40 @@ export function tailFalls(level: (t: number) => number, down: number): number {
 /** How many points a tail is drawn with. */
 const TAIL_POINTS = 48;
 
-/**
- * A reverb's tail (CARD-118), from its own sums (`tailLevel`): how loud what is left of it is,
- * from 0 dB at its start down to −60 dB, a faint fill and the line `tail`; one dot where it has
- * fallen 30 dB, that moves the size as its knob does (to the right, longer) and by the wheel.
- */
-export function tail<D>(p: Painter<D, "seconds", "db">, v: Values, names: { size: Num<D>; damping: string }): Shape[] {
-  const level = tailLevel(known(v, names.size, "size"), known(v, names.damping, "damping"));
+/** A tail's points, to where it has fallen 60 dB, and where it has fallen 30 dB: the last asked for kept, for a draw and its words. */
+function tailShape(size: number, damping: number): { points: number[]; half: number } {
+  if (shape && shape.size === size && shape.damping === damping) return shape;
+  const level = tailLevel(size, damping);
   const end = tailFalls(level, 60);
   const points: number[] = [];
   for (let i = 0; i < TAIL_POINTS; i++) {
     const t = (i / (TAIL_POINTS - 1)) * end;
     points.push(t, Math.max(-60, level(t)));
   }
+  // Where it has fallen 30 dB: between the two points either side, in a straight line.
+  let half = end;
+  for (let i = 2; i < points.length; i += 2)
+    if (points[i + 1] <= -30) {
+      const [t0, y0, t1, y1] = [points[i - 2], points[i - 1], points[i], points[i + 1]];
+      half = t0 + ((t1 - t0) * (-30 - y0)) / (y1 - y0);
+      break;
+    }
+  shape = { size, damping, points, half };
+  return shape;
+}
+let shape: { size: number; damping: number; points: number[]; half: number } | null = null;
+
+/**
+ * A reverb's tail (CARD-118), from its own sums (`tailLevel`): how loud what is left of it is,
+ * from 0 dB at its start down to −60 dB, a faint fill and the line `tail`; one dot where it has
+ * fallen 30 dB, that moves the size as its knob does (to the right, longer) and by the wheel.
+ */
+export function tail<D>(p: Painter<D, "seconds", "db">, v: Values, names: { size: Num<D>; damping: Num<D> }): Shape[] {
+  const { points, half } = tailShape(known(v, names.size, "size"), known(v, names.damping, "damping"));
   return [
     p.fill(points, { base: -60, tone: "faint" }),
     p.line(points, { name: "tail" }),
-    p.handle(tailFalls(level, 30), -30, { x: knob(names.size), wheel: names.size } as unknown as Moves<D, "seconds", "db">),
+    p.handle(half, -30, { x: knob(names.size), wheel: names.size } as unknown as Moves<D, "seconds", "db">),
   ];
 }
 
@@ -224,7 +316,7 @@ export function tailWords(v: Values, names: { size: string; damping: string }): 
   const [s, d] = [v[names.size], v[names.damping]];
   if (typeof s !== "number" || typeof d !== "number") return "A room's tail as it fades: its size or damping is set by a cable or the code";
   const highs = d > 0 ? `; damping ${figures(d)} makes its highs fade sooner` : "";
-  return `Its tail fades 30 dB in ${secondsWords(tailFalls(tailLevel(s, d), 30))}${highs}. Drag the dot for the size`;
+  return `Its tail fades 30 dB in ${secondsWords(tailShape(s, d).half)}${highs}. Drag the dot for the size`;
 }
 
 // ---------------------------------------------------------------- moving effects
@@ -254,7 +346,7 @@ export function chorusDelays(rate: number, depth: number, t: number): [number, n
  * A chorus's motion over a second (CARD-119): how late each of its two copies is, in seconds, the
  * lines `one` and `two`, drifting apart and back `rate` times a second, by up to `depth` × 6 ms.
  */
-export function chorusMotion(p: Painter<any, "seconds", "seconds">, v: Values, names: { rate: string; depth: string }): Shape[] {
+export function chorusMotion<D>(p: Painter<D, "seconds", "seconds">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
   const one: number[] = [], two: number[] = [];
   for (const t of second()) {
@@ -281,7 +373,7 @@ export function notchesAt(rate: number, depth: number, t: number): [number, numb
 }
 
 /** A phaser's motion over a second (CARD-120): its three notches across frequency, the lines `low`, `mid` and `high`. */
-export function phaserMotion(p: Painter<any, "seconds", "hz">, v: Values, names: { rate: string; depth: string }): Shape[] {
+export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
   const lines: number[][] = [[], [], []];
   for (const t of second()) notchesAt(rate, depth, t).forEach((f, i) => lines[i].push(t, f));
@@ -294,7 +386,7 @@ export function tremoloAt(rate: number, depth: number, t: number): number {
 }
 
 /** A tremolo's motion over a second (CARD-121): how loud it leaves the sound, the line `level`. */
-export function tremoloMotion(p: Painter<any, "seconds", "unit01">, v: Values, names: { rate: string; depth: string }): Shape[] {
+export function tremoloMotion<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
   const points = second().flatMap((t) => [t, tremoloAt(rate, depth, t)]);
   return [p.fill(points, { base: 0, tone: "faint" }), p.line(points, { name: "level" })];
@@ -360,7 +452,7 @@ export function crushPicture(): PictureDecl<"seconds", "bipolar"> {
 }
 
 /** The bitcrusher's cycle (CARD-123): the sine (faint) and, over it, each sample as `crushed` gives it, held for its sample: the line `crushed`. */
-export function crush(p: Painter<any, "seconds", "bipolar">, v: Values, names: { bits: string; rate: string; mix: string }): Shape[] {
+export function crush<D>(p: Painter<D, "seconds", "bipolar">, v: Values, names: { bits: Num<D>; rate: Num<D>; mix: Num<D> }): Shape[] {
   const samples = crushed(known(v, names.bits, "bits"), known(v, names.rate, "rate"), known(v, names.mix, "mix"));
   const sine: number[] = [], held: number[] = [];
   for (let i = 0; i <= 96; i++) sine.push(i / 96 / CRUSH_HZ, Math.sin((2 * Math.PI * i) / 96));
@@ -372,36 +464,42 @@ export function crush(p: Painter<any, "seconds", "bipolar">, v: Values, names: {
 
 /** How far up a field's fan reaches, below the picture's top, so its dot is drawn whole. */
 const FAN = 0.85;
+/** What the widener makes up above width 1, from a sound's middle above 300 Hz, 11 ms late: `0.6 × (width − 1)` (its kernel's `WIDEN_SYNTH`). */
+const MADE = 0.6;
 
-/** A stereo field (CARD-124): from 2 to the left to 2 to the right across (the width: 1 is the sound as it came), its depth up. */
+/** A stereo field (CARD-124): how far apart left and right are, from 2 to the left to 2 to the right (1 is the sound as it came), its depth up. */
 export function fieldPicture(): PictureDecl<"scalar", "unit01"> {
   return view.picture({ x: axis.lin("scalar", -2, 2), y: axis.lin("unit01", 0, 1) });
 }
 
+/** How wide the widener makes a mono sound, from its sound above 300 Hz: 0 at width 1 or less. */
+export const madeUp = (width: number) => MADE * Math.max(0, clamp(width, 0, 2) - 1);
+
 /**
- * A stereo field (CARD-124): a fan from the listener, at the foot, as wide as `width` either side
- * (how far its sides are turned up against its middle, as the kernel does: 0 one point, the middle
- * alone; 1 the sound as it came; 2 its sides twice as loud), the faint lines where 1 is; and a dot at
- * its right edge that moves the width across.
+ * A stereo field (CARD-124): a fan from the listener, at the foot, as wide as `width` either side,
+ * how far apart it spreads a stereo sound's left and right (the kernel turns their difference by
+ * `width`: 0 is mono, 1 the sound as it came, 2 twice as far apart), the faint lines where 1 is;
+ * above width 1, a second fan, `made`, the width it makes up for a mono sound from its sound above
+ * 300 Hz (`madeUp`); and a dot at the fan's right edge that moves the width across.
  */
 export function field<D>(p: Painter<D, "scalar", "unit01">, v: Values, names: { width: In<D, "scalar"> }): Shape[] {
-  const w = clamp(known(v, names.width, "width"), 0, 2);
+  const w = clamp(known(v, names.width, "width"), 0, 2), m = madeUp(w);
   return [
     p.line([0, 0, -1, FAN], { tone: "faint" }),
     p.line([0, 0, 1, FAN], { tone: "faint" }),
     p.fill([0, 0, -w, FAN, w, FAN], { tone: "faint" }),
     p.line([-w, FAN, 0, 0, w, FAN], { name: "field" }),
+    ...(m > 0 ? [p.line([-m, FAN, 0, 0, m, FAN], { name: "made", tone: "soft" })] : []),
     p.handle(w, FAN, { x: names.width } as Moves<D, "scalar", "unit01">),
   ];
 }
 
-/** What `field` draws, in words. */
+/** What `field` draws, in words, with no jargon. */
 export function fieldWords(v: Values, names: { width: string }): string {
   const w = v[names.width];
   if (typeof w !== "number") return "How wide the sound is: its width is set by a cable or the code";
-  if (w <= 0) return "Width 0: mono, its middle alone. Drag the edge to widen it";
-  const what = w < 1 ? "narrower than it came" : w === 1 ? "as it came" : "wider than it came";
-  return `Width ${figures(w)}, ${what}: its sides turned ${w >= 1 ? "up" : "down"} ${dbWords(Math.abs(db(w)))} against its middle. Drag the edge`;
+  if (w <= 0) return "Width 0: mono, left and right the same. Drag the edge to widen it";
+  if (w === 1) return "Width 1: the sound as it came. Drag the edge";
+  if (w < 1) return `Width ${figures(w)}: a stereo sound's left and right come ${figures(w)} times as far apart, toward mono; a mono sound stays as it is. Drag the edge`;
+  return `Width ${figures(w)}: a stereo sound's left and right spread ${figures(w)} times as far apart; a mono sound gets a made-up width of ${figures(madeUp(w))} from its sound above 300 Hz (the faint fan). Drag the edge`;
 }
-
-export { figures };

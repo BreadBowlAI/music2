@@ -7,24 +7,11 @@
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
 
-import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
-import { dbWords, hzWords } from "std/pictures";
+import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape } from "@m2/core";
+import { dbWords, hzWords, known, type In, type Num, type Read, type Values } from "std/pictures";
 
-/** The name of one of the sound's number controls: what a dot moves by the wheel, or as its knob. */
-type Num<D> = NonNullable<Moves<D>["wheel"]>;
-/** The name of one of the sound's controls in `U` (CARD-62). */
-type In<D, U extends Unit> = Extract<NonNullable<Moves<D, U, U>["x"]>, string>;
 /** One of the card's groups: the tab a dot shows (CARD-71). */
 type Tab<D> = NonNullable<Moves<D>["opens"]>;
-/** What plays, by name (CARD-63). */
-type Values = { readonly [k: string]: unknown };
-
-/** `v[name]`, which a cable or the code may hold (CARD-63): else the picture can't be drawn, said in words. */
-function known(v: Values, name: string, what: string): number {
-  const x = v[name];
-  if (typeof x !== "number") throw new Error(`its ${what} is set by a cable or worked out by the code, so it can't be drawn`);
-  return x;
-}
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
@@ -66,16 +53,27 @@ const EACH = RATE / 1000;
 /** The one-pole coefficient for a time constant of `time` seconds (the kernel's `pole`). */
 const pole = (time: number) => Math.exp(-1 / (time * RATE));
 
+/** What the transient shaper hears of the hit, at each millisecond: see `heard`. */
+export type Heard = { level: number[]; start: number[]; tail: number[] };
+/** `heard`'s sums, once worked out; and how many times they have been (for the test that a build never does, CARD-113). */
+let shares: Heard | null = null;
+let worked = 0;
+/** How many times this module has worked out its sums: a song's build never does (review T1). */
+export const sumsWorked = () => worked;
+
 /**
- * What the transient shaper hears of the hit, worked out once (CARD-113): at each millisecond, the
- * hit's level, and how far it is a hit's start (0 to 1, the share of `attack`) and a hit's tail (0
- * to 1, the share of `sustain`), by the kernel's own sums (`@m2/mixing:transient`): the loudest
- * sample of the last 25 ms in 1 ms pieces, glided over 2 ms; a follower that rises over 20 ms and
- * falls with it at once, one that falls over 0.3 s and rises with it at once; each share in full
- * from 6 dB on. The shares don't depend on the card's values, so they are worked out at load.
+ * What the transient shaper hears of the hit (CARD-113): at each millisecond, the hit's level, and
+ * how far it is a hit's start (0 to 1, the share of `attack`) and a hit's tail (0 to 1, the share of
+ * `sustain`), by the kernel's own sums (`@m2/mixing:transient`, its `Window` and `Follow`): the
+ * loudest sample of the last 25 ms in 1 ms pieces, glided over 2 ms; a follower that rises over
+ * 20 ms and falls with it at once, one that falls over 0.3 s and rises with it at once; each share
+ * in full from 6 dB on. The shares don't depend on the card's values, so they are worked out on the
+ * picture's first draw and kept: never as a song builds, which loads this module too.
  */
-export const HEARD: { level: number[]; start: number[]; tail: number[] } = (() => {
-  const out = { level: [] as number[], start: [] as number[], tail: [] as number[] };
+export function heard(): Heard {
+  if (shares) return shares;
+  worked += 1;
+  const out: Heard = { level: [], start: [], tail: [] };
   // The hit, as std:adsr plays it.
   const rise = 1 / (HIT.attack * RATE);
   const fall = Math.exp(-6.9 / (HIT.decay * RATE));
@@ -86,30 +84,29 @@ export const HEARD: { level: number[]; start: number[]; tail: number[] } = (() =
   const len = Math.max(1, Math.round(RATE / 1000));
   const pieces = new Array<number>(PIECES).fill(0);
   let at = 0, finished = 0, now = 0, left = len;
-  // A follower that lands on a level that holds still (the kernel's `Follow`).
-  const follower = () => {
-    let value = 0, last = 0;
-    return {
-      get: () => value,
-      next(level: number, coef: number) {
-        const still = level === last;
-        last = level;
-        if (value !== level) {
-          const y = level + (value - level) * coef;
-          const landed = still && (y === value || Math.abs(y - level) <= 1e-6 * Math.abs(level));
-          value = landed ? level : Math.abs(y) < 1e-15 ? 0 : y;
-        }
-        return value;
-      },
-      set(level: number) {
-        value = last = level;
-        return level;
-      },
-    };
-  };
-  const smooth = follower(), riser = follower(), faller = follower();
+  // Three followers, each landing on a level that holds still (the kernel's `Follow`): its value
+  // and the level it was given last.
+  let glided = 0, glidedLast = 0, riser = 0, riserLast = 0, faller = 0, fallerLast = 0;
   const [glide, slow, hang] = [pole(0.002), pole(0.02), pole(0.3)];
+  const step = (value: number, last: number, level: number, coef: number) => {
+    if (value === level) return value;
+    const y = level + (value - level) * coef;
+    const landed = level === last && (y === value || Math.abs(y - level) <= 1e-6 * Math.abs(level));
+    return landed ? level : Math.abs(y) < 1e-15 ? 0 : y;
+  };
   for (let n = 0; n <= HIT_SECONDS * RATE; n++) {
+    // Once the hit falls with no start left and all of a tail, it stays so: the level only falls,
+    // the riser falls with it, and the faller, 0.3 s slow, only falls further behind. The rest is
+    // the hit's own fall.
+    const i = out.start.length - 1;
+    if (!attacking && n % EACH === 0 && i > 0 && out.start[i] === 0 && out.tail[i] >= 1) {
+      for (let m = n; m <= HIT_SECONDS * RATE; m += EACH) {
+        out.level.push(x * fall ** (m - n + 1));
+        out.start.push(0);
+        out.tail.push(1);
+      }
+      break;
+    }
     if (attacking) {
       x += rise;
       if (x >= 1) [x, attacking] = [1, false];
@@ -118,26 +115,31 @@ export const HEARD: { level: number[]; start: number[]; tail: number[] } = (() =
     if (x === 0 && now === 0 && finished === 0) {
       [at, left, loudest] = [0, len, 0];
     } else {
-      now = Math.max(now, x);
-      loudest = Math.max(now, finished);
+      if (x > now) now = x;
+      loudest = now > finished ? now : finished;
       if (--left === 0) {
         pieces[at] = now;
         at = (at + 1) % PIECES;
-        finished = Math.max(...pieces);
+        finished = 0;
+        for (let i = 0; i < PIECES; i++) if (pieces[i] > finished) finished = pieces[i];
         [now, left] = [0, len];
       }
     }
-    const level = smooth.next(loudest, glide);
-    const r = level <= riser.get() ? riser.set(level) : riser.next(level, slow);
-    const f = level >= faller.get() ? faller.set(level) : faller.next(level, hang);
+    glided = step(glided, glidedLast, loudest, glide);
+    glidedLast = loudest;
+    const level = glided;
+    if (level <= riser) riser = riserLast = level;
+    else [riser, riserLast] = [step(riser, riserLast, level, slow), level];
+    if (level >= faller) faller = fallerLast = level;
+    else [faller, fallerLast] = [step(faller, fallerLast, level, hang), level];
     if (n % EACH === 0) {
       out.level.push(x);
-      out.start.push(Math.min(1, (db(level) - db(r)) / 6));
-      out.tail.push(Math.min(1, (db(f) - db(level)) / 6));
+      out.start.push(Math.min(1, (db(level) - db(riser)) / 6));
+      out.tail.push(Math.min(1, (db(faller) - db(level)) / 6));
     }
   }
-  return out;
-})();
+  return (shares = out);
+}
 
 /** Where the attack's dot sits, in seconds: early in the hit, where all of `attack` applies. */
 export const ATTACK_AT = 0.005;
@@ -160,13 +162,14 @@ export function hit<D>(p: Painter<D, "seconds", "db">, v: Values, names: { attac
   const a = clamp(known(v, names.attack, "attack"), -24, 24);
   const s = clamp(known(v, names.sustain, "sustain"), -24, 24);
   const before: number[] = [], after: number[] = [];
-  HEARD.level.forEach((x, i) => {
+  const { level, start, tail } = heard();
+  level.forEach((x, i) => {
     // From its first millisecond: the axis is a log one.
     if (i === 0) return;
     const t = i / 1000;
     const y = Math.max(-120, db(x));
     before.push(t, y);
-    after.push(t, x > 0 ? y + clamp(a * HEARD.start[i] + s * HEARD.tail[i], -24, 24) : -120);
+    after.push(t, x > 0 ? y + clamp(a * start[i] + s * tail[i], -24, 24) : -120);
   });
   const on = (t: number) => after[2 * (Math.round(t * 1000) - 1) + 1];
   return [
@@ -188,8 +191,7 @@ export function hitWords(v: Values, names: { attack: string; sustain: string }):
 
 /**
  * The spectrum with a band on it (CARD-114): 20 Hz to 20 kHz across, levels from −90 to 0 dB up,
- * on the spectrum's own scale (CARD-103), so a level on it is where the sound is; the sound going
- * in (faint) and coming out.
+ * the spectrum's own scale (CARD-103); the sound going in (faint) and coming out.
  */
 export function bandPicture(): PictureDecl<"hz", "db"> {
   return view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -90, 0), live: [live.spectrum("in", { tone: "faint" }), live.spectrum("out")] });
@@ -199,19 +201,17 @@ export function bandPicture(): PictureDecl<"hz", "db"> {
 export const bandEdges = (f: number): [number, number] => [f * (Math.sqrt(1.25) - 0.5), f * (Math.sqrt(1.25) + 0.5)];
 
 /**
- * The band a de-esser listens to (CARD-114): a faint box over its band (a Q of 1, between the
- * points 3 dB down), from its threshold up, where what is louder is turned down; and one dot at
- * its frequency and threshold, moving the frequency across and the threshold up and down.
+ * The band a de-esser listens to and turns down (CARD-114): a faint box over the whole height of
+ * its band (a Q of 1, between the points 3 dB down), and one dot in its middle, moving the
+ * frequency across and the threshold as its knob does. The threshold is no line on the picture:
+ * the kernel compares the band's peaks with it, and no bar of the spectrum reads those (a bar is a
+ * twelfth of an octave, the band about seventeen; an S sound's peaks stand well over its bars).
  */
-export function band<D>(p: Painter<D, "hz", "db">, v: Values, names: { freq: In<D, "hz">; threshold: In<D, "db"> }): Shape[] {
+export function band<D>(p: Painter<D, "hz", "db">, v: Values, names: { freq: In<D, "hz">; threshold: Num<D> }): Shape[] {
   const f = known(v, names.freq, "frequency");
-  const t = clamp(known(v, names.threshold, "threshold"), -90, 0);
+  known(v, names.threshold, "threshold");
   const [lo, hi] = bandEdges(f);
-  return [
-    p.fill([lo, t, hi, t, hi, 0, lo, 0], { tone: "faint" }),
-    p.line([lo, t, hi, t], { name: "threshold" }),
-    p.handle(f, t, { x: names.freq, y: names.threshold } as Moves<D, "hz", "db">),
-  ];
+  return [p.fill([lo, -90, hi, -90, hi, 0, lo, 0], { tone: "faint" }), p.handle(f, -45, { x: names.freq, y: knob(names.threshold) } as unknown as Moves<D, "hz", "db">)];
 }
 
 /** What `band` draws, in words. */
@@ -219,8 +219,8 @@ export function bandWords(v: Values, names: { freq: string; threshold: string; a
   const [f, t, a] = [v[names.freq], v[names.threshold], v[names.amount]];
   if (typeof f !== "number" || typeof t !== "number") return "Turns a band down while it is loud: its frequency or threshold is set by a cable or the code";
   const [lo, hi] = bandEdges(f);
-  const most = typeof a === "number" ? `by up to ${dbWords(a)}` : "by an amount set elsewhere";
-  return `Listens from ${hzWords(lo)} to ${hzWords(hi)}: louder than ${dbWords(t)} there, that band is turned down, ${most}`;
+  const most2 = typeof a === "number" ? `up to ${dbWords(a)}` : "up to an amount set elsewhere";
+  return `Listens from ${hzWords(lo)} to ${hzWords(hi)}: when that band's peaks go over ${dbWords(t)}, it turns the band down by as much, ${most2}`;
 }
 
 // ---------------------------------------------------------------- the multiband compressor
@@ -306,7 +306,7 @@ export function splitWords(v: Values, names: { lowMid: string; midHigh: string; 
   const [a, b] = [v[names.lowMid], v[names.midHigh]];
   if (typeof a !== "number" || typeof b !== "number") return "Lows, mids and highs, each compressed on its own: a crossover is set by a cable or the code";
   const g = names.gains.map((n) => (typeof v[n] === "number" ? dbWords(v[n] as number) : "set elsewhere"));
-  return `Lows below ${hzWords(Math.min(a, b))}, mids to ${hzWords(Math.max(a, b))}, highs above, each compressed on its own, then turned ${g[0]}, ${g[1]} and ${g[2]}. Drawn below its thresholds`;
+  return `Lows below ${hzWords(Math.min(a, b))}, mids to ${hzWords(Math.max(a, b))}, highs above, each compressed on its own, then turned ${g[0]}, ${g[1]} and ${g[2]}: as it sounds while quieter than its thresholds`;
 }
 
 // ---------------------------------------------------------------- Pump
@@ -334,11 +334,14 @@ const STEP_POINTS = 48;
  * foot that moves the depth up and down, and a dot on its curve, a third of the way through, that
  * moves the shape as its knob does (up, more: the curve comes back sooner) and by the wheel.
  */
-export function dip<D>(p: Painter<D, "beats", "db">, v: Values, names: { depth: In<D, "db">; shape: Num<D>; rate: string }): Shape[] {
+export function dip<D>(p: Painter<D, "beats", "db">, v: Values, names: { depth: In<D, "db">; shape: Num<D>; rate: Read<D> }): Shape[] {
   const depth = clamp(known(v, names.depth, "depth"), -24, 0);
   const shape = clamp(known(v, names.shape, "shape"), 0, 1);
   const rate = v[names.rate];
-  const step = RATES[(typeof rate === "string" && rate in RATES ? rate : "1/4") as keyof typeof RATES];
+  if (rate === undefined) throw new Error(`names ${String(names.rate)}, which this sound doesn't have`);
+  // A rate the code works out greys the picture: it never draws a rate the song may not play (review T8).
+  if (typeof rate !== "string" || !(rate in RATES)) throw new Error("its rate is set by a cable or worked out by the code, so it can't be drawn");
+  const step = RATES[rate as keyof typeof RATES];
   const points: number[] = [];
   for (let at = 0; at < 4 - 1e-9; at += step) {
     for (let i = 0; i < STEP_POINTS; i++) points.push(at + (step * i) / STEP_POINTS, dipDb(depth, shape, i / STEP_POINTS));

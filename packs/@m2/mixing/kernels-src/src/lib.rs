@@ -39,7 +39,7 @@ export!(transient, Transient);
 export!(deesser, Deesser);
 export!(multiband, Multiband);
 
-/// A follower of a level that moves (the transient shaper's), a one-pole's way: it lands on its
+/// A follower of a level that moves (the transient shaper's), a one-pole's way: it lands on its [copied: src/pictures.ts `heard`, CARD-113]
 /// level only once the level holds still, when within a millionth of it or when a step no longer
 /// moves it (a slow float one-pole stalls short). Chasing a level that moves, it is never snapped
 /// onto it, however small the gap: a slow follower snapped onto a slowly falling level would never

@@ -161,19 +161,28 @@ fn the_transient_shaper_draws_one_hit_before_and_after() {
     assert_eq!(d["words"], "One hit, before (faint) and after: its start up 9 dB, its tail down 6 dB");
 }
 
-// CARD-114: the de-esser draws the band it listens to over the spectrum, from its threshold up,
-// between the points its Q of 1 is 3 dB down, and one dot at its frequency and threshold.
+// CARD-114 (review T4): the de-esser draws the band it listens to over the spectrum, a box over the
+// whole height between the points its Q of 1 is 3 dB down, and no line on the spectrum's scale: the
+// kernel compares the band's peaks with its threshold, which no bar of the spectrum reads, so the
+// threshold is in its words and on its dot's knob. The dot, in the box's middle, moves the frequency
+// across and the threshold as its knob does.
 #[test]
 fn the_deesser_draws_its_band_over_the_spectrum() {
     let runner = Runner::new();
     let d = draw(&runner, "mixing", "deesser", "band", json!({"freq": 6000, "threshold": -30, "amount": 6})).unwrap();
-    assert_eq!(kinds(&d), ["fill", "line", "handle"]);
-    assert_eq!(dots(&d), ["x=freq y=threshold"]);
-    assert!(close(places(&d)[0], (6000.0, -30.0)));
-    let edges = line(&d, "threshold");
-    let (lo, hi) = (edges[0].0, edges[1].0);
+    assert_eq!(kinds(&d), ["fill", "handle"]);
+    assert_eq!(dots(&d), ["x=freq y=threshold(knob)"]);
+    assert!(close(places(&d)[0], (6000.0, -45.0)), "in the box's middle: {:?}", places(&d)[0]);
+    let box_: Vec<(f64, f64)> =
+        d["shapes"][0]["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+    let (lo, hi) = (box_.iter().map(|p| p.0).fold(f64::MAX, f64::min), box_.iter().map(|p| p.0).fold(0.0, f64::max));
+    let (foot, top) = (box_.iter().map(|p| p.1).fold(f64::MAX, f64::min), box_.iter().map(|p| p.1).fold(f64::MIN, f64::max));
     assert!((lo * hi - 6000.0 * 6000.0).abs() < 1e-3 && (hi - lo - 6000.0).abs() < 1e-6, "a Q of 1: {lo} to {hi}");
-    assert_eq!(d["words"], "Listens from 3.71 kHz to 9.71 kHz: louder than −30 dB there, that band is turned down, by up to 6 dB");
+    assert_eq!((foot, top), (-90.0, 0.0), "the whole height: no level on the spectrum's scale");
+    assert_eq!(
+        d["words"],
+        "Listens from 3.71 kHz to 9.71 kHz: when that band's peaks go over −30 dB, it turns the band down by as much, up to 6 dB"
+    );
 }
 
 // CARD-115: the multiband draws its split: how it turns each frequency below its thresholds (the
@@ -204,7 +213,7 @@ fn the_multiband_draws_its_split() {
     assert!(close(mid, ((200.0f64 * 2500.0).sqrt(), -2.0)), "the mid's dot in its middle, at its gain: {mid:?}");
     assert_eq!(
         d["words"],
-        "Lows below 200 Hz, mids to 2.5 kHz, highs above, each compressed on its own, then turned 3 dB, −2 dB and 0 dB. Drawn below its thresholds"
+        "Lows below 200 Hz, mids to 2.5 kHz, highs above, each compressed on its own, then turned 3 dB, −2 dB and 0 dB: as it sounds while quieter than its thresholds"
     );
     v["lowMid"] = json!(3000);
     let crossed = draw(&runner, "mixing", "multiband", "split", v).unwrap();
@@ -321,17 +330,30 @@ fn drive_and_bitcrush_draw_their_curves() {
     assert_eq!(d["words"], "A 1 kHz sine, rounded to 2 bits and held 12 thousand times a second");
 }
 
-// CARD-124: widen draws a fan as wide as its width either side, the faint lines where 1 is, and a
-// dot at its right edge that moves the width across.
+// CARD-124 (review T3): widen draws a fan as wide as its width either side, how far apart it spreads
+// a stereo sound's left and right, the faint lines where 1 is, and a dot at its right edge that
+// moves the width across; above width 1, a second fan, `made`, the width it makes up for a mono
+// sound from its sound above 300 Hz: 0.6 × (width − 1). Its words say both, with no jargon.
 #[test]
 fn widen_draws_its_stereo_field() {
     let runner = Runner::new();
     let d = draw(&runner, "effects", "widen", "field", json!({"width": 1.5})).unwrap();
-    assert_eq!(kinds(&d), ["line", "line", "fill", "line", "handle"]);
+    assert_eq!(kinds(&d), ["line", "line", "fill", "line", "line", "handle"]);
     assert_eq!(dots(&d), ["x=width"]);
     assert_eq!(line(&d, "field"), [(-1.5, 0.85), (0.0, 0.0), (1.5, 0.85)]);
+    let made = line(&d, "made");
+    assert!(close(made[0], (-0.3, 0.85)) && close(made[2], (0.3, 0.85)), "{made:?}");
     assert!(close(places(&d)[0], (1.5, 0.85)));
-    assert_eq!(d["words"], "Width 1.5, wider than it came: its sides turned up 3.52 dB against its middle. Drag the edge");
+    assert_eq!(
+        d["words"],
+        "Width 1.5: a stereo sound's left and right spread 1.5 times as far apart; a mono sound gets a made-up width of 0.3 from its sound above 300 Hz (the faint fan). Drag the edge"
+    );
+    let narrow = draw(&runner, "effects", "widen", "field", json!({"width": 0.5})).unwrap();
+    assert_eq!(kinds(&narrow), ["line", "line", "fill", "line", "handle"], "no made-up width at or under 1");
+    assert_eq!(
+        narrow["words"],
+        "Width 0.5: a stereo sound's left and right come 0.5 times as far apart, toward mono; a mono sound stays as it is. Drag the edge"
+    );
 }
 
 // CARD-110: a picture whose values a cable sets greys, saying which, as std's do.
@@ -342,4 +364,66 @@ fn a_value_set_elsewhere_greys_the_picture_in_words() {
     assert!(why.contains("its depth is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
     let why = draw(&runner, "effects", "delay", "echoes", json!({"time": 0.25, "feedback": null, "mix": 0.3})).unwrap_err();
     assert!(why.contains("its feedback is set by a cable"), "{why}");
+    // Review T8: a rate the code works out greys Pump's picture, never a 1/4 note drawn in its place.
+    let why = draw(&runner, "mixing", "pump", "dip", json!({"depth": -8, "shape": 0.5, "rate": null})).unwrap_err();
+    assert!(why.contains("its rate is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
+}
+
+// CARD-117 (review T9): a delay at mix 0 still has its two dots, resting at the picture's foot, so its
+// time and mix can be dragged back up.
+#[test]
+fn a_silent_delay_keeps_its_dots() {
+    let runner = Runner::new();
+    let d = draw(&runner, "effects", "delay", "echoes", json!({"time": 0.25, "feedback": 0.3, "mix": 0})).unwrap();
+    assert_eq!(dots(&d), ["x=time y=mix(knob)", "wheel=feedback y=feedback(knob)"]);
+    assert!(close(places(&d)[0], (0.25, -60.0)) && close(places(&d)[1], (0.5, -60.0)), "{:?}", places(&d));
+}
+
+/// A test pack whose reverb picture names a value it doesn't have.
+const MISNAMED: &str = r#"import { component, control, port } from "@m2/core";
+import { tail, tailPicture } from "@m2/effects/pictures";
+
+export const room = component(
+  {
+    id: "room",
+    inputs: { x: port.audio() },
+    controls: { size: control.frac(0.5), damping: control.frac(0.5) },
+    output: port.audio(),
+    editor: { views: { tail: tailPicture() } },
+  },
+  (x) => x,
+  { tail: { draw: (v, p) => tail(p, v, { size: "size", damping: "dampin" } as never), words: () => "a room" } },
+);
+"#;
+
+// CARD-110 (review T7): a picture that names a value its sound hasn't got says so, never that a cable
+// sets it.
+#[test]
+fn a_misnamed_value_is_said_as_one() {
+    let dir = std::env::temp_dir().join(format!("m2-script-misnamed-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/index.ts"), MISNAMED).unwrap();
+    let packages = vec![
+        ("@test/room".to_string(), dir.clone()),
+        ("@m2/effects".to_string(), repo().join("packs/@m2/effects")),
+        ("std".to_string(), repo().join("std")),
+    ];
+    let catalog = m2_script::describe(&packages);
+    let descriptor = catalog.components.get("@test/room:room").cloned().unwrap_or_else(|| panic!("{:?}", catalog.problems));
+    let ask = Ask {
+        key: "room".into(),
+        packages,
+        song: None,
+        module: descriptor.module.clone(),
+        descriptor,
+        view: "tail".into(),
+        values: json!({"size": 0.5, "damping": 0.5}).to_string(),
+        memo: "room\u{0}tail".into(),
+    };
+    let why = match Runner::new().draw(ask) {
+        Drawn::Cant(why) => why,
+        other => panic!("{other:?}"),
+    };
+    assert!(why.contains("dampin, which this sound doesn't have") && !why.contains("cable"), "{why}");
+    let _ = std::fs::remove_dir_all(&dir);
 }

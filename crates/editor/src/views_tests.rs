@@ -581,9 +581,8 @@ fn the_code_line_keeps_a_named_sound_and_reads_code_safely() {
 }
 
 // CARD-31: every sound music2's own packs list is dressed, and its card shows it: the groups its
-// descriptor declares, in their order (More last, for what no group names), or none when it
-// declares none (the reverb and the phaser, whose knobs are all on their faces, CARD-110), and its
-// views. Every
+// descriptor declares, in their order (More last, for what no group names), or none when it declares
+// none (the reverb and the phaser, whose knobs are all on their faces, CARD-110), and its views. Every
 // instrument of @m2/synths and @m2/drums has groups; every polysynth sound with a wave to pick has
 // its shape as a menu; every sound with a whole envelope has one to drag; every sound with a cutoff
 // and a resonance its filter's curve.

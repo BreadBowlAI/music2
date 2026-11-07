@@ -4,7 +4,7 @@
 // that stops refusing it fails the check too.
 
 import { component, control, port } from "@m2/core";
-import { drive, echoes, echoesPicture, field, fieldPicture, shapePicture, tail, tailPicture } from "../../../../packs/@m2/effects/src/pictures";
+import { drive, echoes, echoesPicture, field, fieldPicture, motionPicture, shapePicture, tail, tailPicture, tremoloMotion } from "../../../../packs/@m2/effects/src/pictures";
 
 export const dots = [
   component(
@@ -55,6 +55,35 @@ export const dots = [
         // @ts-expect-error a reverb's size that is a choice, moved as a knob
         draw: (v, p) => tail(p, v, { size: "size", damping: "damping" }),
         words: () => "a tail",
+      },
+    },
+  ),
+  // Review T7: a name a picture only reads is the sound's own too.
+  component(
+    {
+      id: "damping-misspelt",
+      inputs: { in: port.audio() },
+      controls: { size: control.frac(0.5), damping: control.frac(0.5) },
+      output: port.audio(),
+      editor: { views: { tail: tailPicture() } },
+    },
+    (x) => x,
+    {
+      tail: {
+        // @ts-expect-error a damping the sound doesn't have
+        draw: (v, p) => tail(p, v, { size: "size", damping: "dampin" }),
+        words: () => "a tail",
+      },
+    },
+  ),
+  component(
+    { id: "rate-misspelt", inputs: { in: port.audio() }, controls: { rate: control.hz(1), depth: control.frac(0.5) }, output: port.audio(), editor: { views: { motion: motionPicture("unit01", 0, 1) } } },
+    (x) => x,
+    {
+      motion: {
+        // @ts-expect-error a rate the sound doesn't have
+        draw: (v, p) => tremoloMotion(p, v, { rate: "rates", depth: "depth" }),
+        words: () => "a motion",
       },
     },
   ),

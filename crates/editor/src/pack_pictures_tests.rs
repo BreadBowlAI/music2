@@ -72,7 +72,7 @@ fn render(body: &str, seconds: f64) -> Vec<[f64; 2]> {
         "song.ts",
         format!(
             "import {{ db, song, time }} from '@m2/core';\nimport {{ adsr, gain, osc, pan, vca }} from 'std/dsp';\nimport {{ lfo }} from 'std/control';\n\
-             import {{ multiband, pump, transient }} from '@m2/mixing';\n\
+             import {{ deesser, multiband, pump, transient }} from '@m2/mixing';\n\
              import {{ bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen }} from '@m2/effects';\n{body}"
         ),
     );
@@ -247,14 +247,19 @@ fn the_delays_echoes_are_its_sound() {
     }
 }
 
-// CARD-118, CARD-125: the reverb's tail, drawn from its own sums, is what it plays: how loud what is
-// left of a click's tail is (its energy from then on, Schroeder's backward sum), where the line
-// `tail` says, within 0.5 dB, down to 30 dB below its start.
+// CARD-118, CARD-125 (review T2): the reverb's tail, drawn from its own sums, is what it plays: how
+// loud what is left of a click's tail is (its energy from then on, Schroeder's backward sum), where
+// the line `tail` says, within 0.5 dB, at every point it draws, down to 60 dB below its start, at
+// its corners (size 0 and 1, damping 0 and 1) and between (size 0.4 at full damping, the furthest
+// of a finer look, 0.47 dB). Each render lasts half as long again as
+// the picture, so the energy it leaves out is far under −60 dB.
 #[test]
 fn the_reverbs_tail_is_its_sound() {
-    for (size, damping) in [(0.5, 0.0), (0.8, 0.5), (0.3, 1.0), (1.0, 0.2)] {
+    for (size, damping) in
+        [(0.0, 0.0), (0.0, 0.5), (0.0, 1.0), (0.5, 0.0), (0.5, 0.5), (0.5, 1.0), (1.0, 0.0), (1.0, 0.5), (1.0, 1.0), (0.4, 1.0)]
+    {
         let tail = line(&drawn("effects", "reverb", "tail", json!({"size": size, "damping": damping, "mix": 1})), "tail");
-        let seconds = tail.last().unwrap().0 + 0.5;
+        let seconds = tail.last().unwrap().0 * 1.5 + 0.5;
         let out = left(&format!("export default song(() => reverb({STEADY}, {{ size: {size}, damping: {damping}, mix: 1 }}));\n"), seconds);
         // The click's tail, and what is left of it from each sample on.
         let click: Vec<f64> = (0..out.len()).map(|n| if n == 0 { out[0] } else { out[n] - out[n - 1] }).collect();
@@ -264,9 +269,6 @@ fn the_reverbs_tail_is_its_sound() {
         }
         let mut checked = 0;
         for &(t, y) in &tail {
-            if y < -30.0 {
-                continue;
-            }
             let heard = 10.0 * (left[(t * RATE).round() as usize] / left[0]).log10();
             assert!(
                 (heard - y).abs() <= 0.5,
@@ -274,7 +276,7 @@ fn the_reverbs_tail_is_its_sound() {
             );
             checked += 1;
         }
-        assert!(checked > 20, "{checked} points checked");
+        assert!(checked == tail.len() && tail.last().unwrap().1 <= -59.9, "every point, down to −60 dB: {checked} of {}", tail.len());
     }
 }
 
@@ -420,7 +422,7 @@ fn the_bitcrushers_sine_is_its_sound() {
 // hard left (its sides as loud as its middle) comes out with its sides turned as far against its
 // middle as the field's edge says, within 0.5 dB.
 #[test]
-fn the_wideners_field_is_its_sound() {
+fn the_wideners_field_is_its_sound_for_a_wide_sound() {
     for width in [0.25, 0.5, 1.0, 1.5, 2.0] {
         let edge = dots(&drawn("effects", "widen", "field", json!({"width": width})))[0].0;
         let out = render(&format!("export default song(() => widen(pan({STEADY}, -1), {{ width: {width} }}));\n"), 0.2);
@@ -432,4 +434,98 @@ fn the_wideners_field_is_its_sound() {
             db(side / mid)
         );
     }
+}
+
+// CARD-124, CARD-125 (review T3): a mono sound through the widener, a 3 kHz tone, comes out with
+// sides only above width 1, as loud against its middle as the made-up fan's edge says (the middle
+// 11 ms late, above 300 Hz, times 0.6 × (width − 1)), within 0.5 dB; at width 1 or less it stays
+// mono, and the picture draws no made-up fan.
+#[test]
+fn the_wideners_field_is_its_sound_for_a_mono_sound() {
+    for width in [0.5, 1.0, 1.25, 1.5, 2.0] {
+        let d = drawn("effects", "widen", "field", json!({"width": width}));
+        let made = d["shapes"].as_array().unwrap().iter().find(|s| s["name"] == "made").map(|s| pairs(&s["points"]));
+        let out = render(&format!("export default song(() => widen(osc.sine(3000), {{ width: {width} }}));\n"), 0.2);
+        // Over the last 50 ms, long after the 11 ms the made-up side waits.
+        let tail = &out[out.len() - 2400..];
+        let rms = |f: &dyn Fn(&[f64; 2]) -> f64| (tail.iter().map(|x| f(x) * f(x)).sum::<f64>() / tail.len() as f64).sqrt();
+        let (mid, side) = (rms(&|x| (x[0] + x[1]) / 2.0), rms(&|x| (x[0] - x[1]) / 2.0));
+        match made {
+            None => assert!(
+                width <= 1.0 && db(side / mid) < -80.0,
+                "width {width}: no made-up fan, and the sound stays mono: {:.1} dB",
+                db(side / mid)
+            ),
+            Some(fan) => {
+                let edge = fan.iter().map(|p| p.0).fold(0.0, f64::max);
+                assert!(
+                    width > 1.0 && (db(side / mid) - db(edge)).abs() <= 0.5,
+                    "width {width}: the made-up fan's edge at {edge:.3}, the sides {:.2} dB against the middle",
+                    db(side / mid)
+                );
+            }
+        }
+    }
+}
+
+// CARD-114, CARD-125 (review T4): the de-esser's band is what it turns down, by how far the band's
+// peaks go over its threshold: a tone at the band's middle (its dot), its peaks 10 dB under 0 dB,
+// comes out turned down by its peaks' height over the threshold, at most `amount`, within 0.5 dB;
+// one at the band's edges less, and one two octaves away by under 1 dB.
+#[test]
+fn the_deessers_band_is_what_it_turns_down() {
+    let d = drawn("mixing", "deesser", "band", json!({"freq": 6000, "threshold": -30, "amount": 6}));
+    let shapes = d["shapes"].as_array().unwrap();
+    let box_ = shapes.iter().find(|s| s["kind"] == "fill").map(|s| pairs(&s["points"])).unwrap();
+    let (lo, hi) = (box_.iter().map(|p| p.0).fold(f64::MAX, f64::min), box_.iter().map(|p| p.0).fold(0.0, f64::max));
+    let middle = dots(&d)[0].0;
+    let heard = |hz: f64, threshold: f64, amount: f64| -> f64 {
+        let body = |t: f64| {
+            format!(
+                "export default song(() => deesser(gain(osc.sine({hz}), db(-10)), {{ freq: 6000, threshold: {t}, amount: {amount} }}));\n"
+            )
+        };
+        let out = left(&body(threshold), 0.3);
+        let dry = left(&body(0.0), 0.3);
+        let n = (RATE / hz).ceil() as usize;
+        db(level_at(&out, out.len() - n, n)) - db(level_at(&dry, dry.len() - n, n))
+    };
+    for (threshold, amount, down) in [(-30.0, 6.0, 6.0), (-13.0, 6.0, 3.0), (-5.0, 6.0, 0.0), (-30.0, 12.0, 12.0)] {
+        let got = heard(middle, threshold, amount);
+        assert!(
+            (got + down).abs() <= 0.5,
+            "at the band's middle, {middle} Hz, threshold {threshold}, amount {amount}: down {down} dB, it plays {got:.2} dB"
+        );
+    }
+    for edge in [lo, hi] {
+        let got = heard(edge, -30.0, 12.0);
+        assert!(got < -1.0 && got > -12.0, "at the band's edge, {edge:.0} Hz: turned down, less than at its middle: {got:.2} dB");
+    }
+    let far = middle / 4.0;
+    let got = heard(far, -30.0, 12.0);
+    assert!(got > -1.0, "two octaves under the band, {far:.0} Hz: under 1 dB: {got:.2} dB");
+}
+
+// CARD-110 (review T1): a build of a song that plays both packs works out none of their pictures'
+// sums (the transient shaper's hit, the reverb's room): each is worked out on its picture's first
+// draw, and kept. The song counts them as it builds, and fails if any ran; asking for one works it
+// out once, so the count counts.
+#[test]
+fn a_build_works_out_none_of_the_pictures_sums() {
+    let head = "import { song } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { reverb } from '@m2/effects';\nimport { transient } from '@m2/mixing';\n\
+                import { sumsWorked as fx, tailLevel } from '@m2/effects/pictures';\nimport { sumsWorked as mix, heard } from '@m2/mixing/pictures';\n";
+    let built = |body: &str| {
+        let f = Fixture::new();
+        f.write("music2.toml", MANIFEST);
+        f.write("song.ts", format!("{head}{body}export default song(() => transient(reverb(osc.saw(110))));\n"));
+        let s = f.open();
+        (s.draft_errors.is_empty() && s.problems().is_empty(), format!("{:?} {:?}", s.draft_errors, s.problems()))
+    };
+    let (ok, why) =
+        built("const ran = fx() + mix();\nif (ran !== 0) throw new Error(`the pictures' sums ran ${ran} times as the song built`);\n");
+    assert!(ok, "a build works out none: {why}");
+    let (ok, why) = built(
+        "tailLevel(0.5, 0.5)(0.1); tailLevel(0.9, 0); heard(); heard();\nif (fx() !== 1 || mix() !== 1) throw new Error(`asked for, worked out ${fx()} and ${mix()} times`);\n",
+    );
+    assert!(ok, "asked for, each is worked out once and kept: {why}");
 }

@@ -18,7 +18,7 @@
 // Stopped, they wait; Play carries on. Played after a stop, a song sounds as its export does.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params, type Value } from "@m2/core";
-import { hzWords } from "std/pictures";
+import { figures, hzWords } from "std/pictures";
 import {
   chorusMotion,
   crush,
@@ -32,7 +32,6 @@ import {
   field,
   fieldPicture,
   fieldWords,
-  figures,
   motionPicture,
   phaserMotion,
   shapePicture,

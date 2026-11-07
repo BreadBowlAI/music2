@@ -30,7 +30,7 @@ abi!();
 /// Longest delay time, in seconds.
 const MAX_DELAY: f32 = 2.0;
 
-/// Feedback delay with a dry/wet mix. Inputs: in, time, feedback, mix.
+/// Feedback delay with a dry/wet mix. Inputs: in, time, feedback, mix. Its card draws its echoes from this sum: src/pictures.ts `echoLevels` (CARD-117, tested by crates/editor's pack_pictures_tests).
 pub struct Delay {
     sr: f32,
     lines: Vec<Vec<f32>>,
@@ -95,7 +95,7 @@ export!(delay, Delay);
 
 // ---------------------------------------------------------------- reverb
 
-/// Freeverb's comb and allpass lengths at 44.1 kHz, scaled to the sample rate. The right
+/// Freeverb's comb and allpass lengths at 44.1 kHz, scaled to the sample rate. The right [Copied in src/pictures.ts `room`, `tailLevel` (CARD-118): change both.]
 /// channel's lines are `SPREAD` samples longer so the two sides decorrelate.
 const COMBS: [usize; 8] = [1116, 1188, 1277, 1356, 1422, 1491, 1557, 1617];
 const ALLPASSES: [usize; 4] = [556, 441, 341, 225];
@@ -250,7 +250,7 @@ export!(reverb, Reverb);
 // ---------------------------------------------------------------- modulation
 
 const PHASER_STAGES: usize = 6;
-/// The sweep's centre, and how many octaves it moves either way at full depth.
+/// The sweep's centre, and how many octaves it moves either way at full depth. Copied in src/pictures.ts `notchesAt` (CARD-120): change both.
 const PHASER_CENTER: f32 = 640.0;
 const PHASER_OCTAVES: f32 = 2.5;
 /// Feedback at `feedback` = 1. Below 1 the loop always decays: peaks reach 10 dB at most.
@@ -321,7 +321,7 @@ impl Kernel for Phaser {
 
 export!(phaser, Phaser);
 
-/// Tremolo: a sine LFO that dips the level by `depth` (1 = down to silence) and starts
+/// Tremolo: a sine LFO that dips the level by `depth` (1 = down to silence) and starts [copied: src/pictures.ts `tremoloAt`, CARD-121]
 /// at full level. Inputs: in, rate (Hz), depth, playing.
 pub struct Tremolo {
     lfo: Phase,
@@ -354,7 +354,7 @@ export!(tremolo, Tremolo);
 
 // ---------------------------------------------------------------- lo-fi
 
-/// Bitcrusher: holds samples at a lower `rate` (Hz) and rounds them to `bits` of
+/// Bitcrusher: holds samples at a lower `rate` (Hz) and rounds them to `bits` of [copied: src/pictures.ts `crushed`, CARD-123]
 /// resolution (fractional bits sweep smoothly). Inputs: in, bits, rate, mix, playing.
 ///
 /// Its clock runs on while the song is stopped, so a tail is still crushed; it can't wait, as a
@@ -420,7 +420,7 @@ export!(bitcrush, Bitcrush);
 
 // ---------------------------------------------------------------- stereo
 
-/// Past width 1, the widener adds a side signal made from the middle `WIDEN_DELAY`
+/// Past width 1, the widener adds a side signal made from the middle `WIDEN_DELAY` [copied: src/pictures.ts `madeUp`, CARD-124]
 /// seconds ago, highpassed at `WIDEN_CUT` Hz so bass stays centred, at up to
 /// `WIDEN_SYNTH` (at width 2). That widens mono sounds too, and since it is pure side
 /// signal it cancels exactly when the result is summed to mono.

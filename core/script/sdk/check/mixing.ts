@@ -3,7 +3,7 @@
 // gate keyed by another sound, and its pictures' dots (CARD-110). A line that should fail carries `@ts-expect-error`, so a type that
 // stops refusing it fails the check too.
 
-import { component, control, db, hz, khz, ms, port, type Audio } from "@m2/core";
+import { component, control, db, hz, khz, ms, port, setting, type Audio } from "@m2/core";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
 import { curvePicture } from "std/pictures";
 import { band, bandPicture, dip, dipPicture, hit, hitPicture, levelsPicture, split, threshold } from "../../../../packs/@m2/mixing/src/pictures";
@@ -124,6 +124,25 @@ export const dots = [
         // @ts-expect-error a dot that shows a tab the card hasn't got
         draw: (v, p) => split(p, v, { lowMid: "lowMid", midHigh: "midHigh", gains: ["lowGain", "midGain", "highGain"], tabs: ["Low", "Middle", "High"] }),
         words: () => "a split",
+      },
+    },
+  ),
+  // Review T7: Pump's rate, which its picture only reads, is the sound's own setting.
+  component(
+    {
+      id: "rate-misspelt",
+      inputs: { in: port.audio() },
+      controls: { depth: control.db(-8), shape: control.frac(0.5) },
+      settings: { rate: setting.choice(["1/4", "1/8"], "1/4") },
+      output: port.audio(),
+      editor: { views: { dip: dipPicture() } },
+    },
+    (x) => x,
+    {
+      dip: {
+        // @ts-expect-error a rate the sound doesn't have
+        draw: (v, p) => dip(p, v, { depth: "depth", shape: "shape", rate: "rates" }),
+        words: () => "a dip",
       },
     },
   ),
