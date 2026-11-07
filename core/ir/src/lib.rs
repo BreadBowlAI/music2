@@ -389,6 +389,8 @@ pub enum TimeOf {
     Playing,
     /// The song's key, as a [`Unit::Keyset`] (VOX-12).
     Key,
+    /// The song's tempo where it is, in beats per minute (RENDER-7).
+    Tempo,
 }
 
 impl TimeOf {
@@ -399,6 +401,7 @@ impl TimeOf {
             TimeOf::Seconds => Unit::Seconds,
             TimeOf::Playing => Unit::Unit01,
             TimeOf::Key => Unit::Keyset,
+            TimeOf::Tempo => Unit::Bpm,
         }
     }
 }

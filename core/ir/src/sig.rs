@@ -85,12 +85,20 @@ pub struct KernelSig {
     /// Seconds of delay it adds, its manifest's `latency_s`, counted in frames at the song's rate by
     /// `m2_kernel::latency_frames` (VOX-24). A kernel gives one of the two; the other is 0.
     pub latency_s: f64,
+    /// A note effect's `fan` (ABI-15): how many notes it may give for each it takes, 1 to 8, which
+    /// sizes its room. 1 for every other kernel.
+    pub fan: u32,
 }
 
 impl KernelSig {
     /// Whether it adds latency, in frames or in seconds.
     pub fn late(&self) -> bool {
         self.latency > 0 || self.latency_s > 0.0
+    }
+
+    /// Whether it gives notes: a note effect (ABI-15, RENDER-41), whose one output is its notes.
+    pub fn gives_notes(&self) -> bool {
+        self.outputs.first().is_some_and(|o| matches!(o.kind, PortKind::Events(_)))
     }
 
     /// How late it is, in words: "64 samples", "15 ms".
@@ -111,6 +119,7 @@ impl KernelSig {
             meters: vec![],
             latency,
             latency_s: 0.0,
+            fan: 1,
         };
         if sig.outputs.is_empty() {
             return Err(format!("kernel `{id}`: needs at least one output"));
@@ -120,10 +129,23 @@ impl KernelSig {
         if let Some(w) = names.windows(2).find(|w| w[0] == w[1]) {
             return Err(format!("kernel `{id}`: port `{}` declared twice", w[0]));
         }
+        // ABI-15: a kernel that gives notes is a note effect: its notes are all it gives, they come
+        // from one notes input, and it adds no latency.
+        let events = |v: &[PortSig]| v.iter().filter(|p| matches!(p.kind, PortKind::Events(_))).count();
+        if events(&sig.outputs) > 0 {
+            if sig.outputs.len() > 1 {
+                return Err(format!("kernel `{id}`: a kernel that gives notes gives nothing else"));
+            }
+            if events(&sig.inputs) != 1 {
+                return Err(format!("kernel `{id}`: a kernel that gives notes takes its notes from one `events<note>` input"));
+            }
+            if latency > 0 {
+                return Err(format!("kernel `{id}`: a kernel that gives notes adds no latency"));
+            }
+        }
         for o in &sig.outputs {
-            // An events output's shape is reserved in kernel ABI v1, not built (ABI-8).
-            if o.default.is_some() || matches!(o.kind, PortKind::Events(_)) {
-                return Err(format!("kernel `{id}`: output `{}` must be audio or control, without a default", o.name));
+            if o.default.is_some() {
+                return Err(format!("kernel `{id}`: output `{}` can't have a default", o.name));
             }
             let var_in = |f: fn(&PortKind) -> bool| sig.inputs.iter().any(|i| f(&i.kind));
             let bound = match o.kind {
@@ -296,14 +318,36 @@ mod tests {
         }
     }
 
-    // ABI-8: a kernel takes notes through an `events<note>` input; an events output's shape is
-    // reserved, not built.
+    // ABI-8: a kernel takes notes through an `events<note>` input.
     #[test]
-    fn a_kernel_takes_events_but_never_gives_them() {
+    fn a_kernel_takes_events() {
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         let k = KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: audio<1>"]), 0).unwrap();
         assert_eq!(k.inputs[0].kind, PortKind::Events(crate::EventType::Note));
-        let e = KernelSig::parse("p:k", "", &s(&["n: events<note>"]), &s(&["out: events<note>"]), 0).unwrap_err();
-        assert!(e.contains("output `out` must be audio or control"), "{e}");
+        assert!(!k.gives_notes());
+    }
+
+    // ABI-15: a kernel may give notes: then it is a note effect, its notes output its only one
+    // (meters may follow), its notes from exactly one `events<note>` input, with no latency. Its
+    // `fan` is 1 until its manifest says more.
+    #[test]
+    fn a_kernel_gives_notes_as_a_note_effect() {
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let k = KernelSig::parse("p:k", "", &s(&["n: events<note>", "rate: control<beats> = 0.25"]), &s(&["out: events<note>"]), 0)
+            .unwrap()
+            .with_meters(&s(&["step: control<scalar>"]))
+            .unwrap();
+        assert!(k.gives_notes());
+        assert_eq!((k.outputs[0].kind, k.fan), (PortKind::Events(crate::EventType::Note), 1));
+        for (ins, outs, latency, says) in [
+            (&["n: events<note>"][..], &["out: events<note>", "x: audio<1>"][..], 0, "a kernel that gives notes gives nothing else"),
+            (&["x: control<hz>"], &["out: events<note>"], 0, "takes its notes from one `events<note>` input"),
+            (&["n: events<note>", "m: events<note>"], &["out: events<note>"], 0, "takes its notes from one `events<note>` input"),
+            (&["n: events<note>"], &["out: events<note>"], 64, "a kernel that gives notes adds no latency"),
+            (&["n: events<note>"], &["out: control<hz> = 1"], 0, "output `out` can't have a default"),
+        ] {
+            let e = KernelSig::parse("p:k", "", &s(ins), &s(outs), latency).unwrap_err();
+            assert!(e.contains(says), "{ins:?} {outs:?}: {e}");
+        }
     }
 }

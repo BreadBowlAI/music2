@@ -613,6 +613,7 @@ fn prewarming_keeps_kernel_memory_flat() {
         sample_rate: SR as f64,
         slots: &slots,
         caps: &[Caps::FLOOR],
+        effects: &[],
         owner: &owner,
         mode: m2_plugins::RenderMode::Offline,
         at: None,

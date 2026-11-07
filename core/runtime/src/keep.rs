@@ -140,8 +140,16 @@ fn edges(nodes: &[FNode], n: &FNode, packages: &PackageSet) -> Vec<(Edge, Input)
     }
 }
 
-/// The notes lane a consumer reads, and how late (RENDER-18): through a note delay, if it is.
-fn notes_lane<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Option<(&'a str, &'a str, u32)> {
+/// The notes a consumer reads, by their lane's address (with the note effects they come through,
+/// RENDER-26a) among `refs`, its plan's slots, whose note effects are `effects`; and how late
+/// (RENDER-18): through a note delay, if it is.
+fn notes_lane<'a>(
+    nodes: &[FNode],
+    n: &FNode,
+    packages: &PackageSet,
+    refs: &'a [LaneRef],
+    effects: &[(usize, usize)],
+) -> Option<(&'a LaneRef, u32)> {
     let src = match &n.op {
         FOp::Poly { lane, .. } => *lane,
         FOp::Plugin { plugin, inputs, .. } => {
@@ -157,10 +165,7 @@ fn notes_lane<'a>(nodes: &'a [FNode], n: &FNode, packages: &PackageSet) -> Optio
         FOp::NoteDelay { lane, frames } => (lane, frames),
         _ => (src, 0),
     };
-    match &nodes.get(src)?.op {
-        FOp::Lane { module, lane, .. } => Some((module, lane, frames)),
-        _ => None,
-    }
+    Some((&refs[crate::notes_slot(nodes, src, refs, effects)?], frames))
 }
 
 /// The note delay a consumer reads its notes through, if it does.
@@ -250,7 +255,7 @@ pub(crate) fn wire(
         if let FOp::Lane { module, lane, kind, .. } = &g.op
             && !matches!(kind, Kind::Events(_))
         {
-            lanes.ghost(&LaneRef { module: module.clone(), lane: lane.clone(), kind: *kind }, k);
+            lanes.ghost(&LaneRef { module: module.clone(), lane: lane.clone(), kind: *kind, through: vec![] }, k);
         }
     }
     // Moves: kept boxes, then ghosts' (§6.2, §6.4).
@@ -268,20 +273,24 @@ pub(crate) fn wire(
             w.release.push((n + g) as u32);
         }
     }
-    // A kept consumer whose notes now come from another lane lets go of what it holds (§3.5); so
-    // does one whose note delay doesn't move into the new plan with the notes in flight in it.
+    // A kept consumer whose notes now come from another lane, or through other note effects,
+    // lets go of what it holds (§3.5, RENDER-26a); so does one whose note delay doesn't move into
+    // the new plan with the notes in flight in it.
+    let old_refs: Vec<LaneRef> = info.lanes.iter().map(|x| x.lane.clone()).collect();
+    let (new_refs, new_effects) = (&lanes.lanes.refs, &lanes.effects);
     for i in (0..n).filter(|&i| w.kept[i]) {
         let j = w.same[i].expect("kept");
         let lost = note_delay(&old.nodes, &old.nodes[j], packages)
             .is_some_and(|d| note_delay(&new.nodes, &new.nodes[i], packages).is_none_or(|e| !w.kept[e] || w.same[e] != Some(d)));
-        if lost || notes_lane(&new.nodes, &new.nodes[i], packages) != notes_lane(&old.nodes, &old.nodes[j], packages) {
+        let now = notes_lane(&new.nodes, &new.nodes[i], packages, new_refs, new_effects);
+        if lost || now != notes_lane(&old.nodes, &old.nodes[j], packages, &old_refs, &info.effects) {
             w.release.push(i as u32);
         }
     }
     // The room the old plugin nodes had, which their notes move into.
     let old_room = |j: usize| {
-        let (m, l, _) = notes_lane(&old.nodes, &old.nodes[j], packages)?;
-        info.lanes.iter().find(|x| x.lane.module == m && x.lane.lane == l).and_then(|x| x.caps)
+        let (r, _) = notes_lane(&old.nodes, &old.nodes[j], packages, &old_refs, &info.effects)?;
+        info.lanes.iter().find(|x| x.lane == *r).and_then(|x| x.caps)
     };
     for i in (0..n).filter(|&i| w.kept[i] && matches!(new.nodes[i].op, FOp::Plugin { .. })) {
         if let Some(c) = old_room(w.same[i].expect("kept")) {
@@ -347,7 +356,9 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
     }
     // Ghosts: the old sources of changed edges that don't continue, and what they read that
     // doesn't (§6.4). Events lanes aren't ghosts: a ghost reads no notes.
-    let is_events = |j: usize| matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. } | FOp::NoteDelay { .. });
+    let is_events = |j: usize| {
+        matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. } | FOp::NoteDelay { .. }) || crate::is_note_effect(&old.nodes[j])
+    };
     let mut ghost_of: HashMap<usize, usize> = HashMap::new();
     let mut order_of_ghosts = vec![];
     let mut work: Vec<usize> =
