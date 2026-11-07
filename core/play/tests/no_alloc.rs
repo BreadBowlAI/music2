@@ -466,6 +466,99 @@ fn live_notes_never_allocate() {
     }
 }
 
+/// `@m2/notes`' four note effects in a chain before sine voices, in C major at 120 bpm (PACK-29):
+/// the lane's notes through Scale, Chord, the Arpeggiator (holding while stopped) and Note echo.
+fn noted() -> Song {
+    let body = json!([
+        {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
+        {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+        {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+        {"id": "amp", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "o", "by": "g"}}]);
+    let time = |of: &str| json!({"id": of, "op": "time", "of": of});
+    let nodes = json!([
+        {"id": "n", "op": "lane", "lane": "notes"},
+        time("key"), time("beats"), time("playing"), time("tempo"),
+        {"id": "on", "op": "const", "value": 1, "unit": "switch"},
+        {"id": "sc", "op": "kernel", "kernel": "@m2/notes:scale", "inputs": {"notes": "n", "key": "key"}},
+        {"id": "ch", "op": "kernel", "kernel": "@m2/notes:chord", "inputs": {"notes": "sc", "key": "key"}},
+        {"id": "ar", "op": "kernel", "kernel": "@m2/notes:arp",
+            "inputs": {"notes": "ch", "beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "on"}},
+        {"id": "ec", "op": "kernel", "kernel": "@m2/notes:echo", "inputs": {"notes": "ar", "beats": "beats", "playing": "playing", "tempo": "tempo"}},
+        {"id": "v", "op": "poly", "events": "ec", "voices": 8, "body": {"out": "amp", "nodes": body}},
+    ]);
+    let pitch = |k: usize| [60, 67, 69, 65][k % 4] + (k % 3) as i32;
+    let chords: Vec<Value> = (0..16).map(|k| json!({"pitch": pitch(k), "start": k as f64 * 0.5, "length": 0.4})).collect();
+    let arrangement: m2_song::Arrangement =
+        serde_json::from_value(json!({"tempo": [{"beat": 0, "bpm": 120}], "key": {"root": "C", "scale": "major"}})).unwrap();
+    let data = DataSet::with_lanes(arrangement, [(addr("notes"), notes(json!({"clips": [{"start": 0, "length": 8, "notes": chords}]})))]);
+    song(nodes, "v", json!([{"key": "notes", "kind": "events<note>"}]), data)
+}
+
+// RENDER-28, RENDER-41, PACK-29: `@m2/notes`' four note effects allocate and free nothing in the
+// lane pass, live: clip notes and keys through a chain of all four, playing, through a loop's
+// wraps, a seek, a Stop, keys held and latched while stopped (the Arpeggiator's clock and its Hold,
+// the echoes' clock), Stop pressed again, Play, and a panic.
+#[test]
+fn note_effects_never_allocate() {
+    let song = noted();
+    let r = song.renderer();
+    let (generation, info) = (r.generation(), r.info());
+    let slot = info.lanes.iter().position(|l| l.lane.lane == "notes").unwrap() as u32;
+    let (player, mut d) = Player::driven(SR);
+    player.open(r).unwrap();
+    let mut data = vec![0.0f32; 2 * 4096];
+    let (mut allocs, mut heard) = (0, 0.0f32);
+    let mut fill = |d: &mut m2_play::Driver, frames: usize| {
+        let mut done = 0;
+        for n in SIZES.iter().cycle() {
+            let n = (*n).min(frames - done);
+            if n == 0 {
+                break;
+            }
+            allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
+            heard = data[..2 * n].iter().fold(heard, |m, x| m.max(x.abs()));
+            done += n;
+        }
+        drop(d.drain_retired());
+    };
+    let on = |h: u32| LiveEv::On { source: 1, handle: h, pitch: 50.0 + (h % 20) as f32, velocity: 0.8 };
+    let off = |h: u32| LiveEv::Off { source: 1, handle: h };
+    fill(&mut d, 4096);
+    player.play();
+    player.set_loop(Some((0.0, 2.0))).unwrap();
+    for h in 0..20 {
+        player.live(generation, slot, on(h)).unwrap();
+        fill(&mut d, 3000);
+        player.live(generation, slot, off(h)).unwrap();
+        fill(&mut d, 2000);
+    }
+    player.set_loop(None).unwrap();
+    player.seek(3.0).unwrap();
+    fill(&mut d, 20_000);
+    player.stop();
+    // Stopped: keys held, then let go and latched by Hold, steps and echoes on their own clocks.
+    for h in 40..44 {
+        player.live(generation, slot, on(h)).unwrap();
+    }
+    fill(&mut d, 30_000);
+    for h in 40..44 {
+        player.live(generation, slot, off(h)).unwrap();
+    }
+    fill(&mut d, 30_000);
+    // Stop pressed again lets go of the latch; then Play, and a panic.
+    player.stop();
+    fill(&mut d, 10_000);
+    player.live(generation, slot, on(50)).unwrap();
+    fill(&mut d, 5000);
+    player.play();
+    fill(&mut d, 20_000);
+    player.panic().unwrap();
+    fill(&mut d, 5000);
+    assert_eq!(allocs, 0, "the callback allocated or freed");
+    assert!(heard > 0.1, "the notes the chain gave sounded: {heard}");
+    assert!(!player.crashed());
+}
+
 // RENDER-30a, MON-13: a sound input's callback allocates and frees nothing: a device's at 44.1 kHz
 // with four channels, converted to the song's 48 kHz, in buffers of odd sizes, into a ring for each
 // pair; and the output's callback, as it hands the silent input what was injected and the engine
