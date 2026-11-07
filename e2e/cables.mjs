@@ -53,5 +53,23 @@ ok((await html()).includes("declared after this value"), "connecting into its ow
 ok(fs.readFileSync(song, "utf8") === original, "and the file is unchanged");
 ok(errorsBeforeRefusal.length === 0, `no console errors before the refusal ${errorsBeforeRefusal.join(" | ")}`);
 ok(errors.length === errorsBeforeRefusal.length + 1 && errors.at(-1).includes("400"), "the refusal is the only error: its 400 response");
+// A note effect's value takes no cable (RENDER-41, DV-6): while a cable is dragged the Arpeggiator's
+// Gate is dimmed and says why on hover, and a drop on it says so too, writing nothing.
+const words = "The Arpeggiator's Gate can't take a cable: a note effect plays before the song's sounds. Draw it on the timeline instead (Automate).";
+const w = await center('[data-outlet="wobble"]');
+await page.mouse.move(w.x, w.y); await page.mouse.down();
+await page.mouse.move(w.x + 30, w.y + 8, { steps: 4 });
+// The Gate sits below the fold: scrolled into view while the cable is dragged, as a hand would.
+await page.$eval('[data-knob="gate"]', (e) => e.scrollIntoView({ block: "end", inline: "nearest" }));
+await sleep(200);
+const g = await center('[data-knob="gate"] svg');
+await page.mouse.move(g.x, g.y, { steps: 4 });
+const shown = await page.$eval('[data-knob="gate"]', (e) => ({ title: e.getAttribute("title"), opacity: Number(getComputedStyle(e).opacity) }));
+ok(shown.title === words && shown.opacity < 1, `while a cable is dragged, the Arpeggiator's Gate is dimmed and says why: ${JSON.stringify(shown)}`);
+await page.mouse.up();
+await sleep(600);
+const said = await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent ?? ""));
+ok(said.some((t) => t.includes(words)), `a drop on it says why: ${said.join(" | ")}`);
+ok(fs.readFileSync(song, "utf8") === original, "and writes nothing");
 console.log(`\n${passed} passed, ${failed} failed`);
 await browser.close();

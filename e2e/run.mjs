@@ -104,7 +104,7 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // Rust tests of this kind: ci/sleeps-tests.txt). It says nothing of the run's tier.
 export const SUITES = [
   ["graph", "proj", { expect: 19, s: 3 }],
-  ["cables", "cables", { expect: 12, s: 5 }],
+  ["cables", "cables", { expect: 15, s: 5 }],
   ["undo", "cables", { expect: 10, s: 6 }],
   ["nx-undo", "fix", { expect: 18, s: 2 }],
   ["ag-notice", "fix", { expect: 53, s: 22 }],

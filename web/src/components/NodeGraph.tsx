@@ -97,6 +97,8 @@ export const Ports = createContext(true);
  * the call that drives it ("← Blend", taste.md DV-11).
  */
 export const Fed = createContext<Map<string, string>>(new Map());
+/** Whether a cable is being dragged in this graph: a value that takes no cable then says why (DV-6). */
+const Cabling = createContext(false);
 
 /** The merged input of the compact mixer card: every channel's input, as one port. */
 const CHANNELS = "channels";
@@ -719,7 +721,12 @@ const ModuleSection = memo(function ModuleSection({
         setCable(null);
         if (ev.type !== "pointerup") return;
         const knob = target(ev);
-        if (!knob) return;
+        if (!knob) {
+          // A value no cable can drive says why, in its card's words (a note effect's, RENDER-41).
+          const refused = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-no-cable]");
+          if (refused && area.current?.contains(refused)) toast(refused.dataset.noCable!);
+          return;
+        }
         // The knob turns into "← name": that says it, so no toast does (taste.md §2.14).
         graphApi
           .connect(gesture.session, gesture.revision, gesture.from, knob.dataset.knobId!, { name: `connecting ${gesture.name}` })
@@ -733,7 +740,9 @@ const ModuleSection = memo(function ModuleSection({
   );
 
   return (
-    // Flat on the dock, edge to edge: no card, no title row, no legend (taste.md DK-3).
+    // Flat on the dock, edge to edge: no card, no title row, no legend (taste.md DK-3). While a cable
+    // is dragged, a value that takes none says why (DV-6).
+    <Cabling.Provider value={!!cable}>
     <section className="grow shrink-0 w-max min-w-full flex flex-col p-4" data-module={module.key}>
       {/* The canvas fills the panel, dotted all over; the graph sits at its top left, as a chain reads (taste.md §3.5). */}
       <div data-canvas className="relative grow grid place-items-start" style={{ minWidth: width * zoom, minHeight: height * zoom }}>
@@ -806,6 +815,7 @@ const ModuleSection = memo(function ModuleSection({
         </div>
       </div>
     </section>
+    </Cabling.Provider>
   );
 });
 
@@ -1778,6 +1788,7 @@ function KnobControl({
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
   const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
+  const cabling = useContext(Cabling);
   const title = !editable
     ? `${why ?? "It can't be edited right now"}.`
     : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
@@ -1876,14 +1887,14 @@ function KnobControl({
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
-      data-no-cable={knob.cable_refused ? true : undefined}
+      data-no-cable={knob.cable_refused ? `${knob.cable_refused}.` : undefined}
       data-glow={glows || undefined}
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
       data-cell={cell || undefined}
       aria-disabled={disabled}
-      title={title}
+      title={cabling && knob.cable_refused ? `${knob.cable_refused}.` : title}
       data-kind="number"
       {...grip.handlers}
       // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
@@ -1895,6 +1906,8 @@ function KnobControl({
         !disabled && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
         "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
+        // And one it can't: dimmed, its words on hover (DV-6).
+        "[[data-cabling]_&[data-no-cable]]:opacity-40",
       )}
     >
       <Dot
@@ -1981,6 +1994,7 @@ function PickControl({
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, picking one writes it in";
   const how = `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`;
+  const cabling = useContext(Cabling);
   const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
   /**
    * A pick: its option's value written into the code, one undo step named "Wobble shape". Picked
@@ -1997,7 +2011,7 @@ function PickControl({
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
-      data-no-cable={knob.cable_refused ? true : undefined}
+      data-no-cable={knob.cable_refused ? `${knob.cable_refused}.` : undefined}
       data-glow={glows || undefined}
       data-value={JSON.stringify(knob.value)}
       data-shared={knob.uses > 1 || undefined}
@@ -2005,11 +2019,13 @@ function PickControl({
       data-kind={knob.kind}
       data-cell={(knob.kind === "switch" && cell) || undefined}
       aria-disabled={!!off}
-      title={title}
+      title={cabling && knob.cable_refused ? `${knob.cable_refused}.` : title}
       className={clsx(
         "group/knob relative min-w-0 transition-colors duration-80",
         !cell ? "h-10 pl-4 pr-4 flex items-center gap-2" : knob.kind === "switch" ? "w-16 py-1 flex flex-col items-center gap-0.5" : "col-span-full h-7 px-1 flex items-center gap-2",
         "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
+        // And one it can't: dimmed, its words on hover (DV-6).
+        "[[data-cabling]_&[data-no-cable]]:opacity-40",
       )}
     >
       <Dot
