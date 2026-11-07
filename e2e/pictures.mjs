@@ -277,6 +277,10 @@ const uncovered = async (sel, tall, where) => {
   check(h === tall && c.labels > 0 && c.covered.length === 0, `${where}, ${h} px tall: no axis label covers the curve (${c.size}, ${c.labels} labels; covered: ${c.covered.join(" ") || "none"})`);
 };
 await uncovered(pic, 104, "beside the Normal face's values");
+// Its frequencies' labels (taste.md DV-17, review S9): a log axis's decades first, then its 5s where
+// they fit, so 100 and 1k show across the 198 px face (placed left to right, 500 took 1k's place).
+const across = await page.$eval(`${pic} svg`, (svg) => ({ size: svg.dataset.size, labels: [...svg.querySelectorAll('text[data-tick]:not([text-anchor="end"])')].map((t) => t.textContent) }));
+check(across.size?.startsWith("198x") && across.labels.includes("100") && across.labels.includes("1k"), `across the ${across.size} face its frequencies are labelled ${across.labels.join(" ")}: 100 and 1k among them`);
 await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-normal.png` });
 await page.click(`${card} [data-size-to="expanded"]`);
 await uncovered(pic, 132, "Expanded");

@@ -199,7 +199,7 @@ export const SUITES = [
   // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
   ["frame", "fix", { expect: 81, s: 14 }],
-  ["pictures", "fix", { expect: 40, s: 10 }],
+  ["pictures", "fix", { expect: 41, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
   ["dress2a", "fix", { expect: 82, s: 18 }],

@@ -99,14 +99,17 @@ export function fitted(a: Axis, shapes: Shape[]): Axis {
   return Number.isFinite(far) && far < a.hi ? { ...a, hi: far } : a;
 }
 
-/** An axis's grid: a log axis at 1, 2 and 5 of each decade, a plain one at a round step; labelled where it reads. */
-function ticks(a: Axis): { v: number; label?: string }[] {
-  const out: { v: number; label?: string }[] = [];
+/**
+ * An axis's grid: a log axis at 1, 2 and 5 of each decade, a plain one at a round step; labelled
+ * where it reads, a log axis's decades `first` (taste.md DV-17: 100, 1k, 10k are what it is read by).
+ */
+function ticks(a: Axis): { v: number; label?: string; first?: boolean }[] {
+  const out: { v: number; label?: string; first?: boolean }[] = [];
   if (a.scale === "log") {
     for (let d = Math.floor(Math.log10(a.lo)); d <= Math.ceil(Math.log10(a.hi)); d++) {
       for (const m of [1, 2, 5]) {
         const v = m * 10 ** d;
-        if (v >= a.lo && v <= a.hi) out.push({ v, label: m === 1 || m === 5 ? spelled(v, a.unit) : undefined });
+        if (v >= a.lo && v <= a.hi) out.push({ v, label: m === 1 || m === 5 ? spelled(v, a.unit) : undefined, first: m === 1 });
       }
     }
     return out;
@@ -259,14 +262,17 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
   const svg = useRef<SVGSVGElement>(null);
   const { w, h } = useSize(svg);
   const { plot, left, span, labels, X, Y } = layout(view, w, h);
-  // The x axis's labels that fit: each clear of the one before, none past the right edge.
-  let end = -Infinity;
+  // The x axis's labels that fit, none past the right edge and each clear of the others: a log
+  // axis's decades first, then the rest where they fit, each in order across (taste.md DV-17).
+  const taken: [number, number][] = [];
   const xLabels = new Set(
     ticks(view.x)
+      .filter((t) => t.label)
+      .map((t) => ({ v: t.v, first: !!t.first, x: X(t.v) + 2, wide: CHAR * [...t.label!].length }))
+      .sort((a, b) => Number(b.first) - Number(a.first))
       .filter((t) => {
-        const x = X(t.v) + 2, wide = CHAR * [...(t.label ?? "")].length;
-        if (!t.label || x < end + GAP || x + wide > w) return false;
-        end = x + wide;
+        if (t.x + t.wide > w || taken.some(([a, b]) => t.x < b + GAP && a < t.x + t.wide + GAP)) return false;
+        taken.push([t.x, t.x + t.wide]);
         return true;
       })
       .map((t) => t.v),
