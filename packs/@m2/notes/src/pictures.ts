@@ -94,11 +94,14 @@ export function stepOf(k: number, rate: number, swing: number): [number, number]
 
 /** How tall a step's box is, as a share of the picture: half of it above its note's place, half below. */
 const STEP_HEIGHT = 0.06;
+/** Where the notes' names sit, up: a band of their own over every box, so none sits on a bar. */
+const NAMES_AT = 0.8;
 
 /**
  * The steps (PACK-30): each step a box from its step's start, `gate` × its step long, at its note's
- * place; each of the chord's notes named at its first box; a guide line where a turn starts (the
- * step's line rests there while no note is held) and one where the next starts.
+ * place, the places below the names' band; each of the chord's notes named once, in that band over
+ * its first box; a guide line where a turn starts (the step's line rests there while no note is held)
+ * and one where the next starts.
  */
 export function steps<D>(p: Painter<D, "beats", "scalar">, v: Values): Shape[] {
   const style = named(v, "style", "style");
@@ -108,7 +111,7 @@ export function steps<D>(p: Painter<D, "beats", "scalar">, v: Values): Shape[] {
   const swing = within(known(v, "swing", "swing"), 0.5, 0.71);
   const notes = turn(style, octaves);
   const [lo, hi] = [Math.min(...notes), Math.max(...notes)];
-  const place = (pitch: number) => (hi === lo ? 0.5 : 0.12 + (0.72 * (pitch - lo)) / (hi - lo));
+  const place = (pitch: number) => (hi === lo ? 0.35 : 0.08 + (0.56 * (pitch - lo)) / (hi - lo));
   const shapes: Shape[] = [p.mark("x", 0, "Where a turn starts: the line rests here while no note is held")];
   const named_ = new Set<number>();
   notes.forEach((pitch, k) => {
@@ -117,7 +120,7 @@ export function steps<D>(p: Painter<D, "beats", "scalar">, v: Values): Shape[] {
     shapes.push(...box(p, start, start + gate * len, y - STEP_HEIGHT / 2, y + STEP_HEIGHT / 2, true));
     if (C_CHORD.includes(pitch) && !named_.has(pitch)) {
       named_.add(pitch);
-      shapes.push(p.label(start, y + STEP_HEIGHT, noteName(pitch)));
+      shapes.push(p.label(start, NAMES_AT, noteName(pitch)));
     }
   });
   shapes.push(p.mark("x", stepOf(notes.length, rate, swing)[0], "Then the pattern starts again"));
@@ -150,11 +153,9 @@ const BLACK = [
   [10, 5],
 ];
 
-/** A key's box: its outline, and when `lit`, filled twice over, so a lit key stands out. */
+/** A key's box: its outline, and when `lit`, filled and outlined in the main tone. */
 function key<D>(p: Painter<D, "scalar", "unit01">, x0: number, x1: number, y0: number, lit: boolean): Shape[] {
-  const corners = [x0, y0, x1, y0, x1, 0.98, x0, 0.98];
-  const fill = lit ? [p.fill(corners, { tone: "main" }), p.fill(corners, { tone: "main" })] : [];
-  return [...fill, p.line([...corners, x0, y0], { tone: lit ? "main" : "faint" })];
+  return box(p, x0, x1, y0, 0.98, lit);
 }
 
 /**

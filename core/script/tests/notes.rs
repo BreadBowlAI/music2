@@ -145,6 +145,32 @@ fn labels(d: &Value) -> Vec<(f64, String)> {
         .collect()
 }
 
+/// The labels a picture drew, with where they sit: (x, y, words).
+fn placed(d: &Value) -> Vec<(f64, f64, String)> {
+    shapes(d)
+        .iter()
+        .filter(|s| s["kind"] == "label")
+        .map(|s| (s["x"].as_f64().unwrap(), s["y"].as_f64().unwrap(), s["words"].as_str().unwrap().to_string()))
+        .collect()
+}
+
+/// That a steps picture names its notes in a band of their own, above every box, each over its
+/// note's first box (review P8): no name sits on a bar.
+fn named_above(d: &Value) {
+    let b = boxes(d);
+    let top = b.iter().map(|((_, _, _, y1), _)| *y1).fold(0.0, f64::max);
+    for (x, y, w) in placed(d) {
+        assert!(y >= top + 0.08, "{w} at {y}, the boxes' top at {top}");
+        assert!(b.iter().any(|((x0, _, _, _), _)| close(*x0, x)), "{w} over a box: {x}");
+    }
+}
+
+/// That each lit key of a keyboard is filled once (review P8): its outline marks it.
+fn lit_once(d: &Value) {
+    let fills = shapes(d).iter().filter(|s| s["kind"] == "fill").count();
+    assert_eq!(fills, boxes(d).iter().filter(|(_, lit)| *lit).count(), "one fill a lit key");
+}
+
 /// The guide lines across a picture's x axis: where.
 fn marks(d: &Value) -> Vec<f64> {
     shapes(d).iter().filter(|s| s["kind"] == "mark" && s["axis"] == "x").map(|s| s["at"].as_f64().unwrap()).collect()
@@ -163,8 +189,8 @@ fn arp_values(changes: Value) -> Value {
 }
 
 // PACK-30: the steps picture is one turn of the pattern for C major: each step a box from its
-// step's start, gate × its step long, at its note's place, low to high; the chord's notes named at
-// their first box; a guide line where a turn starts and where the next does. Its line of the step
+// step's start, gate × its step long, at its note's place, low to high; the chord's notes named in
+// a band of their own over their first box; a guide line where a turn starts and where the next does. Its line of the step
 // playing is the kernel's meter `step`, a live layer.
 #[test]
 fn the_arpeggiators_steps_are_its_pattern_for_c_major() {
@@ -181,6 +207,7 @@ fn the_arpeggiators_steps_are_its_pattern_for_c_major() {
     let heights: Vec<f64> = b.iter().map(|((_, _, y0, _), _)| *y0).collect();
     assert!(heights[0] < heights[1] && heights[1] < heights[2], "low to high: {heights:?}");
     assert_eq!(labels(&d).iter().map(|l| l.1.as_str()).collect::<Vec<_>>(), ["C4", "E4", "G4"]);
+    named_above(&d);
     assert_eq!(marks(&d), [0.0, 0.75], "where a turn starts, and the next");
     assert_eq!(d["words"], "Up, sixteenth notes, 1 octave");
     // Up and down, two octaves, eighths, swung 60%, gate 1.5: C E G C' E' G' E' C' G E, the second
@@ -203,6 +230,7 @@ fn the_arpeggiators_steps_are_its_pattern_for_c_major() {
     }
     assert!(order[5] > order[4] && order[6] < order[5] && order[9] > order[0], "up to G5, then back down: {order:?}");
     assert_eq!(marks(&d), [0.0, 5.0], "a turn of ten eighths");
+    named_above(&d);
     assert_eq!(d["words"], "Up and down, eighth notes, 2 octaves, holding the keys you let go");
     // Random draws the notes it picks from, low to high; Down from the top.
     let d = draw(&runner, "arp", "steps", arp_values(json!({"style": "down", "rate": "1/8T"})));
@@ -251,6 +279,7 @@ fn lit_chord(runner: &Runner, values: Value) -> (Vec<String>, String) {
     }
     let d = draw(runner, "chord", "keyboard", v);
     assert_eq!(boxes(&d).len(), 25, "C4 to C6: fifteen white keys and ten black");
+    lit_once(&d);
     let (lit, names) = keys(&d);
     assert_eq!(names.iter().map(|n| n.0).collect::<Vec<_>>(), lit, "each lit key named, and none else");
     assert!(names.iter().all(|(k, w)| name(*k).starts_with(w.as_str())), "named by its note: {names:?}");
@@ -304,6 +333,7 @@ fn lock_to_keys_keyboard_names_where_each_note_goes() {
     let runner = Runner::new();
     let d = draw(&runner, "lock-to-key", "keyboard", json!({"shift": 0}));
     assert_eq!(boxes(&d).len(), 12, "seven white keys and five black");
+    lit_once(&d);
     let (lit, names) = keys(&d);
     assert_eq!(lit, [0, 2, 4, 5, 7, 9, 11], "C major's notes");
     let words = |names: Vec<(i32, String)>| names.into_iter().map(|n| n.1).collect::<Vec<_>>();
