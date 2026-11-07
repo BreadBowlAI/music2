@@ -1,6 +1,6 @@
 [package]
 name = "@m2/wavetable"
-version = "1.1.0"
+version = "1.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's wavetable synth: two oscillators that slide through tables of waveforms, a filter, two envelopes, an LFO and unison"
 authors = ["music2"]
@@ -11,13 +11,14 @@ tags = ["synth", "wavetable", "pad", "bass", "lead", "pluck"]
 wasm = "kernels/wavetable.wasm"
 
 [dependencies]
-# @m2/core 2.4, the pack contract (PACK-22) and the minor it uses (PACK-23): its envelopes and its
-# filter are pictures (CARD-60, view.picture), which came in 2.4 (its labels came in 2.1). So any
+# @m2/core 2.4, the pack contract (PACK-22) and the minor it uses (PACK-23): its tables, envelopes,
+# filter and LFO are pictures (CARD-60, view.picture), which came in 2.4 (its labels came in 2.1). So any
 # 2.x from 2.4 runs it, an older one says in words that it needs 2.4, and a change to @m2/core that
 # would break it is a 3.0.0.
 "@m2/core" = "2.4"
 # It calls no std kernel, but uses std's code: std/dsp's `mono` gives one voice its glide, and
-# std/pictures (new in std 0.10) draws its envelopes and its filter (CARD-96, CARD-97).
+# std/pictures (new in std 0.10) draws its envelopes (CARD-96); its tables, its filter and its LFO
+# are its own pictures (src/pictures.ts, CARD-131 to CARD-134).
 std = "0.10"
 
 # ---------------------------------------------------------------- its own kernel

@@ -1,6 +1,6 @@
 [package]
 name = "@m2/drums"
-version = "2.1.0"
+version = "2.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's 808/909 drums: Drum, which plays one drum from its menu, with kits of several Drum tracks, and the drum machine on one notes lane"
 authors = ["music2"]
@@ -11,9 +11,10 @@ tags = ["drums", "drum machine", "808", "909", "kit"]
 wasm = "kernels/drums.wasm"
 
 [dependencies]
-# @m2/core 2, the pack contract (PACK-22): any 2.x from 2.3, which has an instrument's kits
-# (KIT-3, 2.2) and its optional inputs (PKG-18, PKG-20, 2.3), runs it, and a change to @m2/core that would break it is a 3.0.0.
-"@m2/core" = "2.3"
+# @m2/core 2, the pack contract (PACK-22): any 2.x from 2.4 runs it. It uses an instrument's kits
+# (KIT-3, 2.2), its optional inputs (PKG-18, PKG-20, 2.3), and the Drum's hit is a picture (CARD-60,
+# CARD-142, view.picture, 2.4). A change to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.4"
 # std's drumhit and hitcount, which mark and count its hits, are in std 0.7 and later; the drum
 # voice is its own.
 std = "0.7"

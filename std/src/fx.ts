@@ -10,10 +10,11 @@
 // Their cards' faces (CARD-92 to CARD-95): eq3's curve, measured from its own sound, with a dot for
 // each band; the compressor's transfer curve, drawn from its own sum since a compressor's sound
 // changes with its level (D13), with the live level riding it and how far it turns down, from its
-// own meter (D8), and its last seconds in and out beside it; the limiter's and the duck's how far.
+// own meter (D8), and its last seconds in and out beside it; the duck's how far; the limiter's
+// ceiling over its last seconds, to drag (CARD-143).
 
 import { component, control, kernel, port, signature, type Audio, type Params, type Value } from "@m2/core";
-import { curvePicture, dbWords, historyPicture, hzWords, reduction, reductionPicture, transfer, transferPicture, transferWords } from "./pictures";
+import { ceiling as drawCeiling, ceilingPicture, curvePicture, dbWords, historyPicture, hzWords, reduction, reductionPicture, transfer, transferPicture, transferWords } from "./pictures";
 
 /**
  * Turn `x` down by `depth` dB while `side` is high: `duck(bass.out, kick.env)`, or
@@ -59,13 +60,13 @@ export const limit = component(
     controls: { ceiling: control.db(-1).range(-24, 0) },
     output: port.audio(),
     positional: ["ceiling"],
-    editor: { category: "Dynamics", description: "Stops peaks from clipping", insert: { ceiling: -1 }, views: { down: reductionPicture({ most: 12 }) }, face: ["down", "ceiling"] },
+    editor: { category: "Dynamics", description: "Stops peaks from clipping", insert: { ceiling: -1 }, views: { level: ceilingPicture() }, face: ["level", "ceiling"] },
   },
   (x: Audio, { ceiling }: Params) => kernel("std:limit", { in: x, ceiling }),
   {
-    down: {
-      draw: (v, p) => reduction(p),
-      words: (v) => `Turns peaks down so they stay under ${v.ceiling === null ? "a ceiling set elsewhere" : dbWords(v.ceiling)}`,
+    level: {
+      draw: (v, p) => drawCeiling(p, v, { ceiling: "ceiling" }),
+      words: (v) => `Turns peaks down so they stay under ${v.ceiling === null ? "a ceiling set elsewhere" : dbWords(v.ceiling)}. Drag the line to move the ceiling`,
     },
   },
 );

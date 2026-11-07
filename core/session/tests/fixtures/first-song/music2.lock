@@ -2,10 +2,10 @@
 
 [[pack]]
 name = "@m2/drums"
-version = "2.1.0"
-hash = "sha256:be98dfd161358c97ec09f362120b72da38afc7a331484f4008bb81c3b19af411"
+version = "2.2.0"
+hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 
 [[pack]]
 name = "@m2/synths"
-version = "2.1.0"
-hash = "sha256:9903e2755ae4797b34337aab2a9f6b6c9802366d08c335231fff42e5231c6585"
+version = "2.2.0"
+hash = "sha256:ddb567e071a73aace8eb853d359ae83ba17fa839be9df717df7407b049def053"

@@ -896,3 +896,28 @@ fn tune_goes_into_an_audio_tracks_own_code() {
     assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.1\""), "{}", f.read("music2.toml"));
     assert!(f.read("song.ts").contains("vox: vox.out"), "the song reads the track as it did");
 }
+
+// CARD-72: a picture knows the notes lane that plays its call, as the keys view does (CARD-28), so
+// its `p.play` place plays there: the Drum's hit on its track's hits; an effect's picture, which no
+// notes lane plays, none.
+#[test]
+fn a_picture_knows_the_notes_lane_that_plays_its_call() {
+    use crate::views::Drawn;
+    let f = Fixture::new();
+    f.write("music2.toml", MANIFEST);
+    f.write(
+        "song.ts",
+        "import { song, track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { limit } from \"std/fx\";\n\
+         const kick = track(\"kick\", ({ lane }) => limit(drums.drum(lane.notes(\"hits\"))));\nexport default song(() => kick.out);\n",
+    );
+    let s = f.open();
+    assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+    let m = s.view().modules.into_iter().find(|m| m.key == "kick").unwrap();
+    let lane_of = |title: &str| {
+        let card = m.nodes.iter().find(|n| n.title.as_deref() == Some(title)).unwrap_or_else(|| panic!("{title}'s card"));
+        let Drawn::Picture { lane, .. } = &card.views[0].of else { panic!("not a picture: {:?}", card.views[0].of) };
+        lane.as_ref().map(|l| (l.module.clone(), l.lane.clone()))
+    };
+    assert_eq!(lane_of("Drum"), Some(("kick".to_string(), "hits".to_string())));
+    assert_eq!(lane_of("Limit"), None);
+}

@@ -2,8 +2,8 @@
 
 [[pack]]
 name = "@m2/drums"
-version = "2.1.0"
-hash = "sha256:be98dfd161358c97ec09f362120b72da38afc7a331484f4008bb81c3b19af411"
+version = "2.2.0"
+hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 
 [[pack]]
 name = "@m2/effects"
@@ -17,8 +17,8 @@ hash = "sha256:9dca398f15369ef18f5cabb1a73c0bbcc32fa2fc6a616d379284b85a333970c1"
 
 [[pack]]
 name = "@m2/synths"
-version = "2.1.0"
-hash = "sha256:9903e2755ae4797b34337aab2a9f6b6c9802366d08c335231fff42e5231c6585"
+version = "2.2.0"
+hash = "sha256:ddb567e071a73aace8eb853d359ae83ba17fa839be9df717df7407b049def053"
 
 [[pack]]
 name = "@m2/vocals"
@@ -27,5 +27,5 @@ hash = "sha256:cf640aaca58780ba44381f639446c5b8770946338567771d8ba78ee5b139764b"
 
 [[pack]]
 name = "@m2/wavetable"
-version = "1.1.0"
-hash = "sha256:163e11d087a293bc0149f281abf632a5a9b7ee3b6c26cd05927e58072ecd56f3"
+version = "1.2.0"
+hash = "sha256:8d778efe0cad9b1a897a990ebb60a109d9d38d562a6882c146ec07a9680c2e68"

@@ -166,6 +166,8 @@ export type CardView = { name: string } & (
       values: { name: string; value: number | string | boolean | null; knob?: string; why?: string }[];
       /** Its words at these values, once the server worked them out (CARD-63); null until then. */
       words?: string | null;
+      /** The notes lane that plays the call, which a `p.play` place plays on (CARD-72). */
+      lane?: LaneRef;
       /** Why it can't be drawn, when it can't. */
       why?: string;
     }
