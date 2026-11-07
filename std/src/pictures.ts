@@ -10,7 +10,6 @@
 // | Picture | Declared by | Drawn by |
 // |---|---|---|
 // | a curve across frequency, measured from the sound (an EQ, a filter) | `curvePicture()` | `p.response()` and dots |
-// | a filter drawn from its maths, inside a voice where nothing can be measured | `curvePicture({ live: false })` | `lowpass(p, v, names)` |
 // | how a compressor turns loud sounds down: level in across, level out up | `transferPicture()` | `transfer(p, v, names)` |
 // | how far a sound is turned down, as it plays, over the last 3 s | `reductionPicture()` | `reduction(p, …)` |
 // | an envelope: how loud a note is over time | `envelopePicture()` | `envelope(p, v, names)` |
@@ -67,57 +66,6 @@ export function curvePicture(o: { range?: number; live?: boolean } = {}): Pictur
     y: axis.lin("db", -range, range),
     ...(o.live === false ? {} : { live: [live.spectrum("in", { tone: "faint" }), live.spectrum("out")] }),
   });
-}
-
-/** How many points a curve drawn from maths has: one each sixtieth of the 10 octaves. */
-const CURVE_POINTS = 241;
-
-/** A two-pole lowpass's gain at `f`, in dB: 1 / √((1 − r²)² + (r / q)²), r = f / cutoff (an analog prototype). */
-export function lowpassDb(f: number, cutoff: number, q: number): number {
-  const r = f / cutoff;
-  return -10 * Math.log10((1 - r * r) ** 2 + (r / q) ** 2);
-}
-
-/** A resonance from 0 to 1 as the q it is drawn with (CARD-30): 0.5, no bump, to 30, where a synth's filter sings. */
-export const resonanceQ = (r: number) => 0.5 * 60 ** Math.min(1, Math.max(0, r));
-
-/**
- * A lowpass drawn from its maths (CARD-30): a two-pole (12 dB per octave) curve at `cutoff` with a
- * bump the `q` makes taller, or, with `resonance`, a level from 0 to 1 drawn as `resonanceQ`. For a
- * filter inside an instrument's voices, where music2 can't play a click through it (CARD-81); a
- * filter a sound plays on its own is measured (`p.response()`). Its one dot moves the cutoff across
- * and the q (or the resonance) up and down, and by the wheel.
- */
-export function lowpass<D>(
-  p: Painter<D, "hz", "db">,
-  v: { readonly [k: string]: unknown },
-  names: { cutoff: Across<D, "hz">; q: In<D, "scalar"> } | { cutoff: Across<D, "hz">; resonance: In<D, "unit01"> },
-): Shape[] {
-  const cutoff = known(v, nameOf(names.cutoff), "cutoff");
-  const resonant = "resonance" in names;
-  const qName = resonant ? names.resonance : names.q;
-  const raw = known(v, qName, resonant ? "resonance" : "q");
-  const q = resonant ? resonanceQ(raw) : raw;
-  const points: number[] = [];
-  for (let i = 0; i < CURVE_POINTS; i++) {
-    const f = 20 * 1000 ** (i / (CURVE_POINTS - 1));
-    points.push(f, Math.max(-120, lowpassDb(f, cutoff, q)));
-  }
-  return [
-    p.fill(points, { base: -120, tone: "faint" }),
-    p.line(points, { name: "curve" }),
-    p.handle(cutoff, 20 * Math.log10(q), { x: names.cutoff, y: knob(qName), wheel: qName } as unknown as Moves<D, "hz", "db">),
-  ];
-}
-
-/** What `lowpass` draws, in words. */
-export function lowpassWords(v: { readonly [k: string]: unknown }, names: { cutoff: string; q?: string; resonance?: string }): string {
-  const c = v[names.cutoff], q = v[names.resonance ?? names.q ?? ""];
-  if (typeof c !== "number") return "A filter that cuts the highs: its cutoff is set by a cable or the code";
-  const bump = typeof q === "number" ? `, ${names.resonance ? "resonance" : "q"} ${figures(q)}` : "";
-  // No slope is named: the drawing is a two-pole one, but the filter it stands for may not be (a
-  // synth's ladder falls 24 dB per octave, review Y9, S2).
-  return `Cuts the highs above ${hzWords(c)}${bump}: a drawing, not measured from the sound`;
 }
 
 /** The name a `moves` entry moves: its own, or a `knob(…)`'s. */

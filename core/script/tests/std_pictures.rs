@@ -202,59 +202,6 @@ fn the_lfo_draws_whole_cycles_of_its_shape() {
     }
 }
 
-/** A test pack whose card draws std/pictures' lowpass by a resonance from 0 to 1, as a synth's would. */
-const RESONANT: &str = r#"import { component, control, port, signature, type Audio, type Events } from "@m2/core";
-import { curvePicture, lowpass, lowpassWords } from "std/pictures";
-
-export const resonant = component(
-  {
-    id: "resonant",
-    label: "Resonant",
-    signature: signature<(notes: Events) => Audio>(),
-    inputs: { notes: port.notes() },
-    controls: { cutoff: control.hz(1000).range(20, 20000).log(), resonance: control.frac(0.1).range(0, 1) },
-    output: port.audio(),
-    editor: { views: { filter: curvePicture({ live: false }) } },
-  },
-  (notes: Events): Audio => { throw new Error("only its picture is drawn"); },
-  { filter: { draw: (v, p) => lowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", resonance: "resonance" }) } },
-);
-"#;
-
-// CARD-30: a drawn lowpass reads a q or a resonance from 0 to 1: a sound with a resonance
-// draws it as the q 0.5 × 60^r, its dot moving the resonance as its knob does, and its words say
-// resonance, and that it is a drawing. (music2's polysynth draws its own ladder: CARD-136.)
-#[test]
-fn a_drawn_lowpass_reads_a_resonance() {
-    let pack = std::env::temp_dir().join(format!("m2-script-resonant-{}", std::process::id()));
-    std::fs::create_dir_all(pack.join("src")).unwrap();
-    std::fs::write(pack.join("src/index.ts"), RESONANT).unwrap();
-    let packages = vec![("@test/resonant".to_string(), pack.clone()), ("std".to_string(), std_dir())];
-    let catalog = m2_script::describe(&packages);
-    let descriptor = catalog.components.get("@test/resonant:resonant").cloned().unwrap_or_else(|| panic!("{:?}", catalog.problems));
-    let ask = Ask {
-        key: "resonant".into(),
-        packages,
-        song: None,
-        module: descriptor.module.clone(),
-        descriptor,
-        view: "filter".into(),
-        values: json!({"cutoff": 1200, "resonance": 0.5}).to_string(),
-        memo: "resonant\u{0}filter".into(),
-    };
-    let d = match Runner::new().draw(ask) {
-        Drawn::Shapes(json) => serde_json::from_str::<Value>(&json).unwrap(),
-        other => panic!("{other:?}"),
-    };
-    let _ = std::fs::remove_dir_all(&pack);
-    assert_eq!(kinds(&d), ["fill", "line", "handle"]);
-    assert_eq!(dots(&d), ["wheel=resonance x=cutoff y=resonance(knob)"]);
-    let h = &d["shapes"][2];
-    let q = 0.5 * 60f64.powf(0.5);
-    assert!((h["y"].as_f64().unwrap() - 20.0 * q.log10()).abs() < 1e-9, "{h}");
-    assert_eq!(d["words"], "Cuts the highs above 1.2 kHz, resonance 0.5: a drawing, not measured from the sound");
-}
-
 // CARD-75, CARD-90: every picture std and music2's own packs draw does draw, at its defaults: each
 // value as its control's default (a choice's name, a switch's true or false), each setting as its.
 #[test]

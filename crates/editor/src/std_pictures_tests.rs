@@ -1,17 +1,14 @@
 //! std's pictures drawn from its own sums are the sound (CARD-99, D13): each against a render of the
 //! kernel it draws, within 0.5 dB. The compressor's transfer curve at steady levels in and around
-//! its knee; the envelope of std's adsr from its first sample to the end of its release; the LFO's
-//! shape over a bar; and std/pictures' lowpass, a drawing for filters inside a voice, against std's
-//! own filter measured from its sound, where an analog curve holds (up to a twelfth of the rate).
+//! its knee; the envelope of std's adsr from its first sample to the end of its release; and the
+//! LFO's shape over a bar.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use m2_runtime::Renderer;
 use m2_script::pictures::{Ask, Drawn, Runner};
-use serde_json::{Map, Value, json};
+use serde_json::{Value, json};
 
-use crate::measure::{Layer, Pass, Span, copy};
 use crate::testing::{Fixture, MANIFEST};
 
 const RATE: f64 = 48_000.0;
@@ -173,72 +170,4 @@ fn the_lfo_shape_is_its_sound() {
         }
         assert!(checked > 100, "{shape}: {checked} points checked");
     }
-}
-
-/// A test pack whose card draws std/pictures' lowpass from its maths, over std's own lowpass.
-const DRAWN_LOWPASS: &str = r#"import { component, control, port } from "@m2/core";
-import { lowpass } from "std/filter";
-import { curvePicture, lowpass as drawLowpass, lowpassWords } from "std/pictures";
-
-export const drawn = component(
-  {
-    id: "drawn",
-    label: "Drawn",
-    inputs: { x: port.audio() },
-    controls: { cutoff: control.hz(1000).range(20, 20000).log(), q: control.scalar(0.707).range(0.3, 20).log() },
-    output: port.audio(),
-    editor: { views: { curve: curvePicture({ live: false }) } },
-  },
-  (x, { cutoff, q }) => lowpass(x, { cutoff, q }),
-  { curve: { draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "q" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", q: "q" }) } },
-);
-"#;
-
-// CARD-30, CARD-99: std/pictures' lowpass, drawn from its maths, is std's state-variable lowpass as
-// its sound measures it, within 0.5 dB wherever it is above −60 dB up to a twelfth of the rate
-// (4 kHz at 48 kHz), where a filter made digital still follows its analog curve.
-#[test]
-fn the_drawn_lowpass_is_stds_filter_up_to_a_twelfth_of_the_rate() {
-    let pack = std::env::temp_dir().join(format!("m2-editor-drawn-lowpass-{}", std::process::id()));
-    std::fs::create_dir_all(pack.join("src")).unwrap();
-    std::fs::write(pack.join("src/index.ts"), DRAWN_LOWPASS).unwrap();
-    for (cutoff, q) in [(200.0, 0.707), (800.0, 4.0), (300.0, 10.0)] {
-        let pic = drawn(
-            vec![("@test/drawn".into(), pack.clone()), ("std".into(), std_dir())],
-            "@test/drawn:drawn",
-            "curve",
-            json!({"cutoff": cutoff, "q": q}),
-        );
-        let drawn = line(&pic, "curve");
-        let f = Fixture::new();
-        f.write("music2.toml", MANIFEST);
-        f.write("song.ts", format!("import {{ song }} from '@m2/core';\nimport {{ lowpass }} from 'std/filter';\nimport {{ osc }} from 'std/dsp';\nimport {{ track }} from '@m2/core';\n\
-             const t = track('t', () => lowpass(osc.saw(110), {{ cutoff: {cutoff}, q: {q} }}));\nexport default song(() => t.out);\n"));
-        let s = f.open();
-        let rev = s.accepted();
-        let site = rev.compiled.sites.iter().find(|x| x.file == "song.ts" && x.callee == "lowpass").unwrap();
-        let node = format!("{}#{}", site.file, site.ordinal);
-        let c = copy(rev, &s.packages, "t", &node, &Map::new(), Layer::Response { level: crate::measure::LEVEL }).unwrap();
-        let span = Span { log: true, lo: 20.0, hi: 20_000.0 };
-        let measured = c.measure(&s.packages, span, Duration::from_secs(5), Pass::Rest).unwrap();
-        // Between the two measured points either side, on the log scale the points are spaced on.
-        let heard = |hz: f64| -> f64 {
-            let at = measured.chunks(2).position(|p| p[0] >= hz).unwrap();
-            let (lo, hi) = (&measured[2 * at.saturating_sub(1)..], &measured[2 * at..]);
-            if at == 0 || hi[0] == hz {
-                return hi[1];
-            }
-            let t = (hz / lo[0]).ln() / (hi[0] / lo[0]).ln();
-            lo[1] + t * (hi[1] - lo[1])
-        };
-        let mut checked = 0;
-        for &(hz, y) in drawn.iter().filter(|(hz, y)| *hz <= RATE / 12.0 && *y > -60.0) {
-            let m = heard(hz);
-            assert!((m - y).abs() <= 0.5, "cutoff {cutoff}, q {q}: at {hz:.0} Hz the drawing says {y:.2} dB, the filter {m:.2} dB");
-            checked += 1;
-        }
-        assert!(checked > 50, "{checked} points checked");
-        assert!(pic["words"].as_str().unwrap().starts_with("Cuts the highs above"), "{}", pic["words"]);
-    }
-    let _ = std::fs::remove_dir_all(&pack);
 }
