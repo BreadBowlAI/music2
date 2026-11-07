@@ -308,16 +308,21 @@ impl Kernel for Arp {
             // pattern restarts here.
             let mut restart = false;
             let moved = song.moved(self.last);
+            // A seek or a loop's wrap while the song plays on keeps the keys Hold latched, so a loop
+            // plays on; Play, a Stop and a move while stopped let go of them (PACK-30, D7).
+            let jumped = moved && song.playing && self.last.is_some_and(|l| l.playing);
             if moved {
                 self.end_where(&mut give, f, |_| true);
-                self.let_go();
+                if !jumped {
+                    self.let_go();
+                }
                 self.clock = None;
                 restart = true;
             }
             self.last = Some(song);
             // Hold latches keys played live, playing or stopped, and nothing at the frame where the
-            // song moved: Play, a Stop and a seek let go of it.
-            let hold = io.input(HOLD)[f] >= 0.5 && !moved;
+            // song starts or stops.
+            let hold = io.input(HOLD)[f] >= 0.5 && !(moved && !jumped);
             if !hold {
                 self.let_go();
             }

@@ -387,3 +387,21 @@ fn the_note_counter_wraps_below_the_live_bit() {
     assert_eq!(crate::event::take_id(&mut next), LIVE_BIT - 1);
     assert_eq!((crate::event::take_id(&mut next), next), (1, 2), "then 1 again");
 }
+
+// PACK-30, Hold: in the engine, a loop's wrap keeps the keys Hold latched: let go, the chord plays on
+// every lap of a 2-beat loop.
+#[test]
+fn hold_keeps_its_latch_through_a_loops_wrap_in_wasm() {
+    let (mut r, at) = playing(&held_arp(), &data(json!({"clips": []}), None));
+    r.transport_cmd(Cmd::Loop(Some((0.0, 2.0))));
+    for (h, p) in [(1, 60.0), (2, 64.0), (3, 67.0)] {
+        assert!(r.live(0, key(h, p)));
+    }
+    assert!(!ons_of(&mut r, at["a"], 50).is_empty(), "the keys play");
+    for h in 1..=3 {
+        r.live(0, let_go(h));
+    }
+    // Two beats are 375 blocks: the laps end at blocks 375 and 750, counted from the first.
+    let laps: Vec<usize> = (0..3).map(|lap| ons_of(&mut r, at["a"], if lap == 0 { 325 } else { 375 }).len()).collect();
+    assert_eq!(laps, [6, 8, 8], "every lap");
+}

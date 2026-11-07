@@ -37,9 +37,13 @@ const FIXED: [&[f32]; 7] =
 
 /// The notes of the chord of `shape` on `pitch`, `inversion` times turned over, each with its place
 /// in the shape: in `key`, or fixed with none. A pitch it already has is played once, and none past
-/// 0 or 127 is played. Low to high.
+/// 0 or 127 is played, nor any for a note given past them. Low to high.
 pub fn chord(pitch: f32, key: Option<Key>, shape: usize, inversion: usize) -> ([(usize, f32); FAN], usize) {
     let mut notes = [(0, 0.0f32); FAN];
+    // A note given past 0 or 127 is left out, its chord with it (PACK-29).
+    if !(0.0..=TOP as f32).contains(&pitch) {
+        return (notes, 0);
+    }
     let n = match key {
         Some(k) => {
             let root = k.snap(pitch);

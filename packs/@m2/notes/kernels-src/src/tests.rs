@@ -525,7 +525,7 @@ fn hold_never_latches_a_clips_notes() {
 }
 
 // PACK-30, Hold: while the song plays it latches keys played live: let go, they keep playing until a
-// new key starts a new chord; a seek lets go of them.
+// new key starts a new chord; a seek keeps them, the pattern starting again there.
 #[test]
 fn hold_latches_live_keys_while_the_song_plays() {
     let held = keys(&[c_major(0, BEAT), vec![n(2 * BEAT, 2 * BEAT + 1000, 65.0)]].concat());
@@ -538,7 +538,19 @@ fn hold_latches_live_keys_while_the_song_plays() {
     all_playable_and_ended(&g);
     let seek = |f: u64| (true, if f < BEAT + BEAT / 2 { f } else { f + 10 * BEAT } as f64 / BEAT as f64);
     let r = Run::new("arp", &ARP, 3 * BEAT).notes(&keys(&c_major(0, BEAT))).with("hold", 1.0).song(&seek);
-    assert!(ons(&run::<Arp>(&r).0).iter().all(|x| x.0 < BEAT + BEAT / 2), "a seek let go");
+    let after: Vec<f32> = ons(&run::<Arp>(&r).0).iter().filter(|x| x.0 >= BEAT + BEAT / 2).map(|x| x.1).collect();
+    assert_eq!(after, [60.0, 64.0, 67.0, 60.0, 64.0, 67.0], "a seek keeps them, the pattern started again there");
+}
+
+// PACK-30, Hold: a loop's wrap keeps the keys it latched, so a loop plays on while you jam over it:
+// every lap of a 2-beat loop plays the chord let go at beat 0.5.
+#[test]
+fn hold_keeps_its_latch_through_a_loops_wrap() {
+    let looped = |f: u64| (true, (f % (2 * BEAT)) as f64 / BEAT as f64);
+    let r = Run::new("arp", &ARP, 6 * BEAT).notes(&keys(&c_major(0, BEAT / 2))).with("hold", 1.0).song(&looped);
+    let o = ons(&run::<Arp>(&r).0);
+    let laps: Vec<usize> = (0..3).map(|lap| o.iter().filter(|x| x.0 / (2 * BEAT) == lap).count()).collect();
+    assert_eq!(laps, [8, 8, 8], "{o:?}");
 }
 
 // PACK-30, Hold: nothing latches at the frame where the song stops: keys played live and let go at
@@ -873,6 +885,23 @@ fn a_note_given_past_127_or_below_0_is_left_out_with_its_echoes() {
     for pitch in [-12.0, 12.0] {
         let g = echo(&[n(0, 1000, 130.0), n(100, 1100, -2.0)], &[("pitch", pitch)], 2 * BEAT, &from_0);
         assert!(g.iter().all(|e| !matches!(e, Gave::On { .. })), "pitch {pitch}: {g:?}");
+    }
+}
+
+// PACK-29, PACK-31, PACK-33: Chord and Lock to key leave out a note given past 0 to 127, in a key
+// or with none, In key on or off: no note of it is played, not even one its chord would bring back.
+#[test]
+fn chord_and_lock_to_key_leave_out_a_note_given_past_127_or_below_0() {
+    for pitch in [130.0, -2.0] {
+        for key in [C_MAJOR, EVERY] {
+            let given = [n(0, 20_000, pitch)];
+            let lock = run::<LockToKey>(&Run::new("lock", &LOCK, 30_000).notes(&given).with("key", key)).0;
+            assert_eq!(pitches(&lock), [] as [f32; 0], "Lock to key, {pitch} in key {key}");
+            for in_key in [1.0, 0.0] {
+                let chord = run::<Chord>(&Run::new("chord", &CHORD, 30_000).notes(&given).with("key", key).with("in_key", in_key)).0;
+                assert_eq!(pitches(&chord), [] as [f32; 0], "Chord, {pitch} in key {key}, In key {in_key}");
+            }
+        }
     }
 }
 

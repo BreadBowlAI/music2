@@ -14,9 +14,12 @@ const KEY: usize = 1;
 const SHIFT: usize = 2;
 
 /// Where Lock to key moves `pitch` in `key`, `shift` notes of the key on: none past 0 or 127, nor for a
-/// note given past them, with no key too (PACK-29).
+/// note given past them, in a key or not (PACK-29).
 pub fn moved(pitch: f32, key: Option<Key>, shift: i32) -> Option<f32> {
-    let Some(k) = key else { return (0.0..=TOP as f32).contains(&pitch).then_some(pitch) };
+    if !(0.0..=TOP as f32).contains(&pitch) {
+        return None;
+    }
+    let Some(k) = key else { return Some(pitch) };
     let p = k.step(k.snap(pitch), shift);
     (0..=TOP).contains(&p).then_some(p as f32)
 }
