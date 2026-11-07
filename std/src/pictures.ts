@@ -366,7 +366,7 @@ export function ceilingPicture(): PictureDecl<"seconds", "db"> {
  * control in dB (checked by type, CARD-62).
  */
 export function ceiling<D>(p: Painter<D, "seconds", "db">, v: { readonly [k: string]: unknown }, names: { ceiling: In<D, "db"> }): Shape[] {
-  const c = known(v[names.ceiling] as number | null, "ceiling");
+  const c = known(v, names.ceiling, "ceiling");
   return [
     p.mark("x", 3, "Now: the last 3 seconds run from the left"),
     p.mark("y", c, `The ceiling: ${dbWords(c)}`),
