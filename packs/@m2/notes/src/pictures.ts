@@ -1,7 +1,7 @@
 // @m2/notes' pictures (PACK-30 to PACK-33): what each card draws, in TypeScript over the picture
 // words (CARD-61), from the card's values alone (CARD-63). A picture never sees the notes that play,
 // nor the song's key, so each is drawn for C: the Arpeggiator's steps for a C major chord, Chord's
-// chord on C, Scale's keys in C major. The sums are the kernels' own (packs/@m2/notes/kernels-src):
+// chord on C, Lock to key's keys in C major. The sums are the kernels' own (packs/@m2/notes/kernels-src):
 // the steps' grid, the chords' notes, the echoes' times and levels.
 
 import { axis, live, view, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
@@ -137,7 +137,7 @@ export function stepsWords(v: Values): string {
   return `${STYLE_WORDS[style] ?? style}, ${RATE_WORDS[rate as Rate] ?? rate}, ${n} ${n === 1 ? "octave" : "octaves"}${held}`;
 }
 
-// ---------------------------------------------------------------- a keyboard (Chord, Scale)
+// ---------------------------------------------------------------- a keyboard (Chord, Lock to key)
 
 /** Each white key of an octave, in semitones from C. */
 const WHITE = [0, 2, 4, 5, 7, 9, 11];
@@ -187,7 +187,7 @@ function keyboardPicture(whites: number): PictureDecl<"scalar", "unit01"> {
   return view.picture({ x: axis.lin("scalar", 0, whites), y: axis.lin("unit01", 0, 1) });
 }
 
-/** C major's notes, from C: the key Chord and Scale draw in. */
+/** C major's notes, from C: the key Chord and Lock to key draw in. */
 const C_MAJOR = [0, 2, 4, 5, 7, 9, 11];
 const inC = (p: number) => C_MAJOR.includes(((p % 12) + 12) % 12);
 /** The note of C major nearest `p`, a tie going down (NOTE-3), as the kernels snap. */
@@ -304,21 +304,21 @@ export function echoWords(v: Values): string {
   return `${n} ${n === 1 ? "echo" : "echoes"}, ${ONE_WORDS[time as Rate] ?? time} apart, ${quieter}${climbs}`;
 }
 
-// ---------------------------------------------------------------- Scale's keyboard (PACK-33)
+// ---------------------------------------------------------------- Lock to key's keyboard (PACK-33)
 
-/** Scale's keyboard (PACK-33): the twelve notes of an octave from C, seven white keys. */
-export function scalePicture(): PictureDecl<"scalar", "unit01"> {
+/** Lock to key's keyboard (PACK-33): the twelve notes of an octave from C, seven white keys. */
+export function lockPicture(): PictureDecl<"scalar", "unit01"> {
   return keyboardPicture(7);
 }
 
 /** The twelve notes from C, C major's lit, each named by the note it plays in C major at this shift (PACK-33). */
-export function scaleKeys<D>(p: Painter<D, "scalar", "unit01">, v: Values): Shape[] {
+export function lockKeys<D>(p: Painter<D, "scalar", "unit01">, v: Values): Shape[] {
   const shift = within(Math.round(known(v, "shift", "shift")), -7, 7);
   return keyboard(p, 7, inC, (k) => NAMES[((stepC(snapC(60 + k), shift) % 12) + 12) % 12]);
 }
 
-/** What `scaleKeys` draws, in words. */
-export function scaleWords(v: Values): string {
+/** What `lockKeys` draws, in words. */
+export function lockWords(v: Values): string {
   const shift = v.shift;
   const near = "Moves each note to the nearest note of the key, a tie going down";
   if (typeof shift !== "number") return `${near}: its shift is set by a lane or the code`;

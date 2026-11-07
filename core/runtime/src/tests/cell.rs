@@ -545,7 +545,7 @@ fn every_std_kernel_keeps_its_inputs() {
     let in_voice: BTreeSet<String> = voiced.iter().map(|s| s.id.clone()).collect();
     assert_eq!(
         all.difference(&in_voice).collect::<Vec<_>>(),
-        ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:scale", "@m2/vocals:shift"],
+        ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock", "@m2/vocals:shift"],
         "only the note effects and the latent one are left out of the voice"
     );
     let FOp::Poly { voice, .. } = &flat.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };

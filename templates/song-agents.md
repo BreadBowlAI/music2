@@ -49,7 +49,7 @@ Below, `.` is this song's folder.
 
 `m2 docs commands` lists every command; `m2 <command> --help` says how to call one.
 
-A note effect (`@m2/notes`: the Arpeggiator, Chord, Note echo, Scale) goes before an instrument and
+A note effect (`@m2/notes`: the Arpeggiator, Chord, Note echo, Lock to key) goes before an instrument and
 changes its notes as they play: `synth.pluck(arp(lane.notes("chords")))`. Its notes never show in
 the roll. A part the musician should see and edit is notes written into a clip (`m2 clips`).
 

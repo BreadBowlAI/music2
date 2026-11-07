@@ -1,7 +1,7 @@
 //! PACK-29 to PACK-33: `@m2/notes`' four kernels in wasm, as music2's own, run in the lane pass behind
 //! the guard (RENDER-41, RENDER-42), their notes read as an instrument reads them: Chord against
 //! the roll's own chord stamps in every key of seven notes (NOTE-4), the Arpeggiator over a held
-//! chord on the grid, Note echo on the beat, Scale onto the song's key. Their rules one by one are
+//! chord on the grid, Note echo on the beat, Lock to key onto the song's key. Their rules one by one are
 //! the kernels' native tests (`packs/@m2/notes/kernels-src/src/tests.rs`).
 
 use std::collections::BTreeMap;
@@ -193,12 +193,12 @@ fn the_echo_plays_its_echoes_on_the_beat_in_wasm() {
     assert_eq!(heard, [(2400, 69.0, 1.0), (14_400, 69.0, 0.7), (26_400, 69.0, 0.49), (38_400, 69.0, 0.343)]);
 }
 
-// PACK-33: Scale, in wasm, in the song's key of D minor: C♯ goes down to C, E♭ down to D; shifted
+// PACK-33: Lock to key, in wasm, in the song's key of D minor: C♯ goes down to C, E♭ down to D; shifted
 // up 2 notes of the key, D goes to F.
 #[test]
-fn the_scale_moves_notes_onto_the_songs_key_in_wasm() {
+fn lock_to_key_moves_notes_onto_the_songs_key_in_wasm() {
     let more = json!([{"id": "two", "op": "const", "value": 2}]);
-    let effects = [("s".to_string(), "scale", json!({"key": "key"})), ("t".to_string(), "scale", json!({"key": "key", "shift": "two"}))];
+    let effects = [("s".to_string(), "lock", json!({"key": "key"})), ("t".to_string(), "lock", json!({"key": "key", "shift": "two"}))];
     let ir = song_of(&effects, more);
     let pk = own_packages();
     let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
@@ -369,7 +369,7 @@ fn a_live_key_stays_live_through_a_chord_in_wasm() {
 #[test]
 fn a_live_keys_id_has_the_live_bit_and_a_clips_note_hasnt() {
     let clip = json!({"clips": [{"start": 0, "length": 4, "notes": [{"pitch": "C4", "start": 0, "length": 1}]}]});
-    let (mut r, _) = playing(&song_of(&[("s".to_string(), "scale", json!({"key": "key"}))], json!([])), &data(clip, None));
+    let (mut r, _) = playing(&song_of(&[("s".to_string(), "lock", json!({"key": "key"}))], json!([])), &data(clip, None));
     assert!(r.live(0, key(1, 67.0)));
     r.render_block(r.clock()).unwrap();
     let ons: Vec<(f32, u32)> =

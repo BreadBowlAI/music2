@@ -7,7 +7,7 @@
 //! A note effect takes notes and gives notes (ABI-15): the host runs it in the lane pass, on whole
 //! blocks, and reads what it gives through a guard (RENDER-41, RENDER-42). [`Arp`] plays the notes
 //! held one at a time ([`arpeggio`]), [`Chord`] a chord from each note ([`chords`]), [`Echo`] each
-//! note again, later and quieter ([`echoes`]), and [`Scale`] moves each note onto the song's key
+//! note again, later and quieter ([`echoes`]), and [`LockToKey`] moves each note onto the song's key
 //! ([`scales`]). They share the song's key ([`key`]) and where the song is ([`time`]).
 //!
 //! The house rules: each gives an On only with a pitch from 0 to 127 and a velocity from 0 to 1, so
@@ -31,14 +31,14 @@ pub mod time;
 pub use arpeggio::Arp;
 pub use chords::Chord;
 pub use echoes::Echo;
-pub use scales::Scale;
+pub use scales::LockToKey;
 
 abi!();
 
 export!(arp, Arp);
 export!(chord, Chord);
 export!(echo, Echo);
-export!(scale, Scale);
+export!(lock, LockToKey);
 
 #[cfg(test)]
 mod tests;

@@ -207,7 +207,7 @@ fn music2s_own_note_effects_go_before_an_instrument_each_value_a_knob() {
     f.write("song.ts", text);
     let listed = ours(&f.open());
     let ids: Vec<&str> = listed.iter().map(|e| e.component.as_str()).collect();
-    assert_eq!(ids, ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:scale"]);
+    assert_eq!(ids, ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock-to-key"]);
     for e in &listed {
         assert!(e.notes, "{}: a note effect", e.component);
         let mut s = f.open();

@@ -1,5 +1,5 @@
-//! `@m2/notes:scale`, Scale (PACK-33): each note moved to the key's nearest note, a tie going down,
-//! as Lock to key moves one (NOTE-3), then `shift` notes of the key up (down, below 0). With no key,
+//! `@m2/notes:lock`, Lock to key (PACK-33): each note moved to the key's nearest note, a tie going
+//! down, as the roll's Lock to key moves one (NOTE-3), then `shift` notes of the key up (down, below 0). With no key,
 //! or a chromatic one (4095, which `time.key` gives for both), every note plays as it is. A note
 //! keeps its id, so its Off ends it; one moved past 0 or 127 is left out.
 
@@ -13,7 +13,7 @@ const NOTES: usize = 0;
 const KEY: usize = 1;
 const SHIFT: usize = 2;
 
-/// Where Scale moves `pitch` in `key`, `shift` notes of the key on: none past 0 or 127, nor for a
+/// Where Lock to key moves `pitch` in `key`, `shift` notes of the key on: none past 0 or 127, nor for a
 /// note given past them, with no key too (PACK-29).
 pub fn moved(pitch: f32, key: Option<Key>, shift: i32) -> Option<f32> {
     let Some(k) = key else { return (0.0..=TOP as f32).contains(&pitch).then_some(pitch) };
@@ -21,15 +21,15 @@ pub fn moved(pitch: f32, key: Option<Key>, shift: i32) -> Option<f32> {
     (0..=TOP).contains(&p).then_some(p as f32)
 }
 
-pub struct Scale;
+pub struct LockToKey;
 
-impl Kernel for Scale {
+impl Kernel for LockToKey {
     const INPUTS: usize = 3;
     const OUTPUTS: usize = 1;
     const NOTES: &'static [usize] = &[NOTES, 3];
 
     fn new(_: &Cfg) -> Self {
-        Scale
+        LockToKey
     }
 
     fn process(&mut self, io: &mut Io) {

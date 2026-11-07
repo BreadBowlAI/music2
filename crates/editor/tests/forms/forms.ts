@@ -9,7 +9,7 @@ import { drums } from "@m2/drums";
 import { bass, fm, pad, pluck, synth } from "@m2/synths";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
-import { arp, chord, echo, scale as onKey } from "@m2/notes";
+import { arp, chord, echo, lockToKey } from "@m2/notes";
 import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
@@ -72,7 +72,7 @@ export default song(({ lane, time }) => {
   );
   const tables = wavetable(lane.notes("tables"), { tableA: "vowels", positionA: level, filter: "bandpass", unison: 3 });
   const voice = tune(lowpass(buzz, 1500), { glide: 0, amount: 0.8 });
-  const noted = synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }));
+  const noted = synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }));
   const planned = [
     // song.ts:20 `lfo` leaves out phase: a value written in
     lfo(time.beats, { period: 2, phase: 0 }),
@@ -1349,55 +1349,55 @@ export default song(({ lane, time }) => {
     // song.ts:73 `lowpass` leaves out q: a cable written in
     lowpass(buzz, 1500, wobble),
     // song.ts:74 `synth.pluck` leaves out attack: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { attack: 0.003 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { attack: 0.003 }),
     // song.ts:74 `synth.pluck` leaves out attack: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { attack: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { attack: wobble }),
     // song.ts:74 `synth.pluck` leaves out brightness: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { brightness: 4500 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { brightness: 4500 }),
     // song.ts:74 `synth.pluck` leaves out brightness: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { brightness: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { brightness: wobble }),
     // song.ts:74 `synth.pluck` leaves out decay: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { decay: 0.45 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { decay: 0.45 }),
     // song.ts:74 `synth.pluck` leaves out decay: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { decay: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { decay: wobble }),
     // song.ts:74 `synth.pluck` leaves out release: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { release: 0.25 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { release: 0.25 }),
     // song.ts:74 `synth.pluck` leaves out release: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { release: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { release: wobble }),
     // song.ts:74 `synth.pluck` leaves out shape: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { shape: "saw" }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { shape: "saw" }),
     // song.ts:74 `synth.pluck` leaves out spread: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { spread: 0.85 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { spread: 0.85 }),
     // song.ts:74 `synth.pluck` leaves out spread: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { spread: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { spread: wobble }),
     // song.ts:74 `synth.pluck` leaves out sustain: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { sustain: 0 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { sustain: 0 }),
     // song.ts:74 `synth.pluck` leaves out sustain: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { sustain: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { sustain: wobble }),
     // song.ts:74 `synth.pluck` leaves out velSens: a value written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { velSens: 0.5 }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { velSens: 0.5 }),
     // song.ts:74 `synth.pluck` leaves out velSens: a cable written in
-    synth.pluck(echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { velSens: wobble }),
+    synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { velSens: wobble }),
     // song.ts:74 `echo` leaves out fall: a value written in
-    echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: 0.3 }),
+    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: 0.3 }),
     // song.ts:74 `echo` leaves out fall: a cable written in
-    echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: wobble }),
+    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: wobble }),
     // song.ts:74 `echo` leaves out pitch: a value written in
-    echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: 0 }),
+    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: 0 }),
     // song.ts:74 `echo` leaves out pitch: a cable written in
-    echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: wobble }),
+    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: wobble }),
     // song.ts:74 `echo` leaves out time: a value written in
-    echo(arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, time: "1/8" }),
+    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, time: "1/8" }),
     // song.ts:74 `arp` leaves out hold: a value written in
-    arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, hold: false }),
+    arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, hold: false }),
     // song.ts:74 `arp` leaves out style: a value written in
-    arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, style: "up" }),
+    arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, style: "up" }),
     // song.ts:74 `arp` leaves out swing: a value written in
-    arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: 0.5 }),
+    arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: 0.5 }),
     // song.ts:74 `arp` leaves out swing: a cable written in
-    arp(chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: wobble }),
+    arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: wobble }),
     // song.ts:74 `chord` leaves out inKey: a value written in
-    chord(onKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1, inKey: true }),
+    chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1, inKey: true }),
     // song.ts:75 `master` leaves out ceiling: a value written in
     master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted }), { ceiling: -1 }),
     // song.ts:75 `master` leaves out ceiling: a cable written in
@@ -1556,8 +1556,8 @@ export default song(({ lane, time }) => {
     synth.pluck(chord(lane.notes("chords"))),
     // @m2/notes:echo added before a sound
     synth.pluck(echo(lane.notes("chords"))),
-    // @m2/notes:scale added before a sound
-    synth.pluck(scale(lane.notes("chords"))),
+    // @m2/notes:lock-to-key added before a sound
+    synth.pluck(lockToKey(lane.notes("chords"))),
     // @m2/vocals:tune added after a sound
     tune(osc.saw(semis(60)), { glide: 0.1, amount: 1 }),
     // clap:m2.probe added after a sound

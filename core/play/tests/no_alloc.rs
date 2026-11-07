@@ -467,7 +467,7 @@ fn live_notes_never_allocate() {
 }
 
 /// `@m2/notes`' four note effects in a chain before sine voices, in C major at 120 bpm (PACK-29):
-/// the lane's notes through Scale, Chord, the Arpeggiator (holding while stopped) and Note echo.
+/// the lane's notes through Lock to key, Chord, the Arpeggiator (holding while stopped) and Note echo.
 fn noted() -> Song {
     let body = json!([
         {"id": "p", "op": "lane", "lane": "pitch"}, {"id": "g", "op": "lane", "lane": "gate"},
@@ -479,7 +479,7 @@ fn noted() -> Song {
         {"id": "n", "op": "lane", "lane": "notes"},
         time("key"), time("beats"), time("playing"), time("tempo"),
         {"id": "on", "op": "const", "value": 1, "unit": "switch"},
-        {"id": "sc", "op": "kernel", "kernel": "@m2/notes:scale", "inputs": {"notes": "n", "key": "key"}},
+        {"id": "sc", "op": "kernel", "kernel": "@m2/notes:lock", "inputs": {"notes": "n", "key": "key"}},
         {"id": "ch", "op": "kernel", "kernel": "@m2/notes:chord", "inputs": {"notes": "sc", "key": "key"}},
         {"id": "ar", "op": "kernel", "kernel": "@m2/notes:arp",
             "inputs": {"notes": "ch", "beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "on"}},

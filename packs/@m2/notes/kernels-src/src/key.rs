@@ -1,5 +1,5 @@
 //! The song's key as a note effect reads it, `time.key` (VOX-12): a set of the twelve pitch
-//! classes, bit n for pitch class n (0 is C). What Chord and Scale share (PACK-31, PACK-33): the
+//! classes, bit n for pitch class n (0 is C). What Chord and Lock to key share (PACK-31, PACK-33): the
 //! key's nearest note, a tie going down, as Lock to key finds it (NOTE-3), and a walk along the
 //! key's notes.
 

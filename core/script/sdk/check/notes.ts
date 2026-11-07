@@ -4,7 +4,7 @@
 // carries `@ts-expect-error`, so a type that stops refusing it fails the check too.
 
 import { semis, type Audio, type Ctx, type Events } from "@m2/core";
-import { arp, chord, echo, scale } from "@m2/notes";
+import { arp, chord, echo, lockToKey } from "@m2/notes";
 import { synth } from "@m2/synths";
 
 declare const x: Audio;
@@ -20,14 +20,14 @@ export function notes(ctx: Ctx) {
     chord(held, { shape: "7th", inKey: false, inversion: 2 }),
     echo(held),
     echo(held, { time: "1/8", repeats: 3, fall: 0.3, pitch: semis(12) }),
-    scale(held),
-    scale(held, { shift: -2 }),
+    lockToKey(held),
+    lockToKey(held, { shift: -2 }),
     // A chain: notes out are notes in.
-    arp(chord(scale(held)), { gate: ctx.lane.control("arp-gate", "scalar", 0.8) }),
+    arp(chord(lockToKey(held)), { gate: ctx.lane.control("arp-gate", "scalar", 0.8) }),
     arp(held, { bypass: true }),
   ];
   // Before an instrument, which plays their notes.
-  const heard: Audio[] = [synth.pluck(arp(held, { rate: "1/16" })), synth.pad(chord(scale(held), { shape: "7th" }))];
+  const heard: Audio[] = [synth.pluck(arp(held, { rate: "1/16" })), synth.pad(chord(lockToKey(held), { shape: "7th" }))];
   // @ts-expect-error a note effect takes notes, not a sound
   arp(x);
   // @ts-expect-error a rate is one of the menu's names

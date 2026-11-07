@@ -2,10 +2,10 @@
 name = "@m2/notes"
 version = "0.1.0"
 license = "MIT OR Apache-2.0"
-description = "music2's note effects, which go before an instrument: the Arpeggiator, Chord, Note echo and Scale"
+description = "music2's note effects, which go before an instrument: the Arpeggiator, Chord, Note echo and Lock to key"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["arpeggiator", "arp", "chords", "note echo", "scale", "notes", "midi effects"]
+tags = ["arpeggiator", "arp", "chords", "note echo", "lock to key", "scale", "notes", "midi effects"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/notes.wasm"
@@ -75,8 +75,8 @@ outputs = ["out: events<note>"]
 fan = 8
 
 [[kernel]]
-name = "scale"
-description = "Scale (PACK-33): each note moved to the key's nearest note, a tie going down, then shift notes of the key up (down below 0), -7 to 7. With no key (key 4095) every note plays as it is"
+name = "lock"
+description = "Lock to key (PACK-33): each note moved to the key's nearest note, a tie going down, then shift notes of the key up (down below 0), -7 to 7. With no key (key 4095) every note plays as it is"
 inputs = [
   "notes: events<note>",
   "key: control<keyset> = 4095",

@@ -56,13 +56,13 @@ fn the_note_effects_start_where_their_kernels_do() {
     let catalog = describe(&packages());
     assert!(catalog.problems.is_empty(), "{:?}", catalog.problems);
     let ids: Vec<&str> = catalog.components.keys().filter_map(|k| k.strip_prefix("@m2/notes:")).collect();
-    assert_eq!(ids, ["arp", "chord", "echo", "scale"], "the pack's sounds");
+    assert_eq!(ids, ["arp", "chord", "echo", "lock-to-key"], "the pack's sounds");
     let ports = port_defaults();
     for (id, label, category, face, controls) in [
         ("arp", "Arpeggiator", "Arpeggiator", ["steps", "style", "rate", "octaves", "gate", "hold"].as_slice(), 6),
         ("chord", "Chord", "Chords", &["keyboard", "shape", "inKey", "inversion"], 3),
         ("echo", "Note echo", "Echo", &["echoes", "time", "repeats", "fall", "pitch"], 4),
-        ("scale", "Scale", "Scales", &["keyboard", "shift"], 1),
+        ("lock-to-key", "Lock to key", "Scales", &["keyboard", "shift"], 1),
     ] {
         let d = &catalog.components[&format!("@m2/notes:{id}")];
         assert!(d.is_note_effect() && !d.is_effect() && !d.is_instrument(), "{id}: a note effect");
@@ -73,8 +73,10 @@ fn the_note_effects_start_where_their_kernels_do() {
         let views: Vec<&str> = d.editor.views.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(views, [face[0]], "{id} draws one picture");
         assert!(matches!(d.editor.views[0].of, ViewOf::Picture { .. }), "{id}'s view is a picture");
+        // Its kernel is the component's own name, but Lock to key's: `lock`, a kernel's name being one word.
+        let kernel = if d.id == "@m2/notes:lock-to-key" { "@m2/notes:lock".to_string() } else { d.id.clone() };
         for c in &d.controls {
-            let port = (d.id.clone(), snake(&c.name));
+            let port = (kernel.clone(), snake(&c.name));
             let kernel = ports.get(&port).unwrap_or_else(|| panic!("{id}.{}: its kernel has no port {}", c.name, port.1));
             assert_eq!(c.default.as_ref().map(|s| s.value), Some(*kernel), "{id}.{}: its default is its kernel's port's", c.name);
         }
@@ -295,12 +297,12 @@ fn the_echoes_fade_as_their_values_say() {
     assert_eq!(d["words"], "1 echo, a quarter note apart, each 50% quieter, each 1 semitone lower");
 }
 
-// PACK-33: Scale's keyboard is the twelve notes of an octave from C, C major's lit, each named by
+// PACK-33: Lock to key's keyboard is the twelve notes of an octave from C, C major's lit, each named by
 // the note it plays there at this shift.
 #[test]
-fn scales_keyboard_names_where_each_note_goes() {
+fn lock_to_keys_keyboard_names_where_each_note_goes() {
     let runner = Runner::new();
-    let d = draw(&runner, "scale", "keyboard", json!({"shift": 0}));
+    let d = draw(&runner, "lock-to-key", "keyboard", json!({"shift": 0}));
     assert_eq!(boxes(&d).len(), 12, "seven white keys and five black");
     let (lit, names) = keys(&d);
     assert_eq!(lit, [0, 2, 4, 5, 7, 9, 11], "C major's notes");
@@ -310,7 +312,7 @@ fn scales_keyboard_names_where_each_note_goes() {
         d["words"],
         "Moves each note to the nearest note of the key, a tie going down. Drawn in C major: the card says your song's key"
     );
-    let d = draw(&runner, "scale", "keyboard", json!({"shift": 2}));
+    let d = draw(&runner, "lock-to-key", "keyboard", json!({"shift": 2}));
     assert_eq!(words(keys(&d).1), ["E", "E", "F", "F", "G", "A", "A", "B", "B", "C", "C", "D"]);
     assert_eq!(
         d["words"],

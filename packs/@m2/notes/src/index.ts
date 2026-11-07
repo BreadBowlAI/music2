@@ -8,7 +8,7 @@
 // the same: it wraps the instrument's notes (PKG-21).
 //
 // Each card's face is its picture, drawn for C (a picture sees only the card's values, CARD-63),
-// and every value but the Arpeggiator's swing. Chord and Scale read the song's key, `time.key`, so
+// and every value but the Arpeggiator's swing. Chord and Lock to key read the song's key, `time.key`, so
 // their cards say it, and Set the key when there is none (VOX-26).
 
 import { component, control, kernel, port, setting, time, type Events, type EventsKind, type Params } from "@m2/core";
@@ -19,10 +19,10 @@ import {
   echoBars,
   echoesPicture,
   echoWords,
+  lockKeys,
+  lockPicture,
+  lockWords,
   RATE_NAMES,
-  scaleKeys,
-  scalePicture,
-  scaleWords,
   SHAPES,
   steps,
   stepsPicture,
@@ -131,14 +131,14 @@ export const echo = component(
 );
 
 /**
- * Scale (PACK-33): every note moved to the nearest note of the song's key, a tie going down, as
- * Lock to key does in the roll, so no note is wrong; then `shift` notes of the key up or down (+2
- * in C major turns C E G into E G B). With no key set, notes play as they are.
+ * Lock to key (PACK-33): every note moved to the nearest note of the song's key, a tie going down,
+ * as the roll's Lock to key moves drawn notes, so no note is wrong; then `shift` notes of the key
+ * up or down (+2 in C major turns C E G into E G B). With no key set, notes play as they are.
  */
-export const scale = component(
+export const lockToKey = component(
   {
-    id: "scale",
-    label: "Scale",
+    id: "lock-to-key",
+    label: "Lock to key",
     inputs: { notes: port.notes() },
     controls: { shift: control.scalar(0).range(-7, 7) },
     output: port.notes(),
@@ -146,10 +146,10 @@ export const scale = component(
       category: "Scales",
       description: "Moves every note onto the song's key, so no note is wrong",
       // The twelve notes, C major's lit, each named by the note it plays (PACK-33).
-      views: { keyboard: scalePicture() },
+      views: { keyboard: lockPicture() },
       face: ["keyboard", "shift"],
     },
   },
-  (notes: Events, { shift }: Params) => kernel<EventsKind>("@m2/notes:scale", { notes, key: time.key, shift }),
-  { keyboard: { draw: (v, p) => scaleKeys(p, v), words: (v) => scaleWords(v) } },
+  (notes: Events, { shift }: Params) => kernel<EventsKind>("@m2/notes:lock", { notes, key: time.key, shift }),
+  { keyboard: { draw: (v, p) => lockKeys(p, v), words: (v) => lockWords(v) } },
 );

@@ -1,6 +1,6 @@
 //! Native tests of the pack's note effects, each named by the rule it checks (PACK-29 to PACK-33):
 //! the Arpeggiator's every rule in the events note's §5, Chord's shapes in and out of a key, Note
-//! echo's echoes on the beat, Scale's nearest note and shift; then what all four keep: the
+//! echo's echoes on the beat, Lock to key's nearest note and shift; then what all four keep: the
 //! controllers passed, no note the guard would drop, nothing taken while they play, a reset that
 //! starts over. Chord against the roll's own chord stamps is in core/runtime, which has the table
 //! (`the_chord_is_the_rolls_stamp_in_every_seven_note_key`).
@@ -31,7 +31,7 @@ const EVERY: f32 = 4095.0;
 const ARP: [&str; 10] = ["notes", "beats", "playing", "tempo", "style", "rate", "octaves", "gate", "hold", "swing"];
 const CHORD: [&str; 5] = ["notes", "key", "shape", "in_key", "inversion"];
 const ECHO: [&str; 8] = ["notes", "beats", "playing", "tempo", "time", "repeats", "fall", "pitch"];
-const SCALE: [&str; 3] = ["notes", "key", "shift"];
+const LOCK: [&str; 3] = ["notes", "key", "shift"];
 
 // ---------------------------------------------------------------- a run, as the host plays one
 
@@ -562,7 +562,7 @@ fn each_keeps_the_live_bit() {
             ("arp", run::<Arp>(&Run::new("arp", &ARP, BEAT).notes(&notes(&c_major(0, BEAT)))).0),
             ("chord", run::<Chord>(&Run::new("chord", &CHORD, 30_000).notes(&notes(&[n(0, 20_000, 60.0)]))).0),
             ("echo", run::<Echo>(&Run::new("echo", &ECHO, 3 * BEAT).notes(&notes(&[n(0, 6000, 60.0)]))).0),
-            ("scale", run::<Scale>(&Run::new("scale", &SCALE, 30_000).notes(&notes(&[n(0, 20_000, 61.0)])).with("key", C_MAJOR)).0),
+            ("lock", run::<LockToKey>(&Run::new("lock", &LOCK, 30_000).notes(&notes(&[n(0, 20_000, 61.0)])).with("key", C_MAJOR)).0),
         ];
         for (name, g) in runs {
             assert!(g.len() >= 2, "{name}");
@@ -876,40 +876,40 @@ fn a_note_given_past_127_or_below_0_is_left_out_with_its_echoes() {
     }
 }
 
-// ---------------------------------------------------------------- Scale (PACK-33)
+// ---------------------------------------------------------------- Lock to key (PACK-33)
 
-/// What Scale gives for each note of `played`, with `set`.
-fn scaled(played: &[f32], set: &[(&'static str, f32)]) -> Vec<f32> {
+/// What Lock to key gives for each note of `played`, with `set`.
+fn locked(played: &[f32], set: &[(&'static str, f32)]) -> Vec<f32> {
     let notes: Vec<N> = played.iter().enumerate().map(|(i, p)| n(i as u64 * 1000, i as u64 * 1000 + 500, *p)).collect();
-    let mut r = Run::new("scale", &SCALE, played.len() as u64 * 1000).notes(&notes);
+    let mut r = Run::new("lock", &LOCK, played.len() as u64 * 1000).notes(&notes);
     r.set = set.to_vec();
-    let g = run::<Scale>(&r).0;
+    let g = run::<LockToKey>(&r).0;
     all_playable_and_ended(&g);
     pitches(&g)
 }
 
 // PACK-33: each note goes to the key's nearest note, a tie going down, as Lock to key does.
 #[test]
-fn scale_moves_each_note_to_the_nearest_note_of_the_key() {
+fn lock_to_key_moves_each_note_to_the_nearest_note_of_the_key() {
     let all: Vec<f32> = (60..72).map(|p| p as f32).collect();
-    assert_eq!(scaled(&all, &[("key", C_MAJOR)]), [60.0, 60.0, 62.0, 62.0, 64.0, 65.0, 65.0, 67.0, 67.0, 69.0, 69.0, 71.0]);
-    assert_eq!(scaled(&[61.4, 61.6], &[("key", C_MAJOR)]), [60.0, 62.0], "rounded first");
+    assert_eq!(locked(&all, &[("key", C_MAJOR)]), [60.0, 60.0, 62.0, 62.0, 64.0, 65.0, 65.0, 67.0, 67.0, 69.0, 69.0, 71.0]);
+    assert_eq!(locked(&[61.4, 61.6], &[("key", C_MAJOR)]), [60.0, 62.0], "rounded first");
 }
 
 // PACK-33: then `shift` notes of the key: +2 in C major turns C E G into E G B.
 #[test]
-fn scale_shifts_by_notes_of_the_key() {
-    assert_eq!(scaled(&[60.0, 64.0, 67.0], &[("key", C_MAJOR), ("shift", 2.0)]), [64.0, 67.0, 71.0]);
-    assert_eq!(scaled(&[60.0, 61.0], &[("key", C_MAJOR), ("shift", -1.0)]), [59.0, 59.0]);
-    assert_eq!(scaled(&[60.0], &[("key", C_MAJOR), ("shift", 7.0)]), [72.0], "seven notes of the key: an octave");
-    assert_eq!(scaled(&[60.0], &[("key", C_PENTATONIC), ("shift", 5.0)]), [72.0], "five of a pentatonic");
-    assert_eq!(scaled(&[127.0, 60.0], &[("key", C_MAJOR), ("shift", 1.0)]), [62.0], "past 127, left out");
+fn lock_to_key_shifts_by_notes_of_the_key() {
+    assert_eq!(locked(&[60.0, 64.0, 67.0], &[("key", C_MAJOR), ("shift", 2.0)]), [64.0, 67.0, 71.0]);
+    assert_eq!(locked(&[60.0, 61.0], &[("key", C_MAJOR), ("shift", -1.0)]), [59.0, 59.0]);
+    assert_eq!(locked(&[60.0], &[("key", C_MAJOR), ("shift", 7.0)]), [72.0], "seven notes of the key: an octave");
+    assert_eq!(locked(&[60.0], &[("key", C_PENTATONIC), ("shift", 5.0)]), [72.0], "five of a pentatonic");
+    assert_eq!(locked(&[127.0, 60.0], &[("key", C_MAJOR), ("shift", 1.0)]), [62.0], "past 127, left out");
 }
 
 // PACK-33: with no key (or a chromatic one), every note plays as it is, whatever the shift.
 #[test]
-fn with_no_key_scale_plays_notes_as_they_are() {
-    assert_eq!(scaled(&[61.0, 61.5, 66.0], &[("key", EVERY), ("shift", 3.0)]), [61.0, 61.5, 66.0]);
+fn with_no_key_lock_to_key_plays_notes_as_they_are() {
+    assert_eq!(locked(&[61.0, 61.5, 66.0], &[("key", EVERY), ("shift", 3.0)]), [61.0, 61.5, 66.0]);
 }
 
 // ---------------------------------------------------------------- what all four keep (PACK-29)
@@ -929,9 +929,9 @@ fn controllers_pass_as_they_come() {
     let mut r = Run::new("echo", &ECHO, 1024);
     r.midi = midi.clone();
     assert_eq!(wheels(run::<Echo>(&r).0), want, "echo");
-    let mut r = Run::new("scale", &SCALE, 1024);
+    let mut r = Run::new("lock", &LOCK, 1024);
     r.midi = midi;
-    assert_eq!(wheels(run::<Scale>(&r).0), want, "scale");
+    assert_eq!(wheels(run::<LockToKey>(&r).0), want, "lock");
 }
 
 /// A thread's count of heap operations, for the tests that say none happen.
@@ -1023,7 +1023,7 @@ fn the_four_allocate_nothing_while_they_play() {
     assert_eq!(heap_ops::<Arp>(&ARP, &[(4, 2.0), (6, 3.0), (7, 1.5), (8, 1.0)]), 0, "arp");
     assert_eq!(heap_ops::<Chord>(&CHORD, &[(1, C_MAJOR), (2, 3.0), (3, 1.0), (4, 2.0)]), 0, "chord");
     assert_eq!(heap_ops::<Echo>(&ECHO, &[(4, 5.0), (5, 8.0), (6, 0.1), (7, 5.0)]), 0, "echo");
-    assert_eq!(heap_ops::<Scale>(&SCALE, &[(1, C_MAJOR), (2, 3.0)]), 0, "scale");
+    assert_eq!(heap_ops::<LockToKey>(&LOCK, &[(1, C_MAJOR), (2, 3.0)]), 0, "lock");
 }
 
 // PACK-29, ABI-5: a reset starts over: what a kernel gives after it is what a new one gives.
@@ -1051,7 +1051,7 @@ fn a_reset_starts_over() {
     again::<Arp>(&Run::new("arp", &ARP, 0).notes(&held).with("style", 4.0));
     again::<Chord>(&Run::new("chord", &CHORD, 0).notes(&held).with("key", C_MAJOR));
     again::<Echo>(&Run::new("echo", &ECHO, 0).notes(&held));
-    again::<Scale>(&Run::new("scale", &SCALE, 0).notes(&held).with("key", C_MAJOR).with("shift", 1.0));
+    again::<LockToKey>(&Run::new("lock", &LOCK, 0).notes(&held).with("key", C_MAJOR).with("shift", 1.0));
 }
 
 // PACK-29: whatever they are given (values that aren't numbers, or far past their ranges, notes
@@ -1075,8 +1075,8 @@ fn nothing_makes_them_give_a_note_the_guard_drops() {
         let mut r = Run::new("echo", &ECHO, frames).notes(&edge);
         r.set = all(&ECHO);
         all_playable_and_ended(&run::<Echo>(&r).0);
-        let mut r = Run::new("scale", &SCALE, frames).notes(&edge);
-        r.set = all(&SCALE);
-        all_playable_and_ended(&run::<Scale>(&r).0);
+        let mut r = Run::new("lock", &LOCK, frames).notes(&edge);
+        r.set = all(&LOCK);
+        all_playable_and_ended(&run::<LockToKey>(&r).0);
     }
 }
