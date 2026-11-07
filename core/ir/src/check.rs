@@ -155,6 +155,19 @@ impl FOp {
     }
 }
 
+/// Whether a node of `op` with outputs `outputs` is a note effect (RENDER-41): a kernel whose
+/// output is notes (ABI-15).
+fn is_note_effect(op: &FOp, outputs: &[Kind]) -> bool {
+    matches!(op, FOp::Kernel { .. }) && matches!(outputs.first(), Some(Kind::Events(_)))
+}
+
+impl FNode {
+    /// Whether it is a note effect (RENDER-41): a kernel whose output is notes (ABI-15).
+    pub fn is_note_effect(&self) -> bool {
+        is_note_effect(&self.op, &self.outputs)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FNode {
     /// `<module key>/<node id>`.
@@ -636,16 +649,11 @@ impl<'a> Checker<'a> {
                 match self.resolve(&m.key, r, 0) {
                     Err(e) => self.diags.push(diag(m, None, format!("export `{name}`: {e}"))),
                     // RENDER-41: a note effect's notes are read in its own module.
-                    Ok(p)
-                        if matches!(nodes[p.node].op, FOp::Kernel { .. })
-                            && matches!(nodes[p.node].outputs.first(), Some(Kind::Events(_))) =>
-                    {
-                        self.diags.push(diag(
-                            m,
-                            None,
-                            format!("export `{name}`: a note effect's notes stay in its own module: play them there"),
-                        ))
-                    }
+                    Ok(p) if nodes[p.node].is_note_effect() => self.diags.push(diag(
+                        m,
+                        None,
+                        format!("export `{name}`: a note effect's notes stay in its own module: play them there"),
+                    )),
                     Ok(_) => {}
                 }
             }
@@ -1493,11 +1501,11 @@ fn type_kernel(
 }
 
 /// Whether node `node` gives notes an instrument may read: a notes lane's, or a note effect's
-/// (RENDER-41), the one kernel whose output is notes (ABI-15).
+/// (RENDER-41).
 fn gives_notes(ops: &[Option<FOp>], kinds: &[Option<Vec<Kind>>], node: usize) -> bool {
-    match ops.get(node) {
-        Some(Some(FOp::Lane { kind: Kind::Events(_), .. })) => true,
-        Some(Some(FOp::Kernel { .. })) => matches!(kinds.get(node), Some(Some(k)) if matches!(k.first(), Some(Kind::Events(_)))),
+    match (ops.get(node), kinds.get(node)) {
+        (Some(Some(FOp::Lane { kind: Kind::Events(_), .. })), _) => true,
+        (Some(Some(op)), Some(Some(outputs))) => is_note_effect(op, outputs),
         _ => false,
     }
 }

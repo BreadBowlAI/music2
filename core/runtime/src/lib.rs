@@ -146,12 +146,6 @@ pub(crate) fn events_sources(nodes: &[FNode], n: &FNode, packages: &PackageSet) 
     found
 }
 
-/// Whether node `n` is a note effect (RENDER-41): a kernel whose output is notes (ABI-15). It runs
-/// in the lane pass, in a lane slot of its own; in the graph it is idle, as a notes lane is.
-pub(crate) fn is_note_effect(n: &FNode) -> bool {
-    matches!(n.op, FOp::Kernel { .. }) && matches!(n.outputs.first(), Some(Kind::Events(_)))
-}
-
 /// The lane slot node `src` gives its notes through: a notes lane's, by its key among `refs`, or a
 /// note effect's, by `effects` (node, slot). None for any other node.
 pub(crate) fn notes_slot(nodes: &[FNode], src: usize, refs: &[LaneRef], effects: &[(usize, usize)]) -> Option<usize> {
@@ -1470,7 +1464,7 @@ impl Builder<'_> {
             }
             // A note effect plays in the lane pass, in its slot (RENDER-41): here it is idle, as a lane.
             FOp::Lane { kind: Kind::Events(_), .. } => Exec::Notes,
-            FOp::Kernel { .. } if is_note_effect(n) => Exec::Notes,
+            FOp::Kernel { .. } if n.is_note_effect() => Exec::Notes,
             FOp::Lane { module, lane, kind: Kind::Audio(_), .. } => Exec::Audio { slot: self.slot(module, lane)? },
             FOp::Time(t) => Exec::Time(*t),
             FOp::Const(v) => Exec::Const(*v as f32),
@@ -1547,7 +1541,9 @@ impl Builder<'_> {
                     _ => None,
                 };
                 let captures = voice.nodes.iter().filter_map(|n| if let FOp::Capture(p) = n.op { Some(p) } else { None }).collect();
-                let plan = Vec::with_capacity(if ghost { 0 } else { 2 * self.caps(slot).ons + sched::LIVE_ROOM });
+                // Through a note delay, two blocks of a note effect's Ons may meet in one (RENDER-42).
+                let ons = (2 * self.caps(slot).ons + sched::LIVE_ROOM) * if late.is_some() { 2 } else { 1 };
+                let plan = Vec::with_capacity(if ghost { 0 } else { ons });
                 Exec::Poly(Box::new(PolyNode { slot, late, out: voice.out, captures, plan, glide: *glide, pool, ghost }))
             }
             FOp::Feedback { input, channels } => Exec::Feedback { input: *input, ring: vec![0.0; *channels as usize * BLOCK] },
@@ -1588,7 +1584,7 @@ impl Builder<'_> {
                 }
                 let slot = self.notes_slot(nodes, src)?;
                 let room = events_room(self.caps(slot), late.is_some());
-                Ok(NotesIn { input, from: (!ghost).then_some((slot, late.map(|(d, _)| d))), room })
+                Ok(NotesIn { input, from: Some((slot, late.map(|(d, _)| d))), room })
             })
             .collect()
     }
@@ -1600,14 +1596,9 @@ impl Builder<'_> {
     fn effect(&mut self, nodes: &[FNode], i: usize, caps: Caps, shape: Option<u64>) -> Result<notefx::NoteEffect> {
         let n = &nodes[i];
         let FOp::Kernel { kernel, channels, inputs, assets, values } = &n.op else { bail!("{}: not a note effect", n.name) };
-        let sig =
-            m2_ir::Kernels::kernel(self.packages, kernel).with_context(|| format!("{}: kernel `{kernel}` has no signature", n.name))?;
-        let notes = sig.inputs.iter().position(|p| matches!(p.kind, m2_ir::PortKind::Events(_)));
-        let src = notes.and_then(|p| match inputs.get(p) {
-            Some(Input::Port { src, .. }) => Some(src.node),
-            _ => None,
-        });
-        let (Some(notes), Some(src)) = (notes, src) else { bail!("{}: a note effect takes its notes from a lane", n.name) };
+        let Some(&(notes, src, _)) = events_sources(nodes, n, self.packages).first() else {
+            bail!("{}: a note effect takes its notes from a lane", n.name)
+        };
         let from = self.notes_slot(nodes, src)?;
         let room_in = events_room(self.caps(from), false);
         let mut fed = Vec::with_capacity(inputs.len());
@@ -1641,7 +1632,8 @@ impl Builder<'_> {
                 Some(notefx::Held::new(inst, guard))
             }
         };
-        Ok(notefx::NoteEffect { node: i, from, inputs: fed, notes, room_in, meters: sig.meters.len(), held, fresh: true, told: false })
+        let meters = m2_ir::Kernels::kernel(self.packages, kernel).map_or(0, |s| s.meters.len());
+        Ok(notefx::NoteEffect { node: i, from, inputs: fed, notes, room_in, meters, held, fresh: true, told: false })
     }
 
     /// Kernel `k` for node `n` in a voice: its state born in the pool's sandbox for its package,
@@ -1848,8 +1840,8 @@ fn continue_delays(cont: &Continues, checked: usize, l: &latency::Latency, old: 
     Continues { top }
 }
 
-/// `time`'s `t` at frames `lo..lo + out.len()` of block `b` (RENDER-7), as a `time` node gives it
-/// (`step`): what a note effect's input reads in the lane pass (RENDER-41).
+/// `time`'s `t` at frames `lo..lo + out.len()` of block `b` (RENDER-7): what a `time` node gives, and
+/// what a note effect's input reads in the lane pass (RENDER-41).
 fn time_of(t: TimeOf, b: &Block, lo: usize, out: &mut [f32]) {
     let n = out.len();
     match t {
@@ -1998,30 +1990,8 @@ fn step<R: Reads>(
             Ok(())
         }
         Exec::Notes | Exec::Const(_) => Ok(()),
-        Exec::Time(TimeOf::Beats) => {
-            out[0][seg.range(0)].copy_from_slice(&b.beats[seg.off..seg.off + n]);
-            Ok(())
-        }
-        Exec::Time(TimeOf::Seconds) => {
-            out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
-            Ok(())
-        }
-        Exec::Time(TimeOf::Tempo) => {
-            out[0][seg.range(0)].copy_from_slice(&b.tempo[seg.off..seg.off + n]);
-            Ok(())
-        }
-        Exec::Time(TimeOf::Key) => {
-            out[0][seg.range(0)].fill(b.keyset);
-            Ok(())
-        }
-        // From the block's runs, as plugins are told (HOST-6): 1 where the transport moves.
-        Exec::Time(TimeOf::Playing) => {
-            for run in b.runs.as_slice() {
-                let (lo, hi) = ((run.off as usize).max(seg.off), ((run.off + run.n) as usize).min(seg.off + n));
-                if lo < hi {
-                    out[0][lo..hi].fill(if run.moving { 1.0 } else { 0.0 });
-                }
-            }
+        Exec::Time(t) => {
+            time_of(*t, b, seg.off, &mut out[0][seg.range(0)]);
             Ok(())
         }
         Exec::Kernel(k) => k.process(b, seg, r, out, pool, lanes),
@@ -3024,7 +2994,7 @@ impl Renderer {
             .nodes
             .iter()
             .zip(&used)
-            .map(|(n, &u)| if u && !is_note_effect(n) { Shape::of(n, packages, &assets) } else { None })
+            .map(|(n, &u)| if u && !n.is_note_effect() { Shape::of(n, packages, &assets) } else { None })
             .collect();
         // A note delay's room is its lane's, or its note effect's.
         let caps_of = |lanes: &LanePlan, slot: usize| lanes.caps.get(slot).copied().unwrap_or_default();

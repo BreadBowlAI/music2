@@ -357,7 +357,7 @@ fn window(k: &Keep, new: &Flat, packages: &PackageSet, w: &mut Wiring) -> Option
     // Ghosts: the old sources of changed edges that don't continue, and what they read that
     // doesn't (§6.4). Events lanes aren't ghosts: a ghost reads no notes.
     let is_events = |j: usize| {
-        matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. } | FOp::NoteDelay { .. }) || crate::is_note_effect(&old.nodes[j])
+        matches!(old.nodes[j].op, FOp::Lane { kind: Kind::Events(_), .. } | FOp::NoteDelay { .. }) || old.nodes[j].is_note_effect()
     };
     let mut ghost_of: HashMap<usize, usize> = HashMap::new();
     let mut order_of_ghosts = vec![];

@@ -1106,6 +1106,37 @@ fn stop_pressed_while_stopped_keeps_renders_14s_order() {
     std::fs::remove_dir_all(pkg).ok();
 }
 
+// RENDER-42, RENDER-18: an instrument that reads a note effect through a note delay has room for
+// two blocks of its Ons, as two may meet in one block of the delay.
+#[test]
+fn a_late_instrument_has_room_for_two_blocks_of_ons() {
+    let (pk, pkg) = with_effects(&[]);
+    let body = json!({"out": "y", "nodes": [
+        {"id": "p", "op": "lane", "lane": "pitch"},
+        {"id": "hz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "p"}},
+        {"id": "o", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "hz"}},
+        {"id": "y", "op": "kernel", "kernel": "std:add", "inputs": {"a": "o", "b": "s"}}]});
+    let ir = song(
+        json!([{"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "x", "op": "kernel", "kernel": "std:sine"},
+            {"id": "s", "op": "kernel", "kernel": "@test/t:slow", "inputs": {"in": "x"}},
+            {"id": "c", "op": "const", "value": 400},
+            {"id": "e", "op": "kernel", "kernel": "@test/t:alt", "inputs": {"notes": "n", "n": "c"}},
+            {"id": "v", "op": "poly", "events": "e", "voices": 4, "body": body}]),
+        "v",
+        json!([{"key": "notes", "kind": "events<note>"}]),
+    );
+    let f = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let mut r = Renderer::new(&f, &lane(json!({"clips": []})), &pk, SR).unwrap();
+    r.set_strict(false);
+    r.live = true;
+    assert!(r.info().played.as_ref().is_some_and(|p| p.nodes.iter().any(|n| n.name == "song/v~notes~64")), "read through a note delay");
+    for k in 0..4 {
+        r.render_block(k * BLOCK as u64).unwrap();
+    }
+    std::fs::remove_dir_all(pkg).ok();
+}
+
 // RENDER-42, RENDER-9, RENDER-36: a seek ends a note effect's notes at its frame and lets the pedal
 // up, as a lane does; a loop's wrap ends them and leaves the pedal.
 #[test]
@@ -1136,6 +1167,20 @@ fn bogged(chain: usize) -> Ir {
     }
     nodes.push(json!({"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"notes": format!("e{}", chain - 1)}}));
     song(Value::Array(nodes), "k", json!([{"key": "notes", "kind": "events<note>"}]))
+}
+
+// RENDER-42: a slot's room is its source's times its `fan`, but never more than 8 times a lane's
+// smallest room, or its source's when that is more: along a chain it grows by its live notes, never
+// by `fan` again and again.
+#[test]
+fn a_chain_of_note_effects_never_multiplies_its_room() {
+    let (pk, pkg) = with_effects(&[]);
+    let r = Renderer::new(&check(&bogged(3), &pk).unwrap(), &lane(json!({"clips": []})), &pk, SR).unwrap();
+    let caps: Vec<sched::Caps> = r.info().effects.iter().map(|&(_, s)| r.info().lanes[s].caps.unwrap()).collect();
+    let live = sched::LIVE_ROOM;
+    let most = |k: usize| sched::Caps { sounding: 2048 + k * live, ons: 1024 + k * live };
+    assert_eq!(caps, [most(0), most(1), most(2)]);
+    std::fs::remove_dir_all(pkg).ok();
 }
 
 // RENDER-42: the guard's own time is a few steps an event, however many notes sound: a kernel that

@@ -17,7 +17,7 @@ use std::ops::Range;
 use std::sync::{Arc, Weak};
 
 use anyhow::Result;
-use m2_ir::{Alloc, FNode, FOp, Flat, Input, Kind, PortRef, Voice};
+use m2_ir::{Alloc, FNode, FOp, Flat, Kind, PortRef, Voice};
 use m2_song::{DataSet, LaneData, Sha, TempoMap};
 
 use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
@@ -28,7 +28,7 @@ use crate::notefx::NoteEffect;
 use crate::sched::LIVE_ROOM;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::taps::{TapSlots, Taps};
-use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data, notes_slot};
+use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, events_sources, fpenv, lane_slots, notes_data, notes_slot};
 
 /// What a box must be to move into a node (RENDER-25): an instance is kept only for a node of the
 /// same shape. Compared whole when a plan is prepared; its [`Shape::hash64`] is stored in the box,
@@ -638,29 +638,29 @@ impl LanePlan {
     /// Against a plan that plays, the slot of the same address moves in, with its kernel and
     /// guard. Their part of the plan is made by the builder.
     pub(crate) fn effects(&mut self, flat: &Flat, packages: &PackageSet, assets: &KernelAssets, keep: Option<&Keep>) {
-        let mut seen: HashMap<(Vec<u64>, String, String, u64), u64> = HashMap::new();
-        for &i in &flat.order {
+        let mut seen: HashMap<(usize, u64), u64> = HashMap::new();
+        for &i in flat.order.iter().filter(|&&i| flat.nodes[i].is_note_effect()) {
             let n = &flat.nodes[i];
-            let FOp::Kernel { kernel, inputs, .. } = &n.op else { continue };
-            let Some(sig) = m2_ir::Kernels::kernel(packages, kernel).filter(|s| s.gives_notes()) else { continue };
-            let src = sig.inputs.iter().position(|p| matches!(p.kind, m2_ir::PortKind::Events(_))).and_then(|p| match inputs.get(p) {
-                Some(Input::Port { src, .. }) => Some(src.node),
-                _ => None,
-            });
+            let src = events_sources(&flat.nodes, n, packages).first().map(|s| s.1);
             let Some(from) = src.and_then(|src| notes_slot(&flat.nodes, src, &self.lanes.refs, &self.effects)) else { continue };
-            let (caps_in, fan) = (self.caps[from], sig.fan as usize);
-            let caps = Caps { sounding: (caps_in.sounding + LIVE_ROOM) * fan, ons: (caps_in.ons + LIVE_ROOM) * fan };
-            let source = self.lanes.refs[from].clone();
-            let own = Shape::of(n, packages, assets).map_or(0, |s| s.hash64());
+            // Its source's room, live notes counted in, times its `fan`; never past 8 times a lane's
+            // smallest, or its source's when that is more (RENDER-42).
+            let FOp::Kernel { kernel, .. } = &n.op else { continue };
+            let fan = m2_ir::Kernels::kernel(packages, kernel).map_or(1, |s| s.fan as usize);
+            let room = |x: usize, floor: usize| ((x + LIVE_ROOM) * fan).min((x + LIVE_ROOM).max(8 * floor));
+            let c = self.caps[from];
+            let caps = Caps { sounding: room(c.sounding, Caps::FLOOR.sounding), ons: room(c.ons, Caps::FLOOR.ons) };
+            // Its address: its source's, then its own shape, its source's room and its own, and its
+            // place among equals (RENDER-26a).
             let mut h = DefaultHasher::new();
-            (own, caps_in.sounding, caps_in.ons, fan).hash(&mut h);
+            (Shape::of(n, packages, assets).map_or(0, |s| s.hash64()), c.sounding, c.ons, caps.sounding, caps.ons).hash(&mut h);
             let kind = h.finish();
-            let nth = seen.entry((source.through.clone(), source.module.clone(), source.lane.clone(), kind)).or_insert(0);
+            let nth = seen.entry((from, kind)).or_insert(0);
             let mut h = DefaultHasher::new();
             (kind, *nth).hash(&mut h);
             *nth += 1;
-            let mut through = source.through.clone();
-            through.push(h.finish());
+            let source = self.lanes.refs[from].clone();
+            let through = source.through.iter().copied().chain([h.finish()]).collect();
             let r = LaneRef { through, ..source };
             let to = self.lanes.slots.len();
             if let Some(o) = keep.and_then(|k| k.info.lanes.iter().position(|x| x.lane == r)) {
