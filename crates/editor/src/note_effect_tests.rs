@@ -192,3 +192,51 @@ fn a_note_effect_is_bypassed_moved_and_removed_as_an_effect_is() {
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), text);
 }
+
+// PKG-21, PACK-29, PKG-3: each of `@m2/notes`' four goes before an instrument as its notes' wrap,
+// one undo step, and every control it declares is a knob on it from the start, at its default.
+#[test]
+fn music2s_own_note_effects_go_before_an_instrument_each_value_a_knob() {
+    let text = "import { song } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\
+                export default song(({ lane }) => synth.pluck(lane.notes(\"chords\")));\n";
+    let ours = |s: &Session| -> Vec<crate::effect::EffectInfo> { s.effects().into_iter().filter(|e| e.component.starts_with("@m2/notes:")).collect() };
+    let f = Fixture::new();
+    f.write("music2.toml", format!("{}\"@m2/notes\" = \"0.1\"\n", crate::testing::MANIFEST));
+    f.write("song.ts", text);
+    let listed = ours(&f.open());
+    let ids: Vec<&str> = listed.iter().map(|e| e.component.as_str()).collect();
+    assert_eq!(ids, ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:scale"]);
+    for e in &listed {
+        assert!(e.notes, "{}: a note effect", e.component);
+        let mut s = f.open();
+        let added = s.add_effect(rev(&s), &call(&s, "synth.pluck"), &e.component).unwrap_or_else(|x| panic!("{}: {x}", e.component));
+        assert_eq!(added.after, format!("{}(lane.notes(\"chords\"))", e.name), "{}", e.component);
+        assert!(f.read("song.ts").contains(&format!("import {{ {} }} from \"@m2/notes\";", e.name)), "{}", f.read("song.ts"));
+        let d = s.catalog().components[&e.component].clone();
+        let node = s.view().modules[0].nodes.iter().find(|n| n.component.as_deref() == Some(&e.component)).cloned().expect("its card");
+        let mut knobs: Vec<&str> = node.knobs.iter().map(|k| k.slot.as_deref().unwrap()).collect();
+        knobs.sort();
+        let mut declared: Vec<&str> = d.controls.iter().map(|c| c.name.as_str()).collect();
+        declared.sort();
+        assert_eq!(knobs, declared, "{}: every value a knob", e.component);
+        assert!(node.knobs.iter().all(|k| !k.written), "{}: each at its default", e.component);
+        s.undo().unwrap();
+        assert_eq!(f.read("song.ts"), text, "{}: one undo step", e.component);
+    }
+}
+
+// PACK-10, PACK-18: adding the Arpeggiator to a song that doesn't list `@m2/notes` lists it, at the
+// line for the version music2 comes with, and locks it, in the same undo step.
+#[test]
+fn adding_music2s_arpeggiator_lists_and_locks_its_pack() {
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write("song.ts", "import { song } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nexport default song(({ lane }) => synth.pluck(lane.notes(\"chords\")));\n");
+    let mut s = f.open();
+    s.add_effect(rev(&s), &call(&s, "synth.pluck"), "@m2/notes:arp").unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("music2.toml").contains("\"@m2/notes\" = \"0.1\""), "{}", f.read("music2.toml"));
+    assert!(f.read("music2.lock").contains("name = \"@m2/notes\"\nversion = \"0.1.0\""), "{}", f.read("music2.lock"));
+    assert!(f.read("song.ts").contains("synth.pluck(arp(lane.notes(\"chords\")))"));
+    s.undo().unwrap();
+    assert!(!f.read("music2.toml").contains("@m2/notes"));
+}

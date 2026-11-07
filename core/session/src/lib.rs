@@ -567,7 +567,7 @@ export default song(() => v.out);
                 }
             });
         }
-        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/vocals"], "the packs whose sounds read the song's key");
+        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/notes", "@m2/vocals"], "the packs whose sounds read the song's key");
         let uses = |name: &str, dir: &Path| -> String {
             let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
             let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
@@ -654,7 +654,7 @@ export default song(() => v.out);
                 (m.package.name, m.package.version, hash)
             })
             .collect();
-        assert_eq!(bundled.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable");
+        assert_eq!(bundled.len(), 7, "@m2/drums, @m2/effects, @m2/mixing, @m2/notes, @m2/synths, @m2/vocals and @m2/wavetable");
         let (mut songs, mut wrong) = (0, vec![]);
         let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
         while let Some(d) = stack.pop() {

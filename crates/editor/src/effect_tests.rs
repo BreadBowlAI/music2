@@ -180,10 +180,12 @@ fn effects_are_listed_with_their_component_and_category() {
     assert_eq!(lowpass.label, s.catalog().components["std:lowpass"].label, "named by its descriptor's label");
     let delay = effects.iter().find(|e| e.component == "@m2/effects:delay").unwrap();
     assert_eq!((delay.name.as_str(), delay.module.as_str(), delay.category.as_str()), ("delay", "@m2/effects", "Delay & Reverb"));
-    // Every effect inserts only its own controls, and is nothing but its descriptor says.
+    // Every effect inserts only its own controls, and is nothing but its descriptor says: an
+    // effect, or a note effect, which goes before a sound (PKG-21).
     for e in &effects {
         let d = &s.catalog().components[&e.component];
-        assert!(d.is_effect() && !e.category.is_empty() && e.label == d.label, "{}", e.component);
+        let kind = if e.notes { d.is_note_effect() } else { d.is_effect() };
+        assert!(kind && !e.category.is_empty() && e.label == d.label, "{}", e.component);
         assert!(d.editor.insert.iter().all(|i| d.control(&i.slot).is_some()), "{}", e.component);
     }
 }
@@ -218,10 +220,11 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
 }
 
 // PKG-3: every effect goes after a sound, and every control it declares is a knob on it from the
-// start: the ones its insert writes, written, and the others at their defaults.
+// start: the ones its insert writes, written, and the others at their defaults. (A note effect
+// goes before a sound that plays notes: `note_effect_tests.rs`.)
 #[test]
 fn every_effect_goes_after_a_sound_and_every_control_it_declares_is_a_knob() {
-    for effect in Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects() {
+    for effect in Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects().into_iter().filter(|e| !e.notes) {
         let fixture = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
         let mut s = fixture.open();
         let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{}: {e}", effect.component));
@@ -249,7 +252,7 @@ fn every_effect_goes_on_a_channel_the_mixer_pans() {
     let source = format!(
         "{HEAD}import {{ mixer }} from \"std/mix\";\nexport default song(() => mixer({{ a: {{ in: osc.saw(hz(110)), pan: 0.3 }} }}));\n"
     );
-    for effect in Fixture::new(&source).open().effects() {
+    for effect in Fixture::new(&source).open().effects().into_iter().filter(|e| !e.notes) {
         let fixture = Fixture::new(&source);
         let mut s = fixture.open();
         s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{} before a pan: {e}", effect.component));

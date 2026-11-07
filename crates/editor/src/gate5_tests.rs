@@ -349,7 +349,11 @@ fn planned_call_forms_are_current() {
         forms.push(format!("    // song.ts:{} `mixer` writes db(…): {} written in\n    {edited},\n", call.line, c.origin.slot().unwrap()));
     }
     for e in s.effects() {
-        forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert));
+        match e.notes {
+            // A note effect goes before what plays notes (PKG-21): here, the polysynth's pluck.
+            true => forms.push(format!("    // {} added before a sound\n    synth.pluck({}(lane.notes(\"chords\"){})),\n", e.component, e.name, e.insert)),
+            false => forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert)),
+        }
     }
     // An installed plugin added after a sound (gaps #32), as the probe.
     let (open, close) = crate::plugins::effect_text("clap:m2.probe", "m2-probe");
