@@ -201,27 +201,24 @@ fn the_fm_sounds_draw_one_note() {
 }
 
 // CARD-141: the Drum draws one hit at A2, measured, as long as its drum rings times its decay (a
-// second at most); a place a click plays; a dot at its start that moves the punch up and down, under
-// the pointer, and one at its end that moves the decay as its knob.
+// second at most); a place a click plays; and one dot, at its start, that moves the punch up and
+// down, under the pointer. The decay is its knob's: no dot on a time axis moves a multiple under the
+// pointer (review U8).
 #[test]
 fn the_drum_draws_its_hit() {
     let runner = Runner::new();
     let d = draw(&runner, "@m2/drums:drum", "hit", json!({"drum": "snare", "tune": 0, "decay": 2, "punch": 0.25, "drive": 0})).unwrap();
-    assert_eq!(kinds(&d), ["hit", "play", "handle", "handle"]);
-    assert_eq!(dots(&d), ["y=punch", "x=decay(knob)"]);
+    assert_eq!(kinds(&d), ["hit", "play", "handle"]);
+    assert_eq!(dots(&d), ["y=punch"]);
     let hit = &of(&d, "hit")[0];
     assert_eq!(hit["note"], 45);
     assert!((hit["seconds"].as_f64().unwrap() - 0.7).abs() < 1e-9, "a snare rings 0.35 s, times 2: {hit}");
-    let [start, end] = [of(&d, "handle")[0], of(&d, "handle")[1]];
+    let start = of(&d, "handle")[0];
     assert_eq!((start["x"].as_f64(), start["y"].as_f64()), (Some(0.015), Some(0.25)));
-    assert!((end["x"].as_f64().unwrap() - 0.7).abs() < 1e-9);
-    assert_eq!(d["words"], "Snare, one hit as it sounds: 700 ms. Click it to hear it; drag its end for the decay, its start for the punch");
+    assert_eq!(d["words"], "Snare, one hit as it sounds: 700 ms. Click it to hear it; drag its start for the punch");
     let d = draw(&runner, "@m2/drums:drum", "hit", json!({"drum": "cymbal", "decay": 3, "punch": 0})).unwrap();
     assert!((of(&d, "hit")[0]["seconds"].as_f64().unwrap() - 1.0).abs() < 1e-9, "a second at most");
-    assert_eq!(
-        d["words"],
-        "Cymbal, one hit as it sounds: 1 s of it. Click it to hear it; drag its end for the decay, its start for the punch"
-    );
+    assert_eq!(d["words"], "Cymbal, one hit as it sounds: 1 s of it. Click it to hear it; drag its start for the punch");
 }
 
 // CARD-143, CARD-144: std's Limit and Master draw their ceiling over their last seconds: guide lines

@@ -16,7 +16,7 @@
 // same (each catches its noise and metal at a new place, as on an analog machine), yet
 // every render of a song is.
 
-import { axis, component, control, kernel, knob, poly, port, setting, signature, view, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
+import { axis, component, control, kernel, poly, port, setting, signature, view, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
 
 /**
  * The drums the Drum can play, as its menu names them, grouped by family: each other drum the drum
@@ -296,7 +296,8 @@ export const drums = {
       machine(notes, "@m2/drums:one", voices, { drum, tune, decay, push: punch, drive }, cutBy),
     {
       // One hit at A2 as this Drum plays it, measured (CARD-80), as long as it rings: click it to hear
-      // it; its end's dot moves the decay as its knob does, its start's dot the punch up and down.
+      // it; its start's dot moves the punch up and down. The decay is its knob's: a dot on an axis of
+      // time can't move a multiple under the pointer.
       hit: {
         draw: (v, p) => {
           const s = hitFor(v.drum, v.decay);
@@ -305,12 +306,11 @@ export const drums = {
             // Over the hit, so a click anywhere on it plays it; its dots are over both.
             p.play([0, -1, s, 1], { note: HIT_NOTE }),
             p.handle(Math.min(PUNCH_AT, s / 4), v.punch, { y: "punch" }),
-            p.handle(s, 0, { x: knob("decay") }),
           ];
         },
         words: (v) => {
           const s = hitFor(v.drum, v.decay);
-          return `${typeof v.drum === "string" ? v.drum[0].toUpperCase() + v.drum.slice(1) : "A drum"}, one hit as it sounds: ${timeWords(s)}${s >= 1 ? " of it" : ""}. Click it to hear it; drag its end for the decay, its start for the punch`;
+          return `${typeof v.drum === "string" ? v.drum[0].toUpperCase() + v.drum.slice(1) : "A drum"}, one hit as it sounds: ${timeWords(s)}${s >= 1 ? " of it" : ""}. Click it to hear it; drag its start for the punch`;
         },
       },
     },
