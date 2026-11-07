@@ -262,41 +262,70 @@ fn the_drawn_ladder_is_the_polysynths_filter() {
     }
 }
 
-// CARD-140: the FM synth's partials, drawn as a note starts, are what its voice plays then: each
-// drawn above −40 dB against the loudest is the played one's within 0.5 dB, for a pair whose
-// partials fold back below 0 and land together (1 and 1), and two that don't.
+/// The size of `hz` in `x`, through a Hann window, against the other sizes it gives: for partials
+/// that fall between a plain transform's bins (middle C's), each many bins from the next.
+fn windowed(x: &[f64], hz: f64) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * hz / RATE;
+    let n = x.len() as f64;
+    let (mut re, mut im) = (0.0, 0.0);
+    for (i, v) in x.iter().enumerate() {
+        let hann = 0.5 - 0.5 * (2.0 * std::f64::consts::PI * i as f64 / n).cos();
+        re += hann * v * (w * i as f64).cos();
+        im -= hann * v * (w * i as f64).sin();
+    }
+    (re * re + im * im).sqrt()
+}
+
+// CARD-140: the FM synth's partials, drawn as a note starts at middle C, are what its voice plays
+// then: each drawn above −40 dB against the loudest is the played one's within 0.5 dB. Pair A alone
+// whose partials fold back below 0 and land together (1 and 1); both pairs at once, each with its
+// share of the mix (A's partials odd, B's even, so none land together); and a modulator so high that
+// the kernel limits its index, as the drawing must (review U3).
 #[test]
 fn the_drawn_partials_are_the_fm_synths_sound() {
-    for (c, m, amount, tone) in [(1.0, 1.0, 1.5, 0.5), (1.0, 2.0, 2.0, 0.75), (2.0, 3.0, 1.0, 0.5)] {
+    let middle_c = 440.0 * 2f64.powf(-9.0 / 12.0);
+    for (a, b, mix, tone) in [
+        ((1.0, 1.0, 1.5), (1.0, 14.0, 0.0), 0.0, 0.5),
+        ((1.0, 2.0, 2.0), (2.0, 4.0, 1.2), 0.4, 0.75),
+        ((1.0, 24.0, 4.0), (1.0, 14.0, 0.0), 0.0, 0.75),
+    ] {
         let pic = drawn(
             "@m2/synths:fm-custom",
             "partials",
-            json!({"carrierA": c, "modulatorA": m, "amountA": amount, "carrierB": 1, "modulatorB": 14, "amountB": 0.8, "mixB": 0, "tone": tone, "feedback": 0}),
+            json!({"carrierA": a.0, "modulatorA": a.1, "amountA": a.2, "carrierB": b.0, "modulatorB": b.1, "amountB": b.2, "mixB": mix, "tone": tone, "feedback": 0}),
         );
-        let bars = points(&pic, "bars", None);
+        let bars: Vec<(f64, f64)> = pic["shapes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|s| s["kind"] == "bars")
+            .flat_map(|s| {
+                s["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect::<Vec<_>>()
+            })
+            .collect();
         // A long brightness decay, so the index holds over the 0.17 s heard.
         let call = format!(
-            "kernel('@m2/synths:fm', {{ pitch: {}, gate: 1, velocity: 0.8, ratio_a: {c}, mod_a: {m}, index_a: {amount}, fall_a: 60, mix_b: 0, index_b: 0, feedback: 0, detune: 0, tone: {tone}, attack: 0.001, sustain: 1 }})",
-            pitch()
+            "kernel('@m2/synths:fm', {{ pitch: 60, gate: 1, velocity: 0.8, ratio_a: {}, mod_a: {}, index_a: {}, fall_a: 60, ratio_b: {}, mod_b: {}, index_b: {}, fall_b: 60, mix_b: {mix}, feedback: 0, detune: 0, tone: {tone}, attack: 0.001, sustain: 1 }})",
+            a.0, a.1, a.2, b.0, b.1, b.2
         );
         let out = render(&call, 0.02);
         let top = bars.iter().map(|b| b.1).fold(f64::MIN, f64::max);
-        let heard: Vec<f64> = bars.iter().map(|b| db(harmonic(&out, b.0))).collect();
+        let heard: Vec<f64> = bars.iter().map(|b| db(windowed(&out, b.0 * middle_c))).collect();
         let loudest = heard.iter().cloned().fold(f64::MIN, f64::max);
         let mut checked = 0;
-        for (b, h) in bars.iter().zip(&heard) {
-            if b.1 - top < -40.0 {
+        for (bar, h) in bars.iter().zip(&heard) {
+            if bar.1 - top < -40.0 {
                 continue;
             }
             assert!(
-                ((h - loudest) - (b.1 - top)).abs() <= 0.5,
-                "{c} bent by {m}, amount {amount}, tone {tone}: at ratio {} it is drawn {:.2} dB, played {:.2} dB",
-                b.0,
-                b.1 - top,
+                ((h - loudest) - (bar.1 - top)).abs() <= 0.5,
+                "{a:?} and {b:?}, mix {mix}, tone {tone}: at ratio {} it is drawn {:.2} dB, played {:.2} dB",
+                bar.0,
+                bar.1 - top,
                 h - loudest
             );
             checked += 1;
         }
-        assert!(checked >= 3, "{c}:{m}: {checked} partials checked");
+        assert!(checked >= 2, "{a:?}: {checked} partials checked");
     }
 }

@@ -18,7 +18,7 @@ hash = "sha256:46adda6827342521c90b7f2f4b0c41b6a803286e2b4b10438db4f2c607a6532f"
 [[pack]]
 name = "@m2/synths"
 version = "2.2.0"
-hash = "sha256:46301ea480f8749a1b260a1b00abeee5b90919e4bfa3cb09e413cb0ab159d510"
+hash = "sha256:5a556a5f79c7c06fc224ad55067ee5e595fb20581570325c34d50c07cbd9793f"
 
 [[pack]]
 name = "@m2/vocals"

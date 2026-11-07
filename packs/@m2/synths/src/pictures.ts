@@ -134,8 +134,22 @@ export function partialsPicture(): PictureDecl<"scalar", "db"> {
   return view.picture({ x: axis.lin("scalar", 0, MOST), y: axis.lin("db", FLOOR, 0) });
 }
 
-/** How far a pair's modulator bends its carrier as a note at velocity 0.8 starts at middle C, for `tone`: the kernel's index × brightness. */
-export const indexAt = (amount: number, tone: number) => Math.min(32, Math.max(0, amount)) * 2 ** ((Math.min(1, Math.max(0, tone)) - 0.5) * 4);
+/** Middle C, in Hz, and the rate the partials are drawn for: the kernel limits an index by the rate. */
+const MIDDLE_C = 440 * 2 ** (-9 / 12);
+const RATE = 48000;
+
+/**
+ * How far a pair's modulator bends its carrier as a note at velocity 0.8 starts at middle C, for
+ * `tone`, with its carrier at ratio `c` and its modulator at `m`: the kernel's index × brightness,
+ * bent below the most that keeps the pair's sidebands, out to the index and 4 more, under 1.4 × the
+ * rate (`index_limit` and `soft_min`, fm.rs), at 48 kHz.
+ */
+export function indexAt(amount: number, tone: number, c: number, m: number): number {
+  const i = Math.min(32, Math.max(0, amount)) * 2 ** ((Math.min(1, Math.max(0, tone)) - 0.5) * 4);
+  const most = (1.4 * RATE - c * MIDDLE_C) / Math.max(1, m * MIDDLE_C) - 4;
+  if (most <= 0) return 0;
+  return i / Math.sqrt(Math.sqrt(1 + (i / most) ** 4));
+}
 
 /**
  * One pair's partials as a note starts (CARD-140): a carrier at ratio `c` bent by a sine at ratio `m`
@@ -168,7 +182,7 @@ type PairNames<D> = {
 
 /**
  * An FM synth's partials (CARD-140): pair A's as bars (`bars` A), pair B's soft, each pair's from
- * `partialsOf` at its index as a note starts (`indexAt`), times its share of the mix; and a dot on
+ * `partialsOf` at its index as a note starts (`indexAt`, at 48 kHz), times its share of the mix; and a dot on
  * each pair's first partial above its carrier (at carrier + modulator, marked A or B) that moves the
  * modulator across, under the pointer, and the amount as its knob (up and down) and by the wheel.
  * Feedback, which makes modulator A a saw, isn't drawn: its words say so.
@@ -185,10 +199,10 @@ export function partials<D>(p: Painter<D, "scalar", "db">, v: { readonly [k: str
   const pairs = [[a, 1 - mix, "A", "main"], [b, mix, "B", "soft"]] as const;
   for (const [pair, gain, mark, tone_] of pairs) {
     const [c, m] = [num(pair.carrier), num(pair.modulator)];
-    const parts = partialsOf(c, m, indexAt(num(pair.amount), tone), gain).filter(([x, y]) => x <= MOST && dbOf(y) > FLOOR);
+    const parts = partialsOf(c, m, indexAt(num(pair.amount), tone, c, m), gain).filter(([x, y]) => x <= MOST && dbOf(y) > FLOOR);
     out.push(p.bars(parts.flatMap(([x, y]) => [x, dbOf(y)]), { base: FLOOR, tone: tone_ }));
     if (gain > 0) {
-      const first = partialsOf(c, m, indexAt(num(pair.amount), tone), gain).find(([x]) => Math.abs(x - (c + m)) < 1e-6);
+      const first = partialsOf(c, m, indexAt(num(pair.amount), tone, c, m), gain).find(([x]) => Math.abs(x - (c + m)) < 1e-6);
       out.push(p.handle(c + m, dbOf(first?.[1] ?? 0), { x: pair.modulator, y: knob(pair.amount), wheel: pair.amount, mark } as unknown as Moves<D, "scalar", "db">));
     }
   }
