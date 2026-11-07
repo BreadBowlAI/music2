@@ -628,11 +628,11 @@ impl<K: Kernel> Host<K> {
     pub fn process_range(&mut self, from: u32, to: u32) {
         let mb = self.max_block;
         self.table.clear();
-        for (p, notes) in self.ports.iter_mut().zip(&self.notes) {
+        for (p, notes) in self.ports.iter_mut().zip(&mut self.notes) {
             let at = p.as_mut_ptr();
             match notes {
                 // An events input: its header, in its one entry (and the one after, unread).
-                Some((head, _)) => self.table.extend([&**head as *const Notes as *mut f32; PORT_CHANNELS]),
+                Some((head, _)) => self.table.extend([&mut **head as *mut Notes as *mut f32; PORT_CHANNELS]),
                 None => self.table.extend((0..PORT_CHANNELS).map(|c| at.wrapping_add(c * mb))),
             }
         }
@@ -867,9 +867,147 @@ pub fn latency_frames(seconds: f64, sample_rate: f64) -> u32 {
     (frames - 1e-6).ceil().min(u32::MAX as f64) as u32
 }
 
+/// **Notes out** (ABI-15, ABI-9): a kernel that gives notes, a note effect, writes them through its
+/// notes output, `events<note>` in its manifest. Its one table entry is the address of a header as
+/// an input's ([`Notes`]): the host writes `cap` and where its events go, and sets `count` to 0
+/// before each call. (Written here, at the file's end, so the lines above keep their numbers, and
+/// with them every module's bytes.)
+impl<'a> Io<'a> {
+    /// A writer for output `o`, the kernel's notes output: each [`Give::push`] writes one event. It
+    /// borrows nothing of `self`, so a kernel reads its notes with [`Io::events`] while it gives.
+    /// Output `o` must be a notes output.
+    pub fn give(&self, o: usize) -> Give<'a> {
+        assert!(self.inputs + o < self.ports.len(), "no output {o}");
+        let head = self.table[self.ports[self.inputs + o].first as usize] as *mut Notes;
+        Give { head, from: self.from, to: self.from + self.frames, _out: PhantomData }
+    }
+}
+
+/// One call's notes output (ABI-15): events written in turn after its header.
+pub struct Give<'a> {
+    head: *mut Notes,
+    from: usize,
+    to: usize,
+    _out: PhantomData<&'a mut [RawEvent]>,
+}
+
+impl Give<'_> {
+    /// Write `e`, its frame counted from the call's first frame as [`Io::events`] gives them, and
+    /// count it. False, and nothing written, once `cap` are written, or for a frame past the call's.
+    /// Pass the wheels and the pedal on in one line: `if let Event::Midi { .. } = e { give.push(e); }`.
+    pub fn push(&mut self, e: Event) -> bool {
+        let at = self.from + e.frame();
+        // SAFETY: the host gives a notes output's one table entry as the address of its header,
+        // whose `events` have room for `cap` events, in the state's own block, which nothing else
+        // writes during the call; only raw reads and writes reach them.
+        unsafe {
+            let (count, cap) = (std::ptr::addr_of!((*self.head).count).read(), std::ptr::addr_of!((*self.head).cap).read());
+            let events = std::ptr::addr_of!((*self.head).events).read() as *mut RawEvent;
+            if count >= cap || events.is_null() || at >= self.to {
+                return false;
+            }
+            let e = match e {
+                Event::On { id, pitch, velocity, from_pitch, .. } => Event::On { frame: at, id, pitch, velocity, from_pitch },
+                Event::Off { id, velocity, .. } => Event::Off { frame: at, id, velocity },
+                Event::Expression { id, kind, value, .. } => Event::Expression { frame: at, id, kind, value },
+                Event::Param { id, value, .. } => Event::Param { frame: at, id, value },
+                Event::Midi { bytes, .. } => Event::Midi { frame: at, bytes },
+            };
+            events.add(count as usize).write(RawEvent::of(&e));
+            std::ptr::addr_of_mut!((*self.head).count).write(count + 1);
+        }
+        true
+    }
+}
+
+impl<K: Kernel> Host<K> {
+    /// Give output `o` a notes output with room for `cap` events, as a host lays it out (ABI-15).
+    pub fn gives(&mut self, o: usize, cap: usize) {
+        let mut raw = vec![RawEvent::default(); cap];
+        let head = Box::new(Notes { count: 0, cap: cap as u32, events: raw.as_mut_ptr() });
+        self.notes[K::INPUTS + o] = Some((head, raw));
+    }
+
+    /// What notes output `o` gave since this was last asked, each frame in the block.
+    pub fn given(&mut self, o: usize) -> Vec<Event> {
+        let Some((head, raw)) = &mut self.notes[K::INPUTS + o] else { return vec![] };
+        let n = head.count.min(head.cap) as usize;
+        head.count = 0;
+        raw[..n].iter().filter_map(|r| r.event(0, self.max_block)).collect()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A note effect: each note an octave up, its velocity halved; the wheels passed on.
+    struct Up;
+
+    impl Kernel for Up {
+        const INPUTS: usize = 1;
+        const OUTPUTS: usize = 1;
+        const NOTES: &'static [usize] = &[0];
+
+        fn new(_: &Cfg) -> Self {
+            Up
+        }
+
+        fn process(&mut self, io: &mut Io) {
+            let mut give = io.give(0);
+            for e in io.events(0) {
+                let e = match e {
+                    Event::On { frame, id, pitch, velocity, from_pitch } => {
+                        Event::On { frame, id, pitch: pitch + 12.0, velocity: velocity / 2.0, from_pitch }
+                    }
+                    e => e,
+                };
+                give.push(e);
+            }
+        }
+    }
+
+    // ABI-9, ABI-15: a kernel gives notes through the kit while it reads them: each written as the
+    // host reads it, its frame in the block (a call from frame 64 counts from there), counted; the
+    // host's own `count` starts again at each call.
+    #[test]
+    fn a_kernel_gives_events_through_the_kit() {
+        let mut host = Host::<Up>::new(48_000.0, 128, 1);
+        host.gives(0, 8);
+        let bend = Event::Midi { frame: 0, bytes: [0xE0, 0, 80] };
+        host.events(
+            0,
+            &[
+                bend,
+                Event::On { frame: 5, id: 3, pitch: 60.0, velocity: 1.0, from_pitch: None },
+                Event::Off { frame: 90, id: 3, velocity: 0.5 },
+            ],
+        );
+        host.process(128);
+        assert_eq!(
+            host.given(0),
+            [
+                bend,
+                Event::On { frame: 5, id: 3, pitch: 72.0, velocity: 0.5, from_pitch: None },
+                Event::Off { frame: 90, id: 3, velocity: 0.5 }
+            ]
+        );
+        host.process_range(64, 128);
+        assert_eq!(host.given(0), [Event::Off { frame: 90, id: 3, velocity: 0.5 }], "frames in the block, from a call at 64");
+        assert_eq!(host.given(0), [], "asked again: nothing new");
+    }
+
+    // ABI-15: a notes output takes no more than its `cap`: the rest are refused, nothing written.
+    #[test]
+    fn a_full_notes_output_takes_no_more() {
+        let mut host = Host::<Up>::new(48_000.0, 128, 1);
+        host.gives(0, 2);
+        let on = |frame, id| Event::On { frame, id, pitch: 60.0, velocity: 1.0, from_pitch: None };
+        host.events(0, &[on(1, 1), on(2, 2), on(3, 3)]);
+        host.process(128);
+        let given = host.given(0);
+        assert_eq!(given.iter().map(Event::frame).collect::<Vec<_>>(), [1, 2], "the first two");
+    }
 
     // VOX-24: a latency in seconds is whole frames, rounded up, at every rate; 0 and nonsense are 0.
     #[test]
