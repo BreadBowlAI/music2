@@ -92,8 +92,34 @@ fn a_note_effect_is_listed_as_one() {
 fn a_note_effect_goes_only_before_what_plays_notes() {
     let (f, _pack, mut s, text) = open("", "synth.pluck(lane.notes(\"chords\"))", false);
     let e = s.add_effect(rev(&s), &call(&s, "osc.saw"), "@test/notes:arp").unwrap_err().to_string();
-    assert!(e.contains("Arpeggiator can't go here: it goes before a sound that plays notes, and `osc.saw` takes none."), "{e}");
+    assert!(e.contains("Arpeggiator can't go here: it goes before a sound that plays notes, and `osc.saw` plays none."), "{e}");
     assert_eq!(f.read("song.ts"), text);
+}
+
+// PKG-21 (review N1, design D2): a note effect goes before any call that plays notes: a pack's
+// instrument (its first argument), a `poly` (its first) or a plugin (its `notes`), found from what
+// the call reads, not from a list. The text it would wrap is those notes, as written.
+#[test]
+fn the_notes_a_note_effect_goes_around_are_found_in_any_player() {
+    m2_plugins::probe::install();
+    let (f, _pack, s, _) = open("", "synth.pluck(lane.notes(\"a\"))", false);
+    let text = f.read("song.ts").replace(
+        "mixer({ keys: synth.pluck(lane.notes(\"a\")), hum: osc.saw(hz(110)) })",
+        "mixer({ keys: synth.pluck(lane.notes(\"a\")), voice: poly(lane.notes(\"b\"), (n) => osc.saw(n.pitch)), \
+         probe: plugin(\"clap:m2.probe\", { notes: lane.notes(\"c\"), key: \"p\" }), hum: osc.saw(hz(110)) })",
+    );
+    f.write("song.ts", text.replace("import { hz, song }", "import { hz, plugin, poly, song }"));
+    drop(s);
+    let s = f.open();
+    let around = |callee: &str| {
+        let site = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.callee == callee).unwrap().clone();
+        notes_of(&s, &site, "Arpeggiator").map(|span| f.read("song.ts")[span.start as usize..span.end as usize].to_string())
+    };
+    assert_eq!(around("synth.pluck").unwrap(), "lane.notes(\"a\")");
+    assert_eq!(around("poly").unwrap(), "lane.notes(\"b\")");
+    assert_eq!(around("plugin").unwrap(), "lane.notes(\"c\")");
+    let e = around("osc.saw").unwrap_err().to_string();
+    assert!(e.contains("Arpeggiator can't go here: it goes before a sound that plays notes, and `osc.saw` plays none."), "{e}");
 }
 
 // PKG-21: + Note effect wraps the notes of the call it goes before, where they are written, and
@@ -111,6 +137,34 @@ fn adding_a_note_effect_wraps_the_notes_of_what_plays_them() {
     assert_eq!(f.read("song.ts"), two, "the chord goes before the arpeggiator");
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), one);
+    s.undo().unwrap();
+    assert_eq!(f.read("song.ts"), text);
+}
+
+// PKG-21 (review N1): before a `poly` and a plugin, as before a pack's instrument: their notes,
+// wrapped where they are written.
+#[test]
+#[ignore = "waits for track notes-out: a kernel that gives notes (ABI-2), and a voice and a plugin that play a note effect's"]
+fn a_note_effect_goes_before_a_poly_and_a_plugin() {
+    m2_plugins::probe::install();
+    let f = Fixture::new();
+    let pack = f.0.join("notes");
+    notes_pack(&pack, true);
+    let text = song(
+        &f,
+        &pack,
+        "",
+        "poly(lane.notes(\"b\"), (n) => osc.saw(n.pitch)), probe: plugin(\"clap:m2.probe\", { notes: lane.notes(\"c\"), key: \"p\" })",
+    );
+    let text = text.replace("import { hz, song }", "import { hz, plugin, poly, song }");
+    f.write("song.ts", &text);
+    let mut s = f.open();
+    s.add_effect(rev(&s), &call(&s, "poly"), "@test/notes:arp").unwrap_or_else(|e| panic!("{e}"));
+    s.add_effect(rev(&s), &call(&s, "plugin"), "@test/notes:chord").unwrap_or_else(|e| panic!("{e}"));
+    let now = f.read("song.ts");
+    assert!(now.contains("poly(arp(lane.notes(\"b\")), (n) => osc.saw(n.pitch))"), "{now}");
+    assert!(now.contains("plugin(\"clap:m2.probe\", { notes: chord(lane.notes(\"c\")), key: \"p\" })"), "{now}");
+    s.undo().unwrap();
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), text);
 }

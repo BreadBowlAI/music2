@@ -349,8 +349,8 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
     if !site.in_project {
         return Err(EditError::NotFound(call.to_string()));
     }
-    let site = if effect.notes { notes_of(s, &site, &effect.label)? } else { site };
-    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
+    let span = if effect.notes { notes_of(s, &site, &effect.label)? } else { Span::of(&site) };
+    let text = s.accepted().snapshot.files.get(Path::new(&span.file)).ok_or_else(|| EditError::NotFound(span.file.clone()))?.clone();
     let (args, ctors) = insert_args(&desc, &s.accepted().compiled.units);
     let mut imports = vec![];
     if let Some(i) = import_insertion(&text, &effect.module, &effect.name) {
@@ -365,37 +365,64 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
     let also = crate::packs::needs(s, component)?;
     let (open, close, before) = (format!("{}(", effect.name), format!("{args})"), effect.notes);
     let wrap = Wrap { open, close, imports, callee: effect.name, label: effect.label, before, also };
-    wrap_call(s, &site, wrap, |_, _, _| Ok(()))
+    wrap_call(s, &span, wrap, |_, _, _| Ok(()))
 }
 
-/// Where note effect `label` goes before call `site` (PKG-21): the notes that call takes, its first
-/// argument, as a site of its own, to be wrapped as a call is. The call must take notes first, as an
-/// instrument or another note effect does. Why not, in words.
-fn notes_of(s: &Session, site: &Site, label: &str) -> Result<Site, EditError> {
+/// Where note effect `label` goes before call `site` (PKG-21): the notes that call plays, as written
+/// in it. The call plays notes when it is a component that takes them first (an instrument, another
+/// note effect: its first argument), or makes a `poly` (its first argument) or a plugin (its
+/// `notes`), found from what it made, not from a list. Why not, in words.
+pub(crate) fn notes_of(s: &Session, site: &Site, label: &str) -> Result<Span, EditError> {
     let refused = |why: String| EditError::Rejected(format!("{label} can't go here: {why}."));
-    let takes =
-        component_at(s, site).filter(|d| d.inputs.first().is_some_and(|i| i.kind == PortKind::Notes && !d.positional.contains(&i.name)));
-    let d = takes.ok_or_else(|| refused(format!("it goes before a sound that plays notes, and `{}` takes none", site.callee)))?;
+    let none = || refused(format!("it goes before a sound that plays notes, and `{}` plays none", site.callee));
+    let first = || site.args.first().map(Arg::span);
+    let at = match component_at(s, site) {
+        Some(d) => first().filter(|_| d.inputs.first().is_some_and(|i| i.kind == PortKind::Notes && !d.positional.contains(&i.name))),
+        None => match made_op(s, site) {
+            Some(Op::Poly { .. }) => first(),
+            Some(Op::Plugin { inputs, .. }) if inputs.contains_key("notes") => site.args.iter().find_map(|a| match a {
+                Arg::Object { props, .. } => props.iter().find(|(k, _)| k == "notes").map(|(_, v)| v.span()),
+                _ => None,
+            }),
+            _ => None,
+        },
+    };
+    let (start, end) = at.ok_or_else(none)?;
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?;
-    let (start, end) = site.args.first().map(Arg::span).ok_or_else(|| refused(format!("{} is given no notes here", d.label)))?;
-    let written = &text[start as usize..end as usize];
-    if written.trim_start().starts_with("...") {
-        return Err(refused(format!("{}'s call spreads its arguments", d.label)));
+    if text[start as usize..end as usize].trim_start().starts_with("...") {
+        return Err(refused(format!("`{}` spreads its arguments", site.callee)));
     }
-    Ok(Site {
-        id: u32::MAX,
-        file: site.file.clone(),
-        ordinal: u32::MAX,
-        start,
-        end,
-        open: start,
-        line: text[..start as usize].matches('\n').count() as u32 + 1,
-        callee: written.to_string(),
-        binding: None,
-        constant: false,
-        in_project: true,
-        args: vec![],
-    })
+    Ok(Span { file: site.file.clone(), start, end })
+}
+
+/// The op of the one node call `site` gave as its output, if it gave one.
+fn made_op(s: &Session, site: &Site) -> Option<Op> {
+    let compiled = &s.accepted().compiled;
+    let mut outputs = compiled.outputs.iter().filter(|o| o.site == site.id);
+    let (Some(output), None) = (outputs.next(), outputs.next()) else { return None };
+    let m = compiled.ir.modules.iter().find(|m| m.key == output.module)?;
+    let id = split_ref(&output.port).0;
+    let mut op = None;
+    walk(&m.nodes, &mut |n| {
+        if n.id == id {
+            op = Some(n.op.clone());
+        }
+    });
+    op
+}
+
+/// The text a wrap goes around: bytes `start..end` of `file`.
+pub(crate) struct Span {
+    pub file: String,
+    pub start: u32,
+    pub end: u32,
+}
+
+impl Span {
+    /// A call's whole text.
+    pub(crate) fn of(site: &Site) -> Span {
+        Span { file: site.file.clone(), start: site.start, end: site.end }
+    }
 }
 
 /// How a call is wrapped: the text written before it and after it, the imports that text needs,
@@ -412,38 +439,39 @@ pub(crate) struct Wrap {
     pub also: crate::packs::Needs,
 }
 
-/// Wrap call `site` of the accepted revision as `w` says, as one `TextEdit` Tx confined to the call:
+/// Wrap the text at `span` (a call, or a note effect's notes) of the accepted revision as `w` says, as
+/// one `TextEdit` Tx confined to it:
 /// two insertions around it (R5), so its characters stay as they are, and the imports. The planner
 /// asserts `check` on the new call's site in the candidate, then that the new call wraps the old
 /// one and nothing else changed (WRITE-9).
 pub(crate) fn wrap_call(
     s: &mut Session,
-    site: &Site,
+    span: &Span,
     w: Wrap,
     check: impl FnOnce(&Session, &Checked, u32) -> Result<(), EditError>,
 ) -> Result<Edited, EditError> {
-    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
-    let written = &text[site.start as usize..site.end as usize];
+    let text = s.accepted().snapshot.files.get(Path::new(&span.file)).ok_or_else(|| EditError::NotFound(span.file.clone()))?.clone();
+    let written = &text[span.start as usize..span.end as usize];
     let wrapped = format!("{}{written}{}", w.open, w.close);
     let imports = joined(w.imports);
-    let shift: u32 = imports.iter().filter(|(at, _)| *at <= site.start).map(|(_, line)| line.len() as u32).sum();
+    let shift: u32 = imports.iter().filter(|(at, _)| *at <= span.start).map(|(_, line)| line.len() as u32).sum();
     // Two insertions around the call (R5): an import at the call's own start goes before the
     // wrapping text, in the same edit.
     let mut edits: Vec<(u32, u32, String)> = vec![];
     let mut opening = w.open;
-    let mut ranges = vec![Range::bytes(site.start, site.end)];
+    let mut ranges = vec![Range::bytes(span.start, span.end)];
     for (at, line) in &imports {
-        if *at == site.start {
+        if *at == span.start {
             opening.insert_str(0, line);
         } else {
             edits.push((*at, *at, line.clone()));
             ranges.push(Range::bytes(*at, *at));
         }
     }
-    edits.push((site.start, site.start, opening));
-    edits.push((site.end, site.end, w.close));
+    edits.push((span.start, span.start, opening));
+    edits.push((span.end, span.end, w.close));
     edits.sort_by_key(|e| e.0);
-    let file = path(&site.file)?;
+    let file = path(&span.file)?;
     let mut declared: BTreeMap<_, _> = [(file.clone(), Ranges::Ranges(ranges))].into();
     declared.extend(w.also.ranges);
     let expect = Expect::Confined(Confined { ranges: declared, ..Confined::default() });
@@ -458,7 +486,7 @@ pub(crate) fn wrap_call(
         unmoved(s, checked)?;
         // The planner's assertion (WRITE-9): the new call wraps the old one, and nothing else changed.
         let candidate = &checked.candidate().compiled;
-        let new = candidate.sites.iter().find(|x| x.file == site.file && x.start == site.start + shift && x.callee == w.callee);
+        let new = candidate.sites.iter().find(|x| x.file == span.file && x.start == span.start + shift && x.callee == w.callee);
         let new = new.ok_or_else(refused)?.id;
         check(s, checked, new)?;
         match wraps(candidate, &checked.baseline().compiled.ir, new) {
@@ -466,7 +494,7 @@ pub(crate) fn wrap_call(
             false => Err(refused()),
         }
     })?;
-    Ok(Edited { revision: done.number, file: site.file.clone(), before: label.0, after: label.1 })
+    Ok(Edited { revision: done.number, file: span.file.clone(), before: label.0, after: label.1 })
 }
 
 /// Take out effect call `call`, leaving what it was applied to.
