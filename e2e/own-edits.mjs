@@ -7,6 +7,8 @@
 //  - a clip's left edge dragged right after its right edge was trimmed: both written, the second
 //    from the first;
 //  - ⌘Z right after a MIDI file came in, and right after an audio file did: each taken back;
+//  - a card's picture after the window's own ⌘Z whose answer comes after the song's new state: it is
+//    drawn again as soon as the window shows the change, not seconds later (CARD-67);
 // and no refusal is shown, nor answered.
 // node own-edits.mjs <root> <home> <project>
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
@@ -259,6 +261,46 @@ await key("Meta+v");
 check((await answered).ok() && read("data/kick/hits.json") !== kickHits, "⌘C, then ⌘V at bar 17: the bars are pasted");
 await key("Meta+z");
 check(await until(() => read("data/kick/hits.json") === kickHits), "and ⌘Z at once takes the paste back");
+check(await quiet(n), `nothing refused: ${await said()}`);
+
+// ---------------------------------------------------------------- a picture after a ⌘Z answered late
+// The kick's Drum draws its hit (CARD-141). Its punch's dot dragged, then ⌘Z, whose answer reaches
+// the page a second after the song's new state does (the server makes the step before its answer
+// arrives): the picture is drawn again, back as it was, once the window shows its own change.
+await show("kick");
+await view("graph");
+const hitPic = `${drum} [data-picture="hit"]`;
+const hitPoints = () => page.$eval(`${hitPic} polygon[data-hit]`, (e) => e.getAttribute("points")).catch(() => null);
+check(await until(async () => ((await hitPoints()) ?? "").length > 100, 15000), "the kick's Drum draws its hit");
+await page.$eval(`${hitPic} [data-dot="0"]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+await sleep(300);
+const hit0 = await hitPoints();
+const kickCode = read("tracks/kick.ts");
+const dot = await box(`${hitPic} [data-dot="0"]`);
+await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2);
+await page.mouse.down();
+for (let i = 1; i <= 6; i++) await page.mouse.move(dot.x + dot.width / 2, dot.y + dot.height / 2 - 2 * i);
+await page.mouse.up();
+check(await until(() => read("tracks/kick.ts") !== kickCode, 8000) && (await until(async () => (await hitPoints()) !== hit0, 8000)), "its punch's dot dragged up: written, and the hit drawn again");
+await sleep(1000);
+await page.evaluate(() => {
+  const f = window.fetch;
+  window.__m2Fetch = f;
+  window.fetch = async (...a) => {
+    const r = await f(...a);
+    if (String(a[0]?.url ?? a[0]).includes("/api/graph/undo")) await new Promise((res) => setTimeout(res, 1000));
+    return r;
+  };
+});
+n = refusals.length;
+await page.mouse.click(10, 10);
+await key("Meta+z");
+check(await until(() => read("tracks/kick.ts") === kickCode, 8000), "⌘Z takes the punch back");
+const back = Date.now();
+const redrawn = await until(async () => (await hitPoints()) === hit0, 8000);
+const took = Date.now() - back;
+check(redrawn && took < 2500, `and the hit is drawn again as it was once the window shows it, not 4 s later: ${redrawn ? `${took} ms` : "not in 8 s"}`);
+await page.evaluate(() => (window.fetch = window.__m2Fetch));
 check(await quiet(n), `nothing refused: ${await said()}`);
 
 done(errors);

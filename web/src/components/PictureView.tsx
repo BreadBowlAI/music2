@@ -13,7 +13,7 @@ import { beatNow, playingNow } from "../lib/clock";
 import { useCards } from "../lib/folded";
 import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
 import { barAt, controlLabel, graphApi, inSentence, picks, stepValue, type CardView, type Knob, type NumberKnob } from "../lib/graph";
-import { showsOwn } from "../lib/history";
+import { shown as showing, showsOwn } from "../lib/history";
 import { useStore } from "../lib/store";
 import { useViewDrag, type ViewProps } from "./CardViews";
 import { NOTCH, useKnobGesture } from "./Knob";
@@ -176,14 +176,16 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
     };
     // By its id in the view of `revision`: a stop names the same, so it never ends an ask made by a
     // renumbered card's id (CARD-67).
-    const ask = (on: boolean) => {
+    const ask = (on: boolean): Promise<void> => {
       // Never by a revision older than the window's own last change (AGENT-2), which the server
-      // refuses (CARD-67): the window asks again by the revision that change made, once it shows it.
+      // refuses (CARD-67): it waits, as a gesture does, until the window shows that change, then
+      // asks; the change's answer may come after the song's new state (review U1). Had the
+      // revision moved meanwhile, the effect runs again for it.
       const graph = useStore.getState().graph;
-      if (on && graph && !showsOwn(graph)) return Promise.resolve();
+      if (on && graph && !showsOwn(graph)) return showing(session).then((g) => (alive && g && g.view.revision === revision ? ask(true) : undefined));
       return graphApi.picture(session, revision, module, node, name, on).then(
-        (a) => (on && a.picture ? take(a.picture) : undefined),
-        (e) => alive && on && setAsked(said(e)),
+        (a) => void (on && a.picture && take(a.picture)),
+        (e) => void (alive && on && setAsked(said(e))),
       );
     };
     void ask(true);

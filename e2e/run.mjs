@@ -217,7 +217,7 @@ export const SUITES = [
   ["pk-packs", "fix", { expect: 20, s: 3 }],
   ["spotlight", "fix", { expect: 53, s: 4 }],
   ["library", "library", { expect: 38, s: 9 }],
-  ["own-edits", "fix", { expect: 43, s: 6 }],
+  ["own-edits", "fix", { expect: 48, s: 8 }],
   ["own-gate", "fix", { expect: 33, s: 12 }],
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
