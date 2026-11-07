@@ -11,13 +11,13 @@ tags = ["mixing", "eq", "gate", "transient", "de-esser", "multiband", "compresso
 wasm = "kernels/mixing.wasm"
 
 [dependencies]
-# @m2/core 2, the pack contract (PACK-22), from 2.6: its multiband's split is measured with a quiet
-# click (p.response's level, CARD-115), which came in 2.6; its cards draw pictures (CARD-60,
+# @m2/core 2, the pack contract (PACK-22), from 2.5: its multiband's split is measured with a quiet
+# click (p.response's level, CARD-115), which came in 2.5; its cards draw pictures (CARD-60,
 # view.picture) and name their faces (CARD-40) since 2.4 (a call may leave an input out, the gate's
 # key, since 2.3, PKG-18); a change to @m2/core that would break it is a 3.0.0. Pump is std's
 # blocks (lfo, range, scale, blend and duck, PACK-28), all in std 0.9; the pictures use
 # std/pictures' curve and words, new in std 0.10 (CARD-90); the rest uses none of std's code.
-"@m2/core" = "2.6"
+"@m2/core" = "2.5"
 std = "0.10"
 
 # ---------------------------------------------------------------- its own kernels

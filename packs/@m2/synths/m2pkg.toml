@@ -11,12 +11,12 @@ tags = ["synth", "polysynth", "fm", "keys", "bass", "pad", "lead"]
 wasm = "kernels/synths.wasm"
 
 [dependencies]
-# @m2/core 2.6, the pack contract (PACK-22) and the minor it uses (PACK-23): its FM partials limit an
-# index as the kernel does at the song's rate (p.rate, CARD-87), which came in 2.6; its envelopes,
+# @m2/core 2.5, the pack contract (PACK-22) and the minor it uses (PACK-23): its FM partials limit an
+# index as the kernel does at the song's rate (p.rate, CARD-87), which came in 2.5; its envelopes,
 # filters, notes and partials are pictures (CARD-60, view.picture) since 2.4 (synth.custom's
-# labelled setting came in 2.1). So any 2.x from 2.6 runs it, an older one says in words that it
-# needs 2.6, and a change to @m2/core that would break it is a 3.0.0.
-"@m2/core" = "2.6"
+# labelled setting came in 2.1). So any 2.x from 2.5 runs it, an older one says in words that it
+# needs 2.5, and a change to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.5"
 # Its envelopes are std/pictures' (CARD-96), new in std 0.10, and its ladder, its notes and its FM
 # partials its own (src/pictures.ts, CARD-136 to CARD-140); the std kernels its sounds play are all in
 # std 0.7 and later, and the voices are its own.

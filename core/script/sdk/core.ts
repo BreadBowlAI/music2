@@ -1392,7 +1392,7 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
    * The curve music2 measures from this sound itself (CARD-80): a click played through a copy of
    * the call at these values, its gain at each frequency. Only on an `hz` x axis and a `db` y axis.
    * `level` is the click's, in dB from −80 to −20 (−20 when left out): a quieter click stays under
-   * a sound's thresholds, so its compressors rest (2.6).
+   * a sound's thresholds, so its compressors rest (2.5).
    */
   response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string; level?: number }) => Shape : never;
   /**
@@ -1402,7 +1402,7 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
   /**
    * The song's sample rate, in Hz (CARD-87): a kernel works its sums out at it, so a picture drawn
-   * from them does too (2.6). 48000 where no song plays (`m2 pack check`). Words get no rate.
+   * from them does too (2.5). 48000 where no song plays (`m2 pack check`). Words get no rate.
    */
   readonly rate: number;
 }

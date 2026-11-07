@@ -61,7 +61,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | a card's face, `editor.face` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than stop at a field it doesn't know |
 | a picture, `view.picture` (new in 2.4) | `"2.4"` | the same: an older music2 says in words that your pack needs 2.4 |
 | a note effect, or the song's tempo, `time.tempo` (new in 2.5) | `"2.5"` | the same: an older music2 says in words that your pack needs 2.5 |
-| a quiet click for a measured curve, `p.response({ level })`, or the song's sample rate in a picture, `p.rate` (new in 2.6) | `"2.6"` | the same: an older music2 says in words that your pack needs 2.6 |
+| a quiet click for a measured curve, `p.response({ level })`, or the song's sample rate in a picture, `p.rate` (new in 2.5) | `"2.5"` | the same |
 
 ### music2's promise to your pack
 
@@ -251,7 +251,7 @@ A picture has two parts:
 |---|---|
 | `x`, `y` | The axes: `axis.log("hz", 20, 20000)` (a log scale starts above 0), `axis.lin("db", -24, 24)`, `axis.time(2)` (0 to 2 seconds). music2 draws the grid and its labels. |
 | `live` | Optional: layers that move with the sound (below). |
-| `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`; each may be `null` (a cable or the code works it out), so write `v.freq1 ?? 1000` where you need a number. `p` makes the shapes, and `p.rate` is the song's sample rate in Hz (44100, 48000, 96000…; new in 2.6): your kernel works at it, so a picture drawn from your kernel's maths must too. |
+| `draw` | A function `(v, p) => [shapes]`. `v` holds what plays, by the name of each value: a number in its base unit (Hz, dB, seconds), a menu's name, a switch's `true` or `false`; each may be `null` (a cable or the code works it out), so write `v.freq1 ?? 1000` where you need a number. `p` makes the shapes, and `p.rate` is the song's sample rate in Hz (44100, 48000, 96000…; new in 2.5): your kernel works at it, so a picture drawn from your kernel's maths must too. |
 | `words` | Required: a function of `v` that says the picture in one sentence, 1 to 400 characters, one line. The card, agents (`GET /api/graph`) and screen readers read it. |
 
 The shapes, each in the axes' units. Points are one flat list: `[x0, y0, x1, y1, …]`.
@@ -273,7 +273,7 @@ A tone is `"main"`, `"soft"` or `"faint"`: music2's greys. You can't choose a co
 
 | Word | Draws | Axes |
 |---|---|---|
-| `p.response({ tone, name, level })` | the curve of an EQ or a filter: a click played through the copy, and how loud each frequency comes out. `level` is how loud the click is, −80 to −20 dB (−20 if left out): play it quieter than a sound's thresholds, and its compressors rest (new in 2.6) | `x` in `hz`, `y` in `db` |
+| `p.response({ tone, name, level })` | the curve of an EQ or a filter: a click played through the copy, and how loud each frequency comes out. `level` is how loud the click is, −80 to −20 dB (−20 if left out): play it quieter than a sound's thresholds, and its compressors rest (new in 2.5) | `x` in `hz`, `y` in `db` |
 | `p.hit({ note, seconds, tone })` | one note of an instrument: `note` (60 if left out) held for `seconds` (1 at most, and no longer than the x axis; left out, the axis's end or 1), drawn as its wave | `x` in `seconds` (`axis.time`), `y` in `bipolar` (−1 to 1) |
 
 Each may be in a picture once. They follow every drag at once, and the same values are measured only once. A measure has 20 ms (more at a higher rate); past that the picture greys, and it is tried again 10 s later.

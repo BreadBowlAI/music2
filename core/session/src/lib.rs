@@ -539,10 +539,9 @@ export default song(() => v.out);
         // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
         // instrument names kits (KIT-3), `"2.3"` once an input may be left out (PKG-18), what its
         // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12), or its descriptors
-        // draw a picture or name a face (CARD-60, CARD-40), or `"2.5"` once it has a note effect (PKG-21)
-        // or its code reads the song's tempo (RENDER-7), or `"2.6"` once a picture measures its curve
-        // with a quiet click (CARD-80) or reads the song's rate (CARD-87); a pack of recordings alone
-        // may ask for none.
+        // draw a picture or name a face (CARD-60, CARD-40), or `"2.5"` once it has a note effect (PKG-21),
+        // its code reads the song's tempo (RENDER-7), or a picture measures its curve with a quiet click
+        // (CARD-80) or reads the song's rate (CARD-87); a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         // The packs whose components read `time.key`: a time node of the key in a frame of one of
         // theirs (review U5), in every-component's graph.
@@ -590,7 +589,7 @@ export default song(() => v.out);
             let keyed = keyed.contains(name);
             // A note effect (2.5, PKG-21), which the descriptor shows, or the song's tempo read (2.5, RENDER-7).
             let noted = timed.contains(name) || mine.clone().any(|(_, d)| d.is_note_effect());
-            // A curve measured with a quiet click (2.6, CARD-80), or the song's rate read (2.6,
+            // A curve measured with a quiet click (2.5, CARD-80), or the song's rate read (2.5,
             // CARD-87), which only a draw shows: each picture drawn at its defaults, as `m2 pack
             // check` draws it, at 48 and at 96 kHz, a picture that reads the rate drawing apart.
             let quiet = mine.clone().any(|(_, d)| {
@@ -618,8 +617,7 @@ export default song(() => v.out);
                 })
             });
             match (major.as_deref(), optional, kits, labelled) {
-                (Some(m), ..) if quiet => format!("{m}.6"),
-                (Some(m), ..) if noted => format!("{m}.5"),
+                (Some(m), ..) if noted || quiet => format!("{m}.5"),
                 (Some(m), ..) if keyed || pictured => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
                 (Some(m), false, true, _) => format!("{m}.2"),
