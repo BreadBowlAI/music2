@@ -405,3 +405,33 @@ fn hold_keeps_its_latch_through_a_loops_wrap_in_wasm() {
     let laps: Vec<usize> = (0..3).map(|lap| ons_of(&mut r, at["a"], if lap == 0 { 325 } else { 375 }).len()).collect();
     assert_eq!(laps, [6, 8, 8], "every lap");
 }
+
+// RENDER-14, RENDER-42, ABI-15: offline, as an export renders, the guard gives no note the live bit,
+// whatever a kernel gives: a stranger's note effect that numbers a clip's chord from 1 << 31 can't
+// make the Arpeggiator after it, Hold on, play the chord on after it ends.
+#[test]
+fn an_export_never_latches_a_chord_a_kernel_marked_live() {
+    let raw = |kind: u32, id: u32, v: [f32; 3]| [kind, 0, id, v[0].to_bits(), v[1].to_bits(), v[2].to_bits()];
+    let b = LIVE_BIT;
+    let mut script: Vec<Vec<[u32; 6]>> = vec![[1, 2, 3].map(|n| raw(0, b | n, [56.0 + 4.0 * n as f32, 0.8, f32::NAN])).to_vec()];
+    script.extend((1..10).map(|_| vec![]));
+    script.push([1, 2, 3].map(|n| raw(1, b | n, [0.0; 3])).to_vec());
+    let (pk, pkg) = super::events::with_effects(&script);
+    let nodes = json!([
+        {"id": "n", "op": "lane", "lane": "notes"},
+        {"id": "beats", "op": "time", "of": "beats"},
+        {"id": "playing", "op": "time", "of": "playing"},
+        {"id": "tempo", "op": "time", "of": "tempo"},
+        {"id": "hold", "op": "const", "value": 1, "unit": "switch"},
+        {"id": "s", "op": "kernel", "kernel": "@test/t:script", "inputs": {"notes": "n"}},
+        {"id": "a", "op": "kernel", "kernel": "@m2/notes:arp", "inputs": {"notes": "s", "beats": "beats", "playing": "playing", "tempo": "tempo", "hold": "hold"}},
+        voice("v", "a"),
+    ]);
+    let ir = song(nodes, "v", json!([{"key": "notes", "kind": "events<note>"}]));
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let mut r = Renderer::new(&flat, &data(json!({"clips": []}), None), &pk, SR).unwrap();
+    let at = slots(&r, &flat);
+    assert!(!ons_of(&mut r, at["a"], 60).is_empty(), "the chord plays while it sounds");
+    assert_eq!(ons_of(&mut r, at["a"], FOUR_BEATS), Vec::<u32>::new(), "no latched chord after it ends");
+    std::fs::remove_dir_all(pkg).ok();
+}

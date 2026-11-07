@@ -503,6 +503,29 @@ fn a_changed_constant_is_sent() {
     assert_eq!(send(&mut fresh), [P::Param { time: 0, id: 3, value: 0.5 }], "a new instance at its first call");
 }
 
+// RENDER-14: a plugin is sent a key played live by the counter's own number, without the live bit, so
+// CLAP never sees a negative note id; its held keys keep the full id, so its Off still finds it.
+#[test]
+fn a_plugin_is_sent_a_live_keys_id_without_the_live_bit() {
+    use m2_plugins::Event as P;
+    let live = 5 | crate::event::LIVE_BIT;
+    let on = |frame, id, pitch| Event::On { frame, id, pitch, velocity: 0.5, from_pitch: None };
+    let notes = [on(0, live, 60.5), Event::Off { frame: 40, id: live, velocity: 0.0 }, on(64, live + 1, 62.0)];
+    let bufs: Vec<Vec<Vec<f32>>> = vec![];
+    let mut keys: Vec<(u32, i16)> = Vec::with_capacity(16);
+    let mut out = m2_plugins::Events::with_capacity(64);
+    let mut next = 0;
+    plugin_events(&[], (&[], false), None, &notes, &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out);
+    let sent = [
+        P::NoteOn { time: 0, id: 5, key: 61, velocity: 0.5 },
+        P::Tuning { time: 0, id: 5, key: 61, semitones: -0.5 },
+        P::NoteOff { time: 40, id: 5, key: 61 },
+        P::NoteOn { time: 64, id: 6, key: 62, velocity: 0.5 },
+    ];
+    assert_eq!(out.iter().collect::<Vec<_>>(), sent);
+    assert_eq!(keys, [(live + 1, 62)], "held by its full id");
+}
+
 // RENDER-14, RENDER-28, HOST-6: a plugin hears the lane's notes and its sampled parameters in the
 // order a stable sort by time gave before: parameters after notes at one frame. Built without
 // allocating.
