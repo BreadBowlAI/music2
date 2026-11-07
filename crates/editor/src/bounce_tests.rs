@@ -35,7 +35,10 @@ fn bounce(f: &Fixture, s: &mut Session, track: &str, name: &str) -> (Result<InPl
 /// The song as Export Audio renders it: to the end of its last clip, then on until it falls silent.
 fn exported(s: &Session) -> Vec<f32> {
     let rev = s.accepted_arc();
-    let path = std::env::temp_dir().join(format!("m2-bounce-heard-{}-{}.wav", std::process::id(), rev.number));
+    // Each call its own file: tests in one process share its id, and open songs at one revision.
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    let path = std::env::temp_dir().join(format!("m2-bounce-heard-{}-{}-{n}.wav", std::process::id(), rev.number));
     let song: Arc<dyn crate::render::Song> = rev.clone();
     Render::new(song, &s.packages, 48_000, 0.0, Length::Song, Threads::Exactly(1)).unwrap().write_float(&path, |_| {}).unwrap();
     let samples = hound::WavReader::open(&path).unwrap().into_samples::<f32>().map(Result::unwrap).collect();
