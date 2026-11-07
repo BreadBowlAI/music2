@@ -18,6 +18,10 @@ await page.setViewport({ width: 1600, height: 1000 });
 const consoleErrors = [];
 // The refused writes answer 423; with the project closed between parts, the state answers 400, and
 // so does a picture asked for as it closes (the kick's Drum's, CARD-141), saying the song changed.
+// Why (review U7, traced): the page's last state read is answered (revision 2) just as the suite
+// closes the song; the card's re-render then stops its ask by revision 1 (answered {}, CARD-67) and
+// asks by revision 2, which reaches a server whose song is closed and is refused, as the state's
+// next read is. A race the window can't see; the contract's own answer, as for the state.
 page.on("console", (m) => m.type() === "error" && !/(423 \(Locked\)|400 \(Bad Request\))/.test(m.text()) && consoleErrors.push(m.text()));
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
 // Which request a "Failed to load resource" error was.
