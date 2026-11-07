@@ -155,6 +155,19 @@ impl FOp {
     }
 }
 
+/// Whether a node of `op` with outputs `outputs` is a note effect (RENDER-41): a kernel whose
+/// output is notes (ABI-15).
+fn is_note_effect(op: &FOp, outputs: &[Kind]) -> bool {
+    matches!(op, FOp::Kernel { .. }) && matches!(outputs.first(), Some(Kind::Events(_)))
+}
+
+impl FNode {
+    /// Whether it is a note effect (RENDER-41): a kernel whose output is notes (ABI-15).
+    pub fn is_note_effect(&self) -> bool {
+        is_note_effect(&self.op, &self.outputs)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FNode {
     /// `<module key>/<node id>`.
@@ -633,8 +646,15 @@ impl<'a> Checker<'a> {
 
         for m in &ir.modules {
             for (name, r) in &m.exports {
-                if let Err(e) = self.resolve(&m.key, r, 0) {
-                    self.diags.push(diag(m, None, format!("export `{name}`: {e}")));
+                match self.resolve(&m.key, r, 0) {
+                    Err(e) => self.diags.push(diag(m, None, format!("export `{name}`: {e}"))),
+                    // RENDER-41: a note effect's notes are read in its own module.
+                    Ok(p) if nodes[p.node].is_note_effect() => self.diags.push(diag(
+                        m,
+                        None,
+                        format!("export `{name}`: a note effect's notes stay in its own module: play them there"),
+                    )),
+                    Ok(_) => {}
                 }
             }
         }
@@ -1081,22 +1101,42 @@ impl<'a> Checker<'a> {
                     }
                     let unknown: Vec<&str> =
                         conns.iter().map(|(p, _)| p.as_str()).filter(|p| !sig.inputs.iter().any(|s| s.name == *p)).collect();
-                    let notes_not_lane = is_plugin
-                        && typed_conns.get("notes").is_some_and(|(p, ..)| !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))));
+                    let notes_not_lane = is_plugin && typed_conns.get("notes").is_some_and(|(p, ..)| !gives_notes(&ops, &kinds, p.node));
                     // ABI-8: a kernel's notes too, and never inside a voice, whose kernels get their
                     // note from its fields.
                     let kernel_notes_not_lane = !is_plugin
                         && sig.inputs.iter().any(|i| {
                             matches!(i.kind, PortKind::Events(_))
                                 && typed_conns.get(i.name.as_str()).is_some_and(|(p, k, ..)| {
-                                    matches!(k, Kind::Events(_))
-                                        && (scope.in_voice() || !matches!(ops.get(p.node), Some(Some(FOp::Lane { .. }))))
+                                    matches!(k, Kind::Events(_)) && (scope.in_voice() || !gives_notes(&ops, &kinds, p.node))
                                 })
                         });
-                    if notes_not_lane {
-                        Err("a plugin's notes must come straight from a notes lane".into())
+                    // RENDER-41: a note effect runs before the song's sounds, in the lane pass, so
+                    // its other inputs are what that pass can read.
+                    let note_effect_reads = (!is_plugin && sig.gives_notes())
+                        .then(|| {
+                            sig.inputs.iter().filter(|i| !matches!(i.kind, PortKind::Events(_))).find(|i| {
+                                typed_conns.get(i.name.as_str()).is_some_and(|(p, ..)| {
+                                    !matches!(
+                                        ops.get(p.node),
+                                        Some(Some(FOp::Const(_) | FOp::Time(_) | FOp::Lane { kind: Kind::Control(_), .. }))
+                                    )
+                                })
+                            })
+                        })
+                        .flatten();
+                    if !is_plugin && sig.gives_notes() && scope.in_voice() {
+                        Err("a note effect plays before the instruments, never inside a poly's voices".into())
+                    } else if notes_not_lane {
+                        Err("a plugin's notes must come from a notes lane or a note effect".into())
                     } else if kernel_notes_not_lane {
-                        Err("a kernel's notes come straight from a notes lane, outside poly: a voice's kernels get their note from its fields".into())
+                        Err("a kernel's notes come from a notes lane or a note effect, outside poly: a voice's kernels get their note from its fields".into())
+                    } else if let Some(i) = note_effect_reads {
+                        Err(format!(
+                            "a note effect's `{}` must be a constant, a knob, `time` or a control lane: it plays before the song's sounds, \
+                             so it can't read one",
+                            i.name
+                        ))
                     } else if !unknown.is_empty() {
                         let have: Vec<&str> = sig.inputs.iter().map(|p| p.name.as_str()).collect();
                         Err(format!("`{kernel}` has no input `{}` (inputs: {})", unknown.join("`, `"), have.join(", ")))
@@ -1127,7 +1167,7 @@ impl<'a> Checker<'a> {
                     }
                 }
                 (Op::Poly { voices, body, alloc, .. }, Res::Poly { events, glide, .. }) => {
-                    let lane_ok = matches!(ops.get(events.node), Some(Some(FOp::Lane { .. })));
+                    let lane_ok = gives_notes(&ops, &kinds, events.node);
                     let seconds = Kind::Control(Some(Unit::Seconds));
                     match kind_of(&kinds, *events) {
                         None => continue,
@@ -1153,7 +1193,7 @@ impl<'a> Checker<'a> {
                                 }
                             }
                         }
-                        Some(Kind::Events(_)) => Err("poly needs a notes lane as its events".into()),
+                        Some(Kind::Events(_)) => Err("poly needs a notes lane or a note effect as its events".into()),
                         Some(k) => Err(format!("poly needs events<note>, got {k}")),
                     }
                 }
@@ -1458,6 +1498,16 @@ fn type_kernel(
         }))
         .collect();
     Ok((inputs, channels, outs))
+}
+
+/// Whether node `node` gives notes an instrument may read: a notes lane's, or a note effect's
+/// (RENDER-41).
+fn gives_notes(ops: &[Option<FOp>], kinds: &[Option<Vec<Kind>>], node: usize) -> bool {
+    match (ops.get(node), kinds.get(node)) {
+        (Some(Some(FOp::Lane { kind: Kind::Events(_), .. })), _) => true,
+        (Some(Some(op)), Some(Some(outputs))) => is_note_effect(op, outputs),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -2080,10 +2130,11 @@ mod tests {
         assert!(e[0].message.contains("input `a`: notes feed only an `events<note>` input; play notes with poly"), "{}", e[0]);
     }
 
-    // ABI-8: a kernel's `events<note>` input takes notes straight from a notes lane, outside any
-    // voice (a voice's kernels get their note through the note fields), and must be connected.
+    // ABI-8: a kernel's `events<note>` input takes notes from a notes lane (or a note effect over
+    // one, RENDER-41), outside any voice (a voice's kernels get their note through the note
+    // fields), and must be connected.
     #[test]
-    fn a_kernel_takes_notes_straight_from_a_lane_outside_voices() {
+    fn a_kernel_takes_notes_from_a_lane_outside_voices() {
         let mut k = kernels();
         let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
         k.insert(
@@ -2110,9 +2161,116 @@ mod tests {
         let e = refused(json!([lane, {"id": "x", "op": "poly", "events": "n", "voices": 2, "body": {"out": "a", "nodes": [
             {"id": "a", "op": "kernel", "kernel": "t:arp", "inputs": {"notes": "n"}}]}}]));
         assert!(
-            e.contains("a kernel's notes come straight from a notes lane, outside poly: a voice's kernels get their note from its fields"),
+            e.contains(
+                "a kernel's notes come from a notes lane or a note effect, outside poly: a voice's kernels get their note from its fields"
+            ),
             "{e}"
         );
+    }
+
+    // RENDER-41: a note effect (a kernel that gives notes, ABI-15) reads a notes lane or another
+    // note effect, and for the rest only constants, knobs, `time` and control lanes; never inside a
+    // voice, nor exported from its module. Instruments, plugins and kernels read its notes as a
+    // lane's. A feedback is neither a lane nor a note effect.
+    #[test]
+    fn a_note_effect_is_checked_where_it_runs() {
+        let mut k = kernels();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let up = ["notes: events<note>", "by: control<semitones> = 12", "at: control<beats> = 0", "c: control<hz> = 1"];
+        k.insert("t:up".into(), KernelSig::parse("t:up", "", &s(&up), &s(&["out: events<note>"]), 0).unwrap());
+        k.insert("t:hear".into(), KernelSig::parse("t:hear", "", &s(&["notes: events<note>"]), &s(&["out: audio<1>"]), 0).unwrap());
+        let ir = |nodes: serde_json::Value, keys: serde_json::Value| {
+            serde_json::from_value::<Ir>(json!({"ir": crate::IR_VERSION, "root": {"module": "song", "export": "out"},
+                "modules": [{"key": "keys", "lanes": [{"key": "n", "kind": "events<note>"}],
+                    "nodes": [{"id": "n", "op": "lane", "lane": "n"}, {"id": "e", "op": "kernel", "kernel": "t:up", "inputs": {"notes": "n"}}],
+                    "exports": keys},
+                    {"key": "song", "lanes": [{"key": "n", "kind": "events<note>"}, {"key": "c", "kind": "control<hz>"}],
+                    "nodes": nodes, "exports": {"out": "x"}}]}))
+            .unwrap()
+        };
+        let none = json!({});
+        let lanes = [json!({"id": "n", "op": "lane", "lane": "n"}), json!({"id": "c", "op": "lane", "lane": "c"})];
+        let body = json!({"out": "a", "nodes": [{"id": "a", "op": "kernel", "kernel": "t:saw"}]});
+        let mut ok = lanes.to_vec();
+        ok.extend([
+            json!({"id": "by", "op": "const", "value": 7, "origin": {"site": 1}}),
+            json!({"id": "t", "op": "time", "of": "beats"}),
+            json!({"id": "e", "op": "kernel", "kernel": "t:up", "inputs": {"notes": "n", "by": "by", "at": "t", "c": "c"}}),
+            json!({"id": "f", "op": "kernel", "kernel": "t:up", "inputs": {"notes": "e", "by": "by"}}),
+            json!({"id": "h", "op": "kernel", "kernel": "t:hear", "inputs": {"notes": "f"}}),
+            json!({"id": "v", "op": "poly", "events": "f", "voices": 2, "body": body}),
+            json!({"id": "x", "op": "kernel", "kernel": "t:add", "inputs": {"a": "h", "b": "v"}}),
+        ]);
+        let f = check(&ir(serde_json::Value::Array(ok.clone()), none.clone()), &k).unwrap_or_else(|e| panic!("{e:?}"));
+        let at = |name: &str| f.nodes.iter().position(|n| n.name == name).unwrap();
+        assert_eq!(f.nodes[at("song/e")].outputs, [Kind::Events(EventType::Note)]);
+        let FOp::Poly { lane, .. } = f.nodes[at("song/v")].op else { panic!("a poly") };
+        assert_eq!(lane, at("song/f"), "an instrument reads a note effect as it reads a lane");
+        let refused = |nodes: Vec<serde_json::Value>, keys: serde_json::Value| {
+            let e = check(&ir(serde_json::Value::Array(nodes), keys), &k).unwrap_err();
+            e.iter().map(|d| d.message.clone()).collect::<Vec<_>>().join("; ")
+        };
+        let with = |extra: &[serde_json::Value]| lanes.iter().cloned().chain(extra.iter().cloned()).collect::<Vec<_>>();
+        let e = refused(
+            with(&[json!({"id": "x", "op": "poly", "events": "n", "voices": 2, "body": {"out": "a", "nodes": [
+                {"id": "u", "op": "kernel", "kernel": "t:up", "inputs": {"notes": "n"}},
+                {"id": "a", "op": "kernel", "kernel": "t:saw"}]}})]),
+            none.clone(),
+        );
+        assert!(e.contains("a note effect plays before the instruments, never inside a poly's voices"), "{e}");
+        let e = refused(
+            with(&[
+                json!({"id": "o", "op": "kernel", "kernel": "t:mtof", "inputs": {"pitch": "by"}}),
+                json!({"id": "by", "op": "const", "value": 60}),
+                json!({"id": "e", "op": "kernel", "kernel": "t:up", "inputs": {"notes": "n", "c": "o"}}),
+                json!({"id": "x", "op": "kernel", "kernel": "t:hear", "inputs": {"notes": "e"}}),
+            ]),
+            none.clone(),
+        );
+        assert!(e.contains("a note effect's `c` must be a constant, a knob, `time` or a control lane"), "{e}");
+        let fb = json!({"id": "fb", "op": "feedback", "kind": "events<note>", "input": "n"});
+        let e =
+            refused(with(&[fb.clone(), json!({"id": "x", "op": "kernel", "kernel": "t:hear", "inputs": {"notes": "fb"}})]), none.clone());
+        assert!(e.contains("a kernel's notes come from a notes lane or a note effect"), "{e}");
+        let e = refused(with(&[fb.clone(), json!({"id": "x", "op": "poly", "events": "fb", "voices": 2, "body": body})]), none.clone());
+        assert!(e.contains("poly needs a notes lane or a note effect as its events"), "{e}");
+        let e = refused(
+            with(&[
+                json!({"id": "k", "op": "import", "module": "keys", "export": "notes"}),
+                json!({"id": "x", "op": "kernel", "kernel": "t:hear", "inputs": {"notes": "k"}}),
+            ]),
+            json!({"notes": "e"}),
+        );
+        assert!(e.contains("export `notes`: a note effect's notes stay in its own module"), "{e}");
+    }
+
+    // RENDER-7: `time.tempo` is the song's tempo, in the unit `bpm`, which fits only itself.
+    #[test]
+    fn time_tempo_is_in_bpm() {
+        let mut k = kernels();
+        let s = |v: &[&str]| v.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        k.insert("t:sync".into(), KernelSig::parse("t:sync", "", &s(&["bpm: control<bpm> = 120"]), &s(&["out: audio<1>"]), 0).unwrap());
+        let f = check(
+            &song(
+                json!([{"id": "t", "op": "time", "of": "tempo"}, {"id": "x", "op": "kernel", "kernel": "t:sync", "inputs": {"bpm": "t"}}]),
+                "x",
+            ),
+            &k,
+        )
+        .unwrap_or_else(|e| panic!("{e:?}"));
+        assert!(f.nodes.iter().any(|n| n.op == FOp::Time(TimeOf::Tempo) && n.outputs == [Kind::Control(Some(Unit::Bpm))]));
+        assert_eq!(serde_json::to_value(TimeOf::Tempo).unwrap(), json!("tempo"));
+        assert_eq!(("bpm".parse::<Unit>(), Unit::Bpm.name()), (Ok(Unit::Bpm), "bpm"));
+        assert!(Unit::Bpm.is_number() && !Unit::Bpm.fits(Unit::Hz) && !Unit::Hz.fits(Unit::Bpm));
+        let e = check(
+            &song(
+                json!([{"id": "t", "op": "time", "of": "tempo"}, {"id": "x", "op": "kernel", "kernel": "t:saw", "inputs": {"freq": "t"}}]),
+                "x",
+            ),
+            &k,
+        )
+        .unwrap_err();
+        assert!(e[0].message.contains("expects control<hz>, got control<bpm>"), "{}", e[0]);
     }
 
     #[test]

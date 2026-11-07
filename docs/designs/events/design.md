@@ -318,7 +318,7 @@ A pack's kernel may be a stranger's code. A note it starts and never ends, or a 
 **A drop is a fault.** Live, it is said once per plan, naming the sound and its pack ("Arp on Keys, from @alice/arp, gave notes music2 can't play; some were left out."). In an export it fails the render, naming the sound, as any fault that changes the sound does ([RENDER-1](../../architecture.md#offline)).
 
 **It ends every note and lets the pedal up** (the pedal at 0 before the Offs, the wheels back at rest, as RENDER-36 does for a lane), at that frame, when:
-- the song stops or jumps (a seek, a loop's wrap), as a lane does ([RENDER-9](../../architecture.md#seek-and-loop));
+- the song stops or jumps (a seek, a loop's wrap), as a lane does ([RENDER-9](../../architecture.md#seek-and-loop)): at a wrap it ends the notes and leaves the pedal down, as a lane does ([RENDER-36](../../architecture.md#events));
 - **Stop is pressed while the song is already stopped**: a stuck arpeggio is one press away from silence;
 - the kernel is reset (a panic, Stop All Sound), replaced by a new plan, or stopped for taking too long ([ABI-7](../../architecture.md#kernel-abi-reservations)).
 

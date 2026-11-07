@@ -51,7 +51,7 @@ impl Renderer {
         let alone = &mut Runner::one();
         let runner = if self.plan.plugins || how != How::Parts { alone } else { runner };
         let t0 = Instant::now();
-        let b = self.pre(clock, runner);
+        let b = self.pre(clock, runner)?;
         let t1 = Instant::now();
         let failed = match how {
             How::Parts => run_graph(&mut self.plan.graph, &mut self.plan.schedule, &self.lanes.slots, &b, runner, &self.plan.report),
@@ -76,7 +76,7 @@ impl Renderer {
     pub fn profile_block(&mut self, clock: u64) -> Result<Vec<u64>> {
         let _mode = fpenv::Canon::enter();
         let order = topological(&self.parts());
-        let b = self.pre(clock, &mut Runner::one());
+        let b = self.pre(clock, &mut Runner::one())?;
         let mut ns = vec![0; order.len()];
         {
             let view = GraphView::new(&mut self.plan.graph);

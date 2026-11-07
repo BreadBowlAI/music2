@@ -24,9 +24,11 @@ use crate::audio::{self, AudioLane, AudioPlayer, KernelAssets};
 use crate::cells::{CellId, CellMap, CellSlots, Cells};
 use crate::event::Event;
 use crate::fault::{Code, Faults, Reporter};
+use crate::notefx::NoteEffect;
+use crate::sched::LIVE_ROOM;
 use crate::sched::{Caps, LaneSwap, NoteScheduler};
 use crate::taps::{TapSlots, Taps};
-use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, lane_slots, notes_data};
+use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, events_sources, fpenv, lane_slots, notes_data, notes_slot};
 
 /// What a box must be to move into a node (RENDER-25): an instance is kept only for a node of the
 /// same shape. Compared whole when a plan is prepared; its [`Shape::hash64`] is stored in the box,
@@ -35,16 +37,16 @@ use crate::{Exec, Graph, LaneRef, PackageSet, PluginInstance, Renderer, fpenv, l
 pub enum Shape {
     /// The kernel, the SHA-256 of its package's wasm module (which fixes its state ABI), and its
     /// settings (kernel ABI v1): its channel count, the hash of each asset it reads (`None`: it
-    /// reads silence), and its values, as bits. And each `events<note>` input's lane, how late it
-    /// comes (a note delay's frames) and its room (ABI-8): the plan sets them
-    /// ([`Shape::with_notes`]).
+    /// reads silence), and its values, as bits. And each `events<note>` input's lane, with the note
+    /// effects it comes through (RENDER-26a), how late it comes (a note delay's frames) and its
+    /// room (ABI-8): the plan sets them ([`Shape::with_notes`]).
     Kernel {
         id: String,
         wasm: Sha,
         channels: u8,
         assets: Vec<Option<Sha>>,
         values: Vec<u64>,
-        notes: Vec<(String, String, u32, usize)>,
+        notes: Vec<(String, String, Vec<u64>, u32, usize)>,
     },
     /// The plugin, its version and its channels. Not its state: a new committed blob is loaded
     /// into the instance (RENDER-26b), and a state path is the same for every pair the path pass
@@ -113,7 +115,7 @@ impl Shape {
 
     /// A kernel's shape, with what its `events<note>` inputs read: each one's lane, its delay's
     /// frames and its room (ABI-8).
-    pub(crate) fn with_notes(self, notes: Vec<(String, String, u32, usize)>) -> Shape {
+    pub(crate) fn with_notes(self, notes: Vec<(String, String, Vec<u64>, u32, usize)>) -> Shape {
         match self {
             Shape::Kernel { id, wasm, channels, assets, values, .. } => Shape::Kernel { id, wasm, channels, assets, values, notes },
             s => s,
@@ -215,6 +217,8 @@ pub struct PlanInfo {
     /// The graph it plays when it has delays: the checked one with them (RENDER-18). The next
     /// plan is wired against it.
     pub played: Option<Arc<Flat>>,
+    /// Its note effects (RENDER-41): each one's node and its lane slot.
+    pub(crate) effects: Vec<(usize, usize)>,
 }
 
 /// One plugin node of a plan, as the next plan prepared against it, and an export, see it.
@@ -460,6 +464,9 @@ pub(crate) enum LaneSlot {
     Notes(Option<NoteScheduler>),
     Control(Option<Arc<m2_song::ControlLane>>),
     Audio(Option<Box<AudioPlayer>>),
+    /// A note effect's (RENDER-41): read as a notes lane. Empty only while its plan is built; what
+    /// moves between plans is its kernel and its guard.
+    Effect(Option<Box<NoteEffect>>),
 }
 
 impl LaneSlot {
@@ -467,14 +474,17 @@ impl LaneSlot {
     pub(crate) fn events(&self) -> &[Event] {
         match self {
             LaneSlot::Notes(Some(s)) => s.events().as_slice(),
+            LaneSlot::Effect(Some(fx)) => fx.events(),
             _ => &[],
         }
     }
 
-    /// A notes lane's scheduler, while it is here.
-    pub(crate) fn scheduler(&self) -> Option<&NoteScheduler> {
+    /// The pitch and velocity of note `id` while its lane or note effect has it sounding: what
+    /// starts it again in a plugin an export lent (RENDER-1).
+    pub(crate) fn sounding_note(&self, id: u32) -> Option<(f32, f32)> {
         match self {
-            LaneSlot::Notes(Some(s)) => Some(s),
+            LaneSlot::Notes(Some(s)) => s.sounding_note(id),
+            LaneSlot::Effect(Some(fx)) => fx.sounding_note(id),
             _ => None,
         }
     }
@@ -492,6 +502,7 @@ impl LaneSlot {
             LaneSlot::Notes(s) => s.is_some(),
             LaneSlot::Control(c) => c.is_some(),
             LaneSlot::Audio(p) => p.is_some(),
+            LaneSlot::Effect(fx) => fx.as_ref().is_some_and(|fx| fx.filled()),
         }
     }
 
@@ -512,11 +523,13 @@ pub(crate) struct Lanes {
 /// A plan's lanes as prepared: what moves in, and the room each will have.
 pub(crate) struct LanePlan {
     pub(crate) lanes: Lanes,
-    /// By slot: the room a notes lane will have.
+    /// By slot: the room a notes lane or a note effect will have.
     pub(crate) caps: Vec<Caps>,
     pub(crate) moves: Vec<LaneMove>,
     /// By live slot: an audio lane's renders.
     pub(crate) audio: Vec<Option<Arc<AudioLane>>>,
+    /// Each note effect's node and its slot, after every lane's (RENDER-41).
+    pub(crate) effects: Vec<(usize, usize)>,
 }
 
 /// Whether two revisions' data for a lane play alike.
@@ -548,7 +561,13 @@ impl LanePlan {
         report: &Reporter,
     ) -> Result<LanePlan> {
         let refs = lane_slots(flat);
-        let mut p = LanePlan { lanes: Lanes { slots: vec![], refs: vec![], live: refs.len() }, caps: vec![], moves: vec![], audio: vec![] };
+        let mut p = LanePlan {
+            lanes: Lanes { slots: vec![], refs: vec![], live: refs.len() },
+            caps: vec![],
+            moves: vec![],
+            audio: vec![],
+            effects: vec![],
+        };
         for (s, r) in refs.iter().enumerate() {
             let (m, l) = (r.module.as_str(), r.lane.as_str());
             let from = keep.and_then(|k| Some((k, k.info.lanes.iter().position(|x| x.lane == *r)?)));
@@ -611,6 +630,49 @@ impl LanePlan {
         }
         p.lanes.refs = refs;
         Ok(p)
+    }
+
+    /// The note effects of `flat` (RENDER-41), each a slot after every lane and after its source's:
+    /// its address (its source's, then its own shape and room and its place among equals,
+    /// RENDER-26a) and its room (its source's, live notes counted in, times its `fan`, RENDER-42).
+    /// Against a plan that plays, the slot of the same address moves in, with its kernel and
+    /// guard. Their part of the plan is made by the builder.
+    pub(crate) fn effects(&mut self, flat: &Flat, packages: &PackageSet, assets: &KernelAssets, keep: Option<&Keep>) {
+        let mut seen: HashMap<(usize, u64), u64> = HashMap::new();
+        for &i in flat.order.iter().filter(|&&i| flat.nodes[i].is_note_effect()) {
+            let n = &flat.nodes[i];
+            let src = events_sources(&flat.nodes, n, packages).first().map(|s| s.1);
+            let Some(from) = src.and_then(|src| notes_slot(&flat.nodes, src, &self.lanes.refs, &self.effects)) else { continue };
+            // Its source's room, live notes counted in, times its `fan`; never past 8 times a lane's
+            // smallest, or its source's when that is more (RENDER-42).
+            let FOp::Kernel { kernel, .. } = &n.op else { continue };
+            let fan = m2_ir::Kernels::kernel(packages, kernel).map_or(1, |s| s.fan as usize);
+            let room = |x: usize, floor: usize| ((x + LIVE_ROOM) * fan).min((x + LIVE_ROOM).max(8 * floor));
+            let c = self.caps[from];
+            let caps = Caps { sounding: room(c.sounding, Caps::FLOOR.sounding), ons: room(c.ons, Caps::FLOOR.ons) };
+            // Its address: its source's, then its own shape, its source's room and its own, and its
+            // place among equals (RENDER-26a).
+            let mut h = DefaultHasher::new();
+            (Shape::of(n, packages, assets).map_or(0, |s| s.hash64()), c.sounding, c.ons, caps.sounding, caps.ons).hash(&mut h);
+            let kind = h.finish();
+            let nth = seen.entry((from, kind)).or_insert(0);
+            let mut h = DefaultHasher::new();
+            (kind, *nth).hash(&mut h);
+            *nth += 1;
+            let source = self.lanes.refs[from].clone();
+            let through = source.through.iter().copied().chain([h.finish()]).collect();
+            let r = LaneRef { through, ..source };
+            let to = self.lanes.slots.len();
+            if let Some(o) = keep.and_then(|k| k.info.lanes.iter().position(|x| x.lane == r)) {
+                self.moves.push(LaneMove { from: o as u32, to: to as u32, swap: None, grow: None });
+            }
+            self.lanes.slots.push(LaneSlot::Effect(None));
+            self.lanes.refs.push(r);
+            self.caps.push(caps);
+            self.audio.push(None);
+            self.effects.push((i, to));
+        }
+        self.lanes.live = self.lanes.slots.len();
     }
 
     /// The slot a ghost reads lane `r` through: the live one when the new plan has it, else the
@@ -733,6 +795,15 @@ impl Renderer {
         let shift = old.transport.pos() as i64 - self.transport.pos() as i64;
         for lm in &mut e.lanes {
             let (to, from) = (lm.to as usize, lm.from as usize);
+            // A note effect's kernel and guard move into this plan's slot, which reads this plan's
+            // nodes and lanes (RENDER-26a); one that stopped is reset, as a box is.
+            if let (LaneSlot::Effect(Some(n)), LaneSlot::Effect(Some(o))) = (&mut self.lanes.slots[to], &mut old.lanes.slots[from]) {
+                std::mem::swap(&mut n.held, &mut o.held);
+                if let Err(e) = n.entered() {
+                    self.plan.report.node(Code::of(&e), n.node);
+                }
+                continue;
+            }
             std::mem::swap(&mut self.lanes.slots[to], &mut old.lanes.slots[from]);
             match (&mut self.lanes.slots[to], lm.swap.take()) {
                 // What it replaces leaves with the spent entry.
@@ -790,7 +861,7 @@ impl Renderer {
         let live = self.lanes.live;
         for s in &mut self.lanes.slots[live..] {
             let kind = match s {
-                LaneSlot::Notes(_) => Kind::Events(m2_ir::EventType::Note),
+                LaneSlot::Notes(_) | LaneSlot::Effect(_) => Kind::Events(m2_ir::EventType::Note),
                 LaneSlot::Control(_) => Kind::Control(None),
                 LaneSlot::Audio(_) => Kind::Audio(1),
             };

@@ -35,6 +35,8 @@ m2-plugins::remote a_crash_marks_every_instance_of_its_process  speed: within 40
 m2-plugins::remote a_hung_call_ends_its_process  speed: ended within 480 ms to 3 s (core/plugins/tests/remote.rs)
 m2-plugins::remote a_main_thread_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
 m2-plugins::remote an_offline_call_that_hangs_ends_its_process  speed: ended within 950 ms to 5 s (core/plugins/tests/remote.rs)
+m2-runtime tests::events::a_flooded_guard_takes_a_small_part_of_a_block  speed: a flooded guard within a tenth of a block, 267 us (core/runtime/src/tests/events.rs)
+m2-runtime tests::events::eight_note_effects_take_a_small_part_of_a_block  speed: the lane pass within a tenth of a block, 267 us (core/runtime/src/tests/events.rs)
 m2-server export::tests::an_export_renders_on_its_own_while_a_second_is_refused  speed: answered within 250 ms (crates/server/src/export.rs)
 m2-server graph::audition::tests::audition_never_waits_for_a_compile  speed: sent within 20 ms, heard before the compile ends (crates/server/src/graph/audition_tests.rs)
 m2-server graph::lanes::tests::lane_previews_never_wait_for_a_compile  speed: within 500 ms (crates/server/src/graph/lanes_tests.rs)
