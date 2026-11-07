@@ -139,27 +139,52 @@ export function stepsWords(v: Values): string {
 
 // ---------------------------------------------------------------- a keyboard (Chord, Scale)
 
-/** The keys of an octave that are black, from C. */
-const BLACK = [1, 3, 6, 8, 10];
+/** Each white key of an octave, in semitones from C. */
+const WHITE = [0, 2, 4, 5, 7, 9, 11];
+/** Each black key of an octave: its semitones from C, and the white key it sits after. */
+const BLACK = [
+  [1, 0],
+  [3, 1],
+  [6, 3],
+  [8, 4],
+  [10, 5],
+];
+
+/** A key's box: its outline, and when `lit`, filled twice over, so a lit key stands out. */
+function key<D>(p: Painter<D, "scalar", "unit01">, x0: number, x1: number, y0: number, lit: boolean): Shape[] {
+  const corners = [x0, y0, x1, y0, x1, 0.98, x0, 0.98];
+  const fill = lit ? [p.fill(corners, { tone: "main" }), p.fill(corners, { tone: "main" })] : [];
+  return [...fill, p.line([...corners, x0, y0], { tone: lit ? "main" : "faint" })];
+}
 
 /**
- * A keyboard of `count` keys from C, across in semitones from it: each key a box, a black one
- * shorter; those `lit` filled, and each key named by `name` (when it gives one) at its foot.
+ * A piano keyboard of `whites` white keys from C, across in white keys: each white key a box, each
+ * black key a shorter one over the line between two; those `lit` (by semitones from C) filled; and
+ * each named by `name` when it gives a name, a white key's at its foot, a black key's at its box's.
  */
-function keyboard<D>(p: Painter<D, "semitones", "unit01">, count: number, lit: (k: number) => boolean, name: (k: number) => string | null): Shape[] {
+function keyboard<D>(p: Painter<D, "scalar", "unit01">, whites: number, lit: (semis: number) => boolean, name: (semis: number) => string | null): Shape[] {
   const shapes: Shape[] = [];
-  for (let k = 0; k < count; k++) {
-    const black = BLACK.includes(k % 12);
-    shapes.push(...box(p, k + 0.08, k + 0.92, black ? 0.4 : 0.04, 0.96, lit(k)));
-    const words = name(k);
-    if (words) shapes.push(p.label(k + 0.12, black ? 0.44 : 0.08, words));
+  const at = (w: number, semis: number) => 12 * Math.floor(w / 7) + semis;
+  for (let w = 0; w < whites; w++) {
+    const semis = at(w, WHITE[w % 7]);
+    shapes.push(...key(p, w + 0.04, w + 0.96, 0.02, lit(semis)));
+    const words = name(semis);
+    if (words) shapes.push(p.label(w + 0.25, 0.06, words));
+  }
+  for (let w = 0; w + 1 < whites; w++) {
+    const black = BLACK.find(([, after]) => after === w % 7);
+    if (!black) continue;
+    const semis = at(w, black[0]);
+    shapes.push(...key(p, w + 0.68, w + 1.32, 0.4, lit(semis)));
+    const words = name(semis);
+    if (words) shapes.push(p.label(w + 0.72, 0.44, words));
   }
   return shapes;
 }
 
-/** A keyboard picture of `count` keys from C (PACK-31, PACK-33). */
-function keyboardPicture(count: number): PictureDecl<"semitones", "unit01"> {
-  return view.picture({ x: axis.lin("semitones", 0, count), y: axis.lin("unit01", 0, 1) });
+/** A keyboard picture of `whites` white keys from C (PACK-31, PACK-33): across in white keys. */
+function keyboardPicture(whites: number): PictureDecl<"scalar", "unit01"> {
+  return view.picture({ x: axis.lin("scalar", 0, whites), y: axis.lin("unit01", 0, 1) });
 }
 
 /** C major's notes, from C: the key Chord and Scale draw in. */
@@ -197,18 +222,18 @@ export function chordOnC(shape: number, inKey: boolean, inversion: number): numb
   return [...new Set(notes)].filter((n) => n <= 127).sort((a, b) => a - b);
 }
 
-/** Chord's keyboard (PACK-31): two octaves and a note, C4 to C6. */
-export function chordPicture(): PictureDecl<"semitones", "unit01"> {
-  return keyboardPicture(25);
+/** Chord's keyboard (PACK-31): two octaves and a note, C4 to C6, fifteen white keys. */
+export function chordPicture(): PictureDecl<"scalar", "unit01"> {
+  return keyboardPicture(15);
 }
 
 /** The notes the chord plays for a C, lit and named (PACK-31). */
-export function chordKeys<D>(p: Painter<D, "semitones", "unit01">, v: Values): Shape[] {
+export function chordKeys<D>(p: Painter<D, "scalar", "unit01">, v: Values): Shape[] {
   const shape = SHAPES.indexOf(named(v, "shape", "shape") as (typeof SHAPES)[number]);
   const inKey = v.inKey;
   if (typeof inKey !== "boolean") throw new Error("its In key is set by a lane or worked out by the code, so it can't be drawn");
   const notes = chordOnC(Math.max(0, shape), inKey, within(Math.round(known(v, "inversion", "inversion")), 0, 3));
-  return keyboard(p, 25, (k) => notes.includes(60 + k), (k) => (notes.includes(60 + k) ? NAMES[k % 12] : null));
+  return keyboard(p, 15, (k) => notes.includes(60 + k), (k) => (notes.includes(60 + k) ? NAMES[k % 12] : null));
 }
 
 /** What a shape is called, in a sentence: in a key, and fixed. */
@@ -261,7 +286,7 @@ export function echoBars<D>(p: Painter<D, "beats", "unit01">, v: Values): Shape[
   const shapes: Shape[] = [];
   for (const e of echoLevels(every, repeats, fall, pitch)) {
     shapes.push(...box(p, e.at, e.at + every / 2, 0, e.level, true));
-    if (pitch !== 0 && e.at > 0) shapes.push(p.label(e.at, Math.min(0.92, e.level + 0.04), `${e.moves > 0 ? "+" : ""}${figures(e.moves)}`));
+    if (pitch !== 0 && e.at > 0) shapes.push(p.label(e.at, Math.min(0.8, e.level + 0.04), `${e.moves > 0 ? "+" : ""}${figures(e.moves)}`));
   }
   return shapes;
 }
@@ -281,15 +306,15 @@ export function echoWords(v: Values): string {
 
 // ---------------------------------------------------------------- Scale's keyboard (PACK-33)
 
-/** Scale's keyboard (PACK-33): the twelve notes from C. */
-export function scalePicture(): PictureDecl<"semitones", "unit01"> {
-  return keyboardPicture(12);
+/** Scale's keyboard (PACK-33): the twelve notes of an octave from C, seven white keys. */
+export function scalePicture(): PictureDecl<"scalar", "unit01"> {
+  return keyboardPicture(7);
 }
 
 /** The twelve notes from C, C major's lit, each named by the note it plays in C major at this shift (PACK-33). */
-export function scaleKeys<D>(p: Painter<D, "semitones", "unit01">, v: Values): Shape[] {
+export function scaleKeys<D>(p: Painter<D, "scalar", "unit01">, v: Values): Shape[] {
   const shift = within(Math.round(known(v, "shift", "shift")), -7, 7);
-  return keyboard(p, 12, inC, (k) => NAMES[((stepC(snapC(60 + k), shift) % 12) + 12) % 12]);
+  return keyboard(p, 7, inC, (k) => NAMES[((stepC(snapC(60 + k), shift) % 12) + 12) % 12]);
 }
 
 /** What `scaleKeys` draws, in words. */
