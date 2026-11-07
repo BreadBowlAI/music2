@@ -732,3 +732,65 @@ fn an_eight_band_curve_draws_inside_its_budget() {
     eprintln!("an eight-band curve: median {median:?}, p99 {p99:?}");
     assert!(p99 < Duration::from_millis(8), "p99 {p99:?} (median {median:?}): over the 8 ms budget");
 }
+
+/// The curve, its draw first working `hang` thousand steps of sums, then drawing as ever.
+fn spinning() -> String {
+    CURVE.replace(
+        "if ((v.hang ?? 0) > 0) for (;;) {}",
+        "let spun = 0;\n        for (let i = 0; i < (v.hang ?? 0) * 1000; i++) spun += Math.sqrt(i);\n        if (spun < 0) return [];",
+    )
+}
+
+// CARD-64: a draw's 20 ms is its own thread's CPU time, so a draw that waits for a CPU is never stopped
+// for the wait: the draw and sixty busy threads on one CPU, a draw of about 10 ms of work takes far past
+// 200 ms by the clock (where a backstop of ten times 20 ms stopped it) and draws; one of about 300 ms of
+// work is stopped. Linux only: macOS keeps no
+// thread on one CPU (m2_os::thread::one_cpu says so, and the test says it didn't run).
+#[test]
+fn a_draw_sharing_its_cpu_is_stopped_for_its_work_not_its_wait() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    // This thread and every thread it starts after, the runner's included, on one CPU.
+    if let Err(e) = m2_os::thread::one_cpu() {
+        eprintln!("not run here: {e}");
+        return;
+    }
+    let pack = Pack::new("spinning", &spinning());
+    let runner = Runner::new();
+    let desc = pack.descriptor("curve");
+    let draw = |hang: f64, gain: f64| {
+        let mut v = at_defaults();
+        (v["hang"], v["gain1"]) = (json!(hang), json!(gain));
+        let t = Instant::now();
+        let drawn = runner.draw(pack.ask_as("spinning", desc.clone(), "curve", v));
+        (drawn, t.elapsed())
+    };
+    // Its first draw runs twice; then how long a thousand steps take, alone on the CPU.
+    shapes(draw(0.0, 0.0).0);
+    let (drawn, took) = draw(20.0, 0.1);
+    shapes(drawn);
+    let per = took.as_secs_f64() / 20.0;
+    let ten = (0.01 / per).max(1.0);
+    // Sixty threads that only spin, on the same CPU: the draw gets about a sixty-first of it.
+    let busy = Arc::new(AtomicBool::new(true));
+    let spinners: Vec<_> = (0..60)
+        .map(|_| {
+            let busy = busy.clone();
+            std::thread::spawn(move || {
+                let mut x = 0u64;
+                while busy.load(Ordering::Relaxed) {
+                    x = std::hint::black_box(x.wrapping_add(1));
+                }
+            })
+        })
+        .collect();
+    let (drawn, took) = draw(ten, 0.2);
+    busy.store(false, Ordering::Relaxed);
+    for s in spinners {
+        s.join().unwrap();
+    }
+    assert!(took > Duration::from_millis(200), "the CPU was shared: {took:?} by the clock for about 10 ms of work");
+    shapes(drawn);
+    // About 300 ms of work: stopped at its 20 ms, whatever the clock says.
+    let why = cant(draw(30.0 * ten, 0.3).0);
+    assert!(why.starts_with("took too long and was stopped"), "{why}");
+}
