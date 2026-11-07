@@ -2,10 +2,10 @@
 //! wraps the notes of the call it goes before, and Bypass, Move and Remove work on one as on an
 //! effect, each one undo step.
 //!
-//! A note effect plays once track `notes-out` gives a kernel a notes output (ABI-2). Until then a
-//! song with one whose notes come from a kernel doesn't build, so the tests that write one wait for
-//! it (`#[ignore]`, naming it); the rest use a note effect that gives its notes on as they come,
-//! which builds today.
+//! The tests that write a note effect use one whose notes a kernel gives (ABI-15): one that only
+//! gives its notes on as they come makes no node for the planner's checks (WRITE-9), which then
+//! refuse the edit. That kernel builds but can't play (`testing::notes_pack`), and no test here
+//! plays it. The rest use a note effect that gives its notes on as they come.
 
 use std::path::{Path, PathBuf};
 
@@ -125,7 +125,6 @@ fn the_notes_a_note_effect_goes_around_are_found_in_any_player() {
 // PKG-21: + Note effect wraps the notes of the call it goes before, where they are written, and
 // imports it: one undo step. Before a note effect, it goes between that one and its notes.
 #[test]
-#[ignore = "waits for track notes-out: a kernel that gives notes (ABI-2), and a voice that plays a note effect's"]
 fn adding_a_note_effect_wraps_the_notes_of_what_plays_them() {
     let (f, _pack, mut s, text) = open("", "synth.pluck(lane.notes(\"chords\"))", true);
     let added = s.add_effect(rev(&s), &call(&s, "synth.pluck"), "@test/notes:arp").unwrap_or_else(|e| panic!("{e}"));
@@ -144,7 +143,6 @@ fn adding_a_note_effect_wraps_the_notes_of_what_plays_them() {
 // PKG-21 (review N1): before a `poly` and a plugin, as before a pack's instrument: their notes,
 // wrapped where they are written.
 #[test]
-#[ignore = "waits for track notes-out: a kernel that gives notes (ABI-2), and a voice and a plugin that play a note effect's"]
 fn a_note_effect_goes_before_a_poly_and_a_plugin() {
     m2_plugins::probe::install();
     let f = Fixture::new();
@@ -171,7 +169,6 @@ fn a_note_effect_goes_before_a_poly_and_a_plugin() {
 
 // PKG-21, PKG-3: Bypass, Move and Remove work on a note effect as on an effect, each one undo step.
 #[test]
-#[ignore = "waits for track notes-out: a kernel that gives notes (ABI-2), and a voice that plays a note effect's"]
 fn a_note_effect_is_bypassed_moved_and_removed_as_an_effect_is() {
     let (f, _pack, mut s, text) = open("arp, chord", "synth.pluck(arp(chord(lane.notes(\"chords\")), { gate: 0.5 }))", true);
 

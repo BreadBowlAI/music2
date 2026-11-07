@@ -78,6 +78,7 @@ pub(crate) fn notes_pack(dir: &Path, kernels: bool) {
         .to_string();
     if kernels {
         // std's module, whose `sine` exports a kernel's functions; this manifest says it gives notes.
+        // A song with it builds, but can't play: the kernel has sine's ports, not these.
         manifest += "wasm = \"k.wasm\"\n";
         std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm"), dir.join("k.wasm")).unwrap();
     }
