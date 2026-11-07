@@ -139,6 +139,11 @@ fn a_kind_typed_filters_by_kind() {
     assert_eq!(found(&items, "effects"), ["e"], "a kind alone");
     let q = Query::parse("Sounds");
     assert_eq!((q.kinds.as_slice(), q.words.is_empty()), (&[Kind::Sound][..], true));
+    // PKG-21 (review N7): a note effect's kind is typed as every answer prints it.
+    for typed in ["note-effect", "note-effects", "Note-Effect", "notefx"] {
+        assert_eq!(Kind::named(typed), Some(Kind::NoteEffect), "{typed}");
+    }
+    assert_eq!(Kind::named(Kind::NoteEffect.name()), Some(Kind::NoteEffect));
 }
 
 // LIB-1: what is typed is split into words as an item's text is, at every character that isn't a

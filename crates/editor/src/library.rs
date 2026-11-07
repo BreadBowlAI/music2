@@ -60,6 +60,7 @@ impl Kind {
     }
 
     /// The kind a word typed names: `instrument` or `instruments`, `effect`, `effects` or `fx`,
+    /// `note-effect`, `note-effects` or `notefx`,
     /// `sound`, `sounds`, `preset` or `presets`, `sample` or `samples`, `plugin` or `plugins`.
     pub fn named(word: &str) -> Option<Kind> {
         let w = word.to_lowercase();
@@ -67,6 +68,7 @@ impl Kind {
         match one {
             "instrument" => Some(Kind::Instrument),
             "effect" | "fx" => Some(Kind::Effect),
+            "note-effect" | "noteeffect" | "notefx" => Some(Kind::NoteEffect),
             "sound" | "preset" => Some(Kind::Sound),
             "sample" => Some(Kind::Sample),
             "plugin" => Some(Kind::Plugin),
