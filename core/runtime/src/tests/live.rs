@@ -314,6 +314,27 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
 // RENDER-7, HOST-6's twin for kernels: `time.playing` is 1 on every frame where the song plays,
 // through a seek and through a loop wrap that falls mid-block, and 0 while stopped, from the block
 // line the stop lands on.
+// RENDER-7: `time.tempo` is the tempo map's at each frame's beat, in bpm, from the block's runs as
+// `time.beats` is: the first tempo at the start, stopped or playing; the next from the frame whose
+// beat passes the change, inside a block; stopped there, it holds. (Its node copies this, as
+// `time.beats`' copies the beats; a node nothing reads isn't run, and no std kernel takes a bpm.)
+#[test]
+fn time_tempo_follows_the_tempo_map() {
+    let ir = song(json!([{"id": "o", "op": "kernel", "kernel": "std:sine"}]), "o", json!([]));
+    // 120 bpm, then 90 from beat 2.01: 1.005 s, frame 48 240, 112 frames into the block from 48 128.
+    let arr: Arrangement = serde_json::from_value(json!({"tempo": [{"beat": 0, "bpm": 120}, {"beat": 2.01, "bpm": 90}]})).unwrap();
+    let mut r = live(&ir, &with_notes(json!({"clips": []}), arr));
+    let mut tempo = |pos: u64, playing: bool| {
+        r.set_transport(Transport::new(pos, playing));
+        r.pre(0, &mut Runner::one()).tempo
+    };
+    assert!(tempo(0, false).iter().all(|&x| x == 120.0), "stopped at the start: the first tempo");
+    assert!(tempo(0, true).iter().all(|&x| x == 120.0), "playing from the start");
+    let change = tempo(48_128, true);
+    assert!(change[..110].iter().all(|&x| x == 120.0) && change[114..].iter().all(|&x| x == 90.0), "{change:?}");
+    assert!(tempo(48_384, false).iter().all(|&x| x == 90.0), "stopped after the change: it holds");
+}
+
 #[test]
 fn time_playing_follows_the_transport() {
     let ir = song(
