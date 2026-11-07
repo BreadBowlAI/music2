@@ -2,8 +2,9 @@
 //! CARD-133, CARD-136, CARD-140; D13): each against a render of the kernel it draws, within 0.5 dB.
 //! The Wavetable's tables, harmonic by harmonic; its filter's four shapes, and the polysynth's
 //! ladder, each as the change it makes to a note's harmonics; the FM synth's partials as a note
-//! starts. Each kernel is played straight, on a note at 187.5 Hz, so 8,192 samples at 48 kHz are 32
-//! whole cycles and each harmonic falls on one bin of a plain transform.
+//! starts. Each kernel is played straight, on a note at 187.5 Hz, for whole cycles of it (32 at 48
+//! and 96 kHz, 35 at 44.1 kHz), so each harmonic falls on one bin of a plain transform; at 44.1, 48
+//! and 96 kHz, each picture drawn at the rate played (CARD-87, CARD-99).
 
 use std::path::PathBuf;
 
@@ -13,10 +14,19 @@ use serde_json::{Value, json};
 
 use crate::testing::{Fixture, MANIFEST};
 
-const RATE: f64 = 48_000.0;
-/// The note every kernel here plays: 32 whole cycles in `WINDOW` samples.
+/// The rates each picture is checked at (CARD-99): a sum right only at 48 kHz fails at the others.
+const RATES: [f64; 3] = [44_100.0, 48_000.0, 96_000.0];
+/// The note every kernel here plays, heard for whole cycles of it.
 const F0: f64 = 187.5;
-const WINDOW: usize = 8192;
+
+/// How many samples at `rate` are heard: whole cycles of `F0`, about 32 of them (a sixth of a
+/// second). A cycle at 44.1 kHz is 235.2 samples, so whole cycles come five at a time there: 35.
+fn window(rate: f64) -> usize {
+    let cycle = rate / F0;
+    let whole = (1..=100).find(|k| ((*k as f64 * cycle) - (*k as f64 * cycle).round()).abs() < 1e-6).unwrap();
+    let cycles = whole * (32.0 / whole as f64).round() as usize;
+    (cycles as f64 * cycle).round() as usize
+}
 
 /// The note `F0` as a pitch in semitones (69 is A 440).
 fn pitch() -> f64 {
@@ -30,8 +40,9 @@ fn packages() -> Vec<(String, PathBuf)> {
     p
 }
 
-/// Picture `view` of the component `cid` at `values`: its shapes and words, as the runner draws them.
-fn drawn(cid: &str, view: &str, values: Value) -> Value {
+/// Picture `view` of the component `cid` at `values`, for a song at `rate`: its shapes and words, as
+/// the runner draws them.
+fn drawn(rate: f64, cid: &str, view: &str, values: Value) -> Value {
     let packages = packages();
     let catalog = m2_script::describe(&packages);
     let descriptor = catalog.components.get(cid).cloned().unwrap_or_else(|| panic!("no {cid}: {:?}", catalog.problems));
@@ -44,7 +55,7 @@ fn drawn(cid: &str, view: &str, values: Value) -> Value {
         view: view.into(),
         values: values.to_string(),
         memo: format!("{cid}\u{0}{view}"),
-        rate: 48_000,
+        rate: rate as u32,
     };
     match Runner::new().draw(ask) {
         Drawn::Shapes(json) => serde_json::from_str(&json).unwrap(),
@@ -63,11 +74,12 @@ fn points(drawn: &Value, kind: &str, name: Option<&str>) -> Vec<(f64, f64)> {
     s["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect()
 }
 
-/// `WINDOW` samples from `from` seconds of a song whose track `t` plays `call` (a kernel of a pack):
-/// its left side.
-fn render(call: &str, from: f64) -> Vec<f64> {
+/// `window(rate)` samples from `from` seconds of a song at `rate` whose track `t` plays `call` (a
+/// kernel of a pack): its left side.
+fn render(rate: f64, call: &str, from: f64) -> Vec<f64> {
     let f = Fixture::new();
-    f.write("music2.toml", format!("{MANIFEST}\"@m2/wavetable\" = \"1\"\n"));
+    let manifest = MANIFEST.replace("sample_rate = 48000", &format!("sample_rate = {rate}"));
+    f.write("music2.toml", format!("{manifest}\"@m2/wavetable\" = \"1\"\n"));
     f.write(
         "song.ts",
         format!(
@@ -77,15 +89,16 @@ fn render(call: &str, from: f64) -> Vec<f64> {
     let s = f.open();
     let rev = s.accepted();
     let mut r = Renderer::new(&rev.compiled.flat, &rev.compiled.data, &s.packages, rev.project.sample_rate()).unwrap();
-    let skip = (from * RATE) as usize;
-    let mut out = vec![[0.0f32; 2]; skip + WINDOW];
+    assert_eq!(rev.project.sample_rate() as f64, rate);
+    let skip = (from * rate) as usize;
+    let mut out = vec![[0.0f32; 2]; skip + window(rate)];
     r.process(&mut out).unwrap();
     out[skip..].iter().map(|x| x[0] as f64).collect()
 }
 
-/// The size of harmonic `h` of `F0` in `x`, `WINDOW` samples of whole cycles.
-fn harmonic(x: &[f64], h: f64) -> f64 {
-    let w = 2.0 * std::f64::consts::PI * h * F0 / RATE;
+/// The size of harmonic `h` of `F0` in `x`, whole cycles of it at `rate`.
+fn harmonic(x: &[f64], h: f64, rate: f64) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * h * F0 / rate;
     let (mut re, mut im) = (0.0, 0.0);
     for (n, v) in x.iter().enumerate() {
         re += v * (w * n as f64).cos();
@@ -116,9 +129,9 @@ fn wavetable(inputs: &str, table: usize) -> String {
     )
 }
 
-/// Harmonic `h` of `F0` in `x` (`WINDOW` samples of whole cycles) as a complex number, `(re, im)`.
-fn phasor(x: &[f64], h: f64) -> (f64, f64) {
-    let w = 2.0 * std::f64::consts::PI * h * F0 / RATE;
+/// Harmonic `h` of `F0` in `x` (whole cycles of it at `rate`) as a complex number, `(re, im)`.
+fn phasor(x: &[f64], h: f64, rate: f64) -> (f64, f64) {
+    let w = 2.0 * std::f64::consts::PI * h * F0 / rate;
     let (mut re, mut im) = (0.0, 0.0);
     for (n, v) in x.iter().enumerate() {
         re += v * (w * n as f64).cos();
@@ -147,9 +160,14 @@ fn wrapped(a: f64) -> f64 {
 // has the right sizes and the wrong shape).
 #[test]
 fn the_drawn_tables_are_the_wavetables_sound() {
-    for (t, table, position) in [(0, "basic", 0.5), (1, "pulse", 0.7), (2, "vowels", 0.35), (3, "harmonics", 0.6), (4, "digital", 0.4)] {
-        let pic =
-            drawn("@m2/wavetable:wavetable", "wavesA", json!({"tableA": table, "fileA": null, "positionA": position, "lfoPosition": 0}));
+    let tables = [(0, "basic", 0.5), (1, "pulse", 0.7), (2, "vowels", 0.35), (3, "harmonics", 0.6), (4, "digital", 0.4)];
+    for (rate, (t, table, position)) in RATES.into_iter().flat_map(|r| tables.map(|x| (r, x))) {
+        let pic = drawn(
+            rate,
+            "@m2/wavetable:wavetable",
+            "wavesA",
+            json!({"tableA": table, "fileA": null, "positionA": position, "lfoPosition": 0}),
+        );
         let frame: Vec<f64> = points(&pic, "line", Some("frame")).iter().map(|p| p.1).collect();
         let n = frame.len() - 1;
         // The drawing's harmonics: one cycle of n points.
@@ -166,11 +184,11 @@ fn the_drawn_tables_are_the_wavetables_sound() {
             .collect();
         // Its filter a highpass at 20 Hz, whose own turn of each harmonic (its digital curve: the
         // analog one at tan(π f / rate) over tan(π 20 / rate)) is taken back.
-        let out = render(&wavetable(&format!("a_position: {position}, filter: 2, cutoff: 20, q: 0.707"), t), 0.5);
+        let out = render(rate, &wavetable(&format!("a_position: {position}, filter: 2, cutoff: 20, q: 0.707"), t), 0.5);
         let heard: Vec<(f64, f64)> = (1..=20)
             .map(|h| {
-                let (re, im) = phasor(&out, h as f64);
-                let w = (std::f64::consts::PI * h as f64 * F0 / RATE).tan() / (std::f64::consts::PI * 20.0 / RATE).tan();
+                let (re, im) = phasor(&out, h as f64, rate);
+                let w = (std::f64::consts::PI * h as f64 * F0 / rate).tan() / (std::f64::consts::PI * 20.0 / rate).tan();
                 // H = −w² / (1 − w² + i w / q).
                 let (dr, di) = (1.0 - w * w, w / 0.707);
                 let (hr, hi) = (-w * w * dr / (dr * dr + di * di), w * w * di / (dr * dr + di * di));
@@ -187,9 +205,13 @@ fn the_drawn_tables_are_the_wavetables_sound() {
                 continue;
             }
             let m = db(heard[h].0 / htop);
-            assert!((m - d).abs() <= 0.5, "{table} at {position}: harmonic {} is drawn {d:.2} dB, played {m:.2} dB", h + 1);
+            assert!((m - d).abs() <= 0.5, "at {rate} Hz, {table} at {position}: harmonic {} is drawn {d:.2} dB, played {m:.2} dB", h + 1);
             let turn = wrapped(drew[h].1 - heard[h].1).to_degrees();
-            assert!(turn.abs() <= 5.0, "{table} at {position}: harmonic {} is drawn {turn:.1}° from where it is played", h + 1);
+            assert!(
+                turn.abs() <= 5.0,
+                "at {rate} Hz, {table} at {position}: harmonic {} is drawn {turn:.1}° from where it is played",
+                h + 1
+            );
             checked += 1;
         }
         assert!(checked >= 5, "{table}: {checked} harmonics checked");
@@ -201,23 +223,25 @@ fn the_drawn_tables_are_the_wavetables_sound() {
 #[test]
 fn the_drawn_filter_is_the_wavetables_filter() {
     // Table basic at 2/3 is a saw: every harmonic, each as the reference plays it.
-    let saw = |inputs: &str| render(&wavetable(&format!("a_position: 0.6666667, {inputs}"), 0), 0.5);
-    let open = saw("filter: 2, cutoff: 20, q: 0.707");
-    for (shape, place, cutoff, q) in
-        [("lowpass", 0, 1000.0, 2.0), ("bandpass", 1, 800.0, 4.0), ("highpass", 2, 600.0, 0.707), ("notch", 3, 1000.0, 1.0)]
-    {
-        let pic = drawn("@m2/wavetable:wavetable", "curve", json!({"filter": shape, "cutoff": cutoff, "q": q}));
+    let saw = |rate: f64, inputs: &str| render(rate, &wavetable(&format!("a_position: 0.6666667, {inputs}"), 0), 0.5);
+    let shapes = [("lowpass", 0, 1000.0, 2.0), ("bandpass", 1, 800.0, 4.0), ("highpass", 2, 600.0, 0.707), ("notch", 3, 1000.0, 1.0)];
+    for (rate, (shape, place, cutoff, q)) in RATES.into_iter().flat_map(|r| shapes.map(|x| (r, x))) {
+        let open = saw(rate, "filter: 2, cutoff: 20, q: 0.707");
+        let pic = drawn(rate, "@m2/wavetable:wavetable", "curve", json!({"filter": shape, "cutoff": cutoff, "q": q}));
         let curve = points(&pic, "line", Some("curve"));
-        let out = saw(&format!("filter: {place}, cutoff: {cutoff}, q: {q}"));
+        let out = saw(rate, &format!("filter: {place}, cutoff: {cutoff}, q: {q}"));
         let mut checked = 0;
-        for h in 1..=(RATE / 12.0 / F0) as usize {
+        for h in 1..=(rate / 12.0 / F0) as usize {
             let hz = h as f64 * F0;
             let d = curve_at(&curve, hz);
             if d < -60.0 {
                 continue;
             }
-            let m = db(harmonic(&out, h as f64) / harmonic(&open, h as f64));
-            assert!((m - d).abs() <= 0.5, "{shape} at {cutoff} Hz, q {q}: at {hz} Hz it is drawn {d:.2} dB, played {m:.2} dB");
+            let m = db(harmonic(&out, h as f64, rate) / harmonic(&open, h as f64, rate));
+            assert!(
+                (m - d).abs() <= 0.5,
+                "at {rate} Hz, {shape} at {cutoff} Hz, q {q}: at {hz} Hz it is drawn {d:.2} dB, played {m:.2} dB"
+            );
             checked += 1;
         }
         assert!(checked >= 10, "{shape}: {checked} harmonics checked");
@@ -238,24 +262,27 @@ fn synth(inputs: &str) -> String {
 // drawing's change from the filter wide open to these settings is the played one's.
 #[test]
 fn the_drawn_ladder_is_the_polysynths_filter() {
-    let curve_of = |cutoff: f64, resonance: f64| {
-        let pic = drawn("@m2/synths:synth-custom", "filter", json!({"cutoff": cutoff, "resonance": resonance}));
+    let curve_of = |rate: f64, cutoff: f64, resonance: f64| {
+        let pic = drawn(rate, "@m2/synths:synth-custom", "filter", json!({"cutoff": cutoff, "resonance": resonance}));
         (points(&pic, "line", Some("curve")), pic["words"].as_str().unwrap().to_string())
     };
-    let (wide, _) = curve_of(20_000.0, 0.0);
-    let open = render(&synth("cutoff: 20000, resonance: 0"), 0.5);
-    for (cutoff, resonance) in [(500.0, 0.0), (1200.0, 0.5), (2000.0, 0.8)] {
-        let (curve, words) = curve_of(cutoff, resonance);
-        let out = render(&synth(&format!("cutoff: {cutoff}, resonance: {resonance}")), 0.5);
+    for (rate, (cutoff, resonance)) in RATES.into_iter().flat_map(|r| [(500.0, 0.0), (1200.0, 0.5), (2000.0, 0.8)].map(|x| (r, x))) {
+        let (wide, _) = curve_of(rate, 20_000.0, 0.0);
+        let open = render(rate, &synth("cutoff: 20000, resonance: 0"), 0.5);
+        let (curve, words) = curve_of(rate, cutoff, resonance);
+        let out = render(rate, &synth(&format!("cutoff: {cutoff}, resonance: {resonance}")), 0.5);
         let mut checked = 0;
-        for h in 1..=(RATE / 12.0 / F0) as usize {
+        for h in 1..=(rate / 12.0 / F0) as usize {
             let hz = h as f64 * F0;
             let d = curve_at(&curve, hz) - curve_at(&wide, hz);
             if curve_at(&curve, hz) < -60.0 {
                 continue;
             }
-            let m = db(harmonic(&out, h as f64) / harmonic(&open, h as f64));
-            assert!((m - d).abs() <= 0.5, "cutoff {cutoff}, resonance {resonance}: at {hz} Hz it is drawn {d:.2} dB, played {m:.2} dB");
+            let m = db(harmonic(&out, h as f64, rate) / harmonic(&open, h as f64, rate));
+            assert!(
+                (m - d).abs() <= 0.5,
+                "at {rate} Hz, cutoff {cutoff}, resonance {resonance}: at {hz} Hz it is drawn {d:.2} dB, played {m:.2} dB"
+            );
             checked += 1;
         }
         assert!(checked >= 8, "cutoff {cutoff}: {checked} harmonics checked");
@@ -263,10 +290,10 @@ fn the_drawn_ladder_is_the_polysynths_filter() {
     }
 }
 
-/// The size of `hz` in `x`, through a Hann window, against the other sizes it gives: for partials
-/// that fall between a plain transform's bins (middle C's), each many bins from the next.
-fn windowed(x: &[f64], hz: f64) -> f64 {
-    let w = 2.0 * std::f64::consts::PI * hz / RATE;
+/// The size of `hz` in `x` at `rate`, through a Hann window, against the other sizes it gives: for
+/// partials that fall between a plain transform's bins (middle C's), each many bins from the next.
+fn windowed(x: &[f64], hz: f64, rate: f64) -> f64 {
+    let w = 2.0 * std::f64::consts::PI * hz / rate;
     let n = x.len() as f64;
     let (mut re, mut im) = (0.0, 0.0);
     for (i, v) in x.iter().enumerate() {
@@ -281,16 +308,21 @@ fn windowed(x: &[f64], hz: f64) -> f64 {
 // then: each drawn above −40 dB against the loudest is the played one's within 0.5 dB. Pair A alone
 // whose partials fold back below 0 and land together (1 and 1); both pairs at once, each with its
 // share of the mix (A's partials odd, B's even, so none land together); and a modulator so high that
-// the kernel limits its index, as the drawing must (review U3).
+// the kernel limits its index, as the drawing must (review U3), which hangs on the rate (CARD-87).
+// It is heard from 10 ms in, for 60 ms: its index falls from the note's start (slowly, at a fall of
+// 60 s), and where the limit puts it near a zero of a Bessel function (at 44.1 kHz) a partial's
+// level swings with it.
 #[test]
 fn the_drawn_partials_are_the_fm_synths_sound() {
     let middle_c = 440.0 * 2f64.powf(-9.0 / 12.0);
-    for (a, b, mix, tone) in [
+    let pairs = [
         ((1.0, 1.0, 1.5), (1.0, 14.0, 0.0), 0.0, 0.5),
         ((1.0, 2.0, 2.0), (2.0, 4.0, 1.2), 0.4, 0.75),
         ((1.0, 24.0, 4.0), (1.0, 14.0, 0.0), 0.0, 0.75),
-    ] {
+    ];
+    for (rate, (a, b, mix, tone)) in RATES.into_iter().flat_map(|r| pairs.map(|x| (r, x))) {
         let pic = drawn(
+            rate,
             "@m2/synths:fm-custom",
             "partials",
             json!({"carrierA": a.0, "modulatorA": a.1, "amountA": a.2, "carrierB": b.0, "modulatorB": b.1, "amountB": b.2, "mixB": mix, "tone": tone, "feedback": 0}),
@@ -304,14 +336,14 @@ fn the_drawn_partials_are_the_fm_synths_sound() {
                 s["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect::<Vec<_>>()
             })
             .collect();
-        // A long brightness decay, so the index holds over the 0.17 s heard.
+        // A long brightness decay, so the index holds over what is heard.
         let call = format!(
             "kernel('@m2/synths:fm', {{ pitch: 60, gate: 1, velocity: 0.8, ratio_a: {}, mod_a: {}, index_a: {}, fall_a: 60, ratio_b: {}, mod_b: {}, index_b: {}, fall_b: 60, mix_b: {mix}, feedback: 0, detune: 0, tone: {tone}, attack: 0.001, sustain: 1 }})",
             a.0, a.1, a.2, b.0, b.1, b.2
         );
-        let out = render(&call, 0.02);
+        let out: Vec<f64> = render(rate, &call, 0.01).into_iter().take((0.06 * rate) as usize).collect();
         let top = bars.iter().map(|b| b.1).fold(f64::MIN, f64::max);
-        let heard: Vec<f64> = bars.iter().map(|b| db(windowed(&out, b.0 * middle_c))).collect();
+        let heard: Vec<f64> = bars.iter().map(|b| db(windowed(&out, b.0 * middle_c, rate))).collect();
         let loudest = heard.iter().cloned().fold(f64::MIN, f64::max);
         let mut checked = 0;
         for (bar, h) in bars.iter().zip(&heard) {
@@ -320,14 +352,14 @@ fn the_drawn_partials_are_the_fm_synths_sound() {
             }
             assert!(
                 ((h - loudest) - (bar.1 - top)).abs() <= 0.5,
-                "{a:?} and {b:?}, mix {mix}, tone {tone}: at ratio {} it is drawn {:.2} dB, played {:.2} dB",
+                "at {rate} Hz, {a:?} and {b:?}, mix {mix}, tone {tone}: at ratio {} it is drawn {:.2} dB, played {:.2} dB",
                 bar.0,
                 bar.1 - top,
                 h - loudest
             );
             checked += 1;
         }
-        assert!(checked >= 2, "{a:?}: {checked} partials checked");
+        assert!(checked >= 2, "at {rate} Hz, {a:?}: {checked} partials checked");
     }
 }
 

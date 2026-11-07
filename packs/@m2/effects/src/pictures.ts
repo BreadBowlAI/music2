@@ -2,7 +2,8 @@
 // the picture words (CARD-61), with no kernel. Each is drawn from the effect's own sums, since none
 // can be measured with a click (CARD-82: a delay's or a reverb's click rings past 2 s, drive changes
 // with how loud it is, the moving effects change over time), and each is checked against a render
-// of the sound within 0.5 dB (CARD-99). They are worked out at 48 kHz.
+// of the sound within 0.5 dB (CARD-99), at 44.1, 48 and 96 kHz. Each is worked out at the song's
+// sample rate (`p.rate`, CARD-87), as its kernel works; words, which get no rate, at 48 kHz.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
@@ -12,8 +13,10 @@ import { dbWords, figures, known, secondsWords, type In, type Num, type Values }
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
-/** The rate the pictures are worked out at. */
-const RATE = 48_000;
+/** The rate a picture's words work their sums out at: words get no song's rate (CARD-87). */
+const WORDS = 48_000;
+/** The nearest 32-bit float to a number: what a kernel holds. */
+const f32 = Math.fround;
 
 // ---------------------------------------------------------------- delay
 
@@ -27,9 +30,9 @@ export function echoesPicture(): PictureDecl<"seconds", "db"> {
   return view.picture({ x: axis.time(ECHO_SECONDS), y: axis.lin("db", FLOOR, 0) });
 }
 
-/** The level of each sound a click makes through the delay, in dB: the click itself, then each echo, to −60 dB or 8 s. */
-export function echoLevels(time: number, feedback: number, mix: number): { at: number; db: number }[] {
-  const t = clamp(time, 1 / RATE, 2), fb = clamp(feedback, 0, 0.95), m = clamp(mix, 0, 1);
+/** The level of each sound a click makes through the delay at the song's rate `sr`, in dB: the click itself, then each echo, to −60 dB or 8 s. */
+export function echoLevels(time: number, feedback: number, mix: number, sr: number): { at: number; db: number }[] {
+  const t = clamp(time, 1 / sr, 2), fb = clamp(feedback, 0, 0.95), m = clamp(mix, 0, 1);
   const out = [{ at: 0, db: db(1 - m) }];
   for (let k = 1, level = m; k * t <= ECHO_SECONDS && db(level) > FLOOR; k++, level *= fb) out.push({ at: k * t, db: db(level) });
   return out;
@@ -44,10 +47,10 @@ export function echoLevels(time: number, feedback: number, mix: number): { at: n
  */
 export function echoes<D>(p: Painter<D, "seconds", "db">, v: Values, names: { time: In<D, "seconds">; feedback: Num<D>; mix: Num<D> }): Shape[] {
   const time = known(v, names.time, "time"), fb = known(v, names.feedback, "feedback"), mix = known(v, names.mix, "mix");
-  const all = echoLevels(time, fb, mix);
+  const all = echoLevels(time, fb, mix, p.rate);
   const bar = (e: { at: number; db: number }) => [e.at, Math.max(FLOOR, e.db)];
   // Each dot rests at the foot when its echo is under it (a mix of 0), so it can be dragged back up (review T9).
-  const t = clamp(time, 1 / RATE, 2);
+  const t = clamp(time, 1 / p.rate, 2);
   const first = all[1] ?? { at: t, db: FLOOR }, second = all[2] ?? { at: 2 * t, db: FLOOR };
   return [
     p.bars(bar(all[0]), { base: FLOOR, tone: "faint" }),
@@ -61,7 +64,7 @@ export function echoes<D>(p: Painter<D, "seconds", "db">, v: Values, names: { ti
 export function echoesWords(v: Values, names: { time: string; feedback: string; mix: string }): string {
   const [t, fb, m] = [v[names.time], v[names.feedback], v[names.mix]];
   if (typeof t !== "number" || typeof fb !== "number" || typeof m !== "number") return "Echoes that repeat and fade: one of its values is set by a cable or the code";
-  const n = echoLevels(t, fb, m).length - 1;
+  const n = echoLevels(t, fb, m, WORDS).length - 1;
   const fading = fb > 0 ? `, each ${dbWords(-db(clamp(fb, 0, 0.95)))} quieter` : ", only one";
   return `An echo every ${secondsWords(t)}${fading}: ${n} ${n === 1 ? "echo" : "echoes"} before −60 dB. Drag the first for its time and mix, the second for the feedback`;
 }
@@ -90,14 +93,14 @@ export function tailPicture(): PictureDecl<"seconds", "db"> {
 
 /** What every tail is drawn with, whatever its size and damping: see `room`. */
 export type Room = { before: number[]; grid: number; together: number[] };
-/** `room`'s sums, once worked out; and how many times they have been (for the test that a build never does). */
-let rooms: Room | null = null;
+/** `room`'s sums at each song's rate, once worked out; and how many times they have been (for the test that a build never does). */
+const rooms = new Map<number, Room>();
 let worked = 0;
 /** How many times this module has worked out its sums: a song's build never does (review T1). */
 export const sumsWorked = () => worked;
 
-/** The lengths, at 48 kHz, of the reverb's combs and all-passes, in samples (the kernel's own rounding). */
-const at48 = (l: number) => Math.floor((l * RATE) / 44_100);
+/** The length at the song's rate `sr` of one of the reverb's combs or all-passes, in samples: the kernel's own sum and rounding, in 32-bit floats. */
+const lengthAt = (l: number, sr: number) => Math.floor(f32(f32(l * sr) / 44_100));
 
 /**
  * What the reverb's four all-passes do to its combs' sound, the same for any size and damping, so
@@ -112,13 +115,14 @@ const at48 = (l: number) => Math.floor((l * RATE) / 44_100);
  *   echoes of themselves: each all-pass's is 7/3 at once and −(2/3) × 0.5^j at j lengths either way,
  *   to 4 lengths (within 0.02 dB of every length).
  */
-export function room(): Room {
-  if (rooms) return rooms;
+export function room(sr: number): Room {
+  const kept = rooms.get(sr);
+  if (kept) return kept;
   worked += 1;
-  const stages = ALLPASSES.map(at48), combs = COMBS.map(at48);
+  const stages = ALLPASSES.map((l) => lengthAt(l, sr)), combs = COMBS.map((l) => lengthAt(l, sr));
   // The energies, each all-pass after the last, gathered in 1 ms as they go (each bin its energy
   // and its energy × time), as far as 0.5 s.
-  const ms = RATE / 1000, bins = 500;
+  const ms = sr / 1000, bins = 500;
   let energy = new Float64Array(bins), timed = new Float64Array(bins);
   energy[0] = 1;
   for (const m of stages) {
@@ -139,7 +143,7 @@ export function room(): Room {
   }
   // How much of it all comes before each moment, every quarter of a millisecond, from 0 to 1:
   // `before[i]` is the share that comes before i quarters.
-  const grid = RATE / 4000;
+  const grid = sr / 4000;
   let all = 0;
   for (let b = 0; b < bins; b++) all += energy[b];
   const quarters = new Float64Array(4 * bins + 1);
@@ -177,30 +181,32 @@ export function room(): Room {
     for (let a = 0; a < combs.length; a++) for (let b = a + 1; b < combs.length; b++) sum += 2 * at(n * (combs[a] - combs[b]));
     together.push(sum / (combs.length * whole));
   }
-  return (rooms = { before, grid, together });
+  const made = { before, grid, together };
+  rooms.set(sr, made);
+  return made;
 }
 
 /**
- * How loud what is left of a reverb's tail is `t` seconds in, in dB from its start: all the sound
- * still to come after that time, as a click's tail gives it (its energy from then on). By the
- * kernel's own sums: a click with its lows below 200 Hz cut goes into eight combs, each sending
+ * How loud what is left of a reverb's tail is `t` seconds in, in dB from its start, at the song's
+ * rate `sr`: all the sound still to come after that time, as a click's tail gives it (its energy
+ * from then on). By the kernel's own sums: a click with its lows below 200 Hz cut goes into eight combs, each sending
  * back `0.7 + 0.28 × size` of what went round, through a one-pole low-pass of `0.4 × damping` that
  * makes the highs fade sooner; then through the four all-passes (`room`). Each comb's energy at
  * each frequency is the loop's gain, squared, smaller each time round it, and its first times round
  * are as loud together as `room` says.
  */
-export function tailLevel(size: number, damping: number): (t: number) => number {
+export function tailLevel(size: number, damping: number, sr: number): (t: number) => number {
   // The last tail asked for is kept, so a draw and its words work its sums out once.
-  if (last && last.size === size && last.damping === damping) return last.level;
-  const { before, grid, together } = room();
+  if (last && last.size === size && last.damping === damping && last.sr === sr) return last.level;
+  const { before, grid, together } = room(sr);
   const fb = 0.7 + 0.28 * clamp(size, 0, 1), d = 0.4 * clamp(damping, 0, 1);
-  const lengths = COMBS.map(at48);
+  const lengths = COMBS.map((l) => lengthAt(l, sr));
   // Each band's share of a click (its lows cut) and its loop's gain, squared.
   const share: number[] = [], gain: number[] = [];
   for (let i = 0; i < BANDS; i++) {
-    const [a, b] = [LOWEST * (RATE / 2 / LOWEST) ** (i / BANDS), LOWEST * (RATE / 2 / LOWEST) ** ((i + 1) / BANDS)];
+    const [a, b] = [LOWEST * (sr / 2 / LOWEST) ** (i / BANDS), LOWEST * (sr / 2 / LOWEST) ** ((i + 1) / BANDS)];
     const f = Math.sqrt(a * b), r = (f / CUT) ** 4;
-    const g = (fb * (1 - d)) ** 2 / (1 - 2 * d * Math.cos((2 * Math.PI * f) / RATE) + d * d);
+    const g = (fb * (1 - d)) ** 2 / (1 - 2 * d * Math.cos((2 * Math.PI * f) / sr) + d * d);
     share.push(((b - a) * r) / (1 + r));
     gain.push(g);
   }
@@ -235,7 +241,7 @@ export function tailLevel(size: number, damping: number): (t: number) => number 
   // spread it lands: the k-th time round's (from 0) for what comes k to k + 1 lengths before `t`.
   // Each share is read once, as the end of one span and the start of the next.
   const left = (t: number) => {
-    const now = t * RATE;
+    const now = t * sr;
     upTo(Math.ceil(now / shortest) + 1);
     let e = 0;
     for (let c = 0; c < lengths.length; c++) {
@@ -257,11 +263,11 @@ export function tailLevel(size: number, damping: number): (t: number) => number 
   };
   const whole = left(0);
   const level = (t: number) => 10 * Math.log10(Math.max(1e-12, left(t) / whole));
-  last = { size, damping, level };
+  last = { size, damping, sr, level };
   return level;
 }
 /** The last tail `tailLevel` worked out. */
-let last: { size: number; damping: number; level: (t: number) => number } | null = null;
+let last: { size: number; damping: number; sr: number; level: (t: number) => number } | null = null;
 
 /**
  * When a tail of `level` has fallen `down` dB, in seconds: `TAIL_SECONDS` at most. Doubled from a
@@ -292,10 +298,10 @@ export function tailFalls(level: (t: number) => number, down: number): number {
 /** How many points a tail is drawn with. */
 const TAIL_POINTS = 48;
 
-/** A tail's points, to where it has fallen 60 dB, and where it has fallen 30 dB: the last asked for kept, for a draw and its words. */
-function tailShape(size: number, damping: number): { points: number[]; half: number } {
-  if (shape && shape.size === size && shape.damping === damping) return shape;
-  const level = tailLevel(size, damping);
+/** A tail's points at the song's rate `sr`, to where it has fallen 60 dB, and where it has fallen 30 dB: the last asked for kept, for a draw and its words. */
+function tailShape(size: number, damping: number, sr: number): { points: number[]; half: number } {
+  if (shape && shape.size === size && shape.damping === damping && shape.sr === sr) return shape;
+  const level = tailLevel(size, damping, sr);
   const end = tailFalls(level, 60);
   const points: number[] = [];
   for (let i = 0; i < TAIL_POINTS; i++) {
@@ -310,10 +316,10 @@ function tailShape(size: number, damping: number): { points: number[]; half: num
       half = t0 + ((t1 - t0) * (-30 - y0)) / (y1 - y0);
       break;
     }
-  shape = { size, damping, points, half };
+  shape = { size, damping, sr, points, half };
   return shape;
 }
-let shape: { size: number; damping: number; points: number[]; half: number } | null = null;
+let shape: { size: number; damping: number; sr: number; points: number[]; half: number } | null = null;
 
 /**
  * A reverb's tail (CARD-118), from its own sums (`tailLevel`): how loud what is left of it is,
@@ -321,7 +327,7 @@ let shape: { size: number; damping: number; points: number[]; half: number } | n
  * fallen 30 dB, that moves the size as its knob does (to the right, longer) and by the wheel.
  */
 export function tail<D>(p: Painter<D, "seconds", "db">, v: Values, names: { size: Num<D>; damping: Num<D> }): Shape[] {
-  const { points, half } = tailShape(known(v, names.size, "size"), known(v, names.damping, "damping"));
+  const { points, half } = tailShape(known(v, names.size, "size"), known(v, names.damping, "damping"), p.rate);
   return [
     p.fill(points, { base: -60, tone: "faint" }),
     p.line(points, { name: "tail" }),
@@ -334,7 +340,7 @@ export function tailWords(v: Values, names: { size: string; damping: string }): 
   const [s, d] = [v[names.size], v[names.damping]];
   if (typeof s !== "number" || typeof d !== "number") return "A room's tail as it fades: its size or damping is set by a cable or the code";
   const highs = d > 0 ? `; damping ${figures(d)} makes its highs fade sooner` : "";
-  return `Its tail fades 30 dB in ${secondsWords(tailShape(s, d).half)}${highs}. Drag the dot for the size`;
+  return `Its tail fades 30 dB in ${secondsWords(tailShape(s, d, WORDS).half)}${highs}. Drag the dot for the size`;
 }
 
 // ---------------------------------------------------------------- moving effects
@@ -346,17 +352,57 @@ export function motionPicture<U extends Unit>(unit: U, lo: number, hi: number, l
 
 /** How many points a second of motion is drawn with. */
 const MOTION_POINTS = 241;
-/** Where an LFO is `t` seconds in, from 0 to 1 of its cycle, as the kernels' `Phase` counts it from the song's start (at most `most` cycles a second). */
-const phaseAt = (rate: number, t: number, most = 20) => ((clamp(rate, 0, most) * Math.round(t * RATE)) / RATE) % 1;
 /** A second's times. */
 const second = () => Array.from({ length: MOTION_POINTS }, (_, i) => i / (MOTION_POINTS - 1));
+
+/**
+ * Where an LFO is, from 0 to 1 of its cycle, as the kernels' `Phase` counts it from the song's
+ * start: `rate` (at most `most` cycles a second) over the song's rate `sr` added each sample, in
+ * 32-bit floats, so it drifts from the exact phase as the kernel's does (most at a high rate: about
+ * 5 × 10⁻⁴ of a cycle by 0.8 s at 96 kHz). The function given is the phase at sample `n`, asked for
+ * `n` that only grow. A 32-bit float in [2^e, 2^(e+1)) is a whole number of 2^(e − 23), so each step
+ * inside it adds the step rounded to that: the phase is walked a run of such steps at a time.
+ */
+function phases(rate: number, sr: number, most: number): (n: number) => number {
+  const step = f32(f32(clamp(rate, 0, most)) / f32(sr));
+  let at = 0, done = 0;
+  const one = () => {
+    at = f32(at + step);
+    if (at >= 1) at = f32(at - 1);
+    done += 1;
+  };
+  return (n) => {
+    while (done < n && step > 0) {
+      if (at === 0) {
+        one();
+        continue;
+      }
+      let e = Math.floor(Math.log2(at));
+      if (2 ** e > at) e -= 1;
+      else if (2 ** (e + 1) <= at) e += 1;
+      const ulp = 2 ** (e - 23), q = step / ulp;
+      // A step half way between two floats rounds to the even one, which hangs on where it lands.
+      if (q % 1 === 0.5) {
+        one();
+        continue;
+      }
+      const s = Math.round(q) * ulp;
+      const inside = s > 0 ? Math.max(0, Math.ceil((2 ** (e + 1) - at) / s) - 1) : n - done;
+      const k = Math.min(inside, n - done);
+      at += k * s;
+      done += k;
+      if (done < n) one();
+    }
+    return at;
+  };
+}
 
 /** The chorus's two copies (std:chorus): each `base` plus up to `depth` × `sweep` seconds late. */
 const CHORUS = { base: 0.008, sweep: 0.006 } as const;
 
-/** How late each of the chorus's two copies is `t` seconds in, in seconds (std:chorus's own sum). */
-export function chorusDelays(rate: number, depth: number, t: number): [number, number] {
-  const s = Math.sin(2 * Math.PI * phaseAt(rate, t)), w = clamp(depth, 0, 1) * CHORUS.sweep;
+/** How late each of the chorus's two copies is with its LFO at `phase`, in seconds (std:chorus's own sum). */
+export function chorusDelays(depth: number, phase: number): [number, number] {
+  const s = Math.sin(2 * Math.PI * phase), w = clamp(depth, 0, 1) * CHORUS.sweep;
   return [CHORUS.base + w * (0.5 + 0.5 * s), CHORUS.base + w * (0.5 - 0.5 * s)];
 }
 
@@ -366,9 +412,10 @@ export function chorusDelays(rate: number, depth: number, t: number): [number, n
  */
 export function chorusMotion<D>(p: Painter<D, "seconds", "seconds">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
+  const phase = phases(rate, p.rate, 20);
   const one: number[] = [], two: number[] = [];
   for (const t of second()) {
-    const [a, b] = chorusDelays(rate, depth, t);
+    const [a, b] = chorusDelays(depth, phase(Math.round(t * p.rate)));
     one.push(t, a);
     two.push(t, b);
   }
@@ -379,14 +426,14 @@ export function chorusMotion<D>(p: Painter<D, "seconds", "seconds">, v: Values, 
 const PHASER = { centre: 640, octaves: 2.5 } as const;
 
 /**
- * Where the phaser's notches are `t` seconds in, in Hz (`@m2/effects:phaser`'s own sum): six
- * all-pass stages around a frequency that sweeps `rate` times a second, mixed with the sound, cut
- * the sound where their turn is half a cycle, at three places round that frequency.
+ * Where the phaser's notches are with its LFO at `phase`, at the song's rate `sr`, in Hz
+ * (`@m2/effects:phaser`'s own sum): six all-pass stages around a frequency that sweeps with the LFO,
+ * mixed with the sound, cut the sound where their turn is half a cycle, at three places round it.
  */
-export function notchesAt(rate: number, depth: number, t: number): [number, number, number] {
-  const s = Math.sin(2 * Math.PI * phaseAt(rate, t));
-  const f = clamp(PHASER.centre * 2 ** (PHASER.octaves * clamp(depth, 0, 1) * s), 10, 0.45 * RATE);
-  const g = Math.tan((Math.PI * f) / RATE), back = RATE / Math.PI;
+export function notchesAt(depth: number, phase: number, sr: number): [number, number, number] {
+  const s = Math.sin(2 * Math.PI * phase);
+  const f = clamp(PHASER.centre * 2 ** (PHASER.octaves * clamp(depth, 0, 1) * s), 10, 0.45 * sr);
+  const g = Math.tan((Math.PI * f) / sr), back = sr / Math.PI;
   return [back * Math.atan(g * TURNS[0]), back * Math.atan(g * TURNS[1]), back * Math.atan(g * TURNS[2])];
 }
 /** Where the six stages' turn is half a cycle, against the sweep's frequency: tan(π/12), tan(3π/12), tan(5π/12). */
@@ -395,9 +442,10 @@ const TURNS = [1, 3, 5].map((k) => Math.tan((k * Math.PI) / 12));
 /** A phaser's motion over a second (CARD-120): its three notches across frequency, the lines `low`, `mid` and `high`. */
 export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
+  const phase = phases(rate, p.rate, 20);
   const lines: number[][] = [[], [], []];
   for (const t of second()) {
-    const [low, mid, high] = notchesAt(rate, depth, t);
+    const [low, mid, high] = notchesAt(depth, phase(Math.round(t * p.rate)), p.rate);
     lines[0].push(t, low);
     lines[1].push(t, mid);
     lines[2].push(t, high);
@@ -405,15 +453,16 @@ export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names
   return [p.line(lines[0], { name: "low", tone: "soft" }), p.line(lines[1], { name: "mid" }), p.line(lines[2], { name: "high", tone: "soft" })];
 }
 
-/** How loud the tremolo leaves a sound `t` seconds in, from 0 to 1 (its kernel's own sum). */
-export function tremoloAt(rate: number, depth: number, t: number): number {
-  return 1 - clamp(depth, 0, 1) * (0.5 - 0.5 * Math.cos(2 * Math.PI * phaseAt(rate, t, 40)));
+/** How loud the tremolo leaves a sound with its LFO at `phase`, from 0 to 1 (its kernel's own sum). */
+export function tremoloAt(depth: number, phase: number): number {
+  return 1 - clamp(depth, 0, 1) * (0.5 - 0.5 * Math.cos(2 * Math.PI * phase));
 }
 
 /** A tremolo's motion over a second (CARD-121): how loud it leaves the sound, the line `level`. */
 export function tremoloMotion<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
-  const points = second().flatMap((t) => [t, tremoloAt(rate, depth, t)]);
+  const phase = phases(rate, p.rate, 40);
+  const points = second().flatMap((t) => [t, tremoloAt(depth, phase(Math.round(t * p.rate)))]);
   return [p.fill(points, { base: 0, tone: "faint" }), p.line(points, { name: "level" })];
 }
 
@@ -453,19 +502,19 @@ export function drive<D>(p: Painter<D, "bipolar", "bipolar">, v: Values, names: 
 export const CRUSH_HZ = 1000;
 
 /**
- * One cycle of a 1 kHz sine as the bitcrusher plays it at 48 kHz (`@m2/effects:bitcrush`'s own sum),
- * a value for each sample: held each time its clock, going up by `rate` over the song's rate each
- * sample, passes 1, and rounded to `bits` (2^(bits − 1) steps each side of 0), then mixed with the
- * sine by `mix`.
+ * One cycle of a 1 kHz sine as the bitcrusher plays it at the song's rate `sr`
+ * (`@m2/effects:bitcrush`'s own sum), a value for each sample: held each time its clock, going up
+ * by `rate` over the song's rate each sample (in 32-bit floats, as the kernel adds it), passes 1,
+ * and rounded to `bits` (2^(bits − 1) steps each side of 0), then mixed with the sine by `mix`.
  */
-export function crushed(bits: number, rate: number, mix: number): number[] {
-  const steps = 2 ** (clamp(bits, 1, 24) - 1), m = clamp(mix, 0, 1), step = clamp(rate, 20, RATE) / RATE;
+export function crushed(bits: number, rate: number, mix: number, sr: number): number[] {
+  const steps = 2 ** (clamp(bits, 1, 24) - 1), m = clamp(mix, 0, 1), step = f32(f32(clamp(rate, 20, sr)) / f32(sr));
   const out: number[] = [];
   let clock = 1, held = 0;
-  for (let n = 0; n < RATE / CRUSH_HZ; n++) {
-    const x = Math.sin((2 * Math.PI * CRUSH_HZ * n) / RATE);
-    if (clock >= 1) [clock, held] = [clock - 1, Math.round(x * steps) / steps];
-    clock += step;
+  for (let n = 0; n < sr / CRUSH_HZ; n++) {
+    const x = Math.sin((2 * Math.PI * CRUSH_HZ * n) / sr);
+    if (clock >= 1) [clock, held] = [f32(clock - 1), Math.round(x * steps) / steps];
+    clock = f32(clock + step);
     out.push(x * (1 - m) + held * m);
   }
   return out;
@@ -478,10 +527,11 @@ export function crushPicture(): PictureDecl<"seconds", "bipolar"> {
 
 /** The bitcrusher's cycle (CARD-123): the sine (faint) and, over it, each sample as `crushed` gives it, held for its sample: the line `crushed`. */
 export function crush<D>(p: Painter<D, "seconds", "bipolar">, v: Values, names: { bits: Num<D>; rate: Num<D>; mix: Num<D> }): Shape[] {
-  const samples = crushed(known(v, names.bits, "bits"), known(v, names.rate, "rate"), known(v, names.mix, "mix"));
+  const samples = crushed(known(v, names.bits, "bits"), known(v, names.rate, "rate"), known(v, names.mix, "mix"), p.rate);
   const sine: number[] = [], held: number[] = [];
   for (let i = 0; i <= 96; i++) sine.push(i / 96 / CRUSH_HZ, Math.sin((2 * Math.PI * i) / 96));
-  samples.forEach((y, n) => held.push(n / RATE, y, (n + 1) / RATE, y));
+  // Each sample held for its time, the last up to the cycle's end.
+  samples.forEach((y, n) => held.push(n / p.rate, y, Math.min(1 / CRUSH_HZ, (n + 1) / p.rate), y));
   return [p.line(sine, { tone: "faint" }), p.line(held, { name: "crushed" })];
 }
 

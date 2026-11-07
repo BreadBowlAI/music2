@@ -7,5 +7,5 @@ hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 
 [[pack]]
 name = "@m2/synths"
-version = "2.2.0"
-hash = "sha256:e96f2437295933e8c3bdba97fe463719f1f9b86ee176abc7d34a017a70f2e2d8"
+version = "2.3.0"
+hash = "sha256:746654a595c402c8baeb5261740ff4f26d271b44c736226ed6ee37be0d836c3d"
