@@ -1,7 +1,7 @@
 // @m2/mixing's parametric EQ from + Effect (PACK-26, PACK-10): added after the keys' pluck, it
 // writes its call, its import, the pack's [dependencies] line and its lock in one edit. Its card
-// shows its eight bands under their headings, and no picture (no view draws an EQ's whole curve
-// yet). A band's shape is a menu: picking one writes its name, one undo step, and ⌘Z takes the code
+// shows its eight bands under their headings, then its curve (CARD-111), under More on the patch,
+// drawn small there (CARD-105). A band's shape is a menu: picking one writes its name, one undo step, and ⌘Z takes the code
 // back byte for byte; turning band 3's frequency knob writes it, one undo step, undone as one. One
 // more ⌘Z takes the EQ out, with its import, dependency and lock. Each state linted.
 //
@@ -38,8 +38,8 @@ await page.click('[data-effect-browser] [data-effect="eq"]');
 const added = 'eq(pluck(lane.notes("chords")))';
 check(await until(() => read("tracks/keys.ts").includes(added), 15000), `the EQ wraps the pluck: ${read("tracks/keys.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/keys.ts").includes('import { eq } from "@m2/mixing";'), "and imports it from @m2/mixing");
-check(/^"@m2\/mixing" = "1\.1"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
-check(/name = "@m2\/mixing"\nversion = "1\.1\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(/^"@m2\/mixing" = "1\.2"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
+check(/name = "@m2\/mixing"\nversion = "1\.2\.0"/.test(read("music2.lock")), "music2.lock locks it");
 const withEq = files();
 
 // ---------------------------------------------------------------- its card: eight bands, band 8's curve
@@ -48,17 +48,23 @@ const card = '[data-module="keys"] [data-node="eq"]';
 check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), "the EQ's card shows its groups");
 const groups = await page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
 const bands = Array.from({ length: 8 }, (_, i) => `Band ${i + 1}`);
-check(JSON.stringify(groups) === JSON.stringify(bands), `its eight bands, in order: ${JSON.stringify(groups)}`);
+check(JSON.stringify(groups) === JSON.stringify([...bands, "More"]), `its eight bands, in order, then More, its curve: ${JSON.stringify(groups)}`);
 const rows = await page.$$eval(`${card} [data-node-body] > *`, (els) => els.map((e) => e.dataset.group ?? e.dataset.knob ?? e.dataset.view ?? "?"));
 const at = (x) => rows.indexOf(x);
 check(
   at("Band 3") < at("On 3") && at("On 3") < at("Shape 3") && at("Shape 3") < at("Frequency 3") && at("Gain 3") < at("Q 3") && at("Q 3") < at("Band 4"),
   `each band's values under its heading: ${rows.slice(at("Band 3"), at("Band 4") + 1).join(", ")}`,
 );
-check(at("Band 8") < at("Q 8") && at("Q 8") === rows.length - 1, `band 8 ends with its Q: ${rows.slice(at("Band 8")).join(", ")}`);
+check(at("Band 8") < at("Q 8") && at("Q 8") === at("More") - 1 && at("curve") === rows.length - 1, `band 8 ends with its Q, then its curve: ${rows.slice(at("Band 8")).join(", ")}`);
 const kinds = await page.$$eval(`${card} [data-knob="Shape 3"], ${card} [data-knob="On 3"], ${card} [data-knob="Gain 3"]`, (els) => els.map((e) => `${e.dataset.knob} ${e.dataset.kind} ${e.dataset.value}`));
 check(JSON.stringify(kinds) === JSON.stringify(["On 3 switch true", 'Shape 3 choice "bell"', "Gain 3 number 0"]), `a band's switch, menu and knob: ${JSON.stringify(kinds)}`);
-check(!(await page.$(`${card} [data-view]`)), "it draws no picture: no view draws an EQ's whole curve yet");
+// Its own size, before the patch's zoom: no taller than a patch's picture (CARD-105).
+await seen(`${card} [data-picture="curve"]`);
+const size = () => page.$eval(`${card} [data-picture="curve"] svg`, (e) => e.dataset.size).catch(() => null);
+await until(async () => Number((await size())?.split("x")[1]) > 0, 15000);
+const curve = await size();
+const tall = Number(curve?.split("x")[1]);
+check(tall > 0 && tall <= 48, `it draws its curve, at most 48 px tall on the patch (CARD-105): ${curve}`);
 await linted(card, "the EQ's card");
 await page.screenshot({ path: `${process.argv[2]}/mixing-eq.png` });
 
