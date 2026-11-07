@@ -338,3 +338,34 @@ export function lfoWords(v: { readonly [k: string]: unknown }, names: { period: 
   const every = typeof period === "number" ? `every ${figures(period)} ${period === 1 ? "beat" : "beats"}` : "at a rate set elsewhere";
   return `A ${typeof shape === "string" ? shape : "sine"} wave from 0 to 1, once ${every}`;
 }
+
+// ---------------------------------------------------------------- a ceiling
+
+/**
+ * A limiter's last 3 seconds (CARD-143): the level going in (faint) and coming out, below 0 dB, and
+ * how far it turned the sound down (its `meter`), above 0 dB, up to 12, every layer on the picture's
+ * own axis in dB (CARD-103), from −48 dB at the foot.
+ */
+export function ceilingPicture(o: { meter?: string } = {}): PictureDecl<"seconds", "db"> {
+  const meter = o.meter ?? "reduction";
+  return view.picture({
+    x: axis.time(3),
+    y: axis.lin("db", -48, 12),
+    live: [live.history(live.level("in"), { tone: "faint" }), live.history(live.level("out")), live.history(live.meter(meter)), live.meter(meter)],
+  });
+}
+
+/**
+ * A ceiling's shapes (CARD-143): a guide line at 0 dB, one at the right edge (now), the ceiling's
+ * line, and a dot on it, in the middle, that moves the ceiling up and down, under the pointer. Its
+ * ceiling is a control in dB (checked by type, CARD-62).
+ */
+export function ceiling<D>(p: Painter<D, "seconds", "db">, v: { readonly [k: string]: unknown }, names: { ceiling: In<D, "db"> }): Shape[] {
+  const c = known(v[names.ceiling] as number | null, "ceiling");
+  return [
+    p.mark("y", 0, "0 dB: the levels below, how far it turned down above"),
+    p.mark("x", 3, "Now: the last 3 seconds run from the left"),
+    p.mark("y", c, `The ceiling: ${dbWords(c)}`),
+    p.handle(1.5, c, { y: names.ceiling } as Moves<D, "seconds", "db">),
+  ];
+}

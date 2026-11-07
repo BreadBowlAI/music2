@@ -4,6 +4,7 @@ import { busOf, component, control, each, feed, kernel, port, setting, signature
 import { gain, pan } from "./dsp";
 import { limit } from "./fx";
 import { sum } from "./math";
+import { ceiling as drawCeiling, ceilingPicture, dbWords } from "./pictures";
 
 /** A send to a bus channel: its level (dB), after the channel's pan and fader, or before them with `pre: true`. */
 export type Send = Value | { db?: Value; pre?: boolean };
@@ -121,8 +122,16 @@ export const master = component(
     inputs: { in: port.audio() },
     controls: { db: control.db(0).range(-60, 12), ceiling: control.db(-1).range(-24, 0) },
     output: port.audio(),
+    // Its ceiling over the song's last seconds, to drag, from its limiter's own meter (CARD-144).
+    editor: { views: { level: ceilingPicture() }, face: ["level", "db", "ceiling"] },
   },
   // Stereo from the start, sample for sample: a mono mix whose first channel is panned turns
   // stereo, and the gain and limiter keep going rather than start again (design-8b §5.1).
   (x: Audio, { db, ceiling }: Params) => limit(gain(kernel("std:stereo", { in: x }), db), ceiling),
+  {
+    level: {
+      draw: (v, p) => drawCeiling(p, v, { ceiling: "ceiling" }),
+      words: (v) => `The song's last 3 seconds: no peak passes its ceiling, ${v.ceiling === null ? "set elsewhere" : dbWords(v.ceiling)}. Drag the line to move it`,
+    },
+  },
 );

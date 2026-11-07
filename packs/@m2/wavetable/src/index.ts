@@ -15,18 +15,23 @@
 // so a high note doesn't fold back into a low hum, and are made once for all the voices of a sound.
 // `voices: 1` plays one note at a time, sliding over `glide` between notes that overlap (std/dsp's
 // `mono`); with more, each note gets its own voice and `glide` does nothing.
+//
+// Its card (CARD-131 to CARD-135): table A on its face, its frames stacked, to drag across for
+// position, with the LFO's reach on it; tabs for each oscillator, the filter (its own shape's curve),
+// the two envelopes (std's) and the LFO; what no tab names is More.
 
 import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+import { curvePicture, envelope, envelopePicture, envelopeWords } from "std/pictures";
+import { filter, filterWords, lfo, lfoPicture, lfoWords, table, tablePicture, tableWords, TABLES } from "./pictures";
 
-/** The names each of its pictures reads (std/pictures, CARD-96, CARD-97): the amp envelope, the filter's, and the filter. */
+/** The names each of its pictures reads: the envelopes (std/pictures, CARD-96), its tables, its filter and its LFO (its own, CARD-131 to CARD-134). */
 const AMP = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 const FILTER_ENV = { attack: "filterAttack", decay: "filterDecay", sustain: "filterSustain", release: "filterRelease" } as const;
-const FILTER = { cutoff: "cutoff", q: "q" } as const;
-
-/** The built-in tables, in the order the kernel numbers them. */
-const TABLES = ["basic", "pulse", "vowels", "harmonics", "digital"] as const;
+const FILTER = { shape: "filter", cutoff: "cutoff", q: "q" } as const;
+const TABLE_A = { table: "tableA", file: "fileA", position: "positionA", lfo: "lfoPosition" } as const;
+const TABLE_B = { table: "tableB", file: "fileB", position: "positionB", lfo: "lfoPosition" } as const;
+const LFO = { rate: "lfoRate", position: "lfoPosition", cutoff: "lfoCutoff" } as const;
 
 /** A time, from a millisecond to 10 seconds, on a log scale so the short ones get room. */
 const TIME = (s: number) => control.secs(s).range(0.001, 10).log();
@@ -86,16 +91,22 @@ export const wavetable = component(
       category: "Instruments",
       description: "Two oscillators that slide through tables of waveforms: from soft to bright, vowels to digital",
       views: {
+        wavesA: tablePicture(),
+        wavesB: tablePicture(),
         amp: envelopePicture(),
         curve: curvePicture({ live: false }),
         filterEnvelope: envelopePicture(),
+        lfo: lfoPicture(),
       },
+      // The face (CARD-135): table A, to drag through, and the four knobs a sound starts from. The
+      // rest are tabs; what no tab names (unison, glide, the level) is More.
+      face: ["wavesA", "positionA", "cutoff", "attack", "release"],
       groups: {
-        Oscillators: ["tableA", "fileA", "positionA", "pitchA", "levelA", "tableB", "fileB", "positionB", "pitchB", "levelB"],
+        "Osc A": ["tableA", "fileA", "positionA", "pitchA", "levelA"],
+        "Osc B": ["wavesB", "tableB", "fileB", "positionB", "pitchB", "levelB"],
         Filter: ["filter", "curve", "cutoff", "q", "keytrack", "filterEnv"],
-        Envelopes: ["amp", "attack", "decay", "sustain", "release", "filterEnvelope", "filterAttack", "filterDecay", "filterSustain", "filterRelease"],
-        LFO: ["lfoRate", "lfoPosition", "lfoCutoff"],
-        Unison: ["unison", "detune", "spread"],
+        Env: ["amp", "attack", "decay", "sustain", "release", "filterEnvelope", "filterAttack", "filterDecay", "filterSustain", "filterRelease"],
+        LFO: ["lfo", "lfoRate", "lfoPosition", "lfoCutoff"],
       },
     },
   },
@@ -143,8 +154,11 @@ export const wavetable = component(
     return p.voices === 1 ? mono(notes, voice, { glide: p.glide }) : poly(notes, voice, { voices: p.voices });
   },
   {
+    wavesA: { draw: (v, p) => table(p, v, TABLE_A), words: (v) => tableWords(v, TABLE_A, "A") },
+    wavesB: { draw: (v, p) => table(p, v, TABLE_B), words: (v) => tableWords(v, TABLE_B, "B") },
     amp: { draw: (v, p) => envelope(p, v, AMP), words: (v) => envelopeWords(v, AMP) },
-    curve: { draw: (v, p) => lowpass(p, v, FILTER), words: (v) => lowpassWords(v, FILTER) },
+    curve: { draw: (v, p) => filter(p, v, FILTER), words: (v) => filterWords(v, FILTER) },
     filterEnvelope: { draw: (v, p) => envelope(p, v, FILTER_ENV), words: (v) => envelopeWords(v, FILTER_ENV) },
+    lfo: { draw: (v, p) => lfo(p, v, LFO), words: (v) => lfoWords(v, LFO) },
   },
 );

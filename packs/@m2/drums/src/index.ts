@@ -16,7 +16,7 @@
 // same (each catches its noise and metal at a new place, as on an analog machine), yet
 // every render of a song is.
 
-import { component, control, kernel, poly, port, setting, signature, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
+import { axis, component, control, kernel, knob, poly, port, setting, signature, view, type Audio, type Choice, type Events, type Params, type Value } from "@m2/core";
 
 /**
  * The drums the Drum can play, as its menu names them, grouped by family: each other drum the drum
@@ -44,6 +44,45 @@ const DRUMS = [
   "shaker 2",
   "tambourine",
 ] as const;
+
+/**
+ * About how long each drum rings at `decay` 1, in seconds, to where it has faded out of hearing:
+ * how long its picture plays it (CARD-141). Only the picture's length: what it draws is the drum's
+ * own sound, measured (`p.hit`).
+ */
+const RINGS: Record<(typeof DRUMS)[number], number> = {
+  kick: 0.6,
+  "kick 2": 0.5,
+  snare: 0.35,
+  "snare 2": 0.35,
+  clap: 0.4,
+  hats: 0.12,
+  "open hat": 0.6,
+  tom: 0.6,
+  rim: 0.1,
+  claves: 0.15,
+  cowbell: 0.4,
+  cymbal: 1,
+  "cymbal 2": 1,
+  ride: 1,
+  "ride 2": 1,
+  shaker: 0.2,
+  "shaker 2": 0.3,
+  tambourine: 0.4,
+};
+/** The note the picture plays: A2, which plays every drum as itself (KIT-14). */
+const HIT_NOTE = 45;
+/** How much of the hit's start its punch moves, in seconds: its first 15 ms (`push`). */
+const PUNCH_AT = 0.015;
+
+/** How long the Drum's picture plays its hit, in seconds: how long it rings, times its decay, at most a second. */
+function hitFor(drum: unknown, decay: unknown): number {
+  const rings = typeof drum === "string" && drum in RINGS ? RINGS[drum as keyof typeof RINGS] : 0.5;
+  return Math.min(1, Math.max(0.05, rings * (typeof decay === "number" ? decay : 1)));
+}
+
+/** A time in words: "45 ms", "0.6 s". */
+const timeWords = (s: number) => (s < 1 ? `${Math.round(s * 1000)} ms` : `${Math.round(s * 100) / 100} s`);
 
 /**
  * The drum voices for `notes`, with a patch of kernel inputs (see `@m2/drums:drum` and `one` in the
@@ -202,7 +241,10 @@ export const drums = {
       editor: {
         category: "Drums",
         description: "One 808/909 drum on every note, from its menu: kick, snare, clap, hi-hats, tom, rim, cowbell, cymbal, shaker, ride, tambourine, claves and more",
-        groups: { Drum: ["drum", "tune", "decay", "punch", "drive"] },
+        // Its hit, as it really sounds, first in its one group, so its face is its hit and its knobs
+        // (CARD-141): there is nothing else.
+        views: { hit: view.picture({ x: axis.time(1), y: axis.lin("bipolar", -1, 1) }) },
+        groups: { Drum: ["hit", "drum", "tune", "decay", "punch", "drive"] },
         // What + Track's Drum kit makes (KIT-4): each track a Drum, going to one Drums bus. The 808's
         // and the 909's hats are two tracks, Hats (closed) and Open hat, cut by the Hats' hits, so a
         // beat grid has a row for each (KIT-28); the Basic kit's are one Hats track, closed, pedal and
@@ -252,5 +294,25 @@ export const drums = {
     },
     (notes: Events, cutBy: Events | undefined, { drum, voices, tune, decay, punch, drive }: Params): Audio =>
       machine(notes, "@m2/drums:one", voices, { drum, tune, decay, push: punch, drive }, cutBy),
+    {
+      // One hit at A2 as this Drum plays it, measured (CARD-80), as long as it rings: click it to hear
+      // it; its end's dot moves the decay as its knob does, its start's dot the punch up and down.
+      hit: {
+        draw: (v, p) => {
+          const s = hitFor(v.drum, v.decay);
+          return [
+            p.hit({ note: HIT_NOTE, seconds: s }),
+            // Over the hit, so a click anywhere on it plays it; its dots are over both.
+            p.play([0, -1, s, 1], { note: HIT_NOTE }),
+            p.handle(Math.min(PUNCH_AT, s / 4), v.punch, { y: "punch" }),
+            p.handle(s, 0, { x: knob("decay") }),
+          ];
+        },
+        words: (v) => {
+          const s = hitFor(v.drum, v.decay);
+          return `${typeof v.drum === "string" ? v.drum[0].toUpperCase() + v.drum.slice(1) : "A drum"}, one hit as it sounds: ${timeWords(s)}${s >= 1 ? " of it" : ""}. Click it to hear it; drag its end for the decay, its start for the punch`;
+        },
+      },
+    },
   ),
 };

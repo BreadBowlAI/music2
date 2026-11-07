@@ -242,7 +242,8 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
   }, [tab]);
   useEffect(() => attach(), []);
   const hearing = useAudition((s) => s.on);
-  const notes = p.node.inputs.find((i) => i.kind === "notes" && i.lane)?.lane;
+  // The notes lane that plays the call (CARD-72), as the keys view's (CARD-28).
+  const notes = view.lane;
   const playing = useRef<number | null>(null);
   const knobOf = (m?: Moved): NumberKnob | null => {
     const k: Knob | undefined = m?.knob ? p.node.knobs.find((x) => x.id === m.knob) : undefined;

@@ -73,6 +73,10 @@ pub enum Drawn {
         /// Its words at these values, or why it can't be drawn: worked out by the picture runner
         /// after the view is made, never by the settle that makes it, so null here (CARD-63).
         words: Option<String>,
+        /// The notes lane that plays the call, which a `p.play` place plays on (CARD-72), as the
+        /// keys view's keys do.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        lane: Option<LaneRef>,
     },
 }
 
@@ -278,9 +282,14 @@ pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, n
                     Drawn::Keys { setting, regions, lane: notes.cloned(), why }
                 }
                 ViewOf::Scope => Drawn::Scope {},
-                ViewOf::Picture { x, y, live } => {
-                    Drawn::Picture { x: x.clone(), y: y.clone(), live: live.clone(), values: picture_values(m, desc, node), words: None }
-                }
+                ViewOf::Picture { x, y, live } => Drawn::Picture {
+                    x: x.clone(),
+                    y: y.clone(),
+                    live: live.clone(),
+                    values: picture_values(m, desc, node),
+                    words: None,
+                    lane: notes.cloned(),
+                },
             };
             CardView { name: v.name.clone(), of }
         })

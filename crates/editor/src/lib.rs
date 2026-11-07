@@ -496,4 +496,7 @@ mod gate5_tests;
 mod std_pictures_tests;
 
 #[cfg(test)]
+mod instrument_pictures_tests;
+
+#[cfg(test)]
 pub(crate) mod testing;
