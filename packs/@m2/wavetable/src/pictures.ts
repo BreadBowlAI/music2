@@ -31,14 +31,21 @@ const WIDTHS = [130, 150, 200];
 const GAINS = [1, 0.6, 0.3];
 const VOICE = 110;
 
+/** A frame's harmonics, by number from 1: the frame is Σ re[h]·cos(2πht) − im[h]·sin(2πht). */
+type Frame = { re: Float64Array; im: Float64Array };
+
 /**
- * Frame `j` of built-in table `t` as its harmonics, `[re, im]` of each from 0 to `DRAWN`: the frame is
- * Σ re·cos(2πht) − im·sin(2πht). `tables::built_in`'s own sums, the first `DRAWN` harmonics of each.
+ * Frame `j` of built-in table `t` as its harmonics, up to `DRAWN`: `tables::built_in`'s own sums.
+ * Kept by table and frame, since they never change: a draw sums only the frames it draws (CARD-131).
  */
-export function harmonics(t: number, j: number): number[][] {
-  const a = Array.from({ length: DRAWN + 1 }, () => [0, 0]);
+const kept = new Map<string, Frame>();
+export function harmonics(t: number, j: number): Frame {
+  const key = `${t}:${j}`;
+  const was = kept.get(key);
+  if (was) return was;
+  const a: Frame = { re: new Float64Array(DRAWN + 1), im: new Float64Array(DRAWN + 1) };
   const sine = (h: number, amp: number) => {
-    if (h <= DRAWN) a[h] = [0, -amp];
+    if (h <= DRAWN) a.im[h] = -amp;
   };
   const along = j / (framesOf(t) - 1);
   if (t === 0) {
@@ -51,7 +58,8 @@ export function harmonics(t: number, j: number): number[][] {
     const w = 0.5 - 0.48 * along;
     for (let h = 1; h <= DRAWN; h++) {
       const phi = 2 * Math.PI * h * w;
-      a[h] = [(2 / (Math.PI * h)) * Math.sin(phi), (-2 / (Math.PI * h)) * (1 - Math.cos(phi))];
+      a.re[h] = (2 / (Math.PI * h)) * Math.sin(phi);
+      a.im[h] = (-2 / (Math.PI * h)) * (1 - Math.cos(phi));
     }
   } else if (t === 2) {
     const s = along * (VOWELS.length - 1);
@@ -65,49 +73,90 @@ export function harmonics(t: number, j: number): number[][] {
       sine(h, (0.05 + peaks) / h);
     }
   } else if (t === 3) {
-    const n = Math.min(Math.max(j + 1, Math.floor(1.2 ** j)), 1023);
+    const n = Math.min(Math.max(j + 1, Math.floor(1.2 ** j)), DRAWN);
     for (let h = 1; h <= n; h++) sine(h, 2 / (Math.PI * h));
   } else {
     const gray = j ^ (j >> 1);
     sine(1, 1);
     for (let h = 2; h <= 48; h++) if ((gray >> ((h - 2) % 5)) & 1) sine(h, 1 / Math.sqrt(h));
   }
+  kept.set(key, a);
   return a;
 }
 
-/**
- * One cycle of a frame from its harmonics, `n + 1` points from phase 0 to 1, scaled so its peak is 1:
- * each frame as tall as the others, as a wavetable synth draws them. Each harmonic's cosine and sine
- * by turning the one before: a few multiplications, not a cosine each.
- */
-function cycle(a: number[][], n: number): number[] {
-  let last = a.length - 1;
-  while (last > 0 && a[last][0] === 0 && a[last][1] === 0) last--;
-  const out: number[] = [];
-  let peak = 0;
-  for (let i = 0; i <= n; i++) {
-    const th = (2 * Math.PI * i) / n;
-    const [c1, s1] = [Math.cos(th), Math.sin(th)];
-    let [c, s, v] = [1, 0, 0];
-    for (let h = 1; h <= last; h++) {
-      [c, s] = [c * c1 - s * s1, s * c1 + c * s1];
-      v += a[h][0] * c - a[h][1] * s;
+/** cos and sin of 2πk/n for k from 0 to n − 1, kept by n: each point's harmonics are looked up, not worked out. */
+const turns = new Map<number, [Float64Array, Float64Array]>();
+function turnsOf(n: number): [Float64Array, Float64Array] {
+  let t = turns.get(n);
+  if (!t) {
+    const [c, s] = [new Float64Array(n), new Float64Array(n)];
+    for (let k = 0; k < n; k++) {
+      c[k] = Math.cos((2 * Math.PI * k) / n);
+      s[k] = Math.sin((2 * Math.PI * k) / n);
     }
-    out.push(v);
-    peak = Math.max(peak, Math.abs(v));
+    turns.set(n, (t = [c, s]));
   }
-  return peak > 0 ? out.map((v) => v / peak) : out;
+  return t;
+}
+
+/**
+ * One cycle of frame `a`, `n + 1` points from phase 0 to 1 (n a power of 2), its harmonics up to
+ * `most` (under n / 2, so the points hold them), scaled so its peak is 1: each frame as tall as the
+ * others, as a wavetable synth draws them. Summed by an inverse FFT, n log n steps rather than one
+ * for each harmonic at each point, so a draw stays far inside its limit (CARD-75).
+ */
+function cycle(a: Frame, n: number, most: number): number[] {
+  const [c, s] = turnsOf(n);
+  const top = Math.min(most, DRAWN, n / 2 - 1);
+  const re = new Float64Array(n), im = new Float64Array(n);
+  for (let h = 1; h <= top; h++) {
+    re[h] = a.re[h];
+    im[h] = a.im[h];
+  }
+  // In place: the points in bit-reversed order, then butterflies, each turning by e^(+2πi k/n).
+  for (let i = 1, j = 0; i < n; i++) {
+    let bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      const r = re[i], q = im[i];
+      re[i] = re[j];
+      im[i] = im[j];
+      re[j] = r;
+      im[j] = q;
+    }
+  }
+  for (let len = 2; len <= n; len <<= 1) {
+    const step = n / len, half = len >> 1;
+    for (let start = 0; start < n; start += len) {
+      for (let k = 0; k < half; k++) {
+        // Plain numbers, not a destructured pair: a pair is an array QuickJS makes each time.
+        const wr = c[k * step], wi = s[k * step];
+        const u = start + k, v = u + half;
+        const tr = re[v] * wr - im[v] * wi, ti = re[v] * wi + im[v] * wr;
+        re[v] = re[u] - tr;
+        im[v] = im[u] - ti;
+        re[u] += tr;
+        im[u] += ti;
+      }
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < n; i++) if (Math.abs(re[i]) > peak) peak = Math.abs(re[i]);
+  const out: number[] = [];
+  for (let i = 0; i <= n; i++) out.push(peak > 0 ? re[i % n] / peak : 0);
+  return out;
 }
 
 /** Table `t` at `position` (0 to 1), as the kernel reads it: between the two frames it falls among, mixed. */
-export function frameAt(t: number, position: number): number[][] {
+export function frameAt(t: number, position: number): Frame {
   const place = Math.min(1, Math.max(0, position)) * (framesOf(t) - 1);
   const j = Math.min(Math.floor(place), framesOf(t) - 1);
   const m = place - j;
   const a = harmonics(t, j);
   if (m === 0) return a;
   const b = harmonics(t, j + 1);
-  return a.map((x, h) => [x[0] + m * (b[h][0] - x[0]), x[1] + m * (b[h][1] - x[1])]);
+  return { re: a.re.map((x, h) => x + m * (b.re[h] - x)), im: a.im.map((x, h) => x + m * (b.im[h] - x)) };
 }
 
 /**
@@ -126,10 +175,10 @@ const RISE = 1.3;
 /** How many frames are drawn faint behind the one playing. */
 const BEHIND = 8;
 
-/** Frame `a` drawn at `position`: across from `position × (1 − WIDE)`, up from its own line. */
-function drawnAt(a: number[][], position: number, n: number): number[] {
+/** Frame `a` drawn at `position` in `n` points, its harmonics up to `most`: across from `position × (1 − WIDE)`, up from its own line. */
+function drawnAt(a: Frame, position: number, n: number, most: number): number[] {
   const out: number[] = [];
-  cycle(a, n).forEach((v, i) => out.push(position * (1 - WIDE) + (WIDE * i) / n, FOOT + RISE * position + TALL * v));
+  cycle(a, n, most).forEach((v, i) => out.push(position * (1 - WIDE) + (WIDE * i) / n, FOOT + RISE * position + TALL * v));
   return out;
 }
 
@@ -157,14 +206,24 @@ export function table<D>(p: Painter<D, "unit01", "bipolar">, v: { readonly [k: s
   if (typeof v[names.file] === "string") return [dot(FOOT + RISE * position)];
   const t = Math.max(0, TABLES.indexOf((v[names.table] as (typeof TABLES)[number]) ?? "basic"));
   const out: Shape[] = [];
-  out.push(p.part(`behind ${t}`, () => Array.from({ length: BEHIND }, (_, i) => p.line(drawnAt(frameAt(t, i / (BEHIND - 1)), i / (BEHIND - 1), 48), { tone: "faint" }))));
+  // The frames behind, each one of the table's own (none mixed), kept as a part: drawn again only
+  // when the table changes.
+  out.push(
+    p.part(`behind ${t}`, () =>
+      Array.from({ length: BEHIND }, (_, i) => {
+        const j = Math.round((i * (framesOf(t) - 1)) / (BEHIND - 1));
+        const at = j / (framesOf(t) - 1);
+        return p.line(drawnAt(harmonics(t, j), at, 32, 15), { tone: "faint" });
+      }),
+    ),
+  );
   const reach = typeof v[names.lfo] === "number" ? (v[names.lfo] as number) : 0;
   if (reach > 0) {
     const [lo, hi] = [Math.max(0, position - reach), Math.min(1, position + reach)];
-    out.push(p.line(drawnAt(frameAt(t, lo), lo, 64), { tone: "soft" }), p.line(drawnAt(frameAt(t, hi), hi, 64), { tone: "soft" }));
+    out.push(p.line(drawnAt(frameAt(t, lo), lo, 32, 15), { tone: "soft" }), p.line(drawnAt(frameAt(t, hi), hi, 32, 15), { tone: "soft" }));
     out.push(p.line([lo * (1 - WIDE) + WIDE, FOOT + RISE * lo, hi * (1 - WIDE) + WIDE, FOOT + RISE * hi], { tone: "soft", name: "reach" }));
   }
-  const now = drawnAt(frameAt(t, position), position, 128);
+  const now = drawnAt(frameAt(t, position), position, 64, DRAWN);
   out.push(p.line(now, { name: "frame" }), dot(dotAt(now, position)));
   return out;
 }

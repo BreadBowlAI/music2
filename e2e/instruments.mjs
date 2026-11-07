@@ -106,7 +106,7 @@ const wt = '[data-testid=chain] [data-module="wt"] [data-node="wavetable"]';
 check(await until(async () => !!(await page.$(wt)), 20000), "Wave's chain has the Wavetable's card");
 await shown(wt);
 const table = `${wt} [data-picture="wavesA"]`;
-check(await until(async () => (await points(`${table} polyline[data-line="frame"]`)) === 129, 20000), "its face draws table A: the frame playing, 129 points");
+check(await until(async () => (await points(`${table} polyline[data-line="frame"]`)) === 65, 20000), "its face draws table A: the frame playing, 65 points");
 // Eight frames behind it, and the two at the ends of the LFO's reach, with the line between them.
 check((await page.$$(`${table} polyline:not([data-line])`)).length === 10 && !!(await page.$(`${table} polyline[data-line="reach"]`)), "eight frames behind it, and the LFO's reach");
 check(/^Table A, vowels, at position 0\.35: drag across to move through it\. The LFO moves it from 0\.05 to 0\.65$/.test((await words(table)) ?? ""), `its words: ${await words(table)}`);
@@ -127,7 +127,7 @@ check(/^Cuts the highs above 8 kHz, q 0\.7/.test((await words(curve)) ?? ""), `i
 await page.click(`${wt} [data-tab="LFO"]`);
 check(await until(async () => (await points(`${wt} [data-picture="lfo"] polyline[data-line="shape"]`)) > 30, 15000), "its LFO tab draws the LFO's sine");
 await page.click(`${wt} [data-tab="Osc B"]`);
-check(await until(async () => (await points(`${wt} [data-picture="wavesB"] polyline[data-line="frame"]`)) === 129, 15000), "its Osc B tab draws table B");
+check(await until(async () => (await points(`${wt} [data-picture="wavesB"] polyline[data-line="frame"]`)) === 65, 15000), "its Osc B tab draws table B");
 
 // ---------------------------------------------------------------- the Polysynth (CARD-136, CARD-138)
 
