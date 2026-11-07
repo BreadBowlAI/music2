@@ -708,6 +708,39 @@ fn an_echo_past_127_or_silent_is_left_out() {
     assert_eq!(pitches(&g), [60.0], "a fall of 1 leaves only the note");
 }
 
+// PACK-32: it echoes 256 notes at once at most: a note past that plays alone. A place comes free at
+// the frame the last echo of its note ends, so a note after that frame is echoed, even in that block.
+#[test]
+fn it_echoes_256_notes_at_once_and_a_note_past_that_plays_alone() {
+    // One echo each, a 1/32 (3,000 frames) after its note. The first note's echo ends at 3,100.
+    let mut notes = vec![n(0, 100, 60.0)];
+    notes.extend((1..echoes::ROOM as u64).map(|i| n(i, 10_000, 60.0)));
+    notes.push(n(1000, 1100, 72.0));
+    notes.push(n(3150, 3250, 74.0));
+    let g = echo(&notes, &[("time", 5.0), ("repeats", 1.0)], BEAT, &from_0);
+    let at = |pitch: f32| ons(&g).iter().filter(|x| x.1 == pitch).map(|x| x.0).collect::<Vec<_>>();
+    assert_eq!(at(72.0), [1000], "the 257th plays alone");
+    assert_eq!(at(74.0), [3150, 6150], "a place came free at 3,100, in the block of 3,150");
+    all_playable_and_ended(&g);
+}
+
+// PACK-32: a place comes free after the frame where its note's echoes are over, as if each frame
+// were played in turn: a note let go at a frame, none of its echoes to play, leaves its place to
+// a note a frame later, not to one at that frame.
+#[test]
+fn a_place_comes_free_after_its_frame() {
+    // Each echo a semitone up: the first note, at 127, has none to play (128 is past 127).
+    let mut notes = vec![n(0, 5000, 127.0)];
+    notes.extend((1..echoes::ROOM as u64).map(|i| n(i, 20_000, 60.0)));
+    notes.push(n(5000, 5100, 72.0));
+    notes.push(n(5001, 5101, 74.0));
+    let g = echo(&notes, &[("time", 5.0), ("repeats", 1.0), ("pitch", 1.0)], BEAT, &from_0);
+    let at = |pitch: f32| ons(&g).iter().filter(|x| x.1 == pitch).map(|x| x.0).collect::<Vec<_>>();
+    assert_eq!((at(72.0), at(73.0)), (vec![5000], vec![]), "at the frame the first note is let go: alone");
+    assert_eq!((at(74.0), at(75.0)), (vec![5001], vec![8001]), "a frame later: echoed");
+    all_playable_and_ended(&g);
+}
+
 // ---------------------------------------------------------------- Scale (PACK-33)
 
 /// What Scale gives for each note of `played`, with `set`.

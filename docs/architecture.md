@@ -2350,7 +2350,7 @@ Its card's face is the picture `keyboard`, Shape, In key and Inversion. **The ke
 - play each note as it comes, and `repeats` times again: echo k starts k × `time` after the note starts and ends k × `time` after it ends, as hard as the note times (1 − `fall`)ᵏ, and k × `pitch` semitones higher (+12 climbs by octaves). A note's echoes keep the values it started with. An echo that would be silent (a fall of 1) or go past 0 or 127 is left out.
 - place its echoes on the song's beat while it plays (from each note's start on the beat), and while it is stopped on a clock of its own that runs at `time.tempo`;
 - at Play, a Stop, a seek and a loop's wrap (as the Arpeggiator finds them, [PACK-30](#packs)), end the echoes sounding and forget those to come; a note itself goes on while it is held;
-- echo 256 notes at once at most: a note past that plays alone.
+- echo 256 notes at once at most: a note past that plays alone. A note's place comes free after the frame where it has been let go and its echoes are over, as if each frame were played in turn.
 
 Its card's face is the picture `echoes`, Time, Repeats, Fall and Pitch. **The echoes picture** MUST draw a note and its echoes as fading bars: across, beats from the note's start; up, how hard each plays, the note at 1; each echo named by how far it moves when `pitch` isn't 0 ("+12"). Its words: "3 echoes, an eighth note apart, each 30% quieter", with ", each 12 semitones higher" when it climbs.
 - *Why:* a delay of notes rather than sound: its echoes play the instrument again, so they can climb, and each is a note an instrument's release, filter and voices shape. Placed by the beat, the echoes of a note stay on the grid it was played on, live and in the export.
