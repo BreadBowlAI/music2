@@ -589,9 +589,10 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     // Above the x axis's labels, at the canvas's twice-the-pixels scale.
     const plot = c.height - 2 * FOOT;
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
-    // A level in dB on the picture's own y axis when that is in dB (CARD-103); else from −90 dB at
-    // the foot to 0 dB at the top.
-    const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT))));
+    // A level's bar or history in dB on the picture's own y axis when that is in dB (CARD-103); else,
+    // and for a spectrum always, from −90 dB at the foot to 0 dB at the top.
+    const ownY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
+    const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : ownY(db));
     /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1. */
     const said: ({ v: number; x?: number; y: number } | null)[] = layers.map(() => null);
     g.clearRect(0, 0, c.width, c.height);
@@ -601,11 +602,15 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       g.strokeStyle = g.fillStyle = grey((l as { tone?: string }).tone);
       g.lineWidth = 2;
       if (l.kind === "spectrum" && last?.bins && view.x.unit === "hz") {
-        // A twelfth of an octave each, from 20 Hz: a faint fill from the foot.
+        // A twelfth of an octave each, from 20 Hz: a faint fill from the foot, on a scale of its own
+        // (−90 dB at the foot, 0 dB at the top) whatever the y axis: a level behind a curve of gain,
+        // so a quiet sound still shows (CARD-103).
         g.globalAlpha = 0.35;
         g.beginPath();
         g.moveTo(0, plot);
-        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, dbY(db)));
+        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, ownY(db)));
+        const loudest = Math.max(...last.bins);
+        said[i] = { v: loudest, y: ownY(loudest) / plot };
         g.lineTo(c.width, plot);
         g.closePath();
         g.fill();

@@ -201,7 +201,7 @@ export const SUITES = [
   ["frame", "fix", { expect: 80, s: 14 }],
   ["pictures", "fix", { expect: 37, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
-  ["dress", "fix", { expect: 42, s: 10 }],
+  ["dress", "fix", { expect: 44, s: 10 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],

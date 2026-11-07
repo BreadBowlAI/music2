@@ -28,11 +28,14 @@ write(
 import { synth } from "@m2/synths";
 import { delay, reverb, widen } from "@m2/effects";
 import { lowpass } from "std/filter";
+import { gain } from "std/dsp";
 import { eq3 } from "std/fx";
 
-// The tune: a bright pluck, shaped by an EQ and a filter, with echoes three 16ths apart.
+// The tune: a bright pluck, turned well down (a quiet sound for its EQ's spectrum), shaped by an EQ
+// and a filter, with echoes three 16ths apart.
 export default track("hook", { name: "Hook" }, ({ lane }) => {
-  const hook = lowpass(eq3(synth.pluck(lane.notes("notes"), { brightness: hz(4200) }), { mid: 3 }), { cutoff: hz(6000), q: 1.2 });
+  const quiet = gain(synth.pluck(lane.notes("notes"), { brightness: hz(4200) }), { db: -40 });
+  const hook = lowpass(eq3(quiet, { mid: 3 }), { cutoff: hz(6000), q: 1.2 });
   const echoes = delay(hook, { time: 0.388, feedback: 0.3, mix: 0.25 });
   return reverb(widen(echoes, { width: 1.3 }), { size: 0.6, mix: 0.2 });
 });
@@ -222,7 +225,8 @@ const out = (l) => {
   return l - down + 3;
 };
 const clamp = (v) => Math.min(1, Math.max(0, v));
-await post("/loop", { start: 0, end: 8, on: true });
+// Bars 5 and 6, where the hook plays too.
+await post("/loop", { start: 16, end: 24, on: true });
 await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
 let rides = false, turned = 0, placed = true, seenHistory = false;
@@ -263,6 +267,29 @@ for (let i = 0; i < 30 && round < 5; i++) {
 }
 check(round >= 5 && ok, `its playhead is the song's beat gone round its 6 beats, where the LFO is (${round} reads)`);
 await page.screenshot({ path: `${ROOT}/dress-lfo.png` });
+
+// ---------------------------------------------------------------- the EQ's spectrum keeps its own scale (CARD-103)
+
+// Behind eq3's ±24 dB gain curve, the hook's spectrum is a level from −90 dB at the foot to 0 dB at
+// the top, so a quiet sound still shows: its loudest bin is drawn where that scale puts it.
+await page.click('[data-module-tab="hook"] [data-testid=track-label]');
+if (await page.$('[data-device="chain"]')) await page.click('[data-device="chain"]');
+await until(async () => !!(await page.$(eqPic)), 15000);
+await shown(eqPic);
+let spectra = 0, onItsScale = true, quietest = 0;
+for (let i = 0; i < 60 && spectra < 5; i++) {
+  await sleep(150);
+  const layers = await said(eqPic);
+  for (const l of layers.slice(0, 2)) {
+    // A read of silence (the pluck between notes) is at the foot, as it should be: not counted.
+    if (!l || l.v <= -90) continue;
+    spectra += 1;
+    quietest = Math.min(quietest, l.v);
+    if (Math.abs(l.y - Math.min(1, Math.max(0, -l.v / 90))) > 0.005 || l.y >= 1) onItsScale = false;
+  }
+}
+check(spectra >= 5 && onItsScale, `the hook's spectrum shows behind eq3's curve, on its own −90..0 dB scale (loudest bins down to ${quietest.toFixed(1)} dB)`);
+check(quietest < -24, `including bins quieter than the curve's foot (−24 dB): ${quietest.toFixed(1)} dB`);
 await page.keyboard.press("Space");
 
 done(errors);
