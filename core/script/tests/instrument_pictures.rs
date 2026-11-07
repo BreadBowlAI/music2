@@ -90,7 +90,7 @@ fn the_wavetable_draws_its_table_with_the_lfos_reach() {
     let dot = &of(&d, "handle")[0];
     assert_eq!(dot["x"], 0.35, "the dot is at the position, so it moves across with it");
     let frame = floats(&d["shapes"][4]["points"]);
-    assert_eq!(frame.len(), 2 * 129);
+    assert_eq!(frame.len(), 2 * 65);
     assert!((frame[0] - 0.35 * 0.3).abs() < 1e-12, "the frame starts across at its position, as a stack does: {}", frame[0]);
     assert_eq!(d["words"], "Table A, vowels, at position 0.35: drag across to move through it. The LFO moves it from 0.05 to 0.65");
     let d = draw(
@@ -319,4 +319,73 @@ fn each_face_is_the_one_its_rule_lists() {
     ] {
         assert_eq!(face(cid), want, "{cid}'s face");
     }
+}
+
+/// The time a picture's draw takes, its first in a fresh runtime (`warm`, a cheap picture of the same
+/// package, loads the package's code first, which has its own limit): the median of five fresh
+/// runners, each timed by the wall clock around `Runner::draw`, which also counts the trip to the
+/// runner's thread and Rust's checks (about 1.5 ms here), so it is more than the draw's own time.
+fn first_draw(warm: (&str, &str, Value), cid: &str, view: &str, values: &Value) -> std::time::Duration {
+    let mut times: Vec<std::time::Duration> = (0..5)
+        .map(|_| {
+            let runner = Runner::new();
+            draw(&runner, warm.0, warm.1, warm.2.clone()).unwrap_or_else(|why| panic!("{}'s {}: {why}", warm.0, warm.1));
+            let t = std::time::Instant::now();
+            draw(&runner, cid, view, values.clone()).unwrap_or_else(|why| panic!("{cid}'s {view}: {why}"));
+            t.elapsed()
+        })
+        .collect();
+    times.sort();
+    times[2]
+}
+
+// CARD-75: every picture of music2's own instruments, and std's ceiling, draws in a fifth of the
+// runner's 20 ms limit for a draw, its first in a fresh runtime included, so a slow or busy machine
+// never stops it (the Wavetable's table was stopped on CI's runners). It judges speed, so it runs in
+// the nightly tier (ci/nightly-tests.txt).
+#[test]
+fn every_instrument_picture_draws_in_a_fifth_of_its_limit() {
+    let budget = std::time::Duration::from_millis(4);
+    let mut said = vec![];
+    let mut slow = vec![];
+    let envelope = json!({"attack": 0.01, "decay": 0.3, "sustain": 0.5, "release": 0.3});
+    let mut time = |cid: &str, warm: (&str, &str, Value), view: &str, values: Value| {
+        let t = first_draw(warm, cid, view, &values);
+        said.push(format!("{cid} {view} {values}: {:.2} ms", t.as_secs_f64() * 1e3));
+        if t > budget {
+            slow.push(said.last().unwrap().clone());
+        }
+    };
+    let wt = "@m2/wavetable:wavetable";
+    for table in ["basic", "pulse", "vowels", "harmonics", "digital"] {
+        time(wt, (wt, "amp", envelope.clone()), "wavesA", json!({"tableA": table, "fileA": null, "positionA": 0.37, "lfoPosition": 0.3}));
+    }
+    time(wt, (wt, "amp", envelope.clone()), "wavesB", json!({"tableB": "harmonics", "fileB": null, "positionB": 0.81, "lfoPosition": 0.5}));
+    time(wt, (wt, "amp", envelope.clone()), "curve", json!({"filter": "bandpass", "cutoff": 1000, "q": 2}));
+    time(wt, (wt, "amp", envelope.clone()), "lfo", json!({"lfoRate": 20, "lfoPosition": 0.2, "lfoCutoff": 1}));
+    time("@m2/synths:synth-custom", ("@m2/synths:synth-custom", "amp", envelope.clone()), "note", json!({"attack": 0.003, "decay": 0.5}));
+    time(
+        "@m2/synths:synth-custom",
+        ("@m2/synths:synth-custom", "amp", envelope.clone()),
+        "filter",
+        json!({"cutoff": 1000, "resonance": 0.9}),
+    );
+    time(
+        "@m2/synths:fm-custom",
+        ("@m2/synths:fm-custom", "amp", envelope.clone()),
+        "partials",
+        json!({"carrierA": 1, "modulatorA": 1, "amountA": 8, "carrierB": 3, "modulatorB": 0.5, "amountB": 8, "mixB": 0.5, "tone": 1, "feedback": 0}),
+    );
+    // The Drum's one picture keeps nothing between draws: one at other values loads its code.
+    time(
+        "@m2/drums:drum",
+        ("@m2/drums:drum", "hit", json!({"drum": "kick", "decay": 1, "punch": 0})),
+        "hit",
+        json!({"drum": "cymbal", "decay": 3, "punch": 0.5}),
+    );
+    // Each of std's modules loads at its first picture: one of the same module, or the same at other values.
+    time("std:limit", ("std:compress", "history", json!({})), "level", json!({"ceiling": -1}));
+    time("std:master", ("std:master", "level", json!({"ceiling": -3, "db": 0})), "level", json!({"ceiling": -1, "db": 0}));
+    eprintln!("{}", said.join("\n"));
+    assert!(slow.is_empty(), "past {budget:?}:\n{}", slow.join("\n"));
 }
