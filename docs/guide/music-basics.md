@@ -70,7 +70,7 @@ The words a chord stamp uses:
 
 In a pentatonic or blues key (5 or 6 notes), only the chords whose notes are all in the key are placed, so there are fewer: the pointer says why one isn't. A chromatic key (all 12 notes) has no chords to stamp.
 
-An arpeggiator (a chord played one note at a time) is still to come ([gap #16](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
+An arpeggiator (a chord played one note at a time) is still to come ([gap #62](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 
 ## The parts of a pop song
 
