@@ -124,8 +124,9 @@ check(masterWidth === 460, `Normal: 460 px with a picture on its face: the Maste
 const master = `${songChain} [data-node="master"]`;
 await page.click(`${master} [data-size-to="folded"]`);
 check(await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "folded"), "Fold folds the Master");
-const masterSentence = await page.$eval(`${master} [data-sentence]`, (e) => e.textContent).catch(() => null);
-check(/^The song's last 3 seconds: no peak passes its ceiling, [−\d.]+ dB/.test(masterSentence ?? ""), `Folded, one sentence: its picture's words: ${masterSentence}`);
+// The words come once the server has worked them out (CARD-63), after the view: until then the sentence is the values.
+const masterSentence = () => page.$eval(`${master} [data-sentence]`, (e) => e.textContent).catch(() => null);
+check(await until(async () => /^The song's last 3 seconds: no peak passes its ceiling, [−\d.]+ dB/.test((await masterSentence()) ?? "")), `Folded, one sentence: its picture's words: ${await masterSentence()}`);
 await page.click(`${master} [data-size-to="normal"]`);
 await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "normal");
 // An instrument's card wears its track's colour along its top (CARD-43, review F13); an effect's doesn't.
