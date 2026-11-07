@@ -259,6 +259,9 @@ pub struct Build<'a> {
     pub made: &'a str,
     /// The std this app has: what the packs build and their previews render with.
     pub std: &'a Path,
+    /// music2's own packs, by name and folder: what an effect's or a note effect's preview plays
+    /// through (its pluck and its kit, LIB-3), loaded beside std and the pack, as the app's ⌘F does.
+    pub own: &'a [(String, PathBuf)],
     /// A folder for each version's work (its previews, and its files before they are kept), removed
     /// after.
     pub work: &'a Path,
@@ -380,6 +383,7 @@ fn one(b: &Build, tags: &BTreeSet<String>, name: &PackName, v: &ListedVersion) -
         stage: stage.clone(),
         tags: tags.clone(),
         std: b.std.to_path_buf(),
+        own: b.own.to_vec(),
         out: b.out.to_path_buf(),
         from: b.from.cloned(),
     };
@@ -441,6 +445,8 @@ struct Job {
     stage: PathBuf,
     tags: BTreeSet<String>,
     std: PathBuf,
+    /// music2's own packs ([`Build::own`]).
+    own: Vec<(String, PathBuf)>,
     out: PathBuf,
     from: Option<Bucket>,
 }
@@ -652,7 +658,9 @@ fn publish(p: &Publish) -> Result<Facts, String> {
         blob_file(job, f.sha256, f.size, &p.dir.join(&f.path))?;
         blobs.insert(f.sha256);
     }
-    let packages = vec![(pack::STD.to_string(), job.std.clone()), (p.name.as_str().to_string(), p.dir.to_path_buf())];
+    // std, the pack, and music2's own packs a preview plays through (but the pack itself, when it is one).
+    let mut packages = vec![(pack::STD.to_string(), job.std.clone()), (p.name.as_str().to_string(), p.dir.to_path_buf())];
+    packages.extend(job.own.iter().filter(|(n, _)| n != p.name.as_str()).cloned());
     let catalog = m2_session::describe(&packages);
     let indexed = samples::index(samples::Root::Package { name: p.name.as_str(), dir: p.dir }, None);
     let lib =
