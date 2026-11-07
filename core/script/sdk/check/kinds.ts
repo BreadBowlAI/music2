@@ -6,6 +6,9 @@
 
 import { component, control, kernel, port, setting, time, view, type Audio, type Choice, type Control, type Ctx, type Events, type Keyset, type Switch } from "@m2/core";
 import { lowpass } from "std/filter";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawLowpass, lowpassWords, transfer, transferPicture } from "std/pictures";
+
+const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
 /** A sound that uses every kind a descriptor declares. */
 export const every = component(
@@ -27,7 +30,8 @@ export const every = component(
     output: port.audio(),
     editor: {
       category: "Instruments",
-      views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q"), keys: view.keys("regions"), scope: view.scope() },
+      // An envelope and a filter are std's pictures (CARD-96, CARD-97).
+      views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys("regions"), scope: view.scope() },
       groups: { Sound: ["shape", "sub", "scope"], Filter: ["filter", "cutoff", "q"], Amp: ["amp", "attack", "decay", "sustain", "release"] },
     },
   },
@@ -37,6 +41,10 @@ export const every = component(
     const on: Switch = sub;
     const n: number = voices;
     return kernel<Audio>("test:every", { notes, shape: s, sub: on, cutoff, voices: n }) as Audio;
+  },
+  {
+    amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
+    filter: { draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "q" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", q: "q" }) },
   },
 );
 
@@ -98,79 +106,152 @@ export const handed = component(
   },
 );
 
-// Views name controls of this very descriptor, in a unit that fits. Each mistake is marked on the
-// view itself, by the code editor's TypeScript as by the project's: the directive stands on the
-// line before the view, so a mistake marked on `component` would leave it unused.
+// Views name settings of this very descriptor (a key map's regions or keymap). Each mistake is
+// marked on the view itself, by the code editor's TypeScript as by the project's: the directive
+// stands on the line before the view, so a mistake marked on `component` would leave it unused.
+// An envelope and a filter are no views since @m2/core 2.4.0 (CARD-100): std's pictures, whose
+// dots name the descriptor's own controls, marked where they are named (CARD-62).
 export const views = [
   component(
     {
       id: "views-ok",
-      controls: { a: control.ms(5), d: control.beats(1), s: control.db(-6), r: control.secs(0.2), f: control.khz(2), q: control.scalar(1) },
+      controls: { f: control.khz(2), q: control.scalar(1) },
       settings: { zones: setting.keymap() },
-      editor: { views: { env: view.envelope("a", "d", "s", "r"), lp: view.filter("f", "q"), map: view.keys("zones") } },
+      editor: { views: { map: view.keys("zones"), out: view.scope() } },
     },
     () => x,
   ),
   component(
     {
-      id: "missing",
+      id: "envelope-missing",
       controls: { a: control.secs(0.1), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1) },
-      editor: {
-        views: {
-          // @ts-expect-error a view naming a control this descriptor doesn't have
-          env: view.envelope("a", "d", "s", "rel"),
-        },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error an envelope's dot naming a control this descriptor doesn't have
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "rel" }),
+        words: () => "an envelope",
       },
     },
-    () => x,
   ),
-  // A filter's q may be a resonance from 0 to 1, as a synth's knob says it (CARD-30).
+  // std's pictures name controls in the unit they draw (CARD-62, review S1): an envelope's times in
+  // seconds and its sustain a level from 0 to 1, a drawn filter's q a plain number (or a resonance
+  // from 0 to 1), a compressor's ratio a plain number. Each mistake is marked where it is named.
   component(
     {
-      id: "resonance-ok",
-      controls: { cutoff: control.hz(800), resonance: control.frac(0.3) },
-      editor: { views: { lp: view.filter("cutoff", "resonance") } },
+      id: "envelope-in-hz",
+      controls: { a: control.hz(100), d: control.secs(0.1), s: control.frac(1), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
     },
     () => x,
+    {
+      env: {
+        // @ts-expect-error an attack that is a frequency
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
+  ),
+  component(
+    {
+      id: "envelope-in-beats",
+      controls: { a: control.secs(0.1), d: control.beats(1), s: control.frac(1), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error a decay in beats: the picture draws seconds
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
+  ),
+  component(
+    {
+      id: "sustain-a-choice",
+      controls: { a: control.secs(0.1), d: control.secs(0.1), s: control.choice(["low", "high"], "low"), r: control.secs(0.1) },
+      editor: { views: { env: envelopePicture() } },
+    },
+    () => x,
+    {
+      env: {
+        // @ts-expect-error a sustain that is a choice
+        draw: (v, p) => envelope(p, v, { attack: "a", decay: "d", sustain: "s", release: "r" }),
+        words: () => "an envelope",
+      },
+    },
   ),
   component(
     {
       id: "q-in-db",
       controls: { cutoff: control.hz(800), boost: control.db(0) },
-      editor: {
-        views: {
-          // @ts-expect-error a q that is a level in dB
-          lp: view.filter("cutoff", "boost"),
-        },
-      },
+      editor: { views: { lp: curvePicture({ live: false }) } },
     },
     () => x,
+    {
+      lp: {
+        // @ts-expect-error a q that is a level in dB
+        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "boost" }),
+        words: () => "a filter",
+      },
+    },
   ),
   component(
     {
-      id: "wrong-unit",
+      id: "resonance-in-db",
+      controls: { cutoff: control.hz(800), resonance: control.db(0) },
+      editor: { views: { lp: curvePicture({ live: false }) } },
+    },
+    () => x,
+    {
+      lp: {
+        // @ts-expect-error a resonance that is a level in dB, not one from 0 to 1
+        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }),
+        words: () => "a filter",
+      },
+    },
+  ),
+  component(
+    {
+      id: "ratio-in-db",
+      controls: { threshold: control.db(-18), ratio: control.db(3), makeup: control.db(0) },
+      editor: { views: { tr: transferPicture() } },
+    },
+    () => x,
+    {
+      tr: {
+        // @ts-expect-error a ratio that is a level in dB
+        draw: (v, p) => transfer(p, v, { threshold: "threshold", ratio: "ratio", makeup: "makeup" }),
+        words: () => "a compressor",
+      },
+    },
+  ),
+  component(
+    {
+      id: "resonance-ok",
+      controls: { cutoff: control.hz(800), resonance: control.frac(0.3) },
+      editor: { views: { lp: curvePicture({ live: false }) } },
+    },
+    () => x,
+    { lp: { draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", resonance: "resonance" }) } },
+  ),
+  component(
+    {
+      id: "cutoff-a-time",
       controls: { cutoff: control.secs(1), q: control.scalar(1) },
-      editor: {
-        views: {
-          // @ts-expect-error a cutoff that is a time
-          lp: view.filter("cutoff", "q"),
-        },
-      },
+      editor: { views: { lp: curvePicture({ live: false }) } },
     },
     () => x,
-  ),
-  component(
     {
-      id: "a-choice",
-      controls: { a: control.secs(0.1), s: control.choice(["low", "high"], "low") },
-      editor: {
-        views: {
-          // @ts-expect-error a sustain that is a choice
-          env: view.envelope("a", "a", "s", "a"),
-        },
+      lp: {
+        // @ts-expect-error a cutoff that is a time, moved across a frequency
+        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "q" }),
+        words: () => "a filter",
       },
     },
-    () => x,
   ),
   component(
     {
@@ -192,13 +273,18 @@ export const views = [
       editor: {
         views: {
           // @ts-expect-error a view named as one of the sound's values
-          cutoff: view.filter("cutoff", "q"),
+          cutoff: view.scope(),
         },
       },
     },
     () => x,
   ),
 ];
+
+// @ts-expect-error view.envelope is gone: an envelope is std's picture
+view.envelope("a", "d", "s", "r");
+// @ts-expect-error view.filter is gone: a filter is std's picture
+view.filter("f", "q");
 
 // Groups name this descriptor's values and views, each once. A mistake is marked on `groups`.
 export const groups = [
@@ -235,7 +321,7 @@ export const faces = [
     id: "face-ok",
     controls: { a: control.secs(0.01), s: control.frac(0.5), b: control.hz(1) },
     settings: { c: setting.int(1) },
-    editor: { views: { amp: view.envelope("a", "a", "s", "a") }, groups: { One: ["a", "b"] }, face: ["amp", "a", "c"] },
+    editor: { views: { amp: view.scope() }, groups: { One: ["a", "b"] }, face: ["amp", "a", "c"] },
   }, () => x),
   component({
     id: "face-unknown",

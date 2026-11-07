@@ -9,8 +9,9 @@
 // `.smooth()`. `voices: 1` plays one note at a time, as the polysynth does. Each card is put in
 // order by its groups (CARD-17), and a sound with a whole envelope draws it, to drag (CARD-16).
 
-import { component, control, kernel, poly, port, setting, signature, view, type Audio, type Events, type Params, type Value } from "@m2/core";
+import { component, control, kernel, poly, port, setting, signature, type Audio, type Events, type Params, type Value } from "@m2/core";
 import { mono, type Voice } from "std/dsp";
+import { envelope, envelopePicture, envelopeWords } from "std/pictures";
 
 /** The engine for a note, with a patch of kernel inputs (see `@m2/synths:fm` in the pack's `m2pkg.toml`). */
 function engine(n: Voice, patch: Record<string, Value>): Audio {
@@ -28,8 +29,8 @@ const AMOUNT = (i: number) => control.scalar(i).range(0, 8);
 const TIME = (s: number) => control.secs(s).range(0.001, 10).log();
 const VEL_SENS = (v: number) => control.frac(v).range(0, 1).label("vel sens");
 const LEVEL01 = (v: number) => control.frac(v).range(0, 1);
-/** How loud a note is over time, to drag. */
-const AMP = view.envelope("attack", "decay", "sustain", "release");
+/** The names a sound's envelope picture reads: how loud a note is over time, to drag (std/pictures, CARD-96). */
+const ENVELOPE = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
 
 export const fm = {
   /** The whole FM engine, every knob out: start here for a sound of your own. */
@@ -74,7 +75,7 @@ export const fm = {
       editor: {
         category: "Sound design",
         description: "The FM synth with every knob: two operator pairs, feedback, envelopes",
-        views: { amp: AMP },
+        views: { amp: envelopePicture() },
         groups: {
           "Pair A": ["carrierA", "modulatorA", "amountA", "brightDecayA", "feedback"],
           "Pair B": ["carrierB", "modulatorB", "amountB", "brightDecayB", "mixB", "detune"],
@@ -108,6 +109,7 @@ export const fm = {
           level: p.level,
         }),
       ),
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** An electric piano: a soft, round body and a bright tine that barks when played hard. */
@@ -133,7 +135,7 @@ export const fm = {
       editor: {
         category: "Instruments",
         description: "An electric piano: a warm body and a tine that barks when played hard",
-        views: { amp: AMP },
+        views: { amp: envelopePicture() },
         groups: { Sound: ["tone", "tine"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
@@ -157,6 +159,7 @@ export const fm = {
           vel_amount: velSens,
         }),
       ),
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** A glassy bell: inharmonic, bright and long. */
@@ -179,7 +182,7 @@ export const fm = {
       editor: {
         category: "Instruments",
         description: "A glassy bell: bright, shimmering and long",
-        views: { amp: AMP },
+        views: { amp: envelopePicture() },
         groups: { Sound: ["tone"], Loudness: ["amp", "attack", "decay", "sustain", "release", "velSens"] },
       },
     },
@@ -204,6 +207,7 @@ export const fm = {
           vel_amount: velSens,
         }),
       ),
+    { amp: { draw: (v, p) => envelope(p, v, ENVELOPE), words: (v) => envelopeWords(v, ENVELOPE) } },
   ),
 
   /** Metallic FM percussion: a short, clangy, inharmonic hit that zaps down into its note. */

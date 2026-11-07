@@ -13,7 +13,7 @@ fn wavetable_song() -> Song {
     let files = [
         (
             "music2.toml",
-            "[project]\nname = \"Wavetable\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\
+            "[project]\nname = \"Wavetable\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\
              \"@m2/wavetable\" = \"1\"\n",
         ),
         (

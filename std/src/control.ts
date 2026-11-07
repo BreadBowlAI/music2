@@ -2,6 +2,7 @@
 
 import { component, control, kernel, port, setting, signature, type Control, type Params, type Signal, type Value } from "@m2/core";
 import { blend, scale } from "./math";
+import { lfo as lfoShape, lfoPicture, lfoWords } from "./pictures";
 
 export { blend, range, xrange } from "./math";
 
@@ -27,9 +28,17 @@ export const lfo = component(
     // Fixed when the song builds (changing it rebuilds): a setting, not a knob (D3). The kernel takes it as a number.
     settings: { shape: setting.choice(["sine", "tri", "saw", "square"], "sine") },
     output: port.control("unit01"),
+    // Its shape over one bar, the song's playhead on it (CARD-98): where it is, when its beats are the song's.
+    editor: { views: { wave: lfoPicture() } },
   },
   (beats: Control<"beats">, { period, shape, phase }: Params) =>
     kernel("std:lfo", { beats, period, shape: SHAPES[shape as keyof typeof SHAPES], phase }),
+  {
+    wave: {
+      draw: (v, p) => lfoShape(p, v, { period: "period", shape: "shape", phase: "phase" }),
+      words: (v) => lfoWords(v, { period: "period", shape: "shape" }),
+    },
+  },
 );
 
 /** `x` where `mask` is 1, silence (or zero) where it is 0. */

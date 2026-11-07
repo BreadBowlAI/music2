@@ -68,6 +68,31 @@ function along(a: Axis, v: number) {
   if (a.scale === "log") return Math.log(Math.max(v, 1e-12) / a.lo) / Math.log(a.hi / a.lo);
   return (v - a.lo) / (a.hi - a.lo);
 }
+/** Every x a shape reaches: its points, a dot's, a label's, a play place's, a mark across. */
+function reaches(shapes: Shape[]): number[] {
+  const out: number[] = [];
+  for (const s of shapes) {
+    if (s.kind === "part") out.push(...reaches(s.shapes));
+    else if (s.kind === "line" || s.kind === "fill" || s.kind === "bars" || s.kind === "hit" || s.kind === "response") (s.points ?? []).forEach((v, i) => i % 2 === 0 && out.push(v));
+    else if (s.kind === "handle" && s.x !== null) out.push(s.x);
+    else if (s.kind === "label") out.push(s.x);
+    else if (s.kind === "play") out.push(s.box[0], s.box[2]);
+    else if (s.kind === "mark" && s.axis === "x") out.push(s.at);
+  }
+  return out.filter(Number.isFinite);
+}
+
+/**
+ * The x axis a picture is drawn on (CARD-102): an axis of time (in seconds or beats) runs from its
+ * start to the furthest x its shapes reach, never past its end, so a short envelope fills the
+ * picture as a long one does; any other axis as declared.
+ */
+export function fitted(a: Axis, shapes: Shape[]): Axis {
+  if (a.scale === "log" || (a.unit !== "seconds" && a.unit !== "beats")) return a;
+  const far = Math.max(...reaches(shapes).filter((v) => v > a.lo));
+  return Number.isFinite(far) && far < a.hi ? { ...a, hi: far } : a;
+}
+
 /** An axis's grid: a log axis at 1, 2 and 5 of each decade, a plain one at a round step; labelled where it reads. */
 function ticks(a: Axis): { v: number; label?: string }[] {
   const out: { v: number; label?: string }[] = [];
@@ -170,6 +195,10 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   }, [session, revision, module, node, name, looking]);
   const why = asked ?? drawn?.why ?? null;
   const words = why ?? drawn?.words ?? view.words ?? `${p.owner}'s picture`;
+  // While a dot is dragged the x axis stays as it was at the press (CARD-102), so the dot and the
+  // shape it moves stay under the pointer; let go, it fits what is drawn again.
+  const [heldX, holdX] = useState<Axis | null>(null);
+  const shown: PictureView = drawn?.shapes ? { ...view, x: heldX ?? fitted(view.x, drawn.shapes) } : view;
   return (
     <div ref={box} className="h-full" data-picture={name} data-asking={looking || undefined}>
       <div
@@ -179,8 +208,8 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
         aria-label={words}
         title={words}
       >
-        {drawn?.shapes && !why && view.live?.length ? <Live view={view} shapes={drawn.shapes} looking={looking} {...p} /> : null}
-        {drawn?.shapes && !why && <Shapes view={view} shapes={drawn.shapes} {...p} />}
+        {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} {...p} /> : null}
+        {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} {...p} />}
         {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
       </div>
     </div>
@@ -194,7 +223,7 @@ function placer(view: PictureView, w: number, h: number) {
 }
 
 /** The grid and the shapes, at the picture's own size in pixels, and its dots. */
-function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes: Shape[] }) {
+function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; shapes: Shape[]; hold: (x: Axis | null) => void }) {
   const svg = useRef<SVGSVGElement>(null);
   const { w, h } = useSize(svg);
   const { plot, X, Y } = placer(view, w, h);
@@ -238,6 +267,7 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
     const knobs = [kx, ky].filter((k): k is NumberKnob => !!k);
     if (!knobs.length) return;
     drag.begin(knobs);
+    hold(view.x);
     const start = knobs.map((k) => k.value);
     const x0 = e.clientX, y0 = e.clientY;
     /** How far `d` pixels move a value from `v`: on its axis in its scale, or as its knob's drag (300 px). */
@@ -259,8 +289,14 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
       if (ev.pointerId !== pointer) return;
       const vs = values(ev);
       drag.move(vs);
-      // The dot follows the pointer; the rest of the picture each `pictures` message (CARD-70).
-      setHeld({ i, x: kx && mx && mx.by !== "knob" ? vs[0] : hd.x, y: ky && my && my.by !== "knob" ? vs[vs.length - 1] : hd.y });
+      // The dot follows the pointer; the rest of the picture each `pictures` message (CARD-70). A dot
+      // drawn away from its value (an envelope's decay corner) moves by as much as its value did.
+      const by = (a: Axis, at: number | null, from: number, to: number) => (at === null ? null : a.scale === "log" ? at * (to / from) : at + (to - from));
+      setHeld({
+        i,
+        x: kx && mx && mx.by !== "knob" ? by(view.x, hd.x, start[0], vs[0]) : hd.x,
+        y: ky && my && my.by !== "knob" ? by(view.y, hd.y, start[knobs.length - 1], vs[vs.length - 1]) : hd.y,
+      });
     };
     const up = (ev: PointerEvent) => {
       if (ev.pointerId !== pointer) return;
@@ -268,6 +304,7 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
       el.removeEventListener("pointerup", up);
       el.removeEventListener("pointercancel", up);
       setHeld(null);
+      hold(null);
       if (ev.type === "pointerup") void drag.end(stepName(p.owner, knobs));
       else void drag.cancel();
     };
@@ -292,7 +329,7 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
     return out.join(" ");
   };
   return (
-    <svg ref={svg} viewBox={w && h ? `0 0 ${w} ${h}` : undefined} className="block w-full h-full" data-shapes={flat.length} data-size={`${w}x${h}`}>
+    <svg ref={svg} viewBox={w && h ? `0 0 ${w} ${h}` : undefined} className="block w-full h-full" data-shapes={flat.length} data-size={`${w}x${h}`} data-x-span={`${view.x.lo},${view.x.hi}`}>
       {w > 0 &&
         ticks(view.x).map((t) => (
           <g key={`x${t.v}`}>
@@ -305,10 +342,11 @@ function Shapes({ view, shapes, ...p }: ViewProps & { view: PictureView; shapes:
           </g>
         ))}
       {w > 0 &&
-        ticks(view.y).map((t) => (
+        ticks(view.y).map((t, j) => (
           <g key={`y${t.v}`}>
             <line x1={0} x2={w} y1={Y(t.v)} y2={Y(t.v)} stroke="var(--color-line)" strokeWidth={0.5} />
-            {t.label && (
+            {/* The lowest y label would sit on the x axis's first one, in the corner: it is left out. */}
+            {t.label && !(j === 0 && t.v === view.y.lo && ticks(view.x)[0]?.label !== undefined && ticks(view.x)[0]?.v === view.x.lo) && (
               <text x={2} y={Y(t.v) - 2} fontSize={9} fill="var(--color-fg-faint)" data-tick>
                 {t.label}
               </text>
@@ -524,8 +562,9 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
     const tick = () => {
       if (!alive) return;
       const now = playingNow();
-      // Once more as it stops, so the line rests where the song did.
-      if (now || was) draw();
+      // Once more as it stops, so the line rests where the song did. The newest draw: the axis may
+      // have changed since this began.
+      if (now || was) latest.current();
       was = now;
       requestAnimationFrame(tick);
     };
@@ -534,6 +573,7 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       alive = false;
     };
   }, [playhead, looking]);
+  const latest = useRef(() => {});
   const draw = () => {
     const c = canvas.current;
     const g = c?.getContext("2d");
@@ -546,9 +586,15 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       greys.current = { faint: css.getPropertyValue("--color-fg-faint").trim() || "#8a8f96", soft: css.getPropertyValue("--color-fg-muted").trim() || "#8a8f96" };
     }
     const grey = (t?: string) => (t === "faint" ? greys.current!.faint : greys.current!.soft);
-    const plot = c.height * ((PICTURE_H - 8 - FOOT) / (PICTURE_H - 8));
+    // Above the x axis's labels, at the canvas's twice-the-pixels scale.
+    const plot = c.height - 2 * FOOT;
     const px = (v: number, a: Axis) => Math.min(1, Math.max(0, along(a, v)));
-    const dbY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
+    // A level's bar or history in dB on the picture's own y axis when that is in dB (CARD-103); else,
+    // and for a spectrum always, from −90 dB at the foot to 0 dB at the top.
+    const ownY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
+    const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : ownY(db));
+    /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1. */
+    const said: ({ v: number; x?: number; y: number } | null)[] = layers.map(() => null);
     g.clearRect(0, 0, c.width, c.height);
     layers.forEach((l, i) => {
       const all = seen.current.get(i) ?? [];
@@ -556,11 +602,15 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       g.strokeStyle = g.fillStyle = grey((l as { tone?: string }).tone);
       g.lineWidth = 2;
       if (l.kind === "spectrum" && last?.bins && view.x.unit === "hz") {
-        // A twelfth of an octave each, from 20 Hz: a faint fill from the foot.
+        // A twelfth of an octave each, from 20 Hz: a faint fill from the foot, on a scale of its own
+        // (−90 dB at the foot, 0 dB at the top) whatever the y axis: a level behind a curve of gain,
+        // so a quiet sound still shows (CARD-103).
         g.globalAlpha = 0.35;
         g.beginPath();
         g.moveTo(0, plot);
-        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, dbY(db)));
+        last.bins.forEach((db, j) => g.lineTo(px(20 * 2 ** (j / 12), view.x) * c.width, ownY(db)));
+        const loudest = Math.max(...last.bins);
+        said[i] = { v: loudest, y: ownY(loudest) / plot };
         g.lineTo(c.width, plot);
         g.closePath();
         g.fill();
@@ -575,11 +625,21 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
           g.beginPath();
           g.arc(x, y, 6, 0, 2 * Math.PI);
           g.fill();
-        } else g.fillRect(0, plot - 4, ((db - DB_FOOT) / -DB_FOOT) * c.width, 4);
+          said[i] = { v: db, x: x / c.width, y: y / plot };
+        } else if (view.y.unit === "db") {
+          // A bar at the left edge, from the foot up to the level on the y axis.
+          const y = dbY(db);
+          g.fillRect(0, y, 8, plot - y);
+          said[i] = { v: db, y: y / plot };
+        } else {
+          g.fillRect(0, plot - 4, ((db - DB_FOOT) / -DB_FOOT) * c.width, 4);
+          said[i] = { v: db, y: 1 };
+        }
       } else if (l.kind === "meter" && last?.now !== undefined) {
         // A bar at the right edge, from the axis's 0 to the meter's number, in the y axis's unit.
         const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(last.now, view.y)) * plot;
         g.fillRect(c.width - 10, Math.min(y0, y1), 8, Math.abs(y1 - y0));
+        said[i] = { v: last.now, y: y1 / plot };
       } else if (l.kind === "history" && all.length > 1) {
         g.beginPath();
         all.forEach((s, j) => {
@@ -588,15 +648,24 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
           const x = ((j + HISTORY - all.length) / (HISTORY - 1)) * c.width;
           if (j) g.lineTo(x, y);
           else g.moveTo(x, y);
+          said[i] = { v, y: y / plot };
         });
         g.stroke();
       } else if (l.kind === "playhead") {
         const graph = useStore.getState().graph;
         let t: number | null = null;
         if ((l.from ?? "beat") === "beat" && graph) {
-          const beat = beatNow();
-          const bar = barAt(graph.timeline.meter, Math.max(0, beat));
-          t = (beat - bar.start) / bar.length;
+          const beat = Math.max(0, beatNow());
+          if (view.x.unit === "beats") {
+            // On an axis of beats: the song's beat, from the axis's start, round again each time it
+            // has crossed it (CARD-104), so a picture of whole cycles shows where its cycle is.
+            const span = view.x.hi - view.x.lo;
+            t = span > 0 ? (((beat - view.x.lo) % span) + span) % span / span : null;
+          } else {
+            const bar = barAt(graph.timeline.meter, beat);
+            t = (beat - bar.start) / bar.length;
+          }
+          if (t !== null) said[i] = { v: beat, x: t, y: 0 };
         } else if (last?.now !== undefined) t = px(last.now, view.x);
         if (t !== null) g.fillRect(t * c.width - 1, 0, 2, plot);
       } else if (l.kind === "scope" && last?.frames?.length) {
@@ -613,7 +682,10 @@ function Live({ view, shapes, looking, session, module, node }: ViewProps & { vi
       }
     });
     c.dataset.reads = String(reads.current);
+    c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4) }));
+    c.dataset.span = `${view.x.lo},${view.x.hi}`;
   };
+  latest.current = draw;
   return (
     <>
       <canvas ref={canvas} data-live={layers.length} className="absolute inset-0 w-full h-full pointer-events-none" />

@@ -23,7 +23,7 @@
 
 [package]
 name = "std"
-version = "0.9.0"
+version = "0.10.0"
 license = "MIT OR Apache-2.0"
 description = "The toolbox sounds are made of: oscillators, envelopes, filters, the Sampler, the mixer, the effects mixing needs, and the kernels they are built on"
 wasm = "kernels/std.wasm"

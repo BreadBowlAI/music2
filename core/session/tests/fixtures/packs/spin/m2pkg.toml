@@ -8,7 +8,8 @@ tags = ["test"]
 wasm = "k.wasm"
 
 [dependencies]
-"@m2/core" = "2"
+# A picture (CARD-60), new in @m2/core 2.4 (PACK-23).
+"@m2/core" = "2.4"
 std = "0.9"
 
 # Each kernel plays its input while it is under 0.001; past it, `spin` never returns from the call

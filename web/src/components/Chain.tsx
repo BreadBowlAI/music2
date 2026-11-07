@@ -6,7 +6,7 @@
 import clsx from "clsx";
 import { ChevronRight, Maximize2, Minus, Square } from "lucide-react";
 import { useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
+import { controlLabel, display, lockReason, moduleName, picks, type CardRow, type GraphState, type ModuleView, type ViewNode } from "../lib/graph";
 import { ALL, chainOf, frameOf, knobsOf, packOf, type Branch, type FrameTab } from "../lib/frame";
 import { useCards, type CardSize } from "../lib/folded";
 import { useNotice } from "../lib/notice";
@@ -29,6 +29,8 @@ const FACE_KNOB = 36;
 const TAB_KNOB = 28;
 /** Expanded draws its face bigger (CARD-44): its knobs this size. */
 const BIG_KNOB = 44;
+/** How tall a picture is on a Normal card's face, one or two of them, so the card fits the dock's first height (CARD-43); Expanded draws each at its own size. */
+const FACE_PICTURE_H = [104, 76];
 
 /**
  * Device: the chain where the sound is one and the window wants it, else the patch (CARD-42). The
@@ -204,8 +206,8 @@ function Frame({
   const faceHasPicture = frame.face.some((r) => "view" in r);
   const normal = faceHasPicture ? PICTURE_W : NORMAL_W;
   const width = size === "folded" ? FOLDED_W : size === "expanded" ? normal * 2 : normal;
-  const row = (r: CardRow, cell: number | undefined, ided = false) => (
-    <RowOf key={key(r)} row={r} node={node} module={module} titled={titled} nodeKey={nodeKey} knobKey={knobKey} graph={graph} editable={editable} cell={cell} ided={ided} />
+  const row = (r: CardRow, cell: number | undefined, ided = false, height?: number) => (
+    <RowOf key={key(r)} row={r} node={node} module={module} titled={titled} nodeKey={nodeKey} knobKey={knobKey} graph={graph} editable={editable} cell={cell} ided={ided} height={height} />
   );
   const grid = (rows: CardRow[], cell: number) => <div className="grid grid-cols-[repeat(auto-fill,64px)] justify-between gap-y-1 px-3 py-1">{rows.map((r) => row(r, cell))}</div>;
   // The face: its pictures beside its values, so a Normal card fits the dock's first height (review
@@ -220,7 +222,7 @@ function Frame({
       </div>
     ) : pictures.length && values.length ? (
       <div data-face className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)] items-start">
-        <div className="pt-1">{pictures.map((r) => row(r, undefined))}</div>
+        <div className="pt-1">{pictures.map((r) => row(r, undefined, false, FACE_PICTURE_H[Math.min(pictures.length, 2) - 1]))}</div>
         {grid(values, FACE_KNOB)}
       </div>
     ) : (
@@ -363,6 +365,7 @@ function RowOf({
   editable,
   cell,
   ided,
+  height,
 }: {
   row: CardRow;
   node: ViewNode;
@@ -374,6 +377,8 @@ function RowOf({
   editable: boolean;
   cell?: number;
   ided: boolean;
+  /** A view's height, in place of its own: a picture on a Normal face. */
+  height?: number;
 }) {
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useContext(Tracks);
@@ -417,7 +422,7 @@ function RowOf({
   }
   const v = node.views?.find((x) => x.name === row.view);
   if (!v) return null;
-  return wide(<ViewRow view={v} node={node} module={module} session={graph.session} revision={graph.view.revision} editable={editable} locked={locked} owner={titled} />);
+  return wide(<ViewRow view={v} height={height} node={node} module={module} session={graph.session} revision={graph.view.revision} editable={editable} locked={locked} owner={titled} />);
 }
 
 /**
@@ -437,7 +442,8 @@ function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
       const k = p?.knob ? node.knobs.find((x) => x.id === p.knob) : undefined;
       if (!p || !k) return [];
       const value = picks(k) ? (k.options?.find((o) => o.value === k.value)?.label ?? String(k.value)) : display(k, k.value);
-      return [`${p.label.charAt(0).toUpperCase()}${p.label.slice(1)} ${value}`];
+      // Named as its knob is, by the one rule (a level is Volume, never "Db"; review S7).
+      return [`${controlLabel(k)} ${value}`];
     })
     .slice(0, 4)
     .join(" · ");

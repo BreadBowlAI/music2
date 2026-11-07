@@ -47,14 +47,7 @@ pub struct CardView {
 /// What a view draws.
 #[derive(Clone, Debug, Serialize, PartialEq)]
 #[serde(tag = "kind", rename_all = "lowercase")]
-// A card's view is made once for each view the window draws, never kept by the thousand: its size
-// costs nothing, and boxing the envelope would only hide its parts behind a pointer.
-#[allow(clippy::large_enum_variant)]
 pub enum Drawn {
-    /// An envelope's shape; its corners move the attack, the decay and sustain, and the release.
-    Envelope { attack: Part, decay: Part, sustain: Part, release: Part },
-    /// A low-pass curve from cutoff and q; its peak moves them.
-    Filter { cutoff: Part, q: Part },
     /// Which recording plays on which keys and velocities, from what std's Sampler plays.
     Keys {
         /// The `regions` or `keymap` setting it draws, by its id.
@@ -93,23 +86,6 @@ pub struct PictureValue {
     pub value: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub knob: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub why: Option<String>,
-}
-
-/// A value a view draws and moves: its control's slot, its knob when the card can move it, and
-/// why not when it can't.
-#[derive(Clone, Debug, Serialize, PartialEq)]
-pub struct Part {
-    pub slot: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub knob: Option<String>,
-    /// What plays, when the card can't move it but the view can draw it: a lane's fallback, in
-    /// `unit` (review V6).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub value: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unit: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub why: Option<String>,
 }
@@ -288,47 +264,11 @@ fn uncommented(code: &str) -> Option<String> {
 /// Card `node`'s views (CARD-26), of call `site` of `desc`, made in module `m`; `notes` is the
 /// notes lane that plays the call, when one does.
 pub(crate) fn views(m: &Module, site: u32, desc: &Descriptor, node: &ViewNode, notes: Option<&LaneRef>) -> Vec<CardView> {
-    let part = |slot: &str, draws: &[&str]| -> Part {
-        let fits = |u: Option<&str>| u.is_some_and(|u| draws.contains(&u));
-        let none = Part { slot: slot.to_string(), knob: None, value: None, unit: None, why: None };
-        // Its knob, when its value is in a unit the picture draws (review V2): a cutoff written in
-        // semitones isn't moved as Hz.
-        match node.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)) {
-            Some(k) if fits(k.unit) => return Part { knob: Some(k.id.clone()), ..none },
-            Some(k) => {
-                return Part { why: Some(format!("it is written in {}, which this picture doesn't draw", unit_words(k.unit))), ..none };
-            }
-            None => {}
-        }
-        // A lane's fallback, which plays where no clip is, when it is in a unit the picture draws.
-        let input = node.inputs.iter().find(|p| p.slot.as_deref() == Some(slot));
-        let lane = input.and_then(|p| p.lane.as_ref()).and_then(|l| m.lanes.iter().find(|x| x.key == l.lane));
-        let held = lane.and_then(|l| match l.kind {
-            m2_ir::Kind::Control(u) if fits(u.map(m2_ir::Unit::name)) => Some((l.default.unwrap_or(0.0), u.map(m2_ir::Unit::name))),
-            _ => None,
-        });
-        let why = Some(why_not(m, input));
-        match held {
-            Some((value, unit)) => Part { value: Some(value), unit, why, ..none },
-            None => Part { why, ..none },
-        }
-    };
     desc.editor
         .views
         .iter()
         .map(|v| {
             let of = match &v.of {
-                ViewOf::Envelope { attack, decay, sustain, release } => {
-                    let (time, level) = (&["seconds", "beats"][..], &["unit01", "gain", "db"][..]);
-                    Drawn::Envelope {
-                        attack: part(attack, time),
-                        decay: part(decay, time),
-                        sustain: part(sustain, level),
-                        release: part(release, time),
-                    }
-                }
-                // Its q a q, or a resonance from 0 to 1 (CARD-30): the window draws either.
-                ViewOf::Filter { cutoff, q } => Drawn::Filter { cutoff: part(cutoff, &["hz"]), q: part(q, &["scalar", "unit01"]) },
                 ViewOf::Keys { regions } => {
                     let setting = node.settings.iter().find(|x| &x.slot == regions).map(|x| x.id.clone()).unwrap_or_default();
                     let (regions, why) = match crate::sampler::key_regions(m, site) {

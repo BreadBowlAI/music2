@@ -350,7 +350,8 @@ fn moving_a_component_keeps_its_id() {
         let fx = std::fs::read_to_string(dir.join("src/fx.ts")).unwrap();
         let start = fx.find("/**\n * Compressor:").expect("compress's doc comment");
         let end = start + fx[start..].find("\n);\n").expect("compress's end") + 4;
-        let imports = "import { component, control, kernel, port, signature, type Audio, type Params, type Value } from \"@m2/core\";\n";
+        let imports = "import { component, control, kernel, port, signature, type Audio, type Params, type Value } from \"@m2/core\";\n\
+                       import { historyPicture, transfer, transferPicture, transferWords } from \"./pictures\";\n";
         std::fs::write(dir.join("src/compress.ts"), format!("{imports}{}", &fx[start..end])).unwrap();
         std::fs::write(dir.join("src/fx.ts"), format!("{}export {{ compress }} from \"./compress\";\n{}", &fx[..start], &fx[end..]))
             .unwrap();

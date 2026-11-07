@@ -21,7 +21,7 @@ fn vocal_song(what: &str, tracks: &[(&str, &str)]) -> Song {
     let mut files = vec![
         (
             "music2.toml".to_string(),
-            "[project]\nname = \"Vocals\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/vocals\" = \"1\"\n"
+            "[project]\nname = \"Vocals\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/vocals\" = \"1\"\n"
                 .to_string(),
         ),
         ("song.ts".to_string(), song),

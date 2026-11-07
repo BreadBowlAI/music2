@@ -1203,20 +1203,13 @@ export function signature<F extends (...args: any[]) => any>(): Signature<F> {
   return SIGNATURE as Signature<any>;
 }
 
-/** What a view draws, by role, and the kind each must be: a time, a level, … (CARD-16). */
+/** What a view draws, by role, and the kind each must be (CARD-16): a key map's regions or keymap setting. */
 type ViewNeeds = { readonly [role: string]: readonly [string, Want] };
-/** What a view's name may be: a control in one of `WANTS`' units, or a regions or keymap setting. */
-type Want = keyof typeof WANTS | "regions";
-const WANTS = {
-  time: ["seconds", "beats"],
-  level: ["unit01", "gain", "db"],
-  frequency: ["hz"],
-  // How much a filter rings at its cutoff: a q, or a resonance from 0 to 1, as a synth's knob says it (CARD-30).
-  q: ["scalar", "unit01"],
-} as const satisfies Record<string, readonly Unit[]>;
+/** What a view's name may be: a regions or keymap setting. */
+type Want = "regions";
 
 /** What a view declaration holds: its kind, and the name it draws for each role. */
-type ViewSpec = { kind: "envelope" | "filter" | "keys" | "scope" | "picture"; names: Record<string, [unknown, Want]>; picture?: PictureSpec };
+type ViewSpec = { kind: "keys" | "scope" | "picture"; names: Record<string, [unknown, Want]>; picture?: PictureSpec };
 
 /**
  * A view (CARD-16): a picture over values the sound declares, which holds none of its own. `V`
@@ -1231,23 +1224,12 @@ export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
 }
 
 /**
- * Declare a view in `editor.views`, naming this sound's own controls (CARD-16):
- * `view.envelope("attack", "decay", "sustain", "release")` (times, and a level), `view.filter("cutoff", "q")`
- * (a frequency, and a q or a resonance from 0 to 1, CARD-30), `view.keys("regions")` (a `regions` or
- * `keymap` setting), `view.scope()`.
+ * Declare a view in `editor.views` (CARD-16): `view.keys("regions")` (a `regions` or `keymap`
+ * setting), `view.scope()`, or `view.picture(…)`, a picture the sound draws (CARD-60). An envelope
+ * and a filter are std's pictures: `envelopePicture()` and `curvePicture()` in std/pictures
+ * (CARD-96, CARD-97).
  */
 export const view = {
-  envelope<const A extends string, const D extends string, const S extends string, const R extends string>(
-    attack: A,
-    decay: D,
-    sustain: S,
-    release: R,
-  ): ViewDecl<{ attack: [A, "time"]; decay: [D, "time"]; sustain: [S, "level"]; release: [R, "time"] }> {
-    return new ViewDecl({ kind: "envelope", names: { attack: [attack, "time"], decay: [decay, "time"], sustain: [sustain, "level"], release: [release, "time"] } });
-  },
-  filter<const C extends string, const Q extends string>(cutoff: C, q: Q): ViewDecl<{ cutoff: [C, "frequency"]; q: [Q, "q"] }> {
-    return new ViewDecl({ kind: "filter", names: { cutoff: [cutoff, "frequency"], q: [q, "q"] } });
-  },
   keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
     return new ViewDecl({ kind: "keys", names: { regions: [regions, "regions"] } });
   },
@@ -1263,6 +1245,18 @@ export const view = {
     return new PictureDecl({ kind: "picture", names: {}, picture: { ...spec } });
   },
 };
+
+// Gone since 2.4.0 (CARD-100): a sound that still calls one, past the types, is told in words what to draw instead.
+for (const [gone, now] of [
+  ["envelope", "an envelope is a picture of std/pictures, envelopePicture() and envelope() (CARD-96)"],
+  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-97)"],
+] as const) {
+  Object.defineProperty(view, gone, {
+    value: () => {
+      throw new Error(`view.${gone} is gone from @m2/core 2.4: ${now}`);
+    },
+  });
+}
 
 // ------------------------------------------------ pictures (CARD-60 to CARD-66)
 
@@ -1309,7 +1303,8 @@ export class Live {
 /**
  * A picture's live layers (CARD-73), at the call's input (`"in"`) or output (`"out"`):
  * `live.spectrum("in", { tone: "faint" })`, `live.level("in", { on: "curve" })` (a dot riding the
- * line named `curve`), `live.meter("reduction")`, `live.history(live.meter("reduction"))`,
+ * line named `curve`), `live.meter("reduction")`, `live.history(live.meter("reduction"))` (a
+ * `tone` of its own, as a spectrum's),
  * `live.playhead("beat")`, `live.scope("out")`.
  */
 export const live = {
@@ -1322,8 +1317,8 @@ export const live = {
   meter(name: string): Live {
     return new Live({ kind: "meter", name });
   },
-  history(of: Live): Live {
-    return new Live({ kind: "history", of });
+  history(of: Live, o?: { tone?: Tone }): Live {
+    return new Live({ kind: "history", of, ...(o?.tone !== undefined ? { tone: o.tone } : {}) });
   },
   playhead(from: string): Live {
     return new Live({ kind: "playhead", from });
@@ -1902,32 +1897,23 @@ type Body<D> = (...args: [...Anys<Slots<keyof Ins<D>>>, BodyParams<D>]) => unkno
 
 // Views and groups, checked against this very descriptor (CARD-16, CARD-17): a mistake makes the
 // descriptor's own view or group a type that says what is wrong, so the editor marks it there.
-type WantUnits = { [W in keyof typeof WANTS]: (typeof WANTS)[W][number] };
 type ViewsOf<D> = D extends { editor: { views: infer V extends Record<string, ViewDecl<any>> } } ? V : {};
 /** A card's values: its controls and settings. */
 type Values<D> = keyof Ctls<D> | keyof Sets<D>;
-/** What is wrong with a view's `role` naming `N`, which must be `W` (a kind), or never. */
-type RoleProblem<D, Role extends string, N, W> = W extends "regions"
-  ? N extends keyof Sets<D>
-    ? [SetArg<Sets<D>[N]>] extends [readonly Region[] | undefined]
-      ? never
-      : [SetArg<Sets<D>[N]>] extends [string | number | boolean | undefined]
-        ? `its setting names "${N & string}", which isn't a regions or keymap setting`
-        : never
-    : `its setting names "${N & string}", which isn't a setting of this sound`
-  : N extends keyof Ctls<D>
-    ? Ctls<D>[N] extends ControlDecl<any, infer K>
-      ? [NonNullable<K>] extends [WantUnits[W & keyof WantUnits]]
-        ? never
-        : `its ${Role} names "${N & string}", which isn't a ${W & string} (${WantUnits[W & keyof WantUnits]})`
-      : `its ${Role} names "${N & string}", a dictionary, not a ${W & string}`
-    : `its ${Role} names "${N & string}", which isn't a control of this sound`;
+/** What is wrong with a key map's setting `N` (CARD-16), or never. */
+type RoleProblem<D, N> = N extends keyof Sets<D>
+  ? [SetArg<Sets<D>[N]>] extends [readonly Region[] | undefined]
+    ? never
+    : [SetArg<Sets<D>[N]>] extends [string | number | boolean | undefined]
+      ? `its setting names "${N & string}", which isn't a regions or keymap setting`
+      : never
+  : `its setting names "${N & string}", which isn't a setting of this sound`;
 type ViewProblem<D, Name, V> = Name extends keyof Ins<D> | Values<D>
   ? `"${Name & string}" is a value of this sound: give the view a name of its own`
   : V extends PictureDecl<any, any>
     ? never
   : V extends ViewDecl<infer Needs>
-    ? { [R in keyof Needs]: RoleProblem<D, R & string, Needs[R][0], Needs[R][1]> }[keyof Needs]
+    ? { [R in keyof Needs]: RoleProblem<D, Needs[R][0]> }[keyof Needs]
     : never;
 type ViewsFit<D> = [{ [K in keyof ViewsOf<D>]: ViewProblem<D, K, ViewsOf<D>[K]> }[keyof ViewsOf<D>]] extends [never]
   ? unknown
@@ -2334,7 +2320,7 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     const at = `editor.views' "${name}"`;
     if (!NAME.test(name)) fail(`${at}: a view's name is a plain name, such as amp`);
     if (names.has(name)) fail(`${at}: "${name}" is a value of this sound; give the view a name of its own`);
-    if (!(v instanceof ViewDecl)) fail(`${at} must be made with view.envelope(), view.filter(), view.keys(), view.scope() or view.picture()`);
+    if (!(v instanceof ViewDecl)) fail(`${at} must be made with view.keys(), view.scope() or view.picture(); an envelope or a filter is a picture of std/pictures`);
     const spec = specOf<ViewSpec>(v as object);
     // A picture (CARD-60): its axes and live layers; its code stays here, for the runner.
     if (spec.kind === "picture") {
@@ -2345,19 +2331,11 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     }
     const out: Record<string, string> = { name, kind: spec.kind };
     for (const [role, [n, want]] of Object.entries(spec.names)) {
-      const says = want === "regions" ? `${at}: the key map's setting` : `${at}: the ${spec.kind}'s ${role}`;
-      if (want === "regions") {
-        const st = settings.find((x) => x.name === n);
-        if (!st) fail(`${says} names ${shown(n)}, which isn't a setting of this sound (settings: ${settings.map((x) => x.name).join(", ") || "none"})`);
-        if (st!.spec.kind !== "regions" && st!.spec.kind !== "keymap") {
-          fail(`${says} names "${n}", ${SETTING_WORDS[st!.spec.kind]} setting, but a key map shows regions or a keymap`);
-        }
-      } else {
-        const c = controls.find((x) => x.name === n);
-        if (!c) fail(`${says} names ${shown(n)}, which isn't a control of this sound (controls: ${controls.map((x) => x.name).join(", ") || "none"})`);
-        const units: readonly Unit[] = WANTS[want];
-        const is = c!.each ? "a dictionary" : c!.spec.kind !== "number" ? `a ${c!.spec.kind}` : c!.spec.unit ? `a control in ${c!.spec.unit}` : "a control with no unit";
-        if (c!.each || c!.spec.kind !== "number" || !c!.spec.unit || !units.includes(c!.spec.unit)) fail(`${says} names "${n}", ${is}, but it must be a ${want} (${units.join(" or ")})`);
+      const says = `${at}: the key map's setting`;
+      const st = settings.find((x) => x.name === n);
+      if (!st) fail(`${says} names ${shown(n)}, which isn't a setting of this sound (settings: ${settings.map((x) => x.name).join(", ") || "none"})`);
+      if (st!.spec.kind !== "regions" && st!.spec.kind !== "keymap") {
+        fail(`${says} names "${n}", ${SETTING_WORDS[st!.spec.kind]} setting, but a key map shows regions or a keymap`);
       }
       out[role] = n as string;
     }

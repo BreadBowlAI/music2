@@ -63,7 +63,7 @@ fn an_old_songs_lines_and_imports_move_to_the_packs() {
     assert!(up.written.is_some(), "written");
     assert_eq!(
         f.read("music2.toml"),
-        manifest("\"@m2/core\" = \"2\"\nstd = \"0.9\" # the std it was made with\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n")
+        manifest("\"@m2/core\" = \"2\"\nstd = \"0.10\" # the std it was made with\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n")
     );
     assert_eq!(
         f.read("tracks/keys.ts"),
@@ -88,6 +88,35 @@ fn an_old_songs_lines_and_imports_move_to_the_packs() {
     let keys = &up.changes[2].lines;
     assert!(keys.iter().any(|l| l.contains("- import { chorus, duck } from \"std/fx\";")), "{keys:#?}");
     assert!(keys.iter().any(|l| l.contains("+ import { chorus } from \"@m2/effects\";")), "{keys:#?}");
+}
+
+// FMT-25, CARD-101: a song made for std 0.9 asks for std 0.10 once upgraded, its other lines and
+// its code as they were; the upgrade says the one line it wrote, before and after, and the song
+// builds as it did.
+#[test]
+fn a_song_made_for_std_0_9_moves_to_0_10_and_says_so() {
+    let f = Fixture::new();
+    f.write("music2.toml", manifest("\"@m2/core\" = \"2\"\nstd = \"0.9\" # the std it was made with\n\"@m2/drums\" = \"2\"\n"));
+    f.write("song.ts", song_of(&["kick"]));
+    let kick = "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { compress } from \"std/fx\";\n\n\
+                export default track(\"kick\", ({ lane }) => compress(drums.drum(lane.notes(\"hits\")), { threshold: -12 }));\n";
+    f.write("tracks/kick.ts", kick);
+    let mut s = f.open();
+    assert!(needed(&s), "made for std 0.9, it asks for an older music2");
+    let up = upgrade(&mut s, false, None).unwrap();
+    assert!(up.left.is_empty() && up.refused.is_empty(), "{:?} {:?}", up.left, up.refused);
+    assert_eq!(f.read("music2.toml"), manifest("\"@m2/core\" = \"2\"\nstd = \"0.10\" # the std it was made with\n\"@m2/drums\" = \"2\"\n"));
+    assert_eq!(f.read("tracks/kick.ts"), kick, "its code is as it was");
+    let manifest_change = up.changes.iter().find(|c| c.file == "music2.toml").expect("it says it wrote music2.toml");
+    assert!(manifest_change.lines.iter().any(|l| l.contains("- std = \"0.9\"")), "{:#?}", manifest_change.lines);
+    assert!(manifest_change.lines.iter().any(|l| l.contains("+ std = \"0.10\"")), "{:#?}", manifest_change.lines);
+    assert!(
+        !up.changes.iter().any(|c| c.file.ends_with(".ts")),
+        "no code is written: {:?}",
+        up.changes.iter().map(|c| &c.file).collect::<Vec<_>>()
+    );
+    assert!(s.draft_errors.is_empty() && s.accepted().has_code(), "it builds: {:?}", s.draft_errors);
+    assert!(!needed(&s), "made for this music2 now");
 }
 
 // FMT-25: the nine single drums, and the simple kick and hat, are One drum, each knob converted as
@@ -134,7 +163,7 @@ fn the_single_drums_are_one_drum_with_their_knobs_converted() {
         "import { track } from \"@m2/core\";\nimport { drums } from \"@m2/drums\";\nimport { mixer } from \"std/mix\";\n\n\
          export default track(\"simple\", ({ lane }) => mixer({ k: drums.drum(lane.notes(\"k\")), h: drums.drum(lane.notes(\"h\"), { drum: \"hats\", decay: 2 }) }));\n"
     );
-    assert!(f.read("music2.toml").ends_with("\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/synths\" = \"2\"\n"));
+    assert!(f.read("music2.toml").ends_with("\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n\"@m2/synths\" = \"2\"\n"));
     assert!(s.draft_errors.is_empty() && s.accepted().has_code(), "it builds: {:?}", s.draft_errors);
     // The simple kick and hat were other sounds than One drum's: said, by file and line (G3). The
     // drum machine is named apart, to do when you choose, never converted (KIT-24).
@@ -541,7 +570,7 @@ fn a_tune_lanes_ramp_stays_within_a_cent() {
 #[test]
 fn lines_moved_by_hand_still_upgrade() {
     let f = Fixture::new();
-    f.write("music2.toml", manifest("\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/synths\" = \"2\"\n"));
+    f.write("music2.toml", manifest("\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/synths\" = \"2\"\n"));
     f.write("song.ts", song_of(&["hats"]));
     f.write(
         "tracks/hats.ts",
@@ -667,7 +696,7 @@ fn edits_that_clash_are_refused() {
 fn an_own_pack_locked_with_other_files_is_locked_again() {
     let f = Fixture::new();
     old_kick_song(&f);
-    f.write("music2.toml", manifest("\"@m2/core\" = \"1\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n"));
+    f.write("music2.toml", manifest("\"@m2/core\" = \"1\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n"));
     let drums = PackName::new("@m2/drums").unwrap();
     let now = m2_song::pack::comes_with(&drums).unwrap();
     let other = "sha256:3c38e9f58adb6324635f8600a4433d1676d6645245a9d539efc4776f261df380";

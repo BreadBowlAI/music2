@@ -411,7 +411,7 @@ mod tests {
         p
     }
 
-    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
+    pub(crate) const MANIFEST: &str = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n\"@m2/effects\" = \"1\"\n\"@m2/synths\" = \"2\"\n";
 
     fn project(files: &[(&str, &str)]) -> PathBuf {
         static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -538,8 +538,8 @@ export default song(() => v.out);
         // PACK-23: and each pack that runs code asks for this app's major of @m2/core, and the minor
         // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
         // instrument names kits (KIT-3), `"2.3"` once an input may be left out (PKG-18), what its
-        // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12); a pack of
-        // recordings alone may ask for none.
+        // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12), or its descriptors
+        // draw a picture or name a face (CARD-60, CARD-40); a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         // The packs whose components read `time.key`: a time node of the key in a frame of one of
         // theirs (review U5), in every-component's graph.
@@ -572,11 +572,15 @@ export default song(() => v.out);
             let labelled = mine.clone().any(|(_, d)| d.settings.iter().chain(entries(d).iter()).any(|x| x.label.is_some()));
             let kits = mine.clone().any(|(_, d)| !d.editor.kits.is_empty());
             let optional = mine.clone().any(|(_, d)| d.inputs.iter().any(|i| i.optional));
+            // A picture or a face (2.4, CARD-40, CARD-60), which the descriptor shows.
+            let pictured = mine.clone().any(|(_, d)| {
+                !d.editor.face.is_empty() || d.editor.views.iter().any(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. }))
+            });
             // The song's key, `time.key` (2.4, VOX-12), is read in a body, which no descriptor shows:
             // the graph of every-component, which calls every component of every bundled pack, does.
             let keyed = keyed.contains(name);
             match (major.as_deref(), optional, kits, labelled) {
-                (Some(m), ..) if keyed => format!("{m}.4"),
+                (Some(m), ..) if keyed || pictured => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
                 (Some(m), false, true, _) => format!("{m}.2"),
                 (Some(m), false, false, true) => format!("{m}.1"),

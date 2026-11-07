@@ -8,10 +8,15 @@ use crate::testing::{Fixture, MANIFEST};
 use crate::{Gestures, Knob, ViewNode};
 
 /// A sound with a choice, a switch, an envelope's and a filter's controls, regions, its four views
-/// and three groups (the design's §3.5 example).
+/// (its envelope and its filter std's pictures, CARD-96, CARD-97) and three groups (the design's
+/// §3.5 example).
 pub(crate) const WOBBLE: &str = "import { component, control, port, setting, view } from \"@m2/core\";
 import { lowpass } from \"std/filter\";
 import { sampler } from \"std/sampler\";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawn, lowpassWords } from \"std/pictures\";
+
+const ENV = { attack: \"attack\", decay: \"decay\", sustain: \"sustain\", release: \"release\" } as const;
+const CUT = { cutoff: \"cutoff\", q: \"q\" } as const;
 
 export const wobble = component(
   {
@@ -32,11 +37,15 @@ export const wobble = component(
     output: port.audio(),
     editor: {
       category: \"Instruments\",
-      views: { amp: view.envelope(\"attack\", \"decay\", \"sustain\", \"release\"), filter: view.filter(\"cutoff\", \"q\"), keys: view.keys(\"regions\"), scope: view.scope() },
+      views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys(\"regions\"), scope: view.scope() },
       groups: { Sound: [\"shape\", \"sub\", \"scope\"], Filter: [\"filter\", \"cutoff\", \"q\"], Amp: [\"amp\", \"attack\", \"decay\", \"sustain\", \"release\"] },
     },
   },
   (notes, { cutoff, q, attack, release, regions }) => lowpass(sampler(notes, { regions, attack, release }), { cutoff, q }),
+  {
+    amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
+    filter: { draw: (v, p) => drawn(p, v, CUT), words: (v) => lowpassWords(v, CUT) },
+  },
 );
 ";
 
@@ -389,9 +398,10 @@ fn a_cards_groups_are_in_the_view() {
     );
 }
 
-// CARD-26: the view carries the card's views, resolved for the call: each part of an envelope and
-// a filter names its slot and its knob; a keys view its setting, the regions the Sampler plays and
-// the notes lane; a scope nothing. A part driven by a lane has no knob, and says why.
+// CARD-26, CARD-63: the view carries the card's views, resolved for the call: an envelope and a
+// filter, std's pictures, each value they read with its knob; a keys view its setting, the regions
+// the Sampler plays and the notes lane; a scope nothing. A value a lane drives has no knob, says
+// why, and is what plays with no clip.
 #[test]
 fn a_cards_views_are_in_the_view() {
     use crate::views::{Drawn, KeyRegion};
@@ -401,21 +411,16 @@ fn a_cards_views_are_in_the_view() {
     let knob_id = |slot: &str| card_now.knobs.iter().find(|k| k.slot.as_deref() == Some(slot)).map(|k| k.id.clone());
     let names: Vec<&str> = card_now.views.iter().map(|v| v.name.as_str()).collect();
     assert_eq!(names, ["amp", "filter", "keys", "scope"]);
-    match &card_now.views[0].of {
-        Drawn::Envelope { attack, decay, sustain, release } => {
-            for (part, slot) in [(attack, "attack"), (decay, "decay"), (sustain, "sustain"), (release, "release")] {
-                assert_eq!((part.slot.as_str(), &part.knob, &part.why), (slot, &knob_id(slot), &None), "{slot}");
-            }
-        }
-        other => panic!("not an envelope: {other:?}"),
+    let value = |view: &crate::views::CardView, name: &str| match &view.of {
+        Drawn::Picture { values, .. } => values.iter().find(|v| v.name == name).cloned().unwrap_or_else(|| panic!("no {name}")),
+        other => panic!("not a picture: {other:?}"),
+    };
+    for slot in ["attack", "decay", "sustain", "release"] {
+        let v = value(&card_now.views[0], slot);
+        assert_eq!((&v.knob, &v.why), (&knob_id(slot), &None), "{slot}");
     }
-    match &card_now.views[1].of {
-        Drawn::Filter { cutoff, q } => {
-            assert_eq!((cutoff.knob.clone(), q.knob.clone()), (knob_id("cutoff"), knob_id("q")));
-            assert!(cutoff.knob.is_some());
-        }
-        other => panic!("not a filter: {other:?}"),
-    }
+    assert_eq!((value(&card_now.views[1], "cutoff").knob, value(&card_now.views[1], "q").knob), (knob_id("cutoff"), knob_id("q")));
+    assert!(knob_id("cutoff").is_some());
     let regions = card_now.settings.iter().find(|x| x.slot == "regions").unwrap().id.clone();
     match &card_now.views[2].of {
         Drawn::Keys { setting, regions: played, lane, why } => {
@@ -430,26 +435,23 @@ fn a_cards_views_are_in_the_view() {
     assert!(matches!(card_now.views[3].of, Drawn::Scope {}));
     let sent = serde_json::to_value(&card_now).unwrap();
     assert_eq!(sent["views"][3], json!({"name": "scope", "kind": "scope"}));
-    assert_eq!(sent["views"][0]["attack"]["slot"], "attack");
+    assert_eq!(sent["views"][0]["kind"], "picture");
     // The attack automated: its part has no knob, and says the lane drives it.
     let attack = knob(&s, "attack");
     s.automate(s.accepted().number, &attack.id).unwrap();
-    match &card(&s).views[0].of {
-        Drawn::Envelope { attack, decay, .. } => {
-            assert_eq!(attack.knob, None);
-            assert_eq!(attack.why.as_deref(), Some("it follows the attack lane"));
-            // Drawn where it plays with no clip: the lane's fallback, in its unit (V6).
-            assert_eq!((attack.value, attack.unit), (Some(0.005), Some("seconds")));
-            // The other corners stay the card's to move.
-            assert_eq!((decay.knob.clone(), decay.value), (knob_id("decay"), None));
-        }
-        other => panic!("not an envelope: {other:?}"),
-    }
+    let now = card(&s);
+    let (attack, decay) = (value(&now.views[0], "attack"), value(&now.views[0], "decay"));
+    assert_eq!(attack.knob, None);
+    assert_eq!(attack.why.as_deref(), Some("it follows the attack lane"));
+    // Drawn where it plays with no clip: the lane's fallback, in its unit (V6).
+    assert_eq!(attack.value, json!(0.005));
+    // The other corners stay the card's to move.
+    assert_eq!(decay.knob, knob_id("decay"));
 }
 
-// CARD-26 (review V2): a view moves a knob only in a unit it draws. A cutoff written in semitones
-// (std's FREQ accepts them: `semis(72)`) has no knob in the filter's picture, which says why, and
-// draws nothing for it; its q, in its own unit, is still the card's.
+// CARD-63 (review V2): a picture moves a knob only in the unit it is declared in. A cutoff written in
+// semitones (std's FREQ accepts them: `semis(72)`) has no knob in the filter's picture, which says
+// why, and is null for it; its q, in its own unit, is still the card's.
 #[test]
 fn a_view_moves_only_a_knob_in_a_unit_it_draws() {
     use crate::views::Drawn;
@@ -457,9 +459,11 @@ fn a_view_moves_only_a_knob_in_a_unit_it_draws() {
     f.write("music2.toml", MANIFEST);
     f.write(
         "lib/tone.ts",
-        "import { component, control, port, view } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+        "import { component, control, port } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { osc } from \"std/dsp\";\n\
+         import { curvePicture, lowpass as drawn, lowpassWords } from \"std/pictures\";\n\
          export const tone = component(\n  { id: \"tone\", label: \"Tone\", controls: { cutoff: control.hz(1000).range(20, 20000).log().accepts(\"semitones\", 0, 127), q: control.scalar(0.7) },\n\
-         output: port.audio(), editor: { views: { filter: view.filter(\"cutoff\", \"q\") } } },\n  ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),\n);\n",
+         output: port.audio(), editor: { views: { filter: curvePicture({ live: false }) } } },\n  ({ cutoff, q }) => lowpass(osc.saw(cutoff), { q }),\n\
+         { filter: { draw: (v, p) => drawn(p, v, { cutoff: \"cutoff\", q: \"q\" }), words: (v) => lowpassWords(v, { cutoff: \"cutoff\", q: \"q\" }) } },\n);\n",
     );
     f.write(
         "song.ts",
@@ -473,14 +477,11 @@ fn a_view_moves_only_a_knob_in_a_unit_it_draws() {
     let card = m.nodes.into_iter().find(|n| n.title.as_deref() == Some("Tone")).expect("Tone's card");
     let cutoff = card.knobs.iter().find(|k| k.slot.as_deref() == Some("cutoff")).expect("the cutoff's knob");
     assert_eq!((cutoff.unit, &cutoff.value), (Some("semitones"), &json!(72)));
-    match &card.views[0].of {
-        Drawn::Filter { cutoff, q } => {
-            assert_eq!((&cutoff.knob, cutoff.value), (&None, None));
-            assert_eq!(cutoff.why.as_deref(), Some("it is written in semitones, which this picture doesn't draw"));
-            assert!(q.knob.is_some() && q.why.is_none(), "{q:?}");
-        }
-        other => panic!("not a filter: {other:?}"),
-    }
+    let Drawn::Picture { values, .. } = &card.views[0].of else { panic!("not a picture: {:?}", card.views[0].of) };
+    let (cutoff, q) = (values.iter().find(|v| v.name == "cutoff").unwrap(), values.iter().find(|v| v.name == "q").unwrap());
+    assert_eq!((&cutoff.knob, &cutoff.value), (&None, &Json::Null));
+    assert_eq!(cutoff.why.as_deref(), Some("it is written in semitones, which this picture doesn't draw"));
+    assert!(q.knob.is_some() && q.why.is_none(), "{q:?}");
 }
 
 // CARD-25 (review V7): a group may name a dictionary slot; its entries' values are its rows.
@@ -524,8 +525,8 @@ fn a_cards_face_and_code_are_in_the_view() {
     );
     f.write(
         "song.ts",
-        "import { song, track } from \"@m2/core\";\nimport { lowpass } from \"std/filter\";\nimport { wobble } from \"./lib/wobble\";\n\
-         const lead = track(\"lead\", ({ lane }) =>\n  lowpass(wobble(lane.notes(\"notes\"), { shape: \"square\", // its wave\n    cutoff: 1200 }), { cutoff: 900 }),\n);\n\
+        "import { song, track } from \"@m2/core\";\nimport { gain } from \"std/dsp\";\nimport { wobble } from \"./lib/wobble\";\n\
+         const lead = track(\"lead\", ({ lane }) =>\n  gain(wobble(lane.notes(\"notes\"), { shape: \"square\", // its wave\n    cutoff: 1200 }), { db: -3 }),\n);\n\
          export default song(() => lead.out);\n",
     );
     let s = f.open();
@@ -537,10 +538,10 @@ fn a_cards_face_and_code_are_in_the_view() {
     assert_eq!(wobble.face, [View("amp".into()), Input(input("cutoff")), Input(input("attack")), Input(input("release"))]);
     assert_eq!(wobble.code.as_deref(), Some("wobble(lane.notes(\"notes\"), { shape: \"square\", cutoff: 1200 })"));
     let v = s.view();
-    let lowpass = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Lowpass")).expect("the lowpass card");
-    assert!(lowpass.face.is_empty());
-    assert_eq!(lowpass.code.as_deref(), Some("lowpass(…, { cutoff: 900 })"));
-    let sent = serde_json::to_value(lowpass).unwrap();
+    let gain = v.modules.iter().flat_map(|m| &m.nodes).find(|n| n.title.as_deref() == Some("Gain")).expect("the gain card");
+    assert!(gain.face.is_empty());
+    assert_eq!(gain.code.as_deref(), Some("gain(…, { db: -3 })"));
+    let sent = serde_json::to_value(gain).unwrap();
     assert!(sent.get("face").is_none(), "no face, no field: {sent}");
     assert_eq!(serde_json::to_value(&wobble).unwrap()["face"][0], json!({"view": "amp"}));
 }

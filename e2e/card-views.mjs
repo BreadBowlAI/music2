@@ -88,6 +88,10 @@ write("data/wobble/notes.json", JSON.stringify({ clips: [{ id: "w1", start: 0, l
 const TRACK = `import { component, control, port, setting, track, view } from "@m2/core";
 import { lowpass } from "std/filter";
 import { sampler } from "std/sampler";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawn, lowpassWords } from "std/pictures";
+
+const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+const CUT = { cutoff: "cutoff", q: "q" } as const;
 
 const wobble = component(
   {
@@ -107,11 +111,15 @@ const wobble = component(
     settings: { regions: setting.regions() },
     output: port.audio(),
     editor: {
-      views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q"), keys: view.keys("regions"), scope: view.scope() },
+      views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys("regions"), scope: view.scope() },
       groups: { Sound: ["shape", "sub", "scope"], Filter: ["filter", "cutoff", "q"], Amp: ["amp", "attack", "decay", "sustain", "release"] },
     },
   },
   (notes, { cutoff, q, attack, release, regions }) => lowpass(sampler(notes, { regions, attack, release, mode: "gate" }), { cutoff, q }),
+  {
+    amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
+    filter: { draw: (v, p) => drawn(p, v, CUT), words: (v) => lowpassWords(v, CUT) },
+  },
 );
 
 export default track("wobble", { name: "Wobble" }, ({ lane }) =>
@@ -207,7 +215,8 @@ check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes i
 await tab("Amp");
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
-const handle = await seen(`${card} [data-view="amp"] [data-handle="attack"]`);
+// std's envelope picture (CARD-96): its attack corner is its first dot.
+const handle = await seen(`${card} [data-picture="amp"] [data-dot="0"]`);
 check(!!handle, "the envelope draws its attack corner");
 await linted(`${card} [data-view="amp"]`, "the envelope");
 n = posts.length;
@@ -228,7 +237,7 @@ check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes it ba
 
 // The filter's peak: cutoff and q in one edit.
 await tab("Filter");
-const peak = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
+const peak = await seen(`${card} [data-picture="filter"] [data-dot="0"]`);
 await page.mouse.move(peak.x + peak.width / 2, peak.y + peak.height / 2);
 await page.mouse.down();
 await page.mouse.move(peak.x + peak.width / 2 - 25, peak.y + peak.height / 2 - 15, { steps: 10 });
@@ -243,7 +252,7 @@ await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "one ⌘Z takes both back");
 // Dragged far past the cutoff's declared range (40 Hz to 8 kHz), the peak stops at its end, as a knob's drag does.
-const peak2 = await seen(`${card} [data-view="filter"] [data-handle="peak"]`);
+const peak2 = await seen(`${card} [data-picture="filter"] [data-dot="0"]`);
 await page.mouse.move(peak2.x + peak2.width / 2, peak2.y + peak2.height / 2);
 await page.mouse.down();
 await page.mouse.move(peak2.x + 400, peak2.y + peak2.height / 2, { steps: 10 });

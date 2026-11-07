@@ -217,7 +217,7 @@ fn an_edited_folder_pack_draws_its_new_code() {
     std::fs::create_dir_all(pack.join("src")).unwrap();
     let index = TONE.to_string();
     std::fs::write(pack.join("src/index.ts"), &index).unwrap();
-    std::fs::write(pack.join("m2pkg.toml"), "[package]\nname = \"@test/curve\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n\n[dependencies]\n\"@m2/core\" = \"2.4\"\nstd = \"0.9\"\n").unwrap();
+    std::fs::write(pack.join("m2pkg.toml"), "[package]\nname = \"@test/curve\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\n\n[dependencies]\n\"@m2/core\" = \"2.4\"\nstd = \"0.10\"\n").unwrap();
     let manifest = std::fs::read_to_string(fixture.0.join("music2.toml")).unwrap();
     let rel = format!("../{}", pack.file_name().unwrap().to_string_lossy());
     fixture

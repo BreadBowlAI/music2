@@ -149,16 +149,11 @@ export type CardRow = { input: string } | { setting: string } | { view: string }
 /** A group of a card (CARD-25): its title, and its rows in the order the sound names them. */
 export interface CardGroup { name: string; rows: CardRow[] }
 
-/** A value a view draws and moves (CARD-26): its control's slot, its knob when the card can move it, else what plays (a lane's fallback, in `unit`) and why not. */
-export interface ViewPart { slot: string; knob?: string; value?: number; unit?: string; why?: string }
-
 /** A region std's Sampler plays, as a key map draws it: its notes and velocities, each lowest and highest. */
 export interface KeyRegion { file: string; root: number; keys: [number, number]; velocity: [number, number]; round_robin: [number, number]; release?: boolean }
 
 /** A view of a card (CARD-26): a picture over values with homes; it holds none of its own. */
 export type CardView = { name: string } & (
-  | { kind: "envelope"; attack: ViewPart; decay: ViewPart; sustain: ViewPart; release: ViewPart }
-  | { kind: "filter"; cutoff: ViewPart; q: ViewPart }
   | { kind: "keys"; setting: string; regions: KeyRegion[]; lane?: LaneRef; why?: string }
   | { kind: "scope" }
   | {

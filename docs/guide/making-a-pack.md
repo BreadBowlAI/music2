@@ -142,15 +142,20 @@ A sound's code says what each of its values is. It never says how to draw it: th
 
 | View | Draws | Its names must be |
 |---|---|---|
-| `view.envelope("attack", "decay", "sustain", "release")` | the envelope's shape | three times (`control.secs`, `control.ms` or `control.beats`) and a level (`control.frac`, `control.linear` or `control.db`) |
-| `view.filter("cutoff", "q")` | a low-pass filter's curve (12 dB per octave), worked out from the two knobs: a picture, not a measurement | a frequency (`control.hz`) and a `control.scalar` |
+| `envelopePicture()`, from `std/pictures` | the envelope's shape: drag its corners | (its code names them, [below](#pictures-std-gives)) |
+| `curvePicture()`, from `std/pictures` | a filter's or an EQ's curve: drag its dot | (its code names them) |
 | `view.keys("regions")` | which recording plays on which keys, as std's Sampler plays them | a `setting.regions()` or `setting.keymap()` |
 | `view.scope()` | the sound as it plays | (no names) |
+| `view.picture({ x, y, live })` | a picture of your own ([Pictures](#pictures)) | (its code names them) |
 
 **Groups** put the card in order. Each group names some of the sound's values and views, each once. Values in no group go last, under More.
 
 ```ts
-import { component, control, kernel, poly, port, view, type Audio, type Events } from "@m2/core";
+import { component, control, kernel, poly, port, type Audio, type Events } from "@m2/core";
+import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from "std/pictures";
+
+const AMP = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+const CUT = { cutoff: "cutoff", q: "q" } as const;
 
 export const wobble = component(
   {
@@ -167,12 +172,17 @@ export const wobble = component(
     output: port.audio(),
     editor: {
       category: "Bass",
-      views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
+      views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
       groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Loudness: ["amp"] },
     },
   },
   // A voice of the pack's own kernel, whose port is "shape: control<choice<saw|square|sine>> = 0".
   (notes: Events, c): Audio => poly(notes, (n) => kernel("@alice/wobble:voice", { pitch: n.pitch, gate: n.gate, ...c }) as Audio),
+  // The pictures' code: std draws them, from your sound's values (Pictures, below).
+  {
+    amp: { draw: (v, p) => envelope(p, v, AMP), words: (v) => envelopeWords(v, AMP) },
+    filter: { draw: (v, p) => lowpass(p, v, CUT), words: (v) => lowpassWords(v, CUT) },
+  },
 );
 ```
 
@@ -182,7 +192,7 @@ A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code ed
 
 ```ts
 editor: {
-  views: { amp: view.envelope("attack", "decay", "sustain", "release"), filter: view.filter("cutoff", "q") },
+  views: { amp: envelopePicture(), filter: curvePicture({ live: false }) },
   face: ["filter", "shape", "cutoff", "attack", "release"],
   groups: { Sound: ["shape", "sub"], Filter: ["filter", "cutoff", "q"], Loudness: ["amp"] },
 },
@@ -320,6 +330,24 @@ export const curve = component(
 **What is checked.** As you type, `v.freq9` (a value your sound doesn't have), a switch used as a number, and a dot's name that isn't a control of the right kind are red lines where you wrote them. A name you work out (`` `freq${b}` ``) is checked when TypeScript can tell its values, as from `[1, 2] as const`. music2 checks everything again each time the picture draws, in Rust, whatever your code did: a name the sound doesn't have, a point that isn't a number, an odd count of numbers, more than 20,000 numbers or 256 KB, text too long, words over one line. Each greys the picture with words that say why ("Curve EQ's picture names freq9, which this sound doesn't have."). The knobs still work.
 
 **Where it runs, and its limits.** On music2's server, in the same sandbox as your pack's code at build time: no `Date`, no `Math.random`, no `eval`. Your module's top level may take 1 s to load; each draw 20 ms (keep it well under 8 ms). A draw past its limit, or past 64 MB, is stopped, and the picture rests for 10 s; at values stopped twice it waits for your pack's files to change. A module that doesn't load in time is refused until its files change. A picture is pure: it draws the same shapes for the same values. music2 draws each one twice the first time, and `m2 pack check` does at its defaults: one that keeps something between draws (a count) is refused. `v` can't be changed. A picture needs `@m2/core` 2.4.
+
+### Pictures std gives
+
+`std/pictures` has the pictures many sounds need, ready to use: each a declaration for `editor.views` and a function for its `draw` (pass it `p`, `v` and the names of your values, which TypeScript checks against your sound), and one for its `words`. Import it like any std module, and ask for `std = "0.10"`.
+
+| Picture | Declare it | Draw it | Its dots |
+|---|---|---|---|
+| an envelope: how loud a note is over time, in seconds | `envelopePicture()` | `envelope(p, v, { attack, decay, sustain, release })`, `envelopeWords(v, names)`; its times controls in seconds, its sustain a level from 0 to 1 | the peak (attack), the decay's corner (decay across, sustain up), the end (release): each stays under the pointer as you drag |
+| a filter inside a voice, drawn from maths | `curvePicture({ live: false })` | `lowpass(p, v, { cutoff, q })` (a plain number) or `{ cutoff, resonance }` (0 to 1), `lowpassWords(v, names)` | one: the cutoff across, the q up |
+| a filter or EQ you play on its own | `curvePicture()` (its spectrum under it as it plays) | `p.response()` and your dots | yours |
+| a compressor's curve, level in against level out | `transferPicture()` | `transfer(p, v, { threshold, ratio, makeup })`, `transferWords(v, names)` | the corner: the threshold, across; the line above it: the ratio, across (and the wheel) |
+| a compressor's last seconds: in, out and how far it turned down | `historyPicture()` | a guide line at 0 dB (`p.mark`) | none |
+| how far a sound is turned down as it plays | `reductionPicture({ most, meter })` | `reduction(p, { most })` | none: a meter your kernel gives (`reduction`) |
+| an LFO's shape, whole cycles of it, with the song's playhead | `lfoPicture()` | `lfo(p, v, { period, shape, phase })`, `lfoWords(v, names)` | the end of its first cycle: the period |
+
+The envelope draws std's `adsr`'s own sums and the compressor's curve std's `compress`'s, each checked against those sounds. The lowpass is a two-pole drawing, checked against std's own filter only: on another filter (a synth's ladder falls faster) it is a drawing, and its words say so, naming no slope. A filter you play on its own is better measured: `p.response()` can't be wrong about it.
+
+A picture whose x axis is time (in seconds or beats) is drawn up to the furthest point its shapes reach, so a short envelope fills it as a long one does; while you drag a dot, the axis stays as it was, so the dot stays under the pointer. A live level is drawn on the picture's own y axis when that is in dB.
 
 ## Kernels of its own
 

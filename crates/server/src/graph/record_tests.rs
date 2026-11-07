@@ -199,7 +199,7 @@ fn a_note_under_a_latent_song_lands_where_it_was_heard() {
     let tuned = SONG
         .replace("import { sum } from 'std/math';", "import { sum } from 'std/math';\nimport { tune } from '@m2/vocals';")
         .replace("export default song(() => sum(b.out, k.out));", "const v = track('vox', { name: 'Vox' }, ({ lane }) => tune(lane.audio('clips')));\nexport default song(() => sum(b.out, k.out, v.out));");
-    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/drums\" = \"2\"\n\"@m2/vocals\" = \"1\"\n";
+    let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/drums\" = \"2\"\n\"@m2/vocals\" = \"1\"\n";
     let mut r = Rig::with(&[("music2.toml", manifest), ("song.ts", &tuned)]);
     r.anchored(0, 0.0);
     r.start(false, None);
@@ -1127,7 +1127,7 @@ mod audio {
         const TUNED: &str = "import { song, track } from '@m2/core';\nimport { tune } from '@m2/vocals';\n\
                              const vox = track('vox', { name: 'Vox' }, ({ lane }) => tune(lane.audio('clips')));\n\
                              export default song(() => vox.out);\n";
-        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.9\"\n\"@m2/vocals\" = \"1\"\n";
+        let manifest = "[project]\nname = \"t\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n\"@m2/vocals\" = \"1\"\n";
         let mut r = Rig::with(TUNED, &[("music2.toml", manifest)], &[]);
         let late = 720;
         assert_eq!(r.player.latency(), late, "Tune makes the song 15 ms late");
