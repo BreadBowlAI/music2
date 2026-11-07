@@ -427,6 +427,9 @@ pub fn connect(s: &mut Session, at: u64, from: &str, to: &str) -> Result<Edited,
     ready(s)?;
     let outlet = outlet(s, at, from)?;
     let control = resolve(s, at, to)?;
+    if let Some(why) = cable_refused(s, &control) {
+        return Err(EditError::Rejected(why));
+    }
     if control.file != outlet.file {
         return Err(EditError::Rejected(format!("`{}` is in another file", outlet.name)));
     }
@@ -478,6 +481,20 @@ pub fn connect(s: &mut Session, at: u64, from: &str, to: &str) -> Result<Edited,
         }
     })?;
     Ok(Edited { revision: done.number, file: control.file, before: label.0, after: label.1 })
+}
+
+/// Why no cable can go into control `c`, when none can (RENDER-41): it is a note effect's value, and a
+/// note effect plays before the song's sounds. In the card's own words, for `connect`'s refusal and
+/// the knob the patch doesn't offer to a dragged cable (DV-6).
+pub(crate) fn cable_refused(s: &Session, c: &crate::controls::Control) -> Option<String> {
+    let components = &s.accepted().compiled.components;
+    let (sound, d) = c.declared.iter().find_map(|d| components.get(&d.component).filter(|x| x.is_note_effect()).map(|x| (x, d)))?;
+    let mut label = d.label.chars();
+    let knob: String = label.next().map(|first| first.to_uppercase().chain(label).collect()).unwrap_or_default();
+    Some(format!(
+        "The {}'s {knob} can't take a cable: a note effect plays before the song's sounds. Draw it on the timeline instead (Automate)",
+        sound.label
+    ))
 }
 
 /// The unit of the choice or the switch the cable `outlet` carries, when it is one: a lane of

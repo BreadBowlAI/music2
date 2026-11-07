@@ -1380,12 +1380,8 @@ export default song(({ lane, time }) => {
     synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }), { velSens: wobble }),
     // song.ts:74 `echo` leaves out fall: a value written in
     echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: 0.3 }),
-    // song.ts:74 `echo` leaves out fall: a cable written in
-    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, fall: wobble }),
     // song.ts:74 `echo` leaves out pitch: a value written in
     echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: 0 }),
-    // song.ts:74 `echo` leaves out pitch: a cable written in
-    echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, pitch: wobble }),
     // song.ts:74 `echo` leaves out time: a value written in
     echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2, time: "1/8" }),
     // song.ts:74 `arp` leaves out hold: a value written in
@@ -1394,8 +1390,6 @@ export default song(({ lane, time }) => {
     arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, style: "up" }),
     // song.ts:74 `arp` leaves out swing: a value written in
     arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: 0.5 }),
-    // song.ts:74 `arp` leaves out swing: a cable written in
-    arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5, swing: wobble }),
     // song.ts:74 `chord` leaves out inKey: a value written in
     chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1, inKey: true }),
     // song.ts:75 `master` leaves out ceiling: a value written in

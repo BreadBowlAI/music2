@@ -71,6 +71,8 @@ interface KnobCommon {
   home: Home;
   /** Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it. */
   automate_refused?: string;
+  /** Why no cable can drive it (a note effect's value, RENDER-41): a dragged cable doesn't offer it (DV-6). */
+  cable_refused?: string;
 }
 
 /** A knob of a number: dragged, typed, stepped (the server always says `number`; a knob made here may leave it out). */

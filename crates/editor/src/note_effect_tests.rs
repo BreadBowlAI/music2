@@ -242,3 +242,32 @@ fn adding_music2s_arpeggiator_lists_and_locks_its_pack() {
     s.undo().unwrap();
     assert!(!f.read("music2.toml").contains("@m2/notes"));
 }
+
+// RENDER-41, DV-6: a cable into a note effect's value is refused before anything is written, in the
+// card's own words, and the view says so on each of the note effects' knobs, so the patch never
+// offers one to a dragged cable; any other knob takes a cable as before.
+#[test]
+fn a_cable_into_a_note_effects_value_is_refused_in_words() {
+    let f = crate::gate5_tests::every_component();
+    let mut s = f.open();
+    let wobble = s.outlets().into_iter().find(|o| o.name == "wobble").expect("every-component names `wobble`");
+    let of = |s: &Session, component: &str, slot: &str| {
+        s.controls().into_iter().find(|c| c.declared.iter().any(|d| d.component == component && d.slot == slot)).unwrap()
+    };
+    let gate = of(&s, "@m2/notes:arp", "gate");
+    let before = f.read("song.ts");
+    let said = s.connect(wobble.revision, &wobble.id, &gate.id).unwrap_err();
+    let want = "The Arpeggiator's Gate can't take a cable: a note effect plays before the song's sounds. Draw it on the timeline instead (Automate)";
+    assert!(matches!(&said, EditError::Rejected(m) if m == want), "{said:?}");
+    assert_eq!(f.read("song.ts"), before, "nothing written");
+    let shift = of(&s, "@m2/notes:lock-to-key", "shift");
+    let said = s.connect(wobble.revision, &wobble.id, &shift.id).unwrap_err();
+    assert!(matches!(&said, EditError::Rejected(m) if m.starts_with("The Lock to key's Shift can't take a cable")), "{said:?}");
+    let knobs: Vec<crate::Knob> = s.view().modules.into_iter().flat_map(|m| m.nodes).flat_map(|n| n.knobs).collect();
+    let note_effect = |k: &crate::Knob| k.component.as_deref().is_some_and(|c| c.starts_with("@m2/notes:"));
+    assert!(knobs.iter().filter(|k| note_effect(k)).count() >= 10, "the four's knobs");
+    for k in &knobs {
+        assert_eq!(k.cable_refused.is_some(), note_effect(k), "{} ({:?}): {:?}", k.label, k.component, k.cable_refused);
+    }
+    assert_eq!(knobs.iter().find(|k| k.id == gate.id).and_then(|k| k.cable_refused.as_deref()), Some(want));
+}

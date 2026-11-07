@@ -697,7 +697,8 @@ const ModuleSection = memo(function ModuleSection({
       e.stopPropagation();
       const target = (ev: PointerEvent | React.PointerEvent) => {
         const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-knob-id]");
-        return el && area.current?.contains(el) ? el : null;
+        // A value no cable can drive is no place to drop one (a note effect's, DV-6).
+        return el && area.current?.contains(el) && el.dataset.noCable == null ? el : null;
       };
       // The cable's end: the pointer, or the input it would land on.
       const end = (ev: PointerEvent | React.PointerEvent) => {
@@ -1875,6 +1876,7 @@ function KnobControl({
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
+      data-no-cable={knob.cable_refused ? true : undefined}
       data-glow={glows || undefined}
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
@@ -1892,14 +1894,14 @@ function KnobControl({
         cell ? "w-16 py-1 flex flex-col items-center gap-0.5 rounded-sm" : "h-10 pl-4 pr-4 flex items-center gap-2",
         !disabled && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
-        "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
+        "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
       )}
     >
       <Dot
         id={port}
         kind="control"
         filled={false}
-        className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
+        className="[[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:scale-[1.35] [[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
       {cell ? (
         <>
@@ -1995,6 +1997,7 @@ function PickControl({
       }}
       data-knob={knob.label}
       data-knob-id={editable ? knob.id : undefined}
+      data-no-cable={knob.cable_refused ? true : undefined}
       data-glow={glows || undefined}
       data-value={JSON.stringify(knob.value)}
       data-shared={knob.uses > 1 || undefined}
@@ -2006,14 +2009,14 @@ function PickControl({
       className={clsx(
         "group/knob relative min-w-0 transition-colors duration-80",
         !cell ? "h-10 pl-4 pr-4 flex items-center gap-2" : knob.kind === "switch" ? "w-16 py-1 flex flex-col items-center gap-0.5" : "col-span-full h-7 px-1 flex items-center gap-2",
-        "[[data-cabling]_&[data-knob-id]]:bg-accent-wash [[data-cabling]_&[data-knob-id]:hover]:bg-accent-soft",
+        "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
       )}
     >
       <Dot
         id={port}
         kind="control"
         filled={false}
-        className="[[data-cabling]_[data-knob-id]>&]:scale-[1.35] [[data-cabling]_[data-knob-id]>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
+        className="[[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:scale-[1.35] [[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
       />
       {cell && knob.kind === "switch" ? (
         <>
