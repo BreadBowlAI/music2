@@ -1,6 +1,6 @@
-// A card's views (CARD-26 to CARD-29): pictures over values that have homes, drawn in music2's look
+// A card's views (CARD-26, taste.md DV-9 and DV-10): pictures over values that have homes, drawn in music2's look
 // (taste.md §2.8). Each holds no value of its own. An envelope and a filter are pictures std draws
-// (CARD-96, CARD-97), drawn by `PictureView`.
+// (CARD-96, CARD-30), drawn by `PictureView`.
 //
 // - Keys: which recording plays on which keys and how hard; a click plays the key, as hard as high.
 // - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8, TAP-16).
@@ -187,7 +187,7 @@ function svgPoint(svg: SVGSVGElement, e: { clientX: number; clientY: number }, w
   return { x: ((e.clientX - r.left) / r.width) * w, y: ((e.clientY - r.top) / r.height) * h };
 }
 
-// ---------------------------------------------------------------- keys (CARD-28)
+// ---------------------------------------------------------------- keys (taste.md DV-9)
 
 /** Whether MIDI note `n` is a black key. */
 const black = (n: number) => [1, 3, 6, 8, 10].includes(n % 12);
@@ -270,7 +270,7 @@ function KeysView({ view }: ViewProps & { view: Extract<CardView, { kind: "keys"
   );
 }
 
-// ---------------------------------------------------------------- scope (CARD-29)
+// ---------------------------------------------------------------- scope (taste.md DV-10)
 
 function ScopeView(p: ViewProps) {
   const canvas = useRef<HTMLCanvasElement>(null);

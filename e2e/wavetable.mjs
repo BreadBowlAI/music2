@@ -100,8 +100,8 @@ check(refused.length === 0 && !shownToasts.some((t) => /changed around this cont
 
 // ---------------------------------------------------------------- the pictures
 
-// std's pictures (CARD-96, CARD-97): the corners are the envelope's dots 0 to 2, the filter's peak its
-// one dot, each drawn once its picture is on screen and its shapes have come (CARD-69).
+// std's pictures (CARD-96, CARD-30): the corners are the envelope's dots 0 to 2, the filter's peak its
+// one dot, each drawn once its picture is on screen and its shapes have come (taste.md DV-17).
 const onScreen = (name) => page.$eval(`${card} [data-picture="${name}"]`, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
 await onScreen("amp");
 for (const [i, corner] of ["attack", "decay", "release"].entries()) {

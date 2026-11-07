@@ -1,5 +1,5 @@
 // A picture a pack or a song draws on its card (CARD-60 to CARD-73). Its code runs on the server
-// (CARD-64); the window only asks for its shapes while it shows (CARD-67, CARD-69), draws them in
+// (CARD-64); the window only asks for its shapes while it shows (CARD-67, taste.md DV-17), draws them in
 // music2's own style, and does each dot's gestures (CARD-70): a drag is a knob's gesture over the
 // values the dot names (leases, heard as it goes, one write and one undo step at release), the
 // wheel and the arrows a step, a double-click or Enter a switch's flip. The curve follows each
@@ -35,7 +35,7 @@ type Shape =
   | { kind: "mark"; axis: "x" | "y"; at: number; words?: string }
   | { kind: "label"; x: number; y: number; words: string }
   | { kind: "play"; box: number[]; note: number }
-  // The layers the server measures from the sound itself (CARD-80, CARD-86), with their points.
+  // The layers the server measures from the sound itself (CARD-80), with their points.
   | { kind: "response"; points?: number[]; tone?: string; name?: string }
   | { kind: "hit"; points?: number[]; note: number; seconds: number; tone?: string }
   | { kind: "part"; name: string; shapes: Shape[] };
@@ -135,7 +135,7 @@ function rounded(v: number, unit: string | null) {
 
 const inRange = (k: NumberKnob, v: number) => (k.range ? Math.min(k.range[1], Math.max(k.range[0], v)) : v);
 
-/** A picture's size on screen, in pixels: what it is drawn at, so its text and dots are never stretched (CARD-69). */
+/** A picture's size on screen, in pixels: what it is drawn at, so its text and dots are never stretched (taste.md DV-17). */
 function useSize(el: React.RefObject<Element | null>): { w: number; h: number } {
   const [size, setSize] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -153,7 +153,7 @@ function useSize(el: React.RefObject<Element | null>): { w: number; h: number } 
   return size;
 }
 
-/** A card's picture (CARD-69): asked for while it shows, drawn from its shapes, its dots moving the card's values. */
+/** A card's picture (taste.md DV-17): asked for while it shows, drawn from its shapes, its dots moving the card's values. */
 export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const box = useRef<HTMLDivElement>(null);
   const [drawn, setDrawn] = useState<Drawn | null>(null);
@@ -162,7 +162,7 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
   const { session, module, revision } = p;
   const node = p.node.id;
   const name = view.name;
-  // Looked at: the card on screen, in a window that shows (CARD-69, as a look, TAP-16).
+  // Looked at: the card on screen, in a window that shows (taste.md DV-17, as a look, TAP-16).
   const looking = useLooking(box);
   useEffect(() => {
     if (!looking) return;
@@ -243,14 +243,14 @@ function Shapes({ view, shapes, hold, ...p }: ViewProps & { view: PictureView; s
   const flatten = (ss: Shape[]) => ss.forEach((s) => (s.kind === "part" ? flatten(s.shapes) : flat.push(s)));
   flatten(shapes);
   const handles = flat.filter((s): s is Handle => s.kind === "handle");
-  // A tab picked marks the dot that opens it (CARD-71).
+  // A tab picked marks the dot that opens it (taste.md DV-18).
   useEffect(() => {
     const i = handles.findIndex((x) => x.opens !== undefined && x.opens === tab);
     if (i >= 0) setPicked(i);
   }, [tab]);
   useEffect(() => attach(), []);
   const hearing = useAudition((s) => s.on);
-  // The notes lane that plays the call (CARD-72), as the keys view's (CARD-28).
+  // The notes lane that plays the call (CARD-72), as the keys view's (taste.md DV-9).
   const notes = view.lane;
   const playing = useRef<number | null>(null);
   const knobOf = (m?: Moved): NumberKnob | null => {

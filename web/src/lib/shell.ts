@@ -46,7 +46,7 @@ interface Shell {
   dock: boolean;
   /** The dock body's height, as set by its splitter. */
   height: number;
-  /** What Device shows where the chain can show the sound: its chain, or its patch (CARD-42). The window's own, kept. */
+  /** What Device shows where the chain can show the sound: its chain, or its patch (taste.md DV-11). The window's own, kept. */
   device: "chain" | "patch";
   browser: boolean;
   /** The selected track (a module key), or null after Esc: the dock then keeps showing `module`. */

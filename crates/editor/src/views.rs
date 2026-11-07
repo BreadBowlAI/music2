@@ -53,7 +53,7 @@ pub enum Drawn {
         /// The `regions` or `keymap` setting it draws, by its id.
         setting: String,
         regions: Vec<KeyRegion>,
-        /// The notes lane that plays the call, which a clicked key plays on (CARD-28).
+        /// The notes lane that plays the call, which a clicked key plays on (taste.md DV-9).
         #[serde(skip_serializing_if = "Option::is_none")]
         lane: Option<LaneRef>,
         /// Why no keys are drawn, when they can't be.

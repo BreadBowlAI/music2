@@ -275,7 +275,7 @@ fn a_face_picture_is_on_no_tab() {
     ] {
         let d = catalog.components.get(cid).unwrap_or_else(|| panic!("no {cid}"));
         let (groups, named) = (&d.editor.groups, !d.editor.face.is_empty());
-        // The face it names, else its first group (CARD-43), which is then no tab.
+        // The face it names, else its first group (taste.md DV-12), which is then no tab.
         let face = if named { d.editor.face.clone() } else { groups.first().unwrap_or_else(|| panic!("{cid} has a face")).items.clone() };
         let tabs = if named { &groups[..] } else { &groups[1..] };
         let pictures: Vec<&String> = face.iter().filter(|n| d.editor.views.iter().any(|v| &v.name == *n)).collect();

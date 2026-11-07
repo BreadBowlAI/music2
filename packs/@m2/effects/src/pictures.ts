@@ -2,7 +2,7 @@
 // the picture words (CARD-61), with no kernel. Each is drawn from the effect's own sums, since none
 // can be measured with a click (CARD-82: a delay's or a reverb's click rings past 2 s, drive changes
 // with how loud it is, the moving effects change over time), and each is checked against a render
-// of the sound within 0.5 dB (CARD-125). They are worked out at 48 kHz.
+// of the sound within 0.5 dB (CARD-99). They are worked out at 48 kHz.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).

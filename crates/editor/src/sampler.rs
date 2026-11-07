@@ -111,7 +111,7 @@ pub fn card(compiled: &Compiled, site: u32) -> Option<SamplerCard> {
     })
 }
 
-/// One region std's Sampler plays (PKG-15, PKG-16), as a key map draws it (CARD-26, CARD-28): its
+/// One region std's Sampler plays (PKG-15, PKG-16), as a key map draws it (CARD-26, taste.md DV-9): its
 /// file, the note it was recorded at, its notes and velocities (each lowest and highest), its turn
 /// (`[position, of]`), and whether it plays when the note ends.
 #[derive(Clone, Debug, Serialize, PartialEq)]

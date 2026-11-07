@@ -1,4 +1,4 @@
-// Track frame: Device's chain and the card's frame (CARD-42 to CARD-47). A sound of the song's own,
+// Track frame: Device's chain and the card's frame (taste.md DV-11 to DV-16). A sound of the song's own,
 // Wob, names a face (its amp envelope and three knobs), six bands as groups (each with an `on…`
 // switch) and a choice of three; a Lowpass follows it. Device shows the two as a chain, left to
 // right, with no ports and no cables; Wob's face is drawn big, its tabs are its bands, More and All,
@@ -79,7 +79,7 @@ await until(async () => !!(await page.$('[data-module-tab="wob"]')), 15000);
 await page.click('[data-module-tab="wob"] [data-testid=track-label]');
 await view("graph");
 const chain = '[data-testid=chain] [data-module="wob"]';
-check(await until(async () => !!(await page.$(`${chain} [data-frame]`)), 15000), "Device shows Wob's sound as a chain (CARD-42)");
+check(await until(async () => !!(await page.$(`${chain} [data-frame]`)), 15000), "Device shows Wob's sound as a chain (taste.md DV-11)");
 const titles = await page.$$eval(`${chain} [data-frame] [data-node-title]`, (els) => els.map((e) => e.textContent));
 check(JSON.stringify(titles) === '["Wob","Lowpass"]', `its cards left to right, as the sound flows: ${JSON.stringify(titles)}`);
 check(!(await page.$(`[data-testid=chain] [data-port], [data-testid=chain] [data-port-dot], [data-testid=chain] path[data-from]`)), "no ports and no cables in the chain");
@@ -88,7 +88,7 @@ const wob = `${chain} [data-node="wob"]`;
 const lp = `${chain} [data-node="lowpass"]`;
 // The Lowpass's sound comes through a const (`lowpass(w, …)`): still a connection, no row (review F2).
 check(!(await page.$(`${lp} [data-inlet], ${lp} [data-input]`)), "and none for the Lowpass's sound coming in, though a const names it");
-check((await page.$eval(`${lp} [data-pack]`, (e) => e.textContent).catch(() => null)) === "std", "Lowpass's header names its package, std (CARD-43)");
+check((await page.$eval(`${lp} [data-pack]`, (e) => e.textContent).catch(() => null)) === "std", "Lowpass's header names its package, std (taste.md DV-12)");
 check(!(await page.$(`${wob} [data-pack]`)), "Wob, the song's own, names none");
 await linted("[data-testid=chain]", "the chain");
 const untipped = await page.evaluate(tips, "[data-testid=chain]", {});
@@ -116,11 +116,11 @@ check(!!(await page.$(`${songChain} [data-branch="Bass"] button[aria-label="Add 
 check((await page.$eval(`${songChain} [data-node="duck"] [data-code-line]`, (e) => e.textContent).catch(() => "")) === "duck(bass.out, kick.env, { depth: db(-9) })", "the Duck's code line names the track it ducks");
 check(/Listens to:\s*Kick/.test(await page.$eval(`${songChain} [data-node="duck"] [data-listens]`, (e) => e.textContent).catch(() => "")), "the Duck's card says it listens to Kick");
 check(!!(await page.$(`${songChain} [data-testid=open-mix]`)) && !(await page.$(`${songChain} [data-node="mixer"] [data-knob]`)), "the mixer is one compact card, its levels in Mix");
-// A card with a picture on its face is 460 px at Normal (CARD-44): the Master, its ceiling's picture
+// A card with a picture on its face is 460 px at Normal (taste.md DV-13): the Master, its ceiling's picture
 // on its face (CARD-144). One with none is 380 px: Keys' Pluck, below.
 const masterWidth = Math.round((await box(`${songChain} [data-node="master"]`)).width);
 check(masterWidth === 460, `Normal: 460 px with a picture on its face: the Master's ${masterWidth}`);
-// Folded, a card says its face's first picture's words in one sentence (CARD-44).
+// Folded, a card says its face's first picture's words in one sentence (taste.md DV-13).
 const master = `${songChain} [data-node="master"]`;
 await page.click(`${master} [data-size-to="folded"]`);
 check(await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "folded"), "Fold folds the Master");
@@ -129,7 +129,7 @@ const masterSentence = () => page.$eval(`${master} [data-sentence]`, (e) => e.te
 check(await until(async () => /^The song's last 3 seconds: no peak passes its ceiling, [−\d.]+ dB/.test((await masterSentence()) ?? "")), `Folded, one sentence: its picture's words: ${await masterSentence()}`);
 await page.click(`${master} [data-size-to="normal"]`);
 await until(async () => (await page.$eval(master, (e) => e.dataset.frame)) === "normal");
-// An instrument's card wears its track's colour along its top (CARD-43, review F13); an effect's doesn't.
+// An instrument's card wears its track's colour along its top (taste.md DV-12, review F13); an effect's doesn't.
 await page.click('[data-module-tab="keys"] [data-testid=track-label]');
 const bar = '[data-testid=chain] [data-module="keys"] [data-node="pluck"] [data-colour-bar]';
 check(await until(async () => !!(await page.$(bar))), "Keys' Pluck has its track's colour bar");
@@ -141,7 +141,7 @@ await page.click('[data-module-tab="wob"] [data-testid=track-label]');
 await until(async () => !!(await page.$(wob)));
 check(!(await page.$(`${lp} [data-colour-bar]`)), "the Lowpass, an effect, has none");
 
-// ---------------------------------------------------------------- the face, the tabs, All (CARD-43, CARD-45)
+// ---------------------------------------------------------------- the face, the tabs, All (taste.md DV-12, DV-14)
 
 const faceCells = await page.$$eval(`${wob} [data-cell="36"]`, (els) => els.map((e) => e.dataset.knob));
 check(JSON.stringify(faceCells) === '["cutoff","release"]', `the face's knobs are 36 px, in the face's order: ${JSON.stringify(faceCells)}`);
@@ -157,13 +157,13 @@ const state = (await api("")).body;
 const card = () => state.view.modules.find((m) => m.key === "wob").nodes.find((n) => n.title === "Wob");
 const gain3 = card().knobs.find((k) => k.slot === "gain3").id;
 const hides = await page.$eval(`${wob} [data-tab="Band 3"]`, (e) => e.dataset.hides ?? "");
-check(!(await page.$(`${wob} [data-knob-id="${gain3}"]`)) && hides.split(" ").includes(gain3), `a knob on a tab not shown isn't drawn, and its tab stands for it (CARD-47): ${hides}`);
+check(!(await page.$(`${wob} [data-knob-id="${gain3}"]`)) && hides.split(" ").includes(gain3), `a knob on a tab not shown isn't drawn, and its tab stands for it (taste.md DV-16): ${hides}`);
 await page.click(`${wob} [data-tab="All"]`);
 const all = await page.$$eval(`${wob} [data-tab-panel="All"] [data-knob]`, (els) => els.map((e) => [e.dataset.knob, e.title.includes("Its id: ")]));
 check(all.length === card().knobs.length && all.every(([, id]) => id), `All lists every value, each with its id: ${all.length} of ${card().knobs.length}`);
 await linted(wob, "Wob's card, All shown");
 
-// The tab bar's keys (CARD-46): → the next tab, ← back, wrapping.
+// The tab bar's keys (taste.md DV-15): → the next tab, ← back, wrapping.
 await page.focus(`${wob} [data-tab="All"]`);
 await page.keyboard.press("ArrowRight");
 check(await until(async () => (await page.$eval(`${wob} [data-tab="Band 1"]`, (e) => e.getAttribute("aria-selected"))) === "true"), "→ on the last tab picks the first");
@@ -172,7 +172,7 @@ await page.keyboard.press("ArrowLeft");
 check(await until(async () => (await page.$eval(`${wob} [data-tab="All"]`, (e) => e.getAttribute("aria-selected"))) === "true"), "← goes back to All");
 await page.click(`${wob} [data-tab="Band 1"]`);
 
-// ---------------------------------------------------------------- a segmented choice, a knob in the grid (CARD-45)
+// ---------------------------------------------------------------- a segmented choice, a knob in the grid (taste.md DV-14)
 
 const before = read("tracks/wob.ts");
 const seg = `${wob} [data-knob="shape"] [data-testid=setting-segmented]`;
@@ -195,7 +195,7 @@ await page.mouse.up();
 check(await until(() => read("tracks/wob.ts") !== written && /cutoff: \d/.test(read("tracks/wob.ts")) && !read("tracks/wob.ts").includes("cutoff: 2000,")), "a face knob dragged up writes a higher cutoff");
 check(await stepIs("Wob cutoff"), `one undo step: ${await undoTitle()}`);
 
-// The knob's keys (CARD-46), each one edit.
+// The knob's keys (taste.md DV-15), each one edit.
 const gain1 = `${wob} [data-knob="gain1"]`;
 const value = () => page.$eval(gain1, (e) => Number(e.dataset.value));
 await page.$eval(`${gain1} svg[role=slider]`, (e) => e.focus());
@@ -226,7 +226,7 @@ await page.keyboard.press("ArrowUp");
 await sleep(700);
 check(read("tracks/wob.ts") === afterAgent, "and ↑ then writes nothing");
 
-// ---------------------------------------------------------------- the three sizes (CARD-44)
+// ---------------------------------------------------------------- the three sizes (taste.md DV-13)
 
 const width = async (sel) => Math.round((await box(sel)).width);
 const sent = posts.length;
@@ -261,7 +261,7 @@ await sleep(300);
 const sizesWrote = posts.slice(sent).filter((p) => !/^\/api\/graph\/(picture|look)$/.test(p.url));
 check(sizesWrote.length === 0 && read("tracks/wob.ts") === text, `the sizes write nothing: ${sizesWrote.map((p) => p.url).join(" ")}`);
 
-// ---------------------------------------------------------------- an agent's change on a hidden tab (CARD-47)
+// ---------------------------------------------------------------- an agent's change on a hidden tab (taste.md DV-16)
 
 const now = (await api("")).body;
 // A face knob changed by an agent glows where it is drawn; no tab lights for it (review F8).
@@ -280,7 +280,7 @@ await page.click("[data-testid=pointer-show]");
 check(await until(async () => !!(await page.$(`${wob} [data-tab-panel="Band 3"] [data-knob-id="${gain3Written}"]`))), "Show opens its tab, the knob in sight");
 await page.click("[data-testid=pointer-ok]").catch(() => {});
 
-// ---------------------------------------------------------------- Chain · Patch (CARD-42)
+// ---------------------------------------------------------------- Chain · Patch (taste.md DV-11)
 
 await page.click("[data-device=patch]");
 check(await until(async () => !!(await page.$('[data-testid=graph] [data-module="wob"] [data-port]'))), "Patch shows the sound's patch, its ports and cables");

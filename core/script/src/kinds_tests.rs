@@ -299,7 +299,7 @@ fn views_are_checked_against_their_descriptor() {
         ),
         (
             "{ views: { lp: (view as any).filter(\"f\", \"q\") } }",
-            "view.filter is gone from @m2/core 2.4: a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-97)",
+            "view.filter is gone from @m2/core 2.4: a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-30)",
         ),
         (
             "{ views: { map: view.keys(\"file\") } }",

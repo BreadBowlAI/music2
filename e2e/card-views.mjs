@@ -1,4 +1,4 @@
-// Track views: the card's menus, switches, groups and views (CARD-20 to CARD-29), and a lane of
+// Track views: the card's menus, switches, groups and views (CARD-20 to CARD-26, taste.md DV-9 and DV-10), and a lane of
 // names on the timeline. A sound of the song's own, Wobble, declares a choice, a switch, an
 // envelope's and a filter's controls, regions, all four views and three groups. Its card shows
 // them under their groups' titles (More last), and folds to its first; its shape is a menu whose
@@ -9,7 +9,7 @@
 // Automate on the shape makes a lane of names: a clip on it shows its name, and a click on the clip
 // picks a name from a menu there, one points gesture. Each state linted.
 //
-// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (CARD-42): its groups are tabs
+// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11): its groups are tabs
 // there, so the patch's own checks (the titles, folding, its "N more" row, the shape's menu, the
 // scope scrolled out of sight) are left to the patch run, and the pictures are reached by their tabs.
 //
@@ -22,7 +22,7 @@ import { lint } from "./lintlib.mjs";
 const CHAIN = process.env.E2E_DEVICE === "chain";
 /** The scroller Device draws in. */
 const DEVICE = CHAIN ? "[data-testid=chain]" : "[data-testid=graph]";
-/** On the chain, show the tab that holds `name`'s values (CARD-43); on the patch every group shows. */
+/** On the chain, show the tab that holds `name`'s values (taste.md DV-12); on the patch every group shows. */
 const tab = async (name) => {
   if (!CHAIN) return;
   await page.click(`${card} [data-tab="${name}"]`);
@@ -279,7 +279,7 @@ const struck = socket.slice(from).find((m) => m.t === "audition" && m.on?.length
 check(struck?.module === "wobble" && struck.lane === "notes" && struck.on[0].pitch === 57 && struck.on[0].velocity > 0.9, `on Wobble's notes lane, hard near the top: ${JSON.stringify(struck)}`);
 check(await until(() => socket.slice(from).some((m) => m.t === "audition" && m.off?.length)), "and let go when the pointer lifts");
 
-// ---------------------------------------------------------------- the scope while playing (CARD-29)
+// ---------------------------------------------------------------- the scope while playing (taste.md DV-10)
 
 await post("/loop", { start: 0, end: 4, on: true });
 await page.mouse.click(10, 10);

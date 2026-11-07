@@ -7,7 +7,7 @@
 // controls themselves, or read them once per block.
 
 //
-// Their cards' faces (CARD-92 to CARD-95): eq3's curve, measured from its own sound, with a dot for
+// Their cards' faces (CARD-92 to CARD-94): eq3's curve, measured from its own sound, with a dot for
 // each band; the compressor's transfer curve, drawn from its own sum since a compressor's sound
 // changes with its level (D13), with the live level riding it and how far it turns down, from its
 // own meter (D8), and its last seconds in and out beside it; the duck's how far; the limiter's

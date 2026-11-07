@@ -134,7 +134,7 @@ fn compress_draws_its_transfer_curve_and_its_last_seconds() {
     );
 }
 
-// CARD-94, CARD-95: the duck draws how far it turns down, from its meter; its most as a guide line,
+// CARD-94: the duck draws how far it turns down, from its meter; its most as a guide line,
 // kept on the picture past its top, and saying so (review S9). (The limiter draws its ceiling over
 // its last seconds: CARD-143.)
 #[test]
@@ -221,7 +221,7 @@ export const resonant = component(
 );
 "#;
 
-// CARD-30, CARD-97: a drawn lowpass reads a q or a resonance from 0 to 1: a sound with a resonance
+// CARD-30: a drawn lowpass reads a q or a resonance from 0 to 1: a sound with a resonance
 // draws it as the q 0.5 × 60^r, its dot moving the resonance as its knob does, and its words say
 // resonance, and that it is a drawing. (music2's polysynth draws its own ladder: CARD-136.)
 #[test]

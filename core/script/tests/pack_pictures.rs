@@ -1,7 +1,7 @@
 //! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-124): each draws, from the
 //! pack's own code, with the dots and the words its rule says, as the picture runner draws it for a
 //! window or an agent. Whether a picture drawn from a pack's own sums is the sound is checked
-//! against a render in `crates/editor/src/pack_pictures_tests.rs` (CARD-125).
+//! against a render in `crates/editor/src/pack_pictures_tests.rs` (CARD-99).
 
 use std::path::{Path, PathBuf};
 

@@ -1170,7 +1170,7 @@ pub fn view(session: &Session) -> GraphView {
             });
         }
         // The inputs an automation lane drives, by node and port (8b.5); the notes lane each node
-        // reads, for a keys view's audition (CARD-28).
+        // reads, for a keys view's audition (taste.md DV-9).
         let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
         let mut rows_by_ref: HashMap<(String, String), String> = HashMap::new();
         let mut notes_of: HashMap<String, LaneRef> = HashMap::new();

@@ -76,7 +76,7 @@ import { VIEW_H, ViewRow } from "./CardViews";
 /**
  * How tall a picture is on a patch's card: small, as a Folded card's is (the design's §3.3), so a
  * card's picture never pushes the patch's cards out of its first view. The patch is for wiring;
- * Device's chain, for playing, draws it big (CARD-42, CARD-105).
+ * Device's chain, for playing, draws it big (taste.md DV-11, DV-19).
  */
 const PATCH_PICTURE_H = 48;
 /** A view's height on a patch's card. */
@@ -90,11 +90,11 @@ export const Locked = createContext<string | null>(null);
 export const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
 /** The Song's mixer, drawn as one compact card (MX-6): its node and how many channels it has. */
 export const MixerCard = createContext<{ id: string; channels: number } | null>(null);
-/** Whether the cards here draw their ports: the patch's do, the chain's don't (CARD-42). */
+/** Whether the cards here draw their ports: the patch's do, the chain's don't (taste.md DV-11). */
 export const Ports = createContext(true);
 /**
  * What feeds each input that no cable names, by `node<port`: in the chain, where no cable is drawn,
- * the call that drives it ("← Blend", CARD-42).
+ * the call that drives it ("← Blend", taste.md DV-11).
  */
 export const Fed = createContext<Map<string, string>>(new Map());
 
@@ -329,7 +329,7 @@ const KNOB_H = 40;
 const VALUE_H = 48;
 
 const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** The settings a card shows (CARD-7), under its knobs, in its descriptor's order. */
+/** The settings a card shows (taste.md DV-8), under its knobs, in its descriptor's order. */
 const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
 /** An instrument's line under its name: how it plays its notes; a sound's that follows the key, the key. */
 const VOICES_H = 24;
@@ -845,7 +845,7 @@ function importTitle(label: string) {
 
 /** An input: its kind's mark centred on a node's left edge, filled when something is connected to it. */
 function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; filled: boolean; className?: string }) {
-  // The chain draws no ports (CARD-42).
+  // The chain draws no ports (taste.md DV-11).
   if (!useContext(Ports)) return null;
   return (
     <span
@@ -872,7 +872,7 @@ function NodeCard({
   onCable,
   style,
 }: {
-  /** Its module's key: where its scope reads and its keys play (CARD-28, CARD-29). */
+  /** Its module's key: where its scope reads and its keys play (taste.md DV-9, DV-10). */
   module: string;
   /** Its React key, and its knobs' (see `held`). */
   nodeKey: string;
@@ -900,7 +900,7 @@ function NodeCard({
   const titled = titleOf(node, effects);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
-  // Its settings (CARD-7); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
+  // Its settings (taste.md DV-8); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
   const settings = mixing ? [] : settingsOf(node);
   // Its rows as drawn: in its groups, with its first alone when folded (CARD-25).
   const folded = useFolded((s) => s.ids.has(node.id));
@@ -1027,7 +1027,7 @@ function NodeCard({
 /**
  * A card's tools, in its header: Presets (FMT-22), Make it a kit (KIT-24), the effect's ⋯ menu,
  * remove and + (add an effect after it), each with its popover. The patch's card and the chain's
- * frame (CARD-43) share them.
+ * frame (taste.md DV-12) share them.
  */
 export function CardTools({
   node,
@@ -1431,9 +1431,9 @@ export function InputRow({
   session: number;
   revision: number;
   editable: boolean;
-  /** In a chain card's grid (CARD-45): a knob's size there; anything else takes a row across it. */
+  /** In a chain card's grid (taste.md DV-14): a knob's size there; anything else takes a row across it. */
   cell?: number;
-  /** In All's list (CARD-43): its id for `m2 set` in its tooltip. */
+  /** In All's list (taste.md DV-12): its id for `m2 set` in its tooltip. */
   ided?: boolean;
 }) {
   const toast = useStore((s) => s.toast);
@@ -1540,7 +1540,7 @@ export function InputRow({
     >
       <Dot id={input.id} kind={input.kind} filled={filled} />
       <span className="text-fg-muted truncate">{label}</span>
-      {/* No cable is drawn in the chain: what drives it says so in words (CARD-42). */}
+      {/* No cable is drawn in the chain: what drives it says so in words (taste.md DV-11). */}
       {fed && !driven && (
         <span className="ml-auto text-fg-muted truncate" title={`Driven by ${fed}. Patch shows it.`}>
           ← {fed}
@@ -1650,7 +1650,7 @@ export function ListensRow({ node, input, filled, editable }: { node: ViewNode; 
 /**
  * The knob whose own keys or menu just wrote it while it had the keyboard's focus: the first write of
  * a value the code left out gives its knob a new id, so it mounts again, and only that remount takes
- * the focus back (CARD-46). Kept for the write's round trip, and dropped when the knob is left (review F1).
+ * the focus back (taste.md DV-15). Kept for the write's round trip, and dropped when the knob is left (review F1).
  */
 let focused: { knob: string; el: Element; at: number } | null = null;
 /** How long a write's remount may take to take the focus back. */
@@ -1682,9 +1682,9 @@ function KnobControl({
   session: number;
   revision: number;
   editable: boolean;
-  /** In a chain card's grid (CARD-45): the knob over its label and its value, this many px. */
+  /** In a chain card's grid (taste.md DV-14): the knob over its label and its value, this many px. */
   cell?: number;
-  /** Its id for `m2 set` in its tooltip (All's list, CARD-43). */
+  /** Its id for `m2 set` in its tooltip (All's list, taste.md DV-12). */
   ided?: boolean;
 }) {
   const why = useContext(Locked);
@@ -1888,7 +1888,7 @@ function KnobControl({
       onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
       className={clsx(
         "group/knob relative min-w-0 transition-colors duration-80",
-        // In a chain card's grid: a 64px column, the knob over its label and its value (CARD-45).
+        // In a chain card's grid: a 64px column, the knob over its label and its value (taste.md DV-14).
         cell ? "w-16 py-1 flex flex-col items-center gap-0.5 rounded-sm" : "h-10 pl-4 pr-4 flex items-center gap-2",
         !disabled && "cursor-ns-resize touch-none",
         // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
@@ -1964,11 +1964,11 @@ function PickControl({
   revision: number;
   editable: boolean;
   /**
-   * In a chain card's grid (CARD-45), its knobs this many px: a switch is a cell, as a knob is, its
+   * In a chain card's grid (taste.md DV-14), its knobs this many px: a switch is a cell, as a knob is, its
    * switch over its label; a choice a row across the grid, a segmented control when it has five or fewer.
    */
   cell?: number;
-  /** Its id for `m2 set` in its tooltip (All's list, CARD-43). */
+  /** Its id for `m2 set` in its tooltip (All's list, taste.md DV-12). */
   ided?: boolean;
 }) {
   const toast = useStore((s) => s.toast);

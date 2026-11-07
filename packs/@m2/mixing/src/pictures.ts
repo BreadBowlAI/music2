@@ -1,7 +1,7 @@
 // @m2/mixing's pictures (CARD-110 to CARD-116): what each of its cards draws, in TypeScript over
 // the picture words (CARD-61), with no kernel. The EQ's curve is measured from its own sound
 // (`p.response()`); the transient shaper's hit and Pump's dip are drawn from the pack's own sums,
-// each checked against a render of the sound within 0.5 dB (CARD-125); the gate, the de-esser and
+// each checked against a render of the sound within 0.5 dB (CARD-99); the gate, the de-esser and
 // the multiband draw their values over the sound as it plays.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
@@ -10,7 +10,7 @@
 import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape } from "@m2/core";
 import { dbWords, hzWords, known, type In, type Num, type Read, type Values } from "std/pictures";
 
-/** One of the card's groups: the tab a dot shows (CARD-71). */
+/** One of the card's groups: the tab a dot shows (taste.md DV-18). */
 type Tab<D> = NonNullable<Moves<D>["opens"]>;
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));

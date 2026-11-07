@@ -2,7 +2,7 @@
 // after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo step,
 // written in the effects' own calls; the cards say so at once, so no toast does.
 //
-// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (CARD-42), which draws no cables,
+// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11), which draws no cables,
 // so the dashed line out of a card turned off is the patch run's alone.
 //
 //   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` or `chain` kind: examples/first-song open)

@@ -1227,7 +1227,7 @@ export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
  * Declare a view in `editor.views` (CARD-16): `view.keys("regions")` (a `regions` or `keymap`
  * setting), `view.scope()`, or `view.picture(…)`, a picture the sound draws (CARD-60). An envelope
  * and a filter are std's pictures: `envelopePicture()` and `curvePicture()` in std/pictures
- * (CARD-96, CARD-97).
+ * (CARD-96, CARD-30).
  */
 export const view = {
   keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
@@ -1249,7 +1249,7 @@ export const view = {
 // Gone since 2.4.0 (CARD-100): a sound that still calls one, past the types, is told in words what to draw instead.
 for (const [gone, now] of [
   ["envelope", "an envelope is a picture of std/pictures, envelopePicture() and envelope() (CARD-96)"],
-  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-97)"],
+  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-30)"],
 ] as const) {
   Object.defineProperty(view, gone, {
     value: () => {

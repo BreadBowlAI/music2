@@ -1,4 +1,4 @@
-// Track cards: a call's settings on its card in Device (CARD-1 to CARD-7). Bass's LFO shows its
+// Track cards: a call's settings on its card in Device (CARD-1 to CARD-6, taste.md DV-8). Bass's LFO shows its
 // shape as a menu, at its default (sine, in grey) and saying a change rebuilds the sound; picking
 // saw writes `shape: "saw"` into its call, one undo step ("Undo LFO shape"), and ⌘Z takes the code
 // back byte for byte. A track whose sound is a component of the song's own (Box) shows a switch, a

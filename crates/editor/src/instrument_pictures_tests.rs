@@ -1,5 +1,5 @@
-//! music2's own instruments' pictures drawn from their kernels' sums are the sound (CARD-132,
-//! CARD-133, CARD-137, CARD-140; D13): each against a render of the kernel it draws, within 0.5 dB.
+//! music2's own instruments' pictures drawn from their kernels' sums are the sound (CARD-131,
+//! CARD-133, CARD-136, CARD-140; D13): each against a render of the kernel it draws, within 0.5 dB.
 //! The Wavetable's tables, harmonic by harmonic; its filter's four shapes, and the polysynth's
 //! ladder, each as the change it makes to a note's harmonics; the FM synth's partials as a note
 //! starts. Each kernel is played straight, on a note at 187.5 Hz, so 8,192 samples at 48 kHz are 32
@@ -139,7 +139,7 @@ fn wrapped(a: f64) -> f64 {
     a - t * (a / t).round()
 }
 
-// CARD-132: each built-in table, drawn at a position between two of its frames, is what the
+// CARD-131: each built-in table, drawn at a position between two of its frames, is what the
 // Wavetable plays there, in shape and not only in size: every harmonic up to the 20th the drawing
 // holds above −40 dB is the played one's, against the loudest of them, within 0.5 dB, and its phase
 // against the fundamental's within 5° (review U2: a frame drawn upside down, or backwards in time,
@@ -232,7 +232,7 @@ fn synth(inputs: &str) -> String {
     )
 }
 
-// CARD-137: the polysynth's 24 dB ladder, drawn from its sums, is what its voice does to a saw's
+// CARD-136: the polysynth's 24 dB ladder, drawn from its sums, is what its voice does to a saw's
 // harmonics, within 0.5 dB wherever the drawing is above −60 dB, up to a twelfth of the rate: the
 // drawing's change from the filter wide open to these settings is the played one's.
 #[test]

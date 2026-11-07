@@ -1,7 +1,7 @@
 // @m2/wavetable's own pictures (CARD-131 to CARD-134): its tables, its filter and its LFO, drawn from
 // the kernel's own sums (kernels-src/src/tables.rs and lib.rs), since none of them can be measured:
 // they are inside a voice, where no click reaches (CARD-81). Each is checked against a render of
-// the kernel within 0.5 dB (CARD-132, CARD-133). Its envelopes are std's (CARD-96).
+// the kernel within 0.5 dB (CARD-131, CARD-133). Its envelopes are std's (CARD-96).
 
 import { axis, knob, view, type Moves, type Painter, type PictureDecl, type Shape } from "@m2/core";
 import { hzWords, secondsWords } from "std/pictures";

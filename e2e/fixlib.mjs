@@ -30,7 +30,7 @@ export const check = (ok, what) => {
  * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
  * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
  *
- * `device`: what Device shows where a sound is a chain (CARD-42), as the window's own choice is kept.
+ * `device`: what Device shows where a sound is a chain (taste.md DV-11), as the window's own choice is kept.
  * These suites drive the patch, its ports, cables and rows, unless one asks for `"chain"` (frame),
  * or runs as the `chain` kind (`E2E_DEVICE=chain`: their checks that aren't the patch's own).
  *

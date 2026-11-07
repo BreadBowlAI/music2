@@ -538,7 +538,7 @@ export function MiniKnob({
       className="block rounded-full"
       onKeyDown={(e) => {
         if (e.metaKey || e.ctrlKey || e.altKey || pointer) return;
-        // One step, ten with ⇧ (taste.md §5.2); a tenth of its travel; its lowest and highest (CARD-46).
+        // One step, ten with ⇧ (taste.md §5.2); a tenth of its travel; its lowest and highest (taste.md DV-15).
         const up = e.key === "ArrowUp" || e.key === "ArrowRight";
         if (up || e.key === "ArrowDown" || e.key === "ArrowLeft") onStep((up ? 1 : -1) * (e.shiftKey ? 10 : 1));
         else if (e.key === "PageUp" || e.key === "PageDown") onChange(Math.min(1, Math.max(0, value + (e.key === "PageUp" ? 0.1 : -0.1))));
