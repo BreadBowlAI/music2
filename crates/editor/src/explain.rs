@@ -290,6 +290,7 @@ fn unit(name: &str) -> Option<(&'static str, &'static str)> {
         "bipolar" => ("a number from −1 to 1", "Write a number from −1 to 1, such as 0.5."),
         "gain" => ("a volume as a number (1 keeps it as loud)", "Write a number, such as 0.5 for half as loud."),
         "scalar" => ("a plain number", "Write a plain number, such as 2."),
+        "bpm" => ("a tempo (BPM)", "Write it in beats per minute, such as bpm(120)."),
         _ => return None,
     })
 }

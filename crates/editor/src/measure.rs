@@ -283,13 +283,14 @@ pub fn copy(
     let mut fallbacks: BTreeMap<String, (f64, Kind)> = BTreeMap::new();
     let mut refused: Option<String> = None;
     // Whether a value of it moves as the song plays: a lane drives it, or its track works it out from
-    // the song's beat or from a sound (review M2). A response has no one curve then.
+    // the song's beat, its tempo (which changes along the song) or from a sound (review M2). A
+    // response has no one curve then.
     let mut moves = false;
     while let Some((n, own)) = todo.pop() {
         if matches!(n.op, Op::Plugin { .. }) {
             return Err("it hosts a plugin, which music2 can't measure yet".into());
         }
-        if matches!(n.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds }) {
+        if matches!(n.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds | m2_ir::TimeOf::Tempo }) {
             moves = true;
         }
         let mut found = vec![];
@@ -313,7 +314,7 @@ pub fn copy(
             };
             match (&x.op, kind) {
                 (Op::Const { .. } | Op::Time { .. }, _) => {
-                    moves |= matches!(x.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds });
+                    moves |= matches!(x.op, Op::Time { of: m2_ir::TimeOf::Beats | m2_ir::TimeOf::Seconds | m2_ir::TimeOf::Tempo });
                     keep.insert(id);
                 }
                 (Op::Lane { .. }, Some((k @ Kind::Control(_), default))) => {

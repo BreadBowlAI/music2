@@ -193,6 +193,7 @@ impl World {
             from,
             made: "2026-10-30T12:00:00Z",
             std: &std_dir(),
+            own: &m2_song::pack::test_packs(),
             work: &work,
             to_delete: None,
             limit,
@@ -333,6 +334,35 @@ fn a_registry_builds_into_a_bucket_and_again_to_the_same_bytes() {
 
 /// `w.build` into the new folder `tag`, where `name` fails and the other version is built: what
 /// it says of `name`, and that nothing of it is in the bucket.
+// REG-5, LIB-3 (review N5): an effect's preview plays a loop of music2's own pluck and kit through
+// it, so the robot loads them beside std and the pack, as the app's ⌘F does: an effect pack's
+// version gets its preview.
+#[test]
+fn an_effect_packs_preview_is_built() {
+    let w = World::new("effect");
+    let fx = w.t.0.join("src/fx/fx-0.1.0");
+    write(
+        &fx.join("m2pkg.toml"),
+        "[package]\nname = \"@carol/fx\"\nversion = \"0.1.0\"\nlicense = \"MIT\"\ndescription = \"A soft gain\"\nauthors = [\"Carol\"]\n\
+         repository = \"https://github.com/carol/fx\"\ntags = [\"keys\"]\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.7\"\n",
+    );
+    write(
+        &fx.join("src/index.ts"),
+        "import { component, control, kernel, port, type Audio, type Params } from \"@m2/core\";\n\
+         export const soft = component({ id: \"soft\", label: \"Soft\", inputs: { in: port.audio() }, controls: { db: control.db(-3) }, \
+         output: port.audio(), editor: { category: \"Dynamics\" } }, (x: Audio, { db }: Params) => kernel(\"std:gain\", { in: x, db }));\n",
+    );
+    w.list("@carol/fx", "0.1.0", &fx, "");
+    let out = w.t.0.join("bucket");
+    let built = w.build(&out, None).unwrap_or_else(|e| panic!("{}", e.join("\n")));
+    assert!(built.failed.is_empty(), "{:?}", built.failed);
+    let catalog = catalog_in(&tree(&out));
+    let fx = catalog.get(&name("@carol/fx")).unwrap();
+    let [soft] = fx.items.as_slice() else { panic!("one item: {:?}", fx.items) };
+    assert_eq!(soft.kind, ItemKind::Effect);
+    assert!(soft.preview.is_some(), "its preview: {:?}", soft.no_preview);
+}
+
 fn fails_alone(w: &World, tag: &str, name: &str) -> String {
     let out = w.t.0.join(tag);
     let built = w.build(&out, None).unwrap_or_else(|e| panic!("{tag}: {}", e.join("\n")));

@@ -405,6 +405,7 @@ fn unit_words(u: Option<&str>) -> &'static str {
         Some("unit01") => "a level from 0 to 1",
         Some("bipolar") => "a value from −1 to 1",
         Some("scalar") => "a plain number",
+        Some("bpm") => "BPM",
         _ => "a number with no unit",
     }
 }

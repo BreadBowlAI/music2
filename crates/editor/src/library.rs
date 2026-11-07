@@ -36,19 +36,23 @@ pub mod samples;
 pub enum Kind {
     Instrument,
     Sound,
+    /// It changes notes before an instrument plays them (PKG-21).
+    #[serde(rename = "note-effect")]
+    NoteEffect,
     Effect,
     Sample,
     Plugin,
 }
 
 impl Kind {
-    pub const ALL: [Kind; 5] = [Kind::Instrument, Kind::Sound, Kind::Effect, Kind::Sample, Kind::Plugin];
+    pub const ALL: [Kind; 6] = [Kind::Instrument, Kind::Sound, Kind::NoteEffect, Kind::Effect, Kind::Sample, Kind::Plugin];
 
     /// Its name, as a filter and the API write it: `instrument`.
     pub fn name(self) -> &'static str {
         match self {
             Kind::Instrument => "instrument",
             Kind::Sound => "sound",
+            Kind::NoteEffect => "note-effect",
             Kind::Effect => "effect",
             Kind::Sample => "sample",
             Kind::Plugin => "plugin",
@@ -56,6 +60,7 @@ impl Kind {
     }
 
     /// The kind a word typed names: `instrument` or `instruments`, `effect`, `effects` or `fx`,
+    /// `note-effect`, `note-effects` or `notefx`,
     /// `sound`, `sounds`, `preset` or `presets`, `sample` or `samples`, `plugin` or `plugins`.
     pub fn named(word: &str) -> Option<Kind> {
         let w = word.to_lowercase();
@@ -63,6 +68,7 @@ impl Kind {
         match one {
             "instrument" => Some(Kind::Instrument),
             "effect" | "fx" => Some(Kind::Effect),
+            "note-effect" | "noteeffect" | "notefx" => Some(Kind::NoteEffect),
             "sound" | "preset" => Some(Kind::Sound),
             "sample" => Some(Kind::Sample),
             "plugin" => Some(Kind::Plugin),
@@ -208,6 +214,9 @@ pub struct Item {
     pub instrument: bool,
     /// It goes on a track's sound: an effect, an effect plugin, a sound of an effect.
     pub effect: bool,
+    /// It goes before an instrument's notes: a note effect, a sound of one (PKG-21).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub note_effect: bool,
     /// It has a preview (LIB-3): not a plugin, a plugin's preset, the song's own code or an
     /// instrument that plays a file you give it ([`preview::none_for`]).
     pub preview: bool,
@@ -358,14 +367,15 @@ fn export_words(catalog: &Catalog, d: &Descriptor) -> Vec<String> {
     words
 }
 
-/// The instruments and effects the catalog offers: each with a category (PKG-7).
+/// The instruments, effects and note effects the catalog offers: each with a category (PKG-7, PKG-21).
 fn components(catalog: &Catalog) -> Vec<Item> {
     let mut out = vec![];
     for d in catalog.components.values() {
         let Some(category) = d.editor.category.clone() else { continue };
-        let kind = match (d.is_instrument(), d.is_effect()) {
-            (true, _) => Kind::Instrument,
-            (false, true) => Kind::Effect,
+        let kind = match (d.is_instrument(), d.is_effect(), d.is_note_effect()) {
+            (true, ..) => Kind::Instrument,
+            (false, true, _) => Kind::Effect,
+            (false, false, true) => Kind::NoteEffect,
             _ => continue,
         };
         let package = package_of(&d.id);
@@ -386,6 +396,7 @@ fn components(catalog: &Catalog) -> Vec<Item> {
             component: d.id.clone(),
             instrument: kind == Kind::Instrument,
             effect: kind == Kind::Effect,
+            note_effect: kind == Kind::NoteEffect,
             preset: None,
             sample: None,
         });
@@ -414,6 +425,7 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                 component: of.component.clone(),
                 instrument: of.instrument,
                 effect: of.effect,
+                note_effect: of.note_effect,
                 preview: of.preview,
                 no_preview: if of.kind == Kind::Plugin {
                     Some("A plugin's sounds have no preview yet.".into())
@@ -450,6 +462,7 @@ fn sounds(src: &Sources, components: &[Item]) -> Vec<Item> {
                     component: sound.clone(),
                     instrument: false,
                     effect: false,
+                    note_effect: false,
                     preview: false,
                     no_preview: Some("Plugins have no preview yet.".into()),
                     preset: None,
@@ -514,6 +527,7 @@ fn plugins(list: &[Plugin]) -> Vec<Item> {
                 component: p.id.clone(),
                 instrument: p.instrument,
                 effect: p.effect,
+                note_effect: false,
                 preview: false,
                 no_preview: Some("Plugins have no preview yet.".into()),
                 preset: None,

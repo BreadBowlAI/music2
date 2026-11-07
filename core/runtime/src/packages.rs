@@ -40,6 +40,9 @@ struct KernelDecl {
     /// one frame of them each hop, instead of audio. 0: not a measure.
     #[serde(default)]
     hop: u32,
+    /// A note effect's: how many notes it may give for each it takes, 1 to 8 (ABI-15).
+    #[serde(default)]
+    fan: Option<u32>,
 }
 
 /// An offline kernel as its manifest declares it (VOX-41): a measure's hop (0 for a kernel that
@@ -420,6 +423,16 @@ impl PackageSet {
                 bail!("kernel `{id}`: `latency_s` must be seconds from 0 to 10, not {}", k.latency_s);
             }
             sig.latency_s = k.latency_s;
+            // ABI-15: a note effect's `fan`, and only a note effect's; it adds no latency.
+            match (k.fan, sig.gives_notes()) {
+                (Some(fan), true) if (1..=8).contains(&fan) => sig.fan = fan,
+                (Some(fan), true) => bail!("kernel `{id}`: `fan` is how many notes it may give for each it takes, 1 to 8, not {fan}"),
+                (Some(_), false) => bail!("kernel `{id}` gives a `fan`, which only a kernel that gives notes has"),
+                (None, _) => {}
+            }
+            if sig.gives_notes() && k.latency_s != 0.0 {
+                bail!("kernel `{id}`: a kernel that gives notes adds no latency");
+            }
             sigs.insert(id, sig);
         }
         Ok(Package {
@@ -742,6 +755,7 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
         meters: vec![],
         latency: 0,
         latency_s: 0.0,
+        fan: 1,
     }
 }
 
@@ -823,6 +837,7 @@ fn plugin_sig(id: &str, info: &m2_plugins::Info) -> Result<KernelSig> {
         meters: vec![],
         latency: info.latency,
         latency_s: 0.0,
+        fan: 1,
     };
     Ok(sig)
 }

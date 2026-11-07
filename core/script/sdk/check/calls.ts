@@ -2,7 +2,7 @@
 // (PKG-1, the step 5 design's D15). A line that should fail carries `@ts-expect-error`, so a
 // type that stops refusing it fails the check too.
 
-import { component, control, each, kernel, port, setting, signature, hz, ms, time, type Audio, type Control, type Ctx, type Events, type Params, type Signal, type Value } from "@m2/core";
+import { bpm, component, control, each, kernel, port, setting, signature, hz, ms, time, type Audio, type Control, type Ctx, type Events, type EventsKind, type Params, type Signal, type Value } from "@m2/core";
 import { osc } from "std/dsp";
 import { mixer } from "std/mix";
 
@@ -226,4 +226,36 @@ export function cuts(ctx: Ctx, other: Events) {
   cut(notes, 0.5);
   // @ts-expect-error notes cut a drum, not audio
   cut(notes, osc.sine(hz(1)));
+}
+
+/** A note effect (PKG-21): notes first and notes out. A kernel of its own gives its notes. */
+export const arp = component(
+  {
+    id: "arp",
+    inputs: { notes: port.notes() },
+    controls: { rate: control.choice(["1/8", "1/16"], "1/16"), gate: control.scalar(0.8) },
+    output: port.notes(),
+    editor: { category: "Arpeggiator" },
+  },
+  (notes: Events, { rate, gate }: Params) => kernel<EventsKind>("test:arp", { notes, tempo: time.tempo, rate, gate }),
+);
+
+export function notes(ctx: Ctx) {
+  const held = ctx.lane.notes("chords");
+  const played: Events = arp(held);
+  cut(arp(arp(held, { rate: "1/8" })));
+  cut(arp(held, { gate: 0.5, bypass: true }));
+  cut(played, { tune: 2 });
+  // The song's tempo, in its own unit (RENDER-7): a tempo, not a number of any unit.
+  const tempo: Control<"bpm"> = time.tempo;
+  const fixed = bpm(120);
+  // @ts-expect-error a note effect takes notes, not audio
+  arp(osc.sine(hz(1)));
+  // @ts-expect-error bypass is true or false
+  arp(held, { bypass: 1 });
+  // @ts-expect-error an instrument (notes in, audio out) can't be bypassed
+  cut(held, { bypass: true });
+  // @ts-expect-error a tempo isn't a time
+  const wrong: Control<"seconds"> = time.tempo;
+  return [tempo, fixed, wrong];
 }

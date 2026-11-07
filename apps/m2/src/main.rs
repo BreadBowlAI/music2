@@ -1056,7 +1056,9 @@ change that code first",
             let s = reader(Path::new(&arg(1)?))?;
             println!("revision {}", s.accepted().number);
             for e in s.effects() {
-                println!("effect {:18} {:14} {:16} {}", e.component, e.label, e.category, e.description);
+                // A note effect goes before a call that plays notes (PKG-21), an effect after a sound.
+                let (kind, goes) = if e.notes { ("note-effect", "  (goes before)") } else { ("effect", "") };
+                println!("{kind} {:18} {:14} {:16} {}{goes}", e.component, e.label, e.category, e.description);
             }
             for m in s.view().modules {
                 for n in m.nodes.iter().filter(|n| n.audio || n.effect.is_some()) {
@@ -1442,6 +1444,11 @@ fn registry(args: &[String]) -> Result<()> {
             let from = from()?;
             let work = m2_os::dirs::cache().unwrap_or_else(std::env::temp_dir).join(format!("registry-build-{}", std::process::id()));
             let to_delete = flag(args, "--to-delete").map(PathBuf::from);
+            // music2's own packs, which an effect's preview plays through (LIB-3).
+            let own: Vec<(String, PathBuf)> = m2_song::pack::bundled(&m2_server::resources::packs_dir())
+                .into_iter()
+                .filter_map(|dir| Some((m2_song::pack::PkgManifest::at(&dir).ok()?.package.name.as_str().to_string(), dir)))
+                .collect();
             let b = robot::Build {
                 registry: &dir,
                 sources: &sources,
@@ -1449,6 +1456,7 @@ fn registry(args: &[String]) -> Result<()> {
                 from: from.as_ref(),
                 made: &made,
                 std: &std,
+                own: &own,
                 work: &work,
                 to_delete: to_delete.as_deref(),
                 limit: robot::LONGEST,

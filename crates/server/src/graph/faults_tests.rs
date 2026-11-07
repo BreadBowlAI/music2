@@ -99,6 +99,7 @@ pub(in crate::graph) fn listed(problems: &Value) -> Vec<(String, Option<String>,
     let codes = [
         "sound.stopped",
         "sound.too-slow",
+        "sound.notes-left-out",
         "plugin.failed",
         "plugin.crashed",
         "asset.unreadable",
@@ -197,6 +198,24 @@ fn a_sound_too_slow_is_named_with_its_pack_and_stays_through_stop_all_sound() {
     assert!(rig.graph.poll());
     assert!(rig.problems().is_empty(), "the next plan plays it again");
     assert!(rig.graph.status().playing, "the song plays on");
+}
+
+// RENDER-42: a note effect that left notes out is named with its track and its pack, in words that
+// say it plays on (live), or that the file wasn't made (an export).
+#[test]
+fn notes_left_out_is_said_in_words() {
+    let rig = Rig::new();
+    let (plan, node) = rig.node("bass", delay);
+    rig.report(Code::NotesLeftOut, (plan, node));
+    let said = "Delay on Bass, from @m2/effects, gave notes music2 can't play, or too many at once, so some were left out. It plays on.";
+    assert_eq!(rig.told(), [said]);
+    assert_eq!(rig.problems(), [("sound.notes-left-out".to_string(), Some("bass".to_string()), said.to_string())]);
+    let namer = rig.graph.inspect(move |a| {
+        let o = a.open.as_ref().unwrap();
+        m2_editor::faults::Namer::new(plan, o.plays.as_ref().unwrap().revision.clone(), &o.session.packages)
+    });
+    let export = namer.failed(Fault { code: Code::NotesLeftOut, plan, subject: Subject::Node(node) }, None);
+    assert_eq!(export, "Delay on Bass, from @m2/effects, gave notes music2 can't play, or too many at once, so the file wasn't made.");
 }
 
 /// The module of `@test/stuck` ([`stuck_at`]), from this text: a kernel `stuck` whose `k_new`

@@ -68,3 +68,41 @@ pub(crate) fn fixture(rel: &str) -> Fixture {
 pub(crate) fn fixtures() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../core/session/tests/fixtures")
 }
+
+/// `@test/notes` in `dir`: two note effects, Arpeggiator and Chord, each over a kernel of the pack
+/// that gives notes (`kernels`), or giving their notes on as they come (not).
+pub(crate) fn notes_pack(dir: &Path, kernels: bool) {
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let mut manifest = "[package]\nname = \"@test/notes\"\nversion = \"0.1.0\"\nlicense = \"CC0-1.0\"\n\
+                        description = \"Note effects for music2's tests\"\nauthors = [\"music2\"]\ntags = [\"test\"]\n"
+        .to_string();
+    if kernels {
+        // std's module, whose `sine` exports a kernel's functions; this manifest says it gives notes.
+        // A song with it builds, but can't play: the kernel has sine's ports, not these.
+        manifest += "wasm = \"k.wasm\"\n";
+        std::fs::copy(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std/kernels/std.wasm"), dir.join("k.wasm")).unwrap();
+    }
+    manifest += "\n[dependencies]\n\"@m2/core\" = \"2.5\"\nstd = \"0.10\"\n";
+    if kernels {
+        manifest += "\n[[kernel]]\nname = \"sine\"\ndescription = \"Gives notes\"\n\
+                     inputs = [\"notes: events<note>\", \"tempo: control<bpm>\", \"gate: control<scalar> = 0.8\"]\n\
+                     outputs = [\"out: events<note>\"]\n";
+    }
+    std::fs::write(dir.join("m2pkg.toml"), manifest).unwrap();
+    let body = |gate: &str| match kernels {
+        true => format!("kernel<EventsKind>(\"@test/notes:sine\", {{ notes, tempo: time.tempo, gate: {gate} }})"),
+        false => "notes".to_string(),
+    };
+    let index = format!(
+        "import {{ component, control, kernel, port, time, type Events, type EventsKind, type Params }} from \"@m2/core\";\n\n\
+         /** Its notes, played one at a time. */\n\
+         export const arp = component(\n  {{ id: \"arp\", label: \"Arpeggiator\", inputs: {{ notes: port.notes() }}, controls: {{ gate: control.scalar(0.8) }}, \
+         output: port.notes(), editor: {{ category: \"Arpeggiator\" }} }},\n  (notes: Events, {{ gate }}: Params) => {},\n);\n\n\
+         /** A chord for each note. */\n\
+         export const chord = component(\n  {{ id: \"chord\", label: \"Chord\", inputs: {{ notes: port.notes() }}, output: port.notes(), \
+         editor: {{ category: \"Chords\" }} }},\n  (notes: Events) => {},\n);\n",
+        body("gate"),
+        body("0.8")
+    );
+    std::fs::write(dir.join("src/index.ts"), index).unwrap();
+}

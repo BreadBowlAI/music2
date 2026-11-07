@@ -98,7 +98,7 @@ pub fn search(args: &[String]) -> Result<()> {
     let json = crate::words::on(args, "--json");
     if let Some(k) = crate::words::value(args, "--kind") {
         if Kind::named(&k).is_none() {
-            bail!("--kind is instrument, sound, effect, sample or plugin, not {k}");
+            bail!("--kind is instrument, sound, effect, note-effect, sample or plugin, not {k}");
         }
         words.push(k);
     }
