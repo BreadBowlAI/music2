@@ -96,7 +96,7 @@ crate::api::routes! {
         "Take a cable out: the input's default is written in its place",
         r#"{"session": 7, "revision": 42, "id": "song.ts#5/0"}"#;
     POST "/api/graph/effect/add" => graph_add_effect; writes, agents,
-        "Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`), by its component id as the state's effects list it",
+        "Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`); or a note effect (`notes` in the state's effects list) before a call that plays notes, around its notes; by its component id as the state's effects list it",
         r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}"#;
     POST "/api/graph/effect/remove" => graph_remove_effect; writes, agents,
         "Take an effect out, keeping what it was applied to",

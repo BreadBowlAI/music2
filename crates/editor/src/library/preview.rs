@@ -4,7 +4,8 @@
 //!
 //! [`song`] writes the song: a phrase chosen by the item's category (a beat for drums, a line for a
 //! bass or a lead, four chords for the rest), played by the item with a sound's preset values; an
-//! effect plays a pluck and a drum kit, the first bar dry and the second through it. [`render`]
+//! effect plays a pluck and a drum kit, the first bar dry and the second through it; a note effect
+//! changes four chords that a pluck plays (PKG-21). [`render`]
 //! renders it in a folder of the cache, never a project, on a thread of its own at background
 //! priority, and writes the preview: 16-bit stereo at 48 kHz, brought to one loudness ([`level`],
 //! measured by [`loudness`] as ITU-R BS.1770 does). [`fingerprint`] is the hash of what it renders
@@ -158,6 +159,10 @@ fn options(d: &Descriptor, values: &BTreeMap<String, f64>) -> String {
     if written.is_empty() { String::new() } else { format!(", {{ {} }}", written.join(", ")) }
 }
 
+/// What an effect's and a note effect's previews play through: music2's own pluck, and its drum kit.
+const PLUCK: &str = "@m2/synths:synth-pluck";
+const KIT: &str = "@m2/drums:drum-kit";
+
 pub(super) const ARRANGEMENT: &str = "{\n  \"tempo\": [{\"beat\": 0, \"bpm\": 120}],\n  \"meter\": []\n}\n";
 const IMPORTS: &str = "import { song, track } from \"@m2/core\";\nimport { mixer } from \"std/mix\";\n";
 
@@ -197,8 +202,8 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
     let mut files = BTreeMap::new();
     files.insert("data/arrangement.json".to_string(), ARRANGEMENT.to_string());
     let text = if d.is_effect() {
-        let (keys_import, keys) = imported(catalog, "@m2/synths:synth-pluck", "keys")?;
-        let (kit_import, kit) = imported(catalog, "@m2/drums:drum-kit", "kit")?;
+        let (keys_import, keys) = imported(catalog, PLUCK, "keys")?;
+        let (kit_import, kit) = imported(catalog, KIT, "kit")?;
         let both = format!("mixer({{ keys: {keys}(lane.notes(\"keys\")), drums: {kit}(lane.notes(\"hits\")) }})");
         // The loop: Am then F, plucked, over a kick, a snare and hats. Bar 1 is dry, bar 2 goes
         // through the effect.
@@ -225,6 +230,15 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
              const wet = track(\"wet\", {{ name: \"Wet\" }}, ({{ lane }}) => {call}({both}{opts}));\n\n\
              export default song(() => mixer({{ dry: dry.out, wet: wet.out }}));\n"
         )
+    } else if d.is_note_effect() {
+        // Four chords, through it, plucked.
+        let (keys_import, keys) = imported(catalog, PLUCK, "keys")?;
+        files.insert("data/play/notes.json".into(), lane(&notes(Phrase::Chords), 8.0));
+        format!(
+            "{IMPORTS}{keys_import}\n{import}\n\n\
+             const play = track(\"play\", {{ name: \"Play\" }}, ({{ lane }}) => {keys}({call}(lane.notes(\"notes\"){opts})));\n\n\
+             export default song(() => mixer({{ play: play.out }}));\n"
+        )
     } else if d.is_instrument() {
         files.insert("data/play/notes.json".into(), lane(&notes(phrase(d)), 8.0));
         format!(
@@ -233,7 +247,7 @@ pub fn song(item: &Item, catalog: &Catalog, values: &BTreeMap<String, f64>) -> R
              export default song(() => mixer({{ play: play.out }}));\n"
         )
     } else {
-        return Err(format!("{} is neither an instrument nor an effect, so it has no preview.", item.label));
+        return Err(format!("{} is neither an instrument, an effect nor a note effect, so it has no preview.", item.label));
     };
     files.insert("song.ts".into(), text);
     Ok(Song { files })
@@ -250,9 +264,16 @@ pub fn of(
     packages: &[(String, PathBuf)],
     yours: Option<&Path>,
 ) -> Result<(Song, Vec<(String, PathBuf)>), String> {
-    // std (the song's mixer, an effect's loop) and the item's own package.
+    // std (the song's mixer), the item's own package, and what an effect's loop or a note effect's
+    // chords play through: the pluck's pack, and the kit's.
     let own = item.component.split_once(':').map_or("", |(p, _)| p);
-    let loads: Vec<(String, PathBuf)> = packages.iter().filter(|(n, _)| n == m2_song::pack::STD || n == own).cloned().collect();
+    let through: &[&str] = match (item.effect, item.note_effect) {
+        (true, _) => &[PLUCK, KIT],
+        (_, true) => &[PLUCK],
+        _ => &[],
+    };
+    let wanted = |n: &str| n == m2_song::pack::STD || n == own || through.iter().any(|t| t.split_once(':').is_some_and(|(p, _)| p == n));
+    let loads: Vec<(String, PathBuf)> = packages.iter().filter(|(n, _)| wanted(n)).cloned().collect();
     let values = match &item.preset {
         Some(p) => {
             // A package's own presets are in its folder; yours in yours.

@@ -753,14 +753,16 @@ fn own_file<'a>(item: &Item, listing: &'a Listing) -> Option<&'a m2_song::pack::
     listing.files.iter().find(|f| f.path == path)
 }
 
-/// The facts of a library item (REG-4): none for a plugin, which no pack holds.
+/// The facts of a library item (REG-4): none for a plugin, which no pack holds, and none yet for a
+/// note effect or a sound of one (PKG-21), which REG-4's kinds don't name.
 fn item_facts(item: &Item, listing: &Listing, preview: Option<Sha>, no_preview: Option<String>) -> Option<ItemFacts> {
     let kind = match item.kind {
+        Kind::Plugin | Kind::NoteEffect => return None,
+        Kind::Sound if item.note_effect => return None,
         Kind::Instrument => ItemKind::Instrument,
         Kind::Sound => ItemKind::Sound,
         Kind::Effect => ItemKind::Effect,
         Kind::Sample => ItemKind::Sample,
-        Kind::Plugin => return None,
     };
     let sample = item.sample.as_ref().map(|s| SampleFacts {
         kind: match s.kind {

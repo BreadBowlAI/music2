@@ -19,6 +19,10 @@
 //! included: they are made in its frame) out of the graph that has it, and make whatever read its
 //! output read its input instead: that must be exactly the graph without it.
 //!
+//! A note effect (PKG-21: notes first, notes out) is written the same way, before the notes of the
+//! call it goes before: `pluck(lane.notes("chords"))` becomes `pluck(arp(lane.notes("chords")))`.
+//! Removing, turning off and moving it are an effect's, unchanged.
+//!
 //! Turning an effect off (Next D1) writes `bypass: true` into its options: its call still runs
 //! and makes its nodes, so its knobs stay to set, and gives its audio input on, so nothing reads
 //! them and the engine never makes them (Q24). Turning it on takes the property out. Each is one
@@ -65,6 +69,9 @@ pub struct EffectInfo {
     /// The pack it is from, with its version; none for std's and the project's (PACK-11).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pack: Option<crate::packs::From>,
+    /// A note effect (PKG-21): it goes before what plays notes, not after a sound.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub notes: bool,
 }
 
 /// The component frames of `m` whose chain holds `n`, outermost first: the sites of the
@@ -167,14 +174,16 @@ fn insert_args(d: &Descriptor, units: &[m2_script::UnitCtor]) -> (String, Vec<St
     (text, values.into_iter().filter_map(|v| v.2).collect())
 }
 
-/// The effects the packages offer: every catalogued component with an editor category, and
-/// where to import it from; in the search's order of packages ([`crate::library::origin`]: std's
-/// and music2's own first, std's toolbox before the packs', then the song's, then everyone else's),
-/// each in the order its package declares them (by file, then line).
+/// The effects the packages offer: every catalogued component with an editor category, its note
+/// effects among them (PKG-21), and where to import it from; in the search's order of packages
+/// ([`crate::library::origin`]: std's and music2's own first, std's toolbox before the packs', then
+/// the song's, then everyone else's), each in the order its package declares them (by file, then
+/// line).
 pub fn effects(s: &Session) -> Vec<EffectInfo> {
     let catalog = s.catalog();
     let mut found: Vec<(&Descriptor, EffectInfo)> = catalog
         .effects()
+        .chain(catalog.note_effects())
         .filter_map(|d| {
             let export = catalog.exports.get(&d.id)?.iter().find(|e| !e.name.contains('.'))?;
             let info = EffectInfo {
@@ -186,6 +195,7 @@ pub fn effects(s: &Session) -> Vec<EffectInfo> {
                 category: d.editor.category.clone().unwrap_or_default(),
                 insert: insert_args(d, &s.accepted().compiled.units).0,
                 pack: crate::packs::from(s, &d.id),
+                notes: d.is_note_effect(),
             };
             Some((&**d, info))
         })
@@ -201,9 +211,14 @@ pub fn effects(s: &Session) -> Vec<EffectInfo> {
     found.into_iter().map(|(_, e)| e).collect()
 }
 
-/// The effect that call `site` of the accepted revision is, if it is a call in the project of a
-/// component with an editor category: by the ComponentId its frames record (PKG-9).
+/// The effect or note effect (PKG-21) that call `site` of the accepted revision is, if it is a call
+/// in the project of a component with an editor category: by the ComponentId its frames record (PKG-9).
 pub(crate) fn effect_at(s: &Session, site: &Site) -> Option<Arc<Descriptor>> {
+    component_at(s, site).filter(|d| d.is_effect() || d.is_note_effect())
+}
+
+/// The component that call `site` of the accepted revision is, if it is a call in the project.
+fn component_at(s: &Session, site: &Site) -> Option<Arc<Descriptor>> {
     if !site.in_project {
         return None;
     }
@@ -214,7 +229,7 @@ pub(crate) fn effect_at(s: &Session, site: &Site) -> Option<Arc<Descriptor>> {
     if ids.any(|x| x != Some(id)) {
         return None;
     }
-    compiled.components.get(id).filter(|d| d.is_effect()).cloned()
+    compiled.components.get(id).cloned()
 }
 
 /// Insertions joined where they go: two at one place become one edit.
@@ -311,7 +326,8 @@ fn consumers(m: &Module, track: &str, export: &str) -> usize {
 
 /// Put effect `component` (a ComponentId, `@m2/effects:delay`, or an installed plugin, `clap:<id>`) after
 /// call `call` (`file#ordinal` at revision `at`), or after a track's sound where the song reads it
-/// (`import:<track>.<export>`, CARD-36).
+/// (`import:<track>.<export>`, CARD-36). A note effect goes before call `call`, around the notes it
+/// takes (PKG-21).
 pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Result<Edited, EditError> {
     if component.starts_with("clap:") {
         return crate::plugins::add_effect(s, at, call, component);
@@ -333,6 +349,7 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
     if !site.in_project {
         return Err(EditError::NotFound(call.to_string()));
     }
+    let site = if effect.notes { notes_of(s, &site, &effect.label)? } else { site };
     let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?.clone();
     let (args, ctors) = insert_args(&desc, &s.accepted().compiled.units);
     let mut imports = vec![];
@@ -346,9 +363,39 @@ pub fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) -> Resu
     }
     // A pack's effect brings its `[dependencies]` line and lock entry (PACK-10).
     let also = crate::packs::needs(s, component)?;
-    let wrap =
-        Wrap { open: format!("{}(", effect.name), close: format!("{args})"), imports, callee: effect.name, label: effect.label, also };
+    let (open, close, before) = (format!("{}(", effect.name), format!("{args})"), effect.notes);
+    let wrap = Wrap { open, close, imports, callee: effect.name, label: effect.label, before, also };
     wrap_call(s, &site, wrap, |_, _, _| Ok(()))
+}
+
+/// Where note effect `label` goes before call `site` (PKG-21): the notes that call takes, its first
+/// argument, as a site of its own, to be wrapped as a call is. The call must take notes first, as an
+/// instrument or another note effect does. Why not, in words.
+fn notes_of(s: &Session, site: &Site, label: &str) -> Result<Site, EditError> {
+    let refused = |why: String| EditError::Rejected(format!("{label} can't go here: {why}."));
+    let takes =
+        component_at(s, site).filter(|d| d.inputs.first().is_some_and(|i| i.kind == PortKind::Notes && !d.positional.contains(&i.name)));
+    let d = takes.ok_or_else(|| refused(format!("it goes before a sound that plays notes, and `{}` takes none", site.callee)))?;
+    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?;
+    let (start, end) = site.args.first().map(Arg::span).ok_or_else(|| refused(format!("{} is given no notes here", d.label)))?;
+    let written = &text[start as usize..end as usize];
+    if written.trim_start().starts_with("...") {
+        return Err(refused(format!("{}'s call spreads its arguments", d.label)));
+    }
+    Ok(Site {
+        id: u32::MAX,
+        file: site.file.clone(),
+        ordinal: u32::MAX,
+        start,
+        end,
+        open: start,
+        line: text[..start as usize].matches('\n').count() as u32 + 1,
+        callee: written.to_string(),
+        binding: None,
+        constant: false,
+        in_project: true,
+        args: vec![],
+    })
 }
 
 /// How a call is wrapped: the text written before it and after it, the imports that text needs,
@@ -359,6 +406,8 @@ pub(crate) struct Wrap {
     pub imports: Vec<(u32, String)>,
     pub callee: String,
     pub label: String,
+    /// It goes before the sound wrapped, as a note effect does (PKG-21), not after it: for its words.
+    pub before: bool,
     /// What else the Tx writes: a pack's dependency and lock (PACK-10).
     pub also: crate::packs::Needs,
 }
@@ -402,9 +451,9 @@ pub(crate) fn wrap_call(
     let mut ops = vec![plan::text_edit(&file, &text, &edits)];
     ops.extend(w.also.ops);
     let tx = plan::planned(s, label.clone(), ops, expect);
-    let what = w.label;
-    let refused = || EditError::Rejected(format!("adding {what} here would change more than putting it after this sound"));
-    let said = |why: &str| EditError::Rejected(format!("adding {what} here would change more than putting it after this sound ({why})"));
+    let (what, place) = (w.label, if w.before { "before" } else { "after" });
+    let refused = || EditError::Rejected(format!("adding {what} here would change more than putting it {place} this sound"));
+    let said = |why: &str| EditError::Rejected(format!("adding {what} here would change more than putting it {place} this sound ({why})"));
     let done = plan::run_as(s, tx, said, |s, checked| {
         unmoved(s, checked)?;
         // The planner's assertion (WRITE-9): the new call wraps the old one, and nothing else changed.
@@ -453,16 +502,18 @@ pub fn is_bypassed(compiled: &Compiled, site: u32) -> bool {
     compiled.ir.modules.iter().flat_map(|m| &m.frames).any(|f| f.site == site && f.component.is_some() && f.bypass)
 }
 
-/// Why calls of effect `d` can't be turned off at all, if they can't: the SDK's rule (Q25), its
-/// first input and its output audio; and a component with a `bypass` of its own keeps it.
+/// Why calls of effect `d` can't be turned off at all, if they can't: the SDK's rule (Q25, PKG-21),
+/// its first input and its output audio, or both notes; and a component with a `bypass` of its own
+/// keeps it.
 fn unbypassable(d: &Descriptor) -> Option<String> {
     if d.controls.iter().any(|c| c.name == "bypass") || d.settings.iter().any(|x| x.name == "bypass") {
         return Some("It has its own Bypass knob.".into());
     }
-    let first = d.inputs.first().filter(|i| i.kind == PortKind::Audio && !i.many && !d.positional.contains(&i.name));
+    let first =
+        d.inputs.first().filter(|i| matches!(i.kind, PortKind::Audio | PortKind::Notes) && !i.many && !d.positional.contains(&i.name));
     match (first, &d.output) {
-        (Some(_), Some(o)) if o.kind == PortKind::Audio => None,
-        _ => Some(format!("{} can't be turned off: only an effect that takes audio and gives audio can.", d.label)),
+        (Some(i), Some(o)) if o.kind == i.kind => None,
+        _ => Some(format!("{} can't be turned off: only an effect that takes audio and gives audio, or a note effect, can.", d.label)),
     }
 }
 
@@ -671,9 +722,14 @@ fn move_plan(s: &Session, site: &Site, d: &Descriptor, earlier: bool) -> Result<
             "{} and {} aren't next to each other in the code, so they can't swap here. Change their order in code.",
             d.label, a.label
         )),
-        (true, ..) => Err(format!("{} is the first effect here.", d.label)),
-        (false, ..) => Err(format!("{} is the last effect here.", d.label)),
+        (true, ..) => Err(format!("{} is the first {} here.", d.label, kind_words(d))),
+        (false, ..) => Err(format!("{} is the last {} here.", d.label, kind_words(d))),
     }
+}
+
+/// What `d` is called among its neighbours: an effect, or a note effect (PKG-21).
+fn kind_words(d: &Descriptor) -> &'static str {
+    if d.is_note_effect() { "note effect" } else { "effect" }
 }
 
 /// What the ⋯ menu's Move left (`earlier`) or Move right row of effect call `site` says: the
@@ -1331,3 +1387,7 @@ mod tests;
 #[cfg(test)]
 #[path = "cut_tests.rs"]
 mod cut_tests;
+
+#[cfg(test)]
+#[path = "note_effect_tests.rs"]
+mod note_effect_tests;

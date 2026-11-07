@@ -19,6 +19,7 @@ fn item(kind: Kind, id: &str, label: &str, tags: &[&str], description: &str, pac
         component: id.into(),
         instrument: kind == Kind::Instrument,
         effect: kind == Kind::Effect,
+        note_effect: kind == Kind::NoteEffect,
         preview: true,
         no_preview: None,
         preset: None,
@@ -523,6 +524,37 @@ mod previews {
         let peak = spike.iter().fold(0f32, |m, x| m.max(x.abs()));
         assert!((20.0 * (peak as f64).log10() - preview::PEAK_DB).abs() < 0.01, "{peak}");
         assert!(preview::level(&mut sine(0.0, 4.5, 0.0)).is_err(), "silence is no preview");
+    }
+
+    // LIB-3, PKG-21: an effect's preview and a note effect's play through music2's own sounds, which
+    // `of` loads beside std and the item's own pack: an effect's loop through it, the pluck's and the
+    // kit's; a note effect's four chords through it into the pluck. Each renders.
+    #[test]
+    fn what_a_preview_plays_through_is_loaded_and_it_renders() {
+        let f = crate::testing::Fixture::new();
+        let pack = f.0.join("notes");
+        crate::testing::notes_pack(&pack, false);
+        let packages: Vec<(String, std::path::PathBuf)> = std_packages().into_iter().chain([("@test/notes".to_string(), pack)]).collect();
+        let catalog = m2_session::describe(&packages);
+        let all = items(&Sources { catalog: &catalog, packages: &packages, yours: None, plugins: &[], samples: &[] });
+        let names = |loads: &[(String, std::path::PathBuf)]| loads.iter().map(|(n, _)| n.clone()).collect::<Vec<_>>();
+        for (id, through) in [
+            ("@m2/effects:reverb", vec!["@m2/drums", "@m2/effects", "@m2/synths", "std"]),
+            ("@test/notes:arp", vec!["@m2/synths", "@test/notes", "std"]),
+            ("@m2/synths:synth-pad", vec!["@m2/synths", "std"]),
+        ] {
+            let item = get(&all, id);
+            let (song, loads) = preview::of(item, &catalog, &packages, None).unwrap_or_else(|e| panic!("{id}: {e}"));
+            let mut loaded = names(&loads);
+            loaded.sort();
+            assert_eq!(loaded, through, "{id}");
+            let wav = f.0.join("out.wav");
+            preview::render(&song, &loads, &f.0.join("work"), &wav).unwrap_or_else(|e| panic!("{id}: {e:#}"));
+            assert!(std::fs::metadata(&wav).unwrap().len() > 44, "{id} renders");
+        }
+        let arp = preview::song(get(&all, "@test/notes:arp"), &catalog, &BTreeMap::new()).unwrap();
+        assert!(arp.files["song.ts"].contains(r#"keys.pluck(item(lane.notes("notes")))"#), "{}", arp.files["song.ts"]);
+        assert_eq!(pitches(&arp.files["data/play/notes.json"]).len(), 12, "four chords of three notes");
     }
 
     // LIB-3: a preview builds and renders on a thread of its own (at background priority, as an
