@@ -358,9 +358,15 @@ fn a_kernel_whose_lane_outgrows_its_room_is_new() {
 // ---- Note effects: kernels that give notes, run in the lane pass behind a guard (RENDER-41,
 // RENDER-42, ABI-15) ----
 
-/// A call of `@test/t:script` that traps, and one that writes nonsense into its header.
+/// Calls of `@test/t:script` that aren't its events alone: one that traps; one that gives its two
+/// events where the host put them and then writes nonsense into its header, a `cap` of 2 billion
+/// and its events at [`DECOY`]; and one that gives its two events with a `count` of a million.
 const TRAP: u32 = u32::MAX;
 const LIAR: u32 = u32::MAX - 1;
+const OVER: u32 = u32::MAX - 2;
+
+/// Where the script's memory holds four events no one gave: Ons of pitch 99.
+const DECOY: usize = 7312;
 
 /// One raw event as a kernel writes it (24 bytes): its kind, frame, id and three values.
 fn raw(kind: u32, frame: u32, id: u32, values: [f32; 3]) -> [u32; 6] {
@@ -379,32 +385,43 @@ fn cc(frame: u32, bytes: [u8; 3]) -> [u32; 6] {
     [4, frame, 0, u32::from_le_bytes([bytes[0], bytes[1], bytes[2], 0]), 0, 0]
 }
 
-/// The package of the note effect tests, `@test/t`: the probe `k` ([`probe`]), and three note
-/// effects, each with `notes: events<note>` in and `out: events<note>`:
+/// The package of the note effect tests, `@test/t`: the probe `k` ([`probe`]), `slow`, which passes
+/// its audio on 64 frames late (`latency = 64`), and these note effects, each with
+/// `notes: events<note>` in and `out: events<note>`:
 /// - `up`: each event as it comes, an On `by` semitones up (its input, 12 unless wired); `beat`
-///   the same, `by` in bpm;
-/// - `script`: at its `c`th call, the raw events `script[c]` names, whatever they are, then none: a
-///   call of [`TRAP`] traps, and one of [`LIAR`] says 2 events, a `cap` of 4 billion and its events
-///   at address 0;
-/// - `flood`: `n` Ons a call (its input), at frame 0, each with an id of its own, never an Off.
+///   the same, `by` in bpm, and `shift`, `by` of any unit;
+/// - `script`: at its `c`th call, the raw events `script[c]` names, whatever they are, then none
+///   ([`TRAP`], [`LIAR`] and [`OVER`] name calls of other kinds); a reset leaves its place alone;
+/// - `flood`: `n` Ons a call (its input), at frame 0, each with an id of its own, never an Off;
+/// - `burst`: `n` Ons at every frame, each ended at the next;
+/// - `alt`: as `flood`, its Ons at frame 0 on even calls and at frame 127 on odd ones;
+/// - `hold`: once it hears an On, a note of its own every block (the Off of the last, then an On),
+///   until a reset: as an arpeggiator's Hold holds;
+/// - `bog`, whose `fan` is 8: its room of Ons at its first call, then its room of Offs of a note it
+///   never started at every call.
 fn effects(script: &[Vec<[u32; 6]>]) -> PathBuf {
     const STRIDE: usize = 4 + 6 * 24;
     assert!(script.len() <= 20 && script.iter().all(|c| c.len() <= 6), "the script fits below the heap");
     let mut data = (script.len() as u32).to_le_bytes().to_vec();
     data.resize(4352 - 4100, 0);
+    let word = |data: &mut Vec<u8>, at: usize, v: u32| data[at..at + 4].copy_from_slice(&v.to_le_bytes());
     for call in script {
         let mut entry = vec![0u8; STRIDE];
         let n = match call.first() {
-            Some(e) if e[0] == TRAP || e[0] == LIAR => e[0],
+            Some(e) if e[0] >= OVER => e[0],
             _ => call.len() as u32,
         };
-        entry[..4].copy_from_slice(&n.to_le_bytes());
-        for (k, e) in call.iter().enumerate().filter(|_| n < LIAR) {
+        word(&mut entry, 0, n);
+        for (k, e) in call.iter().enumerate().skip((n >= OVER) as usize) {
             for (w, v) in e.iter().enumerate() {
-                entry[4 + 24 * k + 4 * w..][..4].copy_from_slice(&v.to_le_bytes());
+                word(&mut entry, 4 + 24 * k + 4 * w, *v);
             }
         }
         data.extend(entry);
+    }
+    data.resize(DECOY - 4100, 0);
+    for k in 0..4 {
+        data.extend(on(k, 90 + k, 99.0).iter().flat_map(|w| w.to_le_bytes()));
     }
     let bytes: String = data.iter().map(|b| format!("\\{b:02x}")).collect();
     let k = format!(
@@ -412,9 +429,10 @@ fn effects(script: &[Vec<[u32; 6]>]) -> PathBuf {
   (data (i32.const 4100) "{bytes}")
   {up}
   {beat}
+  {shift}
   (func (export "script_new") (param i32) (result i32) (i32.store (i32.const 4096) (i32.const 0)) (i32.const 4096))
   (func (export "script_ports") (result i32) (i32.const 257))
-  (func (export "script_reset") (param i32) (i32.store (i32.const 4096) (i32.const 0)))
+  (func (export "script_reset") (param i32))
   (func (export "script_active") (param i32) (result i32) (i32.const 0))
   (func (export "script_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
     (local $c i32) (local $o i32) (local $at i32) (local $n i32)
@@ -424,11 +442,15 @@ fn effects(script: &[Vec<[u32; 6]>]) -> PathBuf {
       (local.set $at (i32.add (i32.const 4352) (i32.mul (local.get $c) (i32.const {STRIDE}))))
       (local.set $n (i32.load (local.get $at)))
       (if (i32.eq (local.get $n) (i32.const -1)) (then unreachable))
-      (if (i32.eq (local.get $n) (i32.const -2))
+      (if (i32.ge_u (local.get $n) (i32.const -3))
         (then
-          (i32.store offset=4 (local.get $o) (i32.const -1))
-          (i32.store offset=8 (local.get $o) (i32.const 0))
-          (local.set $n (i32.const -1)))
+          (memory.copy (i32.load offset=8 (local.get $o)) (i32.add (local.get $at) (i32.const 28)) (i32.const 48))
+          (if (i32.eq (local.get $n) (i32.const -2))
+            (then
+              (i32.store offset=4 (local.get $o) (i32.const 0x7fffffff))
+              (i32.store offset=8 (local.get $o) (i32.const {DECOY}))
+              (local.set $n (i32.const 2)))
+            (else (local.set $n (i32.const 1000000)))))
         (else
           (memory.copy (i32.load offset=8 (local.get $o)) (i32.add (local.get $at) (i32.const 4)) (i32.mul (local.get $n) (i32.const 24)))))
       (i32.store (local.get $o) (local.get $n))))
@@ -455,18 +477,142 @@ fn effects(script: &[Vec<[u32; 6]>]) -> PathBuf {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))
       (br $l)))
     (i32.store (i32.const 4104) (i32.add (local.get $id) (local.get $n)))
+    (i32.store (local.get $o) (local.get $n)))
+  (func (export "burst_new") (param i32) (result i32) (i32.store (i32.const 4116) (i32.const 1)) (i32.const 4096))
+  (func (export "burst_ports") (result i32) (i32.const 513))
+  (func (export "burst_reset") (param i32) (i32.store (i32.const 4116) (i32.const 1)))
+  (func (export "burst_active") (param i32) (result i32) (i32.const 0))
+  (func (export "burst_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (local $o i32) (local $k i32) (local $f i32) (local $j i32) (local $e i32) (local $c i32) (local $id i32)
+    (local.set $k (i32.trunc_f32_u (f32.load (i32.load offset=4 (local.get $io)))))
+    (local.set $o (i32.load offset=8 (local.get $io)))
+    (local.set $e (i32.load offset=8 (local.get $o)))
+    (local.set $id (i32.load (i32.const 4116)))
+    (block $df (loop $lf
+      (br_if $df (i32.ge_u (local.get $f) (i32.const 128)))
+      (local.set $j (i32.const 0))
+      (block $dj (loop $lj
+        (br_if $dj (i32.ge_u (local.get $j) (local.get $k)))
+        (if (i32.gt_u (local.get $id) (local.get $k)) (then
+          (i32.store (local.get $e) (i32.const 1))
+          (i32.store offset=4 (local.get $e) (local.get $f))
+          (i32.store offset=8 (local.get $e) (i32.sub (local.get $id) (local.get $k)))
+          (f32.store offset=12 (local.get $e) (f32.const 0))
+          (local.set $e (i32.add (local.get $e) (i32.const 24)))
+          (local.set $c (i32.add (local.get $c) (i32.const 1)))))
+        (i32.store (local.get $e) (i32.const 0))
+        (i32.store offset=4 (local.get $e) (local.get $f))
+        (i32.store offset=8 (local.get $e) (local.get $id))
+        (f32.store offset=12 (local.get $e) (f32.const 60))
+        (f32.store offset=16 (local.get $e) (f32.const 1))
+        (f32.store offset=20 (local.get $e) (f32.const nan))
+        (local.set $e (i32.add (local.get $e) (i32.const 24)))
+        (local.set $c (i32.add (local.get $c) (i32.const 1)))
+        (local.set $id (i32.add (local.get $id) (i32.const 1)))
+        (local.set $j (i32.add (local.get $j) (i32.const 1)))
+        (br $lj)))
+      (local.set $f (i32.add (local.get $f) (i32.const 1)))
+      (br $lf)))
+    (i32.store (i32.const 4116) (local.get $id))
+    (i32.store (local.get $o) (local.get $c)))
+  (func (export "slow_new") (param i32) (result i32) (i32.const 4096))
+  (func (export "slow_ports") (result i32) (i32.const 257))
+  (func (export "slow_reset") (param i32))
+  (func (export "slow_active") (param i32) (result i32) (i32.const 0))
+  (func (export "slow_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (memory.copy (i32.load offset=4 (local.get $io)) (i32.load (local.get $io)) (i32.shl (local.get $to) (i32.const 2))))
+  (func (export "alt_new") (param i32) (result i32) (i32.store (i32.const 4096) (i32.const 1)) (i32.store (i32.const 4100) (i32.const 0)) (i32.const 4096))
+  (func (export "alt_ports") (result i32) (i32.const 513))
+  (func (export "alt_reset") (param i32) (i32.store (i32.const 4096) (i32.const 1)) (i32.store (i32.const 4100) (i32.const 0)))
+  (func (export "alt_active") (param i32) (result i32) (i32.const 0))
+  (func (export "alt_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (local $o i32) (local $n i32) (local $i i32) (local $e i32) (local $id i32) (local $f i32) (local $c i32)
+    (local.set $n (i32.trunc_f32_u (f32.load (i32.load offset=4 (local.get $io)))))
+    (local.set $o (i32.load offset=8 (local.get $io)))
+    (if (i32.gt_u (local.get $n) (i32.load offset=4 (local.get $o))) (then (local.set $n (i32.load offset=4 (local.get $o)))))
+    (local.set $id (i32.load (i32.const 4096)))
+    (local.set $c (i32.load (i32.const 4100)))
+    (local.set $f (i32.mul (i32.and (local.get $c) (i32.const 1)) (i32.const 127)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $e (i32.add (i32.load offset=8 (local.get $o)) (i32.mul (local.get $i) (i32.const 24))))
+      (i32.store (local.get $e) (i32.const 0))
+      (i32.store offset=4 (local.get $e) (local.get $f))
+      (i32.store offset=8 (local.get $e) (i32.add (local.get $id) (local.get $i)))
+      (f32.store offset=12 (local.get $e) (f32.const 60))
+      (f32.store offset=16 (local.get $e) (f32.const 1))
+      (f32.store offset=20 (local.get $e) (f32.const nan))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store (i32.const 4096) (i32.add (local.get $id) (local.get $n)))
+    (i32.store (i32.const 4100) (i32.add (local.get $c) (i32.const 1)))
+    (i32.store (local.get $o) (local.get $n)))
+  (func (export "hold_new") (param i32) (result i32) (i32.store (i32.const 4104) (i32.const 0)) (i32.store (i32.const 4108) (i32.const 1)) (i32.const 4096))
+  (func (export "hold_ports") (result i32) (i32.const 257))
+  (func (export "hold_reset") (param i32) (i32.store (i32.const 4104) (i32.const 0)))
+  (func (export "hold_active") (param i32) (result i32) (i32.load (i32.const 4104)))
+  (func (export "hold_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (local $o i32) (local $e i32) (local $id i32) (local $h i32)
+    (local.set $h (i32.load (local.get $io)))
+    (if (i32.gt_u (i32.load (local.get $h)) (i32.const 0)) (then
+      (if (i32.eqz (i32.load (i32.load offset=8 (local.get $h)))) (then (i32.store (i32.const 4104) (i32.const 1))))))
+    (local.set $o (i32.load offset=4 (local.get $io)))
+    (if (i32.load (i32.const 4104)) (then
+      (local.set $id (i32.load (i32.const 4108)))
+      (local.set $e (i32.load offset=8 (local.get $o)))
+      (i32.store (local.get $e) (i32.const 1))
+      (i32.store offset=4 (local.get $e) (i32.const 0))
+      (i32.store offset=8 (local.get $e) (local.get $id))
+      (f32.store offset=12 (local.get $e) (f32.const 0))
+      (i32.store offset=24 (local.get $e) (i32.const 0))
+      (i32.store offset=28 (local.get $e) (i32.const 0))
+      (i32.store offset=32 (local.get $e) (i32.add (local.get $id) (i32.const 1)))
+      (f32.store offset=36 (local.get $e) (f32.const 60))
+      (f32.store offset=40 (local.get $e) (f32.const 1))
+      (f32.store offset=44 (local.get $e) (f32.const nan))
+      (i32.store (i32.const 4108) (i32.add (local.get $id) (i32.const 1)))
+      (i32.store (local.get $o) (i32.const 2)))))
+  (func (export "bog_new") (param i32) (result i32) (i32.store (i32.const 4112) (i32.const 0)) (i32.const 4096))
+  (func (export "bog_ports") (result i32) (i32.const 257))
+  (func (export "bog_reset") (param i32) (i32.store (i32.const 4112) (i32.const 0)))
+  (func (export "bog_active") (param i32) (result i32) (i32.const 0))
+  (func (export "bog_process") (param $s i32) (param $io i32) (param $from i32) (param $to i32)
+    (local $o i32) (local $n i32) (local $i i32) (local $e i32) (local $c i32) (local $off i32)
+    (local.set $o (i32.load offset=4 (local.get $io)))
+    (local.set $c (i32.load (i32.const 4112)))
+    (local.set $n (i32.load offset=4 (local.get $o)))
+    (local.set $off (i32.ne (local.get $c) (i32.const 0)))
+    (block $done (loop $l
+      (br_if $done (i32.ge_u (local.get $i) (local.get $n)))
+      (local.set $e (i32.add (i32.load offset=8 (local.get $o)) (i32.mul (local.get $i) (i32.const 24))))
+      (i32.store (local.get $e) (local.get $off))
+      (i32.store offset=4 (local.get $e) (i32.const 0))
+      (i32.store offset=8 (local.get $e) (if (result i32) (local.get $off) (then (i32.const 0)) (else (i32.add (local.get $i) (i32.const 1)))))
+      (f32.store offset=12 (local.get $e) (if (result f32) (local.get $off) (then (f32.const 0)) (else (f32.const 60))))
+      (f32.store offset=16 (local.get $e) (f32.const 1))
+      (f32.store offset=20 (local.get $e) (f32.const nan))
+      (local.set $i (i32.add (local.get $i) (i32.const 1)))
+      (br $l)))
+    (i32.store (i32.const 4112) (i32.add (local.get $c) (i32.const 1)))
     (i32.store (local.get $o) (local.get $n)))"#,
         probe = probe_wat(""),
         up = up_wat("up"),
         beat = up_wat("beat"),
+        shift = up_wat("shift"),
     );
     let notes = "inputs = [\"notes: events<note>\"]";
     let ports = format!(
         "{notes}\noutputs = [\"out: audio<1>\"]\n\n\
          [[kernel]]\nname = \"up\"\ninputs = [\"notes: events<note>\", \"by: control<semitones> = 12\"]\noutputs = [\"out: events<note>\"]\n\n\
          [[kernel]]\nname = \"beat\"\ninputs = [\"notes: events<note>\", \"by: control<bpm> = 120\"]\noutputs = [\"out: events<note>\"]\n\n\
+         [[kernel]]\nname = \"shift\"\ninputs = [\"notes: events<note>\", \"by: control<*> = 0\"]\noutputs = [\"out: events<note>\"]\n\n\
          [[kernel]]\nname = \"script\"\n{notes}\noutputs = [\"out: events<note>\"]\n\n\
-         [[kernel]]\nname = \"flood\"\ninputs = [\"notes: events<note>\", \"n: control<scalar> = 0\"]\noutputs = [\"out: events<note>\"]"
+         [[kernel]]\nname = \"flood\"\ninputs = [\"notes: events<note>\", \"n: control<scalar> = 0\"]\noutputs = [\"out: events<note>\"]\n\n\
+         [[kernel]]\nname = \"burst\"\ninputs = [\"notes: events<note>\", \"n: control<scalar> = 0\"]\noutputs = [\"out: events<note>\"]\n\n\
+         [[kernel]]\nname = \"slow\"\ninputs = [\"in: audio<1>\"]\noutputs = [\"out: audio<1>\"]\nlatency = 64\n\n\
+         [[kernel]]\nname = \"alt\"\ninputs = [\"notes: events<note>\", \"n: control<scalar> = 0\"]\noutputs = [\"out: events<note>\"]\n\n\
+         [[kernel]]\nname = \"hold\"\n{notes}\noutputs = [\"out: events<note>\"]\n\n\
+         [[kernel]]\nname = \"bog\"\n{notes}\noutputs = [\"out: events<note>\"]\nfan = 8"
     );
     package_with(&module_v1(&k), &ports)
 }
@@ -498,7 +644,7 @@ fn up_wat(k: &str) -> String {
 }
 
 /// std, music2's own packs, and [`effects`]' package.
-fn with_effects(script: &[Vec<[u32; 6]>]) -> (PackageSet, PathBuf) {
+pub(super) fn with_effects(script: &[Vec<[u32; 6]>]) -> (PackageSet, PathBuf) {
     let pkg = effects(script);
     let mut pk = own_packages();
     pk.load(&pkg).unwrap();
@@ -654,7 +800,8 @@ fn two_note_effects_make_a_chain() {
 }
 
 // RENDER-41: a note effect's other inputs are read in the lane pass as their own nodes read them: a
-// knob's cell as it holds it this block, a control lane from its data at each beat.
+// knob's cell as it holds it this block, a control lane from its data at each beat (and its default
+// where it has none), `time` from the block's times.
 #[test]
 fn a_note_effect_reads_its_knob_time_and_a_control_lane() {
     let (pk, pkg) = with_effects(&[]);
@@ -676,6 +823,32 @@ fn a_note_effect_reads_its_knob_time_and_a_control_lane() {
     let lane_by = check(&through("up", json!({"by": "c"}), json!([{"id": "c", "op": "lane", "lane": "by"}])), &pk).unwrap();
     let mut r = Renderer::new(&lane_by, &data, &pk, SR).unwrap();
     assert_eq!(pitch(&mut r, 0), Some(63.0), "the lane's default where it has no data");
+    let by = LaneData::read(
+        &json!({"unit": "semitones", "clips": [{"start": 0, "length": 8, "points": [[0, 5], [8, 5]]}]}).to_string(),
+        &LaneKind::Control { unit: Some("semitones".into()) },
+    )
+    .unwrap();
+    let notes = LaneData::read(
+        &json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 0.01}]}]}).to_string(),
+        &LaneKind::Notes,
+    )
+    .unwrap();
+    let with_by = DataSet::with_lanes(live::at_bpm(120.0), [(addr("notes"), notes.clone()), (addr("by"), by)]);
+    let mut r = Renderer::new(&lane_by, &with_by, &pk, SR).unwrap();
+    assert_eq!(pitch(&mut r, 0), Some(65.0), "the lane's 5, from its data");
+    // `time.playing` is 1 where the song plays, 0 where it is stopped; `time.beats` where it is.
+    let playing = through("shift", json!({"by": "t"}), json!([{"id": "t", "op": "time", "of": "playing"}]));
+    let data = DataSet::with_lanes(live::at_bpm(120.0), [(addr("notes"), notes)]);
+    let mut r = Renderer::new(&check(&playing, &pk).unwrap(), &data, &pk, SR).unwrap();
+    assert_eq!(pitch(&mut r, 0), Some(61.0), "playing");
+    let mut r = live_one(&playing, &data, &pk);
+    assert!(r.live(0, LiveEv::On { source: 1, handle: 1, pitch: 60.0, velocity: 1.0 }));
+    assert_eq!(pitch(&mut r, 0), Some(60.0), "stopped");
+    let beats = check(&through("shift", json!({"by": "t"}), json!([{"id": "t", "op": "time", "of": "beats"}])), &pk).unwrap();
+    let mut r = Renderer::new(&beats, &notes_at(&[256 + 5], 60), &pk, SR).unwrap();
+    pitch(&mut r, 0);
+    pitch(&mut r, BLOCK as u64);
+    assert_eq!(pitch(&mut r, 2 * BLOCK as u64), Some(60.0 + 256.0 / 24_000.0), "the beat at the block's first frame");
     std::fs::remove_dir_all(pkg).ok();
 }
 
@@ -798,33 +971,67 @@ fn the_guard_ends_the_oldest_note_when_its_room_is_full() {
 }
 
 // RENDER-42: past its room in one block, it keeps the first: as many Ons as its consumers can start
-// in a block, the rest left out, and said.
+// in a block (here three a frame, each ending a frame later), the rest left out, and said; and at
+// one frame, as many notes as it has room to sound, as none of them sounds yet to make room.
 #[test]
 fn the_guard_keeps_the_first_events_of_a_full_block() {
     let (pk, pkg) = with_effects(&[]);
-    let many = json!([{"id": "c", "op": "const", "value": 400}]);
-    let mut r = live_one(&through("flood", json!({"n": "c"}), many), &lane(json!({"clips": []})), &pk);
+    let ons =
+        |got: &[Event]| -> Vec<u32> { got.iter().filter_map(|e| if let Event::On { id, .. } = e { Some(*id) } else { None }).collect() };
+    let three = json!([{"id": "c", "op": "const", "value": 3}]);
+    let mut r = live_one(&through("burst", json!({"n": "c"}), three), &lane(json!({"clips": []})), &pk);
     let got = given(&mut r, 1).remove(0);
-    let ons: Vec<u32> = got.iter().filter_map(|e| if let Event::On { id, .. } = e { Some(*id) } else { None }).collect();
     let most = 2 * (sched::Caps::FLOOR.ons + sched::LIVE_ROOM) + sched::LIVE_ROOM;
-    assert_eq!(ons, (1..=most as u32).collect::<Vec<_>>(), "the first {most}");
+    assert_eq!(ons(&got), (1..=most as u32).collect::<Vec<_>>(), "the first {most}");
     assert!(
         got.len() <= r.info().lanes[fx_slot(&r)].caps.map_or(0, |c| c.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS),
         "within its room"
     );
     assert_eq!(faults(&r).len(), 1, "said");
+    let many = json!([{"id": "c", "op": "const", "value": 400}]);
+    let mut r = live_one(&through("flood", json!({"n": "c"}), many), &lane(json!({"clips": []})), &pk);
+    let room = sched::Caps::FLOOR.sounding + sched::LIVE_ROOM;
+    assert_eq!(ons(&given(&mut r, 1)[0]), (1..=room as u32).collect::<Vec<_>>(), "at one frame, the first {room}");
+    assert_eq!(faults(&r).len(), 1, "said");
     std::fs::remove_dir_all(pkg).ok();
 }
 
-// ABI-15: the host reads the count a kernel says, never more than its own room, from where it put
-// the events: a kernel that writes nonsense into its header reads or writes nothing of another's.
+// ABI-15: the host reads the count a kernel says from where it put the events, never from the
+// header's own `cap` and address, which a kernel may overwrite: here pointed at four events no one
+// gave, none of which comes out.
 #[test]
 fn the_host_reads_no_more_than_its_own_room() {
-    let (pk, pkg) = with_effects(&[vec![[LIAR; 6]]]);
+    let (pk, pkg) = with_effects(&[vec![[LIAR; 6], on(1, 1, 60.0), on(2, 2, 61.0)]]);
+    let mut r = live_one(&through("script", json!({}), json!([])), &lane(json!({"clips": []})), &pk);
+    assert_eq!(given(&mut r, 1)[0], [ev_on(1, 1, 60.0), ev_on(2, 2, 61.0)], "the two it gave, where the host put them");
+    assert!(faults(&r).is_empty());
+    std::fs::remove_dir_all(pkg).ok();
+}
+
+// RENDER-42, ABI-15: a `count` past the room is a drop: the guard reads its room's worth, and says so.
+#[test]
+fn a_count_past_the_room_is_a_drop() {
+    let (pk, pkg) = with_effects(&[vec![[OVER; 6], on(1, 1, 60.0), on(2, 2, 61.0)]]);
     let mut r = live_one(&through("script", json!({}), json!([])), &lane(json!({"clips": []})), &pk);
     let got = given(&mut r, 1).remove(0);
     let room = r.info().lanes[fx_slot(&r)].caps.map_or(0, |c| c.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS);
-    assert!(!got.is_empty() && got.len() <= room, "{} events", got.len());
+    assert!(got.len() <= room, "{} events", got.len());
+    assert_eq!(faults(&r).into_iter().map(|f| f.0).collect::<Vec<_>>(), [fault::Code::NotesLeftOut]);
+    std::fs::remove_dir_all(pkg).ok();
+}
+
+// RENDER-42: an On and its Off at one frame, in that order, is a note of no length, left out as a
+// lane leaves one out, with no fault. An Off then an On of one id at one frame end a note and
+// start another.
+#[test]
+fn the_guard_leaves_out_a_note_of_no_length() {
+    let script = [vec![on(0, 5, 60.0)], vec![on(10, 1, 62.0), off(10, 1), off(20, 5), on(20, 5, 63.0)]];
+    let (pk, pkg) = with_effects(&script);
+    let mut r = live_one(&through("script", json!({}), json!([])), &lane(json!({"clips": []})), &pk);
+    // The note of no length took an id, 2, that no note ever gets.
+    assert_eq!(given(&mut r, 2), [vec![ev_on(0, 1, 60.0)], vec![ev_off(20, 1), ev_on(20, 3, 63.0)]]);
+    assert_eq!(r.sounding_notes(), 1, "nothing hangs");
+    assert!(faults(&r).is_empty(), "no drop");
     std::fs::remove_dir_all(pkg).ok();
 }
 
@@ -860,6 +1067,45 @@ fn stop_pressed_while_stopped_ends_a_note_effects_notes() {
     std::fs::remove_dir_all(pkg).ok();
 }
 
+// RENDER-42: Stop pressed while stopped resets the kernel too, as a panic does: one that holds a note
+// itself (an arpeggiator's Hold) goes silent.
+#[test]
+fn stop_pressed_while_stopped_silences_a_kernel_that_holds() {
+    let (pk, pkg) = with_effects(&[]);
+    let ir = voices("e", json!([{"id": "e", "op": "kernel", "kernel": "@test/t:hold", "inputs": {"notes": "n"}}]));
+    let mut r = live_one(&ir, &lane(json!({"clips": []})), &pk);
+    assert!(r.live(0, LiveEv::On { source: 1, handle: 1, pitch: 50.0, velocity: 0.9 }));
+    r.render_block(r.clock()).unwrap();
+    assert!(r.live(0, LiveEv::Off { source: 1, handle: 1 }));
+    for _ in 0..3 {
+        r.render_block(r.clock()).unwrap();
+    }
+    assert_eq!(r.sounding_notes(), 1, "held by its Hold, the key let go");
+    r.transport_cmd(Cmd::Stop);
+    let after: Vec<usize> = (0..3)
+        .map(|_| {
+            r.render_block(r.clock()).unwrap();
+            r.sounding_notes()
+        })
+        .collect();
+    assert_eq!(after, [0, 0, 0], "Stop while stopped: silence");
+    std::fs::remove_dir_all(pkg).ok();
+}
+
+// RENDER-42, RENDER-14: Stop pressed while stopped ends the notes after the kernel's own controllers
+// at frame 0, in RENDER-14's order.
+#[test]
+fn stop_pressed_while_stopped_keeps_renders_14s_order() {
+    let script = [vec![cc(0, [0xB0, 64, 127]), on(2, 1, 60.0)], vec![], vec![cc(0, [0xB0, 1, 5])]];
+    let (pk, pkg) = with_effects(&script);
+    let mut r = live_one(&through("script", json!({}), json!([])), &lane(json!({"clips": []})), &pk);
+    given(&mut r, 2);
+    r.transport_cmd(Cmd::Stop);
+    let midi = |bytes| Event::Midi { frame: 0, bytes };
+    assert_eq!(given(&mut r, 1)[0], [midi([0xB0, 1, 5]), midi([0xB0, 64, 0]), ev_off(0, 1)]);
+    std::fs::remove_dir_all(pkg).ok();
+}
+
 // RENDER-42, RENDER-9, RENDER-36: a seek ends a note effect's notes at its frame and lets the pedal
 // up, as a lane does; a loop's wrap ends them and leaves the pedal.
 #[test]
@@ -878,6 +1124,49 @@ fn a_seek_or_a_wrap_ends_a_note_effects_notes() {
     r.transport_cmd(Cmd::Loop(Some((0.0, 300.0 / 24_000.0))));
     let got = given(&mut r, 3);
     assert_eq!(got[2], [ev_on(0, 2, 61.0), ev_off(44, 1), ev_off(44, 2)], "a wrap: every note ends there, the pedal stays down");
+    std::fs::remove_dir_all(pkg).ok();
+}
+
+/// A song of `bog` (fan 8) over the lane, or `chain` of them, into the probe.
+fn bogged(chain: usize) -> Ir {
+    let mut nodes = vec![json!({"id": "n", "op": "lane", "lane": "notes"})];
+    for k in 0..chain {
+        let from = if k == 0 { "n".to_string() } else { format!("e{}", k - 1) };
+        nodes.push(json!({"id": format!("e{k}"), "op": "kernel", "kernel": "@test/t:bog", "inputs": {"notes": from}}));
+    }
+    nodes.push(json!({"id": "k", "op": "kernel", "kernel": "@test/t:k", "inputs": {"notes": format!("e{}", chain - 1)}}));
+    song(Value::Array(nodes), "k", json!([{"key": "notes", "kind": "events<note>"}]))
+}
+
+// RENDER-42: the guard's own time is a few steps an event, however many notes sound: a kernel that
+// fills its room with notes and then gives its room of Offs of a note it never started, every block,
+// costs at most 16 steps of the guard's table an event.
+#[test]
+fn the_guards_steps_per_event_stay_few() {
+    let (pk, pkg) = with_effects(&[]);
+    let mut r = live_one(&bogged(1), &lane(json!({"clips": []})), &pk);
+    let slot = fx_slot(&r);
+    for k in 0..6 {
+        r.render_block(k * BLOCK as u64).unwrap();
+    }
+    let (steps, events) = r.effect_steps(slot);
+    assert!(r.sounding_notes() >= 2000, "its room of notes sounds: {}", r.sounding_notes());
+    assert!(events > 5 * 6000, "a full room of events each block: {events}");
+    assert!(steps <= 16 * events, "{steps} steps for {events} events");
+    std::fs::remove_dir_all(pkg).ok();
+}
+
+// RENDER-42: and in time: the flood above takes a small part of a block (nightly: it judges speed;
+// the review measured 7.1 ms a block before the guard's table).
+#[test]
+fn a_flooded_guard_takes_a_small_part_of_a_block() {
+    let (pk, pkg) = with_effects(&[]);
+    let mut r = live_one(&bogged(1), &lane(json!({"clips": []})), &pk);
+    let mut runner = Runner::one();
+    let quickest =
+        (0..40).map(|k| r.gauge_block(k * BLOCK as u64, &mut runner, crate::gauge::How::Parts).unwrap().pre).skip(1).min().unwrap();
+    let budget = BLOCK as f64 / SR as f64 * 1e9;
+    assert!((quickest as f64) < budget / 10.0, "the lane pass took {quickest} ns of the block's {budget:.0}");
     std::fs::remove_dir_all(pkg).ok();
 }
 

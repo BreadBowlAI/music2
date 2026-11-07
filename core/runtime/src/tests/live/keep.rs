@@ -1197,6 +1197,50 @@ fn a_note_held_across_an_export_plays_again_at_the_resume() {
     assert_eq!(rig.e.current().unwrap().held_notes(), 0);
 }
 
+// RENDER-1, RENDER-42: a note held through a note effect across an export plays again after the
+// resume, as a lane's does: the plugin the export borrowed gets a NoteOn for the note the note effect
+// still holds, with the id it gave it, which its Off later ends.
+#[test]
+fn a_note_held_through_a_note_effect_plays_again_after_an_export() {
+    let (mut pk, pkg) = super::super::events::with_effects(&[]);
+    m2_plugins::test_main_thread();
+    probe::install();
+    let mut ir = song(
+        json!([{"id": "n", "op": "lane", "lane": "notes"},
+            {"id": "e", "op": "kernel", "kernel": "@test/t:up", "inputs": {"notes": "n"}},
+            {"id": "p", "op": "plugin", "plugin": "clap:m2.probe", "inputs": {"notes": "e"}}]),
+        "p",
+        json!([{"key": "notes", "kind": "events<note>"}]),
+    );
+    assert!(pk.bind_plugins(&mut ir).is_empty());
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let data = with_notes(
+        json!({"clips": [{"id": "c", "start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 4}]}]}),
+        at_bpm(120.0),
+    );
+    let r = build(&flat, &data, &pk, &Owner::discard());
+    let sp = probe::stats(r.plugin_handles()[0]).unwrap();
+    let mut rig = Rig::of(&flat, &data, r);
+    rig.cmd(Cmd::Play);
+    rig.run(BEAT as usize);
+    let held: Vec<(u32, i16)> = rig.e.current().unwrap().plugins()[0].notes.clone();
+    assert_eq!(held.len(), 1, "the note sounds, an octave up: {held:?}");
+    rig.send(Msg::Hold(true));
+    rig.run(4 * BLOCK);
+    let mut lent = rig.e.current().unwrap().info().lend(&flat, &data, &pk, &Continues::identity(&flat));
+    lent.retain(|&i, _| i == node(&flat, "p"));
+    export_with(&flat, &data, &pk, &lent, 5 * BEAT);
+    drop(lent);
+    let (resume, from) = (rig.e.clock() as i64, sp.notes().len());
+    rig.send(Msg::Hold(false));
+    rig.run(BLOCK);
+    let id = held[0].0 as i32;
+    assert_eq!(sp.notes()[from..], [(resume, Note::On, id)], "the note effect's note again, at the resume");
+    rig.run(3 * BEAT as usize);
+    assert_eq!(sp.notes()[from + 1..], [((4 * BEAT) as i64, Note::Off, id)], "its Off ends it, where it was written");
+    std::fs::remove_dir_all(pkg).ok();
+}
+
 // RENDER-25, RENDER-26a: a plan that keeps nothing (an instance made fresh) doesn't chase the
 // chord: the new probe hears nothing until the next note, and the old one plays out the window as
 // a ghost, its notes let go. The reference the with-plugins gate's level check must fail on.

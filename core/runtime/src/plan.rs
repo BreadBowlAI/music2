@@ -479,10 +479,12 @@ impl LaneSlot {
         }
     }
 
-    /// A notes lane's scheduler, while it is here.
-    pub(crate) fn scheduler(&self) -> Option<&NoteScheduler> {
+    /// The pitch and velocity of note `id` while its lane or note effect has it sounding: what
+    /// starts it again in a plugin an export lent (RENDER-1).
+    pub(crate) fn sounding_note(&self, id: u32) -> Option<(f32, f32)> {
         match self {
-            LaneSlot::Notes(Some(s)) => Some(s),
+            LaneSlot::Notes(Some(s)) => s.sounding_note(id),
+            LaneSlot::Effect(Some(fx)) => fx.sounding_note(id),
             _ => None,
         }
     }

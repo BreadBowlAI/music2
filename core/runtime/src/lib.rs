@@ -774,9 +774,9 @@ const PARAM_STEP: usize = 16;
 const OUT_EVENTS: usize = 256;
 
 /// One call's events for a plugin, for the block's frames `lo..hi`: first a choke and a NoteOff
-/// at its first frame for each of `ended`, and a NoteOff for each of `release`; with `again` (the
-/// lane's scheduler, once an export gave the instance back), a NoteOn there for each of `keys` the
-/// scheduler still holds, and the others forgotten; then the lane's note events (already in order)
+/// at its first frame for each of `ended`, and a NoteOff for each of `release`; with `again` (its
+/// lane or note effect, once an export gave the instance back), a NoteOn there for each of `keys`
+/// it still holds, and the others forgotten; then the lane's note events (already in order)
 /// from `*next` on, merged with `params` sampled every [`PARAM_STEP`] frames; one with a value in
 /// `over` (its window holds or latched it) gets that value, only when a send is due (`None`
 /// last sent), never its input's. At one frame
@@ -788,7 +788,7 @@ const OUT_EVENTS: usize = 256;
 fn plugin_events(
     ended: &[(u32, i16)],
     (release, rest): (&[(u32, i16)], bool),
-    again: Option<&sched::NoteScheduler>,
+    again: Option<&LaneSlot>,
     notes: &[Event],
     next: &mut usize,
     params: &mut [(u32, Input, Option<f32>)],
@@ -944,7 +944,7 @@ impl PluginNode {
             // node starts the ones the song still holds again at the resume.
             inst.mark_lent();
         }
-        let mut again = std::mem::take(&mut self.again).then(|| self.notes.and_then(|s| lanes[s].scheduler())).flatten();
+        let mut again = std::mem::take(&mut self.again).then(|| self.notes.map(|s| &lanes[s])).flatten();
         if b.live {
             taken_over(&mut self.params, &mut self.over, inst);
         }
@@ -1638,10 +1638,10 @@ impl Builder<'_> {
                     Kernel { id: kernel, channels: *channels, inputs, values, assets: &read, sample_rate: self.sample_rate, notes: &rooms };
                 let mut inst = KernelInst::new(self.packages, n, &k, shape, self.deadline())?;
                 inst.prewarm(&mut [])?;
-                Some(Box::new(notefx::Held { inst: Box::new(inst), guard }))
+                Some(notefx::Held::new(inst, guard))
             }
         };
-        Ok(notefx::NoteEffect::new(i, from, fed, notes, room_in, sig.meters.len(), held))
+        Ok(notefx::NoteEffect { node: i, from, inputs: fed, notes, room_in, meters: sig.meters.len(), held, fresh: true, told: false })
     }
 
     /// Kernel `k` for node `n` in a voice: its state born in the pool's sandbox for its package,
@@ -3999,6 +3999,16 @@ impl Renderer {
         self.lanes.slots.iter().filter(|l| matches!(l, LaneSlot::Notes(Some(s)) if s.wheels_moved())).count()
     }
 
+    /// The steps note effect `slot`'s guard took to read what its kernel gave, and the events it
+    /// read, so far (tests).
+    #[cfg(test)]
+    pub(crate) fn effect_steps(&self, slot: usize) -> (u64, u64) {
+        match &self.lanes.slots[slot] {
+            LaneSlot::Effect(Some(fx)) => fx.held.as_ref().map_or((0, 0), |h| h.guard.steps),
+            _ => (0, 0),
+        }
+    }
+
     /// Lane `slot`'s events in the last block (tests).
     #[cfg(test)]
     pub(crate) fn lane_events(&self, slot: usize) -> &[Event] {
@@ -4012,7 +4022,7 @@ impl Renderer {
         self.voices().filter_map(|(slot, v)| Some((slot, v.note.filter(|n| n.off >= clock)?))).all(|(slot, n)| {
             match &self.lanes.slots[slot] {
                 LaneSlot::Notes(Some(s)) => s.is_sounding(n.id),
-                LaneSlot::Effect(Some(fx)) => fx.is_sounding(n.id),
+                LaneSlot::Effect(Some(fx)) => fx.sounding_note(n.id).is_some(),
                 _ => false,
             }
         })
