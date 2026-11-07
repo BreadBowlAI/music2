@@ -8,7 +8,7 @@ use std::sync::{LazyLock, Mutex};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// A value's unit: what the checker holds every connection to (PKG-10). A closed set, which no
-/// package adds to: nine units of number, and the switch and the choice (CARD-12), which fit only
+/// package adds to: ten units of number, and the switch and the choice (CARD-12), which fit only
 /// themselves. Written by name (`hz`, `switch`), a choice with its options (`choice<saw|square>`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Unit {
@@ -21,6 +21,8 @@ pub enum Unit {
     Unit01,
     Bipolar,
     Scalar,
+    /// A tempo in beats per minute: the song's, `time.tempo` (RENDER-7). It fits only itself.
+    Bpm,
     /// On or off: 1 or 0 (CARD-11).
     Switch,
     /// One of a list of named options, as its place in the list, 0 to n − 1 (CARD-10). Its unit is
@@ -33,8 +35,8 @@ pub enum Unit {
 
 impl Unit {
     /// The units of number: each has spellings in the SDK's table (PKG-11).
-    pub const ALL: [Unit; 9] =
-        [Unit::Hz, Unit::Db, Unit::Gain, Unit::Semitones, Unit::Seconds, Unit::Beats, Unit::Unit01, Unit::Bipolar, Unit::Scalar];
+    pub const ALL: [Unit; 10] =
+        [Unit::Hz, Unit::Db, Unit::Gain, Unit::Semitones, Unit::Seconds, Unit::Beats, Unit::Unit01, Unit::Bipolar, Unit::Scalar, Unit::Bpm];
 
     /// Its name, as a lane file records it (FMT-10, CARD-15): a choice's is `choice`, whatever its
     /// options; [`Unit`]'s `Display` writes them too.
@@ -49,6 +51,7 @@ impl Unit {
             Unit::Unit01 => "unit01",
             Unit::Bipolar => "bipolar",
             Unit::Scalar => "scalar",
+            Unit::Bpm => "bpm",
             Unit::Switch => "switch",
             Unit::Choice(_) => "choice",
             Unit::Keyset => "keyset",

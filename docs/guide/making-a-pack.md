@@ -60,6 +60,7 @@ Every key is checked: one music2 doesn't know is an error, so a typo never goes 
 | the song's key, `time.key` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than play it without the key |
 | a card's face, `editor.face` (new in 2.4) | `"2.4"` | an older music2 then says in words that your pack needs 2.4, rather than stop at a field it doesn't know |
 | a picture, `view.picture` (new in 2.4) | `"2.4"` | the same: an older music2 says in words that your pack needs 2.4 |
+| a note effect, or the song's tempo, `time.tempo` (new in 2.5) | `"2.5"` | the same: an older music2 says in words that your pack needs 2.5 |
 
 ### music2's promise to your pack
 
@@ -223,6 +224,8 @@ editor: {
 A value the instrument doesn't have (`drum: "kik"`, a knob it hasn't got, `hz(2)` on a knob in semitones) is a red line under that track, and the build refuses it in words; so are kits on an instrument that isn't a drum. A kit's name and a track's are one line of 1 to 24 characters. Kits need `@m2/core` 2.2: say `"@m2/core" = "2.2"` in `m2pkg.toml`.
 
 **Optional inputs.** An input a call may leave out is `.optional()` (any kind of port), and a call gives it by its place, after the inputs a call must give: `drums.drum(notes, hats.hits, { drum: "open hat" })`; left out, the body gets `undefined`. An instrument may have such inputs after its notes and is still listed. One that only listens, `port.notes({ sidechain: true, label: "Cut by" })`, gets a row on its card that picks a track, called by its label ("Listens to" without one). In a kit, a track gives an optional notes input another track's hits by that track's name, an earlier one in the kit: `{ name: "Open hat", drum: "open hat", cutBy: "Hats" }`. Adding the kit writes the import and the export that takes ([Cut by](sounds.md#cut-by)). Ask for `"@m2/core" = "2.3"`.
+
+**Note effects.** A component whose first input is notes and whose output is notes is a *note effect*: it changes notes before an instrument plays them, as an arpeggiator or a chord tool does. Give it a category, as an effect: **+ Note effect** lists it, and adding it wraps the instrument's notes, `pluck(lane.notes("chords"))` becoming `pluck(arp(lane.notes("chords")))`. It is checked as an effect is: its notes come first, any other input is `.optional()`, and it builds from its `insert` alone. A call of one may be turned off with `bypass: true`. Its notes are made by a kernel of your pack that gives notes, which music2 can't play yet (see below). To keep time while the song is stopped it reads `time.tempo`. Ask for `"@m2/core" = "2.5"`.
 
 A pack's own kernels (`[[kernel]]` in `m2pkg.toml`: WebAssembly, made with the Rust kit, byte by byte in `docs/kernel-abi.md`) may take a lane's notes: an input `notes: events<note>` gets them each block, stamped to the sample, with the lane's wheels and sustain pedal. Connect it straight to a notes lane, outside `poly`: `kernel("@alice/drums:machine", { notes: lane.notes("notes") })`, a drum machine that plays its own voices. A kernel can't play notes into an instrument yet: it takes notes, it doesn't make them.
 

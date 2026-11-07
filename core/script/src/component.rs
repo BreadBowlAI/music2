@@ -302,6 +302,14 @@ impl Descriptor {
         self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
     }
 
+    /// Whether editors offer it as a note effect (PKG-21): a category, notes first that a call must
+    /// give, and notes out. It goes before what plays notes, as an effect goes after a sound.
+    pub fn is_note_effect(&self) -> bool {
+        self.editor.category.is_some()
+            && self.inputs.first().is_some_and(|i| i.kind == PortKind::Notes && !i.optional && !i.many)
+            && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Notes)
+    }
+
     /// Whether a new track can play it (PKG-7): notes first, its only input but those a call may leave
     /// out (PKG-20), and audio out. The + Track list offers it only when it has a category, which
     /// groups it.
@@ -337,6 +345,11 @@ impl Catalog {
     /// The components editors offer as effects.
     pub fn effects(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
         self.components.values().filter(|d| d.is_effect())
+    }
+
+    /// The components editors offer as note effects (PKG-21).
+    pub fn note_effects(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
+        self.components.values().filter(|d| d.is_note_effect())
     }
 
     /// The components a new track can play.

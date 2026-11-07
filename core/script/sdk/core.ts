@@ -5,7 +5,7 @@
 // Rust checker, which is what actually enforces kinds and units. The types below
 // exist so editors can help.
 
-export type Unit = "hz" | "db" | "gain" | "semitones" | "seconds" | "beats" | "unit01" | "bipolar" | "scalar";
+export type Unit = "hz" | "db" | "gain" | "semitones" | "seconds" | "beats" | "unit01" | "bipolar" | "scalar" | "bpm";
 
 export type AudioKind = { readonly audio: true };
 export type ControlKind<U extends Unit = Unit> = { readonly control: U };
@@ -156,6 +156,7 @@ const UNITS = {
   frac: ["unit01", 1, true],
   bipolar: ["bipolar", 1, true],
   scalar: ["scalar", 1, true],
+  bpm: ["bpm", 1, true],
 } as const satisfies Record<string, readonly [Unit, number, boolean]>;
 
 /** A unit constructor's name, such as `hz` or `ms`. */
@@ -183,6 +184,7 @@ export const beats = unitFn("beats");
 export const frac = unitFn("frac");
 export const bipolar = unitFn("bipolar");
 export const scalar = unitFn("scalar");
+export const bpm = unitFn("bpm");
 
 /** The unit table as the build emits it (PKG-11): every spelling, its unit and scale, and the canonical one per unit. */
 function unitTable(): string {
@@ -789,7 +791,7 @@ type IrFrame = {
   parent?: number;
   options?: number;
   sidechain?: { input: string; ref: string }[];
-  /** Turned off with `bypass: true` (Next D1): the call gives its audio input on. */
+  /** Turned off with `bypass: true` (Next D1): the call gives its first input on, its audio or its notes. */
   bypass?: boolean;
 };
 
@@ -1705,8 +1707,9 @@ export type Descriptor = {
   positional?: readonly string[];
   /**
    * What an editor offers: `category`, a free string the UI groups (PKG-7), lists it as an
-   * effect when it takes audio first, or as an instrument a new track can play when it takes
-   * notes first; `insert` is written when the effect is added, each value in its control's
+   * effect when it takes audio first, as a note effect when it takes notes first and gives notes
+   * (PKG-21), or as an instrument a new track can play when it takes notes first and gives audio;
+   * `insert` is written when an effect or a note effect is added, each value in its control's
    * spelling; `notes` names what an instrument's notes play, by MIDI note (`{ 36: "Kick" }`), for
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
    * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
@@ -1842,7 +1845,7 @@ type FirstArg<D> = D extends { signature: Signature<infer F extends (...args: an
   : Derived<D> extends [infer H, ...any[]] ? H : never;
 /**
  * Whether a call can be turned off with `bypass: true` (Next D1, Q25): it takes audio first and
- * gives audio, and declares no `bypass` of its own.
+ * gives audio, or notes first and gives notes (PKG-21), and declares no `bypass` of its own.
  */
 type Bypassable<D> = "bypass" extends keyof Ctls<D> | keyof Sets<D>
   ? false
@@ -1850,7 +1853,9 @@ type Bypassable<D> = "bypass" extends keyof Ctls<D> | keyof Sets<D>
     ? false
     : [FirstArg<D>] extends [Audio]
       ? [Out<D>] extends [Audio] ? true : false
-      : false;
+      : [FirstArg<D>] extends [Events]
+        ? [Out<D>] extends [Events] ? true : false
+        : false;
 
 /**
  * The type of a component's calls: its signature at each length the required slots allow, each
@@ -2089,7 +2094,8 @@ type Component = {
   params: Param[];
   /**
    * Whether a call may be turned off with `bypass: true` (Next D1, Q25): its first argument is an
-   * audio input and its output is audio, and it declares no `bypass` of its own.
+   * audio input and its output is audio, or notes and notes (PKG-21), and it declares no `bypass`
+   * of its own.
    */
   bypassable: boolean;
   /** Where `component()` was called, as `file:line:col`. */
@@ -2120,7 +2126,7 @@ function definedAt(): string | undefined {
 /** The package a module file belongs to, as the host knows it: `{ package: "std", module: "std/fx", file: "std/src/fx.ts" }`. */
 type Home = { package: string | null; module: string; file: string };
 
-const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar"];
+const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar", "bpm"];
 /** The words for a knob, an input or a lane of the unit `keyset`, which none can be (VOX-12). */
 const NO_KEY_KNOB = "the song's key is no knob or lane: read it with time.key";
 const NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -2396,9 +2402,13 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (knobs.length > 6) fail(`editor.face names ${knobs.length} values (${knobs.join(", ")}): a face has six at most`);
   }
 
-  // A category on a component that takes notes and makes audio lists it as an instrument, which
-  // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
-  const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
+  // A category on a component that takes notes first and gives notes lists it as a note effect
+  // (PKG-21), checked as an effect is below. One that takes notes and makes anything else is an
+  // instrument, which a new track plays as `<name>(lane.notes(…))`, so it must build from its notes
+  // alone.
+  const notesFirst = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
+  const noteEffect = notesFirst && output?.kind === "notes";
+  const instrument = notesFirst && !noteEffect;
   if (instrument) {
     // Others it may take only as a call may leave them out (PKG-20): it still builds from its notes alone.
     const [first, ...rest] = inputs;
@@ -2413,19 +2423,21 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     ];
     if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
   } else if (editor.category !== undefined) {
-    // An effect is added after any audio as `<name>(<audio>, <insert>)`, so that must be a whole call.
+    // An effect is added after any audio as `<name>(<audio>, <insert>)`, and a note effect around
+    // the notes of what plays them as `<name>(<notes>, <insert>)` (PKG-21), so that must be a whole call.
+    const [kind, what] = noteEffect ? ["notes", "a note effect (editor.category, notes first and notes out)"] : ["audio", "an effect (editor.category)"];
     const [first, ...rest] = inputs;
-    if (!first || first.spec.kind !== "audio" || lead[0] !== first) fail("an effect (editor.category) takes audio as its first argument");
+    if (!first || first.spec.kind !== kind || lead[0] !== first) fail(`${what} takes ${kind} as its first argument`);
     // Others it may take only as a call may leave them out (PKG-18): a key it listens to.
     const must = rest.find((i) => !i.spec.many && !i.spec.optional);
-    if (must) fail(`an effect (editor.category) has one input a call must give, not "${must.name}" too: declare it .optional()`);
-    if (output?.kind !== "audio") fail("an effect (editor.category) outputs audio");
+    if (must) fail(`${what} has one input a call must give, not "${must.name}" too: declare it .optional()`);
+    if (output?.kind !== kind) fail(`${what} outputs ${kind}`);
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
       ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     const needed = required.filter((n) => !insert.some((x) => x.slot === n));
-    if (needed.length) fail(`an effect (editor.category) must build from its insert alone, which leaves out "${needed[0]}"`);
+    if (needed.length) fail(`${what} must build from its insert alone, which leaves out "${needed[0]}"`);
   }
 
   // Kits (KIT-3): a drum's, each by a short name, its tracks each a short name, once in the kit,
@@ -2564,7 +2576,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     },
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
-  const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
+  // Audio first and audio out, or notes first and notes out (PKG-21): what it takes, it gives on.
+  const bypassable = (first?.spec.kind === "audio" || first?.spec.kind === "notes") && !first.spec.many && output?.kind === first.spec.kind && !names.has("bypass");
   return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json, groups: groups.map((g) => g.name), pictures };
 }
 
@@ -2713,7 +2726,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
     }
     const out = produced(site, body(...c.inputs.map((i) => inputs.get(i.name)), params));
     // Turned off (Next D1, Q24): the body ran as always, so its frame and knobs are there to set,
-    // and the call gives its audio input on. Nothing reads its output, so nothing of it is made.
+    // and the call gives its first input on, its audio or its notes. Nothing reads its output, so nothing of it is made.
     return bypass ? inputs.get(c.inputs[0].name) : out;
   } finally {
     closeFrame(m, frame);
@@ -2745,7 +2758,7 @@ function parse(
   let bypass = false;
   const options = (o: Record<string, unknown>, at: number) => {
     for (const k of Object.keys(o)) {
-      // Any effect can be turned off (Next D1, Q25); a call of anything else can't.
+      // Any effect or note effect can be turned off (Next D1, Q25, PKG-21); a call of anything else can't.
       if (k === "bypass" && c.bypassable) {
         const v = o[k];
         if (v !== undefined && typeof v !== "boolean") fail(c.id, `bypass must be true or false, not ${shown(v)}`);
@@ -2753,7 +2766,7 @@ function parse(
         continue;
       }
       if (k === "bypass" && !c.controls.some((x) => x.name === k) && !c.settings.some((x) => x.name === k)) {
-        fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio can be (options: ${names()})`);
+        fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio, or notes first and gives notes, can be (options: ${names()})`);
       }
       const isSlot = c.controls.some((x) => x.name === k) || c.settings.some((x) => x.name === k);
       if (!isSlot) {
@@ -3099,7 +3112,7 @@ export type LaneOptions = {
   shared?: boolean;
 };
 
-/** Song time: where the song is, whether it plays, and its key. Never the engine's own clock (RENDER-7). */
+/** Song time: where the song is, whether it plays, its key and its tempo. Never the engine's own clock (RENDER-7). */
 export type Time = {
   /** The song's position in beats. */
   readonly beats: Control<"beats">;
@@ -3109,6 +3122,8 @@ export type Time = {
   readonly playing: Control<"unit01">;
   /** The song's key, as a set of notes (VOX-12): for a kernel that follows the key, as Tune does. Every note with no key set. */
   readonly key: Keyset;
+  /** The song's tempo where it is, in beats per minute (2.5.0): for a sound that keeps time while the song is stopped. */
+  readonly tempo: Control<"bpm">;
 };
 
 /** Each component call's time nodes, by the scope they are made in, then `<frame>:<what>`. */
@@ -3120,11 +3135,11 @@ const callTimes = new WeakMap<Scope, Map<string, Signal>>();
  * being built (a voice has its own): so the node sits inside the call that reads it, in the graph
  * view and in the delta's names (WRITE-8), and adding a call beside another renames neither's.
  */
-function timeNode(of: "beats" | "seconds" | "playing" | "key"): Signal {
+function timeNode(of: "beats" | "seconds" | "playing" | "key" | "tempo"): Signal {
   const scope = need(`time.${of}`);
   const m = scope.module;
   // A keyset is no number's unit, so the checker alone knows it (VOX-12).
-  const unit: Unit | undefined = of === "playing" ? "unit01" : of === "key" ? undefined : of;
+  const unit: Unit | undefined = of === "playing" ? "unit01" : of === "key" ? undefined : of === "tempo" ? "bpm" : of;
   const open = infoOf(m).open;
   if (!open.length) {
     let s = m.time.get(of);
@@ -3141,7 +3156,7 @@ function timeNode(of: "beats" | "seconds" | "playing" | "key"): Signal {
 
 /**
  * Song time, for a component's body as for a track's: `time.beats`, `time.seconds`,
- * `time.playing` and `time.key`. The same as `ctx.time`.
+ * `time.playing`, `time.key` and `time.tempo`. The same as `ctx.time`.
  */
 export const time: Time = Object.freeze({
   get beats() {
@@ -3155,6 +3170,9 @@ export const time: Time = Object.freeze({
   },
   get key() {
     return timeNode("key") as Keyset;
+  },
+  get tempo() {
+    return timeNode("tempo") as Control<"bpm">;
   },
 });
 

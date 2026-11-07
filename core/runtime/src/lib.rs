@@ -191,6 +191,8 @@ struct Block {
     seconds: [f32; BLOCK],
     /// Beat of each frame, in full precision, for lane lookups.
     beats64: [f64; BLOCK],
+    /// The song's tempo at each frame's beat, in beats per minute (RENDER-7).
+    tempo: [f32; BLOCK],
     /// The song's key, the same at every frame (VOX-12).
     keyset: f32,
     sample_rate: f64,
@@ -1896,6 +1898,10 @@ fn step<R: Reads>(
             out[0][seg.range(0)].copy_from_slice(&b.seconds[seg.off..seg.off + n]);
             Ok(())
         }
+        Exec::Time(TimeOf::Tempo) => {
+            out[0][seg.range(0)].copy_from_slice(&b.tempo[seg.off..seg.off + n]);
+            Ok(())
+        }
         Exec::Time(TimeOf::Key) => {
             out[0][seg.range(0)].fill(b.keyset);
             Ok(())
@@ -3333,6 +3339,7 @@ impl Renderer {
             beats: [0.0; BLOCK],
             seconds: [0.0; BLOCK],
             beats64: [0.0; BLOCK],
+            tempo: [0.0; BLOCK],
             keyset: self.keyset,
             sample_rate: self.sample_rate,
             strict: self.strict,
@@ -3346,6 +3353,7 @@ impl Renderer {
                 b.seconds[f as usize] = s as f32;
                 b.beats[f as usize] = beat as f32;
                 b.beats64[f as usize] = beat;
+                b.tempo[f as usize] = self.tempo.bpm_at(beat) as f32;
             }
         }
         if self.plan.plugins {
