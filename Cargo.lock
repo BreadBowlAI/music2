@@ -2540,7 +2540,7 @@ checksum = "f9f8bd3e56ce4dfc153cf470fffbfa98c7620958b312ca5c3a4b8d5181fd13c6"
 
 [[package]]
 name = "m2"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hound",
@@ -2566,7 +2566,7 @@ dependencies = [
 
 [[package]]
 name = "m2-editor"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hound",
@@ -2592,7 +2592,7 @@ dependencies = [
 
 [[package]]
 name = "m2-gates"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "m2-editor",
@@ -2609,7 +2609,7 @@ dependencies = [
 
 [[package]]
 name = "m2-ir"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -2621,7 +2621,7 @@ version = "0.1.0"
 
 [[package]]
 name = "m2-os"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "midir",
@@ -2629,7 +2629,7 @@ dependencies = [
 
 [[package]]
 name = "m2-play"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "cpal",
@@ -2646,7 +2646,7 @@ dependencies = [
 
 [[package]]
 name = "m2-plugins"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap-sys",
@@ -2658,14 +2658,14 @@ dependencies = [
 
 [[package]]
 name = "m2-pool"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "m2-os",
 ]
 
 [[package]]
 name = "m2-runtime"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2688,7 +2688,7 @@ dependencies = [
 
 [[package]]
 name = "m2-script"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "libc",
  "libm",
@@ -2703,7 +2703,7 @@ dependencies = [
 
 [[package]]
 name = "m2-server"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "axum",
@@ -2728,7 +2728,7 @@ dependencies = [
 
 [[package]]
 name = "m2-session"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "hound",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "m2-song"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "icu_normalizer",
@@ -2903,7 +2903,7 @@ dependencies = [
 
 [[package]]
 name = "music2-desktop"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "dirs",
