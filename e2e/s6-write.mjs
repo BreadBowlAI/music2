@@ -16,12 +16,14 @@ const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandb
 const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 1000 });
 const consoleErrors = [];
-// The refused writes answer 423; with the project closed between parts, the state answers 400.
+// The refused writes answer 423; with the project closed between parts, the state answers 400, and
+// so does a picture asked for as it closes (the kick's Drum's, CARD-141), saying the song changed.
 page.on("console", (m) => m.type() === "error" && !/(423 \(Locked\)|400 \(Bad Request\))/.test(m.text()) && consoleErrors.push(m.text()));
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
 // Which request a "Failed to load resource" error was.
 page.on("response", (r) => {
   const what = `${r.status()} ${r.request().method()} ${new URL(r.url()).pathname}`;
+  if (what === "400 POST /api/graph/picture") return void r.text().then((t) => /the open song changed/.test(t) || consoleErrors.push(`${what} ${t}`));
   if (r.status() >= 400 && r.status() !== 423 && what !== "400 GET /api/graph") consoleErrors.push(what);
 });
 await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);

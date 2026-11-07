@@ -426,6 +426,10 @@ impl Graph {
     pub fn picture(&self, token: u64, revision: u64, client: &str, (module, node, view): (&str, &str, &str), on: bool) -> Result<Value> {
         let found = {
             let mut cp = self.inner.control.lock();
+            // A stop for a song no longer open ends nothing: its asks ended with it (CARD-67).
+            if !on && cp.open.as_ref().is_none_or(|o| o.engine.token != token) {
+                return Ok(json!({}));
+            }
             let open = cp.open.as_ref().filter(|o| o.engine.token == token).context("the open song changed; refresh it first")?;
             let code = open.revs.code_rev(revision);
             let now = Instant::now();
