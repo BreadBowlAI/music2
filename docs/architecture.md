@@ -1960,11 +1960,11 @@ A tone is `main`, `soft` or `faint`, never a colour. Every length is counted in 
 - *Why:* a picture on its face and on a tab would ask for its shapes and its live layers twice.
 - *Today:* since track `dress2b`. Tested by `a_face_picture_is_on_no_tab`.
 
-**CARD-143.** std's `limit` MUST have a picture `level` on its face beside its ceiling, in place of CARD-94's: its last 3 seconds (`ceilingPicture`), the level going in (faint) and coming out below 0 dB, and how far it turned down (its meter `reduction`, [ABI-14](#kernel-abi-reservations)) above 0, up to 12, on one axis in dB from −48; guide lines at 0 dB and at now (the right edge), the ceiling's line, and a dot on it that moves the ceiling up and down, under the pointer (`ceiling`). Its words: "Turns peaks down so they stay under −1 dB. Drag the line to move the ceiling".
-- *Why:* the design's §5.2: the level history with the ceiling line, to drag. The guide line at now keeps its axis of time whole (CARD-102).
+**CARD-143.** std's `limit` MUST have a picture `level` on its face beside its ceiling, in place of CARD-94's: its last 3 seconds (`ceilingPicture`), the level going in (faint) and coming out, on one axis in dB from −36 to +6, where how far it turned down is the gap between the two above the ceiling; a guide line at now (the right edge), the ceiling's line, and a dot on it that moves the ceiling up and down, under the pointer (`ceiling`). Its words: "Turns peaks down so they stay under −1 dB. Drag the line to move the ceiling".
+- *Why:* the design's §5.2: the level history with the ceiling line, to drag. The guide line at now keeps its axis of time whole (CARD-102). How far it turns down, drawn above 0 dB on the same axis, put the usual −1 dB ceiling's line on the 0 dB one, and crushed the loud part a limiter is set by into a few pixels (review U11); the gap between in and out says it.
 - *Today:* since track `dress2b`: `ceilingPicture` and `ceiling` in `std/src/pictures.ts`, `std/src/fx.ts`. Tested by `limit_and_master_draw_their_ceiling_to_drag` and the `instruments` suite (the ceiling's dot dragged writes the ceiling).
 
-**CARD-144.** std's `master` MUST have the same picture, `level`, on its face beside its gain and ceiling: the song's last 3 seconds, its limiter's reduction read from inside its call ([TAP-11](#taps)). Its words: "The song's last 3 seconds: no peak passes its ceiling, −1 dB. Drag the line to move it".
+**CARD-144.** std's `master` MUST have the same picture, `level`, on its face beside its gain and ceiling: the song's last 3 seconds going in and coming out. Its words: "The song's last 3 seconds: no peak passes its ceiling, −1 dB. Drag the line to move it".
 - *Why:* the design's §5.3.
 - *Today:* since track `dress2b`: `std/src/mix.ts`. Tested by `limit_and_master_draw_their_ceiling_to_drag` and the `instruments` suite (the Master's picture moves while the song plays).
 

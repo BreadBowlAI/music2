@@ -122,7 +122,7 @@ export const master = component(
     inputs: { in: port.audio() },
     controls: { db: control.db(0).range(-60, 12), ceiling: control.db(-1).range(-24, 0) },
     output: port.audio(),
-    // Its ceiling over the song's last seconds, to drag, from its limiter's own meter (CARD-144).
+    // Its ceiling over the song's last seconds, to drag (CARD-144).
     editor: { views: { level: ceilingPicture() }, face: ["level", "db", "ceiling"] },
   },
   // Stereo from the start, sample for sample: a mono mix whose first channel is panned turns

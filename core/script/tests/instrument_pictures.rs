@@ -221,21 +221,31 @@ fn the_drum_draws_its_hit() {
     assert_eq!(d["words"], "Cymbal, one hit as it sounds: 1 s of it. Click it to hear it; drag its start for the punch");
 }
 
-// CARD-143, CARD-144: std's Limit and Master draw their ceiling over their last seconds: guide lines
-// at 0 dB, at now and at the ceiling, and a dot on the ceiling's line that moves it up and down.
+// CARD-143, CARD-144: std's Limit and Master draw their ceiling over their last seconds: the level
+// going in and coming out, from −36 to +6 dB, a guide line at now and one at the ceiling, and a dot on
+// the ceiling's line that moves it up and down. No line at 0 dB and no reduction above it: at the
+// usual −1 dB the ceiling's line read as the 0 dB one (review U11).
 #[test]
 fn limit_and_master_draw_their_ceiling_to_drag() {
     let runner = Runner::new();
+    let catalog = m2_script::describe(&packages());
     for (cid, said) in [
         ("std:limit", "Turns peaks down so they stay under −3 dB. Drag the line to move the ceiling"),
         ("std:master", "The song's last 3 seconds: no peak passes its ceiling, −3 dB. Drag the line to move it"),
     ] {
         let d = draw(&runner, cid, "level", json!({"ceiling": -3, "db": 0})).unwrap();
-        assert_eq!(kinds(&d), ["mark", "mark", "mark", "handle"], "{cid}");
+        assert_eq!(kinds(&d), ["mark", "mark", "handle"], "{cid}");
         assert_eq!(dots(&d), ["y=ceiling"]);
-        assert_eq!(of(&d, "mark")[2]["at"], -3.0);
+        let marks = of(&d, "mark");
+        assert_eq!((&marks[0]["axis"], &marks[0]["at"]), (&json!("x"), &json!(3.0)));
+        assert_eq!((&marks[1]["axis"], &marks[1]["at"]), (&json!("y"), &json!(-3.0)));
         assert_eq!(of(&d, "handle")[0]["y"], -3.0);
         assert_eq!(d["words"], said);
+        let view = catalog.components[cid].editor.views.iter().find(|v| v.name == "level").unwrap();
+        let m2_script::component::ViewOf::Picture { y, live, .. } = &view.of else { panic!("{cid}'s level is a picture") };
+        assert_eq!((y.lo, y.hi), (-36.0, 6.0), "{cid}");
+        let layers = serde_json::to_string(live).unwrap();
+        assert!(!layers.contains("meter"), "{cid}: the levels in and out only: {layers}");
     }
 }
 
