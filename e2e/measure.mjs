@@ -1,10 +1,10 @@
-// Track measure: curves and hits measured from the sound itself (CARD-80 to CARD-86). A test pack,
+// Track measure: curves and hits measured from the sound itself (CARD-80 to CARD-85). A test pack,
 // @test/measured, has a lowpass, Tone, whose face is its response: the curve the server measures by
 // playing a click through a copy of the call; and an instrument, Thump, whose face is its hit: one
 // note's sound, played by a copy of the call. Device's chain draws each. Dragging Tone's cutoff knob
 // moves the measured curve while the knob is held (the server measures it again at the dragged
 // value, CARD-85); stepping Thump's decay knob draws its hit again, shorter. An agent asking for the
-// picture reads the points the window drew (CARD-86). Each state linted.
+// picture reads the points the window drew (CARD-80). Each state linted.
 //
 //   node e2e/measure.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -102,7 +102,7 @@ await view("graph");
 const card = '[data-testid=chain] [data-module="tone"] [data-node="tone"]';
 const pic = `${card} [data-picture="curve"]`;
 const curve = () => page.$eval(`${pic} polyline[data-response]`, (e) => e.getAttribute("points")).catch(() => null);
-check(await until(async () => ((await curve()) ?? "").split(" ").length === 256, 20000), `Tone's face draws its measured curve, 256 points (CARD-86): ${((await curve()) ?? "").split(" ").length}`);
+check(await until(async () => ((await curve()) ?? "").split(" ").length === 256, 20000), `Tone's face draws its measured curve, 256 points (CARD-80): ${((await curve()) ?? "").split(" ").length}`);
 const drawnCount = () => page.$eval(pic, (e) => Number(e.dataset.drawn ?? 0));
 await linted(card, "the measured curve's card");
 await page.screenshot({ path: `${ROOT}/measure-curve.png` });
@@ -135,7 +135,7 @@ check(await until(async () => read("tracks/tone.ts") !== code, 8000), "the relea
 const cutoff = Number(/cutoff: (\d+)/.exec(read("tracks/tone.ts"))?.[1]);
 check(cutoff > 2000, `the drag moved the cutoff up: ${cutoff}`);
 
-// An agent reads the same points, as numbers (CARD-86).
+// An agent reads the same points, as numbers (CARD-80).
 const state = (await api("")).body;
 const node = state.view.modules.find((m) => m.key === "tone").nodes.find((n) => n.title === "Tone");
 const asked = await agent("/api/graph/picture", { session: state.session, revision: state.view.revision, client: "reader", module: "tone", node: node.id, view: "curve", on: true });
@@ -166,7 +166,7 @@ await page.click('[data-module-tab="thump"] [data-testid=track-label]');
 const card2 = '[data-testid=chain] [data-module="thump"] [data-node="thump"]';
 const pic2 = `${card2} [data-picture="hit"]`;
 const hit = () => page.$eval(`${pic2} polygon[data-hit]`, (e) => e.getAttribute("points")).catch(() => null);
-check(await until(async () => ((await hit()) ?? "").split(" ").length === 512, 20000), `Thump's face draws its hit, 256 columns there and back (CARD-86): ${((await hit()) ?? "").split(" ").length}`);
+check(await until(async () => ((await hit()) ?? "").split(" ").length === 512, 20000), `Thump's face draws its hit, 256 columns there and back (CARD-80): ${((await hit()) ?? "").split(" ").length}`);
 await linted(card2, "the hit's card");
 await page.screenshot({ path: `${ROOT}/measure-hit.png` });
 // How tall the hit is in its last half, in pixels: a shorter decay leaves less.

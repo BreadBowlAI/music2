@@ -1,4 +1,4 @@
-//! Curves measured from the sound itself (CARD-80 to CARD-86): a picture's `p.response()` and
+//! Curves measured from the sound itself (CARD-80 to CARD-85): a picture's `p.response()` and
 //! `p.hit()`, worked out from an offline copy of its call, never drawn from a pack's own maths.
 //!
 //! - **The copy** ([`copy`]): the call's own nodes, as the accepted revision built them (its frame

@@ -194,7 +194,7 @@ export const drawn = component(
 );
 "#;
 
-// CARD-97, CARD-99: std/pictures' lowpass, drawn from its maths, is std's state-variable lowpass as
+// CARD-30, CARD-99: std/pictures' lowpass, drawn from its maths, is std's state-variable lowpass as
 // its sound measures it, within 0.5 dB wherever it is above −60 dB up to a twelfth of the rate
 // (4 kHz at 48 kHz), where a filter made digital still follows its analog curve.
 #[test]

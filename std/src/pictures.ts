@@ -82,7 +82,7 @@ export function lowpassDb(f: number, cutoff: number, q: number): number {
 export const resonanceQ = (r: number) => 0.5 * 60 ** Math.min(1, Math.max(0, r));
 
 /**
- * A lowpass drawn from its maths (CARD-97): a two-pole (12 dB per octave) curve at `cutoff` with a
+ * A lowpass drawn from its maths (CARD-30): a two-pole (12 dB per octave) curve at `cutoff` with a
  * bump the `q` makes taller, or, with `resonance`, a level from 0 to 1 drawn as `resonanceQ`. For a
  * filter inside an instrument's voices, where music2 can't play a click through it (CARD-81); a
  * filter a sound plays on its own is measured (`p.response()`). Its one dot moves the cutoff across

@@ -1,4 +1,4 @@
-// A call's settings on its card (CARD-7), with its knobs, in its descriptor's order: a menu for a
+// A call's settings on its card (taste.md DV-8), with its knobs, in its descriptor's order: a menu for a
 // choice, a switch for on or off, a number box for a number (it commits on Enter or when it loses
 // the focus, never on each key), a recording's waveform (a WAV or FLAC dropped on it replaces it), a
 // menu of the song's tracks, and a sentence for regions and a keymap. A setting decides what is
@@ -19,7 +19,7 @@ import { MenuRow, Popover, Segment } from "./ui";
 const ROW_H = 28;
 const RECORDING_H = 32;
 
-/** What the card says of every setting when pointed at (CARD-7): a change rebuilds the sound. */
+/** What the card says of every setting when pointed at (taste.md DV-8): a change rebuilds the sound. */
 export const REBUILDS = "Changing it rebuilds the sound, so a note held now may stop.";
 
 /** The height of a setting's row. */
@@ -62,7 +62,7 @@ interface Props {
   card: string;
   /** The card's id: what a recording's drop names. */
   call: string;
-  /** Its id for `m2 set` in its tooltip (a chain card's All, CARD-43). */
+  /** Its id for `m2 set` in its tooltip (a chain card's All, taste.md DV-12). */
   ided?: boolean;
 }
 
@@ -172,7 +172,7 @@ export function MenuValue({ value, label, off, title, onPick }: { value: { value
 }
 
 /**
- * A choice of five options or fewer, all in sight (CARD-45): a segmented control, one click a pick.
+ * A choice of five options or fewer, all in sight (taste.md DV-14): a segmented control, one click a pick.
  * The option now is raised; a default not written yet reads in `fg-muted` (HOME-1).
  */
 export function Segmented({ value, label, off, title, onPick }: { value: { value: unknown; written?: boolean; options?: Choice[] }; label: string; off: string | null; title?: string; onPick: (v: Choice["value"]) => void }) {

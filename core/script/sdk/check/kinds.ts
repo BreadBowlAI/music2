@@ -30,7 +30,7 @@ export const every = component(
     output: port.audio(),
     editor: {
       category: "Instruments",
-      // An envelope and a filter are std's pictures (CARD-96, CARD-97).
+      // An envelope and a filter are std's pictures (CARD-96, CARD-30).
       views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys("regions"), scope: view.scope() },
       groups: { Sound: ["shape", "sub", "scope"], Filter: ["filter", "cutoff", "q"], Amp: ["amp", "attack", "decay", "sustain", "release"] },
     },

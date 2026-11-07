@@ -2,7 +2,7 @@
 // A knob a folded card hides is still a knob to the rest of the app: Show on an agent's pointer at
 // it unfolds its card (AGENT-6), and the "N more" row stands for it (its glow, AGENT-5).
 //
-// And the chain's cards (CARD-43 to CARD-47): each card's size and the tab it shows. The window's
+// And the chain's cards (taste.md DV-12 to DV-16): each card's size and the tab it shows. The window's
 // own, as folding is: none of it is the song's. Whether Device shows the chain is the shell's.
 
 import { create } from "zustand";
@@ -26,7 +26,7 @@ export const useFolded = create<{ ids: Set<string>; flip: (id: string) => void; 
     }),
 }));
 
-/** A chain card's size (CARD-44). */
+/** A chain card's size (taste.md DV-13). */
 export type CardSize = "folded" | "normal" | "expanded";
 
 export const useCards = create<{
@@ -45,7 +45,7 @@ export const useCards = create<{
 
 /**
  * Show's way to knob `knob`: unfold the patch's card that hides it; and on the chain's card, open a
- * Folded card to Normal and show the tab that holds it, when its face doesn't (CARD-47).
+ * Folded card to Normal and show the tab that holds it, when its face doesn't (taste.md DV-16).
  */
 export function unfoldFor(knob: string) {
   const { ids, open } = useFolded.getState();

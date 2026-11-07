@@ -1,5 +1,5 @@
 // Device (taste.md §3.5): a sound that is a chain as its cards left to right, with no ports and no
-// cables (CARD-42), else its patch. Each chain card is a frame (CARD-43 to CARD-47): a header with
+// cables (taste.md DV-11), else its patch. Each chain card is a frame (taste.md DV-12 to DV-16): a header with
 // its three sizes, its face drawn big, its tabs (its groups, then All), one tab's values in a grid,
 // and the code it writes. The sizes, the tabs and the Chain · Patch choice are the window's own.
 
@@ -20,20 +20,20 @@ import { CardTools, Fed, InputRow, KeyLine, ListensRow, Locked, MixerCard, NodeG
 import { SettingRow, shown } from "./Settings";
 import { Segment } from "./ui";
 
-/** The widths of a chain card (CARD-44), in px: Folded, and Normal without and with a picture on its face; Expanded is twice Normal. */
+/** The widths of a chain card (taste.md DV-13), in px: Folded, and Normal without and with a picture on its face; Expanded is twice Normal. */
 const FOLDED_W = 240;
 const NORMAL_W = 380;
 const PICTURE_W = 460;
-/** A knob's size on the face, and on a tab (CARD-45). */
+/** A knob's size on the face, and on a tab (taste.md DV-14). */
 const FACE_KNOB = 36;
 const TAB_KNOB = 28;
-/** Expanded draws its face bigger (CARD-44): its knobs this size. */
+/** Expanded draws its face bigger (taste.md DV-13): its knobs this size. */
 const BIG_KNOB = 44;
-/** How tall a picture is on a Normal card's face, one or two of them, so the card fits the dock's first height (CARD-43); Expanded draws each at its own size. */
+/** How tall a picture is on a Normal card's face, one or two of them, so the card fits the dock's first height (taste.md DV-12); Expanded draws each at its own size. */
 const FACE_PICTURE_H = [104, 76];
 
 /**
- * Device: the chain where the sound is one and the window wants it, else the patch (CARD-42). The
+ * Device: the chain where the sound is one and the window wants it, else the patch (taste.md DV-11). The
  * Chain · Patch switch is always in its tools; Chain is greyed, saying why, where the sound isn't a
  * chain. The patch of a sound that is a chain says Chain is there (review F15).
  */
@@ -86,7 +86,7 @@ function Chain({ graph, module, chain }: { graph: GraphState; module: ModuleView
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
     return (key: string) => by.get(key);
   }, [graph.view.modules]);
-  // What drives each input no cable names, for the "← Blend" its row reads (CARD-42).
+  // What drives each input no cable names, for the "← Blend" its row reads (taste.md DV-11).
   const fed = useMemo(() => {
     const named = new Map<string, string>();
     for (const e of module.port_edges) {
@@ -173,7 +173,7 @@ const SIZES: { size: CardSize; Icon: typeof Minus; says: string }[] = [
   { size: "expanded", Icon: Maximize2, says: "Expand" },
 ];
 
-/** One chain card: header, face, tabs and the code line (CARD-43). */
+/** One chain card: header, face, tabs and the code line (taste.md DV-12). */
 function Frame({
   graph,
   module,
@@ -211,7 +211,7 @@ function Frame({
   );
   const grid = (rows: CardRow[], cell: number) => <div className="grid grid-cols-[repeat(auto-fill,64px)] justify-between gap-y-1 px-3 py-1">{rows.map((r) => row(r, cell))}</div>;
   // The face: its pictures beside its values, so a Normal card fits the dock's first height (review
-  // F12); Expanded draws its values bigger, under its pictures (CARD-44).
+  // F12); Expanded draws its values bigger, under its pictures (taste.md DV-13).
   const pictures = frame.face.filter((r) => "view" in r);
   const values = frame.face.filter((r) => !("view" in r));
   const face =
@@ -353,7 +353,7 @@ function Frame({
 
 const key = (r: CardRow) => ("input" in r ? `input:${r.input}` : "setting" in r ? `setting:${r.setting}` : `view:${r.view}`);
 
-/** One row of a chain card, by what it names: an input, a setting or a view (CARD-45). */
+/** One row of a chain card, by what it names: an input, a setting or a view (taste.md DV-14). */
 function RowOf({
   row,
   node,
@@ -426,8 +426,8 @@ function RowOf({
 }
 
 /**
- * A Folded card's one sentence (CARD-44): its face's values, "Cutoff 2.4 kHz · Attack 5 ms". It
- * stands for every knob it hides (CARD-47), and a click opens the card to Normal.
+ * A Folded card's one sentence (taste.md DV-13): its face's values, "Cutoff 2.4 kHz · Attack 5 ms". It
+ * stands for every knob it hides (taste.md DV-16), and a click opens the card to Normal.
  */
 function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
   const hides = node.knobs.map((k) => k.id);
@@ -464,8 +464,8 @@ function Sentence({ node, rows }: { node: ViewNode; rows: CardRow[] }) {
 }
 
 /**
- * The tab bar (CARD-43): each tab its name, a dot for its `on…` switch, and the knobs it hides when
- * not shown (CARD-47). ← → pick the previous and the next (CARD-46). Too wide, it scrolls, faded at
+ * The tab bar (taste.md DV-12): each tab its name, a dot for its `on…` switch, and the knobs it hides when
+ * not shown (taste.md DV-16). ← → pick the previous and the next (taste.md DV-15). Too wide, it scrolls, faded at
  * an edge that hides tabs.
  */
 function TabBar({ node, titled, tabs, shown, drawn }: { node: ViewNode; titled: string; tabs: FrameTab[]; shown: string; drawn: string[] }) {
@@ -526,7 +526,7 @@ function TabBar({ node, titled, tabs, shown, drawn }: { node: ViewNode; titled: 
 }
 
 function Tab({ node, tab, drawn, on, onPick, onKeyDown }: { node: ViewNode; tab: FrameTab; drawn: string[]; on: boolean; onPick: () => void; onKeyDown: (e: React.KeyboardEvent) => void }) {
-  // The knobs only this tab draws, while it isn't shown: it stands for them (CARD-47), but not for
+  // The knobs only this tab draws, while it isn't shown: it stands for them (taste.md DV-16), but not for
   // one drawn in sight now, on the face or the tab shown (review F8).
   const hides = on ? [] : knobsOf(node, tab.rows).filter((id) => !drawn.includes(id));
   const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));

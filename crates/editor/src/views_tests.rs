@@ -1,4 +1,4 @@
-//! The card's menus, switches, groups and views (CARD-20 to CARD-29): a sound that declares every
+//! The card's menus, switches, groups and views (CARD-20 to CARD-26): a sound that declares every
 //! kind and view, as the kinds track's `every` test component does, played by a project.
 
 use serde_json::{Value as Json, json};
@@ -8,7 +8,7 @@ use crate::testing::{Fixture, MANIFEST};
 use crate::{Gestures, Knob, ViewNode};
 
 /// A sound with a choice, a switch, an envelope's and a filter's controls, regions, its four views
-/// (its envelope and its filter std's pictures, CARD-96, CARD-97) and three groups (the design's
+/// (its envelope and its filter std's pictures, CARD-96, CARD-30) and three groups (the design's
 /// §3.5 example).
 pub(crate) const WOBBLE: &str = "import { component, control, port, setting, view } from \"@m2/core\";
 import { lowpass } from \"std/filter\";
@@ -897,7 +897,7 @@ fn tune_goes_into_an_audio_tracks_own_code() {
     assert!(f.read("song.ts").contains("vox: vox.out"), "the song reads the track as it did");
 }
 
-// CARD-72: a picture knows the notes lane that plays its call, as the keys view does (CARD-28), so
+// CARD-72: a picture knows the notes lane that plays its call, as the keys view does (taste.md DV-9), so
 // its `p.play` place plays there: the Drum's hit on its track's hits; an effect's picture, which no
 // notes lane plays, none.
 #[test]

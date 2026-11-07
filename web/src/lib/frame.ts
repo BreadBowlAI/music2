@@ -1,4 +1,4 @@
-// The card's frame in Device's chain (CARD-42 to CARD-47), worked out from the view alone: which
+// The card's frame in Device's chain (taste.md DV-11 to DV-16), worked out from the view alone: which
 // calls make a sound's chain, and what each card's face and tabs hold.
 
 import type { CardRow, ModuleView, ViewNode } from "./graph";
@@ -6,7 +6,7 @@ import type { CardRow, ModuleView, ViewNode } from "./graph";
 /** A tab of a chain card: one of its groups, or All. */
 export interface FrameTab { name: string; rows: CardRow[] }
 
-/** What a chain card draws (CARD-43): its face, and its tabs, All last (none when the face holds every value). */
+/** What a chain card draws (taste.md DV-12): its face, and its tabs, All last (none when the face holds every value). */
 export interface FrameOf { face: CardRow[]; tabs: FrameTab[] }
 
 /** The tab every card with more than its face has: every value in one list. */
@@ -39,7 +39,7 @@ const same = (a: CardRow, b: CardRow) =>
   ("view" in a && "view" in b && a.view === b.view);
 
 /**
- * A chain card's face and tabs (CARD-43): the face its sound names, else its first group, else
+ * A chain card's face and tabs (taste.md DV-12): the face its sound names, else its first group, else
  * every value; the tabs, each group that isn't the face, then All, when any value isn't on the face.
  */
 export function frameOf(n: ViewNode): FrameOf {
@@ -57,11 +57,11 @@ export function knobsOf(n: ViewNode, rows: CardRow[]): string[] {
   return rows.flatMap((r) => ("input" in r ? (n.inputs.find((p) => p.id === r.input)?.knob ?? []) : []));
 }
 
-/** A row of a mix's chain (CARD-42): a track's sound the module reads, then its effects in order. */
+/** A row of a mix's chain (taste.md DV-11): a track's sound the module reads, then its effects in order. */
 export interface Branch { from: ViewNode; cards: ViewNode[] }
 
 /**
- * What Device's chain shows of sound `m` (CARD-42): `line`, its calls that make audio, in the order
+ * What Device's chain shows of sound `m` (taste.md DV-11): `line`, its calls that make audio, in the order
  * the sound flows; and for a mix, `branches`, a row for each track's sound it reads before the line,
  * with that sound's effects (a song: each channel's, then its mixer and master). `why` says, in a
  * beginner's words, why there is no chain. Null when it has no calls that make audio, heard or not.
@@ -133,7 +133,7 @@ export function chainOf(m: ModuleView): ChainOf | null {
   return { line, branches };
 }
 
-/** The package a card's sound is from (CARD-43): `@m2/mixing`, `std`, or none for the song's own and a plugin. */
+/** The package a card's sound is from (taste.md DV-12): `@m2/mixing`, `std`, or none for the song's own and a plugin. */
 export function packOf(n: ViewNode): string | null {
   if (!n.component || n.plugin) return null;
   const at = n.component.lastIndexOf(":");

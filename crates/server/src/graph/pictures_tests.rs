@@ -253,7 +253,7 @@ fn a_pictures_words_are_in_the_view() {
     assert_eq!(views(&rig)[0]["words"], "cut at 2400 Hz, 4 dB");
 }
 
-// ------------------------------------------------ curves measured from the sound (CARD-80 to CARD-86)
+// ------------------------------------------------ curves measured from the sound (CARD-80 to CARD-85)
 
 /// A song's own lowpass whose curve is measured, and a drum whose hit is: one test sound each.
 const MEASURED: &str = "import { axis, component, control, port, view } from '@m2/core';

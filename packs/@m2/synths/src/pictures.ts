@@ -2,7 +2,7 @@
 // (`p.hit`, CARD-80); the polysynth's 24 dB ladder filter, and the FM synth's partials, each drawn
 // from the kernel's own sums (kernels-src/src/synth.rs, fm.rs), since a click can't reach inside a
 // voice (CARD-81). Each drawn one is checked against a render of the kernel within 0.5 dB
-// (CARD-137, CARD-140). The envelopes are std's (CARD-96).
+// (CARD-136, CARD-140). The envelopes are std's (CARD-96).
 
 import { axis, knob, view, type Moves, type Painter, type PictureDecl, type Shape } from "@m2/core";
 import { dbWords, hzWords, secondsWords } from "std/pictures";

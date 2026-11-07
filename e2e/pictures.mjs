@@ -4,7 +4,7 @@
 // on). Device's chain draws the curve; dragging band 2's dot moves the curve while the dot is held
 // (the server draws it again from the drag's leases, CARD-68), and the release writes both values in
 // one edit, one undo step, which ⌘Z takes back byte for byte. Picking a dot shows its band's tab
-// (CARD-71); a double-click turns its band off (one write). An agent asking for the picture reads
+// (taste.md DV-18); a double-click turns its band off (one write). An agent asking for the picture reads
 // the same shapes the window drew, as numbers, and each dot's knob ids (CARD-67). Each state linted.
 //
 //   node e2e/pictures.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -110,7 +110,7 @@ await page.click('[data-module-tab="eq"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-testid=chain] [data-module="eq"] [data-node="curve"]';
 const pic = `${card} [data-picture="curve"]`;
-check(await until(async () => !!(await page.$(`${pic}[data-drawn] polyline[data-line="curve"]`)), 20000), "Curve EQ's face draws its picture, asked for while it shows (CARD-69)");
+check(await until(async () => !!(await page.$(`${pic}[data-drawn] polyline[data-line="curve"]`)), 20000), "Curve EQ's face draws its picture, asked for while it shows (taste.md DV-17)");
 check((await page.$eval(pic, (e) => e.dataset.asking)) === "true", "it asks while it is on screen");
 const words = () => page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null);
 check((await words()) === "Band 1: 0 dB at 200 Hz; Band 2: 3 dB at 2000 Hz", `its words are its accessible name: ${await words()}`);
@@ -169,7 +169,7 @@ await page.keyboard.up("Meta");
 check(await until(async () => read("tracks/eq.ts") === code, 8000), "⌘Z takes the drag back, byte for byte");
 check(await until(async () => (await curvePoints()) === before, 8000), "and the curve is drawn as it was");
 
-// ---------------------------------------------------------------- the dot and its tab (CARD-71), and a flip (CARD-70)
+// ---------------------------------------------------------------- the dot and its tab (taste.md DV-18), and a flip (CARD-70)
 
 await page.click(`${card} [data-tab="All"]`).catch(() => {});
 await page.click(`${pic} [data-dot="0"]`);
@@ -213,7 +213,7 @@ await page.keyboard.down("Meta");
 await page.keyboard.press("z");
 await page.keyboard.up("Meta");
 await until(async () => read("tracks/eq.ts") === steps0, 8000);
-// Its text is never stretched (CARD-69, review G9): an axis label is as wide Expanded as at Normal.
+// Its text is never stretched (taste.md DV-17, review G9): an axis label is as wide Expanded as at Normal.
 const label = () => page.$eval(`${pic} text[data-tick]`, (e) => { const r = e.getBoundingClientRect(); return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10]; });
 const normal = await label();
 await page.click(`${card} [data-size-to="expanded"]`);

@@ -1,4 +1,4 @@
-//! `@m2/mixing`'s and `@m2/effects`' pictures drawn from their own sums are the sound (CARD-125,
+//! `@m2/mixing`'s and `@m2/effects`' pictures drawn from their own sums are the sound (CARD-99,
 //! D13): each against a render of the effect it draws, within 0.5 dB. The transient shaper's hit,
 //! Pump's dip, the multiband's bands, the delay's echoes, the reverb's tail, the chorus's, phaser's
 //! and tremolo's motion, drive's curve, the bitcrusher's sine and the widener's width.
@@ -104,7 +104,7 @@ fn level_at(x: &[f64], i: usize, half: usize) -> f64 {
     x[i.saturating_sub(half)..(i + half).min(x.len())].iter().fold(0.0, |m, v| m.max(v.abs()))
 }
 
-// CARD-113, CARD-125: the transient shaper's hit, drawn from the kernel's own sums, is what it plays:
+// CARD-113, CARD-99: the transient shaper's hit, drawn from the kernel's own sums, is what it plays:
 // std's adsr's hit (1 ms up, 60 dB down in 0.3 s) through the transient shaper comes out where the
 // line `after` says, within 0.5 dB, wherever it is above −40 dB.
 #[test]
@@ -136,7 +136,7 @@ fn the_transient_shapers_hit_is_its_sound() {
     }
 }
 
-// CARD-116, CARD-125: Pump's dip, drawn from its own sum, is what it plays: a steady sound through
+// CARD-116, CARD-99: Pump's dip, drawn from its own sum, is what it plays: a steady sound through
 // it, at 120 bpm, is where the line `dip` says over the bar, within 0.5 dB, away from each step's
 // jump back down (its duck glides 1 ms there).
 #[test]
@@ -170,7 +170,7 @@ fn pumps_dip_is_its_sound() {
     }
 }
 
-// CARD-115, CARD-125: the multiband's split, drawn from its crossovers' own sums, is what it plays
+// CARD-115, CARD-99: the multiband's split, drawn from its crossovers' own sums, is what it plays
 // below its thresholds: with its compressors off (ratio 1), a tone at each of a dozen of the line's
 // points, the crossovers and the bands' dots among them, comes out turned as far as the line `split`
 // says, within 0.5 dB.
@@ -214,7 +214,7 @@ fn the_multiband_split_is_its_sound() {
     }
 }
 
-// CARD-117, CARD-125: the delay's echoes, drawn from its own sum, are what it plays: a step through
+// CARD-117, CARD-99: the delay's echoes, drawn from its own sum, are what it plays: a step through
 // it, its first difference a click, gives the click and each echo where the bars say, within 0.5 dB.
 #[test]
 fn the_delays_echoes_are_its_sound() {
@@ -247,7 +247,7 @@ fn the_delays_echoes_are_its_sound() {
     }
 }
 
-// CARD-118, CARD-125 (review T2): the reverb's tail, drawn from its own sums, is what it plays: how
+// CARD-118, CARD-99 (review T2): the reverb's tail, drawn from its own sums, is what it plays: how
 // loud what is left of a click's tail is (its energy from then on, Schroeder's backward sum), where
 // the line `tail` says, within 0.5 dB, at every point it draws, down to 60 dB below its start, at
 // its corners (size 0 and 1, damping 0 and 1) and between (size 0.4 at full damping, the furthest
@@ -280,7 +280,7 @@ fn the_reverbs_tail_is_its_sound() {
     }
 }
 
-// CARD-119, CARD-125: the chorus's motion, drawn from its own sum, is what it plays: a 100 Hz tone
+// CARD-119, CARD-99: the chorus's motion, drawn from its own sum, is what it plays: a 100 Hz tone
 // through it, only the copies, is as loud as two copies that far apart make it,
 // |cos(π · 100 · (one − two))|, within 0.5 dB, wherever that is above −30 dB.
 #[test]
@@ -317,7 +317,7 @@ fn the_chorus_motion_is_its_sound() {
     }
 }
 
-// CARD-120, CARD-125: the phaser's motion, drawn from its own sum, is what it plays: a 1 kHz tone
+// CARD-120, CARD-99: the phaser's motion, drawn from its own sum, is what it plays: a 1 kHz tone
 // through it (feedback 0, mix 0.5) is as loud as its six stages, at the middle notch the picture
 // draws, make it, |cos(6 · atan(tan(π · 1000 / rate) / tan(π · mid / rate)))|, within 0.5 dB,
 // wherever that is above −10 dB. Deeper in a notch the sound lags the drawing by its stages' delay,
@@ -350,7 +350,7 @@ fn the_phaser_motion_is_its_sound() {
     }
 }
 
-// CARD-121, CARD-125: the tremolo's motion, drawn from its own sum, is what it plays: a steady sound
+// CARD-121, CARD-99: the tremolo's motion, drawn from its own sum, is what it plays: a steady sound
 // through it is as loud as the line `level` says, within 0.5 dB, wherever that is above −40 dB.
 #[test]
 fn the_tremolo_motion_is_its_sound() {
@@ -374,7 +374,7 @@ fn the_tremolo_motion_is_its_sound() {
     }
 }
 
-// CARD-122, CARD-125: drive's curve, drawn from its own sum, is what it plays: a steady level in
+// CARD-122, CARD-99: drive's curve, drawn from its own sum, is what it plays: a steady level in
 // comes out where the curve says, within 0.5 dB.
 #[test]
 fn drives_curve_is_its_sound() {
@@ -391,7 +391,7 @@ fn drives_curve_is_its_sound() {
     }
 }
 
-// CARD-123, CARD-125: the bitcrusher's sine, drawn from its own sum, is what it plays: a 1 kHz sine
+// CARD-123, CARD-99: the bitcrusher's sine, drawn from its own sum, is what it plays: a 1 kHz sine
 // through it, sample by sample over its first cycle, where the line `crushed` says, within 0.5 dB
 // and on the same side of 0, wherever it is above −40 dB.
 #[test]
@@ -418,7 +418,7 @@ fn the_bitcrushers_sine_is_its_sound() {
     }
 }
 
-// CARD-124, CARD-125: the widener's field, drawn from its own sum, is what it plays: a sound panned
+// CARD-124, CARD-99: the widener's field, drawn from its own sum, is what it plays: a sound panned
 // hard left (its sides as loud as its middle) comes out with its sides turned as far against its
 // middle as the field's edge says, within 0.5 dB.
 #[test]
@@ -436,7 +436,7 @@ fn the_wideners_field_is_its_sound_for_a_wide_sound() {
     }
 }
 
-// CARD-124, CARD-125 (review T3): a mono sound through the widener, a 3 kHz tone, comes out with
+// CARD-124, CARD-99 (review T3): a mono sound through the widener, a 3 kHz tone, comes out with
 // sides only above width 1, as loud against its middle as the made-up fan's edge says (the middle
 // 11 ms late, above 300 Hz, times 0.6 × (width − 1)), within 0.5 dB; at width 1 or less it stays
 // mono, and the picture draws no made-up fan.
@@ -468,7 +468,7 @@ fn the_wideners_field_is_its_sound_for_a_mono_sound() {
     }
 }
 
-// CARD-114, CARD-125 (review T4): the de-esser's band is what it turns down, by how far the band's
+// CARD-114, CARD-99 (review T4): the de-esser's band is what it turns down, by how far the band's
 // peaks go over its threshold: a tone at the band's middle (its dot), its peaks 10 dB under 0 dB,
 // comes out turned down by its peaks' height over the threshold, at most `amount`, within 0.5 dB;
 // one at the band's edges less, and one two octaves away by under 1 dB.

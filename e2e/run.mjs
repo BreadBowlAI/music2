@@ -10,7 +10,7 @@
 //              fix     examples/first-song open        node suite <root> <home> <project>
 //              attn    same as fix                     node suite <root> <home> <project>
 //              chain   same as fix, with E2E_DEVICE=chain: the window's Device shows the chain
-//                      (CARD-42), so a suite's checks that aren't the patch's own run on it
+//                      (taste.md DV-11), so a suite's checks that aren't the patch's own run on it
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
@@ -111,10 +111,10 @@ export const SUITES = [
   ["ag-focus", "export", { expect: 91, s: 8 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
-  // On Device's chain (CARD-42): all but the dashed cable, which the chain doesn't draw.
+  // On Device's chain (taste.md DV-11): all but the dashed cable, which the chain doesn't draw.
   ["nx-effects", "chain", { expect: 46, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["sidechain", "fix", { expect: 17, s: 20 }],
-  // Its checks on Device's chain too (CARD-42): every one holds there, and one more says the + is the Bass row's.
+  // Its checks on Device's chain too (taste.md DV-11): every one holds there, and one more says the + is the Bass row's.
   ["sidechain", "chain", { expect: 18, s: 20 }],
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
@@ -196,7 +196,7 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 36, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
-  // On Device's chain (CARD-42): the pictures by their tabs, the switch, the scope and the lane of names.
+  // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
   ["frame", "fix", { expect: 81, s: 14 }],
   ["pictures", "fix", { expect: 37, s: 10 }],
@@ -209,7 +209,7 @@ export const SUITES = [
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
   ["tune", "fix", { expect: 30, s: 14 }],
-  // Its checks on Device's chain too (CARD-42): the key line is on a chain card as on the patch's.
+  // Its checks on Device's chain too (taste.md DV-11): the key line is on a chain card as on the patch's.
   ["tune", "chain", { expect: 30, s: 14 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],

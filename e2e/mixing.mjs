@@ -1,7 +1,7 @@
 // @m2/mixing's parametric EQ from + Effect (PACK-26, PACK-10): added after the keys' pluck, it
 // writes its call, its import, the pack's [dependencies] line and its lock in one edit. Its card
 // shows its eight bands under their headings, then its curve (CARD-111), under More on the patch,
-// drawn small there (CARD-105). A band's shape is a menu: picking one writes its name, one undo step, and ⌘Z takes the code
+// drawn small there (taste.md DV-19). A band's shape is a menu: picking one writes its name, one undo step, and ⌘Z takes the code
 // back byte for byte; turning band 3's frequency knob writes it, one undo step, undone as one. One
 // more ⌘Z takes the EQ out, with its import, dependency and lock. Each state linted.
 //
@@ -59,11 +59,11 @@ check(at("Band 8") < at("Q 8") && at("Q 8") === at("More") - 1 && at("curve") ==
 const kinds = await page.$$eval(`${card} [data-knob="Shape 3"], ${card} [data-knob="On 3"], ${card} [data-knob="Gain 3"]`, (els) => els.map((e) => `${e.dataset.knob} ${e.dataset.kind} ${e.dataset.value}`));
 check(JSON.stringify(kinds) === JSON.stringify(["On 3 switch true", 'Shape 3 choice "bell"', "Gain 3 number 0"]), `a band's switch, menu and knob: ${JSON.stringify(kinds)}`);
 // The row's layout height, which the patch's zoom (a transform) doesn't change: a patch's picture
-// row is 48 px (CARD-105).
+// row is 48 px (taste.md DV-19).
 await seen(`${card} [data-view="curve"]`);
 await until(async () => !!(await page.$(`${card} [data-picture="curve"] svg`)), 15000);
 const tall = await page.$eval(`${card} [data-view="curve"]`, (e) => e.offsetHeight).catch(() => null);
-check(tall === 48, `it draws its curve, its row 48 px tall on the patch (CARD-105): ${tall}`);
+check(tall === 48, `it draws its curve, its row 48 px tall on the patch (taste.md DV-19): ${tall}`);
 await linted(card, "the EQ's card");
 await page.screenshot({ path: `${process.argv[2]}/mixing-eq.png` });
 

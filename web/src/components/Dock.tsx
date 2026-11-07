@@ -26,7 +26,7 @@ export function DockSlot({ at, children }: { at: "title" | "tools"; children: Re
 }
 
 const VIEW: Record<DockView, { label: string; Icon: typeof Piano; tab: string }> = {
-  // The id the graph tab had: the Device view shows the track's sound, as a chain or its patch (CARD-42).
+  // The id the graph tab had: the Device view shows the track's sound, as a chain or its patch (taste.md DV-11).
   device: { label: "Device", Icon: SlidersHorizontal, tab: "graph" },
   notes: { label: "Notes", Icon: Piano, tab: "notes" },
   beat: { label: "Beat", Icon: Drum, tab: "beat" },

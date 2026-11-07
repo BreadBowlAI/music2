@@ -1,9 +1,9 @@
-// music2's own sounds on the card (CARD-30 to CARD-33, wave 3), on a fresh copy of examples/first-song
+// music2's own sounds on the card (CARD-31 to CARD-33, wave 3; CARD-136), on a fresh copy of examples/first-song
 // with a Lead track added. The Lead's card shows its groups; its wave shape is a menu of four names,
 // and picking sine writes `shape: "sine"`, one undo step, and the sound changes while it plays: the
 // scope's frames lose the saw's sharp edge (their slope's energy falls). Its
 // envelope's attack corner, dragged right, writes a longer attack; its filter's peak, dragged up, a
-// higher resonance (std's drawn lowpass, CARD-97), and its words say resonance. The kick plays the Drum (KIT-2): its
+// higher resonance (its ladder, CARD-136), and its words say resonance. The kick plays the Drum (KIT-2): its
 // menu (a control) lists the nine drums, and picking the snare writes `drum: "snare"`, one undo step
 // named by its label ("Drum sound"), ⌘Z taking it back byte for byte. Each card linted.
 //
@@ -127,7 +127,7 @@ check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes the cod
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
 // std's envelope picture (CARD-96): its attack corner is its first dot, drawn once the picture is on
-// screen and its shapes have come (CARD-69).
+// screen and its shapes have come (taste.md DV-17).
 await seen(`${card} [data-picture="amp"]`);
 await until(async () => !!(await page.$(`${card} [data-picture="amp"] [data-dot="0"]`)), 15000);
 const handle = await seen(`${card} [data-picture="amp"] [data-dot="0"]`);
@@ -145,11 +145,11 @@ check(await stepIs("Lead attack"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes it back");
-// ---------------------------------------------------------------- the filter's resonance (CARD-30)
+// ---------------------------------------------------------------- the filter's resonance (CARD-136)
 
-// The Lead's filter, std's drawn lowpass (CARD-97), draws its resonance (0 to 1) as the q it stands
-// for; its dot dragged up writes a higher resonance, as its knob's drag would (three figures at most),
-// inside 0 to 1, and its dot says resonance.
+// The Lead's filter, its ladder (CARD-136), draws its resonance (0 to 1); its dot dragged up writes
+// a higher resonance, as its knob's drag would (three figures at most), inside 0 to 1, and its dot
+// says resonance.
 const peakSel = `${card} [data-picture="filter"] [data-dot="0"]`;
 await seen(`${card} [data-picture="filter"]`);
 await until(async () => !!(await page.$(peakSel)), 15000);
