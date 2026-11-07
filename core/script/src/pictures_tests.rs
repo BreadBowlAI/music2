@@ -743,7 +743,7 @@ fn spinning() -> String {
 
 // CARD-64: a draw's 20 ms is its own thread's CPU time, so a draw that waits for a CPU is never stopped
 // for the wait: the draw and sixty busy threads on one CPU, a draw of about 10 ms of work takes far past
-// 200 ms by the clock (where a backstop of ten times 20 ms stopped it) and draws; one of about 300 ms of
+// 200 ms by the clock (where a backstop of ten times 20 ms stopped it) and draws; one of about a second of
 // work is stopped. Linux only: macOS keeps no
 // thread on one CPU (m2_os::thread::one_cpu says so, and the test says it didn't run).
 #[test]
@@ -764,16 +764,26 @@ fn a_draw_sharing_its_cpu_is_stopped_for_its_work_not_its_wait() {
         let drawn = runner.draw(pack.ask_as("spinning", desc.clone(), "curve", v));
         (drawn, t.elapsed())
     };
-    // Its first draw runs twice; then how long a thousand steps take, alone on the CPU.
+    // Its first draw runs twice; then how long a thousand steps take, alone on the CPU: the quickest of
+    // three by the clock, as other processes may share this CPU too (a slow one would make `ten` too
+    // little work, and the stopped draw below not stopped).
     shapes(draw(0.0, 0.0).0);
-    let (drawn, took) = draw(20.0, 0.1);
-    shapes(drawn);
+    let mut took = Duration::MAX;
+    for gain in [0.1, 0.11, 0.12] {
+        let (drawn, t) = draw(20.0, gain);
+        shapes(drawn);
+        took = took.min(t);
+    }
     let per = took.as_secs_f64() / 20.0;
     let ten = (0.01 / per).max(1.0);
-    // Sixty threads that only spin, on the same CPU: the draw gets about a sixty-first of it.
+    // Threads that only spin, on the same CPU, sixty more each round until the draw waits past 200 ms by
+    // the clock (how much of the CPU a waking thread gets is the scheduler's: sixty once gave 196 ms).
+    // Every round's draw must draw: its wait never stops it, however long.
     let busy = Arc::new(AtomicBool::new(true));
-    let spinners: Vec<_> = (0..60)
-        .map(|_| {
+    let mut spinners = Vec::new();
+    let mut took = Duration::ZERO;
+    for gain in [0.2, 0.21, 0.22, 0.23] {
+        spinners.extend((0..60).map(|_| {
             let busy = busy.clone();
             std::thread::spawn(move || {
                 let mut x = 0u64;
@@ -781,16 +791,20 @@ fn a_draw_sharing_its_cpu_is_stopped_for_its_work_not_its_wait() {
                     x = std::hint::black_box(x.wrapping_add(1));
                 }
             })
-        })
-        .collect();
-    let (drawn, took) = draw(ten, 0.2);
+        }));
+        let drawn;
+        (drawn, took) = draw(ten, gain);
+        shapes(drawn);
+        if took > Duration::from_millis(200) {
+            break;
+        }
+    }
     busy.store(false, Ordering::Relaxed);
     for s in spinners {
         s.join().unwrap();
     }
     assert!(took > Duration::from_millis(200), "the CPU was shared: {took:?} by the clock for about 10 ms of work");
-    shapes(drawn);
-    // About 300 ms of work: stopped at its 20 ms, whatever the clock says.
-    let why = cant(draw(30.0 * ten, 0.3).0);
+    // About a second of work: stopped at its 20 ms, whatever the clock says.
+    let why = cant(draw(100.0 * ten, 0.3).0);
     assert!(why.starts_with("took too long and was stopped"), "{why}");
 }
