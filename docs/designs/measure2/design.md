@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed, for the owner's yes (AGENTS.md rule 11). Nothing is built. Revised after the skeptic's review (M2-1 to M2-21, §12). |
+| **Status** | **Accepted** 2026-11-07: the owner said yes to D1 to D8 as recommended. `measure` is not built; the three small steps are (track `measure2-small`, §8). Revised after the skeptic's review (M2-1 to M2-21, §12). |
 | **Written** | 2026-11-07, from `main` at `c653658c`, track `measure2-note` |
 | **Builds on** | [Cards you play with](../cards2/design.md) §4.7 and D13 ("measure where you can"), and the contract's [Curves measured from the sound](../../architecture.md#curves-measured-from-the-sound) (CARD-80 to CARD-86) |
 | **About** | the pictures of std, `@m2/mixing`, `@m2/effects`, `@m2/synths` and `@m2/wavetable` that draw from sums copied out of their kernels (CARD-93, CARD-96 to CARD-98, CARD-113, CARD-115 to CARD-124, CARD-131 to CARD-137, CARD-140) |
@@ -262,7 +262,7 @@ Size: small.
 
 ## 9. Decisions for the owner
 
-| # | Question | Recommended |
+| # | Question | Recommended (all accepted, 2026-11-07) |
 |---|---|---|
 | D1 | Some cards draw their picture from a copy of the sound's maths, checked against the real sound by a test. We could add a measuring tool to music2's core so four of them measure the real sound instead. It makes the core bigger than the copies it removes, and a huge reverb's picture would follow your drag less smoothly. Keep the copies for now? | **Yes, keep them.** The tool costs more than it saves today. |
 | D2 | The multiband compressor's picture could be measured from the real sound by playing a very quiet click through it, with one small option added to what already draws the EQ's curve. Do it? | **Yes.** One copy gone, and the picture still follows your drag every frame. |

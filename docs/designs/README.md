@@ -23,7 +23,7 @@
 | `packs/` | the proposal for packs: instruments, effects, sounds and samples anyone can publish; the registry; ⌘F search (a draft, not built) |
 | `cards/` | typed sounds: std a toolbox and its sounds in `@m2/` packs, cards drawn from each sound's type (menus, switches, views), taps for meters and scopes, kernels with a time limit and events |
 | `cards2/` | cards you play with: a face and tabs on every card, and pictures a pack draws as shapes that music2 draws in its style (accepted, with a mockup) |
-| `measure2/` | pictures that measure the real sound: which of the pictures drawn from copied sums are worth measuring, a narrowed general `measure` step for later, the costs measured, and why the copies stay for now (proposed, revised after review) |
+| `measure2/` | pictures that measure the real sound: which of the pictures drawn from copied sums are worth measuring, a narrowed general `measure` step for later, the costs measured, and why the copies stay for now (accepted) |
 | `drums/` | drums the FL way: one drum per track, a kit is a group of tracks under one bus, a beat grid across them (proposed) |
 | `vocals/` | vocals: Tune (pitch correction as an effect), editing a recorded voice's notes, comping the best take from a loop's passes (accepted) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
