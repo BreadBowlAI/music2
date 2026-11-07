@@ -58,13 +58,12 @@ check(
 check(at("Band 8") < at("Q 8") && at("Q 8") === at("More") - 1 && at("curve") === rows.length - 1, `band 8 ends with its Q, then its curve: ${rows.slice(at("Band 8")).join(", ")}`);
 const kinds = await page.$$eval(`${card} [data-knob="Shape 3"], ${card} [data-knob="On 3"], ${card} [data-knob="Gain 3"]`, (els) => els.map((e) => `${e.dataset.knob} ${e.dataset.kind} ${e.dataset.value}`));
 check(JSON.stringify(kinds) === JSON.stringify(["On 3 switch true", 'Shape 3 choice "bell"', "Gain 3 number 0"]), `a band's switch, menu and knob: ${JSON.stringify(kinds)}`);
-// Its own size, before the patch's zoom: no taller than a patch's picture (CARD-105).
-await seen(`${card} [data-picture="curve"]`);
-const size = () => page.$eval(`${card} [data-picture="curve"] svg`, (e) => e.dataset.size).catch(() => null);
-await until(async () => Number((await size())?.split("x")[1]) > 0, 15000);
-const curve = await size();
-const tall = Number(curve?.split("x")[1]);
-check(tall > 0 && tall <= 48, `it draws its curve, at most 48 px tall on the patch (CARD-105): ${curve}`);
+// The row's layout height, which the patch's zoom (a transform) doesn't change: a patch's picture
+// row is 48 px (CARD-105).
+await seen(`${card} [data-view="curve"]`);
+await until(async () => !!(await page.$(`${card} [data-picture="curve"] svg`)), 15000);
+const tall = await page.$eval(`${card} [data-view="curve"]`, (e) => e.offsetHeight).catch(() => null);
+check(tall === 48, `it draws its curve, its row 48 px tall on the patch (CARD-105): ${tall}`);
 await linted(card, "the EQ's card");
 await page.screenshot({ path: `${process.argv[2]}/mixing-eq.png` });
 
