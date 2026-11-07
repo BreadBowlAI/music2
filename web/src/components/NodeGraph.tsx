@@ -72,6 +72,15 @@ import PresetPopover from "./PresetPopover";
 import { makeKit } from "./Tracks";
 import { MenuValue, Segmented, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
 import { VIEW_H, ViewRow } from "./CardViews";
+
+/**
+ * How tall a picture is on a patch's card: small, as a Folded card's is (the design's §3.3), so a
+ * card's picture never pushes the patch's cards out of its first view. The patch is for wiring;
+ * Device's chain, for playing, draws it big (CARD-42, CARD-105).
+ */
+const PATCH_PICTURE_H = 48;
+/** A view's height on a patch's card. */
+const patchViewH = (kind: keyof typeof VIEW_H) => (kind === "picture" ? PATCH_PICTURE_H : VIEW_H[kind]);
 import { useFolded } from "../lib/folded";
 import { useKeyAsk } from "./KeyField";
 
@@ -397,7 +406,7 @@ function itemsOf(n: ViewNode, folded: boolean): Item[] {
 
 /** How tall a row of a card is. */
 const itemHeight = (x: Item) =>
-  x.t === "input" ? inputHeight(x.port) : x.t === "listens" ? ROW_H : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? VIEW_H[x.v.kind] : ROW_H;
+  x.t === "input" ? inputHeight(x.port) : x.t === "listens" ? ROW_H : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? patchViewH(x.v.kind) : ROW_H;
 
 /**
  * A node's height and where its ports are, from its top. Each input is a row; output `i` sits on
@@ -987,7 +996,7 @@ function NodeCard({
             ) : x.t === "setting" ? (
               <SettingRow key={x.x.id} x={x.x} owner={titled} card={titled} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} />
             ) : x.t === "view" ? (
-              <ViewRow key={`view:${x.v.name}`} view={x.v} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={titled} />
+              <ViewRow key={`view:${x.v.name}`} view={x.v} height={patchViewH(x.v.kind)} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={titled} />
             ) : x.t === "group" ? (
               <div key={`group:${x.name}`} data-group={x.name} className={clsx("h-6 px-4 flex items-end pb-1 text-xs font-semibold text-fg-muted", !x.first && "border-t border-line")}>
                 {x.name}
