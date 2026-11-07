@@ -198,11 +198,13 @@ export const SUITES = [
   ["card-views", "fix", { expect: 61, s: 12 }],
   // On Device's chain (CARD-42): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
-  ["frame", "fix", { expect: 80, s: 14 }],
+  ["frame", "fix", { expect: 81, s: 14 }],
   ["pictures", "fix", { expect: 37, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
+  // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, on the chain.
+  ["instruments", "fix", { expect: 52, s: 12 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
   ["tune", "fix", { expect: 30, s: 14 }],

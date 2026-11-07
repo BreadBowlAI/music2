@@ -1,7 +1,7 @@
 // The wavetable synth, a bundled pack (PACK-27). + Track lists Wavetable among its instruments, as
 // music2's own; picking it adds a track that plays it, the song listing and locking its pack
-// (PACK-10). Its card in Device shows its groups (Oscillators, Filter, Envelopes, LFO, Unison, then
-// More); its settings read by their labels (Table A, never TableA: CARD-34); table A is a menu of
+// (PACK-10). Its card in Device shows its groups (Osc A, Osc B, Filter, Env, LFO, then More:
+// CARD-135); its settings read by their labels (Table A, never TableA: CARD-34); table A is a menu of
 // the five built-in tables, and picking vowels writes `tableA: "vowels"`, one undo step ("Undo
 // Wavetable table A") that ⌘Z takes back byte for byte; once the page shows the revision ⇧⌘Z made
 // (a drag goes from the revision the page shows), position A dragged up writes a new
@@ -42,7 +42,7 @@ const file = "tracks/wavetable.ts";
 check(await until(() => fs.existsSync(`${PROJ}/${file}`)), "picking it adds tracks/wavetable.ts");
 const added = fs.existsSync(`${PROJ}/${file}`) ? read(file) : "";
 check(added.includes('import { wavetable } from "@m2/wavetable";') && added.includes('wavetable(lane.notes("notes"))'), `a track that plays it from its notes: ${added}`);
-check(/"@m2\/wavetable" = "1\.1"/.test(read("music2.toml")) && read("music2.lock").includes('name = "@m2/wavetable"'), "the song lists its pack and locks it");
+check(/"@m2\/wavetable" = "1\.2"/.test(read("music2.toml")) && read("music2.lock").includes('name = "@m2/wavetable"'), "the song lists its pack and locks it");
 check(read("song.ts") !== song, "the song mixes the new track");
 
 // ---------------------------------------------------------------- its card
@@ -55,7 +55,7 @@ check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), 
 await page.$eval(card, (e) => e.scrollIntoView({ block: "start", inline: "center" }));
 await sleep(200);
 const groups = await page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
-check(JSON.stringify(groups) === '["Oscillators","Filter","Envelopes","LFO","Unison","More"]', `its groups, in order, More last: ${JSON.stringify(groups)}`);
+check(JSON.stringify(groups) === '["Osc A","Osc B","Filter","Env","LFO","More"]', `its groups, in order, More last: ${JSON.stringify(groups)}`);
 await linted(card, "the Wavetable's card");
 await page.screenshot({ path: `${ROOT}/wavetable-card.png` });
 
