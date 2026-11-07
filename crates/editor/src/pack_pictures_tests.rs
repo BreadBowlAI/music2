@@ -1,7 +1,8 @@
 //! `@m2/mixing`'s and `@m2/effects`' pictures drawn from their own sums are the sound (CARD-99,
 //! D13): each against a render of the effect it draws, within 0.5 dB. The transient shaper's hit,
-//! Pump's dip, the multiband's bands, the delay's echoes, the reverb's tail, the chorus's, phaser's
-//! and tremolo's motion, drive's curve, the bitcrusher's sine and the widener's width.
+//! Pump's dip, the delay's echoes, the reverb's tail, the chorus's, phaser's and tremolo's motion,
+//! drive's curve, the bitcrusher's sine and the widener's width. And the multiband's split, which is
+//! measured from its sound under its thresholds (CARD-115).
 
 use std::path::{Path, PathBuf};
 
@@ -170,45 +171,80 @@ fn pumps_dip_is_its_sound() {
     }
 }
 
-// CARD-115, CARD-99: the multiband's split, drawn from its crossovers' own sums, is what it plays
-// below its thresholds: with its compressors off (ratio 1), a tone at each of a dozen of the line's
-// points, the crossovers and the bands' dots among them, comes out turned as far as the line `split`
-// says, within 0.5 dB.
+// CARD-115, CARD-80 (measure2 §8): the multiband's split is measured from its own sound with a quiet
+// click, `p.response({ level: -80 })`, under every threshold its card allows (−60 dB), so its
+// compressors rest whatever they are set to. Through a multiband at thresholds of −60 dB and a ratio
+// of 20 the click draws the curve of one at thresholds of 0 dB, to a thousandth of a dB, and passes
+// CARD-82's checks at rest, where a click at −20 dBFS is refused; each band's gain is its part of the
+// curve.
 #[test]
-fn the_multiband_split_is_its_sound() {
-    // Two crossovers an octave apart too, where the low band's all-pass matters.
+fn the_multiband_split_is_measured_under_its_thresholds() {
+    use crate::measure::{Failed, LEVEL, Layer, Pass, Span, copy};
+    let d = drawn("mixing", "multiband", "split", json!({"lowMid": 200, "midHigh": 2500, "lowGain": 0, "midGain": 0, "highGain": 0}));
+    let shapes = d["shapes"].as_array().unwrap();
+    let split = shapes.iter().find(|s| s["kind"] == "response").unwrap_or_else(|| panic!("the split is measured: {d}"));
+    assert_eq!((&split["name"], &split["level"]), (&json!("split"), &json!(-80.0)), "{split}");
+    let level = split["level"].as_f64().unwrap();
+    let span = Span { log: true, lo: 20.0, hi: 20_000.0 };
     for (gains, (lm, mh)) in
         [([6.0, -6.0, 3.0], (200.0f64, 2500.0f64)), ([-9.0, 4.0, -3.0], (120.0, 4000.0)), ([9.0, -9.0, 0.0], (400.0, 800.0))]
     {
-        let mut v = json!({"lowMid": lm, "midHigh": mh, "lowGain": gains[0], "midGain": gains[1], "highGain": gains[2]});
-        for band in ["low", "mid", "high"] {
-            for (k, x) in [("Threshold", -18.0), ("Ratio", 1.0), ("Attack", 0.01), ("Release", 0.1)] {
-                v[format!("{band}{k}")] = json!(x);
-            }
-        }
-        let d = drawn("mixing", "multiband", "split", v);
-        let split = line(&d, "split");
-        // log-scale interpolation along the line, at any frequency.
-        let on = |hz: f64| -> f64 {
-            let i = split.iter().position(|p| p.0 >= hz).unwrap().max(1);
-            let ((f0, y0), (f1, y1)) = (split[i - 1], split[i]);
-            y0 + (y1 - y0) * (hz / f0).ln() / (f1 / f0).ln()
-        };
-        let mut tones: Vec<f64> = split.iter().step_by(24).map(|p| p.0).collect();
-        tones.extend([lm, mh, (lm * mh).sqrt()]);
-        tones.extend(dots(&d).into_iter().filter(|d| d.2.is_some()).map(|d| d.0));
-        for hz in tones.into_iter().filter(|hz| *hz < 16_000.0) {
-            let period = (RATE / hz).ceil() as usize;
-            let body = format!(
-                "export default song(() => multiband(osc.sine({hz}), {{ lowMid: {lm}, midHigh: {mh}, lowGain: {}, midGain: {}, highGain: {}, lowRatio: 1, midRatio: 1, highRatio: 1 }}));\n",
+        let call = |threshold: f64| {
+            format!(
+                "multiband(osc.saw(110), {{ lowMid: {lm}, midHigh: {mh}, lowGain: {}, midGain: {}, highGain: {}, lowThreshold: {threshold}, \
+                 midThreshold: {threshold}, highThreshold: {threshold}, lowRatio: 20, midRatio: 20, highRatio: 20 }})",
                 gains[0], gains[1], gains[2]
-            );
-            let out = left(&body, 0.5);
-            let heard = db(level_at(&out, out.len() - period, period));
-            let y = on(hz);
+            )
+        };
+        let f = Fixture::new();
+        f.write("music2.toml", MANIFEST);
+        f.write(
+            "song.ts",
+            format!(
+                "import {{ song, track }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\nimport {{ sum }} from 'std/math';\nimport {{ multiband }} from '@m2/mixing';\n\
+                 const hard = track('hard', () => {});\nconst rest = track('rest', () => {});\nexport default song(() => sum(hard.out, rest.out));\n",
+                call(-60.0),
+                call(0.0)
+            ),
+        );
+        let s = f.open();
+        assert!(s.draft_errors.is_empty(), "{:?}", s.draft_errors);
+        let rev = s.accepted();
+        let measure = |module: &str, level: f64| {
+            let c = &rev.compiled;
+            let site =
+                c.sites.iter().find(|x| x.callee == "multiband" && c.outputs.iter().any(|o| o.site == x.id && o.module == module)).unwrap();
+            let node = format!("{}#{}", site.file, site.ordinal);
+            copy(rev, &s.packages, module, &node, &serde_json::Map::new(), Layer::Response { level }).unwrap().measure(
+                &s.packages,
+                span,
+                std::time::Duration::from_secs(5),
+                Pass::Rest,
+            )
+        };
+        let hard = measure("hard", level).unwrap_or_else(|e| panic!("at thresholds of −60 dB, measured under them: {e:?}"));
+        let rest = measure("rest", level).unwrap();
+        assert_eq!(hard.len(), 512, "256 points");
+        let worst = hard.chunks(2).zip(rest.chunks(2)).map(|(a, b)| (a[1] - b[1]).abs()).fold(0.0, f64::max);
+        assert!(worst < 0.001, "{lm} and {mh} Hz, gains {gains:?}: the split at thresholds of −60 dB is {worst} dB from its split at 0 dB");
+        let loud = measure("hard", LEVEL);
+        assert!(
+            matches!(&loud, Err(Failed::Cant(w)) if w.starts_with("its sound changes with how loud it is")),
+            "a click at −20 dBFS is over its thresholds: {loud:?}"
+        );
+        // Each band's gain: the lows' at 30 Hz and the highs' at 16 kHz, within a quarter of a dB; the
+        // mids' in their middle, within half a dB, where the crossovers are more than three octaves
+        // apart (nearer, the other bands still sound there).
+        let at = |hz: f64| hard.chunks(2).min_by(|a, b| (a[0] / hz).ln().abs().total_cmp(&(b[0] / hz).ln().abs())).unwrap()[1];
+        let mut parts = vec![(30.0, gains[0], 0.25), (16_000.0, gains[2], 0.25)];
+        if mh / lm > 8.0 {
+            parts.push(((lm * mh).sqrt(), gains[1], 0.5));
+        }
+        for (hz, gain, within) in parts {
             assert!(
-                (heard - y).abs() <= 0.5,
-                "gains {gains:?}: a tone at {hz:.0} Hz, the line says {y:.2} dB, the multiband plays {heard:.2} dB"
+                (at(hz) - gain).abs() < within,
+                "{lm} and {mh} Hz, gains {gains:?}: at {hz:.0} Hz the split is {:.2} dB, its band's gain {gain}",
+                at(hz)
             );
         }
     }

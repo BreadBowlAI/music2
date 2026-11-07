@@ -12,8 +12,8 @@ hash = "sha256:fded980dde2058f04326b18f06064bd2dfdfedc77faa7ccdb0a04b9273e1eaf3"
 
 [[pack]]
 name = "@m2/mixing"
-version = "1.2.0"
-hash = "sha256:7b711ae2ff1bae47e29f8a9943203c6b4e0456586622a8635cd9e90bd5f468ca"
+version = "1.3.0"
+hash = "sha256:3a6844d23c05705668da590a883c15e288c12fd683728a1c7ebb346affa309fc"
 
 [[pack]]
 name = "@m2/synths"

@@ -185,10 +185,11 @@ fn the_deesser_draws_its_band_over_the_spectrum() {
     );
 }
 
-// CARD-115: the multiband draws its split: how it turns each frequency below its thresholds (the
-// line `split`, flat with every gain at 0 dB, each band's gain in its middle), the crossovers as
-// guide lines with a dot each that moves it across, and a dot in each band that moves its gain and
-// shows its tab; crossed, the lower one splits low from mid, as the kernel does.
+// CARD-115: the multiband draws its split: how it turns each frequency below its thresholds,
+// measured with a click at −80 dB (the line `split`, a response the server fills in, whose curve
+// `the_multiband_split_is_measured_under_its_thresholds` checks), the crossovers as guide lines
+// with a dot each that moves it across, and a dot in each band that moves its gain and shows its
+// tab; crossed, the lower one splits low from mid, as the kernel does.
 #[test]
 fn the_multiband_draws_its_split() {
     let runner = Runner::new();
@@ -198,17 +199,18 @@ fn the_multiband_draws_its_split() {
             v[format!("{band}{k}")] = json!(x);
         }
     }
-    let flat = draw(&runner, "mixing", "multiband", "split", v.clone()).unwrap();
-    assert!(line(&flat, "split").iter().all(|p| p.1.abs() < 1e-6), "flat with every gain at 0 dB");
     (v["lowGain"], v["midGain"], v["highGain"]) = (json!(3), json!(-2), json!(0));
     let d = draw(&runner, "mixing", "multiband", "split", v.clone()).unwrap();
-    assert_eq!(kinds(&d), ["line", "mark", "mark", "handle", "handle", "handle", "handle", "handle"]);
+    assert_eq!(kinds(&d), ["response", "mark", "mark", "handle", "handle", "handle", "handle", "handle"]);
+    let split = &d["shapes"][0];
+    assert_eq!(
+        (&split["name"], &split["level"], &split["points"]),
+        (&json!("split"), &json!(-80.0), &Value::Null),
+        "measured, under its thresholds"
+    );
     assert_eq!(dots(&d), ["x=lowMid", "x=midHigh", "y=lowGain", "y=midGain", "y=highGain"]);
     let opens: Vec<&str> = handles(&d).iter().filter_map(|h| h["opens"].as_str()).collect();
     assert_eq!(opens, ["Low", "Mid", "High"]);
-    let split = line(&d, "split");
-    let near = |hz: f64| split.iter().min_by(|a, b| (a.0 / hz).ln().abs().total_cmp(&(b.0 / hz).ln().abs())).unwrap().1;
-    assert!((near(40.0) - 3.0).abs() < 0.1 && (near(700.0) + 2.0).abs() < 0.2 && near(15000.0).abs() < 0.1, "{split:?}");
     let mid = places(&d)[3];
     assert!(close(mid, ((200.0f64 * 2500.0).sqrt(), -2.0)), "the mid's dot in its middle, at its gain: {mid:?}");
     assert_eq!(
