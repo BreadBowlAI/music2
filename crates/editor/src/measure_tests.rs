@@ -398,16 +398,19 @@ fn a_measure_is_stopped_past_its_budget() {
     }
 }
 
-// CARD-85: a measure is cheap enough to follow a drag: a lowpass's and the EQ's responses, and a
-// second of the Drum's hit, each copied, measured and drawn at a new value each time, at 48 and 96
-// kHz, inside its budget (20 ms at 48 kHz, 40 ms at 96) of the thread's CPU at p99. It judges
-// speed, so it runs in the nightly tier (ci/nightly-tests.txt).
+// CARD-85: a measure is cheap enough to follow a drag: a lowpass's and the EQ's responses, the
+// multiband's split (a quiet click, CARD-115), and a second of the Drum's hit, each copied, measured
+// and drawn at a new value each time, at 48 and 96 kHz, inside its budget (20 ms at 48 kHz, 40 ms
+// at 96) of the thread's CPU at p99. It judges speed, so it runs in the nightly tier
+// (ci/nightly-tests.txt).
 #[test]
 fn a_measure_follows_a_drag_inside_its_budget() {
-    let body = "const lead = track('lead', () => lowpass(osc.saw(110), { cutoff: 2400, q: 2 }));\n\
+    let body = "import { multiband } from '@m2/mixing';\n\
+                const lead = track('lead', () => lowpass(osc.saw(110), { cutoff: 2400, q: 2 }));\n\
                 const e = track('e', () => eq(osc.saw(110)));\n\
+                const m = track('m', () => multiband(osc.saw(110)));\n\
                 const kick = track('kick', ({ lane }) => drums.drum(lane.notes('hits'), { decay: 0.5 }));\n\
-                export default song(() => sum(lead.out, e.out, kick.out));\n";
+                export default song(() => sum(lead.out, e.out, m.out, kick.out));\n";
     for rate in [48_000u32, 96_000] {
         let most = budget(rate);
         let (_f, s) = open_at(rate, body);
@@ -431,9 +434,14 @@ fn a_measure_follows_a_drag_inside_its_budget() {
         let lowpass =
             time("lead", "lowpass", Layer::Response { level: LEVEL }, &|i| json!({"cutoff": 200 + 40 * i, "q": 0.5 + (i % 7) as f64}));
         let eq = time("e", "eq", Layer::Response { level: LEVEL }, &|i| json!({"gain4": (i % 24) as f64 - 12.0}));
+        let split = time("m", "multiband", Layer::Response { level: -80.0 }, &|i| json!({"midGain": (i % 24) as f64 - 12.0}));
         let hit = time("kick", "drums.drum", Layer::Hit { note: 36, seconds: 1.0 }, &|i| json!({"decay": 0.2 + 0.01 * i as f64}));
-        eprintln!("at {rate} Hz: a lowpass {lowpass:?}, the EQ {eq:?}, a hit of 1 s {hit:?} (median, p99)");
-        for (what, (_, p99)) in [("a lowpass's response", lowpass), ("the EQ's response", eq), ("a hit of 1 s", hit)] {
+        eprintln!(
+            "at {rate} Hz: a lowpass {lowpass:?}, the EQ {eq:?}, the multiband's split {split:?}, a hit of 1 s {hit:?} (median, p99)"
+        );
+        for (what, (_, p99)) in
+            [("a lowpass's response", lowpass), ("the EQ's response", eq), ("the multiband's split", split), ("a hit of 1 s", hit)]
+        {
             assert!(p99 < most, "{what} at {rate} Hz: p99 {p99:?}, over {most:?}");
         }
     }
