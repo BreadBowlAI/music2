@@ -1,6 +1,6 @@
 [package]
 name = "@m2/effects"
-version = "1.2.0"
+version = "1.3.0"
 license = "MIT OR Apache-2.0"
 description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
 authors = ["music2"]
@@ -11,12 +11,13 @@ tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion
 wasm = "kernels/effects.wasm"
 
 [dependencies]
-# @m2/core 2, the pack contract (PACK-22): any 2.x runs it, and a change to @m2/core that would
-# break it is a 3.0.0.
-"@m2/core" = "2"
-# The std kernels its effects play (chorus and drive, which @m2/synths plays too) are in std 0.7
-# and later; the rest are its own.
-std = "0.7"
+# @m2/core 2.4, the pack contract (PACK-22) and the minor it uses (PACK-23): its cards draw
+# pictures (CARD-60, view.picture) and name their faces (CARD-40), which came in 2.4. So any 2.x
+# from 2.4 runs it, and a change to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.4"
+# Its pictures' words are std/pictures', new in std 0.10 (CARD-90); the std kernels its effects
+# play (chorus and drive, which @m2/synths plays too) are in std 0.7 and later; the rest are its own.
+std = "0.10"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/effects:bitcrush", …)`.

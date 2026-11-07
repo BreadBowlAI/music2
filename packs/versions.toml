@@ -5,8 +5,8 @@
 # are music2's (PACK-19); `every_bundled_pack_is_the_version_its_record_names` checks it against
 # packs/@m2/*. No release has shipped music2's own packs yet, so it holds one version of each.
 "@m2/drums 2.1.0" = "sha256:be98dfd161358c97ec09f362120b72da38afc7a331484f4008bb81c3b19af411"
-"@m2/effects 1.2.0" = "sha256:e49f20aefced6adbff11d6556f367f647b5c3accc68d94f5f64f7d47a23e0aef"
-"@m2/mixing 1.1.0" = "sha256:46adda6827342521c90b7f2f4b0c41b6a803286e2b4b10438db4f2c607a6532f"
+"@m2/effects 1.3.0" = "sha256:78ede1d6ce61ab9ef1310fdda12e4d10ca6a0ff681c50a815fc4afb16c0f59b7"
+"@m2/mixing 1.2.0" = "sha256:ff1801d01e8086b50436408fb05aa89a526a08251ae10199abddcb38b0a6826e"
 "@m2/synths 2.1.0" = "sha256:9903e2755ae4797b34337aab2a9f6b6c9802366d08c335231fff42e5231c6585"
 "@m2/vocals 1.1.0" = "sha256:cf640aaca58780ba44381f639446c5b8770946338567771d8ba78ee5b139764b"
 "@m2/wavetable 1.1.0" = "sha256:163e11d087a293bc0149f281abf632a5a9b7ee3b6c26cd05927e58072ecd56f3"

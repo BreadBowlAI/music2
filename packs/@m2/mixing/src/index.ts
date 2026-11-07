@@ -3,14 +3,19 @@
 // starts with (eq3, compress, limit, duck, in std/fx).
 //
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
-// `insert` when it is added. The first five play the pack's own kernel (`@m2/mixing:eq` …, built
+// `insert` when it is added. Each card's face is its picture (CARD-110 to CARD-116, ./pictures):
+// the EQ's curve measured from its own sound with a dot for each band; the gate's levels with the
+// line where it opens; one hit through the transient shaper, before and after; the de-esser's
+// band over the spectrum; the multiband's split; Pump's dip over a bar. The first five play the pack's own kernel (`@m2/mixing:eq` …, built
 // from kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
 // `.smooth()`; they use none of std's code. Pump is std's blocks alone, in TypeScript.
 
-import { component, control, kernel, port, setting, signature, time, type Audio, type Params } from "@m2/core";
+import { component, control, kernel, knob, port, setting, signature, time, type Audio, type Params } from "@m2/core";
 import { lfo, range } from "std/control";
 import { duck } from "std/fx";
 import { blend, scale } from "std/math";
+import { curvePicture, dbWords, hzWords } from "std/pictures";
+import { band, bandPicture, bandWords, dip, dipPicture, dipWords, hit, hitPicture, hitWords, levelsPicture, RATES, split, splitWords, threshold as thresholdLine } from "./pictures";
 
 // ---------------------------------------------------------------- the parametric EQ
 
@@ -52,8 +57,9 @@ export const eq = component(
     editor: {
       category: "EQ",
       description: "Eight bands to shape the tone: cut the lows or highs, or turn any part up or down",
-      // No picture: no view draws an EQ's whole curve, and the filter view draws a low-pass, which no
-      // band is at the EQ's start (PACK-26, gaps.md).
+      // Its curve, measured from its own sound, over the spectrum in and out (CARD-111).
+      views: { curve: curvePicture() },
+      face: ["curve"],
       groups: {
         "Band 1": ["on1", "shape1", "freq1", "gain1", "q1"],
         "Band 2": ["on2", "shape2", "freq2", "gain2", "q2"],
@@ -68,7 +74,43 @@ export const eq = component(
   },
   // Its kernel's inputs are its controls, by the same names.
   (x: Audio, bands: Params) => kernel("@m2/mixing:eq", { in: x, ...bands }),
+  {
+    // A dot for each band, numbered, in one colour (D14): across its frequency, up and down its
+    // gain (a cut's q, at its peak), the wheel its q, a double-click on or off, and its tab.
+    curve: {
+      draw: (v, p) => [
+        p.response({ name: "curve" }),
+        ...BANDS.map((b) => {
+          const cut = v[`shape${b}`] === "low cut" || v[`shape${b}`] === "high cut";
+          const q = v[`q${b}`];
+          const y = cut ? (q === null ? null : 20 * Math.log10(q)) : v[`gain${b}`];
+          const at = y === null ? null : Math.min(24, Math.max(-24, y));
+          const common = { x: `freq${b}`, wheel: `q${b}`, toggles: `on${b}`, opens: `Band ${b}`, mark: `${b}`, off: v[`on${b}`] !== true } as const;
+          return cut ? p.handle(v[`freq${b}`], at, { ...common, y: knob(`q${b}`) }) : p.handle(v[`freq${b}`], at, { ...common, y: `gain${b}` });
+        }),
+      ],
+      words: (v) => eqWords(v),
+    },
+  },
 );
+
+/** The EQ's bands, by number. */
+const BANDS = [1, 2, 3, 4, 5, 6, 7, 8] as const;
+
+/** What the EQ's curve says (CARD-111): how many bands are on, and what each that changes the sound does. */
+function eqWords(v: { readonly [k: string]: unknown }): string {
+  const on = BANDS.filter((b) => v[`on${b}`] === true);
+  const said = on.flatMap((b) => {
+    const [shape, f, g] = [v[`shape${b}`], v[`freq${b}`], v[`gain${b}`]];
+    const at = typeof f === "number" ? hzWords(f) : "a frequency set elsewhere";
+    if (shape === "low cut") return [`band ${b} cuts the lows below ${at}`];
+    if (shape === "high cut") return [`band ${b} cuts the highs above ${at}`];
+    if (g === 0) return [];
+    return [`band ${b} ${shape} ${typeof g === "number" ? dbWords(g) : "set elsewhere"} at ${at}`];
+  });
+  const count = `${on.length} ${on.length === 1 ? "band" : "bands"} on`;
+  return said.length ? `${count}: ${said.join("; ")}` : `${count}, all at 0 dB: the sound as it is`;
+}
 
 // ---------------------------------------------------------------- dynamics
 
@@ -95,10 +137,26 @@ export const gate = component(
       range: control.db(-80).range(-80, 0),
     },
     output: port.audio(),
-    editor: { category: "Dynamics", description: "Silences a track between its sounds", insert: { threshold: -40 } },
+    editor: {
+      category: "Dynamics",
+      description: "Silences a track between its sounds",
+      insert: { threshold: -40 },
+      // Its levels over the last seconds, with the line where it opens (CARD-112).
+      views: { levels: levelsPicture() },
+      face: ["levels", "threshold", "attack", "hold", "release", "range"],
+    },
   },
   (x: Audio, key: Audio | undefined, { threshold, attack, hold, release, range }: Params) =>
     kernel("@m2/mixing:gate", { in: x, key: key ?? x, threshold, attack, hold, release, range }),
+  {
+    levels: {
+      draw: (v, p) => thresholdLine(p, v, { threshold: "threshold" }),
+      words: (v) =>
+        v.threshold === null
+          ? "The last 3 seconds in and out: its threshold is set by a cable or the code"
+          : `Opens when the sound reaches ${dbWords(v.threshold)}; below that it turns it down to ${v.range === null ? "a level set elsewhere" : dbWords(v.range)}. Drag the line`,
+    },
+  },
 );
 
 /**
@@ -116,9 +174,17 @@ export const transient = component(
       sustain: control.db(0).range(-24, 24),
     },
     output: port.audio(),
-    editor: { category: "Dynamics", description: "Makes each hit punchier or softer, and its tail longer or shorter", insert: { attack: 6, sustain: 0 } },
+    editor: {
+      category: "Dynamics",
+      description: "Makes each hit punchier or softer, and its tail longer or shorter",
+      insert: { attack: 6, sustain: 0 },
+      // One hit, before and after, from the kernel's own sums (CARD-113).
+      views: { hit: hitPicture() },
+      face: ["hit", "attack", "sustain"],
+    },
   },
   (x: Audio, { attack, sustain }: Params) => kernel("@m2/mixing:transient", { in: x, attack, sustain }),
+  { hit: { draw: (v, p) => hit(p, v, { attack: "attack", sustain: "sustain" }), words: (v) => hitWords(v, { attack: "attack", sustain: "sustain" }) } },
 );
 
 /**
@@ -139,9 +205,22 @@ export const deesser = component(
       amount: control.db(6).range(0, 24),
     },
     output: port.audio(),
-    editor: { category: "Dynamics", description: "Tames harsh S sounds in a voice: turns down only the band they sit in", insert: { freq: 6000, threshold: -30, amount: 6 } },
+    editor: {
+      category: "Dynamics",
+      description: "Tames harsh S sounds in a voice: turns down only the band they sit in",
+      insert: { freq: 6000, threshold: -30, amount: 6 },
+      // The band it listens to over the spectrum in and out (CARD-114).
+      views: { band: bandPicture() },
+      face: ["band", "freq", "threshold", "amount"],
+    },
   },
   (x: Audio, { freq, threshold, amount }: Params) => kernel("@m2/mixing:deesser", { in: x, freq, threshold, amount }),
+  {
+    band: {
+      draw: (v, p) => band(p, v, { freq: "freq", threshold: "threshold" }),
+      words: (v) => bandWords(v, { freq: "freq", threshold: "threshold", amount: "amount" }),
+    },
+  },
 );
 
 // One band's compressor, as std's `compress` has it: above `threshold` (dB) the level rises only
@@ -177,6 +256,9 @@ export const multiband = component(
     editor: {
       category: "Dynamics",
       description: "Compresses the lows, mids and highs each on its own",
+      // The split over the spectrum in and out (CARD-115).
+      views: { split: curvePicture() },
+      face: ["split", "lowMid", "midHigh", "lowGain", "midGain", "highGain"],
       groups: {
         Split: ["lowMid", "midHigh"],
         Low: ["lowThreshold", "lowRatio", "lowAttack", "lowRelease", "lowGain"],
@@ -206,12 +288,16 @@ export const multiband = component(
       high_release: c.highRelease,
       high_gain: c.highGain,
     }),
+  {
+    split: {
+      draw: (v, p) =>
+        split(p, v, { lowMid: "lowMid", midHigh: "midHigh", gains: ["lowGain", "midGain", "highGain"], tabs: ["Low", "Mid", "High"] }),
+      words: (v) => splitWords(v, { lowMid: "lowMid", midHigh: "midHigh", gains: ["lowGain", "midGain", "highGain"] }),
+    },
+  },
 );
 
 // ---------------------------------------------------------------- the beat
-
-/** How often Pump dips, by a note's length, and how many beats that is. */
-const RATES = { "1/2": 2, "1/4": 1, "1/8": 0.5, "1/16": 0.25 } as const;
 
 /**
  * Pump: the sound dips on every beat and swells back, in time with the song, with no sidechain
@@ -238,6 +324,9 @@ export const pump = component(
       category: "Dynamics",
       description: "Makes the sound dip on every beat and swell back, in time with the song",
       insert: { depth: -8, shape: 0.5 },
+      // One bar of its dip, from its own sum, with the song's playhead (CARD-116).
+      views: { dip: dipPicture() },
+      face: ["dip", "depth", "shape", "rate"],
     },
   },
   (x: Audio, { depth, shape, rate }: Params) => {
@@ -248,4 +337,5 @@ export const pump = component(
     // What is left in a straight line at shape 0, its fourth power at 1: the dip in dB, times depth.
     return duck(x, blend(left, scale(squared, squared), shape), { depth });
   },
+  { dip: { draw: (v, p) => dip(p, v, { depth: "depth", shape: "shape", rate: "rate" }), words: (v) => dipWords(v, { depth: "depth", shape: "shape", rate: "rate" }) } },
 );

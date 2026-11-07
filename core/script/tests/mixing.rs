@@ -1,7 +1,7 @@
 //! `@m2/mixing`'s descriptors (PACK-26): each tool is an effect in its category, and what a call
 //! that leaves a value out gets is its kernel's port default (PKG-4), so the kernels' own tests,
 //! which play their manifest's defaults, test what songs play. The gate's key only listens, and may
-//! be left out; the EQ's card has a group for each band and no picture. Pump (PACK-28) plays no
+//! be left out; the EQ's card has a group for each band and its curve on its face. Pump (PACK-28) plays no
 //! kernel of its own.
 
 use std::collections::BTreeMap;
@@ -83,8 +83,9 @@ fn the_mixing_tools_are_effects_that_start_where_their_kernels_do() {
     let eq = &catalog.components["@m2/mixing:eq"];
     let groups: Vec<&str> = eq.editor.groups.iter().map(|g| g.name.as_str()).collect();
     assert_eq!(groups, (1..=8).map(|b| format!("Band {b}")).collect::<Vec<_>>(), "the EQ's groups");
-    // No picture until a view of an EQ's whole curve exists (review Z3, gaps.md): the filter view
-    // draws a low-pass, which no band is at the EQ's start.
+    // Its face is its whole curve, measured from its own sound (CARD-111; review Z3 answered by
+    // the pictures, CARD-60, and the measure, CARD-80).
     let views: Vec<&str> = eq.editor.views.iter().map(|v| v.name.as_str()).collect();
-    assert!(views.is_empty(), "the EQ draws {views:?}");
+    assert_eq!(views, ["curve"], "the EQ draws its curve");
+    assert_eq!(eq.editor.face, ["curve"], "its face is its curve");
 }
