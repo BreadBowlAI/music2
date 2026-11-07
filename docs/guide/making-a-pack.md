@@ -359,6 +359,8 @@ export const curve = component(
 
 The envelope draws std's `adsr`'s own sums and the compressor's curve std's `compress`'s, each checked against those sounds. A filter you play on its own is measured: `p.response()` can't be wrong about it. One inside your voices, where music2 can't play a click through it, is yours to draw from your filter's own maths, on `curvePicture({ live: false })`, as the example above does; check it against your sound.
 
+std's drawn lowpass is gone: `lowpass`, `lowpassDb`, `lowpassWords` and `resonanceQ` were taken out of `std/pictures`. A pack that still imports one doesn't load, and the error says what to do instead: measure the filter with `p.response()`, or draw its curve from your own maths.
+
 A picture whose x axis is time (in seconds or beats) is drawn up to the furthest point its shapes reach, so a short envelope fills it as a long one does; while you drag a dot, the axis stays as it was, so the dot stays under the pointer. A live level is drawn on the picture's own y axis when that is in dB.
 
 ## Kernels of its own
