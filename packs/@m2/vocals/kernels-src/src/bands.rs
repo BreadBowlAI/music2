@@ -63,7 +63,7 @@ pub(crate) fn section(sr: f32, f: f32) -> Filter {
 /// phases are 130° apart, so summed as they are they would cut a notch there; turned over, 50°, and
 /// all open they give the carrier back within 1.6 dB.
 pub(crate) fn sign(k: usize) -> f32 {
-    if k % 2 == 0 { 1.0 } else { -1.0 }
+    if k.is_multiple_of(2) { 1.0 } else { -1.0 }
 }
 
 /// One band's two sections, and one channel's states of them.
