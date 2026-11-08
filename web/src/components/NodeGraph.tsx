@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { create } from "zustand";
 import {
   controlLabel,
   display,
@@ -754,10 +755,9 @@ const ModuleSection = memo(function ModuleSection({
       }),
     [module, placed, back, routes, height],
   );
-  // A wire's + shows under the pointer, on the selected node's wires, and while its browser is open.
-  const [hovered, setHovered] = useState<string | null>(null);
+  // A wire's + shows under the pointer (`useWireHover`, so a hover draws only its +), on the selected
+  // node's wires, and while its browser is open.
   const [picking, setPicking] = useState<{ edge: PortEdge; anchor: HTMLElement } | null>(null);
-  const selected = useExpanded((s) => s.selected);
   const keyOf = useMemo(() => new Map(module.nodes.map((n) => [n.id, n.key ?? n.id])), [module]);
 
   // Drag from a named output onto a bar: the value is replaced by the signal's name. Dropped on a
@@ -895,8 +895,8 @@ const ModuleSection = memo(function ModuleSection({
                       strokeWidth={14}
                       fill="none"
                       style={{ pointerEvents: "stroke" }}
-                      onPointerEnter={() => setHovered(edgeKey(e))}
-                      onPointerLeave={() => setHovered((h) => (h === edgeKey(e) ? null : h))}
+                      onPointerEnter={() => useWireHover.getState().set(edgeKey(e), true)}
+                      onPointerLeave={() => useWireHover.getState().set(edgeKey(e), false)}
                     />
                   ))}
                 </svg>
@@ -921,19 +921,17 @@ const ModuleSection = memo(function ModuleSection({
               {!cable &&
                 drawn.map(({ e, at }) => {
                   const k = edgeKey(e);
-                  const shown = hovered === k || picking?.edge === e || (selected != null && (keyOf.get(e.from) === selected || keyOf.get(e.to) === selected));
                   return (
                     <WirePlus
                       key={k}
                       edge={e}
                       from={module.nodes.find((n) => n.id === e.from)!}
                       to={module.nodes.find((n) => n.id === e.to)!}
+                      ends={[keyOf.get(e.from) ?? e.from, keyOf.get(e.to) ?? e.to]}
                       at={at}
-                      shown={shown}
                       open={picking?.edge === e}
                       locked={editable ? null : "This song can't be edited here"}
                       effects={effects}
-                      onHover={(on) => setHovered((h) => (on ? k : h === k ? null : h))}
                       onOpen={(anchor) => setPicking((p) => (p?.edge === e ? null : { edge: e, anchor }))}
                     />
                   );
@@ -972,6 +970,12 @@ const ModuleSection = memo(function ModuleSection({
   );
 });
 
+/** The wire under the pointer, by its key: only its + draws again when it changes. */
+const useWireHover = create<{ hovered: string | null; set: (key: string, on: boolean) => void }>((set) => ({
+  hovered: null,
+  set: (key, on) => set((s) => ({ hovered: on ? key : s.hovered === key ? null : s.hovered })),
+}));
+
 /** What a wire takes: a note effect on notes, an effect on a sound (CARD-36). */
 const wireTakes = (kind: PortKind) => (kind === "notes" ? "a note effect" : "an effect");
 
@@ -984,26 +988,29 @@ function WirePlus({
   edge,
   from,
   to,
+  ends,
   at,
-  shown,
   open,
   locked,
   effects,
-  onHover,
   onOpen,
 }: {
   edge: PortEdge;
   from: ViewNode;
   to: ViewNode;
+  /** Its nodes' keys, which the selection names. */
+  ends: [string, string];
   at: { x: number; y: number };
-  shown: boolean;
   open: boolean;
   locked: string | null;
   effects: Effect[];
-  onHover: (on: boolean) => void;
   onOpen: (anchor: HTMLElement) => void;
 }) {
   const toast = useStore((s) => s.toast);
+  const k = edgeKey(edge);
+  const hovered = useWireHover((s) => s.hovered === k);
+  const selected = useExpanded((s) => s.selected != null && ends.includes(s.selected));
+  const shown = hovered || selected;
   const why = useContext(Locked) ?? locked ?? (edge.plus && "refused" in edge.plus ? edge.plus.refused : null) ?? (edge.plus ? null : "This wire takes no effect.");
   const takes = wireTakes(edge.kind);
   return (
@@ -1027,8 +1034,8 @@ function WirePlus({
       aria-expanded={open}
       title={why ?? `Add ${takes} on this wire: after ${titleOf(from, effects)}, before ${titleOf(to, effects)}`}
       tabIndex={shown ? 0 : -1}
-      onPointerEnter={() => onHover(true)}
-      onPointerLeave={() => onHover(false)}
+      onPointerEnter={() => useWireHover.getState().set(k, true)}
+      onPointerLeave={() => useWireHover.getState().set(k, false)}
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => (why ? toast(why) : onOpen(e.currentTarget))}
     >
