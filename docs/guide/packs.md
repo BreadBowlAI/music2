@@ -27,7 +27,7 @@ music2's sounds are packs too, made by music2 and kept in the repository at `pac
 | `@m2/synths` | the polysynth's sounds (supersaw, lead, pad, pluck, 808 sub, bass, strings), the FM synth's (keys, bell, metal), each synth with every knob, and three simple instruments to read and copy |
 | `@m2/wavetable` | a wavetable synth: two oscillators that slide through tables of waveforms, or a WAV of your own |
 | `@m2/drums` | 808/909 drums: the Drum, which plays one drum, picked from its menu, and three drum kits of it; and the older drum machine, a whole kit on one track |
-| `@m2/effects` | delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen |
+| `@m2/effects` | delay, reverb, Grains, chorus, the Flanger, phaser, tremolo, drive, bitcrush, widen and the Clipper |
 | `@m2/mixing` | the tools a mix needs: an eight-band EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump |
 | `@m2/vocals` | tools for a sung voice: Tune, which moves each sung note onto the song's key, and Find notes, to edit a voice's notes one by one |
 | `@m2/notes` | note effects, which go before an instrument: the Arpeggiator, Chord, Note echo and Lock to key ([Note effects](sounds.md#note-effects)) |
