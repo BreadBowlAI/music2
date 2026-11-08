@@ -138,7 +138,7 @@ await key("Escape");
 
 // The effect browser.
 await show("keys");
-await page.click('[aria-label^="Add an effect after"]');
+await page.click('[aria-label^="Add an effect after"]:not([aria-disabled])');
 await page.waitForSelector("[data-effect-browser]");
 await place("[data-effect-browser]", "the effect browser");
 await key("Escape");

@@ -313,10 +313,12 @@ async function withPlugins() {
     const rev = (await api2("graph")).view.revision;
     const clicked = frames();
     const ref = median(levels(clicked - RATE, clicked));
-    await p2.click('[data-module="kick"] button[aria-label="Add an effect after drums.drum"]');
+    // The drum is read by its Follow and its out, so the + on its wire out is greyed (CARD-36): the
+    // Delay goes on its wire into the Follow, a new graph all the same.
+    await p2.click('[data-module="kick"] button[aria-label^="Add an effect after drums.drum, before follow"]');
     await p2.waitForSelector('[data-module="kick"] [data-effect="delay"]');
     await p2.click('[data-module="kick"] [data-effect="delay"]');
-    check(await until(() => kickTs().includes("delay(drums.drum("), 5000), "a delay goes after the kick while the chord sounds");
+    check(await until(() => kickTs().includes("follow(delay(out,"), 5000), "a delay goes after the kick while the chord sounds");
     check(await until(async () => (await api2("graph")).view.revision > rev, 5000), "and a new revision plays");
     const taken = frames();
     await sleep(1200);

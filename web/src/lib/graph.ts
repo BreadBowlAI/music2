@@ -125,6 +125,8 @@ export interface ViewNode {
   component: string | null;
   /** The effect this node is, by its label (`Delay`), if it can be removed. */
   effect: string | null;
+  /** Why Remove can't take this call out, in words (CARD-36): when it isn't an effect. */
+  remove?: string;
   /** What a call is called on screen: its component's label (`LFO` for `lfo(…)`); `label` is the code's name for it. */
   title: string | null;
   /** Where signals and values come in, in the order the code writes them. */
@@ -219,7 +221,13 @@ export interface InputPort {
 export interface OutputPort { id: string; label: string; kind: PortKind; outlet: boolean }
 
 /** A connection from an output of `from` to an input of `to` (node and port ids); `late`: a `feedback()` reads it a block late, closing a loop. */
-export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean }
+/**
+ * What a wire's + does (CARD-36): the add route's first form, after a call (`call`); its second, on
+ * this wire alone, around argument `input` of call `reader`; or why no effect can go there.
+ */
+export type Plus = { call: string } | { reader: string; input: string } | { refused: string };
+
+export interface PortEdge { from: string; from_port: string; to: string; to_port: string; kind: PortKind; late?: boolean; plus?: Plus }
 
 /**
  * An effect the packages offer: a component (`@m2/effects:delay`) imported as `name` from `module`. `insert` is
@@ -1055,6 +1063,15 @@ export const graphApi = {
       { name: `adding ${effect.label}`, structural: true },
       gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/add", { session, revision: at, call: node, component: effect.component })),
     ),
+  /** An effect on one wire (CARD-36), as its `plus` says: after a call, or around one argument of its reader. */
+  addEffectOn: (session: number, revision: number, plus: { call: string } | { reader: string; input: string }, effect: Effect) =>
+    "call" in plus
+      ? graphApi.addEffect(session, revision, plus.call, effect)
+      : edit(
+          session,
+          { name: `adding ${effect.label}`, structural: true },
+          gated(session, revision, [fileOf(plus.reader)], (at) => call<Edit>("/effect/add", { session, revision: at, reader: plus.reader, input: plus.input, component: effect.component })),
+        ),
   removeEffect: (session: number, revision: number, node: string, step: Step) =>
     edit(session, step, gated(session, revision, [fileOf(node)], (at) => call<Edit>("/effect/remove", { session, revision: at, call: node }))),
   /** Rewrite a notes lane (module and lane keys) with every clip it is to have. Prefer `writeLane`, which queues and gives clips ids. */

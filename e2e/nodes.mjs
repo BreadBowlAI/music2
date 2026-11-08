@@ -19,7 +19,7 @@ import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 import { expand } from "./graphlib.mjs";
 
-const { page, errors, api, view, box, posts, key, caughtUp } = await open(1440, 900);
+const { page, errors, api, view, box, posts, key, caughtUp, toasts } = await open(1440, 900);
 
 /** A write or a pointer from outside the page: an agent's (AGENT-5, AGENT-6). */
 const agent = (path, body) =>
@@ -360,6 +360,113 @@ await until(async () => !!(await page.$(lp)));
 await page.click(`${lp} [data-node-menu]`);
 check(await until(async () => !!(await page.$("[data-testid=node-remove]"))), "the Lowpass's ⋯ menu offers Remove");
 await page.keyboard.press("Escape");
+
+// ---------------------------------------------------------------- + on a wire (CARD-36, taste.md DV-7)
+
+// No node's header and no pill has a + of its own: an effect goes in from + on a wire.
+check(!(await page.$(`${g} [data-node] button[aria-label^="Add an"]`)) && !(await page.$('[data-testid=graph] [data-node] button[aria-label^="Add an"]')), "no node's header and no pill has a + of its own");
+st = await state();
+const wobMod = () => st.view.modules.find((m) => m.key === "wob");
+const idOf = (title) => wobMod().nodes.find((n) => n.title === title)?.id;
+const plusOn = (from, to) => `${g} [data-wire-plus][data-from="${from}"][data-to="${to}"]`;
+const shown = (sel) => page.$eval(sel, (e) => !!e.dataset.shown && getComputedStyle(e).opacity === "1").catch(() => false);
+const [wobN, lpN] = [idOf("Wobbly Bass Synth"), idOf("Lowpass")];
+// Wob's body plays a saw, whose frequency comes in on a wire: its one wire in.
+const inN = wobMod().port_edges.find((e) => e.to === wobN)?.from;
+const out = plusOn(wobN, lpN), into = plusOn(inN, wobN), last = plusOn(lpN, "export:out");
+check(!!(await page.$(out)) && !!(await page.$(into)) && !!(await page.$(last)), "each wire of Wob's has a + of its own");
+// Nothing selected: a click on the canvas's empty corner clears the selection.
+const corner = await box(`${g} [data-canvas]`);
+await page.mouse.click(corner.x + corner.width - 4, corner.y + 4);
+check(!(await shown(out)) && !(await shown(into)), "unseen until it is wanted");
+// Under the pointer: a point on the wire a quarter of its way along, away from its +.
+const along = await page.$eval(`${g} path[data-from="${wobN}"][data-to="${lpN}"]`, (p) => {
+  const q = p.getPointAtLength(p.getTotalLength() / 4).matrixTransform(p.getScreenCTM());
+  return { x: q.x, y: q.y };
+});
+await page.mouse.move(along.x, along.y);
+check(await until(() => shown(out), 2000), "a wire under the pointer shows its + (the graph note's G20)");
+check(!(await shown(into)), "and only its own");
+await page.mouse.move(5, 5);
+check(await until(async () => !(await shown(out)), 2000), "it goes again when the pointer leaves");
+// The selected node's wires show theirs.
+await page.click(`${wob} [data-node-title]`);
+check(await until(async () => (await shown(out)) && (await shown(into))), "the selected node's wires show their +, in and out");
+check(!(await shown(last)), "a wire it doesn't touch doesn't");
+await page.keyboard.press("Escape");
+check(await until(async () => !(await shown(out))), "Esc clears the selection, and its wires' + go");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-plus.png` });
+// Its browser offers what fits a sound's wire; a note effect is greyed, saying why.
+await page.mouse.move(along.x, along.y);
+await until(() => shown(out), 2000);
+await page.click(out);
+check(await until(async () => !!(await page.$("[data-effect-browser]"))), "+ on the wire after Wob opens the effect browser");
+const arpWhy = await page.$eval('[data-effect-browser] [data-component="@m2/notes:arp"]', (e) => e.dataset.unfit ?? "").catch(() => "");
+check(arpWhy === "Arpeggiator goes on notes, and this wire carries a sound", `a note effect is greyed on a sound's wire, saying why: ${arpWhy}`);
+check(!(await page.$('[data-effect-browser] [data-effect="delay"][data-unfit]')), "an effect isn't");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-browser.png` });
+text = read("tracks/wob.ts");
+await page.click('[data-effect-browser] [data-effect="delay"]');
+check(await until(() => read("tracks/wob.ts").includes("lowpass(delay(w, { time: 0.25, feedback: 0.3, mix: 0.3 }), { cutoff: 5000 })")), "a Delay goes on that wire, around the Lowpass's `w`");
+check(await stepIs("adding Delay"), `one undo step: ${await undoTitle()}`);
+check(await until(async () => !!(await page.$(`${g} [data-node="delay"]`))), "the Delay's node shows between Wob and the Lowpass");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-added.png` });
+await key("Meta+z");
+check(await until(() => read("tracks/wob.ts") === text), "⌘Z takes it out again");
+await until(async () => !(await page.$(`${g} [data-node="delay"]`)));
+// Keys' notes wire into its Pluck offers note effects; an effect there is greyed, saying why.
+await page.click('[data-module-tab="keys"] [data-testid=track-label]');
+st = await state();
+const keysMod = st.view.modules.find((m) => m.key === "keys");
+const pluckN = keysMod.nodes.find((n) => n.label === "pluck")?.id;
+const chordsN = keysMod.port_edges.find((e) => e.to === pluckN && e.kind === "notes")?.from;
+const chordsIn = `[data-testid=graph] [data-module="keys"] [data-wire-plus][data-from="${chordsN}"][data-to="${pluckN}"]`;
+await until(async () => !!(await page.$(chordsIn)), 15000);
+await page.click(`[data-testid=graph] [data-module="keys"] [data-node="pluck"] [data-node-title]`);
+await until(() => shown(chordsIn));
+await page.click(chordsIn);
+check(await until(async () => !!(await page.$("[data-effect-browser]"))), "+ on the notes wire into Keys' Pluck opens the browser");
+const delayWhy = await page.$eval('[data-effect-browser] [data-effect="delay"]', (e) => e.dataset.unfit ?? "").catch(() => "");
+check(delayWhy === "Delay goes on a sound, and this wire carries notes", `an effect is greyed on a notes wire, saying why: ${delayWhy}`);
+const keysText = read("tracks/keys.ts");
+await page.click('[data-effect-browser] [data-component="@m2/notes:arp"]');
+check(await until(() => read("tracks/keys.ts").includes("pluck(arp(lane.notes(\"chords\")))")), "an Arpeggiator goes on the notes wire, before the Pluck");
+await key("Meta+z");
+check(await until(() => read("tracks/keys.ts") === keysText), "⌘Z takes it out again");
+await page.keyboard.press("Escape");
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(wob)), 15000);
+// Remove says why it can't, in ⋯ and with Delete: Wob is an instrument.
+await page.click(`${wob} [data-node-menu]`);
+const removeWhy = await page.$eval("[data-testid=node-remove]", (e) => [e.getAttribute("aria-disabled") ?? String(e.disabled), e.title]).catch(() => ["", ""]);
+check(/true/.test(removeWhy[0]) && removeWhy[1] === "Wobbly Bass Synth is an instrument: change it with Change instrument, in its track's menu.", `⋯ greys Remove on Wob, saying why: ${JSON.stringify(removeWhy)}`);
+await page.keyboard.press("Escape");
+await page.click(`${wob} [data-node-title]`);
+await page.keyboard.press("Delete");
+check(await until(async () => (await toasts()).some((x) => x.includes("Wobbly Bass Synth is an instrument"))), "Delete on Wob says the same");
+await page.keyboard.press("Escape");
+// The song: a control wire's + is greyed, saying why, and a click says it.
+await page.click('[data-module-tab="song"]');
+const env = '[data-testid=graph] [data-module="song"] [data-wire-plus][data-from="import:kick.env"]';
+check(await until(async () => !!(await page.$(env)), 9000), "the Kick's env wire into the Duck has a +");
+const envWhy = await page.$eval(env, (e) => [e.getAttribute("aria-disabled"), e.title]).catch(() => [null, ""]);
+check(envWhy[0] === "true" && envWhy[1] === "This wire carries a control: an effect goes on a sound, a note effect on notes.", `greyed, saying why: ${JSON.stringify(envWhy)}`);
+await page.click(env);
+check(await until(async () => (await toasts()).some((x) => x.includes("This wire carries a control"))) && !(await page.$("[data-effect-browser]")), "a click says it, and opens nothing");
+// The kick's drum is read by its Follow and its out: an effect after it would change both.
+await page.click('[data-module-tab="kick"] [data-testid=track-label]');
+st = await state();
+const kickMod = st.view.modules.find((m) => m.key === "kick");
+const drumN = kickMod.nodes.find((n) => n.label === "drums.drum")?.id;
+const drumOut = `[data-testid=graph] [data-module="kick"] [data-wire-plus][data-from="${drumN}"][data-to="export:out"]`;
+check(await until(async () => /is read in 2 places/.test((await page.$eval(drumOut, (e) => e.title).catch(() => "")) ?? ""), 9000), `the kick's wire out is greyed: ${await page.$eval(drumOut, (e) => e.title).catch(() => "")}`);
+const follows = kickMod.port_edges.find((e) => e.from === drumN && e.to !== "export:out");
+check(follows?.plus?.reader === follows?.to && follows?.plus?.input === "0", `its wire into the Follow takes one, on that wire: ${JSON.stringify(follows?.plus)}`);
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(wob)), 15000);
 
 // ---------------------------------------------------------------- +N (taste.md DV-16)
 

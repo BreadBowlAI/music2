@@ -105,7 +105,7 @@ check(!!(await until(() => page.$('[data-module-tab="vox"]'), 20000)) && !!(awai
 
 await show("lead");
 await view("graph");
-const plus = '[data-module="lead"] button[aria-label^="Add an effect after"]';
+const plus = '[data-module="lead"] button[aria-label^="Add an effect after"]:not([aria-disabled])';
 check(!!(await until(() => page.$(plus), 15000)), "the saw has a +");
 await page.click(plus);
 await page.waitForSelector('[data-effect-browser] [data-effect="vocoder"]', { timeout: 5000 }).catch(() => {});

@@ -44,7 +44,7 @@ const knobs = (node) =>
 /** Add `name` after the node labelled `after` by typing `query` in its browser and pressing Enter. */
 const add = async (after, query, name) => {
   const revision = (await api("graph")).view.revision;
-  await press(`[data-module="keys"] button[aria-label="Add an effect after ${after}"]`);
+  await press(`[data-module="keys"] button[aria-label^="Add an effect after ${after},"]`);
   await page.waitForSelector("[data-effect-browser] input");
   await page.keyboard.type(query);
   const first = await until(async () => (await options())[0] === name, 2000);
@@ -73,9 +73,10 @@ check(
   by.reverb.category === "Delay & Reverb" && by.compress.category === "Dynamics" && by.chorus.category === "Modulation" && by.eq3.category === "EQ" && by.bitcrush.category === "Distortion" && by.widen.category === "Utility",
   "each in its category",
 );
-await press('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await press('[data-module="keys"] button[aria-label^="Add an effect after pluck,"]');
 await page.waitForSelector("[data-effect-browser]");
-const groups = await page.$$eval("[data-effect-browser] [data-category]", (els) => els.map((e) => e.dataset.category));
+// What fits a sound's wire (CARD-36): the note effects follow, greyed.
+const groups = await page.$$eval("[data-effect-browser] [data-category]:not([data-unfit])", (els) => els.map((e) => e.dataset.category));
 check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Voice", "Utility"]), `the browser groups them (${groups.join(", ")})`);
 const groupOf = (name) => page.$eval(`[data-effect-browser] [data-effect="${name}"]`, (e) => e.closest("[data-category]")?.dataset.category ?? e.parentElement.closest("[data-category]")?.dataset.category).catch(() => null);
 const listed = await Promise.all(["reverb", "chorus", "compress"].map(groupOf));

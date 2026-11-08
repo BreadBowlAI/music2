@@ -46,7 +46,7 @@ const MENU = "Remove,Move left,Move right,Show in code,Copy its id";
 // ---------------------------------------------------------------- D1: turn an effect off and on
 
 await show("keys");
-await page.click('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after pluck,"]');
 await page.waitForSelector('[data-effect="reverb"]');
 await page.click('[data-effect="reverb"]');
 const reverbed = 'reverb(pluck(lane.notes("chords")), { size: 0.6, damping: 0.5, mix: 0.25 })';
@@ -111,7 +111,7 @@ check(await until(async () => /^Undo turning Reverb on \(/.test(await undoTitle(
 
 // ---------------------------------------------------------------- D2: move an effect left or right
 
-await page.click(`${card("keys", "reverb")} button[aria-label="Add an effect after reverb"]`);
+await page.click(`[data-module="keys"] button[aria-label^="Add an effect after reverb,"]`);
 await page.waitForSelector('[data-effect="delay"]');
 await page.click('[data-effect="delay"]');
 const delayed = `delay(${reverbed}, { time: 0.25, feedback: 0.3, mix: 0.3 })`;

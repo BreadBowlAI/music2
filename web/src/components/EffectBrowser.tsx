@@ -101,21 +101,28 @@ function place(anchor: HTMLElement) {
 }
 
 /**
- * A searchable list of the effects that can go after `after` (the code's name for it, as the preview
- * writes it; `named`: what the screen calls it): type to filter, arrows to move, Enter to add. The
- * installed effect plugins are its last group (gaps #32), asked for as it opens.
+ * A searchable list of the effects for one wire (CARD-36): type to filter, arrows to move, Enter to
+ * add. What fits the wire is listed as it is; what doesn't is greyed, `fits` saying why, and arrows
+ * and Enter pass it by. `wraps` is the code it goes around, as the preview writes it (`pluck(…)`);
+ * `label` and `placeholder` say where it goes ("Add an effect after Pluck"). The installed effect
+ * plugins are its last group (gaps #32), asked for as it opens.
  */
 export default function EffectBrowser({
   effects,
-  after,
-  named = after,
+  wraps,
+  label,
+  placeholder,
+  fits,
   anchor,
   onPick,
   onClose,
 }: {
   effects: Effect[];
-  after: string;
-  named?: string;
+  wraps: string;
+  label: string;
+  placeholder: string;
+  /** Why `effect` can't go on this wire, or null when it can. */
+  fits: (effect: Effect) => string | null;
   anchor: HTMLElement;
   onPick: (effect: Effect) => void;
   onClose: () => void;
@@ -127,9 +134,13 @@ export default function EffectBrowser({
   const list = useRef<HTMLDivElement>(null);
   const plugins = usePluginList((s) => s.plugins);
   useEffect(() => wantPlugins(), []);
-  // A note effect goes before what plays notes, never after a sound (PKG-21): + Effect lists none.
-  const groups = useMemo(() => search([...effects.filter((e) => !e.notes), ...pluginEffects(plugins)], query), [effects, plugins, query]);
-  const flat = useMemo(() => groups.flatMap((g) => g.items), [groups]);
+  // What fits the wire first, then what doesn't, greyed (a note effect on a sound's wire, PKG-21).
+  const groups = useMemo(() => {
+    const all = search([...effects, ...pluginEffects(plugins)], query);
+    const fit = (yes: boolean) => all.map((g) => ({ ...g, items: g.items.filter((m) => !fits(m.effect) === yes) })).filter((g) => g.items.length);
+    return [...fit(true), ...fit(false)];
+  }, [effects, plugins, query, fits]);
+  const flat = useMemo(() => groups.flatMap((g) => g.items).filter((m) => !fits(m.effect)), [groups, fits]);
   const current = flat[Math.min(active, flat.length - 1)];
 
   // Follow the anchor while the graph scrolls; close on a click anywhere else.
@@ -164,7 +175,7 @@ export default function EffectBrowser({
     <div
       ref={panel}
       role="dialog"
-      aria-label={`Add an effect after ${after}`}
+      aria-label={label}
       data-effect-browser
       className="fixed z-50 flex flex-col rounded-md bg-raised shadow-pop overflow-hidden animate-rise cursor-default"
       style={{ ...pos, width: WIDTH }}
@@ -175,7 +186,7 @@ export default function EffectBrowser({
         <input
           autoFocus
           value={query}
-          placeholder={`Add after ${named}…`}
+          placeholder={placeholder}
           aria-label="Search effects"
           role="combobox"
           aria-expanded
@@ -205,17 +216,18 @@ export default function EffectBrowser({
         />
       </div>
       <div ref={list} id="effect-list" role="listbox" aria-label="Effects" className="flex-1 min-h-0 overflow-y-auto p-1">
-        {flat.length === 0 && <NoMatch query={query} className="mx-auto my-6" />}
+        {groups.length === 0 && <NoMatch query={query} className="mx-auto my-6" />}
         {groups.map((g) => {
           const { Icon } = category(g.name);
           return (
-            <div key={g.name} role="group" aria-label={g.name} data-category={g.name}>
+            <div key={`${g.name}:${!!fits(g.items[0].effect)}`} role="group" aria-label={g.name} data-category={g.name} data-unfit={fits(g.items[0].effect) ? true : undefined}>
               <div className="h-ctl-sm px-2 flex items-center gap-1.5 text-sm font-semibold text-fg-muted">
                 <Icon size={14} className="text-fg-faint" />
                 {g.name}
               </div>
               {g.items.map((m) => {
-                const i = index++;
+                const why = fits(m.effect);
+                const i = why ? -1 : index++;
                 const on = m === current;
                 return (
                   <div
@@ -223,18 +235,24 @@ export default function EffectBrowser({
                     id={`effect-${m.effect.component}`}
                     role="option"
                     aria-selected={on}
+                    aria-disabled={!!why || undefined}
                     data-effect={m.effect.name}
                     data-component={m.effect.component}
                     data-active={on || undefined}
+                    data-unfit={why ?? undefined}
                     // Named by its label ("Lowpass"); the code's name is in the tooltip and the footer.
-                    className={clsx("px-2 py-1.5 rounded-sm flex items-center gap-2 cursor-pointer transition-colors duration-80 ease-linear", on && "bg-accent-soft")}
-                    title={m.effect.name}
-                    onPointerMove={() => i !== active && setActive(i)}
-                    onClick={() => choose(m)}
+                    className={clsx(
+                      "px-2 py-1.5 rounded-sm flex items-center gap-2 transition-colors duration-80 ease-linear",
+                      why ? "cursor-default" : "cursor-pointer",
+                      on && "bg-accent-soft",
+                    )}
+                    title={why ?? m.effect.name}
+                    onPointerMove={() => !why && i !== active && setActive(i)}
+                    onClick={() => !why && choose(m)}
                   >
                     <span className="flex-1 min-w-0">
-                      <span className="block text-sm font-medium text-fg">{m.effect.label}</span>
-                      <span className="block text-xs text-fg-muted truncate">{m.effect.description}</span>
+                      <span className={clsx("block text-sm font-medium", why ? "text-fg-off" : "text-fg")}>{m.effect.label}</span>
+                      <span className={clsx("block text-xs truncate", why ? "text-fg-off" : "text-fg-muted")}>{why ?? m.effect.description}</span>
                     </span>
                     {on && <CornerDownLeft size={14} className="shrink-0 text-fg-faint" />}
                   </div>
@@ -249,9 +267,7 @@ export default function EffectBrowser({
       {current && (
         <div className="h-ctl shrink-0 flex items-center px-3 border-t border-line bg-chrome text-xs text-fg-muted">
           <span data-code className="flex-1 min-w-0 truncate font-mono" title="What adding it writes in your code">
-            {isPlugin(current.effect.component)
-              ? `plugin("${current.effect.component}", { in: ${after}(…) })`
-              : `${current.effect.name}(${after}(…)${current.effect.insert})`}
+            {isPlugin(current.effect.component) ? `plugin("${current.effect.component}", { in: ${wraps} })` : `${current.effect.name}(${wraps}${current.effect.insert})`}
           </span>
         </div>
       )}

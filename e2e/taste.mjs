@@ -246,7 +246,7 @@ await page.waitForSelector('[data-knob="drive"] [role=alert]');
 await state("a knob's value typed in, unreadable");
 await key("Escape");
 await show("keys");
-await page.click('[aria-label^="Add an effect after"]');
+await page.click('[aria-label^="Add an effect after"]:not([aria-disabled])');
 await page.waitForSelector("[data-effect-browser]");
 await state("the effect browser");
 await key("Escape");

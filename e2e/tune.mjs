@@ -84,7 +84,7 @@ const files = () => ["tracks/vox.ts", "music2.toml", "music2.lock"].map(read).jo
 // The vocal track's own lane takes an effect around it, in the track's code (review U10).
 await show("vox");
 await view("graph");
-const plus = '[data-module="vox"] button[aria-label="Add an effect after clips"]';
+const plus = '[data-module="vox"] button[aria-label^="Add an effect after clips,"]';
 check(!!(await until(() => page.$(plus), 15000)), "the Vox track's lane has a +");
 await page.click(plus);
 await page.waitForSelector('[data-effect-browser] [data-effect="tune"]', { timeout: 5000 }).catch(() => {});

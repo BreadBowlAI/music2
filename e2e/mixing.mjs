@@ -37,7 +37,7 @@ const before = files();
 // ---------------------------------------------------------------- + Effect
 
 await show("keys");
-await page.click('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after pluck,"]');
 await page.waitForSelector('[data-effect-browser] [data-effect="eq"]');
 const group = await page.$eval('[data-effect-browser] [data-effect="eq"]', (e) => e.closest("[data-category]")?.dataset.category);
 check(group === "EQ", `the parametric EQ is listed under EQ: ${group}`);
