@@ -355,24 +355,11 @@ const BANDS = ["Low", "Mid", "High"] as const;
 const UNDER = -80;
 
 /**
- * A multiband compressor's split (CARD-115), on `curvePicture()`'s axes and its spectrum in and out,
- * and how far each band turns down now, its meters as a bar each at the picture's right, from 0 dB
- * up, low, mid and high side by side (CARD-73).
- */
-export function splitPicture(): PictureDecl<"hz", "db"> {
-  return view.picture({
-    x: axis.log("hz", 20, 20000),
-    y: axis.lin("db", -24, 24),
-    live: [live.spectrum("in", { tone: "faint" }), live.spectrum("out"), ...BANDS.map((b) => live.meter(`${b.toLowerCase()}_reduction`))],
-  });
-}
-
-/**
- * A multiband compressor's split (CARD-115), on `splitPicture()`: how it turns each frequency below
- * its thresholds, the line `split`, measured from its own sound with a click at −80 dB
- * (`p.response`); the two crossovers as guide lines, a dot on each that moves it across; and a dot
- * in each band, at its gain, that moves the gain up and down and shows its tab. How far each band
- * turns down as it plays is its kernel's meter, a live layer of the picture.
+ * A multiband compressor's split (CARD-115), on `curvePicture()`'s axes: how it turns each
+ * frequency below its thresholds, the line `split`, measured from its own sound with a click at
+ * −80 dB (`p.response`); the two crossovers as guide lines, a dot on each that moves it across; and
+ * a dot in each band, at its gain, that moves the gain up and down and shows its tab. How far its
+ * compressors turn down as it plays is its second picture, `down` (`bandsDownPicture`).
  */
 export function split<D>(
   p: Painter<D, "hz", "db">,
@@ -398,13 +385,32 @@ export function split<D>(
 /** What `split` draws, in words. */
 export function splitWords(v: Values, names: { lowMid: string; midHigh: string; gains: readonly [string, string, string] }): string {
   const [a, b] = [v[names.lowMid], v[names.midHigh]];
-  if (typeof a !== "number" || typeof b !== "number") return `Lows, mids and highs, each compressed on its own: a crossover is set by a cable or the code. ${BARS}`;
+  if (typeof a !== "number" || typeof b !== "number") return "Lows, mids and highs, each compressed on its own: a crossover is set by a cable or the code";
   const g = names.gains.map((n) => (typeof v[n] === "number" ? dbWords(v[n] as number) : "set elsewhere"));
-  return `Lows below ${hzWords(Math.min(a, b))}, mids to ${hzWords(Math.max(a, b))}, highs above, each compressed on its own, then turned ${g[0]}, ${g[1]} and ${g[2]}: as it sounds while quieter than its thresholds. ${BARS}`;
+  return `Lows below ${hzWords(Math.min(a, b))}, mids to ${hzWords(Math.max(a, b))}, highs above, each compressed on its own, then turned ${g[0]}, ${g[1]} and ${g[2]}: as it sounds while quieter than its thresholds`;
 }
 
-/** What the multiband's bars show, in words. */
-const BARS = "The bars at the right: how far the lows, mids and highs are turned down now";
+/** The most a multiband's `down` shows, in dB: a band turned down further stands at the top. */
+export const BANDS_MOST = 24;
+
+/**
+ * How far each of a multiband compressor's bands turns down now (CARD-115): its meters
+ * `low_reduction`, `mid_reduction` and `high_reduction`, a bar each, low, mid and high side by side
+ * (CARD-73), from 0 dB at the foot to 24 dB at the top. No history: three lines in the window's two
+ * greys can't be told apart at 104 px, so nothing runs across, and its axis across is drawn bare.
+ */
+export function bandsDownPicture(): PictureDecl<"seconds", "db"> {
+  return view.picture({
+    x: axis.time(3, { bare: true }),
+    y: axis.lin("db", 0, BANDS_MOST),
+    live: BANDS.map((b) => live.meter(`${b.toLowerCase()}_reduction`)),
+  });
+}
+
+/** What the multiband's `down` draws, in words. */
+export function bandsDownWords(): string {
+  return `Low, mid, high: how far each band is turned down now, a bar each, up to ${dbWords(BANDS_MOST)} (further stays at the top)`;
+}
 
 // ---------------------------------------------------------------- Pump
 

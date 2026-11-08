@@ -6,10 +6,10 @@
 // `insert` when it is added. Each card's face is its picture (CARD-110 to CARD-116, ./pictures):
 // the EQ's curve measured from its own sound with a dot for each band; the gate's levels with the
 // line where it opens and a strip lit while it is open; one hit through the transient shaper, before
-// and after; the de-esser's band over the spectrum; the multiband's split, with a bar for how far
-// each band turns down; Pump's dip over a bar. The gate and the de-esser show how far they turn
-// down beside it (`down`, std's reduction picture). What their kernels alone know, they send as
-// meters (CARD-126). The first five play the pack's own kernel (`@m2/mixing:eq` …, built
+// and after; the de-esser's band over the spectrum; the multiband's split; Pump's dip over a bar.
+// The gate, the de-esser and the multiband show how far they turn down beside it (`down`: std's
+// reduction picture, and the multiband's a bar for each band). What their kernels alone know, they
+// send as meters (CARD-126). The first five play the pack's own kernel (`@m2/mixing:eq` …, built
 // from kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
 // `.smooth()`; they use none of std's code. Pump is std's blocks alone, in TypeScript.
 
@@ -21,6 +21,8 @@ import { curvePicture, dbWords, hzWords, reductionPicture } from "std/pictures";
 import {
   band,
   bandDown,
+  bandsDownPicture,
+  bandsDownWords,
   bandDownWords,
   bandPicture,
   BAND_MOST,
@@ -38,7 +40,6 @@ import {
   levelsPicture,
   RATES,
   split,
-  splitPicture,
   splitWords,
   threshold as thresholdLine,
 } from "./pictures";
@@ -280,9 +281,10 @@ export const multiband = component(
     editor: {
       category: "Dynamics",
       description: "Compresses the lows, mids and highs each on its own",
-      // The split over the spectrum in and out, and how far each band turns down (CARD-115).
-      views: { split: splitPicture() },
-      face: ["split", "lowMid", "midHigh", "lowGain", "midGain", "highGain"],
+      // The split over the spectrum in and out, and how far each band turns down, from its kernel's
+      // meters (CARD-115).
+      views: { split: curvePicture(), down: bandsDownPicture() },
+      face: ["split", "down", "lowMid", "midHigh", "lowGain", "midGain", "highGain"],
       groups: {
         Split: ["lowMid", "midHigh"],
         Low: ["lowThreshold", "lowRatio", "lowAttack", "lowRelease", "lowGain"],
@@ -318,6 +320,7 @@ export const multiband = component(
         split(p, v, { lowMid: "lowMid", midHigh: "midHigh", gains: ["lowGain", "midGain", "highGain"], tabs: ["Low", "Mid", "High"] }),
       words: (v) => splitWords(v, { lowMid: "lowMid", midHigh: "midHigh", gains: ["lowGain", "midGain", "highGain"] }),
     },
+    down: { draw: () => [], words: () => bandsDownWords() },
   },
 );
 

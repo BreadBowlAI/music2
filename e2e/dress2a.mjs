@@ -5,11 +5,11 @@
 // card's picture on its face; while the song plays, the live ones move (the spectra, the levels over
 // time, Pump's playhead), and the meters the gate, the de-esser and the multiband send (track
 // meters2, CARD-126): the gate's strip lights on the hits and goes dark between them, and its and
-// the de-esser's `down` say how far they turn down; the multiband's three bars stand side by side,
-// low to high, and its low band's turns down. Mix A's hits stop for a quarter beat between them, so
-// its gate closes. Each draggable picture's dot is dragged: it writes its value, one undo step, which
-// ⌘Z takes back byte for byte. Each card is linted and shot, to compare with the design's mockup (to
-// $E2E_SHOTS when set, else the run's folder).
+// the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
+// side by side, low to high, and its low band's turns down. Mix A's hits stop for a quarter beat
+// between them, so its gate closes. Each draggable picture's dot is dragged: it writes its value,
+// one undo step, which ⌘Z takes back byte for byte. Each card is linted and shot, to compare with
+// the design's mockup (to $E2E_SHOTS when set, else the run's folder).
 //
 //   node e2e/dress2a.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -190,6 +190,11 @@ await shown(mb);
 check(await until(async () => (await points(`${mbPic} polyline[data-response][data-line="split"]`)) === 256, 20000), "the multiband's face draws its split, measured from its sound under its thresholds");
 const opens = await page.$$eval(`${mbPic} [data-dot]`, (els) => els.map((e) => e.dataset.opens ?? ""));
 check(JSON.stringify(opens) === JSON.stringify(["", "", "Low", "Mid", "High"]), `a dot on each crossover, and one for each band's gain that shows its tab: ${JSON.stringify(opens)}`);
+const mbDown = `${mb} [data-face] [data-picture="down"]`;
+check(
+  await until(async () => (await words(mbDown)) === "Low, mid, high: how far each band is turned down now, a bar each, up to 24 dB (further stays at the top)", 20000),
+  `beside it, how far each band turns down: ${await words(mbDown)}`,
+);
 await linted(mb, "the multiband's card");
 await shoot(mb, "multiband");
 await drag(mbPic, 3, 0, -20, "tracks/mixa.ts", (c) => num(c, "midGain") > -2, "Multiband compressor", "the mid's dot dragged up raises its gain");
@@ -254,12 +259,13 @@ check(turned.some((v) => v === 0) && turned.some((v) => v > 20), `its down says 
 await shown(deDown);
 const deTurned = (await reads(deDown, 1, 40)).map((l) => l.v);
 check(deTurned.some((v) => v > 0) && deTurned.every((v) => v >= 0 && v <= 6), `the de-esser's down says how far it turns its band down, up to 6 dB: ${[...new Set(deTurned)].slice(0, 6)}`);
-await shown(mbPic);
-const bars = await reads(mbPic, 2, 40);
-const xs = [2, 3, 4].map((k) => said(mbPic).then((l) => l[k]?.x));
+await shown(mbDown);
+const bars = await reads(mbDown, 0, 40);
+const xs = [0, 1, 2].map((k) => said(mbDown).then((l) => l[k]?.x));
 const [lowX, midX, highX] = await Promise.all(xs);
-check(lowX < midX && midX < highX && highX > 0.9, `the multiband's bars stand side by side, low to high, at its right: ${[lowX, midX, highX]}`);
+check(lowX < midX && midX < highX && highX > 0.9, `the multiband's down stands its bars side by side, low to high, at its right: ${[lowX, midX, highX]}`);
 check(bars.some((l) => l.v > 0), `the low band's bar turns down: ${[...new Set(bars.map((l) => l.v))].slice(0, 6)}`);
+check((await said(mbPic)).length === 2, `its split draws its spectra in and out alone, no bars: ${JSON.stringify(await said(mbPic))}`);
 await shoot(gate, "gate-playing");
 await shoot(de, "deesser-playing");
 await shoot(mb, "multiband-playing");

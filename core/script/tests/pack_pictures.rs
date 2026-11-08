@@ -288,24 +288,37 @@ fn the_multiband_draws_its_split() {
     assert!(close(mid, ((200.0f64 * 2500.0).sqrt(), -2.0)), "the mid's dot in its middle, at its gain: {mid:?}");
     assert_eq!(
         d["words"],
-        "Lows below 200 Hz, mids to 2.5 kHz, highs above, each compressed on its own, then turned 3 dB, −2 dB and 0 dB: as it sounds while quieter than its thresholds. The bars at the right: how far the lows, mids and highs are turned down now"
-    );
-    // CARD-115, CARD-126: how far each band turns down, its kernel's meters, a bar each, low to high.
-    let live = declared("mixing", "multiband", "split")["live"].clone();
-    let meters: Vec<&Value> = live.as_array().unwrap().iter().filter(|l| l["kind"] == "meter").collect();
-    assert_eq!(
-        meters,
-        [
-            &json!({"kind": "meter", "name": "low_reduction"}),
-            &json!({"kind": "meter", "name": "mid_reduction"}),
-            &json!({"kind": "meter", "name": "high_reduction"})
-        ]
+        "Lows below 200 Hz, mids to 2.5 kHz, highs above, each compressed on its own, then turned 3 dB, −2 dB and 0 dB: as it sounds while quieter than its thresholds"
     );
     v["lowMid"] = json!(3000);
     let crossed = draw(&runner, "mixing", "multiband", "split", v).unwrap();
     let marks: Vec<f64> =
         crossed["shapes"].as_array().unwrap().iter().filter(|s| s["kind"] == "mark").map(|s| s["at"].as_f64().unwrap()).collect();
     assert_eq!(marks, [2500.0, 3000.0], "crossed, the lower splits low from mid");
+}
+
+// CARD-115, CARD-126: beside its split, the multiband shows how far each band turns down now, its
+// kernel's meters `low_reduction`, `mid_reduction` and `high_reduction`, a bar each, low to high,
+// from 0 to 24 dB: no history, since three lines in the window's two greys can't be told apart,
+// so its axis across is bare. Its split is as before its meters: `curvePicture()`'s.
+#[test]
+fn the_multiband_shows_how_far_each_band_turns_down() {
+    let down = declared("mixing", "multiband", "down");
+    assert_eq!((&down["y"]["lo"], &down["y"]["hi"], &down["y"]["unit"], &down["y"].get("bare")), (&json!(0.0), &json!(24.0), &json!("db"), &None));
+    assert_eq!(down["x"]["bare"], json!(true), "nothing across: no grid, no numbers");
+    let bars = ["low_reduction", "mid_reduction", "high_reduction"].map(|name| json!({"kind": "meter", "name": name}));
+    assert_eq!(down["live"], json!(bars));
+    let split = declared("mixing", "multiband", "split");
+    assert_eq!(
+        split["live"],
+        json!([{"kind": "spectrum", "at": "in", "tone": "faint"}, {"kind": "spectrum", "at": "out"}]),
+        "split: curvePicture()'s spectrum in and out, no bars"
+    );
+    assert_eq!(descriptor("mixing", "multiband").editor.face, ["split", "down", "lowMid", "midHigh", "lowGain", "midGain", "highGain"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "mixing", "multiband", "down", json!({"lowMid": 200, "midHigh": 2500})).unwrap();
+    assert_eq!(d["shapes"], json!([]));
+    assert_eq!(d["words"], "Low, mid, high: how far each band is turned down now, a bar each, up to 24 dB (further stays at the top)");
 }
 
 // CARD-116: Pump draws one bar of its dip from its own sum: down `depth` at each step's start and

@@ -228,7 +228,6 @@ Each line is one small gap, without a number.
 - **Soloing a bus plays its tracks' dry sound too**: a wet-only solo needs a cell per path.
 - **A send has no pan of its own**, and can't be made mono.
 - **No solo-safe buses**, and no "solo in place" choice.
-- **The multiband's bars stand at its split's right**, low, mid and high side by side, not each at its own band (CARD-115): a meter drawn where a draw puts it (a band's line, `live.meter(name, { on })`) would be a word of `@m2/core`, not the pack's. The gate's and the de-esser's turn-down is a second picture beside theirs, as the duck's is: their levels and spectrum end at 0 dB, so a reduction has no room on them.
 - **A send starts at the track's output**: no send from inside a track's chain, before its effects.
 - **A group's tracks don't fold under it** in the timeline.
 - **The graph view shows a bus's feed** as a song export named `bus:verb`.
