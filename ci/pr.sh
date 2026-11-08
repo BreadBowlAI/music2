@@ -109,6 +109,9 @@ esac
 if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo} RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
 export M2_AUDIO=none M2_MIDI=none CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+# glibc says why it aborts a process ("free(): invalid pointer") on the terminal, which a CI run
+# hasn't got; on stderr, the test's log has it (a SIGABRT in ci/check.sh --pr on 11-08 said nothing).
+export LIBC_FATAL_STDERR_=1
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}/pr
 case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
 TARGET=$CARGO_TARGET_DIR

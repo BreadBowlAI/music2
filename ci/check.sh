@@ -178,6 +178,9 @@ export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo} RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.
 # No audio device, and no MIDI keyboard: nothing the check starts opens one (the suites' servers
 # get M2_MIDI=inject from run.mjs).
 export M2_AUDIO=none M2_MIDI=none CARGO_TERM_COLOR=never
+# glibc says why it aborts a process ("free(): invalid pointer") on the terminal, which a CI run
+# hasn't got; on stderr, the test's log has it (a SIGABRT in ci/check.sh --pr on 11-08 said nothing).
+export LIBC_FATAL_STDERR_=1
 TARGET=${CARGO_TARGET_DIR:-$ROOT/target}
 # Linux: this machine's record of the trees the gates passed on, which --gates=auto reads
 # (ci/gates-auto.sh). Steps 0b and 11 keep it; a Mac keeps none.
