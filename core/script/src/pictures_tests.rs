@@ -900,8 +900,9 @@ fn a_draw_sharing_its_cpu_is_stopped_for_its_work_not_its_wait() {
     // The draws that share the CPU: on a runner whose thread starts at its first draw, from a thread at
     // the lowest priority, which it takes. A busy thread of normal priority on its CPU leaves it about
     // 1.5% of it, however the scheduler places a thread that wakes: busy threads of its own priority
-    // didn't make the wait sure (on GitHub's runner 240 of them left a draw of 10 ms of work waiting only
-    // 81 ms by the clock).
+    // didn't make the wait sure (on GitHub's runner sixty of them left a draw of 10 ms of work waiting
+    // only 81 ms by the clock, the 11-07 nightly; four copies of the test on one CPU here, from 3 ms
+    // beside sixty to 2.7 s beside 120).
     let low = std::thread::scope(|s| {
         s.spawn(|| {
             m2_os::thread::lowest().expect("the lowest priority needs no rights");
