@@ -95,12 +95,13 @@ pub const COMMANDS: &[Command] = &[
         also: &[],
         usage: "m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll P] [--threads N]",
         words: "render to a 24-bit WAV, as the app's Export Audio does: to the last clip's end and on until it falls \
-                silent (10 s more at most), at the project's `sample_rate`. `--from` starts S seconds in, or \
-                `--from-bar` at bar N (counted from 1), replaying the song up to there; `--seconds` renders exactly \
-                N seconds. `--preroll` starts only P seconds earlier instead of replaying: fast for listening late in \
-                a long song, but approximate (notes held from before then, and the tails of what played earlier, are \
-                missing), so it is never written into `assets/`. `--threads` renders on N threads (1 to 64, or \
-                `M2_THREADS`), the same file on any number",
+                silent (10 s more at most, where a sound still playing fades out over the last 50 ms), at the \
+                project's `sample_rate`. `--from` starts S seconds in, or `--from-bar` at bar N (counted from 1), \
+                replaying the song up to there; `--seconds` renders exactly N seconds. `--preroll` starts only P \
+                seconds earlier instead of replaying: fast for listening late in a long song, but approximate (notes \
+                held from before then, and the tails of what played earlier, are missing), so it is never written \
+                into `assets/`. `--threads` renders on N threads (1 to 64, or `M2_THREADS`), the same file on any \
+                number",
         more: "It is the same file the app's Export (Song) writes, which falls silent when the sound has been silent \
                for half a second. 3 hours at most. If a part breaks while it renders, it fails and names it.",
     },

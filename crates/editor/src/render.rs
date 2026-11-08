@@ -44,6 +44,9 @@ pub const MAX_SECONDS: f64 = 3.0 * 3600.0;
 pub const TAIL_SILENCE: f64 = 0.5;
 /// …or for this long at most.
 pub const TAIL_MAX: f64 = 10.0;
+/// How long a render stopped by [`TAIL_MAX`], its sound still playing, fades out at its end, so
+/// the file ends at 0 rather than on a click (RENDER-1).
+pub const FADE: f64 = 0.05;
 /// Silent: quieter than -90 dBFS, about the quietest step a 16-bit file can hold.
 pub(crate) const SILENT: f32 = 3.2e-5;
 /// Frames rendered between progress reports.
@@ -55,7 +58,8 @@ const SONG_SHARE: f64 = 0.9;
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Length {
     /// To the end of the last clip, then on while it still sounds: until it has been
-    /// silent for [`TAIL_SILENCE`], or [`TAIL_MAX`] past the end at most.
+    /// silent for [`TAIL_SILENCE`], or [`TAIL_MAX`] past the end at most, its last [`FADE`] then
+    /// faded out.
     Song,
     /// Exactly this many seconds.
     Seconds(f64),
@@ -504,7 +508,13 @@ impl Render {
                     tail.extend_from_slice(&chunk[..n]);
                     progress(SONG_SHARE + (1.0 - SONG_SHARE) * tail.len() as f64 / room as f64);
                 }
-                out.push(&tail[..(sounding + quiet).min(room)])?;
+                let end = (sounding + quiet).min(room);
+                // Stopped by the limit before half a second of silence: the sound still plays, so it
+                // fades out rather than end on whatever sample it has, a click.
+                if sounding + quiet > room {
+                    fade_out(&mut tail[..end], (FADE * self.sample_rate as f64).round() as usize);
+                }
+                out.push(&tail[..end])?;
             }
         }
         // No block follows soon: the workers sleep now.
@@ -624,6 +634,19 @@ pub fn rooted(ir: &m2_ir::Ir, track: &str, export: &str) -> Result<m2_ir::Ir> {
 /// How long `m2 bounce` renders a song by default, and a stem: to 2 s past where its last clip ends.
 pub fn bounce_seconds(data: &DataSet) -> f64 {
     data.tempo().seconds_at(data.end()) + 2.0
+}
+
+/// Fade the last `n` of `frames` out to silence (RENDER-1): each is turned down by
+/// `1 − 3t² + 2t³`, `t` going from 0 before them to 1 at the last, a curve flat at both ends, so
+/// the last frame is 0. Only `+`, `−` and `×`, which round alike on every OS (PLAT-4).
+fn fade_out(frames: &mut [[f32; 2]], n: usize) {
+    let start = frames.len() - n.min(frames.len());
+    let n = frames.len() - start;
+    for (i, f) in frames[start..].iter_mut().enumerate() {
+        let t = (i + 1) as f64 / n as f64;
+        let g = (1.0 - t * t * (3.0 - 2.0 * t)) as f32;
+        *f = [f[0] * g, f[1] * g];
+    }
 }
 
 /// Refuse to write a render that isn't exact into the project at `project`'s `assets/`
@@ -853,6 +876,100 @@ mod tests {
         // No clips: the song ends where it starts, and only the tail is rendered.
         let (r, _) = dir.render(Length::Song);
         assert_eq!(r.frames as usize, 10 * SR);
+    }
+
+    /// A sine, `by` times full scale, under a held note whose clip ends at beat 4 (2 s): the sine
+    /// never stops. At 220.02 Hz it is near its top 12 s in, where the limit stops a render of it.
+    fn drone_song(by: f64) -> Dir {
+        Dir::new(&[
+            (
+                "song.ts",
+                &format!(
+                    "import {{ hz, song, track }} from '@m2/core';\nimport {{ osc }} from 'std/dsp';\nimport {{ add, scale }} from 'std/math';\n\
+                     import {{ pad }} from '@m2/synths';\nconst p = track('pad', ({{ lane }}) => pad(lane.notes('chords')));\n\
+                     export default song(() => add(p.out, scale(osc.sine(hz(220.02)), {by})));\n"
+                ),
+            ),
+            ("data/pad/chords.json", NOTE),
+            TEMPO,
+        ])
+    }
+
+    /// Render the project in `dir` to `out.wav`: both sides of each frame, as the 24-bit file holds them.
+    fn frames_of(dir: &Dir, length: Length) -> Vec<[f32; 2]> {
+        let out = dir.0.join("out.wav");
+        let r = render_of(dir, length).unwrap().write(&out, |_| {}).unwrap();
+        let samples: Vec<f32> = hound::WavReader::open(&out).unwrap().samples::<i32>().map(|s| s.unwrap() as f32 / 8_388_607.0).collect();
+        let frames: Vec<[f32; 2]> = samples.chunks(2).map(|f| [f[0], f[1]]).collect();
+        assert_eq!(frames.len() as u64, r.frames);
+        frames
+    }
+
+    /// The largest step from one frame to the next, on either side.
+    fn steepest(frames: &[[f32; 2]]) -> f32 {
+        frames.windows(2).map(|w| (w[1][0] - w[0][0]).abs().max((w[1][1] - w[0][1]).abs())).fold(0.0, f32::max)
+    }
+
+    /// A 24-bit file's step: what rounding to it can move a sample by.
+    const STEP_24: f32 = 1.0 / 8_388_607.0;
+
+    // RENDER-1: a song whose sound never falls silent renders to 10 s past its last clip, and its last
+    // 50 ms fade out. Before them it holds the bits of the same song rendered for 12 s, an end asked
+    // for, which doesn't fade and ends on the sine near its top: the click review X5 of track effects3
+    // heard. In them it is never louder than that render, its gain only falls, half way down at their
+    // middle, and no step from one sample to the next, into the silence after the file too, is over
+    // the sound's own there; its last sample is 0 on both sides.
+    #[test]
+    fn a_tail_stopped_at_its_limit_fades_out_over_its_last_50_ms() {
+        let dir = drone_song(0.5);
+        let song = frames_of(&dir, Length::Song);
+        let asked = frames_of(&dir, Length::Seconds(12.0));
+        assert_eq!((song.len(), asked.len()), (12 * SR, 12 * SR), "TAIL_MAX past its last clip");
+        let fade = SR / 20;
+        let start = song.len() - fade;
+        assert!(song[..start] == asked[..start], "up to its last 50 ms, the bits of the render asked for");
+        let own = steepest(&asked[start - 1..]);
+        let cut = asked[asked.len() - 1];
+        assert!(cut[0].abs().min(cut[1].abs()) > 10.0 * own, "an end asked for isn't faded: it ends on {cut:?}, a click");
+        let mut heard = song[start - 1..].to_vec();
+        heard.push([0.0; 2]);
+        let most = steepest(&heard);
+        assert!(most <= own + 4.0 * STEP_24, "a step of {most} as it fades and ends, over the sound's own {own}");
+        let mut was = 1.0f32;
+        for i in start..song.len() {
+            for side in 0..2 {
+                let (s, a) = (song[i][side], asked[i][side]);
+                assert!(s.abs() <= a.abs() + STEP_24, "frame {i}: {s} is louder than {a}");
+                // The gain, where the sound is loud enough to read it past the file's rounding.
+                if a.abs() > 0.05 {
+                    let g = s / a;
+                    assert!(g <= was + 1e-5, "frame {i}: its gain rises, {was} to {g}");
+                    was = g;
+                }
+            }
+        }
+        let middle = start + fade / 2;
+        let near: Vec<f32> = (middle - 100..middle + 100).filter(|&i| asked[i][0].abs() > 0.05).map(|i| song[i][0] / asked[i][0]).collect();
+        assert!(!near.is_empty() && near.iter().all(|g| (0.4..0.6).contains(g)), "half way down at its middle: {near:?}");
+        assert_eq!(song[song.len() - 1], [0.0; 2], "its last sample is 0");
+    }
+
+    // RENDER-1: only a stop at the limit fades. A render that falls silent ends as rendered: a held note
+    // under a sine at −100 dBFS, never counted as sound but never 0 in the file either, holds the bits
+    // of the same song rendered for exactly as long. So does an end asked for, mid-sound.
+    #[test]
+    fn a_render_that_falls_silent_or_ends_where_asked_is_not_faded() {
+        let dir = drone_song(1e-5);
+        let song = frames_of(&dir, Length::Song);
+        assert!(song.len() > 2 * SR + SR / 2 && song.len() < 12 * SR, "it falls silent: {} frames", song.len());
+        let end = &song[song.len() - SR / 20..];
+        let held = end.iter().filter(|f| f[0] != 0.0).count();
+        assert!(held > end.len() / 2 && end.iter().all(|f| f.iter().all(|s| s.abs() < SILENT)), "its end holds the quiet sine: {held}");
+        assert!(song == frames_of(&dir, Length::Seconds(song.len() as f64 / SR as f64)), "as rendered");
+        let dir = drone_song(0.5);
+        let five = frames_of(&dir, Length::Seconds(5.0));
+        assert!(five[..] == frames_of(&dir, Length::Seconds(6.0))[..5 * SR], "an end asked for, as rendered");
+        assert!(five[5 * SR - 1][0].abs() > 0.01, "mid-sound: {:?}", five[5 * SR - 1]);
     }
 
     #[test]

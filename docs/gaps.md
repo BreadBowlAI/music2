@@ -278,7 +278,7 @@ Each line is one small gap, without a number.
 ### Export
 
 - **An export whose sound had NaN or infinite samples** silences them, and the app doesn't say so (`m2 render` warns).
-- **An export that stops at its 10 s tail limit stops mid-sound, with a click** (#36): a sound that never falls silent plays on to `TAIL_MAX` and is cut there. A short fade there would end it cleanly (`crates/editor/src/render.rs`).
+- **A stem, and `m2 bounce`, end 2 s past the last clip, as rendered** (#36): a tail still ringing there (a long reverb, a drone) is cut mid-sound, with a click, where the export goes on until it falls silent and fades out only at its 10 s limit ([RENDER-1](architecture.md#offline)). Stems as long as the export would keep their tails and still line up.
 
 ### Tracks, knobs and the Device view
 
@@ -450,7 +450,6 @@ Each line is one small gap, without a number.
 - **A voice's measures and its edited phrases' renders are never pruned** (`<cache>/measures`, `<cache>/renders`; VOX-41, RENDER-30b): each drag or Straighten value makes a new phrase render (a 1 s stereo phrase is 384 KB), as each Follow tempo change makes a new stretch, and they stay until the cache is cleared; a sweep of the cache folder, with the stretches' part files below, would take them.
 - **A stretch's part file stays in the cache folder when its program is killed mid-stretch** (`renders/<hash>.f32.<pid>.<n>.part`, RENDER-30): a program that ends normally removes it, but nothing sweeps old ones. Since D17 of track samples no test writes there (PLAT-7: before, a plain `cargo test` left them in your own cache). Removing part files untouched for an hour when a program keeps the cache would end it.
 - **#63. Pictures measure the real sound** (large): many pictures of music2's own packs copy their kernel's sums in TypeScript (the delay's echoes, the reverb's tail, the ladder, the FM partials, the Wavetable's frames), each kept honest by a test against a render (CARD-99). One general measure step, music2 playing the sound and measuring what a picture shows, would take the place of those copies, so a kernel that changes can't leave its picture behind. The design note is [Pictures measure the real sound](designs/measure2/design.md) (accepted). Built, its three small steps (track `measure2-small`): the multiband's split measured with a quiet click (`p.response({ level })`, CARD-80, CARD-115); std's drawn lowpass gone (CARD-30); every copy checked at 44.1, 48 and 96 kHz, each drawn at the song's rate (`p.rate`, CARD-87, CARD-99), but the reverb at 44.1 kHz (above). Left, for later (its D5): the narrowed `measure` (its §4), when a pack from outside needs it, a copy breaks, or the Wavetable can be measured fast.
-- **CARD-103's `data-said` holds no meter playhead's place**: a picture's live line from its kernel's meter (`live.playhead`: the Flanger's and Grains') is drawn on its canvas alone, so `e2e/flanger-grains.mjs` reads where it is from the canvas's pixels (`data-plot` gives the plot's box). A `data-said` entry for it would let a suite read the number.
 - **The browser logs an error with no song open**: `GET /api/graph` answers 400, which is how the window knows to show the start screen. Answering "no project" without an error status would be quieter.
 
 ## The old app's parts not back yet
