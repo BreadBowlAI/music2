@@ -526,10 +526,11 @@ fn answer(a: &mut Ask, client: &str, taps: Option<(&TapSlots, u64, u32)>) -> Ans
         head["why"] = json!(why);
     }
     let mut seen = None;
-    let own = matches!(look.kind, Kind::Level | Kind::Meter) && !client.starts_with("agent:");
+    // A window's level or meter is read in its looks message alone.
+    let in_message = matches!(look.kind, Kind::Level | Kind::Meter) && !client.starts_with("agent:");
     if let (Some(_), Some((t, plan, rate)), Some(c)) = (a.channels, taps, a.clients.iter().position(|c| c.name == client)) {
         a.fold(t);
-        if !own {
+        if !in_message {
             seen = see(a, c, t, plan, rate);
         }
     }
