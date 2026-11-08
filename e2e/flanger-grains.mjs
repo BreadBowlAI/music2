@@ -114,7 +114,7 @@ check(
 
 // ---------------------------------------------------------------- + ▸ Grains (PACK-36)
 
-const after = '[data-module="lead"] button[aria-label^="Add an effect after flanger,"]';
+const after = '[data-module="lead"] button[aria-label^="Add an effect after Flanger,"]';
 check(!!(await until(() => page.$(after), 15000)), "the Flanger has a +");
 await page.click(after);
 await page.waitForSelector('[data-effect-browser] [data-effect="grains"]', { timeout: 5000 }).catch(() => {});

@@ -151,12 +151,9 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   const perNote = useMemo(() => (shown ? perNoteOf(shown) : new Set<string>()), [shown]);
   const room = useMemo(() => headRoom(graph.effects, perNote), [graph.effects, perNote]);
   const single = compacted?.card.id;
-  // The dock's room for the graph at Fit, inside the canvas's padding (`p-4` here and on the section).
-  const [dockRoom, setDockRoom] = useState<{ w: number; h: number } | null>(null);
-  const spread = useMemo(() => (shown ? filled(shown, room, single, dockRoom) : new Map<number, number>()), [shown, room, single, dockRoom]);
-  const laid = useMemo(() => shown && layout(shown, expanded, room, single, spread), [shown, expanded, room, single, spread]);
+  const laid = useMemo(() => shown && layout(shown, expanded, room, single), [shown, expanded, room, single]);
   // Fit is worked out from the graph with every node collapsed: expanding one never changes it (DV-13).
-  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single, spread), [shown, room, single, spread]);
+  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single), [shown, room, single]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -176,9 +173,6 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       const bar = scrollbarRoom();
       const w = el.offsetWidth - bar, h = el.offsetHeight - bar;
       setRoom((r) => (r && r.w === w && r.h === h ? r : { w, h }));
-      // Less a scrollbar each way too, as above: never what the scrollbars showing now leave.
-      const dw = w - 64, dh = h - 64;
-      setDockRoom((r) => (r && r.w === dw && r.h === dh ? r : { w: dw, h: dh }));
     };
     measure();
     const watch = new ResizeObserver(measure);
@@ -403,17 +397,7 @@ function layout(
   room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
   /** A node with one size: the Song's compact mixer (MX-6). */
   single?: string,
-  /** Columns whose stacked sources spread sideways, into this many columns each (`filled`, DV-5). */
-  spread?: ReadonlyMap<number, number>,
-): {
-  placed: Map<string, Placed>;
-  width: number;
-  height: number;
-  back: Set<PortEdge>;
-  routes: Map<string, { x0: number; x1: number; y: number }[]>;
-  /** How many sources each column has, by its place before any spread. */
-  sources: Map<number, number>;
-} {
+): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge>; routes: Map<string, { x0: number; x1: number; y: number }[]> } {
   const geo = new Map<string, { w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }>(
     m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room, n.id === single)]),
   );
@@ -445,22 +429,10 @@ function layout(
   }
   const last = Math.max(0, ...depth.values());
   for (const n of m.nodes) if (n.kind === "export") depth.set(n.id, last);
-  // A column's sources (what nothing feeds, and something reads): spread sideways into columns of
-  // their own before it, in turn, each still just before what reads it (DV-5). Every column after
-  // moves right to make room.
-  const sourcesOf = (c: number) => m.nodes.filter((n) => depth.get(n.id) === c && !into.get(n.id)?.size && from.get(n.id)?.size);
-  const sources = new Map<number, number>();
-  // The columns a spread made: their stacks hang from where they land, never above it, so what they
-  // feed stays at the top of the graph's first view.
+  // A column of two sources or more (what nothing feeds, and something reads) hangs from where its
+  // wires land, never above it, so what they feed keeps the top of the graph's first view (DV-5).
   const hanging = new Set<number>();
-  for (let c = 0; c <= last; c++) sources.set(c, sourcesOf(c).length);
-  if (spread?.size) {
-    const at = (c: number) => c + [...spread].reduce((s, [col, k]) => s + (col <= c ? k - 1 : 0), 0);
-    const moved = new Map<string, number>();
-    for (const [c, k] of spread) sourcesOf(c).forEach((n, i) => moved.set(n.id, at(c) - (i % k)));
-    for (const n of m.nodes) depth.set(n.id, moved.get(n.id) ?? at(depth.get(n.id)!));
-    for (const [c, k] of spread) for (let j = 0; j < k; j++) hanging.add(at(c) - j);
-  }
+  for (let c = 0; c <= last; c++) if (m.nodes.filter((n) => depth.get(n.id) === c && !into.get(n.id)?.size && from.get(n.id)?.size).length > 1) hanging.add(c);
   // A wire that skips a column passes through a gap there, held open by a stand-in the height of a
   // wire, placed with the column's nodes, so it never runs behind one (DV-5, review Z7).
   const gaps = new Map<string, string[]>();
@@ -566,41 +538,9 @@ function layout(
     );
   }
   const width = Math.max(0, ...[...placed.values()].map((p) => p.x + p.w));
-  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes, sources } : { placed, width, height, back, routes, sources };
+  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes } : { placed, width, height, back, routes };
 }
 
-/**
- * How far a graph's stacked sources spread sideways (DV-5): while the graph, collapsed, is taller
- * than the dock, the column whose sources stand tallest takes one more column for them, one step at
- * a time, up to the step that makes it fit the dock's height. Of those, the spread that brings the
- * most of its nodes into the dock's first view (the fewest columns, of equals; none, unless one
- * shows more); the rest scrolls. A spread column's stack hangs from where its wires land (`layout`),
- * so what it feeds keeps the top of the view. Worked out with every node collapsed, as Fit is, so
- * expanding a node never changes it.
- */
-function filled(
-  m: ModuleView,
-  room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
-  single: string | undefined,
-  dock: { w: number; h: number } | null,
-): ReadonlyMap<number, number> {
-  let spread = new Map<number, number>();
-  if (!dock) return spread;
-  let laid = layout(m, new Set(), room, single, spread);
-  const seen = (l: typeof laid) => [...l.placed.values()].filter((p) => p.x + p.w <= dock.w && p.y + p.h <= dock.h).length;
-  let best = { spread, seen: seen(laid) };
-  for (let step = 0; step < 32 && laid.height > dock.h; step++) {
-    // The column with the most sources to a column of its own.
-    const tallest = [...laid.sources].map(([c, n]) => ({ c, per: n / (spread.get(c) ?? 1) })).filter((x) => x.per > 1).sort((a, b) => b.per - a.per)[0];
-    if (!tallest) break;
-    const next = new Map(spread).set(tallest.c, (spread.get(tallest.c) ?? 1) + 1);
-    const tried = layout(m, new Set(), room, single, next);
-    if (tried.height >= laid.height) break;
-    [spread, laid] = [next, tried];
-    if (seen(laid) > best.seen) best = { spread, seen: seen(laid) };
-  }
-  return best.spread;
-}
 
 /**
  * Tops for a column's nodes, in order and `GAP_Y` apart, as close to the tops they want as they
@@ -629,6 +569,17 @@ function pack(items: { want: number; h: number }[]): number[] {
     }
   }
   return tops;
+}
+
+/** How far apart the + of a selected node's wires stay, at the least (DV-7): a button and a little. */
+const PLUS_GAP = 24;
+
+/** The point a fraction `t` along `curve` (or a routed wire's stretch, its bow at least `bow`). */
+function along(x0: number, y0: number, x1: number, y1: number, bow: number, t: number) {
+  const dx = Math.max(bow, Math.abs(x1 - x0) * 0.45);
+  const [ax, bx] = [x0 + dx, x1 - dx];
+  const u = 1 - t;
+  return { x: u * u * u * x0 + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * x1, y: u * u * u * y0 + 3 * u * u * t * y0 + 3 * u * t * t * y1 + t * t * t * y1 };
 }
 
 /** A smooth curve from an output (left) to an input (right), bowing out when it runs backwards. */
@@ -746,21 +697,44 @@ const ModuleSection = memo(function ModuleSection({
         const [x0, x1, ya, yb] = [p.x + p.w, q.x, p.y + y0, q.y + y1];
         if (back.has(e)) {
           const low = height - LOOP_ROOM / 2;
-          return [{ e, loop: true, d: loopBack(x0, ya, x1, yb, low), at: { x: (x0 + x1) / 2, y: low } }];
+          const at = { x: (x0 + x1) / 2, y: low };
+          return [{ e, loop: true, d: loopBack(x0, ya, x1, yb, low), at, out: at, into: at }];
         }
         const via = routes.get(edgeKey(e));
-        const last = via?.at(-1);
+        const [first, last] = [via?.[0], via?.at(-1)];
         const [sx, sy] = last ? [last.x1, last.y] : [x0, ya];
-        return [{ e, loop: false, d: via ? routed(x0, ya, x1, yb, via) : curve(x0, ya, x1, yb), at: { x: (sx + x1) / 2, y: (sy + yb) / 2 } }];
+        // Near each end, for a selected node's own wires (DV-7): a fifth of the way along the stretch there.
+        const out = first ? along(x0, ya, first.x0, first.y, 24, 0.2) : along(x0, ya, x1, yb, 48, 0.2);
+        const into = last ? along(sx, sy, x1, yb, 24, 0.8) : along(x0, ya, x1, yb, 48, 0.8);
+        return [{ e, loop: false, d: via ? routed(x0, ya, x1, yb, via) : curve(x0, ya, x1, yb), at: { x: (sx + x1) / 2, y: (sy + yb) / 2 }, out, into }];
       }),
     [module, placed, back, routes, height],
   );
   // A wire's + shows under the pointer (`useWireHover`, so a hover draws only its +), on the selected
-  // node's wires, and while its browser is open.
+  // node's own wires near its end, each 24 px from the next or only under the pointer (DV-7), and
+  // while its browser is open.
+  const keys0 = useMemo(() => new Map(module.nodes.map((n) => [n.id, n.key ?? n.id])), [module]);
+  const keyOf = (id: string) => keys0.get(id) ?? id;
+  const selected = useExpanded((s) => s.selected);
+  const near = useMemo(() => {
+    const shown = new Map<string, { x: number; y: number }>();
+    if (selected == null) return shown;
+    const placedAt: { x: number; y: number }[] = [];
+    const own = drawn.flatMap((w) => {
+      const [a, b] = [keyOf(w.e.from), keyOf(w.e.to)];
+      return a === selected ? [{ k: edgeKey(w.e), at: w.out }] : b === selected ? [{ k: edgeKey(w.e), at: w.into }] : [];
+    });
+    for (const w of own.sort((p, q) => p.at.y - q.at.y || p.at.x - q.at.x)) {
+      if (placedAt.some((q) => Math.hypot(q.x - w.at.x, q.y - w.at.y) < PLUS_GAP)) continue;
+      placedAt.push(w.at);
+      shown.set(w.k, w.at);
+    }
+    return shown;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawn, selected, keys0]);
   const [picking, setPicking] = useState<{ edge: PortEdge; anchor: HTMLElement } | null>(null);
   // A hover ends with its module: another module's (or song's) wire may have the same key.
   useEffect(() => () => useWireHover.setState({ hovered: null }), []);
-  const keyOf = useMemo(() => new Map(module.nodes.map((n) => [n.id, n.key ?? n.id])), [module]);
 
   // Drag from a named output onto a bar: the value is replaced by the signal's name. Dropped on a
   // collapsed node, a menu offers its values (DV-6). The wire is drawn in the module's own
@@ -840,8 +814,8 @@ const ModuleSection = memo(function ModuleSection({
     e.stopPropagation();
     if (!node || !editable) return;
     // Where Remove can't, Delete says why in the view's words (DV-15, CARD-36).
-    if (node.effect) void removeNode(node, titleOf(node, effects), session, revision);
-    else if (node.kind === "call") toast(node.remove ?? `${titleOf(node, effects)} isn't an effect: change it in code.`);
+    if (node.kind === "call" && !node.remove) void removeNode(node, titleOf(node, effects), session, revision);
+    else toast(node.remove ?? `${titleOf(node, effects)} isn't an effect: change it in code.`);
   };
 
   return (
@@ -929,8 +903,8 @@ const ModuleSection = memo(function ModuleSection({
                       edge={e}
                       from={module.nodes.find((n) => n.id === e.from)!}
                       to={module.nodes.find((n) => n.id === e.to)!}
-                      ends={[keyOf.get(e.from) ?? e.from, keyOf.get(e.to) ?? e.to]}
                       at={at}
+                      near={near.get(k)}
                       open={picking?.edge === e}
                       locked={editable ? null : "This song can't be edited here"}
                       effects={effects}
@@ -990,8 +964,8 @@ function WirePlus({
   edge,
   from,
   to,
-  ends,
   at,
+  near,
   open,
   locked,
   effects,
@@ -1000,9 +974,10 @@ function WirePlus({
   edge: PortEdge;
   from: ViewNode;
   to: ViewNode;
-  /** Its nodes' keys, which the selection names. */
-  ends: [string, string];
+  /** Halfway along its last stretch, where it shows under the pointer. */
   at: { x: number; y: number };
+  /** Near the selected node's end, when it shows for the selection (DV-7). */
+  near?: { x: number; y: number };
   open: boolean;
   locked: string | null;
   effects: Effect[];
@@ -1011,8 +986,8 @@ function WirePlus({
   const toast = useStore((s) => s.toast);
   const k = edgeKey(edge);
   const hovered = useWireHover((s) => s.hovered === k);
-  const selected = useExpanded((s) => s.selected != null && ends.includes(s.selected));
-  const shown = hovered || selected;
+  const shown = hovered || !!near;
+  const spot = near ?? at;
   const why = useContext(Locked) ?? locked ?? (edge.plus && "refused" in edge.plus ? edge.plus.refused : null) ?? (edge.plus ? null : "This wire takes no effect.");
   const takes = wireTakes(edge.kind);
   return (
@@ -1023,14 +998,14 @@ function WirePlus({
         why ? "text-fg-off cursor-default" : "text-fg-muted hover:text-accent-strong hover:ring-accent cursor-pointer",
         open && "text-accent-strong ring-accent",
       )}
-      style={{ left: at.x, top: at.y }}
+      style={{ left: spot.x, top: spot.y }}
       data-wire-plus={edgeKey(edge)}
       data-from={edge.from}
       data-to={edge.to}
       data-kind={edge.kind}
       data-shown={shown || open || undefined}
       data-refused={why ?? undefined}
-      aria-label={`Add ${takes} after ${from.label}, before ${to.label}`}
+      aria-label={`Add ${takes} after ${titleOf(from, effects)}, before ${titleOf(to, effects)}`}
       aria-disabled={!!why || undefined}
       aria-haspopup="dialog"
       aria-expanded={open}
@@ -1797,7 +1772,7 @@ function NodeMenu({
   const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
   const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
   // Where Remove can't take it out, the view says why (CARD-36).
-  const remove = locked ?? (node.effect ? null : (node.remove ?? `${title} isn't an effect: change it in code.`));
+  const remove = locked ?? (node.kind === "call" && !node.remove ? null : (node.remove ?? `${title} isn't an effect: change it in code.`));
   return (
     <Popover anchor={anchor} onClose={onClose} align="end" role="menu" aria-label={`${title} menu`} data-testid="effect-menu" className="w-[240px]">
       <MenuRow

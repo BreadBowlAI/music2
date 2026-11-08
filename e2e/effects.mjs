@@ -23,9 +23,9 @@ const read = () => fs.readFileSync(keys, "utf8");
 // The catalog writes delay's settings as knobs (its descriptor's `editor.insert`).
 const delayed = 'delay(pluck(lane.notes("chords")), { time: 0.25, feedback: 0.3, mix: 0.3 })';
 
-const plus = '[data-module="keys"] button[aria-label^="Add an effect after pluck,"]';
+const plus = '[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]';
 ok(!!(await page.$(plus)), "the keys' pluck offers an effect");
-ok(!(await page.$('[data-module="keys"] button[aria-label^="Add an effect after chords,"]')) && !!(await page.$('[data-module="keys"] button[aria-label^="Add a note effect after chords,"]')), "the notes lane doesn't: its wire takes a note effect");
+ok(!(await page.$('[data-module="keys"] button[aria-label^="Add an effect after Chords,"]')) && !!(await page.$('[data-module="keys"] button[aria-label^="Add a note effect after Chords,"]')), "the notes lane doesn't: its wire takes a note effect");
 await page.click(plus);
 await page.waitForSelector('[data-module="keys"] [data-effect="delay"]');
 await page.click('[data-module="keys"] [data-effect="delay"]');

@@ -112,7 +112,7 @@ check(!!(await until(() => page.$('[data-module-tab="vox"]'), 20000)) && !!(awai
 
 await show("vox");
 await view("graph");
-const plus = '[data-module="vox"] button[aria-label^="Add an effect after clips,"]';
+const plus = '[data-module="vox"] button[aria-label^="Add an effect after Clips,"]';
 check(!!(await until(() => page.$(plus), 15000)), "the Vox track's lane has a +");
 await page.click(plus);
 await page.waitForSelector('[data-effect-browser] [data-effect="voiceChanger"]', { timeout: 5000 }).catch(() => {});

@@ -459,15 +459,30 @@ const envWhy = await page.$eval(env, (e) => [e.getAttribute("aria-disabled"), e.
 check(envWhy[0] === "true" && envWhy[1] === "This wire carries a control: an effect goes on a sound, a note effect on notes.", `greyed, saying why: ${JSON.stringify(envWhy)}`);
 await page.click(env);
 check(await until(async () => (await toasts()).some((x) => x.includes("This wire carries a control"))) && !(await page.$("[data-effect-browser]")), "a click says it, and opens nothing");
-// The kick's drum is read by its Follow and its out: an effect after it would change both.
+// The kick's drum is read by its Follow and its out: + on its wire out wraps the record's `out`, so
+// the kick's sound takes the effect and the Follow still reads it dry (CARD-36, review I2).
 await page.click('[data-module-tab="kick"] [data-testid=track-label]');
 st = await state();
 const kickMod = st.view.modules.find((m) => m.key === "kick");
 const drumN = kickMod.nodes.find((n) => n.label === "drums.drum")?.id;
 const drumOut = `[data-testid=graph] [data-module="kick"] [data-wire-plus][data-from="${drumN}"][data-to="export:out"]`;
-check(await until(async () => /is read in 2 places/.test((await page.$eval(drumOut, (e) => e.title).catch(() => "")) ?? ""), 9000), `the kick's wire out is greyed: ${await page.$eval(drumOut, (e) => e.title).catch(() => "")}`);
-const follows = kickMod.port_edges.find((e) => e.from === drumN && e.to !== "export:out");
-check(follows?.plus?.reader === follows?.to && follows?.plus?.input === "0", `its wire into the Follow takes one, on that wire: ${JSON.stringify(follows?.plus)}`);
+check(await until(async () => !!(await page.$(drumOut)) && !(await page.$(`${drumOut}[aria-disabled]`)), 9000), `the kick's wire out takes an effect: ${await page.$eval(drumOut, (e) => e.title).catch(() => "")}`);
+check((await page.$eval(drumOut, (e) => e.getAttribute("aria-label")).catch(() => "")) === "Add an effect after Drum, before Out", "its + names both ends by their titles (DV-2)");
+const kickText = read("tracks/kick.ts");
+await page.click(drumOut);
+await page.waitForSelector('[data-effect-browser] [data-effect="delay"]');
+await page.click('[data-effect-browser] [data-effect="delay"]');
+check(await until(() => /\{ out: delay\(out, \{[^}]*\}\), env: follow\(out,/.test(read("tracks/kick.ts"))), `the Delay wraps the record's out; the Follow reads the drum dry: ${read("tracks/kick.ts").match(/return .*/)?.[0]}`);
+check(await stepIs("adding Delay"), `one undo step: ${await undoTitle()}`);
+await key("Meta+z");
+check(await until(() => read("tracks/kick.ts") === kickText), "⌘Z gives the kick's code back");
+// Delete on a node that isn't a call says why (DV-15).
+const hits = '[data-testid=graph] [data-module="kick"] [data-node="hits"] [data-node-title]';
+await until(async () => !!(await page.$(hits)), 9000);
+await page.click(hits);
+await page.keyboard.press("Delete");
+check(await until(async () => (await toasts()).some((x) => x.includes("Hits isn't an effect: change it in code."))), "Delete on the kick's lane says why");
+await page.keyboard.press("Escape");
 await page.click('[data-module-tab="wob"] [data-testid=track-label]');
 await until(async () => !!(await page.$(wob)), 15000);
 
@@ -625,8 +640,7 @@ check(mixed >= 10 && cols[0] === "Values:8" && cols[1] === `Values 2:${Math.min(
 // ---------------------------------------------------------------- the graph fills the dock before it scrolls (taste.md DV-5)
 
 // examples/sounds' Song: nineteen tracks' sounds and two Ducks into one mixer, far taller than the
-// dock. Its sources spread sideways into columns of their own, as far as that shows the most of its
-// nodes in the dock's first view, and hang from the mixer, which keeps the top of the view.
+// dock. Its column of sources hangs from where its wires land, so the mixer keeps the top of the view.
 const made = await page.evaluate(
   async (token) => (await fetch("/api/project/new", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ name: "Sounds", example: "sounds" }) })).status,
   sess.page_token,
@@ -650,5 +664,13 @@ check(firstView.inView >= FILLED, `more of its nodes in the dock's first view: $
 check(firstView.mixer, "the mixer the tracks go to is among them, at the top of the view");
 check(JSON.stringify(await behind("song")) === "[]", `no wire of it runs behind a node it doesn't touch (DV-5): ${JSON.stringify(await behind("song"))}`);
 await page.screenshot({ path: `${ROOT}/nodes-sounds-song.png` });
+// The mixer selected: its nineteen wires in meet at one input. Only those 24 px apart show their +,
+// near the mixer; the rest show under the pointer (DV-7, review I7).
+await page.click(`${soundsG} [data-node="mixer"] [data-node-title]`);
+await sleep(300);
+const pluses = await page.$$eval(`${soundsG} [data-wire-plus][data-shown]`, (els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }));
+const close = pluses.flatMap((a, i) => pluses.slice(i + 1).filter((b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 24));
+check(pluses.length > 0 && close.length === 0, `the selected mixer's + don't crowd: ${pluses.length} shown, ${close.length} pairs under 24 px`);
+await page.screenshot({ path: `${ROOT}/nodes-mixer-selected.png` });
 
 done(errors);

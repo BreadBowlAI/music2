@@ -168,7 +168,7 @@ await play();
 await until(async () => (await status()).beat > 4.5, 3000);
 rev = await revision();
 w = watch();
-await page.click('[data-module="keys"] button[aria-label^="Add an effect after pluck,"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]');
 await page.waitForSelector('[data-module="keys"] [data-effect="delay"]');
 await page.click('[data-module="keys"] [data-effect="delay"]');
 check(await until(() => read(keysTs).includes("delay(pluck("), 5000), "a delay goes after the keys' pluck while playing");

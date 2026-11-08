@@ -35,10 +35,10 @@ const revision = async () => (await api("")).body.view?.revision;
 await until(async () => !!(await page.$('[data-module="song"]')), 9000);
 await show("song");
 const bass = '[data-module="song"] [data-node="Bass.out"]';
-check(await until(async () => !!(await page.$(`[data-module="song"] button[aria-label^="Add an effect after Bass.out,"]`)), 9000), "the bass's sound in the song has a + (CARD-36)");
+check(await until(async () => !!(await page.$(`[data-module="song"] button[aria-label^="Add an effect after Bass,"]`)), 9000), "the bass's sound in the song has a + (CARD-36)");
 
 // ---------------------------------------------------------------- add a Duck from +
-await page.click(`[data-module="song"] button[aria-label^="Add an effect after Bass.out,"]`);
+await page.click(`[data-module="song"] button[aria-label^="Add an effect after Bass,"]`);
 check(await until(async () => !!(await page.$('[data-effect="duck"]')), 3000), "the effect browser offers Duck");
 await page.click('[data-effect="duck"]');
 const added = plain.replace("bass: bass.out,", "bass: duck(bass.out, { depth: -8 }),");

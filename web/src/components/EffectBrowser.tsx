@@ -252,7 +252,7 @@ export default function EffectBrowser({
                   >
                     <span className="flex-1 min-w-0">
                       <span className={clsx("block text-sm font-medium", why ? "text-fg-off" : "text-fg")}>{m.effect.label}</span>
-                      <span className={clsx("block text-xs truncate", why ? "text-fg-off" : "text-fg-muted")}>{why ?? m.effect.description}</span>
+                      <span className={clsx("block text-xs", why ? "text-fg-off line-clamp-2" : "text-fg-muted truncate")}>{why ?? m.effect.description}</span>
                     </span>
                     {on && <CornerDownLeft size={14} className="shrink-0 text-fg-faint" />}
                   </div>

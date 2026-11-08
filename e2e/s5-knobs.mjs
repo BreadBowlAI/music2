@@ -213,7 +213,7 @@ const keys = read("tracks/keys.ts");
 await show("keys");
 // The edits' toasts fade first, so the screenshot shows the browser alone.
 await until(async () => (await toasts()).length === 0, 15000);
-await page.click('[data-module="keys"] button[aria-label^="Add an effect after pluck,"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]');
 await page.waitForSelector("[data-effect-browser] [data-category]");
 await sleep(300);
 await page.screenshot({ path: `${ROOT}/s5-browser.png` });
