@@ -1,5 +1,5 @@
 // @m2/effects: effects that colour a sound (PACK-15): echoes and space, modulation, drive and crush,
-// and width. The effects mixing needs (EQ, compression, limiting, ducking) are std's, in std/fx.
+// the Clipper (PACK-34), and width. The effects mixing needs (EQ, compression, limiting, ducking) are std's, in std/fx.
 //
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
 // `insert` when it is added. A control is `.smooth()` when its kernel reads it every sample without
@@ -18,7 +18,7 @@
 // Stopped, they wait; Play carries on. Played after a stop, a song sounds as its export does.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params, type Value } from "@m2/core";
-import { figures, hzWords } from "std/pictures";
+import { ceiling as drawCeiling, figures, hzWords } from "std/pictures";
 import {
   chorusMotion,
   crush,
@@ -32,6 +32,8 @@ import {
   field,
   fieldPicture,
   fieldWords,
+  levelPicture,
+  levelWords,
   motionPicture,
   phaserMotion,
   shapePicture,
@@ -268,6 +270,41 @@ export const bitcrush = component(
         v.bits === null || v.rate === null
           ? "A sine, crushed: its bits or rate is set by a cable or the code"
           : `A 1 kHz sine, rounded to ${figures(v.bits)} bits and held ${figures(v.rate / 1000)} thousand times a second`,
+    },
+  },
+);
+
+// ---------------------------------------------------------------- loudness
+
+/**
+ * Clipper: turns `x` up by `gain` dB and cuts every peak over `ceiling` dB flat, at four times the
+ * song's rate, twice, so it adds far fewer harsh tones than a cut at the song's rate (on a bright
+ * sound pushed hard, a few); no sample out is ever over the ceiling (PACK-34). Under the ceiling it
+ * is `x` times the gain, bit for bit, 92 frames late: the song waits for it.
+ */
+export const clip = component(
+  {
+    id: "clip",
+    label: "Clipper",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    // Not smooth: the kernel glides them itself.
+    controls: { gain: control.db(0).range(0, 24), ceiling: control.db(-0.3).range(-24, 0) },
+    output: port.audio(),
+    editor: {
+      category: "Dynamics",
+      description: "Louder without going over: push the gain, and every peak is cut flat at the ceiling",
+      insert: { gain: 6, ceiling: -0.3 },
+      // Its ceiling over what goes into its cut and what comes out (CARD-127).
+      views: { level: levelPicture() },
+      face: ["level", "gain", "ceiling"],
+    },
+  },
+  (x: Audio, { gain, ceiling }: Params) => kernel("@m2/effects:clip", { in: x, gain, ceiling }),
+  {
+    level: {
+      draw: (v, p) => drawCeiling(p, v, { ceiling: "ceiling" }),
+      words: (v) => levelWords(v, { gain: "gain", ceiling: "ceiling" }),
     },
   },
 );

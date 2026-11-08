@@ -2,10 +2,10 @@
 name = "@m2/effects"
 version = "1.4.0"
 license = "MIT OR Apache-2.0"
-description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
+description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush, widen and a clipper"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
+tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "clipper", "stereo"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/effects.wasm"
@@ -86,3 +86,11 @@ name = "widen"
 description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
 inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
 outputs = ["out: audio<2>"]
+
+[[kernel]]
+name = "clip"
+description = "Clipper (PACK-34): turns the sound up by gain (dB), then cuts every peak over ceiling (dB) flat, at four times the song's rate, twice, so its cuts fold almost nothing back into hearing; then cuts any sample still over the ceiling, so none ever is. Under the ceiling it is its input times its gain, 92 frames late. Its meter, pushed: the loudest it heard after its gain, at four times the rate, in dB (down to -100), the most of the call's frames"
+inputs = ["in: audio<*>", "gain: control<db> = 0 in 0..24", "ceiling: control<db> = -0.3 in -24..0"]
+outputs = ["out: audio<*>"]
+meters = ["pushed: control<db>"]
+latency = 92

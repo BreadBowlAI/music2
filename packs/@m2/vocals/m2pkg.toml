@@ -2,10 +2,10 @@
 name = "@m2/vocals"
 version = "1.2.0"
 license = "MIT OR Apache-2.0"
-description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key, and a voice's notes, found and edited"
+description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key; the Voice changer, which moves a voice's notes and its colour, deeper or chipmunk-like; and a voice's notes, found and edited"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key"]
+tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key", "voice changer", "formant"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/vocals.wasm"

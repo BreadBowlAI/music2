@@ -1,0 +1,9 @@
+{
+  "m2preset": 1,
+  "name": "Deep",
+  "sound": "@m2/vocals:voice-changer",
+  "values": {
+    "formant": -5,
+    "pitch": -5
+  }
+}

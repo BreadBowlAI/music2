@@ -6,9 +6,12 @@
 //            (the kick's decay) and after the options written (follow's attack); the knob is then written, and
 //            undo takes out exactly what was inserted (D5, WRITE-21). An ⌥-click puts a knob back at
 //            its declared default, which writes nothing.
-//   browser  the effect browser groups by the descriptors' categories and shows what adding writes (their
-//            `insert`); adding lowpass writes it, and its q, left out, is a knob whose first turn is written
-//            positionally: lowpass(x, 1000, q) (PKG-2, PKG-7). Screenshot: <root>/s5-browser.png.
+//   browser  the effect browser after a sound groups the effects that take audio by the descriptors'
+//            categories and shows what adding writes (their `insert`); the four note effects, which go
+//            before what plays notes, are in the state's list under their own categories and in none
+//            of its groups (PKG-21); adding lowpass writes it, and its q, left out, is a knob whose
+//            first turn is written positionally: lowpass(x, 1000, q) (PKG-2, PKG-7). Screenshot:
+//            <root>/s5-browser.png.
 //   alias    `import { delay as echo }`, saved by another editor, is the Delay effect with delay's three
 //            knobs, and removing it unwraps the call (PKG-9).
 //   mix      the kick's fader (on its Mix strip), left out of its bare mixer entry, is written into it on its first move,
@@ -207,7 +210,10 @@ await page.click('[data-module="keys"] button[aria-label="Add an effect after pl
 await page.waitForSelector("[data-effect-browser] [data-category]");
 await sleep(300);
 await page.screenshot({ path: `${ROOT}/s5-browser.png` });
-const effects = (await state()).effects;
+// The + after a sound offers the effects that take audio. The state marks each note effect `notes`
+// (PKG-21): it goes before what plays notes, so it is no effect of this browser.
+const listed = (await state()).effects;
+const effects = listed.filter((e) => !e.notes);
 const groups = await page.$$eval("[data-effect-browser] [data-category]", (els) => els.map((e) => e.dataset.category));
 const categories = [...new Set(effects.map((e) => e.category))];
 check(
@@ -219,6 +225,16 @@ for (const e of effects) {
   const where = await page.$eval(`[data-effect-browser] [data-component="${e.component}"]`, (el) => el.closest("[data-category]")?.dataset.category).catch(() => null);
   check(where === e.category, `${e.component} (${e.label}) is under ${e.category}`);
 }
+// The note effects: the window offers them nowhere yet (gap #62), so this checks the list a browser
+// for them would group, the state's, and that this one leaves them out.
+const notes = listed.filter((e) => e.notes).map((e) => `${e.component} under ${e.category}`).sort();
+check(
+  JSON.stringify(notes) === JSON.stringify(["@m2/notes:arp under Arpeggiator", "@m2/notes:chord under Chords", "@m2/notes:echo under Echo", "@m2/notes:lock-to-key under Scales"]),
+  `the state lists the four note effects, each under its own category: ${notes.join(", ")}`,
+);
+const offered = await page.$$eval("[data-effect-browser] [data-component]", (els) => els.map((e) => e.dataset.component));
+const misplaced = listed.filter((e) => e.notes && offered.includes(e.component)).map((e) => e.component);
+check(offered.length > 0 && misplaced.length === 0, `the browser after a sound lists none of them: ${misplaced.join(", ") || "none"}`);
 const footer = async () => page.$eval("[data-effect-browser] .font-mono", (e) => e.textContent);
 await page.type('[data-effect-browser] input[aria-label="Search effects"]', "lowpass");
 check(await until(async () => (await footer()) === "lowpass(pluck(…), 1000)"), `its footer shows what adding writes: ${await footer()}`);

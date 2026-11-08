@@ -1,4 +1,4 @@
-//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-126), and `@m2/vocals`' Tune's
+//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-127), and `@m2/vocals`' Tune's
 //! pitch line (VOX-27): each draws, from the pack's own code, with the dots, the words and the live
 //! layers its rule says, as the picture runner draws it for a window or an agent. Whether a picture
 //! drawn from a pack's own sums is the sound is checked against a render in
@@ -488,6 +488,54 @@ fn widen_draws_its_stereo_field() {
     );
 }
 
+// CARD-127: the Clipper draws CARD-143's ceiling over its last 3 seconds, on one axis in dB from
+// −36 to +12: the sound going into its cut, pushed up by its gain (faint, its kernel's meter
+// `pushed`), and what comes out (its level), the ceiling's line with a dot that moves it, and now at
+// the right edge. Its words say what its gain and its ceiling do, then what its lines are.
+#[test]
+fn the_clipper_draws_its_ceiling_over_its_levels() {
+    let level = declared("effects", "clip", "level");
+    assert_eq!((&level["x"]["lo"], &level["x"]["hi"], &level["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
+    assert_eq!((&level["y"]["lo"], &level["y"]["hi"], &level["y"]["unit"]), (&json!(-36.0), &json!(12.0), &json!("db")));
+    let mut pushed = history_of("pushed");
+    pushed["tone"] = json!("faint");
+    assert_eq!(level["live"], json!([pushed, {"kind": "history", "of": {"kind": "level", "at": "out"}}]));
+    let d = descriptor("effects", "clip");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Clipper", Some("Dynamics")));
+    assert_eq!(d.editor.face, ["level", "gain", "ceiling"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": 6, "ceiling": -0.3})).unwrap();
+    assert_eq!(kinds(&d), ["mark", "mark", "handle"]);
+    assert_eq!(dots(&d), ["y=ceiling"]);
+    let shapes = d["shapes"].as_array().unwrap();
+    assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
+    assert_eq!((&shapes[1]["axis"], &shapes[1]["at"]), (&json!("y"), &json!(-0.3)), "the ceiling's line");
+    assert!(close(places(&d)[0], (1.5, -0.3)), "its dot on the line: {:?}", places(&d));
+    // Review V2: true of a bright sound pushed hard too, and in plain words.
+    let works = "It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper; on very bright sounds pushed hard, a few";
+    assert_eq!(
+        d["words"],
+        format!(
+            "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB. {works}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling"
+        )
+    );
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": 0, "ceiling": -6})).unwrap();
+    assert_eq!(
+        d["words"],
+        format!(
+            "Cuts every peak over −6 dB flat. {works}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling"
+        )
+    );
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": null, "ceiling": -1})).unwrap();
+    assert!(
+        d["words"].as_str().unwrap().starts_with("Pushes your sound up by a gain set by a cable or the code and cuts"),
+        "{}",
+        d["words"]
+    );
+    let why = draw(&runner, "effects", "clip", "level", json!({"gain": 6, "ceiling": null})).unwrap_err();
+    assert!(why.contains("its ceiling is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
+}
+
 // CARD-110: a picture whose values a cable sets greys, saying which, as std's do.
 #[test]
 fn a_value_set_elsewhere_greys_the_picture_in_words() {
@@ -644,7 +692,8 @@ fn tune_draws_its_pitch_line() {
     let mut off = history_of("off");
     off["tone"] = json!("faint");
     assert_eq!(pitch["live"], json!([off, history_of("left")]));
-    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount"]);
+    // VOX-20: Formant beside Glide and Amount, since track voice2.
+    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount", "formant"]);
     let runner = Runner::new();
     let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": 0.1, "amount": 1})).unwrap();
     assert_eq!(kinds(&d), ["mark", "mark", "label"]);
@@ -671,4 +720,51 @@ fn tune_draws_its_pitch_line() {
         let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
         assert_eq!(d["words"], words(how));
     }
+}
+
+// VOX-28: the Voice changer draws its live spectrum as the voice comes in (faint) and goes out,
+// across 20 Hz to 20 kHz on a log scale, up −90 to 0 dB (the spectrum's own scale), with nothing
+// worked out from sums, and no shapes at all (review V8: two names crowded the patch's picture): what
+// moves is the sound itself, and at silence the picture is still. Its words say what Pitch and
+// Formant did, then what the layers are.
+#[test]
+fn the_voice_changer_draws_its_spectrum() {
+    let voice = declared("vocals", "voice-changer", "voice");
+    assert_eq!(
+        (&voice["x"]["lo"], &voice["x"]["hi"], &voice["x"]["unit"], &voice["x"]["scale"]),
+        (&json!(20.0), &json!(20000.0), &json!("hz"), &json!("log"))
+    );
+    assert_eq!((&voice["y"]["lo"], &voice["y"]["hi"], &voice["y"]["unit"]), (&json!(-90.0), &json!(0.0), &json!("db")));
+    assert_eq!(
+        voice["live"],
+        json!([{"kind": "spectrum", "at": "in", "tone": "faint"}, {"kind": "spectrum", "at": "out"}]),
+        "the spectrum in, faint, and out"
+    );
+    let d = descriptor("vocals", "voice-changer");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Voice changer", Some("Voice")));
+    assert_eq!(d.editor.face, ["voice", "pitch", "formant"]);
+    let runner = Runner::new();
+    let layers = "Faint: your voice as it comes in; solid: as it goes out. The spikes are its notes, the hills its colour";
+    let said = |pitch: Value, formant: Value| {
+        draw(&runner, "vocals", "voice-changer", "voice", json!({"pitch": pitch, "formant": formant})).unwrap()
+    };
+    let d = said(json!(5), json!(3));
+    assert_eq!(kinds(&d), Vec::<&str>::new(), "no shapes: nothing worked out from sums, and no names");
+    assert_eq!(d["words"], format!("Up 5 semitones, colour 3 semitones brighter. {layers}"));
+    for (pitch, formant) in [(-5, -4), (0, 0), (12, 12)] {
+        assert_eq!(
+            said(json!(pitch), json!(formant))["shapes"],
+            d["shapes"],
+            "its shapes don't move with its values: at {pitch} and {formant}"
+        );
+    }
+    assert_eq!(said(json!(-5), json!(-4))["words"], format!("Down 5 semitones, colour 4 semitones darker. {layers}"));
+    assert_eq!(said(json!(1), json!(-1))["words"], format!("Up 1 semitone, colour 1 semitone darker. {layers}"));
+    assert_eq!(said(json!(7), json!(0))["words"], format!("Up 7 semitones, colour as sung. {layers}"));
+    assert_eq!(said(json!(0), json!(2.5))["words"], format!("Notes as sung, colour 2.5 semitones brighter. {layers}"));
+    assert_eq!(
+        said(json!(0), json!(0))["words"],
+        format!("As sung: Pitch moves the notes, Formant the colour (both down for a deep voice, both up for a chipmunk). {layers}")
+    );
+    assert_eq!(said(Value::Null, json!(3))["words"], format!("Notes moved by a cable or the code, colour 3 semitones brighter. {layers}"));
 }

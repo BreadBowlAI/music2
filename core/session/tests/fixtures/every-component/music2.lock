@@ -8,7 +8,7 @@ hash = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 [[pack]]
 name = "@m2/effects"
 version = "1.4.0"
-hash = "sha256:d3d6fbbe49fc266561128d43c129d805a1129c657f836f0a7ee9a243394320e8"
+hash = "sha256:a3d8c868e52867356c143c20203e6defe9672bdd2ed5ec6d400e42c169a123b1"
 
 [[pack]]
 name = "@m2/mixing"
@@ -28,7 +28,7 @@ hash = "sha256:67107346158017f4a19b5246ad9530e7436d08e5803cd197f392d0441ea3d0ed"
 [[pack]]
 name = "@m2/vocals"
 version = "1.2.0"
-hash = "sha256:8bc87c40b83e03e558d7669c8ceb47bd8ae6b7554a54c802681fc1f102448d3f"
+hash = "sha256:25ec39e5cd59ba9396803325b69f45279f9c3a3ef7d82172ae955dcbfc94ea27"
 
 [[pack]]
 name = "@m2/wavetable"

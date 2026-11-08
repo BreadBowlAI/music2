@@ -6,6 +6,7 @@
 - Arm tracks to record several at once, punch in to fix one part, and keep a take for each time round a loop.
 - Comp: build one take from the best parts of several, by swiping across the take you like.
 - Tune a voice: move each sung note onto the song's key, gently or as the hard "robot" pop sound.
+- Change a voice: make it deeper, or chipmunk-like, by moving its notes and its colour, each on its own.
 - Bounce a track to audio, to chop it, play it backwards or change its pitch: the song sounds the same.
 
 - **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
@@ -89,18 +90,42 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 | The hard, stepped pop sound | Load the **Robot** preset (Presets on its card), or turn **Glide** to 0 | Each note jumps to its pitch at once. |
 | A gentle fix | Turn **Glide** up to about 0.1 s (Natural) or more | Each note slides to its pitch, and the singer's wobble (vibrato) stays. |
 | Fix only part of each note's error | Turn **Amount** down | At 0.5, half of each note's error is fixed; at 0, none. |
+| Change the voice's colour | Turn **Formant** down or up | Down is deeper and darker, a bigger singer; up is smaller and brighter. The notes stay where Tune puts them. At 0, the voice's own colour. |
 | See what it does | Play the song and look at its card | Its **pitch line** shows the last 3 seconds: how far your voice is from its note, faint, and how far Tune leaves it, solid. The middle line is the note; up is sharp, down is flat, a semitone each way. Its words say how fast and how far it moves the voice. |
 
 - **No key set:** every note is allowed, so Tune moves each sung note to the nearest of all twelve. Its card says "Every note allowed" with **Set the key**.
-- **Glide** is how long a note takes to reach its pitch: 0 to 0.4 seconds. **Amount** is how much of the error it fixes: 0 to 1.
-- **The voice keeps its colour.** Tune moves the pitch without making the singer sound like a chipmunk or a giant.
+- **Glide** is how long a note takes to reach its pitch: 0 to 0.4 seconds. **Amount** is how much of the error it fixes: 0 to 1. **Formant** moves the colour (see [Change a voice](#change-a-voice)): −12 to 12 semitones.
+- **The voice keeps its colour.** Tune moves the pitch without making the singer sound like a chipmunk or a giant, until you turn Formant.
 - **A breath or an "s"** has no pitch, so Tune lets it through as it is. On the pitch line, both lines rest on the middle line.
 - **The pitch line comes from Tune itself**: how far off it hears each note, and how far off it leaves it, as it plays. A note sung more than a semitone off is drawn at the edge. At Amount 0 the two lines are one; with Glide at 0 and Amount at 1, the solid line stays on the middle line.
 - **The whole song plays 15 ms later** (15 thousandths of a second) while Tune is on any track, so every track stays in time with the tuned voice. You won't hear the delay, but a singer listening to themselves may feel it. A take you record still lands where you heard it.
 - **An export sounds the same as playback.**
 - **Tune works from about D2 (73 Hz) up to about D6 (1,200 Hz).** A lower note, such as a bass singer's low C, comes through untuned.
 - **It works best on one voice at a time.** A choir, or a voice with a loud band behind it, confuses it.
-- **Agents:** `tune(x, { glide, amount })` from `"@m2/vocals"` in any track's code; `m2 listen` measures the result ([listening](listening.md)).
+- **Agents:** `tune(x, { glide, amount, formant })` from `"@m2/vocals"` in any track's code; `m2 listen` measures the result ([listening](listening.md)).
+
+## Change a voice
+
+The **Voice changer** makes a voice deeper or higher, or sound like another singer: **Pitch** moves its notes, **Formant** its colour, each on its own. It comes with music2, in the pack `@m2/vocals`.
+
+| Word | Meaning |
+|---|---|
+| **Formant** | the hills in a voice's sound that make it an "ah" or an "ee", and a big or a small singer: its colour |
+
+| To do this | Do this | What happens |
+|---|---|---|
+| Add it to a vocal | Select the vocal track (Vox), and in its Device view click **+** on its lane's card, then **Voice changer** (under Voice) | `voiceChanger(lane.audio("clips"), { pitch: 0, formant: 0 })` is written into the track's own file. At 0 and 0 the voice sounds as sung. |
+| A deep, big voice | Load **Deep** (Presets on its card), or turn **Pitch** and **Formant** down | Its notes go 5 semitones down and its colour 5 semitones darker, like a tape played slower. |
+| A chipmunk | Load **Chipmunk**, or turn both up | Its notes go 7 semitones up and its colour 7 brighter, like a tape played faster. |
+| Higher or lower notes, the same singer | Turn **Pitch** only | From 7 semitones down to 12 up: each note moves, the colour stays. |
+| The same notes, another singer | Turn **Formant** only | From 12 semitones down to 12 up: down sounds bigger and darker, up smaller and brighter. |
+| See what it does | Play the song and look at its card | Its picture is your voice's spectrum: faint as it comes in, solid as it goes out. Pitch moves the spikes (the notes); Formant moves the hills (the colour). Its words say what the knobs did. |
+
+- **It follows no key.** Every note moves by the same number of semitones. To put the notes on the key, use Tune.
+- **A breath or an "s"** passes through as it is.
+- **The whole song plays 15 ms later** while it is on any track, as with Tune.
+- **One voice at a time**, from about D2 (73 Hz) to D6 (1,200 Hz), as with Tune.
+- **Agents:** `voiceChanger(x, { pitch, formant })` from `"@m2/vocals"`.
 
 ## Edit a voice's notes
 

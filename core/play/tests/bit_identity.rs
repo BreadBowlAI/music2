@@ -20,8 +20,10 @@ use m2_runtime::{BLOCK, Cmd, Continues, Copying, LaneSwap, METERS, PlanInfo, Poo
 use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
-/// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 9] = [
+/// The fixtures made only of kernels, which render the same bits every time (RENDER-2). One is
+/// late: `clip`, the Clipper's (92 frames, PACK-34), heard live as late as it is (RENDER-33), and
+/// silent until then.
+const PURE: [&str; 10] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -31,6 +33,7 @@ const PURE: [&str; 9] = [
     "templates/empty",
     "core/session/tests/fixtures/sampler-regions",
     "core/session/tests/fixtures/meters",
+    "core/session/tests/fixtures/clip",
 ];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at
@@ -64,9 +67,13 @@ fn offline(song: &Song, frames: usize) -> Vec<[f32; 2]> {
 
 fn check(name: &str, song: &Song, frames: usize, swap_at: Option<usize>) {
     let export = offline(song, frames);
-    let heard = live(song, frames, swap_at);
+    // A song with latency (the Clipper's fixture) is heard as late, the export dropping as much
+    // (RENDER-19): live is the export once shifted by it (RENDER-33).
+    let late = song.renderer().latency() as usize;
+    let heard = live(song, frames + late, swap_at);
     assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
-    assert_eq!(first_diff(&heard, &export), None, "{name}: live differs from the export");
+    assert!(heard[..late].iter().all(|f| *f == [0.0; 2]), "{name}: sound while it is late");
+    assert_eq!(first_diff(&heard[late..], &export), None, "{name}: live differs from the export");
 }
 
 // RENDER-33 on every pure fixture: their whole song and a second past it.
@@ -110,7 +117,10 @@ fn copy_taps_change_no_bit() {
         }
         assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
         assert_eq!(first_diff(&tapped, &export), None, "{name}: a copy tap changed what renders");
-        assert_eq!(first_diff(&copied[..frames], &export), None, "{name}: the output's copy is what rendered");
+        // The output's copy is what the engine made, the latency's frames (RENDER-19) before it too.
+        let late = song.renderer().latency() as usize;
+        assert!(copied[..late].iter().all(|f| *f == [0.0; 2]), "{name}: the output's copy sounds while it is late");
+        assert_eq!(first_diff(&copied[late..late + frames], &export), None, "{name}: the output's copy is what rendered");
     }
 }
 
@@ -160,9 +170,10 @@ fn every_tap_on_changes_no_bit() {
         let taps = r.info().taps.clone().expect("a live plan has taps");
         taps.watch(true);
         let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
+        let late = r.latency() as usize;
         let (_player, mut d) = playing(r, song.rate);
         let (mut turn, mut read, mut framed) = (0, vec![], 0);
-        let heard = hear(&mut d, frames, &mut |_, _| {
+        let heard = hear(&mut d, frames + late, &mut |_, _| {
             for ring in 0..RINGS {
                 if taps.frames(ring, 0, 1024, &mut read).is_some() {
                     framed += read.len();
@@ -178,7 +189,8 @@ fn every_tap_on_changes_no_bit() {
         });
         assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
         assert!(framed > 0, "{name}: the rings were read");
-        assert_eq!(first_diff(&heard, &export), None, "{name}: a tap changed what plays");
+        assert!(heard[..late].iter().all(|f| *f == [0.0; 2]), "{name}: sound while it is late");
+        assert_eq!(first_diff(&heard[late..], &export), None, "{name}: a tap changed what plays");
     }
     assert!(metered > 0, "some meter said a kernel turned a sound down");
 }
@@ -317,9 +329,13 @@ fn std_plays_the_export_after_the_engine_sat_stopped() {
         let frames = (song.seconds() * song.rate as f64) as usize;
         let export = offline(&song, frames);
         assert!(peak(&export) > 0.01 || name.contains("empty"), "{name} makes sound");
+        let late = song.renderer().latency() as usize;
         for idle in [2 * SR as usize, 5 * BLOCK] {
-            let heard = live_after_idle(&song, idle, frames);
-            if let Some(at) = first_diff(&heard, &export) {
+            let heard = live_after_idle(&song, idle, frames + late);
+            if let Some(at) = heard[..late].iter().position(|f| *f != [0.0; 2]) {
+                differs.push(format!("{name}, played after {idle} frames stopped: sound at frame {at}, while it is late"));
+            }
+            if let Some(at) = first_diff(&heard[late..], &export) {
                 differs.push(format!("{name}, played after {idle} frames stopped: from frame {at}"));
             }
         }
@@ -832,10 +848,12 @@ fn live_on_n_threads_is_the_export_on_1() {
         let frames = (song.seconds() * song.rate as f64) as usize;
         let export = offline(&song, frames);
         let parts = song.renderer().parts().len();
+        let late = song.renderer().latency() as usize;
         for n in [2, 4, 7] {
             let (_pool, runner) = engine_threads(n);
-            let heard = live_on(&song, song.rate, frames, runner, None);
-            assert_eq!(first_diff(&heard.out, &export), None, "{name} live on {n} threads: the export's bits");
+            let heard = live_on(&song, song.rate, frames + late, runner, None);
+            assert!(heard.out[..late].iter().all(|f| *f == [0.0; 2]), "{name} live on {n} threads: sound while it is late");
+            assert_eq!(first_diff(&heard.out[late..], &export), None, "{name} live on {n} threads: the export's bits");
             assert!(parts < 2 || heard.on_workers > 0, "{name} on {n} threads: tasks ran on workers");
             across += heard.across;
         }

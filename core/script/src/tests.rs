@@ -213,8 +213,10 @@ fn a_moved_std_effect_through_a_namespace_names_the_pack_to_use() {
     build_of(&[("song.ts", fine)]).unwrap_or_else(|e| panic!("{e:?}"));
 }
 
-// PKG-17 (review S11): MOVED's effects are exactly those @m2/effects exports, and std/fx exports
-// none of them, so an effect moved later can't be left out of the words.
+// PKG-17 (review S11): MOVED's effects are exactly those @m2/effects exports that std once had (all
+// but the ones born in the pack: the Clipper, PACK-34), and std/fx exports none of them, so an
+// effect moved later can't be left out of the words, and one born in the pack is never said to
+// have moved.
 #[test]
 fn moved_names_every_effect_of_m2_effects_and_std_fx_none() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -225,8 +227,12 @@ fn moved_names_every_effect_of_m2_effects_and_std_fx_none() {
     };
     let moved: std::collections::BTreeSet<String> =
         MOVED.iter().find(|(m, ..)| *m == "fx").unwrap().1.iter().map(|n| n.to_string()).collect();
-    assert_eq!(moved, exported("@m2/effects"), "MOVED's fx names and @m2/effects' exports");
+    let born: std::collections::BTreeSet<String> = ["clip".to_string()].into();
+    assert!(born.is_subset(&exported("@m2/effects")), "@m2/effects exports {born:?}");
+    assert!(moved.is_disjoint(&born), "MOVED says {born:?} left std/fx, which never had it");
+    assert_eq!(moved, &exported("@m2/effects") - &born, "MOVED's fx names and @m2/effects' exports that std had");
     assert!(exported("std/fx").is_disjoint(&moved), "std/fx keeps {:?}", exported("std/fx"));
+    assert!(exported("std/fx").is_disjoint(&born), "std/fx has {:?}", exported("std/fx"));
     assert!(!exported("std/fx").is_empty());
 }
 

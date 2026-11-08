@@ -309,7 +309,8 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 /// Sampler playing regions (PKG-16): two velocity layers, two takes in turn, a release and a loop.
 /// `meters` is `@m2/mixing`'s gate, de-esser and multiband, each working, whose sound their meters
 /// must not change (PACK-26).
-const PURE: [&str; 9] = [
+/// `clip` is `@m2/effects`' Clipper played hard, 92 frames late (PACK-34).
+const PURE: [&str; 10] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -319,6 +320,7 @@ const PURE: [&str; 9] = [
     "templates/empty",
     "core/session/tests/fixtures/sampler-regions",
     "core/session/tests/fixtures/meters",
+    "core/session/tests/fixtures/clip",
 ];
 
 /// A copy of the repo's fixture `rel`, such as `examples/first-song`.

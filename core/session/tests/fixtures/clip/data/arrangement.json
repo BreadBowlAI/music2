@@ -1,0 +1,8 @@
+{
+  "tempo": [
+    {"beat": 0, "bpm": 120}
+  ],
+  "meter": [
+    {"beat": 0, "beats": 4, "unit": 4}
+  ]
+}

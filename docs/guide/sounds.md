@@ -1,14 +1,14 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key: [Tune a voice](audio.md#tune-a-voice)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
-- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 25 effects in eight groups.
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and six more, the Clipper among them), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key, and the Voice changer: [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 27 effects in eight groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
 |---|---|
 | **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
-| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, six of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, seven of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
 
 A song that plays them lists them, as the templates do:
 
@@ -123,21 +123,24 @@ A song made before std 0.8 is told, in words, what to change: first its std line
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
-**Effects**, as the effect browser groups them. Eight are `@m2/effects`', six `@m2/mixing`'s; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
+**Effects**, as the effect browser groups them. Nine are `@m2/effects`', six `@m2/mixing`'s, two `@m2/vocals`'; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
 
 | Group | Effects |
 |---|---|
 | Filter | `lowpass`, `highpass`, `bandpass`, `notch` (std, `std/filter`) |
 | EQ | `eq3` (std, `std/fx`), `eq` (`@m2/mixing`) |
-| Dynamics | `compress`, `limit`, `duck` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband`, `pump` (`@m2/mixing`) |
+| Dynamics | `compress`, `limit`, `duck` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband`, `pump` (`@m2/mixing`), `clip` (`@m2/effects`) |
 | Distortion | `drive`, `bitcrush` (`@m2/effects`) |
 | Delay & Reverb | `delay`, `reverb` (`@m2/effects`) |
 | Modulation | `chorus`, `phaser`, `tremolo` (`@m2/effects`) |
 | Utility | `gain`, `pan` (std, `std/dsp`), `widen` (`@m2/effects`) |
+| Voice | `tune`, `voiceChanger` (`@m2/vocals`): [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice) |
 
 Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
 Each effect's card shows a picture of what it does, worked out from the effect's own sums: the delay's echoes (drag the first for the time and the mix, the second for the feedback), the reverb's tail as it fades (drag the dot for the size), a second of the chorus's, the phaser's and the tremolo's movement, drive's curve (drag the dot for more), a sine wave crushed by the bitcrusher, and how wide the widener makes the sound: how far apart a stereo sound's left and right go, and, past width 1, the width it makes up for a mono sound from its highs, as a fainter fan (drag the edge).
+
+**`clip`**, the Clipper (`@m2/effects`, under Dynamics), makes a sound louder without going over: turn **Gain** up (0 to 24 dB) and every peak over the **Ceiling** (−24 to 0 dB, −0.3 dB at first) is cut flat. It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper (aliasing: tones a cut folds back down from above what you hear); on very bright sounds pushed hard, a few. No sample ever passes the ceiling. A sound under the ceiling passes as it is. Put it on a drum bus, or on the whole mix before the master's limiter. It makes the song 92 samples later (2 ms at 48 kHz), and every other track waits for it, as for Tune. Its card shows its last 3 seconds: faint, your sound pushed up by the gain; solid, what comes out; the part of the faint line over the ceiling's line is what it cut. Drag the line to move the ceiling.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from + Effect like any effect, then pick the track in its card's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
 
