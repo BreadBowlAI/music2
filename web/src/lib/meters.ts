@@ -110,6 +110,8 @@ function hear(key: string, peaks: number[], now: number) {
 }
 
 function onMeters(msg: MetersIn) {
+  // A read that heard no whole block says no levels (only its load): the meters keep theirs.
+  if (!msg.tracks) return;
   const now = performance.now();
   for (const [key, peaks] of Object.entries(msg.tracks ?? {})) hear(key, peaks, now);
   for (const [key, peaks] of Object.entries(msg.channels ?? {})) hear(channelMeter(key), peaks, now);

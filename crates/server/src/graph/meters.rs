@@ -12,7 +12,8 @@
 //!   `true_peak` the largest of the last 3 s in dBTP, each null until there is one. While a take
 //!   records on an audio lane, `"input": [x]` is the sound input's loudest sample since the last
 //!   message, both sides (the io plan's slice 3: the take's level bar), read from the take's ring
-//!   at a place of its own.
+//!   at a place of its own. A message whose read heard no whole block (the engine's clock ran late,
+//!   the device stopped calling back) holds only `dsp`: the levels wait for a block.
 //! - **Each window's looks:** `{"t": "looks", "looks": [{"module", "node", "kind", "at",
 //!   "frames": [[…], …]}]}`, what each look it asked for saw (TAP-8, TAP-12): a scope's last
 //!   [`super::scope::SCOPE`] frames, a list per channel; a spectrum's `bins`; a level's `peak` and
@@ -277,6 +278,11 @@ fn short(x: f32) -> f64 {
     (x as f64 * 1e6).round() / 1e6
 }
 
+/// A meters message's `dsp`: the load, to 4 places, and the dropouts.
+fn dsp(load: f32, dropouts: u64) -> Value {
+    json!({"load": (load as f64 * 1e4).round() / 1e4, "dropouts": dropouts})
+}
+
 /// Each meter of `places`, by key, from `peaks`.
 fn by_key(places: &[(String, usize)], peaks: &[Vec<f32>]) -> Map<String, Value> {
     places.iter().filter_map(|(k, at)| Some((k.clone(), json!(peaks.get(*at)?.iter().map(|&x| short(x)).collect::<Vec<_>>())))).collect()
@@ -337,15 +343,17 @@ impl Graph {
             }
             let plays = current?;
             let taps = plays.info.taps.as_ref()?;
+            let dropouts = player.device_errors().xruns + meters.late;
             // A read that heard no whole block since the last message (the engine's clock ran
-            // late) sends nothing, never a silence it didn't hear; the one last message as it
-            // starts to idle goes, the silence it idled in.
+            // late, the device stopped calling back) says no levels, never a silence it didn't
+            // hear, but still the load and the dropouts; its levels wait for the next block. The
+            // one last message as it starts to idle goes whole, the silence it idled in.
             if !idle && !taps.heard() {
-                return None;
+                let dsp = json!({"t": "meters", "session": open.engine.token, "dsp": dsp(meters.load(), dropouts)});
+                return Some(MetersOut { all: dsp, looks: vec![] });
             }
             let loudness = asks.loudness().then(|| meters.loudness());
             let input = record.input().map(|(ring, ch)| meters.input_level(ring, ch));
-            let dropouts = player.device_errors().xruns + meters.late;
             (
                 open.engine.token,
                 taps.take(),
@@ -363,7 +371,7 @@ impl Graph {
             "tracks": by_key(&layout.tracks, &peaks.meters),
             "channels": by_key(&layout.channels, &peaks.meters),
             "out": peaks.out.map(short),
-            "dsp": {"load": (load as f64 * 1e4).round() / 1e4, "dropouts": dropouts},
+            "dsp": dsp(load, dropouts),
         });
         if let Some(l) = loudness {
             all["loudness"] = l;

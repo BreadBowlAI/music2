@@ -117,7 +117,8 @@ let from = heard.length;
 check(await playSong(), "Space plays the song");
 await sleep(2000);
 const second = heard.slice(from).filter((h) => h.at >= Date.now() - 1000);
-const last = heard.at(-1)?.m;
+// The last with levels: a read that heard no whole block says only its load.
+const last = heard.filter((h) => h.m.tracks).at(-1)?.m;
 check(second.length >= 20 && second.length <= 40, `20 to 40 meters messages a second while playing (${second.length} in the last second)`);
 check(!!last && TRACKS.every((k) => Array.isArray(last.tracks[k])) && last.out?.length === 2 && typeof last.dsp?.load === "number", `each with every track's peaks, the output's and the load (${JSON.stringify(last)})`);
 const status = (await api("/status")).body;
