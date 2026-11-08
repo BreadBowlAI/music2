@@ -213,15 +213,15 @@ const keys = read("tracks/keys.ts");
 await show("keys");
 // The edits' toasts fade first, so the screenshot shows the browser alone.
 await until(async () => (await toasts()).length === 0, 15000);
-await page.click('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]');
 await page.waitForSelector("[data-effect-browser] [data-category]");
 await sleep(300);
 await page.screenshot({ path: `${ROOT}/s5-browser.png` });
-// The + after a sound offers the effects that take audio. The state marks each note effect `notes`
-// (PKG-21): it goes before what plays notes, so it is no effect of this browser.
+// The + on a sound's wire offers the effects that take audio. The state marks each note effect `notes`
+// (PKG-21): it goes before what plays notes, so this browser greys it (CARD-36), after what fits.
 const listed = (await state()).effects;
 const effects = listed.filter((e) => !e.notes);
-const groups = await page.$$eval("[data-effect-browser] [data-category]", (els) => els.map((e) => e.dataset.category));
+const groups = await page.$$eval("[data-effect-browser] [data-category]:not([data-unfit])", (els) => els.map((e) => e.dataset.category));
 const categories = [...new Set(effects.map((e) => e.category))];
 check(
   groups.length === categories.length && categories.every((c) => groups.includes(c)),
@@ -232,16 +232,20 @@ for (const e of effects) {
   const where = await page.$eval(`[data-effect-browser] [data-component="${e.component}"]`, (el) => el.closest("[data-category]")?.dataset.category).catch(() => null);
   check(where === e.category, `${e.component} (${e.label}) is under ${e.category}`);
 }
-// The note effects: the window offers them nowhere yet (gap #62), so this checks the list a browser
-// for them would group, the state's, and that this one leaves them out.
+// The note effects: the browser on a notes wire offers them (the suite nodes checks it); this checks
+// the list it groups, the state's, and that this one, on a sound's wire, offers none of them.
 const notes = listed.filter((e) => e.notes).map((e) => `${e.component} under ${e.category}`).sort();
 check(
   JSON.stringify(notes) === JSON.stringify(["@m2/notes:arp under Arpeggiator", "@m2/notes:chord under Chords", "@m2/notes:echo under Echo", "@m2/notes:lock-to-key under Scales"]),
   `the state lists the four note effects, each under its own category: ${notes.join(", ")}`,
 );
-const offered = await page.$$eval("[data-effect-browser] [data-component]", (els) => els.map((e) => e.dataset.component));
+const offered = await page.$$eval("[data-effect-browser] [data-component]:not([data-unfit])", (els) => els.map((e) => e.dataset.component));
 const misplaced = listed.filter((e) => e.notes && offered.includes(e.component)).map((e) => e.component);
-check(offered.length > 0 && misplaced.length === 0, `the browser after a sound lists none of them: ${misplaced.join(", ") || "none"}`);
+const greyed = await page.$$eval("[data-effect-browser] [data-component][data-unfit]", (els) => els.map((e) => e.dataset.component));
+check(
+  offered.length > 0 && misplaced.length === 0 && listed.filter((e) => e.notes).every((e) => greyed.includes(e.component)),
+  `the browser on a sound's wire offers none of them, only greys them: ${misplaced.join(", ") || "none"}`,
+);
 const footer = async () => page.$eval("[data-effect-browser] .font-mono", (e) => e.textContent);
 await page.type('[data-effect-browser] input[aria-label="Search effects"]', "lowpass");
 check(await until(async () => (await footer()) === "lowpass(pluck(…), 1000)"), `its footer shows what adding writes: ${await footer()}`);

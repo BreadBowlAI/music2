@@ -96,7 +96,7 @@ crate::api::routes! {
         "Take a cable out: the input's default is written in its place",
         r#"{"session": 7, "revision": 42, "id": "song.ts#5/0"}"#;
     POST "/api/graph/effect/add" => graph_add_effect; writes, agents,
-        "Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`); or a note effect (`notes` in the state's effects list) before a call that plays notes, around its notes; by its component id as the state's effects list it",
+        "Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`); or a note effect (`notes` in the state's effects list) before a call that plays notes, around its notes; by its component id as the state's effects list it. Or put it on one wire: `reader` and `input` in place of `call`, around argument `input` (`0`, `0.keys.in`) of call `reader`, as a wire's `plus` in the view says (CARD-36)",
         r#"{"session": 7, "revision": 42, "call": "tracks/keys.ts#1", "component": "@m2/effects:delay"}"#;
     POST "/api/graph/effect/remove" => graph_remove_effect; writes, agents,
         "Take an effect out, keeping what it was applied to",
@@ -631,7 +631,15 @@ async fn graph_connect(State(s): S, Json(r): Json<ConnectReq>) -> ApiResult {
 struct EffectReq {
     session: u64,
     revision: u64,
+    /// The call the effect goes after (the add route's first form), or the one taken out.
+    #[serde(default)]
     call: String,
+    /// The add route's second form (CARD-36): the call whose argument `input` (`0`, `0.keys.in`) the
+    /// effect goes around, on that one wire; as a wire's `plus` in the view says it.
+    #[serde(default)]
+    reader: Option<String>,
+    #[serde(default)]
+    input: Option<String>,
     /// The effect's ComponentId (`@m2/effects:delay`), as the graph state's `effects` list it; or an
     /// installed plugin's id, `clap:<id>`, as `GET /api/plugins` lists it (gaps #32).
     #[serde(default)]
@@ -640,7 +648,11 @@ struct EffectReq {
 
 async fn graph_add_effect(State(s): S, Json(r): Json<EffectReq>) -> ApiResult {
     let state = s.clone();
-    let result = blocking(move || state.graph.add_effect(r.session, r.revision, &r.call, &r.component)).await;
+    let result = blocking(move || match (&r.reader, &r.input) {
+        (None, None) => state.graph.add_effect(r.session, r.revision, &r.call, &r.component),
+        (reader, input) => state.graph.add_effect_on(r.session, r.revision, reader.as_deref(), input.as_deref(), &r.component),
+    })
+    .await;
     s.graph_changed();
     Ok(Json(result?))
 }

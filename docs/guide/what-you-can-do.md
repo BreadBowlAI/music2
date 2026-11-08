@@ -29,10 +29,10 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Record several tracks at once, each from its own input (3–4 too) | **R** on each track's header; right-click it for its input |
 | Fix one part by punching in, or keep a take each time round a loop | right-click Record ▸ **Punch in and out**; the clip's menu ▸ **Take 1**, **Take 2**, … |
 | Build one take from the best parts of several (comping) | **Takes** on the track's header, then swipe along a take ([how](audio.md#comp-the-best-parts-of-several-takes)) |
-| Tune a voice onto the song's key, gently or as the "robot" pop sound | **+** on the vocal track's lane in its **Graph**, then **Tune** ([how](audio.md#tune-a-voice)) |
-| Make a voice deeper or higher, or a chipmunk | **+** on the vocal track's lane in its **Graph**, then **Voice changer** ([how](audio.md#change-a-voice)) |
-| Make a synth talk with a voice (a vocoder) | **+** on the synth in its **Graph**, then **Vocoder**, then pick the vocal track in its node's **Talks with** ([how](audio.md#make-a-synth-talk)) |
-| Add the jet's whoosh (a flanger), or break a sound into tiny pieces to smear or stretch it (granular) | **+** on the sound in its **Graph**, then **Flanger** (Modulation) or **Grains** (Delay & Reverb) ([what each knob does](sounds.md)) |
+| Tune a voice onto the song's key, gently or as the "robot" pop sound | **+** on the wire out of the vocal track's lane in its **Graph**, then **Tune** ([how](audio.md#tune-a-voice)) |
+| Make a voice deeper or higher, or a chipmunk | **+** on the wire out of the vocal track's lane in its **Graph**, then **Voice changer** ([how](audio.md#change-a-voice)) |
+| Make a synth talk with a voice (a vocoder) | **+** on the wire out of the synth in its **Graph**, then **Vocoder**, then pick the vocal track in its node's **Talks with** ([how](audio.md#make-a-synth-talk)) |
+| Add the jet's whoosh (a flanger), or break a sound into tiny pieces to smear or stretch it (granular) | **+** on the wire out of the sound in its **Graph**, then **Flanger** (Modulation) or **Grains** (Delay & Reverb) ([what each knob does](sounds.md)) |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Turn a track into audio, to chop it, reverse it or pitch it; the song sounds the same | the track's menu ▸ **Bounce to audio** ([how](audio.md#bounce-a-track-to-audio)) |

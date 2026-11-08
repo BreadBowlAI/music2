@@ -19,7 +19,7 @@ import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 import { expand } from "./graphlib.mjs";
 
-const { page, errors, api, view, box, posts, key, caughtUp } = await open(1440, 900);
+const { page, errors, api, view, box, posts, key, caughtUp, toasts } = await open(1440, 900);
 
 /** A write or a pointer from outside the page: an agent's (AGENT-5, AGENT-6). */
 const agent = (path, body) =>
@@ -65,6 +65,9 @@ const size = (sel) => page.$eval(sel, (e) => e.dataset.size).catch(() => null);
 // Sizes as laid out, before the graph's zoom scales them on screen.
 const width = (sel) => page.$eval(sel, (e) => e.offsetWidth).catch(() => null);
 const height = (sel) => page.$eval(sel, (e) => e.offsetHeight).catch(() => null);
+
+/** How many of examples/sounds' Song's nodes the dock's first view holds, at the least (DV-5): 3 before track graph-insert. */
+const FILLED = 6;
 
 // ---------------------------------------------------------------- Wob, then a Lowpass; an LFO waits
 
@@ -361,6 +364,128 @@ await page.click(`${lp} [data-node-menu]`);
 check(await until(async () => !!(await page.$("[data-testid=node-remove]"))), "the Lowpass's ⋯ menu offers Remove");
 await page.keyboard.press("Escape");
 
+// ---------------------------------------------------------------- + on a wire (CARD-36, taste.md DV-7)
+
+// No node's header and no pill has a + of its own: an effect goes in from + on a wire.
+check(!(await page.$(`${g} [data-node] button[aria-label^="Add an"]`)) && !(await page.$('[data-testid=graph] [data-node] button[aria-label^="Add an"]')), "no node's header and no pill has a + of its own");
+st = await state();
+const wobMod = () => st.view.modules.find((m) => m.key === "wob");
+const idOf = (title) => wobMod().nodes.find((n) => n.title === title)?.id;
+const plusOn = (from, to) => `${g} [data-wire-plus][data-from="${from}"][data-to="${to}"]`;
+const shown = (sel) => page.$eval(sel, (e) => !!e.dataset.shown && getComputedStyle(e).opacity === "1").catch(() => false);
+const [wobN, lpN] = [idOf("Wobbly Bass Synth"), idOf("Lowpass")];
+// Wob's body plays a saw, whose frequency comes in on a wire: its one wire in.
+const inN = wobMod().port_edges.find((e) => e.to === wobN)?.from;
+const out = plusOn(wobN, lpN), into = plusOn(inN, wobN), last = plusOn(lpN, "export:out");
+check(!!(await page.$(out)) && !!(await page.$(into)) && !!(await page.$(last)), "each wire of Wob's has a + of its own");
+// Nothing selected: a click on the canvas's empty corner clears the selection.
+const corner = await box(`${g} [data-canvas]`);
+await page.mouse.click(corner.x + corner.width - 4, corner.y + 4);
+check(!(await shown(out)) && !(await shown(into)), "unseen until it is wanted");
+// Under the pointer: a point on the wire a quarter of its way along, away from its +.
+const along = await page.$eval(`${g} path[data-from="${wobN}"][data-to="${lpN}"]`, (p) => {
+  const q = p.getPointAtLength(p.getTotalLength() / 4).matrixTransform(p.getScreenCTM());
+  return { x: q.x, y: q.y };
+});
+await page.mouse.move(along.x, along.y);
+check(await until(() => shown(out), 2000), "a wire under the pointer shows its + (the graph note's G20)");
+check(!(await shown(into)), "and only its own");
+await page.mouse.move(5, 5);
+check(await until(async () => !(await shown(out)), 2000), "it goes again when the pointer leaves");
+// The selected node's wires show theirs.
+await page.click(`${wob} [data-node-title]`);
+check(await until(async () => (await shown(out)) && (await shown(into))), "the selected node's wires show their +, in and out");
+check(!(await shown(last)), "a wire it doesn't touch doesn't");
+await page.keyboard.press("Escape");
+check(await until(async () => !(await shown(out))), "Esc clears the selection, and its wires' + go");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-plus.png` });
+// Its browser offers what fits a sound's wire; a note effect is greyed, saying why.
+await page.mouse.move(along.x, along.y);
+await until(() => shown(out), 2000);
+await page.click(out);
+check(await until(async () => !!(await page.$("[data-effect-browser]"))), "+ on the wire after Wob opens the effect browser");
+const arpWhy = await page.$eval('[data-effect-browser] [data-component="@m2/notes:arp"]', (e) => e.dataset.unfit ?? "").catch(() => "");
+check(arpWhy === "Arpeggiator goes on notes, and this wire carries a sound", `a note effect is greyed on a sound's wire, saying why: ${arpWhy}`);
+check(!(await page.$('[data-effect-browser] [data-effect="delay"][data-unfit]')), "an effect isn't");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-browser.png` });
+text = read("tracks/wob.ts");
+await page.click('[data-effect-browser] [data-effect="delay"]');
+check(await until(() => read("tracks/wob.ts").includes("lowpass(delay(w, { time: 0.25, feedback: 0.3, mix: 0.3 }), { cutoff: 5000 })")), "a Delay goes on that wire, around the Lowpass's `w`");
+check(await stepIs("adding Delay"), `one undo step: ${await undoTitle()}`);
+check(await until(async () => !!(await page.$(`${g} [data-node="delay"]`))), "the Delay's node shows between Wob and the Lowpass");
+await sleep(400);
+await page.screenshot({ path: `${ROOT}/nodes-wire-added.png` });
+await key("Meta+z");
+check(await until(() => read("tracks/wob.ts") === text), "⌘Z takes it out again");
+await until(async () => !(await page.$(`${g} [data-node="delay"]`)));
+// Keys' notes wire into its Pluck offers note effects; an effect there is greyed, saying why.
+await page.click('[data-module-tab="keys"] [data-testid=track-label]');
+st = await state();
+const keysMod = st.view.modules.find((m) => m.key === "keys");
+const pluckN = keysMod.nodes.find((n) => n.label === "pluck")?.id;
+const chordsN = keysMod.port_edges.find((e) => e.to === pluckN && e.kind === "notes")?.from;
+const chordsIn = `[data-testid=graph] [data-module="keys"] [data-wire-plus][data-from="${chordsN}"][data-to="${pluckN}"]`;
+await until(async () => !!(await page.$(chordsIn)), 15000);
+await page.click(`[data-testid=graph] [data-module="keys"] [data-node="pluck"] [data-node-title]`);
+await until(() => shown(chordsIn));
+await page.click(chordsIn);
+check(await until(async () => !!(await page.$("[data-effect-browser]"))), "+ on the notes wire into Keys' Pluck opens the browser");
+const delayWhy = await page.$eval('[data-effect-browser] [data-effect="delay"]', (e) => e.dataset.unfit ?? "").catch(() => "");
+check(delayWhy === "Delay goes on a sound, and this wire carries notes", `an effect is greyed on a notes wire, saying why: ${delayWhy}`);
+const keysText = read("tracks/keys.ts");
+await page.click('[data-effect-browser] [data-component="@m2/notes:arp"]');
+check(await until(() => read("tracks/keys.ts").includes("pluck(arp(lane.notes(\"chords\")))")), "an Arpeggiator goes on the notes wire, before the Pluck");
+await key("Meta+z");
+check(await until(() => read("tracks/keys.ts") === keysText), "⌘Z takes it out again");
+await page.keyboard.press("Escape");
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(wob)), 15000);
+// Remove says why it can't, in ⋯ and with Delete: Wob is an instrument.
+await page.click(`${wob} [data-node-menu]`);
+const removeWhy = await page.$eval("[data-testid=node-remove]", (e) => [e.getAttribute("aria-disabled") ?? String(e.disabled), e.title]).catch(() => ["", ""]);
+check(/true/.test(removeWhy[0]) && removeWhy[1] === "Wobbly Bass Synth is an instrument: change it with Change instrument, in its track's menu.", `⋯ greys Remove on Wob, saying why: ${JSON.stringify(removeWhy)}`);
+await page.keyboard.press("Escape");
+await page.click(`${wob} [data-node-title]`);
+await page.keyboard.press("Delete");
+check(await until(async () => (await toasts()).some((x) => x.includes("Wobbly Bass Synth is an instrument"))), "Delete on Wob says the same");
+await page.keyboard.press("Escape");
+// The song: a control wire's + is greyed, saying why, and a click says it.
+await page.click('[data-module-tab="song"]');
+const env = '[data-testid=graph] [data-module="song"] [data-wire-plus][data-from="import:kick.env"]';
+check(await until(async () => !!(await page.$(env)), 9000), "the Kick's env wire into the Duck has a +");
+const envWhy = await page.$eval(env, (e) => [e.getAttribute("aria-disabled"), e.title]).catch(() => [null, ""]);
+check(envWhy[0] === "true" && envWhy[1] === "This wire carries a control: an effect goes on a sound, a note effect on notes.", `greyed, saying why: ${JSON.stringify(envWhy)}`);
+await page.click(env);
+check(await until(async () => (await toasts()).some((x) => x.includes("This wire carries a control"))) && !(await page.$("[data-effect-browser]")), "a click says it, and opens nothing");
+// The kick's drum is read by its Follow and its out: + on its wire out wraps the record's `out`, so
+// the kick's sound takes the effect and the Follow still reads it dry (CARD-36, review I2).
+await page.click('[data-module-tab="kick"] [data-testid=track-label]');
+st = await state();
+const kickMod = st.view.modules.find((m) => m.key === "kick");
+const drumN = kickMod.nodes.find((n) => n.label === "drums.drum")?.id;
+const drumOut = `[data-testid=graph] [data-module="kick"] [data-wire-plus][data-from="${drumN}"][data-to="export:out"]`;
+check(await until(async () => !!(await page.$(drumOut)) && !(await page.$(`${drumOut}[aria-disabled]`)), 9000), `the kick's wire out takes an effect: ${await page.$eval(drumOut, (e) => e.title).catch(() => "")}`);
+check((await page.$eval(drumOut, (e) => e.getAttribute("aria-label")).catch(() => "")) === "Add an effect after Drum, before Out", "its + names both ends by their titles (DV-2)");
+const kickText = read("tracks/kick.ts");
+await page.click(drumOut);
+await page.waitForSelector('[data-effect-browser] [data-effect="delay"]');
+await page.click('[data-effect-browser] [data-effect="delay"]');
+check(await until(() => /\{ out: delay\(out, \{[^}]*\}\), env: follow\(out,/.test(read("tracks/kick.ts"))), `the Delay wraps the record's out; the Follow reads the drum dry: ${read("tracks/kick.ts").match(/return .*/)?.[0]}`);
+check(await stepIs("adding Delay"), `one undo step: ${await undoTitle()}`);
+await key("Meta+z");
+check(await until(() => read("tracks/kick.ts") === kickText), "⌘Z gives the kick's code back");
+// Delete on a node that isn't a call says why (DV-15).
+const hits = '[data-testid=graph] [data-module="kick"] [data-node="hits"] [data-node-title]';
+await until(async () => !!(await page.$(hits)), 9000);
+await page.click(hits);
+await page.keyboard.press("Delete");
+check(await until(async () => (await toasts()).some((x) => x.includes("Hits isn't an effect: change it in code."))), "Delete on the kick's lane says why");
+await page.keyboard.press("Escape");
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(wob)), 15000);
+
 // ---------------------------------------------------------------- +N (taste.md DV-16)
 
 await until(async () => (await size(wob)) === "collapsed");
@@ -511,5 +636,41 @@ await expand(page, mx);
 const cols = await page.$$eval(`${mx} [data-column]`, (els) => els.map((e) => `${e.dataset.column}:${e.querySelectorAll("[data-knob]").length}`));
 const mixed = await page.$$eval(`${mx} [data-knob]`, (els) => els.length);
 check(mixed >= 10 && cols[0] === "Values:8" && cols[1] === `Values 2:${Math.min(8, mixed - 8)}`, `its ${mixed} values in columns of eight: ${cols.join(" ")}`);
+
+// ---------------------------------------------------------------- the graph fills the dock before it scrolls (taste.md DV-5)
+
+// examples/sounds' Song: nineteen tracks' sounds and two Ducks into one mixer, far taller than the
+// dock. Its column of sources hangs from where its wires land, so the mixer keeps the top of the view.
+const made = await page.evaluate(
+  async (token) => (await fetch("/api/project/new", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ name: "Sounds", example: "sounds" }) })).status,
+  sess.page_token,
+);
+check(made === 200, `examples/sounds opens as a new song: ${made}`);
+await until(async () => !!(await page.$('[data-module-tab="ride"]')), 20000);
+await page.click('[data-module-tab="song"]');
+const soundsG = '[data-testid=graph] [data-module="song"]';
+await until(async () => (await page.$$(`${soundsG} [data-node]`)).length > 20, 15000);
+await sleep(500);
+const firstView = await page.evaluate((sel) => {
+  const dock = document.querySelector("[data-testid=graph]").getBoundingClientRect();
+  const nodes = [...document.querySelectorAll(`${sel} [data-node]`)].map((n) => n.getBoundingClientRect());
+  const area = document.querySelector(`${sel} [data-canvas]`).getBoundingClientRect();
+  const inView = nodes.filter((r) => r.left >= dock.left - 1 && r.right <= dock.right + 1 && r.top >= dock.top - 1 && r.bottom <= dock.bottom + 1).length;
+  const inside = (r) => r.left >= dock.left - 1 && r.right <= dock.right + 1 && r.top >= dock.top - 1 && r.bottom <= dock.bottom + 1;
+  const mixer = document.querySelector(`${sel} [data-node="mixer"]`);
+  return { inView, all: nodes.length, mixer: !!mixer && inside(mixer.getBoundingClientRect()), wide: Math.round(area.width), tall: Math.round(area.height), dockH: Math.round(dock.height) };
+}, soundsG);
+check(firstView.inView >= FILLED, `more of its nodes in the dock's first view: ${firstView.inView} of ${firstView.all} (${JSON.stringify(firstView)})`);
+check(firstView.mixer, "the mixer the tracks go to is among them, at the top of the view");
+check(JSON.stringify(await behind("song")) === "[]", `no wire of it runs behind a node it doesn't touch (DV-5): ${JSON.stringify(await behind("song"))}`);
+await page.screenshot({ path: `${ROOT}/nodes-sounds-song.png` });
+// The mixer selected: its nineteen wires in meet at one input. Only those 24 px apart show their +,
+// near the mixer; the rest show under the pointer (DV-7, review I7).
+await page.click(`${soundsG} [data-node="mixer"] [data-node-title]`);
+await sleep(300);
+const pluses = await page.$$eval(`${soundsG} [data-wire-plus][data-shown]`, (els) => els.map((e) => { const r = e.getBoundingClientRect(); return [r.x + r.width / 2, r.y + r.height / 2]; }));
+const close = pluses.flatMap((a, i) => pluses.slice(i + 1).filter((b) => Math.hypot(a[0] - b[0], a[1] - b[1]) < 24));
+check(pluses.length > 0 && close.length === 0, `the selected mixer's + don't crowd: ${pluses.length} shown, ${close.length} pairs under 24 px`);
+await page.screenshot({ path: `${ROOT}/nodes-mixer-selected.png` });
 
 done(errors);

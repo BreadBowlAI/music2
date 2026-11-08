@@ -61,7 +61,7 @@ Double-click it in the browser (or pick it in + Track), as with music2's own. mu
 - a line in `music2.toml` under `[dependencies]`: `"@alice/felt-piano" = "1.2"` (this version or a newer one that keeps working the same way)
 - an entry in `music2.lock`: the exact version, `1.2.0`, and its fingerprint
 
-Effects work the same way: drag one onto a track, or use **+** on a node in the Graph.
+Effects work the same way: drag one onto a track, or use the **+** on a wire in the Graph.
 
 ## What music2 promises a pack
 

@@ -325,6 +325,8 @@ pub trait Gestures {
     fn disconnect(&mut self, at: u64, id: &str) -> Result<Edited, EditError>;
     fn effects(&self) -> Vec<EffectInfo>;
     fn add_effect(&mut self, at: u64, call: &str, component: &str) -> Result<Edited, EditError>;
+    /// Put an effect on the wire into argument `input` of call `reader` (CARD-36).
+    fn add_effect_on(&mut self, at: u64, reader: &str, input: &str, component: &str) -> Result<Edited, EditError>;
     fn remove_effect(&mut self, at: u64, call: &str) -> Result<Edited, EditError>;
     /// Write a notes lane's clips, as planned at revision `at` (the lane's base is its file
     /// then).
@@ -409,6 +411,10 @@ impl Gestures for Session {
 
     fn add_effect(&mut self, at: u64, call: &str, component: &str) -> Result<Edited, EditError> {
         effect::add_effect(self, at, call, component)
+    }
+
+    fn add_effect_on(&mut self, at: u64, reader: &str, input: &str, component: &str) -> Result<Edited, EditError> {
+        effect::add_effect_on(self, at, reader, input, component)
     }
 
     fn remove_effect(&mut self, at: u64, call: &str) -> Result<Edited, EditError> {

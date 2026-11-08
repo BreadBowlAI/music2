@@ -1752,6 +1752,17 @@ impl Graph {
         self.edit(token, move |s| s.add_effect(revision, &call, &component))
     }
 
+    /// Put an effect on the wire into argument `input` of call `reader`, around that argument alone (CARD-36).
+    /// The wire is named by both, as its `plus` in the view says.
+    pub fn add_effect_on(&self, token: u64, revision: u64, reader: Option<&str>, input: Option<&str>, component: &str) -> Result<Value> {
+        let wire = reader.zip(input).map(|(r, i)| (r.to_string(), i.to_string()));
+        let component = component.to_string();
+        self.edit(token, move |s| match wire {
+            Some((reader, input)) => s.add_effect_on(revision, &reader, &input, &component),
+            None => Err(m2_editor::EditError::Rejected("Name the wire by both `reader` and `input`.".into())),
+        })
+    }
+
     /// Take an effect out, leaving what it was applied to.
     pub fn remove_effect(&self, token: u64, revision: u64, call: &str) -> Result<Value> {
         let call = call.to_string();

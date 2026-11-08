@@ -63,7 +63,7 @@ check(await until(async () => (await redoTitle()) === "Redo Hats volume (⇧⌘Z
 
 await key("Alt+1");
 await page.click('[data-module-tab="keys"]').catch(() => {});
-const plus = '[data-module="keys"] button[aria-label="Add an effect after pluck"]';
+const plus = '[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]';
 await until(async () => !!(await page.$(plus)));
 await page.click(plus);
 await page.waitForSelector('[data-module="keys"] [data-effect="delay"]', { timeout: 5000 }).catch(() => null);

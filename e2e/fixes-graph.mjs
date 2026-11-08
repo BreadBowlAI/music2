@@ -5,12 +5,12 @@ import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs
 
 const { browser, page, errors, posts, api, state, caughtUp, toasts, show, view, key, box, drag } = await open();
 const keysOriginal = read("tracks/keys.ts");
-const plus = (after) => `[data-module="keys"] button[aria-label="Add an effect after ${after}"]`;
+const plus = (after) => `[data-module="keys"] button[aria-label^="Add an effect after ${after},"]`;
 
 // ---------------------------------------------------------------- the effect browser
 
 await show("keys");
-await page.click(plus("pluck"));
+await page.click(plus("Pluck"));
 await page.waitForSelector("[data-effect-browser]");
 for (const word of ["louder", "quieter", "volume"]) {
   await page.$eval("[data-effect-browser] input", (e) => e.select());
@@ -28,7 +28,7 @@ check(await until(async () => !(await page.$("[data-effect-browser]"))), "Escape
 await api("/transport", { method: "POST", body: JSON.stringify({ action: "play" }) });
 check(await until(async () => (await api("/status")).body.seconds > 1.2, 6000), "playing");
 posts.length = 0;
-await page.click(plus("pluck"));
+await page.click(plus("Pluck"));
 await page.waitForSelector("[data-effect-browser] input");
 await page.keyboard.type("reverb");
 await page.keyboard.press("Enter");
@@ -41,8 +41,8 @@ await api("/transport", { method: "POST", body: JSON.stringify({ action: "stop" 
 
 // ---------------------------------------------------------------- a Hz knob at its end
 
-await page.waitForSelector(plus("reverb"));
-await page.click(plus("reverb"));
+await page.waitForSelector(plus("Reverb"));
+await page.click(plus("Reverb"));
 await page.waitForSelector('[data-effect-browser] [data-effect="lowpass"]');
 await page.click('[data-effect-browser] [data-effect="lowpass"]');
 check(await until(() => /lowpass\(reverb\(.*\), 1000\)/.test(read("tracks/keys.ts"))), "lowpass goes after the reverb at 1000 Hz");

@@ -92,7 +92,7 @@ await show("keys");
 const reverbs = () => read("tracks/keys.ts").trim().split("\n").pop();
 const inner = () => /reverb\(pluck\(lane\.notes\("chords"\)\), \{ size: ([\d.]+)/.exec(reverbs())?.[1];
 const outer = () => /\), \{ size: ([\d.]+), damping: [\d.]+, mix: [\d.]+ \}\)\);$/.exec(reverbs())?.[1];
-await page.click('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]');
 await page.waitForSelector('[data-effect="reverb"]');
 await page.click('[data-effect="reverb"]');
 check(await until(() => read("tracks/keys.ts").includes("reverb(pluck(")), "a first Reverb after the keys' pluck");
@@ -102,7 +102,7 @@ await settle();
 let n = refusals.length;
 watch();
 let off = await holdPost("/api/graph/effect/add");
-await page.click('[data-module="keys"] button[aria-label="Add an effect after reverb"]');
+await page.click('[data-module="keys"] button[aria-label^="Add an effect after Reverb,"]');
 await page.waitForSelector('[data-effect="reverb"]');
 await page.click('[data-effect="reverb"]');
 // At once, while the add is on its way and the page draws one Reverb: its size, turned up.

@@ -35,6 +35,7 @@ import {
 } from "lucide-react";
 import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { create } from "zustand";
 import {
   controlLabel,
   display,
@@ -131,7 +132,7 @@ function headRoom(effects: Effect[], perNote: Set<string>) {
     if (perNote.has(n.id)) words.push("per note");
     if (expanded && packOf(n) && wide) words.push(packOf(n)!);
     if (expanded && hasPresets(n, effects)) words.push("Presets");
-    const buttons = (bypassable(n) ? 1 : 0) + (n.audio && effects.length > 0 ? 1 : 0) + (n.kind === "call" ? 2 : 0) + (n.kind !== "call" ? 1 : 0);
+    const buttons = (bypassable(n) ? 1 : 0) + (n.kind === "call" ? 2 : 0) + (n.kind !== "call" ? 1 : 0);
     // Room for "· Off" whether it is off or on, so turning it off never moves the node (taste.md §3.5).
     return { title: bypassable(n) || n.bypassed ? `${titleOf(n, effects)} · Off` : titleOf(n, effects), buttons, words };
   };
@@ -428,6 +429,10 @@ function layout(
   }
   const last = Math.max(0, ...depth.values());
   for (const n of m.nodes) if (n.kind === "export") depth.set(n.id, last);
+  // A column of two sources or more (what nothing feeds, and something reads) hangs from where its
+  // wires land, never above it, so what they feed keeps the top of the graph's first view (DV-5).
+  const hanging = new Set<number>();
+  for (let c = 0; c <= last; c++) if (m.nodes.filter((n) => depth.get(n.id) === c && !into.get(n.id)?.size && from.get(n.id)?.size).length > 1) hanging.add(c);
   // A wire that skips a column passes through a gap there, held open by a stand-in the height of a
   // wire, placed with the column's nodes, so it never runs behind one (DV-5, review Z7).
   const gaps = new Map<string, string[]>();
@@ -473,7 +478,9 @@ function layout(
     });
     col.sort((a, b) => (a.land ?? Infinity) - (b.land ?? Infinity) || a.i - b.i);
     const wanted = col.filter((x) => x.want != null);
-    const tops = pack(wanted.map((x) => ({ want: x.want!, h: x.h })));
+    let tops = pack(wanted.map((x) => ({ want: x.want!, h: x.h })));
+    const lowest = Math.min(...wanted.map((x) => x.want!));
+    if (hanging.has(c) && tops.length && tops[0] < lowest) tops = tops.map((y) => y + lowest - tops[0]);
     wanted.forEach((x, k) => top.set(x.n.id, tops[k]));
     // What nothing to the right reads goes below, for now (see below).
     let next = wanted.length ? tops[tops.length - 1] + wanted[wanted.length - 1].h + GAP_Y : 0;
@@ -534,6 +541,7 @@ function layout(
   return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes } : { placed, width, height, back, routes };
 }
 
+
 /**
  * Tops for a column's nodes, in order and `GAP_Y` apart, as close to the tops they want as they
  * fit (least squares): nodes that would overlap move apart around their middle rather than all
@@ -561,6 +569,17 @@ function pack(items: { want: number; h: number }[]): number[] {
     }
   }
   return tops;
+}
+
+/** How far apart the + of a selected node's wires stay, at the least (DV-7): a button and a little. */
+const PLUS_GAP = 24;
+
+/** The point a fraction `t` along `curve` (or a routed wire's stretch, its bow at least `bow`). */
+function along(x0: number, y0: number, x1: number, y1: number, bow: number, t: number) {
+  const dx = Math.max(bow, Math.abs(x1 - x0) * 0.45);
+  const [ax, bx] = [x0 + dx, x1 - dx];
+  const u = 1 - t;
+  return { x: u * u * u * x0 + 3 * u * u * t * ax + 3 * u * t * t * bx + t * t * t * x1, y: u * u * u * y0 + 3 * u * u * t * y0 + 3 * u * t * t * y1 + t * t * t * y1 };
 }
 
 /** A smooth curve from an output (left) to an input (right), bowing out when it runs backwards. */
@@ -668,6 +687,54 @@ const ModuleSection = memo(function ModuleSection({
   }, [module]);
   // The nodes in layout order, left to right and top to bottom: the order Tab takes (DV-15).
   const ordered = useMemo(() => [...placed.values()].sort((a, b) => a.x - b.x || a.y - b.y), [placed]);
+  // Each wire's path, and where its + sits: halfway along its last stretch, into its input (CARD-36).
+  const drawn = useMemo(
+    () =>
+      module.port_edges.flatMap((e) => {
+        const p = placed.get(e.from), q = placed.get(e.to);
+        const y0 = p?.outs.get(e.from_port), y1 = q?.ins.get(e.to_port);
+        if (!p || !q || y0 == null || y1 == null) return [];
+        const [x0, x1, ya, yb] = [p.x + p.w, q.x, p.y + y0, q.y + y1];
+        if (back.has(e)) {
+          const low = height - LOOP_ROOM / 2;
+          const at = { x: (x0 + x1) / 2, y: low };
+          return [{ e, loop: true, d: loopBack(x0, ya, x1, yb, low), at, out: at, into: at }];
+        }
+        const via = routes.get(edgeKey(e));
+        const [first, last] = [via?.[0], via?.at(-1)];
+        const [sx, sy] = last ? [last.x1, last.y] : [x0, ya];
+        // Near each end, for a selected node's own wires (DV-7): a fifth of the way along the stretch there.
+        const out = first ? along(x0, ya, first.x0, first.y, 24, 0.2) : along(x0, ya, x1, yb, 48, 0.2);
+        const into = last ? along(sx, sy, x1, yb, 24, 0.8) : along(x0, ya, x1, yb, 48, 0.8);
+        return [{ e, loop: false, d: via ? routed(x0, ya, x1, yb, via) : curve(x0, ya, x1, yb), at: { x: (sx + x1) / 2, y: (sy + yb) / 2 }, out, into }];
+      }),
+    [module, placed, back, routes, height],
+  );
+  // A wire's + shows under the pointer (`useWireHover`, so a hover draws only its +), on the selected
+  // node's own wires near its end, each 24 px from the next or only under the pointer (DV-7), and
+  // while its browser is open.
+  const keys0 = useMemo(() => new Map(module.nodes.map((n) => [n.id, n.key ?? n.id])), [module]);
+  const keyOf = (id: string) => keys0.get(id) ?? id;
+  const selected = useExpanded((s) => s.selected);
+  const near = useMemo(() => {
+    const shown = new Map<string, { x: number; y: number }>();
+    if (selected == null) return shown;
+    const placedAt: { x: number; y: number }[] = [];
+    const own = drawn.flatMap((w) => {
+      const [a, b] = [keyOf(w.e.from), keyOf(w.e.to)];
+      return a === selected ? [{ k: edgeKey(w.e), at: w.out }] : b === selected ? [{ k: edgeKey(w.e), at: w.into }] : [];
+    });
+    for (const w of own.sort((p, q) => p.at.y - q.at.y || p.at.x - q.at.x)) {
+      if (placedAt.some((q) => Math.hypot(q.x - w.at.x, q.y - w.at.y) < PLUS_GAP)) continue;
+      placedAt.push(w.at);
+      shown.set(w.k, w.at);
+    }
+    return shown;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [drawn, selected, keys0]);
+  const [picking, setPicking] = useState<{ edge: PortEdge; anchor: HTMLElement } | null>(null);
+  // A hover ends with its module: another module's (or song's) wire may have the same key.
+  useEffect(() => () => useWireHover.setState({ hovered: null }), []);
 
   // Drag from a named output onto a bar: the value is replaced by the signal's name. Dropped on a
   // collapsed node, a menu offers its values (DV-6). The wire is drawn in the module's own
@@ -745,7 +812,10 @@ const ModuleSection = memo(function ModuleSection({
     const node = module.nodes.find((n) => (n.key ?? n.id) === selected);
     e.preventDefault();
     e.stopPropagation();
-    if (node?.effect && editable) void removeNode(node, titleOf(node, effects), session, revision);
+    if (!node || !editable) return;
+    // Where Remove can't, Delete says why in the view's words (DV-15, CARD-36).
+    if (node.kind === "call" && !node.remove) void removeNode(node, titleOf(node, effects), session, revision);
+    else toast(node.remove ?? `${titleOf(node, effects)} isn't an effect: change it in code.`);
   };
 
   return (
@@ -769,38 +839,43 @@ const ModuleSection = memo(function ModuleSection({
               data-cabling={cable ? true : undefined}
             >
               <svg className="absolute inset-0 pointer-events-none overflow-visible" width={width} height={height}>
-                {module.port_edges.map((e) => {
-                  const p = placed.get(e.from), q = placed.get(e.to);
-                  const y0 = p?.outs.get(e.from_port), y1 = q?.ins.get(e.to_port);
-                  if (!p || !q || y0 == null || y1 == null) return null;
-                  const loop = back.has(e);
-                  const via = routes.get(edgeKey(e));
-                  return (
-                    <path
-                      key={edgeKey(e)}
-                      d={
-                        loop
-                          ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2)
-                          : via
-                            ? routed(p.x + p.w, p.y + y0, q.x, q.y + y1, via)
-                            : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)
-                      }
-                      data-loop={loop || undefined}
-                      // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
-                      data-bypassed={e.bypassed || undefined}
-                      strokeDasharray={loop || e.bypassed ? "6 5" : CABLE[e.kind].dash}
-                      data-from={e.from}
-                      data-from-port={e.from_port}
-                      data-to={e.to}
-                      data-to-port={e.to_port}
-                      data-kind={e.kind}
-                      stroke={e.bypassed ? "var(--color-line-strong)" : CABLE[e.kind].stroke}
-                      strokeWidth={CABLE[e.kind].width}
-                      strokeLinecap="round"
-                      fill="none"
-                    />
-                  );
-                })}
+                {drawn.map(({ e, loop, d }) => (
+                  <path
+                    key={edgeKey(e)}
+                    d={d}
+                    data-loop={loop || undefined}
+                    // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
+                    data-bypassed={e.bypassed || undefined}
+                    strokeDasharray={loop || e.bypassed ? "6 5" : CABLE[e.kind].dash}
+                    data-from={e.from}
+                    data-from-port={e.from_port}
+                    data-to={e.to}
+                    data-to-port={e.to_port}
+                    data-kind={e.kind}
+                    stroke={e.bypassed ? "var(--color-line-strong)" : CABLE[e.kind].stroke}
+                    strokeWidth={CABLE[e.kind].width}
+                    strokeLinecap="round"
+                    fill="none"
+                  />
+                ))}
+                {/* Under the pointer, a wire shows its + (CARD-36): a wide, unseen line to hover, under the nodes so it never covers a port. */}
+                {!cable && (
+                  <g data-wire-hits aria-hidden>
+                    {drawn.map(({ e, d }) => (
+                      <path
+                        key={edgeKey(e)}
+                        d={d}
+                        data-wire-hit={edgeKey(e)}
+                        stroke="transparent"
+                        strokeWidth={14}
+                        fill="none"
+                        style={{ pointerEvents: "stroke" }}
+                        onPointerEnter={() => useWireHover.getState().set(edgeKey(e), true)}
+                        onPointerLeave={() => useWireHover.getState().set(edgeKey(e), false)}
+                      />
+                    ))}
+                  </g>
+                )}
               </svg>
               {ordered.map((p) => (
                 <Node
@@ -819,6 +894,24 @@ const ModuleSection = memo(function ModuleSection({
                   style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
                 />
               ))}
+              {!cable &&
+                drawn.map(({ e, at }) => {
+                  const k = edgeKey(e);
+                  return (
+                    <WirePlus
+                      key={k}
+                      edge={e}
+                      from={module.nodes.find((n) => n.id === e.from)!}
+                      to={module.nodes.find((n) => n.id === e.to)!}
+                      at={at}
+                      near={near.get(k)}
+                      open={picking?.edge === e}
+                      locked={editable ? null : "This song can't be edited here"}
+                      effects={effects}
+                      onOpen={(anchor) => setPicking((p) => (p?.edge === e ? null : { edge: e, anchor }))}
+                    />
+                  );
+                })}
               <svg className="absolute inset-0 pointer-events-none overflow-visible z-10" width={width} height={height}>
                 {cable && (
                   <path
@@ -836,10 +929,151 @@ const ModuleSection = memo(function ModuleSection({
           </div>
         </div>
         {dropped && <DropMenu dropped={dropped} onClose={() => setDropped(null)} />}
+        {picking && (
+          <WireBrowser
+            edge={picking.edge}
+            anchor={picking.anchor}
+            from={module.nodes.find((n) => n.id === picking.edge.from)}
+            to={module.nodes.find((n) => n.id === picking.edge.to)}
+            effects={effects}
+            session={session}
+            revision={revision}
+            onClose={() => setPicking(null)}
+          />
+        )}
       </section>
     </Cabling.Provider>
   );
 });
+
+/** The wire under the pointer, by its key: only its + draws again when it changes. */
+const useWireHover = create<{ hovered: string | null; set: (key: string, on: boolean) => void }>((set) => ({
+  hovered: null,
+  set: (key, on) => set((s) => ({ hovered: on ? key : s.hovered === key ? null : s.hovered })),
+}));
+
+/** What a wire takes: a note effect on notes, an effect on a sound (CARD-36). */
+const wireTakes = (kind: PortKind) => (kind === "notes" ? "a note effect" : "an effect");
+
+/**
+ * A wire's + (CARD-36, taste.md DV-7): a small round button halfway along its last stretch, seen
+ * under the pointer and on the selected node's wires. It opens the effect browser with what fits the
+ * wire; where nothing can go, it is greyed, its why in its tooltip, and a click says it.
+ */
+function WirePlus({
+  edge,
+  from,
+  to,
+  at,
+  near,
+  open,
+  locked,
+  effects,
+  onOpen,
+}: {
+  edge: PortEdge;
+  from: ViewNode;
+  to: ViewNode;
+  /** Halfway along its last stretch, where it shows under the pointer. */
+  at: { x: number; y: number };
+  /** Near the selected node's end, when it shows for the selection (DV-7). */
+  near?: { x: number; y: number };
+  open: boolean;
+  locked: string | null;
+  effects: Effect[];
+  onOpen: (anchor: HTMLElement) => void;
+}) {
+  const toast = useStore((s) => s.toast);
+  const k = edgeKey(edge);
+  const hovered = useWireHover((s) => s.hovered === k);
+  const shown = hovered || !!near;
+  const spot = near ?? at;
+  const why = useContext(Locked) ?? locked ?? (edge.plus && "refused" in edge.plus ? edge.plus.refused : null) ?? (edge.plus ? null : "This wire takes no effect.");
+  const takes = wireTakes(edge.kind);
+  return (
+    <button
+      className={clsx(
+        "absolute z-10 size-5 -ml-2.5 -mt-2.5 grid place-items-center rounded-full bg-raised ring-1 ring-line-strong shadow-sm transition-opacity duration-80 ease-linear",
+        shown || open ? "opacity-100" : "opacity-0 focus-visible:opacity-100",
+        why ? "text-fg-off cursor-default" : "text-fg-muted hover:text-accent-strong hover:ring-accent cursor-pointer",
+        open && "text-accent-strong ring-accent",
+      )}
+      style={{ left: spot.x, top: spot.y }}
+      data-wire-plus={edgeKey(edge)}
+      data-from={edge.from}
+      data-to={edge.to}
+      data-kind={edge.kind}
+      data-shown={shown || open || undefined}
+      data-refused={why ?? undefined}
+      aria-label={`Add ${takes} after ${titleOf(from, effects)}, before ${titleOf(to, effects)}`}
+      aria-disabled={!!why || undefined}
+      aria-haspopup="dialog"
+      aria-expanded={open}
+      title={why ?? `Add ${takes} on this wire: after ${titleOf(from, effects)}, before ${titleOf(to, effects)}`}
+      tabIndex={shown ? 0 : -1}
+      onPointerEnter={() => useWireHover.getState().set(k, true)}
+      onPointerLeave={() => useWireHover.getState().set(k, false)}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={(e) => (why ? toast(why) : onOpen(e.currentTarget))}
+    >
+      <Plus size={12} strokeWidth={2.5} />
+    </button>
+  );
+}
+
+/**
+ * The effect browser for one wire (CARD-36): what fits it, effects on a sound and note effects on
+ * notes, the rest greyed with why. A pick puts it there, one undo step, said with its Undo.
+ */
+function WireBrowser({
+  edge,
+  anchor,
+  from,
+  to,
+  effects,
+  session,
+  revision,
+  onClose,
+}: {
+  edge: PortEdge;
+  anchor: HTMLElement;
+  from: ViewNode | undefined;
+  to: ViewNode | undefined;
+  effects: Effect[];
+  session: number;
+  revision: number;
+  onClose: () => void;
+}) {
+  const toast = useStore((s) => s.toast);
+  const notes = edge.kind === "notes";
+  const fits = useCallback(
+    (e: Effect) => (notes && !e.notes ? `${e.label} goes on a sound, and this wire carries notes` : !notes && e.notes ? `${e.label} goes on notes, and this wire carries a sound` : null),
+    [notes],
+  );
+  if (!from || !to || !edge.plus || "refused" in edge.plus) return null;
+  const plus = edge.plus;
+  const [before, after] = [titleOf(to, effects), titleOf(from, effects)];
+  const where = notes ? `before ${before}` : `after ${after}`;
+  return (
+    <EffectBrowser
+      effects={effects}
+      // What it goes around, as the code writes it: a call's name, or the `const` a wire reads it by.
+      wraps={"reader" in plus && from.outlet ? from.outlet : from.kind === "call" ? `${from.label}(…)` : "…"}
+      label={`Add ${wireTakes(edge.kind)} ${where}`}
+      placeholder={`Add ${where}…`}
+      fits={fits}
+      anchor={anchor}
+      onClose={onClose}
+      onPick={(effect) => {
+        onClose();
+        graphApi
+          .addEffectOn(session, revision, plus, effect)
+          .then((c) => toast(`Added ${effect.label} ${where}`, undoAction(session, c.step)))
+          .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+      }}
+    />
+  );
+}
 
 /**
  * A wire dropped on a node, not on a value (DV-6, DV-16): a menu of the node's values, hidden ones
@@ -1297,9 +1531,9 @@ function More({ node, hides, hidden, titled }: { node: ViewNode; hides: string[]
 }
 
 /**
- * A node's tools, in its header: Presets (FMT-22) when expanded, + (an effect after it, until + on a
- * wire replaces it: track graph-insert), and ⋯ (Remove, Move, Make it a kit, Show in code, Copy its
- * id), each with its popover.
+ * A node's tools, in its header: Presets (FMT-22) when expanded, and ⋯ (Remove, Move, Make it a kit,
+ * Show in code, Copy its id), each with its popover. An effect goes in from + on a wire (CARD-36),
+ * never from a node's header.
  */
 function HeadTools({
   node,
@@ -1324,8 +1558,6 @@ function HeadTools({
   expanded: boolean;
 }) {
   const toast = useStore((s) => s.toast);
-  const [picking, setPicking] = useState<HTMLElement | null>(null);
-  const closePicker = useCallback(() => setPicking(null), []);
   // The ⋯ menu, open from its button. A node kept across an edit may show another call now: its menu closes then.
   const [menu, setMenu] = useState<HTMLElement | null>(null);
   const [presets, setPresets] = useState<HTMLElement | null>(null);
@@ -1359,22 +1591,6 @@ function HeadTools({
           }}
         >
           Presets
-        </button>
-      )}
-      {node.audio && effects.length > 0 && (
-        <button
-          className={clsx(button, picking && "bg-accent-soft text-accent-strong")}
-          title={why ?? "Add an effect after this"}
-          aria-label={`Add an effect after ${node.label}`}
-          aria-haspopup="dialog"
-          aria-expanded={!!picking}
-          disabled={!editable}
-          onClick={(e) => {
-            const b = e.currentTarget;
-            setPicking((p) => (p ? null : b));
-          }}
-        >
-          <Plus size={14} />
         </button>
       )}
       {node.kind === "call" && (
@@ -1417,22 +1633,6 @@ function HeadTools({
           onClose={() => setMenu(null)}
         />
       )}
-      {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
-      {picking &&
-        createPortal(
-          <EffectBrowser
-            effects={effects}
-            after={node.label}
-            named={titled}
-            anchor={picking}
-            onClose={closePicker}
-            onPick={(effect) => {
-              setPicking(null);
-              void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
-            }}
-          />,
-          picking.closest("section[data-module]") ?? document.body,
-        )}
     </>
   );
 }
@@ -1571,7 +1771,8 @@ function NodeMenu({
   const toast = useStore((s) => s.toast);
   const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
   const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
-  const remove = locked ?? (node.effect ? null : `${title} isn't an effect: change it in code.`);
+  // Where Remove can't take it out, the view says why (CARD-36).
+  const remove = locked ?? (node.kind === "call" && !node.remove ? null : (node.remove ?? `${title} isn't an effect: change it in code.`));
   return (
     <Popover anchor={anchor} onClose={onClose} align="end" role="menu" aria-label={`${title} menu`} data-testid="effect-menu" className="w-[240px]">
       <MenuRow

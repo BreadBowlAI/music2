@@ -146,11 +146,11 @@ Each effect's card shows a picture of what it does, worked out from the effect's
 
 **`clip`**, the Clipper (`@m2/effects`, under Dynamics), makes a sound louder without going over: turn **Gain** up (0 to 24 dB) and every peak over the **Ceiling** (−24 to 0 dB, −0.3 dB at first) is cut flat. It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper (aliasing: tones a cut folds back down from above what you hear); on very bright sounds pushed hard, a few. No sample ever passes the ceiling. A sound under the ceiling passes as it is. Put it on a drum bus, or on the whole mix before the master's limiter. It makes the song 92 samples later (2 ms at 48 kHz), and every other track waits for it, as for Tune. Its card shows its last 3 seconds: faint, your sound pushed up by the gain; solid, what comes out; the part of the faint line over the ceiling's line is what it cut. Drag the line to move the ceiling.
 
-**`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from + Effect like any effect, then pick the track in its node's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
+**`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from the **+** on the sound's wire like any effect, then pick the track in its node's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
 
 **`compress`** (`std/fx`) hears its own sound, or another track's: `compress(bass.out, kick.out)` squeezes the bass only while the kick is loud. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 
-**Mixing tools** (`@m2/mixing`: `import { eq, gate } from "@m2/mixing"`). Each is an effect: add it after any sound from + Effect, or write it in code.
+**Mixing tools** (`@m2/mixing`: `import { eq, gate } from "@m2/mixing"`). Each is an effect: add it on any sound's wire from its **+**, or write it in code.
 
 | Tool | What it is for | Its knobs |
 |---|---|---|
@@ -194,7 +194,7 @@ A **sidechain** is one track's sound steering an effect on another. The famous o
 To make the bass duck under the kick:
 
 1. In the Graph (⌥1), open the **song** tab: the nodes there are how the tracks are mixed.
-2. On the box **Bass.out** (the bass's sound, where the song mixes it), click **+**, and pick **Duck** (Dynamics).
+2. Point at the wire from **Bass.out** (the bass's sound, where the song mixes it) into its Duck or the mixer, click its **+**, and pick **Duck** (Dynamics).
 3. On the Duck's card, click **Listens to: None** and pick **Kick**.
 4. Play. The bass dips on each kick. Turn **depth** for more or less (−8 dB is a good start).
 
@@ -242,7 +242,7 @@ keys you hold → Arpeggiator → Chord → Pluck → Reverb → the mixer
 | **Note echo** (`echo`) | Plays each note again, later and quieter, a few times: a delay of notes, not of sound | **Time**: how far apart, on the beat. **Repeats**: 1 to 7. **Fall**: how much quieter each one is. **Pitch**: how many semitones higher each one is (12 climbs by octaves) |
 | **Lock to key** (`lockToKey`) | Moves every note you play onto the song's key, so no note is wrong, as the roll's Lock to key moves drawn notes. A note between two goes down | **Shift**: then moves each note that many notes of the key up (or down): 2 in C major turns C E G into E G B, a harmony |
 
-**Add one.** The Graph shows a note effect as a node on the notes wire, but its **+** doesn't list note effects yet: that comes with **+** on a wire. Until then, add one in code, or with `m2`:
+**Add one.** In the Graph, point at the notes wire into the instrument (from its lane), or select the instrument, and click the wire's **+**: the browser lists the note effects, and the effects are greyed, since they go on a sound. Or add one in code, or with `m2`:
 
 | How | What to do |
 |---|---|

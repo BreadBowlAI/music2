@@ -118,7 +118,7 @@ check(lfoOut.includes("name it in code first") && lfoOut.includes("lfo(…)"), `
 
 // ---------------------------------------------------------------- the effect browser
 await show("keys");
-const plus = '[data-module="keys"] button[aria-label="Add an effect after pluck"]';
+const plus = '[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]';
 await page.click(plus);
 await page.waitForSelector("[data-effect-browser]");
 check(await page.$eval("[data-effect-browser] input", (e) => e === document.activeElement), "the browser opens with the search box focused");
@@ -177,7 +177,7 @@ check(await until(() => read("tracks/keys.ts") === keysOriginal), "undoing both 
 
 // ---------------------------------------------------------------- cables from an output circle
 await show("bass");
-await press('[data-module="bass"] button[aria-label="Add an effect after bass"]');
+await press('[data-module="bass"] button[aria-label^="Add an effect after Bass,"]');
 await page.waitForSelector("[data-effect-browser]");
 await page.keyboard.type("lowpass");
 await page.keyboard.press("Enter");

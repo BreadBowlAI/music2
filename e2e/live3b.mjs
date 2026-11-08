@@ -313,10 +313,12 @@ async function withPlugins() {
     const rev = (await api2("graph")).view.revision;
     const clicked = frames();
     const ref = median(levels(clicked - RATE, clicked));
-    await p2.click('[data-module="kick"] button[aria-label="Add an effect after drums.drum"]');
+    // The drum is read by its Follow and its out: + on its wire out wraps the record's `out`, so the
+    // kick's sound takes the Delay and the Follow still reads it dry (CARD-36).
+    await p2.click('[data-module="kick"] button[aria-label^="Add an effect after Drum, before Out"]');
     await p2.waitForSelector('[data-module="kick"] [data-effect="delay"]');
     await p2.click('[data-module="kick"] [data-effect="delay"]');
-    check(await until(() => kickTs().includes("delay(drums.drum("), 5000), "a delay goes after the kick while the chord sounds");
+    check(await until(() => kickTs().includes("out: delay(out,"), 5000), "a delay goes after the kick while the chord sounds");
     check(await until(async () => (await api2("graph")).view.revision > rev, 5000), "and a new revision plays");
     const taken = frames();
     await sleep(1200);

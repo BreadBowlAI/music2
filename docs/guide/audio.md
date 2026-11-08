@@ -86,7 +86,7 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 
 | To do this | Do this | What happens |
 |---|---|---|
-| Add Tune to a vocal | Select the vocal track (Vox), and in its Graph click **+** on its lane's node, then **Tune** (under Voice) | `tune(lane.audio("clips"), { glide: 0.1, amount: 1 })` is written into the track's own file, so everything that hears the track hears it tuned. It starts on **Natural**. |
+| Add Tune to a vocal | Select the vocal track (Vox), and in its Graph click the **+** on the wire out of its lane, then **Tune** (under Voice) | `tune(lane.audio("clips"), { glide: 0.1, amount: 1 })` is written into the track's own file, so everything that hears the track hears it tuned. It starts on **Natural**. |
 | Set the notes it moves to | Click **Key** in the top bar, or **Set the key** on Tune's card | Tune's card says the key, such as "Key: A minor". |
 | The hard, stepped pop sound | Load the **Robot** preset (Presets on its card), or turn **Glide** to 0 | Each note jumps to its pitch at once. |
 | A gentle fix | Turn **Glide** up to about 0.1 s (Natural) or more | Each note slides to its pitch, and the singer's wobble (vibrato) stays. |
@@ -115,7 +115,7 @@ The **Voice changer** makes a voice deeper or higher, or sound like another sing
 
 | To do this | Do this | What happens |
 |---|---|---|
-| Add it to a vocal | Select the vocal track (Vox), and in its Graph click **+** on its lane's node, then **Voice changer** (under Voice) | `voiceChanger(lane.audio("clips"), { pitch: 0, formant: 0 })` is written into the track's own file. At 0 and 0 the voice sounds as sung. |
+| Add it to a vocal | Select the vocal track (Vox), and in its Graph click the **+** on the wire out of its lane, then **Voice changer** (under Voice) | `voiceChanger(lane.audio("clips"), { pitch: 0, formant: 0 })` is written into the track's own file. At 0 and 0 the voice sounds as sung. |
 | A deep, big voice | Load **Deep** (Presets on its card), or turn **Pitch** and **Formant** down | Its notes go 5 semitones down and its colour 5 semitones darker, like a tape played slower. |
 | A chipmunk | Load **Chipmunk**, or turn both up | Its notes go 7 semitones up and its colour 7 brighter, like a tape played faster. |
 | Higher or lower notes, the same singer | Turn **Pitch** only | From 7 semitones down to 12 up: each note moves, the colour stays. |
@@ -139,7 +139,7 @@ The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and 
 
 | To do this | Do this | What happens |
 |---|---|---|
-| Add it to a synth | Select the synth's track, and in its Graph click **+** on its sound's node, then **Vocoder** (under Voice) | `vocoder(…, { clarity: 0.5, smooth: 0.05, formant: 0 })` is written into the track's own file. Until you pick a voice, the synth sounds as it did. |
+| Add it to a synth | Select the synth's track, and in its Graph click the **+** on the wire out of its sound, then **Vocoder** (under Voice) | `vocoder(…, { clarity: 0.5, smooth: 0.05, formant: 0 })` is written into the track's own file. Until you pick a voice, the synth sounds as it did. |
 | Pick the voice | On its card, click **Talks with: No other track**, and pick the vocal track in Talks with (Vox) | `vox.out` is written into the call, and Vox is imported at the top of the file. One undo step: "Lead talks with Vox". |
 | Make it talk | Play the synth's chords while the voice speaks or sings | Each band of the synth plays as loud as the voice is there: the synth takes the shape of the voice, its words on the synth's notes. |
 | Clearer words | Turn **Clarity** up (0 to 1) | More of the voice's own S, T and breath sounds come through. A synth has little that high, so without them the words mumble. |

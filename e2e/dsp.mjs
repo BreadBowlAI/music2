@@ -41,10 +41,10 @@ const knobs = (node) =>
   page.$$eval(`[data-module="keys"] [data-node="${node}"] [data-knob]`, (els) =>
     Object.fromEntries(els.map((e) => [e.dataset.knob, { value: e.dataset.value, shown: e.querySelector(".tabular-nums")?.textContent, editable: !!e.dataset.knobId }])),
   );
-/** Add `name` after the node labelled `after` by typing `query` in its browser and pressing Enter. */
+/** Add `name` after the node titled `after` by typing `query` in its browser and pressing Enter. */
 const add = async (after, query, name) => {
   const revision = (await api("graph")).view.revision;
-  await press(`[data-module="keys"] button[aria-label="Add an effect after ${after}"]`);
+  await press(`[data-module="keys"] button[aria-label^="Add an effect after ${after},"]`);
   await page.waitForSelector("[data-effect-browser] input");
   await page.keyboard.type(query);
   const first = await until(async () => (await options())[0] === name, 2000);
@@ -73,9 +73,10 @@ check(
   by.reverb.category === "Delay & Reverb" && by.compress.category === "Dynamics" && by.chorus.category === "Modulation" && by.eq3.category === "EQ" && by.bitcrush.category === "Distortion" && by.widen.category === "Utility",
   "each in its category",
 );
-await press('[data-module="keys"] button[aria-label="Add an effect after pluck"]');
+await press('[data-module="keys"] button[aria-label^="Add an effect after Pluck,"]');
 await page.waitForSelector("[data-effect-browser]");
-const groups = await page.$$eval("[data-effect-browser] [data-category]", (els) => els.map((e) => e.dataset.category));
+// What fits a sound's wire (CARD-36): the note effects follow, greyed.
+const groups = await page.$$eval("[data-effect-browser] [data-category]:not([data-unfit])", (els) => els.map((e) => e.dataset.category));
 check(JSON.stringify(groups) === JSON.stringify(["Filter", "EQ", "Dynamics", "Distortion", "Delay & Reverb", "Modulation", "Voice", "Utility"]), `the browser groups them (${groups.join(", ")})`);
 const groupOf = (name) => page.$eval(`[data-effect-browser] [data-effect="${name}"]`, (e) => e.closest("[data-category]")?.dataset.category ?? e.parentElement.closest("[data-category]")?.dataset.category).catch(() => null);
 const listed = await Promise.all(["reverb", "chorus", "compress"].map(groupOf));
@@ -86,7 +87,7 @@ await until(async () => !(await page.$("[data-effect-browser]")));
 // ---------------------------------------------------------------- reverb after the pluck
 const pluck = 'pluck(lane.notes("chords"))';
 const reverbArgs = "{ size: 0.6, damping: 0.5, mix: 0.25 }";
-check(await add("pluck", "reverb", "reverb"), "Enter adds a reverb node");
+check(await add("Pluck", "reverb", "reverb"), "Enter adds a reverb node");
 const reverbed = `reverb(${pluck}, ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${reverbed}`)), `keys.ts wraps the pluck: ${reverbed}`);
 check(read().includes('import { reverb } from "@m2/effects";'), "and imports reverb from @m2/effects");
@@ -95,7 +96,7 @@ check(r.size?.value === "0.6" && r.damping?.value === "0.5" && r.mix?.value === 
 
 // ---------------------------------------------------------------- a compressor between the pluck and the reverb
 const compArgs = "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeup: 4 }";
-check(await add("pluck", "comp", "compress"), "a compressor goes after the pluck too");
+check(await add("Pluck", "comp", "compress"), "a compressor goes after the pluck too");
 const compressed = `reverb(compress(${pluck}, ${compArgs}), ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${compressed}`)), `between the pluck and the reverb: ${compressed}`);
 // Collapsed, a node shows four of its values; expanded, all five (taste.md DV-12, DV-13).
@@ -109,7 +110,7 @@ check(
 
 // ---------------------------------------------------------------- chorus after the compressor
 const chorusArgs = "{ rate: 0.8, depth: 0.5, mix: 0.5 }";
-check(await add("compress", "chorus", "chorus"), "a chorus goes after the compressor");
+check(await add("Compress", "chorus", "chorus"), "a chorus goes after the compressor");
 const chained = `reverb(chorus(compress(${pluck}, ${compArgs}), ${chorusArgs}), ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${chained}`)), `the chain reads pluck → compress → chorus → reverb: ${chained}`);
 const fxImport = (l) => l.includes('from "std/fx"') || l.includes('from "@m2/effects"');
@@ -160,7 +161,7 @@ check(await until(async () => !(await page.$('[data-module="keys"] [data-node="r
 
 // ---------------------------------------------------------------- a widener on a track the mixer pans
 // Widened is stereo, and the song pans Keys: std's pan balances a stereo channel, so it goes in.
-check(await add("pluck", "widen", "widen"), "a widener goes after the pluck, though the mixer pans Keys");
+check(await add("Pluck", "widen", "widen"), "a widener goes after the pluck, though the mixer pans Keys");
 check(await until(async () => read().includes(`({ lane }) => widen(${pluck}, { width: 1.5 })`)), "keys.ts reads widen(pluck(…), { width: 1.5 })");
 check((await knobs("widen")).width?.value === "1.5", "with a width knob at 1.5");
 check((await api("graph")).view.draft_errors.length === 0, "and the song compiles");
