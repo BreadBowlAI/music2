@@ -9,7 +9,8 @@
 // Its card has two knobs. Glide is how long a note takes to reach its pitch: 0 is Robot, the
 // stepped pop sound; 0.1 s, Natural, where it opens, keeps the singer's vibrato. Amount is how
 // much of each note's error is fixed. Its presets are Natural and Robot. Its face draws its pitch
-// line (VOX-27, ./pictures): the voice as sung and the note it moves it to, from snap's meters.
+// line (VOX-27, ./pictures): how far the voice is from its note, and how far Tune leaves it, from
+// snap's meters.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params } from "@m2/core";
 import { pitchLine, pitchPicture, pitchWords } from "./pictures";
@@ -30,7 +31,7 @@ export const tune = component(
       category: "Voice",
       description: "Moves each sung note onto the song's key: Glide 0 steps like a robot, more slides naturally",
       insert: { glide: 0.1, amount: 1 },
-      // Its pitch line: the voice and the note it moves it to, as they come (VOX-27).
+      // Its pitch line: how far the voice is from its note, and how far Tune leaves it, as they come (VOX-27).
       views: { pitch: pitchPicture() },
       face: ["pitch", "glide", "amount"],
     },

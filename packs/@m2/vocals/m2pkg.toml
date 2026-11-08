@@ -32,7 +32,7 @@ outputs = ["hz: control<hz>", "clarity: control<unit01>", "level: control<gain>"
 
 [[kernel]]
 name = "snap"
-description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22). Its meters, Tune's pitch line: heard, the pitch it hears, and note, the note of the key it moves it to, each a MIDI note number (0 with no pitch)"
+description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22). Its meters, Tune's pitch line, in semitones, + sharp and - flat: off, how far the pitch it hears is from the note it aims at, and left, how far its move leaves it from that note (both 0 with no pitch)"
 inputs = [
   "hz: control<hz>",
   "clarity: control<unit01>",
@@ -41,7 +41,7 @@ inputs = [
   "amount: control<unit01> = 1",
 ]
 outputs = ["out: control<semitones>"]
-meters = ["heard: control<semitones>", "note: control<semitones>"]
+meters = ["off: control<semitones>", "left: control<semitones>"]
 
 [[kernel]]
 name = "shift"

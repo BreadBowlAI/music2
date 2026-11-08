@@ -20,7 +20,7 @@ export const vocals: Audio[] = [
   tune(0.5),
 ];
 
-// Its pitch line is drawn over time and notes: a picture over other axes can't draw it.
+// Its pitch line is drawn over time and semitones from the note: a picture over other axes can't draw it.
 export const line = [
   component(
     { id: "pitch-line", inputs: { in: port.audio() }, output: port.audio(), editor: { views: { pitch: pitchPicture() } } },

@@ -613,49 +613,46 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
 }
 
 // VOX-27: Tune's card draws its pitch line on its face, beside Glide and Amount: its last 3 seconds
-// by the notes from C2 to C6 (MIDI 36 to 84) on an axis drawn bare, a faint line at each C with
-// middle C named, and now at its right edge; its live layers are snap's meters, the voice as sung
-// (faint) and the note of the key it moves it to (VOX-22). Its words say how Glide and Amount move
-// the voice.
+// across and, up, how far the voice is from its note, from a semitone flat to a semitone sharp, on
+// an axis drawn bare, its middle line named "On the note", and now at its right edge; its live
+// layers are snap's meters, how far the voice is from the note it aims at (faint) and how far Tune
+// leaves it (VOX-22). Its words say how Glide and Amount move the voice.
 #[test]
 fn tune_draws_its_pitch_line() {
     let pitch = declared("vocals", "tune", "pitch");
     assert_eq!((&pitch["x"]["lo"], &pitch["x"]["hi"], &pitch["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
     assert_eq!(
         (&pitch["y"]["lo"], &pitch["y"]["hi"], &pitch["y"]["unit"], &pitch["y"]["bare"]),
-        (&json!(36.0), &json!(84.0), &json!("semitones"), &json!(true))
+        (&json!(-1.0), &json!(1.0), &json!("semitones"), &json!(true))
     );
-    let mut heard = history_of("heard");
-    heard["tone"] = json!("faint");
-    assert_eq!(pitch["live"], json!([heard, history_of("note")]));
+    let mut off = history_of("off");
+    off["tone"] = json!("faint");
+    assert_eq!(pitch["live"], json!([off, history_of("left")]));
     assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount"]);
     let runner = Runner::new();
     let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": 0.1, "amount": 1})).unwrap();
-    assert_eq!(kinds(&d), ["mark", "mark", "mark", "mark", "label"]);
+    assert_eq!(kinds(&d), ["mark", "mark", "label"]);
     let shapes = d["shapes"].as_array().unwrap();
     assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
-    let cs: Vec<(f64, &str)> = shapes
-        .iter()
-        .filter(|s| s["kind"] == "mark" && s["axis"] == "y")
-        .map(|s| (s["at"].as_f64().unwrap(), s["words"].as_str().unwrap()))
-        .collect();
-    assert_eq!(cs, [(48.0, "C3"), (60.0, "C4, middle C"), (72.0, "C5")]);
-    let names: Vec<&str> = shapes.iter().filter(|s| s["kind"] == "label").map(|s| s["words"].as_str().unwrap()).collect();
-    assert_eq!(names, ["C4"], "middle C alone named: at 48 px tall an octave is too little for a name each");
-    assert_eq!(
-        d["words"],
-        "Your voice (faint), and the note of the key it moves it to: in about 100 ms, all the way. Silence and breaths rest at the foot"
-    );
+    assert_eq!((&shapes[1]["axis"], &shapes[1]["at"], &shapes[1]["words"]), (&json!("y"), &json!(0.0), &json!("On the note")));
+    let name = &shapes[2];
+    assert_eq!(name["words"], "On the note", "the middle line named on the picture");
+    let y = name["y"].as_f64().unwrap();
+    assert!(y > 0.0 && y < 0.1, "its name just over the line: {y}");
+    let words = |how: &str| {
+        format!(
+            "Faint: how far your voice is from its note. Solid: how far it is after Tune, which {how}. Up is sharp, down is flat, \
+             up to a semitone (further stays at the edge). With no voice (silence, a breath, an S), both rest on the middle line"
+        )
+    };
+    assert_eq!(d["words"], words("moves it onto the note in about 100 ms"));
     for (glide, amount, how) in [
-        (json!(0), json!(1), "there at once, all the way"),
-        (json!(0.05), json!(0.8), "in about 50 ms, 80% of the way"),
-        (json!(0.1), json!(0), "Amount 0, so it stays as sung"),
-        (Value::Null, json!(1), "as its glide and amount, set by a cable or the code, say"),
+        (json!(0), json!(1), "moves it onto the note at once, so the solid line stays on the middle line"),
+        (json!(0.05), json!(0.8), "moves it 80% of the way to the note in about 50 ms"),
+        (json!(0.1), json!(0), "leaves it as sung at Amount 0, so the two lines are one"),
+        (Value::Null, json!(1), "moves it as its glide and amount, set by a cable or the code, say"),
     ] {
         let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
-        assert_eq!(
-            d["words"],
-            format!("Your voice (faint), and the note of the key it moves it to: {how}. Silence and breaths rest at the foot")
-        );
+        assert_eq!(d["words"], words(how));
     }
 }

@@ -441,10 +441,11 @@ fn no_pitch_eases_back_and_a_bad_key_keeps_the_last() {
 const C_MINOR: f32 = (1 | 1 << 2 | 1 << 3 | 1 << 5 | 1 << 7 | 1 << 8 | 1 << 10) as f32;
 
 /// What snap's two meters say at the end of each block, pitch then snap playing `voice` in `key`
-/// (VOX-22): the pitch it hears and the note it moves it to. Each is one number for the block.
-fn pitch_line(sr: f32, voice: &[f32], key: f32) -> (Vec<f32>, Vec<f32>) {
+/// with `glide` and `amount` (VOX-22): how far the voice is from the note it aims at, and how far
+/// its move leaves it. Each is one number for the block.
+fn pitch_line(sr: f32, voice: &[f32], key: f32, glide: f32, amount: f32) -> (Vec<f32>, Vec<f32>) {
     let (mut pitch, mut snap) = (Host::<Pitch>::of(cfg(sr, 1)), Host::<Snap>::of(cfg(sr, 1)));
-    let (mut heard, mut note) = (vec![], vec![]);
+    let (mut off, mut left) = (vec![], vec![]);
     for chunk in voice.chunks(BLOCK) {
         let n = chunk.len();
         pitch.port_mut(0)[..n].copy_from_slice(chunk);
@@ -452,40 +453,52 @@ fn pitch_line(sr: f32, voice: &[f32], key: f32) -> (Vec<f32>, Vec<f32>) {
         let (hz, clarity) = (pitch.port_mut(1)[..n].to_vec(), pitch.port_mut(2)[..n].to_vec());
         snap.port_mut(0)[..n].copy_from_slice(&hz);
         snap.port_mut(1)[..n].copy_from_slice(&clarity);
-        for (port, v) in [(2, key), (3, 0.1), (4, 1.0)] {
+        for (port, v) in [(2, key), (3, glide), (4, amount)] {
             snap.port_mut(port)[..n].fill(v);
         }
         snap.process(n as u32);
-        for (o, said) in [(6, &mut heard), (7, &mut note)] {
+        for (o, said) in [(6, &mut off), (7, &mut left)] {
             let m = &snap.port_mut(o)[..n];
             assert!(m.iter().all(|x| x.to_bits() == m[0].to_bits()), "a meter holds one number for the block: {:?}", &m[..2]);
             said.push(m[0]);
         }
     }
-    (heard, note)
+    (off, left)
 }
 
-// VOX-22, ABI-13: snap says the pitch it hears and the note of the key it moves it to, as MIDI note
-// numbers, for Tune's pitch line (VOX-27). A voice sung 30 cents over A: heard within 3 cents of it
-// (pitch's own reading, VOX-21), and moved to A in C major, to B♭ in C minor (nearer than A♭).
-// Silence and an "s" have no pitch: both 0.
+// VOX-22, ABI-13: snap says how far the voice is from the note of the key it aims at (`off`, + sharp)
+// and how far its move leaves it (`left`), in semitones, for Tune's pitch line (VOX-27). A voice
+// sung 30 cents over A, in C major: off within 3 cents of +0.30 (pitch's own reading, VOX-21), and
+// left 0 once eased at Amount 1, a fifth of off at Amount 0.8; in C minor it aims at B♭, nearer
+// than A♭: off −0.70. Silence and an "s" have no pitch: both 0. And when the voice stops, both are 0
+// at once, while the move still eases back.
 #[test]
-fn snap_says_the_pitch_it_hears_and_the_note_it_moves_it_to() {
+fn snap_says_how_far_the_voice_is_from_its_note() {
     let sr = 48_000.0;
     let sung = steady(69.3, 0.0, 1.0).sing(sr);
     let settled = |v: &[f32]| v[v.len() / 2..].to_vec();
-    let (heard, note) = pitch_line(sr, &sung, C_MAJOR);
-    let heard = settled(&heard);
-    assert!(heard.iter().all(|&h| (h as f64 - 69.3).abs() < 0.03), "heard within 3 cents of 69.3: {:?}", &heard[..4]);
-    assert!(settled(&note).iter().all(|&m| m == 69.0), "A, in C major: {:?}", &settled(&note)[..4]);
-    let (_, note) = pitch_line(sr, &sung, C_MINOR);
-    assert!(settled(&note).iter().all(|&m| m == 70.0), "B♭, in C minor: {:?}", &settled(&note)[..4]);
+    let near = |v: &[f32], to: f64, by: f64| v.iter().all(|&x| (x as f64 - to).abs() < by);
+    let (off, left) = pitch_line(sr, &sung, C_MAJOR, 0.1, 1.0);
+    let (off, left) = (settled(&off), settled(&left));
+    assert!(near(&off, 0.3, 0.03), "30 cents sharp of A, in C major: {:?}", &off[..4]);
+    assert!(near(&left, 0.0, 0.005), "Amount 1, once eased: on the note: {:?}", &left[..4]);
+    let (off, left) = pitch_line(sr, &sung, C_MAJOR, 0.1, 0.8);
+    let (off, left) = (settled(&off), settled(&left));
+    assert!(near(&left, 0.06, 0.01), "Amount 0.8, once eased: 6 cents sharp: {:?}", &left[..4]);
+    let fifth = off.iter().zip(&left).map(|(&o, &l)| (l - 0.2 * o).abs()).fold(0.0f32, f32::max);
+    assert!(fifth < 0.005, "Amount 0.8 leaves a fifth of how far it is: {fifth}");
+    let (off, _) = pitch_line(sr, &sung, C_MINOR, 0.1, 1.0);
+    assert!(near(&settled(&off), -0.7, 0.03), "70 cents flat of B♭, in C minor: {:?}", &settled(&off)[..4]);
     let silence = vec![0.0; 24_000];
     let s = Song { secs: 0.5, midi: &|_| 60.0, vibrato: 0.0, formants: AH, s: Some((-1.0, 2.0)) }.sing(sr);
     for (what, x) in [("silence", &silence), ("an s", &s)] {
-        let (heard, note) = pitch_line(sr, x, C_MAJOR);
-        assert!(heard.iter().chain(&note).all(|&v| v == 0.0), "{what}: no pitch, 0 and 0");
+        let (off, left) = pitch_line(sr, x, C_MAJOR, 0.1, 1.0);
+        assert!(off.iter().chain(&left).all(|&v| v == 0.0), "{what}: no pitch, 0 and 0");
     }
+    let stopped: Vec<f32> = sung[..24_000].iter().copied().chain(silence).collect();
+    let (off, left) = pitch_line(sr, &stopped, C_MAJOR, 0.4, 1.0);
+    let after = 36_000 / BLOCK;
+    assert!(off[after..].iter().chain(&left[after..]).all(|&v| v == 0.0), "the voice stopped: 0 and 0 at once");
 }
 
 // ---------------------------------------------------------------- shift
