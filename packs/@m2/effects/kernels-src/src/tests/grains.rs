@@ -191,6 +191,9 @@ fn its_level_follows_its_inputs() {
     }
 }
 
+/// A sound for a test: its name, and its sample at a channel and a frame.
+type Sound<'a> = (&'a str, &'a dyn Fn(usize, usize) -> f32);
+
 // PACK-36: its level follows its input's wherever its grains read, from one place or far apart: a
 // sine at 100 Hz and at 1 kHz, a saw and noise, through its grains alone at Spread 0, 5 ms, 50 ms and
 // 0.5 s, Size and Density at their tops (500 ms, 50: 16 at once) and at those it opens at (100 ms,
@@ -210,8 +213,7 @@ fn its_level_follows_its_input_wherever_its_grains_read() {
     let (low, high) = (sine(100.0), sine(1000.0));
     let quiet_noise = |c: usize, t: usize| 0.25 * noise(c, t);
     let half_saw = |c: usize, t: usize| 0.5 * saw(c, t);
-    let sounds: [(&str, &dyn Fn(usize, usize) -> f32); 4] =
-        [("sine 100 Hz", &low), ("sine 1 kHz", &high), ("saw 110 Hz", &half_saw), ("noise", &quiet_noise)];
+    let sounds: [Sound; 4] = [("sine 100 Hz", &low), ("sine 1 kHz", &high), ("saw 110 Hz", &half_saw), ("noise", &quiet_noise)];
     let mut worst = (f64::MAX, f64::MIN);
     let mut over = vec![];
     for (sound, x) in sounds {
