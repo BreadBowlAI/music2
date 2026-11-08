@@ -11,10 +11,11 @@
 // long grains far apart in time. Then, the song looped, each picture's live line (from its kernel's
 // meter, CARD-73) moves while the song plays and stands still while it is stopped: a state counts once
 // two reads in a row show it (the first may be stale: voice2's review V1). A read is where the card's
-// canvas lit its line (its pixels, by the plot's place in `data-plot`: CARD-103's `data-said` holds no
-// meter playhead's place) and an agent's look at the meter. The Flanger's line is drawn at its LFO's
-// phase; Grains' at `reads / 2.5 s` across, its buffer, each within 0.05 of the plot, read between two
-// looks that agree (no grain started between them) after the canvas drew twice. The cards are shot
+// canvas says it drew its line (CARD-103's `data-said`, the entry that follows its meter) and an
+// agent's look at the meter; the canvas lit each line where `data-said` puts it (its pixels, by the
+// plot's place in `data-plot`). The Flanger's line is drawn at its LFO's phase; Grains' at `reads /
+// 2.5 s` across, its buffer, each within 0.05 of the plot, read between two looks that agree (no grain
+// started between them) after the canvas drew twice. The cards are shot
 // while the song plays, in the patch and on Device's chain at Normal and Expanded: to $E2E_SHOTS when
 // set, else the run's folder, as `flanger-<patch|normal|expanded>.png` and `grains-…`. ⌘Z steps back,
 // byte for byte, a step at a time. Each card linted.
@@ -175,26 +176,35 @@ const nodeOf = (label) => g.view?.modules?.find((m) => m.key === "lead")?.nodes?
 /** An agent's look at the meter `name` of the call labelled `label`: what it says now. */
 const look = async (label, name) => (await post("/look", { session: g.session, client: "agent:fx3", module: "lead", node: nodeOf(label), kind: "meter", at: name, on: true })).body?.look;
 /**
- * Where a picture's live line is drawn, from 0 to 1 across its plot: the columns its canvas lit
- * across the middle of the plot (the line is 2 px wide at the canvas's twice-the-pixels scale), by
- * the plot's place the canvas says (`data-plot`, CARD-103's); null when it drew none.
+ * Where a picture's live line that follows meter `from` is drawn, from 0 to 1 across its plot, as its
+ * canvas says (`said`: CARD-103's `data-said`, its entry named by `from`); and where the canvas lit
+ * it (`lit`): the columns lit across the middle of the plot (the line is 2 px wide at the canvas's
+ * twice-the-pixels scale), by the plot's place the canvas says (`data-plot`). Both of one draw; null
+ * where there is none.
  */
-const drawn = (pic) =>
+const drawn = (pic, from) =>
   page
-    .$eval(`${pic} canvas[data-live]`, (c) => {
-      const [left, span, plot] = (c.dataset.plot ?? "").split(",").map(Number);
-      if (!span) return null;
-      const lit = c.getContext("2d").getImageData(0, Math.round(plot), c.width, 1).data;
-      const cols = [];
-      for (let x = 0; x < c.width; x++) if (lit[4 * x + 3] > 0) cols.push(x);
-      return cols.length ? ((cols[0] + cols[cols.length - 1]) / 2 + 0.5 - 2 * left) / (2 * span) : null;
-    })
-    .catch(() => null);
-/** Where each picture's line is drawn now, and what an agent's looks at their meters say. */
+    .$eval(
+      `${pic} canvas[data-live]`,
+      (c, from) => {
+        const x = JSON.parse(c.dataset.said ?? "[]").find((e) => e?.from === from)?.x;
+        const [left, span, plot] = (c.dataset.plot ?? "").split(",").map(Number);
+        const cols = [];
+        if (span) {
+          const row = c.getContext("2d").getImageData(0, Math.round(plot), c.width, 1).data;
+          for (let i = 0; i < c.width; i++) if (row[4 * i + 3] > 0) cols.push(i);
+        }
+        const lit = cols.length ? ((cols[0] + cols[cols.length - 1]) / 2 + 0.5 - 2 * left) / (2 * span) : null;
+        return { said: typeof x === "number" ? x : null, lit };
+      },
+      from,
+    )
+    .catch(() => ({ said: null, lit: null }));
+/** Where each picture says it drew its line now, and what an agent's looks at their meters say. */
 const where = async () => ({
-  sweep: await drawn(sweep),
+  sweep: (await drawn(sweep, "phase")).said,
   phase: (await look("flanger", "phase"))?.now ?? null,
-  cloud: await drawn(cloud),
+  cloud: (await drawn(cloud, "reads")).said,
   reads: (await look("grains", "reads"))?.now ?? null,
 });
 /** Whether `holds(a, b)` holds for two pairs of reads in a row, `every` ms apart, within `ms`. */
@@ -228,18 +238,29 @@ check(m.ok, `while the song plays, Grains' line jumps from grain to grain, and s
 // once the canvas has drawn twice since the first, twice in a row.
 const drew = () => page.$eval(`${cloud} canvas[data-live]`, (c) => Number(c.dataset.reads ?? 0)).catch(() => 0);
 const against = [];
+/** Grains' last read between two looks that agree: a grain plays, so its line is away from now. */
+let grain = null;
 for (const end = Date.now() + 20000; Date.now() < end && against.length < 2; ) {
   const a = (await look("grains", "reads"))?.now;
   const r0 = await drew();
   await until(async () => (await drew()) >= r0 + 2, 2000);
-  const c = await drawn(cloud);
+  const d = await drawn(cloud, "reads");
+  const c = d.said;
   const b = (await look("grains", "reads"))?.now;
   if (!(a > 0 && b > 0 && Math.abs(a - b) < 0.1 && typeof c === "number")) continue;
+  grain = d;
   const off = Math.abs(c - (a + b) / 2 / 2.5);
   if (off < 0.05) against.push(+off.toFixed(4));
   else against.length = 0;
 }
 check(against.length === 2, `Grains' line is drawn at reads / 2.5 s across, within 0.05 (off by ${against.join(", ")})`);
+// Each canvas lit its line where `data-said` puts it, read in the same draw: the Flanger's now, Grains'
+// at that last read, while a grain played.
+const lines = { sweep: await drawn(sweep, "phase"), cloud: grain };
+check(
+  Object.values(lines).every((d) => typeof d?.said === "number" && typeof d.lit === "number" && Math.abs(d.lit - d.said) < 0.01) && lines.cloud.said > 0.02,
+  `each picture lit its line where data-said says: ${JSON.stringify(lines)}`,
+);
 // Shot while the song plays: in the patch, then on Device's chain at Normal and Expanded.
 await shoot(`[data-testid=graph] ${fcard}`, "flanger-patch");
 await shoot(`[data-testid=graph] ${gcard}`, "grains-patch");
