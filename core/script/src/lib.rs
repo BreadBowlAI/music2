@@ -16,6 +16,8 @@ use std::time::{Duration, Instant};
 pub mod component;
 pub mod pictures;
 pub mod sites;
+#[doc(hidden)]
+pub mod speed;
 
 pub use component::{Catalog, Descriptor, UnitCtor};
 

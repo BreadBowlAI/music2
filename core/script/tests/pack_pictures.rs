@@ -612,10 +612,11 @@ fn a_misnamed_value_is_said_as_one() {
 // CARD-75 (a fifth of CARD-64's limit): every picture of both packs draws in 4 ms at most, its first
 // draw too (which works out its kept sums, CARD-110), once its module is loaded (a limit of its own):
 // at its defaults, then at five more values; at 44.1, 48 and 96 kHz, each rate's first draws working
-// out its sums again (CARD-87). It judges speed, so it runs in the nightly tier.
+// out its sums again (CARD-87). It judges speed, so it runs in the nightly tier, in the CPU time of
+// the draw's thread, the 4 ms scaled by this machine's speed against the Linux server's (CARD-75).
 #[test]
 fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
-    let fifth = std::time::Duration::from_millis(4);
+    let fifth = m2_script::speed::scaled(std::time::Duration::from_millis(4));
     let mut slow = vec![];
     for (pack, rate) in ["mixing", "effects"].into_iter().flat_map(|p| [44_100, 48_000, 96_000].map(|r| (p, r))) {
         let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
@@ -662,9 +663,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
                         loaded = true;
                         continue;
                     }
-                    let t = std::time::Instant::now();
-                    let drawn = runner.draw(ask);
-                    let took = t.elapsed();
+                    let (drawn, took) = runner.draw_timed(ask);
                     assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
                     if took > fifth {
                         slow.push(format!("{cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name));
@@ -673,7 +672,11 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
             }
         }
     }
-    assert!(slow.is_empty(), "past a fifth of a draw's 20 ms: {slow:#?}");
+    assert!(
+        slow.is_empty(),
+        "past a fifth of a draw's 20 ms: {fifth:?}, the Linux server's 4 ms × {:.2} for this machine: {slow:#?}",
+        m2_script::speed::ratio()
+    );
 }
 
 // VOX-27: Tune's card draws its pitch line on its face, beside Glide and Amount: its last 3 seconds

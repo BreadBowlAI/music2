@@ -233,27 +233,29 @@ fn a_drag_frame_measures_the_click_alone() {
 }
 
 // CARD-85: a drag's frame of the eight-band EQ's response stays under 8 ms of the thread's CPU at
-// p99 at 48 kHz. It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
+// p99 at 48 kHz. It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt), the 8 ms and
+// the measure's budget scaled by this machine's speed against the Linux server's (CARD-75).
 #[test]
 fn a_drag_frame_of_the_eq_stays_under_8_ms() {
     let (_f, s) = open_at(48_000, "const e = track('e', () => eq(osc.saw(110)));\nexport default song(() => e.out);\n");
     let rev = s.accepted();
     let node = id_in(&s, "e", "eq");
+    let (bound, budget) = (m2_script::speed::scaled(Duration::from_millis(8)), m2_script::speed::scaled(BUDGET));
     let mut took: Vec<Duration> = (0..200)
         .map(|i| {
             let t = m2_os::thread::cpu_time();
-            let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(BUDGET);
+            let packages = PackageSet::default().viewing(&rev.compiled.view).into_owned().with_offline_limit(budget);
             let c =
                 copy(rev, &packages, "e", &node, &values(json!({"gain4": (i % 48) as f64 / 2.0 - 12.0})), Layer::Response { level: LEVEL })
                     .unwrap();
-            assert_eq!(c.measure(&packages, HZ, BUDGET, Pass::Drag).unwrap().len(), 2 * POINTS);
+            assert_eq!(c.measure(&packages, HZ, budget, Pass::Drag).unwrap().len(), 2 * POINTS);
             m2_os::thread::cpu_time() - t
         })
         .collect();
     took.sort();
     let (median, p99) = (took[took.len() / 2], took[took.len() * 99 / 100]);
-    eprintln!("a drag's frame of the EQ: median {median:?}, p99 {p99:?}");
-    assert!(p99 < Duration::from_millis(8), "p99 {p99:?} (median {median:?}): over 8 ms");
+    eprintln!("a drag's frame of the EQ: median {median:?}, p99 {p99:?}, against {bound:?}");
+    assert!(p99 < bound, "p99 {p99:?} (median {median:?}): over 8 ms, {bound:?} on this machine (× {:.2})", m2_script::speed::ratio());
 }
 
 // CARD-83 (review M6): a drum's hit, from the offline copy of its call, is a render of the song with
@@ -401,8 +403,8 @@ fn a_measure_is_stopped_past_its_budget() {
 // CARD-85: a measure is cheap enough to follow a drag: a lowpass's and the EQ's responses, the
 // multiband's split (a quiet click, CARD-115), and a second of the Drum's hit, each copied, measured
 // and drawn at a new value each time, at 48 and 96 kHz, inside its budget (20 ms at 48 kHz, 40 ms
-// at 96) of the thread's CPU at p99. It judges speed, so it runs in the nightly tier
-// (ci/nightly-tests.txt).
+// at 96) of the thread's CPU at p99, scaled by this machine's speed against the Linux server's
+// (CARD-75). It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
 #[test]
 fn a_measure_follows_a_drag_inside_its_budget() {
     let body = "import { multiband } from '@m2/mixing';\n\
@@ -412,7 +414,8 @@ fn a_measure_follows_a_drag_inside_its_budget() {
                 const kick = track('kick', ({ lane }) => drums.drum(lane.notes('hits'), { decay: 0.5 }));\n\
                 export default song(() => sum(lead.out, e.out, m.out, kick.out));\n";
     for rate in [48_000u32, 96_000] {
-        let most = budget(rate);
+        // Its budget at this rate on the Linux server, scaled by this machine's speed (CARD-75).
+        let most = m2_script::speed::scaled(budget(rate));
         let (_f, s) = open_at(rate, body);
         let rev = s.accepted();
         let time = |module: &str, callee: &str, layer: Layer, at: &dyn Fn(usize) -> serde_json::Value| {
@@ -442,7 +445,11 @@ fn a_measure_follows_a_drag_inside_its_budget() {
         for (what, (_, p99)) in
             [("a lowpass's response", lowpass), ("the EQ's response", eq), ("the multiband's split", split), ("a hit of 1 s", hit)]
         {
-            assert!(p99 < most, "{what} at {rate} Hz: p99 {p99:?}, over {most:?}");
+            assert!(
+                p99 < most,
+                "{what} at {rate} Hz: p99 {p99:?}, over {most:?}, its budget on this machine (× {:.2})",
+                m2_script::speed::ratio()
+            );
         }
     }
 }

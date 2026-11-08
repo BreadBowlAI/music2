@@ -820,7 +820,8 @@ fn a_songs_own_sound_draws_from_its_code() {
 
 // CARD-75: an eight-band EQ's picture (a curve of 180 points, eight dots and its words), drawn twice
 // as every draw is (CARD-64), checked in Rust, and the trip there, take under 8 ms at p99, the design's budget for the slowest computer music2 supports.
-// It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
+// It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt), in the CPU time of the draw's
+// thread, the 8 ms scaled by this machine's speed against the Linux server's (CARD-75).
 #[test]
 fn an_eight_band_curve_draws_inside_its_budget() {
     let eight = CURVE.replace("const BANDS = [1, 2] as const;", "const BANDS = [1, 2, 3, 4, 5, 6, 7, 8] as const;").replace(
@@ -840,18 +841,23 @@ fn an_eight_band_curve_draws_inside_its_budget() {
     let desc = pack.descriptor("curve");
     let first = shapes(runner.draw(pack.ask_as("budget", desc.clone(), "curve", v.clone())));
     assert_eq!(first["shapes"].as_array().unwrap().len(), 10, "a grid, a curve and eight dots");
+    let budget = crate::speed::scaled(Duration::from_millis(8));
     let mut took: Vec<Duration> = (0..400)
         .map(|i| {
             v["gain4"] = json!((i % 48) as f64 / 2.0 - 12.0);
-            let t = Instant::now();
-            shapes(runner.draw(pack.ask_as("budget", desc.clone(), "curve", v.clone())));
-            t.elapsed()
+            let (drawn, took) = runner.draw_timed(pack.ask_as("budget", desc.clone(), "curve", v.clone()));
+            shapes(drawn);
+            took
         })
         .collect();
     took.sort();
     let (median, p99) = (took[took.len() / 2], took[took.len() * 99 / 100]);
-    eprintln!("an eight-band curve: median {median:?}, p99 {p99:?}");
-    assert!(p99 < Duration::from_millis(8), "p99 {p99:?} (median {median:?}): over the 8 ms budget");
+    eprintln!("an eight-band curve: median {median:?}, p99 {p99:?}, against {budget:?}");
+    assert!(
+        p99 < budget,
+        "p99 {p99:?} (median {median:?}): over the 8 ms budget, {budget:?} on this machine (× {:.2})",
+        crate::speed::ratio()
+    );
 }
 
 /// The curve, its draw first working `hang` thousand steps of sums, then drawing as ever.
