@@ -304,7 +304,10 @@ fn the_multiband_draws_its_split() {
 #[test]
 fn the_multiband_shows_how_far_each_band_turns_down() {
     let down = declared("mixing", "multiband", "down");
-    assert_eq!((&down["y"]["lo"], &down["y"]["hi"], &down["y"]["unit"], &down["y"].get("bare")), (&json!(0.0), &json!(24.0), &json!("db"), &None));
+    assert_eq!(
+        (&down["y"]["lo"], &down["y"]["hi"], &down["y"]["unit"], &down["y"].get("bare")),
+        (&json!(0.0), &json!(24.0), &json!("db"), &None)
+    );
     assert_eq!(down["x"]["bare"], json!(true), "nothing across: no grid, no numbers");
     let bars = ["low_reduction", "mid_reduction", "high_reduction"].map(|name| json!({"kind": "meter", "name": name}));
     assert_eq!(down["live"], json!(bars));
