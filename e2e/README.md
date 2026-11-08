@@ -198,10 +198,11 @@ The nightly runs and why:
 
 ## Byte-identity of renders
 
-`baseline.sh` renders the pure fixtures, twenty-two renders in all (full renders of `examples/arp`,
+`baseline.sh` renders the pure fixtures, twenty-six renders in all (full renders of `examples/arp`,
 `examples/first-song`, `examples/resample`, `examples/sounds`, `examples/sampler`, `templates/starter`,
 `templates/empty`, `core/session/tests/fixtures/sampler-regions`, `core/session/tests/fixtures/meters`,
-`core/session/tests/fixtures/clip`, `core/session/tests/fixtures/vocoder`, and `--from 4 --seconds 6` of
+`core/session/tests/fixtures/clip`, `core/session/tests/fixtures/vocoder`,
+`core/session/tests/fixtures/flanger`, `core/session/tests/fixtures/grains`, and `--from 4 --seconds 6` of
 each) into a folder with a `SHA256SUMS`:
 
 ```sh
@@ -212,7 +213,8 @@ diff /tmp/base-head/SHA256SUMS /tmp/base-now/SHA256SUMS
 
 A commit from before the `sounds` merge has no `examples/sounds`, one from before std 0.5.0 no
 `sampler-regions`, one from before track `meters2` no `meters`, one from before track `voice2` no
-`clip`, and one from before track `vocoder` no `vocoder`: the script skips it and says so.
+`clip`, one from before track `vocoder` no `vocoder`, and one from before track `effects3` no `flanger`
+or `grains`: the script skips it and says so.
 
 `renders.sha256` is the one record every OS must match (PLAT-4); `ci/check.sh` renders with
 `baseline.sh` and checks against it (`cd <out> && shasum -a 256 -c <repo>/e2e/renders.sha256`).

@@ -311,7 +311,8 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 /// must not change (PACK-26).
 /// `clip` is `@m2/effects`' Clipper played hard, 92 frames late (PACK-34). `vocoder` is
 /// `@m2/vocals`' Vocoder: a synth's chords made to talk by another track's made-up voice (VOX-29).
-const PURE: [&str; 11] = [
+/// `flanger` and `grains` are `@m2/effects`' Flanger and Grains (PACK-35, PACK-36).
+const PURE: [&str; 13] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -323,6 +324,8 @@ const PURE: [&str; 11] = [
     "core/session/tests/fixtures/meters",
     "core/session/tests/fixtures/clip",
     "core/session/tests/fixtures/vocoder",
+    "core/session/tests/fixtures/flanger",
+    "core/session/tests/fixtures/grains",
 ];
 
 /// A copy of the repo's fixture `rel`, such as `examples/first-song`.
