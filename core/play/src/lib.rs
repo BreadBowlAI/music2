@@ -1099,20 +1099,14 @@ impl Player {
         Player::silent_as("none", Some(frames), live)
     }
 
-    /// [`Player::silent_with`] whose clock sleeps with `sleep`: a test's clock that oversleeps.
-    #[doc(hidden)]
-    pub fn silent_sleeping(frames: u32, live: LiveThreads, sleep: Box<dyn Fn(Duration) + Send>) -> Result<Player> {
-        Player::silent_clocked("none", Some(frames), live, sleep)
-    }
-
     /// [`Player::silent`], named `name`, its buffers `frames` frames when given, rendering on the
     /// engine threads `live` asks for: plain threads, one unless it says more.
     fn silent_as(name: &str, frames: Option<u32>, live: LiveThreads) -> Result<Player> {
         Player::silent_clocked(name, frames, live, Box::new(std::thread::sleep))
     }
 
-    /// [`Player::silent_as`], its clock sleeping with `sleep`. It renders a buffer each period by the
-    /// wall clock, at most [`CATCH_UP`] of sound at once after a late wake.
+    /// [`Player::silent_as`], its clock sleeping with `sleep` (a test's oversleeps): a buffer each
+    /// period by the wall clock, at most [`CATCH_UP`] of sound at once after a late wake.
     fn silent_clocked(name: &str, frames: Option<u32>, live: LiveThreads, sleep: Box<dyn Fn(Duration) + Send>) -> Result<Player> {
         const SR: u32 = outputs::SILENT_RATE;
         let frames: usize = match frames {

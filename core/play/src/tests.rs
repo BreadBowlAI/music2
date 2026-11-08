@@ -486,16 +486,21 @@ fn a_silent_player_let_go_stops_and_frees_its_engine() {
 // and wakes at once from a sleep of nothing, as a real one does; its buffers are 128 frames, 2.7 ms.
 // Still the song plays a second each second, within 5%: it renders at once the buffers the wall
 // clock says are due. Before, it caught up two buffers a wake: three buffers each 17.7 ms, 45% of
-// the pace (0.896 s in 2 s).
+// the pace (0.896 s in 2 s). Its sleep waits for the wall clock without the OS's timers, so it lasts
+// what it asks and 15 ms on any machine: on GitHub's Mac, where a sleep ran up to 150 ms late, a
+// real one played the song at 85% (run 42494489844), its sleeps late past the 100 ms it catches up.
 #[test]
 fn a_silent_player_whose_sleeps_run_late_keeps_the_wall_clocks_pace() {
     let late = Duration::from_millis(15);
     let oversleeps = move |d: Duration| {
         if !d.is_zero() {
-            std::thread::sleep(d + late)
+            let until = std::time::Instant::now() + d + late;
+            while std::time::Instant::now() < until {
+                std::thread::yield_now();
+            }
         }
     };
-    let player = Player::silent_sleeping(128, LiveThreads::default(), Box::new(oversleeps)).unwrap();
+    let player = Player::silent_clocked("none", Some(128), LiveThreads::default(), Box::new(oversleeps)).unwrap();
     player.open(sine(48_000)).unwrap();
     assert!(eventually(|| player.status().pending.is_none()), "the clock took the project");
     player.play();
