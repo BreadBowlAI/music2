@@ -38,7 +38,7 @@ env:
 # would be true then: GitHub compares null and false as the number 0).
 jobs:
   linux:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-flakes') && github.event.repository.visibility == 'public'
+    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     outputs:
@@ -97,10 +97,6 @@ jobs:
       # minutes later if that hangs too; the step's limit and the job's are the last backstops.
       - run: timeout -s INT -k 2m 165m ci/check.sh --nightly
         timeout-minutes: 170
-      # TEMP (track ci-flakes): round 2's probe (ci/temp-probe.sh). Taken out before the PR.
-      - if: ${{ !cancelled() }}
-        run: ci/temp-probe.sh linux
-        timeout-minutes: 30
       # What passed only on a retry (ci/check.sh's list, and ci/pr.sh's in each pr-<step>/), for
       # the report job's "Flaky tests" issue.
       - id: flaky
@@ -116,7 +112,7 @@ jobs:
           retention-days: 14
 
   macos:
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-flakes') && github.event.repository.visibility == 'public'
+    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
     runs-on: macos-15
     timeout-minutes: 150
     outputs:
@@ -163,10 +159,6 @@ jobs:
         run: ci/pr.sh suites --all
       - if: ${{ !cancelled() }}
         run: ci/pr.sh renders
-      # TEMP (track ci-flakes): round 2's probe (ci/temp-probe.sh). Taken out before the PR.
-      - if: ${{ !cancelled() }}
-        run: ci/temp-probe.sh macos
-        timeout-minutes: 30
       # What passed only on a retry (each step's list), for the report job's "Flaky tests" issue.
       - id: flaky
         if: always()
@@ -190,7 +182,7 @@ jobs:
   # "Nightly failed" still opens then, and the job's logs are kept.
   report:
     needs: [linux, macos]
-    if: ${{ always() && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
+    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # A job's own permissions replace the top-level ones: contents: read again, for the checkout.
