@@ -20,6 +20,7 @@
 use std::path::Path;
 
 use m2_ir::{Op, split_ref};
+use m2_script::sites::Site;
 use m2_session::{Checked, Compiled, Session};
 
 use crate::cable::current_site;
@@ -164,6 +165,25 @@ pub(crate) fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) 
     if !site.in_project {
         return Err(EditError::NotFound(call.to_string()));
     }
+    add_effect_at(s, &site, &crate::effect::Span::of(&site), component)
+}
+
+/// Whether installed plugin `component` is an effect (it takes a sound in), or why not; and its name.
+pub(crate) fn effect_name(s: &mut Session, component: &str) -> Result<String, EditError> {
+    let info = described(s, component)?;
+    let name = info.name;
+    if !info.audio_in || info.instrument_only {
+        return Err(EditError::Rejected(match info.note_in {
+            true => format!("{name} plays notes; it can't go after a sound. Add it with + Track."),
+            false => format!("{name} takes no sound in, so it can't go after one."),
+        }));
+    }
+    Ok(name)
+}
+
+/// Put installed plugin `component` around the text at `span`, a call or one argument of call `site`
+/// (CARD-36): its key is made from `site`'s.
+pub(crate) fn add_effect_at(s: &mut Session, site: &Site, span: &crate::effect::Span, component: &str) -> Result<Edited, EditError> {
     let info = described(s, component)?;
     let name = info.name;
     if !info.audio_in || info.instrument_only {
@@ -173,11 +193,11 @@ pub(crate) fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) 
         }));
     }
     let key = free_key(s, site.id, &name);
-    let text = s.accepted().snapshot.files.get(Path::new(&site.file)).ok_or_else(|| EditError::NotFound(site.file.clone()))?;
+    let text = s.accepted().snapshot.files.get(Path::new(&span.file)).ok_or_else(|| EditError::NotFound(span.file.clone()))?;
     let imports = import_insertion(text, "@m2/core", "plugin").into_iter().collect();
     let (open, close) = effect_text(component, &key);
     let wrap = Wrap { open, close, imports, callee: "plugin".into(), label: name.clone(), before: false, also: Default::default() };
-    wrap_call(s, &crate::effect::Span::of(&site), wrap, |_, checked, new| {
+    wrap_call(s, span, wrap, |_, checked, new| {
         installed_in(checked, component)?;
         match one_plugin(&checked.candidate().compiled, new, component, &key) {
             true => Ok(()),

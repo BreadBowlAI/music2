@@ -74,6 +74,306 @@ pub struct EffectInfo {
     pub notes: bool,
 }
 
+/// What + on a wire does (CARD-36): the add route's form that puts an effect there, or why none
+/// can, in words. Serialized as the route's own fields, so a window posts it as it is.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum Plus {
+    /// After call `call` (`file#ordinal`, or a track's sound `import:<track>.<export>`): the first form.
+    After { call: String },
+    /// On the wire into argument `input` (`0`, `0.keys.in`) of call `reader`: the second form.
+    Wire { reader: String, input: String },
+    /// Why none can go there.
+    Refused { refused: String },
+}
+
+/// Where a wire comes from, for its **+** (CARD-36).
+pub(crate) enum Source<'a> {
+    /// A call, or a lane's read, of the project.
+    Call(&'a Site),
+    /// Another track's export, read here: `import:<track>.<export>`.
+    Import(&'a str, &'a str),
+    /// The song's time, a voice's note: what no effect goes after.
+    Other,
+}
+
+/// A call as it is called in words: its component's label (`Lowpass`), else its callee.
+fn title(s: &Session, site: &Site) -> String {
+    component_at(s, site).map_or_else(|| site.callee.clone(), |d| d.label.clone())
+}
+
+/// How many times call `site` was made: by a helper function called more than once, or a loop.
+fn made(c: &Compiled, site: u32) -> usize {
+    let frames = c.ir.modules.iter().flat_map(|m| &m.frames).filter(|f| f.site == site && f.key.is_none()).count();
+    let outputs = c.outputs.iter().filter(|o| o.site == site).count();
+    frames.max(outputs)
+}
+
+/// How many times the output of call `site` is read: by the nodes and the exports of its module.
+fn read_count(c: &Compiled, site: u32) -> usize {
+    let mut outputs = c.outputs.iter().filter(|o| o.site == site);
+    let (Some(output), None) = (outputs.next(), outputs.next()) else { return 0 };
+    let Some(m) = c.ir.modules.iter().find(|m| m.key == output.module) else { return 0 };
+    let out = split_ref(&output.port);
+    let count = std::cell::Cell::new(0);
+    let (mut nodes, mut exports) = (m.nodes.clone(), m.exports.clone());
+    refs(&mut nodes, &mut exports, &|_| {}, &|r: &mut String| {
+        if split_ref(r) == out {
+            count.set(count.get() + 1);
+        }
+    });
+    count.get()
+}
+
+/// The text of a file of the accepted revision.
+fn text_of<'a>(s: &'a Session, file: &str) -> &'a str {
+    s.accepted().snapshot.files.get(Path::new(file)).map_or("", |t| &**t)
+}
+
+/// Whether argument `a` spreads, `...xs`, in `text`.
+fn spreads(text: &str, a: &Arg) -> bool {
+    let (start, end) = a.span();
+    text.get(start as usize..end as usize).is_some_and(|w| w.trim_start().starts_with("..."))
+        || text.get(..start as usize).is_some_and(|w| w.trim_end().ends_with("..."))
+}
+
+/// The path of an argument of `site` (in its object literals too) that is the name `name`.
+fn named_at(site: &Site, name: &str) -> Option<Vec<String>> {
+    fn find(a: &Arg, name: &str, path: &mut Vec<String>) -> bool {
+        match a {
+            Arg::Name { name: n, .. } => n == name,
+            Arg::Object { props, .. } => props.iter().any(|(k, v)| {
+                path.push(k.clone());
+                let found = find(v, name, path);
+                if !found {
+                    path.pop();
+                }
+                found
+            }),
+            _ => false,
+        }
+    }
+    site.args.iter().enumerate().find_map(|(i, a)| {
+        let mut path = vec![i.to_string()];
+        find(a, name, &mut path).then_some(path)
+    })
+}
+
+/// The names `site`'s arguments are, in its object literals too.
+fn names_in(site: &Site) -> Vec<String> {
+    fn find(a: &Arg, out: &mut Vec<String>) {
+        match a {
+            Arg::Name { name, .. } => out.push(name.clone()),
+            Arg::Object { props, .. } => props.iter().for_each(|(_, v)| find(v, out)),
+            _ => {}
+        }
+    }
+    let mut out = vec![];
+    site.args.iter().for_each(|a| find(a, &mut out));
+    out
+}
+
+/// The argument of call `reader` (its path) that is call `source` as written: the call itself, or
+/// the `const` it is bound to (CARD-36). Why not, in words.
+fn argument_of(s: &Session, reader: &Site, source: &Site) -> Result<Vec<String>, String> {
+    let c = &s.accepted().compiled;
+    let (them, it) = (title(s, reader), title(s, source));
+    for (site, named) in [(reader, &them), (source, &it)] {
+        let n = made(c, site.id);
+        if n > 1 {
+            return Err(format!("{named} is made {n} times, in a function or a loop: change it in code."));
+        }
+    }
+    let text = text_of(s, &reader.file);
+    let spread = || format!("{them} takes its sounds from a spread: change it in code.");
+    let quoted = |w: &str| {
+        let w = w.split_whitespace().collect::<Vec<_>>().join(" ");
+        let w = if w.chars().count() > 24 { format!("{}…", w.chars().take(23).collect::<String>()) } else { w };
+        format!("{them} reads {it} as `{w}`, not where it is made: change it in code.")
+    };
+    if source.file == reader.file && reader.start <= source.start && source.end <= reader.end && source.id != reader.id {
+        if let Some(path) = crate::view::path_around(reader, source.start)
+            && let Some(arg) = reader.arg(&path)
+        {
+            let (start, end) = arg.span();
+            return match () {
+                _ if (start, end) == (source.start, source.end) => Ok(path),
+                _ if spreads(text, arg) => Err(spread()),
+                _ => Err(quoted(&text[start as usize..end as usize])),
+            };
+        }
+    }
+    if let (Some(name), true, true) = (&source.binding, source.constant, source.file == reader.file)
+        && let Some(path) = named_at(reader, name)
+    {
+        return Ok(path);
+    }
+    if reader.args.iter().any(|a| spreads(text, a)) {
+        return Err(spread());
+    }
+    match &names_in(reader)[..] {
+        [one] => Err(quoted(one)),
+        _ => Err(format!("{them} doesn't read {it} where it is made: change it in code.")),
+    }
+}
+
+/// What the **+** on a wire does (CARD-36): from `source` into call `reader` (an export's, with none),
+/// carrying `kind` (`audio`, `control` or `notes`), read a block late when `late`.
+pub(crate) fn plus(s: &Session, source: Source<'_>, reader: Option<&Site>, kind: &str, late: bool) -> Plus {
+    let refused = |refused: String| Plus::Refused { refused };
+    if late {
+        return refused("This wire closes a loop: change it in code.".into());
+    }
+    if kind == "control" {
+        return refused(CONTROL.into());
+    }
+    let id = |site: &Site| format!("{}#{}", site.file, site.ordinal);
+    match (source, reader) {
+        (Source::Import(track, export), _) => match track_read(s, track, export) {
+            Ok(_) => Plus::After { call: format!("import:{track}.{export}") },
+            Err(why) => refused(sentence(&why)),
+        },
+        (Source::Call(from), Some(reader)) => match argument_of(s, reader, from) {
+            Ok(path) => Plus::Wire { reader: id(reader), input: path.join(".") },
+            Err(why) => refused(why),
+        },
+        (Source::Call(from), None) => {
+            let c = &s.accepted().compiled;
+            let it = title(s, from);
+            match (made(c, from.id), read_count(c, from.id)) {
+                (n, _) if n > 1 => refused(format!("{it} is made {n} times, in a function or a loop: change it in code.")),
+                (_, n) if n > 1 => refused(format!(
+                    "{it} is read in {n} places, so an effect after it would change them all: put it on one of its wires, or change it in code."
+                )),
+                _ => Plus::After { call: id(from) },
+            }
+        }
+        (Source::Other, _) => refused("No effect goes on this wire: change it in code.".into()),
+    }
+}
+
+/// What a control wire says (CARD-36).
+const CONTROL: &str = "This wire carries a control: an effect goes on a sound, a note effect on notes.";
+
+/// `why` as a sentence: its first letter a capital, a full stop at its end.
+fn sentence(why: &str) -> String {
+    let mut c = why.chars();
+    let first = c.next().map(|f| f.to_uppercase().collect::<String>()).unwrap_or_default();
+    format!("{first}{}.", c.as_str().trim_end_matches('.'))
+}
+
+/// Put effect `component` (a ComponentId, or an installed plugin, `clap:<id>`) on the wire into
+/// argument `input` (`0`, `0.keys.in`) of call `reader` (`file#ordinal` at revision `at`), written
+/// around that argument alone (CARD-36): the add route's second form. Only where the view's **+**
+/// says it goes, and only what fits the wire; else refused in the view's words.
+pub fn add_effect_on(s: &mut Session, at: u64, reader: &str, input: &str, component: &str) -> Result<Edited, EditError> {
+    ready(s)?;
+    // What it is, and whether it goes on notes.
+    let (label, notes) = match component.starts_with("clap:") {
+        true => (crate::plugins::effect_name(s, component)?, false),
+        false => {
+            let e = effects(s).into_iter().find(|e| e.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
+            (e.label, e.notes)
+        }
+    };
+    let site = current_site(s, at, reader)?.clone();
+    if !site.in_project {
+        return Err(EditError::NotFound(reader.to_string()));
+    }
+    let id = format!("{}#{}", site.file, site.ordinal);
+    let path: Vec<String> = input.split('.').map(str::to_string).collect();
+    let arg = site.arg(&path).ok_or_else(|| EditError::Rejected(format!("{} has no argument {input}.", title(s, &site))))?;
+    let (start, end) = arg.span();
+    // The wire, as the view says it: the one whose + wraps this argument, else the one written in it.
+    let v = crate::view::view(s);
+    let into: Vec<&crate::view::PortEdge> = v.modules.iter().flat_map(|m| &m.port_edges).filter(|e| e.to == id).collect();
+    let here = into.iter().find(|e| matches!(&e.plus, Plus::Wire { reader, input: i } if *reader == id && i == input));
+    let Some(wire) = here else {
+        // Refused: in the words of the wire written in that argument, or of the one wire that is.
+        let compiled = &s.accepted().compiled;
+        let written = |e: &crate::view::PortEdge| {
+            let from = compiled.sites.iter().find(|x| format!("{}#{}", x.file, x.ordinal) == e.from);
+            from.is_some_and(|f| f.file == site.file && start <= f.start && f.end <= end)
+        };
+        let refusals = |only_written: bool| -> Vec<&str> {
+            into.iter()
+                .filter(|e| !only_written || written(e))
+                .filter_map(|e| match &e.plus {
+                    Plus::Refused { refused } => Some(refused.as_str()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let (refusals, only) = (refusals(true), refusals(false));
+        let why = match (refusals.first(), &only[..]) {
+            (Some(why), _) | (None, [why]) => why.to_string(),
+            _ => format!("No wire into {} there takes an effect: change it in code.", title(s, &site)),
+        };
+        return Err(EditError::Rejected(why));
+    };
+    match (wire.kind, notes) {
+        ("audio", true) => return Err(EditError::Rejected(format!("{label} goes on notes, and this wire carries a sound."))),
+        ("notes", false) => return Err(EditError::Rejected(format!("{label} goes on a sound, and this wire carries notes."))),
+        ("control", _) => return Err(EditError::Rejected(CONTROL.into())),
+        _ => {}
+    }
+    let span = Span { file: site.file.clone(), start, end };
+    if component.starts_with("clap:") {
+        return crate::plugins::add_effect_at(s, &site, &span, component);
+    }
+    let effect = effects(s).into_iter().find(|e| e.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
+    let desc = s.catalog().components[component].clone();
+    let text = text_of(s, &span.file).to_string();
+    let (args, ctors) = insert_args(&desc, &s.accepted().compiled.units);
+    let mut imports = vec![];
+    if let Some(i) = import_insertion(&text, &effect.module, &effect.name) {
+        imports.push(i);
+    }
+    for ctor in &ctors {
+        if !imported_names(&text, "@m2/core").contains(ctor) && !imports.iter().any(|(_, line)| line.contains(ctor.as_str())) {
+            imports.extend(import_insertion(&text, "@m2/core", ctor));
+        }
+    }
+    let also = crate::packs::needs(s, component)?;
+    let (open, close) = (format!("{}(", effect.name), format!("{args})"));
+    let wrap = Wrap { open, close, imports, callee: effect.name, label: effect.label, before: effect.notes, also };
+    wrap_call(s, &span, wrap, |_, _, _| Ok(()))
+}
+
+/// Why Remove can't take call `site` out (CARD-36), in words; else the effect or note effect it is.
+pub(crate) fn removable(s: &Session, site: &Site) -> Result<Arc<Descriptor>, String> {
+    let Some(d) = component_at(s, site) else {
+        return Err(format!("{} isn't an effect: change it in code.", site.callee));
+    };
+    if d.is_effect() || d.is_note_effect() {
+        return Ok(d);
+    }
+    let label = &d.label;
+    let out = d.output.as_ref().map(|o| o.kind);
+    let sound = |k: PortKind| matches!(k, PortKind::Audio | PortKind::Notes | PortKind::Any);
+    let what = |k: PortKind| match k {
+        PortKind::Audio => "a sound",
+        PortKind::Notes => "notes",
+        PortKind::Control => "a control",
+        PortKind::Any => "a signal",
+    };
+    // Its sound inputs: one that takes many, or a dictionary of them (a mixer's channels), counts as several.
+    let inputs: usize = d.inputs.iter().filter(|i| !i.sidechain && sound(i.kind)).map(|i| if i.many { 2 } else { 1 }).sum();
+    let channels = d.controls.iter().any(|c| c.each.as_ref().is_some_and(|e| e.inputs.iter().any(|i| sound(i.kind))));
+    let any = d.controls.iter().any(|c| c.unit.is_none() && c.each.is_none());
+    let first = d.inputs.first().map(|i| i.kind).filter(|k| matches!(k, PortKind::Audio | PortKind::Notes));
+    Err(match (first, out) {
+        (Some(PortKind::Notes), Some(PortKind::Audio)) => {
+            format!("{label} is an instrument: change it with Change instrument, in its track's menu.")
+        }
+        (Some(i), Some(o)) if i != o => format!("{label} turns {} into {}: change it in code.", what(i), what(o)),
+        _ if inputs > 1 || channels => format!("{label} mixes several sounds: change it in code."),
+        (None, Some(PortKind::Audio)) if inputs == 0 && !any => format!("{label} makes a sound of its own: change it in code."),
+        (None, Some(_)) if inputs == 0 && !any => format!("{label} makes a control: change it in code."),
+        _ => format!("{label} isn't an effect: change it in code."),
+    })
+}
+
 /// The component frames of `m` whose chain holds `n`, outermost first: the sites of the
 /// component calls it was made inside (ID-15). `key()` frames aren't calls of a component.
 pub(crate) fn calls_of<'a>(m: &'a Module, n: &Node) -> impl Iterator<Item = u32> + 'a {
@@ -501,8 +801,7 @@ pub(crate) fn wrap_call(
 pub fn remove_effect(s: &mut Session, at: u64, call: &str) -> Result<Edited, EditError> {
     ready(s)?;
     let site = current_site(s, at, call)?.clone();
-    let effect =
-        effect_at(s, &site).ok_or_else(|| EditError::Rejected(format!("`{}` is not an effect that can be removed here", site.callee)))?;
+    let effect = removable(s, &site).map_err(EditError::Rejected)?;
     let refused = || EditError::Rejected(format!("removing {} would change more than taking it out", effect.label));
     let input = site.args.first().ok_or_else(refused)?.span();
     let text = s.accepted().snapshot.files[Path::new(&site.file)].clone();
@@ -1419,3 +1718,7 @@ mod cut_tests;
 #[cfg(test)]
 #[path = "note_effect_tests.rs"]
 mod note_effect_tests;
+
+#[cfg(test)]
+#[path = "wire_tests.rs"]
+mod wire_tests;
