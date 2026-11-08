@@ -150,9 +150,12 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   const perNote = useMemo(() => (shown ? perNoteOf(shown) : new Set<string>()), [shown]);
   const room = useMemo(() => headRoom(graph.effects, perNote), [graph.effects, perNote]);
   const single = compacted?.card.id;
-  const laid = useMemo(() => shown && layout(shown, expanded, room, single), [shown, expanded, room, single]);
+  // The dock's room for the graph at Fit, inside the canvas's padding (`p-4` here and on the section).
+  const [dockRoom, setDockRoom] = useState<{ w: number; h: number } | null>(null);
+  const spread = useMemo(() => (shown ? filled(shown, room, single, dockRoom) : new Map<number, number>()), [shown, room, single, dockRoom]);
+  const laid = useMemo(() => shown && layout(shown, expanded, room, single, spread), [shown, expanded, room, single, spread]);
   // Fit is worked out from the graph with every node collapsed: expanding one never changes it (DV-13).
-  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single), [shown, room, single]);
+  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single, spread), [shown, room, single, spread]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -172,6 +175,9 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       const bar = scrollbarRoom();
       const w = el.offsetWidth - bar, h = el.offsetHeight - bar;
       setRoom((r) => (r && r.w === w && r.h === h ? r : { w, h }));
+      // Less a scrollbar each way too, as above: never what the scrollbars showing now leave.
+      const dw = w - 64, dh = h - 64;
+      setDockRoom((r) => (r && r.w === dw && r.h === dh ? r : { w: dw, h: dh }));
     };
     measure();
     const watch = new ResizeObserver(measure);
@@ -396,7 +402,17 @@ function layout(
   room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
   /** A node with one size: the Song's compact mixer (MX-6). */
   single?: string,
-): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge>; routes: Map<string, { x0: number; x1: number; y: number }[]> } {
+  /** Columns whose stacked sources spread sideways, into this many columns each (`filled`, DV-5). */
+  spread?: ReadonlyMap<number, number>,
+): {
+  placed: Map<string, Placed>;
+  width: number;
+  height: number;
+  back: Set<PortEdge>;
+  routes: Map<string, { x0: number; x1: number; y: number }[]>;
+  /** How many sources each column has, by its place before any spread. */
+  sources: Map<number, number>;
+} {
   const geo = new Map<string, { w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }>(
     m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room, n.id === single)]),
   );
@@ -428,6 +444,22 @@ function layout(
   }
   const last = Math.max(0, ...depth.values());
   for (const n of m.nodes) if (n.kind === "export") depth.set(n.id, last);
+  // A column's sources (what nothing feeds, and something reads): spread sideways into columns of
+  // their own before it, in turn, each still just before what reads it (DV-5). Every column after
+  // moves right to make room.
+  const sourcesOf = (c: number) => m.nodes.filter((n) => depth.get(n.id) === c && !into.get(n.id)?.size && from.get(n.id)?.size);
+  const sources = new Map<number, number>();
+  // The columns a spread made: their stacks hang from where they land, never above it, so what they
+  // feed stays at the top of the graph's first view.
+  const hanging = new Set<number>();
+  for (let c = 0; c <= last; c++) sources.set(c, sourcesOf(c).length);
+  if (spread?.size) {
+    const at = (c: number) => c + [...spread].reduce((s, [col, k]) => s + (col <= c ? k - 1 : 0), 0);
+    const moved = new Map<string, number>();
+    for (const [c, k] of spread) sourcesOf(c).forEach((n, i) => moved.set(n.id, at(c) - (i % k)));
+    for (const n of m.nodes) depth.set(n.id, moved.get(n.id) ?? at(depth.get(n.id)!));
+    for (const [c, k] of spread) for (let j = 0; j < k; j++) hanging.add(at(c) - j);
+  }
   // A wire that skips a column passes through a gap there, held open by a stand-in the height of a
   // wire, placed with the column's nodes, so it never runs behind one (DV-5, review Z7).
   const gaps = new Map<string, string[]>();
@@ -473,7 +505,9 @@ function layout(
     });
     col.sort((a, b) => (a.land ?? Infinity) - (b.land ?? Infinity) || a.i - b.i);
     const wanted = col.filter((x) => x.want != null);
-    const tops = pack(wanted.map((x) => ({ want: x.want!, h: x.h })));
+    let tops = pack(wanted.map((x) => ({ want: x.want!, h: x.h })));
+    const lowest = Math.min(...wanted.map((x) => x.want!));
+    if (hanging.has(c) && tops.length && tops[0] < lowest) tops = tops.map((y) => y + lowest - tops[0]);
     wanted.forEach((x, k) => top.set(x.n.id, tops[k]));
     // What nothing to the right reads goes below, for now (see below).
     let next = wanted.length ? tops[tops.length - 1] + wanted[wanted.length - 1].h + GAP_Y : 0;
@@ -531,9 +565,41 @@ function layout(
     );
   }
   const width = Math.max(0, ...[...placed.values()].map((p) => p.x + p.w));
-  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes } : { placed, width, height, back, routes };
+  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes, sources } : { placed, width, height, back, routes, sources };
 }
 
+/**
+ * How far a graph's stacked sources spread sideways (DV-5): while the graph, collapsed, is taller
+ * than the dock, the column whose sources stand tallest takes one more column for them, one step at
+ * a time, up to the step that makes it fit the dock's height. Of those, the spread that brings the
+ * most of its nodes into the dock's first view (the fewest columns, of equals; none, unless one
+ * shows more); the rest scrolls. A spread column's stack hangs from where its wires land (`layout`),
+ * so what it feeds keeps the top of the view. Worked out with every node collapsed, as Fit is, so
+ * expanding a node never changes it.
+ */
+function filled(
+  m: ModuleView,
+  room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
+  single: string | undefined,
+  dock: { w: number; h: number } | null,
+): ReadonlyMap<number, number> {
+  let spread = new Map<number, number>();
+  let laid = layout(m, new Set(), room, single, spread);
+  if (!dock) return spread;
+  const seen = (l: typeof laid) => [...l.placed.values()].filter((p) => p.x + p.w <= dock.w && p.y + p.h <= dock.h).length;
+  let best = { spread, seen: seen(laid) };
+  for (let step = 0; step < 32 && laid.height > dock.h; step++) {
+    // The column with the most sources to a column of its own.
+    const tallest = [...laid.sources].map(([c, n]) => ({ c, per: n / (spread.get(c) ?? 1) })).filter((x) => x.per > 1).sort((a, b) => b.per - a.per)[0];
+    if (!tallest) break;
+    const next = new Map(spread).set(tallest.c, (spread.get(tallest.c) ?? 1) + 1);
+    const tried = layout(m, new Set(), room, single, next);
+    if (tried.height >= laid.height) break;
+    [spread, laid] = [next, tried];
+    if (seen(laid) > best.seen) best = { spread, seen: seen(laid) };
+  }
+  return best.spread;
+}
 
 /**
  * Tops for a column's nodes, in order and `GAP_Y` apart, as close to the tops they want as they

@@ -66,6 +66,9 @@ const size = (sel) => page.$eval(sel, (e) => e.dataset.size).catch(() => null);
 const width = (sel) => page.$eval(sel, (e) => e.offsetWidth).catch(() => null);
 const height = (sel) => page.$eval(sel, (e) => e.offsetHeight).catch(() => null);
 
+/** How many of examples/sounds' Song's nodes the dock's first view holds, at the least (DV-5): 3 before track graph-insert. */
+const FILLED = 6;
+
 // ---------------------------------------------------------------- Wob, then a Lowpass; an LFO waits
 
 const BANDS = [1, 2, 3, 4, 5, 6];
@@ -618,5 +621,34 @@ await expand(page, mx);
 const cols = await page.$$eval(`${mx} [data-column]`, (els) => els.map((e) => `${e.dataset.column}:${e.querySelectorAll("[data-knob]").length}`));
 const mixed = await page.$$eval(`${mx} [data-knob]`, (els) => els.length);
 check(mixed >= 10 && cols[0] === "Values:8" && cols[1] === `Values 2:${Math.min(8, mixed - 8)}`, `its ${mixed} values in columns of eight: ${cols.join(" ")}`);
+
+// ---------------------------------------------------------------- the graph fills the dock before it scrolls (taste.md DV-5)
+
+// examples/sounds' Song: nineteen tracks' sounds and two Ducks into one mixer, far taller than the
+// dock. Its sources spread sideways into columns of their own, as far as that shows the most of its
+// nodes in the dock's first view, and hang from the mixer, which keeps the top of the view.
+const made = await page.evaluate(
+  async (token) => (await fetch("/api/project/new", { method: "POST", headers: { "x-m2-token": token, "content-type": "application/json" }, body: JSON.stringify({ name: "Sounds", example: "sounds" }) })).status,
+  sess.page_token,
+);
+check(made === 200, `examples/sounds opens as a new song: ${made}`);
+await until(async () => !!(await page.$('[data-module-tab="ride"]')), 20000);
+await page.click('[data-module-tab="song"]');
+const soundsG = '[data-testid=graph] [data-module="song"]';
+await until(async () => (await page.$$(`${soundsG} [data-node]`)).length > 20, 15000);
+await sleep(500);
+const firstView = await page.evaluate((sel) => {
+  const dock = document.querySelector("[data-testid=graph]").getBoundingClientRect();
+  const nodes = [...document.querySelectorAll(`${sel} [data-node]`)].map((n) => n.getBoundingClientRect());
+  const area = document.querySelector(`${sel} [data-canvas]`).getBoundingClientRect();
+  const inView = nodes.filter((r) => r.left >= dock.left - 1 && r.right <= dock.right + 1 && r.top >= dock.top - 1 && r.bottom <= dock.bottom + 1).length;
+  const inside = (r) => r.left >= dock.left - 1 && r.right <= dock.right + 1 && r.top >= dock.top - 1 && r.bottom <= dock.bottom + 1;
+  const mixer = document.querySelector(`${sel} [data-node="mixer"]`);
+  return { inView, all: nodes.length, mixer: !!mixer && inside(mixer.getBoundingClientRect()), wide: Math.round(area.width), tall: Math.round(area.height), dockH: Math.round(dock.height) };
+}, soundsG);
+check(firstView.inView >= FILLED, `more of its nodes in the dock's first view: ${firstView.inView} of ${firstView.all} (${JSON.stringify(firstView)})`);
+check(firstView.mixer, "the mixer the tracks go to is among them, at the top of the view");
+check(JSON.stringify(await behind("song")) === "[]", `no wire of it runs behind a node it doesn't touch (DV-5): ${JSON.stringify(await behind("song"))}`);
+await page.screenshot({ path: `${ROOT}/nodes-sounds-song.png` });
 
 done(errors);
