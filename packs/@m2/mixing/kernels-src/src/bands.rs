@@ -150,7 +150,11 @@ impl Kernel for Multiband {
                 let peak = bands[0][b].abs().max(bands[1][b].abs());
                 let controls = std::array::from_fn(|f| ins[4 + b * 5 + f][i]);
                 g[b] = band.next(self.sr, peak, controls);
-                most[b] = most[b].max(band.env);
+                // A compare, not f32::max: in wasm that is a few instructions more for a NaN no
+                // envelope holds, and the multiband's frames are many.
+                if band.env > most[b] {
+                    most[b] = band.env;
+                }
             }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { bands[c][0] * g[0] + bands[c][1] * g[1] + bands[c][2] * g[2] } else { 0.0 };

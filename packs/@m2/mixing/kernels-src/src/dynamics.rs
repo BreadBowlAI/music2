@@ -110,7 +110,9 @@ impl Kernel for Gate {
             } else if self.g > target {
                 self.g = (self.g * self.down).max(target);
             }
-            least = least.min(self.g);
+            if self.g < least {
+                least = self.g;
+            }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { sane(ins[c][i]) * self.g } else { 0.0 };
             }
@@ -312,7 +314,9 @@ impl Kernel for Deesser {
             let most = self.amount.next(clampf(amount[i], 0.0, 48.0));
             let r = clampf(db(self.env) - threshold, 0.0, most);
             let g = gain(-r);
-            turned = turned.max(r);
+            if r > turned {
+                turned = r;
+            }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { x[c] + (g - 1.0) * band[c] } else { 0.0 };
             }
