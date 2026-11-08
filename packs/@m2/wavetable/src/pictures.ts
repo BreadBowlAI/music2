@@ -14,8 +14,11 @@ const figures = (v: number) => String(Math.round(v * 100) / 100);
 
 // ---------------------------------------------------------------- the tables
 
-/** How many harmonics a drawn frame holds: past these a frame of 128 points can't show more. */
-const DRAWN = 48;
+/**
+ * How many harmonics a drawn frame holds: the frame playing is drawn in 64 points, which hold 31 (the
+ * frames behind, in 32, hold 15), so no more are worked out (CARD-75: a table's first draw in about 2 ms).
+ */
+const DRAWN = 31;
 /** The frames of built-in table `t`: `tables::frames`. */
 const framesOf = (t: number) => (t === 0 ? 4 : 32);
 
@@ -69,7 +72,11 @@ export function harmonics(t: number, j: number): Frame {
     for (let h = 1; h <= DRAWN; h++) {
       const f = h * VOICE;
       let peaks = 0;
-      for (let i = 0; i < 3; i++) peaks += GAINS[i] / (1 + ((f - formants[i]) / (0.5 * WIDTHS[i])) ** 2);
+      for (let i = 0; i < 3; i++) {
+        // Squared by a product: `**` costs QuickJS a call to pow.
+        const x = (f - formants[i]) / (0.5 * WIDTHS[i]);
+        peaks += GAINS[i] / (1 + x * x);
+      }
       sine(h, (0.05 + peaks) / h);
     }
   } else if (t === 3) {
