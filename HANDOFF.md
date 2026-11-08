@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper and the Vocoder landed; the nightly's failures since 11-06 fixed but its speed tests; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper and the Vocoder landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three still failing on GitHub's Mac; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -29,15 +29,26 @@ design for whatever you pick up. Older versions of this page, with each track's 
   - **GitHub's Mac** (five suite runs, every night): a meters read that heard no whole block sent zeros, read as
     silence, and now sends nothing (the taps count each block as it begins and ends); a window's ask again took its
     own read of a meter; `dress` read the EQ's spectrum before the song reached its hook; `instruments` counted reads
-    before they came; `sidechain`'s steady tone is a 440 Hz sine, which every block holds at its peak; `dress2a`'s
-    gate strip needs the 33 ms tick, so it joined the sleeps list. Below, Known flakes and the Mac's paragraph.
+    before they came; `sidechain`'s steady tone is a 440 Hz sine, which every block holds at its peak. `dress2a`'s
+    gate strip and `sidechain`'s dip need the 33 ms tick: each is a suite of its own on the sleeps list
+    (`dress2a-strip`, `sidechain-dip`), and the rest of both runs there. Below, Known flakes and the Mac's paragraph.
   - **Linux:** `s8-meters`' hold tick fell between two hits of a steady kick, 0.0005 dB apart (a peak within 0.1 dB
     under the hold now holds it again, taste.md); `dress2a`'s closings differed by the test's own saw (its hits are
     now alike, sample for sample); the CPU-sharing draw test runs its draw at the lowest priority beside two busy
     threads (`m2_os::thread::lowest`).
-  - **Left:** the four speed tests of pictures and the EQ's drag fail on GitHub's runners, not slower code (Known
-    flakes; the lead decides how they can hold there); one SIGABRT as a record test ended, not seen again in 2,140
-    runs (Known flakes).
+  - **Round 2** (the lead's decisions):
+    - **The six speed tests** of pictures, the EQ's drag, the measures and the spectra (CARD-75, CARD-85, TAP-13)
+      judge CPU time, each bound scaled by the machine's speed: `m2_script::speed` times std's compress drawing its
+      transfer curve (20 draws a sample, the median of 9) against the 4.5 ms this server takes, and says the ratio
+      in the log. On GitHub's Linux they pass, and a draw of twice the work fails; on GitHub's Mac three still
+      fail (Known flakes).
+    - **`@m2/wavetable` 1.2.1:** its tables' pictures work out only the 31 harmonics a drawn frame shows (the vowels'
+      first draw 2.4 to 2.0 ms of CPU, the same shapes).
+    - **The silent player keeps the wall clock's pace** (RENDER-28a): after a late wake it renders the buffers due,
+      up to 100 ms of them. On GitHub's Mac songs played at 40 to 60% of their pace.
+    - `LIBC_FATAL_STDERR_=1` in `ci/check.sh` and `ci/pr.sh`: an abort says why in the log.
+  - **Left:** three speed tests on GitHub's Mac; one SIGABRT as a record test ended, not seen again in 2,140 runs
+    (Known flakes).
   - `ci/release.sh build` says at once when the `file` program is missing.
 - **The events plan and the small measuring steps (2026-11-07 to 11-08)** (#96, #99 to #102). Both notes were accepted
   together (#96): [docs/designs/events/design.md](docs/designs/events/design.md) and
@@ -67,8 +78,8 @@ design for whatever you pick up. Older versions of this page, with each track's 
     - a pure fixture, `core/session/tests/fixtures/meters`, pins the mixing tools' sound, and a hash in
       `core/play/tests/vocals.rs` pins Tune's.
   - **Versions since 0.2.0:** `@m2/core` 2.5.0, `@m2/effects` 1.4.0, `@m2/mixing` 1.3.0, `@m2/synths` 2.3.0,
-    `@m2/vocals` 1.2.0 and `@m2/notes` 0.1.0; std stays 0.10.0. None has shipped yet, so a change to one of these
-    packs before the next release keeps its version, recorded again (PACK-18).
+    `@m2/vocals` 1.2.0, `@m2/wavetable` 1.2.1 and `@m2/notes` 0.1.0; std stays 0.10.0. None has shipped yet, so a
+    change to one of these packs before the next release keeps its version, recorded again (PACK-18).
 - **The cards plan (2026-11-06 to 11-07) gave every sound a card that draws its sound** (#85, #87, #90, #92, #93,
   #94, #95). Design: [docs/designs/cards2/design.md](docs/designs/cards2/design.md), accepted (#85).
   - **The frame** (#87, CARD-40 to CARD-47): the Device view's **Chain**, a card for each sound in the order it
@@ -279,7 +290,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `pl-sounds-fix` | "one revision, and song.ts as it was" right after Return in Change instrument | once, 2026-10-30, track F's check; passed on the retry. The check reads the revision as soon as `tracks/hats.ts` is written, so the file may land before its revision is counted |
 | `st-audio-fix` | "and adds nothing": the revision moved after an MP3 was refused | once, passed on its retry |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
-| `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read": its reader thread wasn't scheduled within 40 callbacks | once each in three checks at load 50 to 70 (2026-10-31); moved to the nightly tier unchanged (`ci/nightly-tests.txt`) |
+| `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read": its reader thread wasn't scheduled within 40 callbacks | once each in three checks at load 50 to 70 (2026-10-31); moved to the nightly tier unchanged (`ci/nightly-tests.txt`). Once more on 2026-11-08 (ci-flakes, six crates' tests at once, load 4 to 12), "the meter slots were read", the same cause; passed on its retry |
 | `pl-notes` | "the focus is back in the roll" after two Escapes | under heavy load, on main too (4 of 8 at load 60); cause not found |
 | `pl-zoom-fix`, `ag-notice-fix`, `notes-proj`, `start-proj` (and `spotlight-fix`, `s8-songbar-fix`, `ports-proj`, each with one race site fixed in #72) | one check each, under load beside other agents' builds | each passed on its retry, 2026-10-31 |
 | `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |
@@ -290,11 +301,11 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `layout-proj`, `attention-attn` | failed once on GitHub's Mac at `53382be` (run 40666853783) | passed on their retry, alone; its logs weren't kept (a passing run keeps none) |
-| The nightly's speed tests of pictures and the EQ's drag: `every_pack_picture_draws_inside_a_fifth_of_its_limit`, `every_instrument_picture_draws_in_a_fifth_of_its_limit`, `an_eight_band_curve_draws_inside_its_budget`, `a_drag_frame_of_the_eq_stays_under_8_ms`; and, now and then, `thirty_one_spectra_fit_in_a_read_with_room` (GitHub's Linux, 23.8 ms against 16.5, run 42483302299) and `a_measure_follows_a_drag_inside_its_budget` (GitHub's Mac, the EQ's p99 at 96 kHz 40.4 ms against 40, the same run) | draws of 4 to 10 ms against 4 ms (the Mac's Wavetable 9.2 ms); the drag's p99 8.8 ms of CPU against 8 (the Mac's 10.3); the eight-band's p99 9 to 21 ms against 8 | Every nightly since they came (#90 to #94; first run 11-07). Track ci-flakes timed them on the Linux server at `c653658c` and at main, interleaved (load 4.6 to 7.2): the code isn't slower (pack draws' p99 3.08 then 2.98 ms; the drag's median 3.34 then 3.38 ms of CPU), so the runners are the cause: GitHub's Linux does the drag's work in 2.4 times the CPU time, and both runners' tails are their neighbours'. The instrument one fails on the server too, alone, 6 of 12 runs (the Wavetable's vowels table, 3.6 to 4.2 ms). How they can hold on a shared runner, unweakened, is the lead's to decide (ci-flakes' report) |
-| `an_armed_track_monitors_without_a_take` (`m2-server`, `record_tests.rs`) | passed, then its process aborted (SIGABRT, nothing on stderr) as it ended | once, in the lead's `ci/check.sh --pr` on 2026-11-08, under full load; passed on its retry. Not made to happen again: 2,140 runs of it alone (8, 16 and 24 at a time), 15 nextest stress rounds of the record tests and 6 of all `m2-server`'s lib tests, 16 at a time. An abort with nothing on stderr is `std::process::abort` with no panic (the pool's `AbortOnPanic` prints its panic first) or glibc's fatal message, which goes to the terminal, not stderr, when there is one (that check ran in tmux): `LIBC_FATAL_STDERR_=1` would keep it |
+| The nightly's six speed tests: `every_pack_picture_draws_inside_a_fifth_of_its_limit`, `every_instrument_picture_draws_in_a_fifth_of_its_limit`, `an_eight_band_curve_draws_inside_its_budget`, `a_drag_frame_of_the_eq_stays_under_8_ms`, `thirty_one_spectra_fit_in_a_read_with_room`, `a_measure_follows_a_drag_inside_its_budget` | on GitHub's Mac, three: the pack pictures' (the chorus's motion, draws 2 and 4 at 44.1 kHz, 5.2 ms; the phaser's motion's first, 5.4 to 6.0 ms; the reverb's tail's first at 48 kHz, 6.5 ms; against 4.4 to 5.8 ms, the ratio 1.09 to 1.44), the drag's (p99 8.9 and 10.5 ms, its median 4.0 to 4.2, against 8.6) and the measure's (one measure past its budget, `Slow`) | Every nightly since they came (#90 to #94). Since ci-flakes' round 2 they judge CPU time, each bound scaled by the machine's speed (`m2_script::speed`, CARD-75): GitHub's Linux passes all six (run 42494489844, the ratio 1.50 to 1.56 beside the other tests; alone 0.90 to 0.93, where the measure's failed once, `Slow`), and a draw twice the work fails there. The Mac's reference work runs as fast as here (the ratio 1.07 to 1.44), but those draws don't: here the chorus's draws 2 and 4 take 1.3 ms, the phaser's first 2.9, the reverb's first 3.2 (the ratio 0.92), so 2 to 4 times longer there, and the drag's p99 is 2.2 to 2.6 times its median there against 1.1 here. Work that allocates (QuickJS's collector, a measure's copy) or a virtual machine's stolen time, likely: what the one reference doesn't do. The instruments' pictures keep the reference's ratio there (the Wavetable's vowels 2.33 ms at 1.17, 2.0 here). Each pack draw's time on both runners: ci-flakes' last nightly (its report) |
+| `an_armed_track_monitors_without_a_take` (`m2-server`, `record_tests.rs`) | passed, then its process aborted (SIGABRT, nothing on stderr) as it ended | once, in the lead's `ci/check.sh --pr` on 2026-11-08, under full load; passed on its retry. Not made to happen again: 2,140 runs of it alone (8, 16 and 24 at a time), 15 nextest stress rounds of the record tests and 6 of all `m2-server`'s lib tests, 16 at a time. An abort with nothing on stderr is `std::process::abort` with no panic (the pool's `AbortOnPanic` prints its panic first) or glibc's fatal message, which goes to the terminal, not stderr, when there is one (that check ran in tmux): `LIBC_FATAL_STDERR_=1` keeps it, set in `ci/check.sh` and `ci/pr.sh` since ci-flakes' round 2 |
 | `dress2a-fix` | on GitHub's Mac (11-08), "the mid's dot dragged up raises its gain" wrote nothing, and the ⌘Z after it undid the suite's own setup, so Pump's checks after it failed | once; passed on its retry, and 2 of 2 in ci-flakes' Mac probe. Cause not found |
 | `io-record-fix` | failed once on GitHub's Mac (11-08) | passed on its retry alone, and 2 of 2 in ci-flakes' Mac probe |
-| `a_burst_past_the_hint_limit_is_walked_and_never_missed` (`m2-server`, `watch_tests.rs`) | "the walk was a rescan": 4,219 names, two walks, one scoped, no rescan | both tries on GitHub's Mac in run 42483302299 (ci-flakes' branch, no watcher change); it passed on the 11-07 and 11-08 Mac nightlies. FSEvents' batching, likely; not looked into |
+| `a_burst_past_the_hint_limit_is_walked_and_never_missed` (`m2-server`, `watch_tests.rs`) | "the walk was a rescan": 4,219 names, two walks, one scoped, no rescan | both tries on GitHub's Mac in run 42483302299; it passed on the 11-07 and 11-08 Mac nightlies. The cause: FSEvents' daemon can get a change a moment after its write, and a flush right after it may return first (`m2_os::watch`'s `flush` says so), so the first tick took part of the burst, under the 4,096 names, and the rest came after: no tick overflowed, and the watcher did as WRITE-19 says. Since ci-flakes' round 2 the test waits (at most 20 s) till the names overflow before its first tick, and says whether they had by the flush. Passed on the Mac in run 42494489844 |
 | `m2-server`'s registry tests, under `cargo test` | "Too many open files" | in a tmux shell, whose open-file limit is lower; they pass from a normal shell and in `ci/check.sh` |
 
 **GitHub's Mac (macos-15), the first nightly (run 40296575023, `07cd88b`):** its sleeps last about four times what
@@ -313,8 +324,17 @@ zeros, which read as silence (now it sends nothing: `sidechain`); a window's ask
 meter (`dress2a`'s closings); `dress` read the EQ's spectrum before the song reached its hook, and `instruments`
 counted reads before they came. A meters message there may also hold one 10 ms buffer, so `sidechain`'s steady tone
 is a 440 Hz sine, every block of which holds its peak. `dress2a`'s gate strip counts openings read by read, which
-needs the 33 ms tick: it joined the sleeps list. The nightly on ci-flakes' branch (run 42483302299) passed the other
-four there, on their first runs.
+needs the 33 ms tick: it is a suite of its own, `dress2a-strip`, on the sleeps list. The nightly on ci-flakes' branch
+(run 42483302299) passed the other four there, on their first runs. Since ci-flakes' round 2 the silent player keeps
+the wall clock's pace there (RENDER-28a: after a late wake it renders the buffers due, up to 100 ms; it caught up one,
+so songs played at 40 to 60%). Then `sidechain`'s dip failed there (run 42494489844): a meters message held a kick
+and the gap after it, so 3 reads with the kick down and a 0.7 dB dip; with 120 ms of timer slack here, the same,
+and with the old player it passed. Those two checks are `sidechain-dip`'s, on the sleeps list. Its sleeps there ran
+up to 150 ms late in that run, past the 100 ms the player catches up, so it may still drop a little sound there.
+The two Rust tests of the sleeps list (`previews_never_wait_for_a_compile`,
+`a_lane_written_in_two_halves_never_plays_empty`) are clocked by the silent player: whether they pass there now is
+in ci-flakes' last nightly. The capture's clock (`crates/server/examples/headless.rs`, `nx-click` and `st-record`)
+still catches up one buffer.
 `a_code_save_behind_a_previewed_write_plays_both` passed there on its retry. G10's timing failed there too ("bar 64
 takes no longer than … from bar 1: 1.25 s against 1.05 s", in `the_live_engine_passes_every_gate`), timed by the
 wall clock beside other tests, as macOS doesn't say how long a thread waited for a CPU. It now times the rendering
@@ -351,8 +371,10 @@ whether it is one of these or a real failure, and fixes the real ones (most were
      kit on any drum machine track, if wanted.
 5. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
    few clean nightlies.
-   The nightly's four speed tests of pictures and the EQ's drag fail on GitHub's runners (Known flakes): how they can
-   hold there unweakened is the lead's to decide, from track ci-flakes' report.
+   Three of the six speed tests still fail on GitHub's Mac, scaled (Known flakes): a reference closer to their work,
+   or how they can hold there unweakened, is the lead's to decide, from track ci-flakes' report. The capture's clock
+   could keep the wall clock's pace as the silent player does; then `nx-click` and `st-record` might leave the sleeps
+   list.
 6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
    macro knobs #57, the rest of #62: Bake to notes, note repeat in a kit, generators), each inside a pack where it
    can be; the beat grid's gaps (a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks,
