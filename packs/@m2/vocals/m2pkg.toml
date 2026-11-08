@@ -11,11 +11,11 @@ tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key"]
 wasm = "kernels/vocals.wasm"
 
 [dependencies]
-# @m2/core 2.4, which gives the song's key to sound as `time.key` (VOX-12); a change to @m2/core
-# that would break it is a 3.0.0. It plays none of std's kernels; the pack is one module, so it
-# loads only where std's modules do.
-"@m2/core" = "2.4"
-std = "0.9"
+# @m2/core 2.5: the song's key as `time.key` (VOX-12) came in 2.4, and Tune's pitch line (VOX-27)
+# draws on an axis drawn bare, which came in 2.5; a change to @m2/core that would break it is a
+# 3.0.0. It plays none of std's kernels; its picture's words use std/pictures', new in std 0.10.
+"@m2/core" = "2.5"
+std = "0.10"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/vocals:pitch", …)`.

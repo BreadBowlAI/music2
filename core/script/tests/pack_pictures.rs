@@ -1,7 +1,8 @@
-//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-126): each draws, from the
-//! pack's own code, with the dots, the words and the live layers its rule says, as the picture
-//! runner draws it for a window or an agent. Whether a picture drawn from a pack's own sums is the
-//! sound is checked against a render in `crates/editor/src/pack_pictures_tests.rs` (CARD-99).
+//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-126), and `@m2/vocals`' Tune's
+//! pitch line (VOX-27): each draws, from the pack's own code, with the dots, the words and the live
+//! layers its rule says, as the picture runner draws it for a window or an agent. Whether a picture
+//! drawn from a pack's own sums is the sound is checked against a render in
+//! `crates/editor/src/pack_pictures_tests.rs` (CARD-99).
 
 use std::path::{Path, PathBuf};
 
@@ -596,4 +597,39 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
         }
     }
     assert!(slow.is_empty(), "past a fifth of a draw's 20 ms: {slow:#?}");
+}
+
+// VOX-27: Tune's card draws its pitch line on its face, beside Glide and Amount: its last 3 seconds
+// by the notes from C2 to C6 (MIDI 36 to 84) on an axis drawn bare, a faint line at each C with
+// middle C named, and now at its right edge; its live layers are snap's meters, the voice as sung
+// (faint) and the note of the key it moves it to (VOX-22). Its words say how Glide and Amount move
+// the voice.
+#[test]
+fn tune_draws_its_pitch_line() {
+    let pitch = declared("vocals", "tune", "pitch");
+    assert_eq!((&pitch["x"]["lo"], &pitch["x"]["hi"], &pitch["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
+    assert_eq!((&pitch["y"]["lo"], &pitch["y"]["hi"], &pitch["y"]["unit"], &pitch["y"]["bare"]), (&json!(36.0), &json!(84.0), &json!("semitones"), &json!(true)));
+    let mut heard = history_of("heard");
+    heard["tone"] = json!("faint");
+    assert_eq!(pitch["live"], json!([heard, history_of("note")]));
+    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": 0.1, "amount": 1})).unwrap();
+    assert_eq!(kinds(&d), ["mark", "mark", "mark", "mark", "label"]);
+    let shapes = d["shapes"].as_array().unwrap();
+    assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
+    let cs: Vec<(f64, &str)> = shapes.iter().filter(|s| s["kind"] == "mark" && s["axis"] == "y").map(|s| (s["at"].as_f64().unwrap(), s["words"].as_str().unwrap())).collect();
+    assert_eq!(cs, [(48.0, "C3"), (60.0, "C4, middle C"), (72.0, "C5")]);
+    let names: Vec<&str> = shapes.iter().filter(|s| s["kind"] == "label").map(|s| s["words"].as_str().unwrap()).collect();
+    assert_eq!(names, ["C4"], "middle C alone named: at 48 px tall an octave is too little for a name each");
+    assert_eq!(d["words"], "Your voice (faint), and the note of the key it moves it to: in about 100 ms, all the way. Silence and breaths rest at the foot");
+    for (glide, amount, how) in [
+        (json!(0), json!(1), "there at once, all the way"),
+        (json!(0.05), json!(0.8), "in about 50 ms, 80% of the way"),
+        (json!(0.1), json!(0), "Amount 0, so it stays as sung"),
+        (Value::Null, json!(1), "as its glide and amount, set by a cable or the code, say"),
+    ] {
+        let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
+        assert_eq!(d["words"], format!("Your voice (faint), and the note of the key it moves it to: {how}. Silence and breaths rest at the foot"));
+    }
 }

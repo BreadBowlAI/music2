@@ -5,7 +5,9 @@
 // every note is allowed."); Set the key opens the key field, and once a key is picked the card says
 // it ("Key: A major"). Glide and Amount are knobs: dragging each writes
 // its new value into the call, one undo step each. The Robot preset writes Glide 0, one undo step.
-// Each state linted.
+// Its face draws its pitch line (VOX-27): while the song plays the voice, the line of the voice says
+// its pitch (216 Hz, 56.68 as a MIDI number) and the note line A (57), the nearest note of A major,
+// from Tune's own meters. Each state linted.
 //
 //   node e2e/tune.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -41,7 +43,7 @@ function wav(path) {
   fs.writeFileSync(path, b);
 }
 
-const { page, errors, show, view, key, box } = await open(1440, 900);
+const { page, errors, show, view, key, box, api } = await open(1440, 900);
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
   check(bad.length === 0, `lint: ${what}${bad.length ? `: ${bad.slice(0, 3).join(" | ")}` : ""}`);
@@ -148,5 +150,32 @@ check(await until(async () => /Undo .*Robot/.test((await undoTitle()) ?? "")), `
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => files() === before), "⌘Z takes it back, byte for byte");
+
+// ---------------------------------------------------------------- its pitch line (VOX-27)
+
+const pic = `${card} [data-picture="pitch"]`;
+check(!!(await until(() => page.$(`${pic} svg`), 15000)), "Tune's face draws its pitch line");
+const said = () => page.$eval(`${pic} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
+check(
+  /^Your voice \(faint\), and the note of the key it moves it to: in about 100 ms, all the way\./.test((await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => "")) ?? ""),
+  `its words: ${await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null)}`,
+);
+await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 3, on: true }) });
+await seen(pic);
+await page.mouse.click(10, 10);
+await page.keyboard.press("Space");
+const lines = [];
+for (let i = 0; i < 60 && !lines.some(([h, n]) => n?.v === 57 && Math.abs((h?.v ?? 0) - 56.68) < 0.1); i++) {
+  await sleep(100);
+  lines.push(await said());
+}
+const last = lines.at(-1) ?? [];
+check(
+  lines.some(([h, n]) => n?.v === 57 && Math.abs((h?.v ?? 0) - 56.68) < 0.1),
+  `while the voice plays, its line at its pitch (56.68) and the note's at A (57): ${JSON.stringify(last)}`,
+);
+await page.screenshot({ path: `${ROOT}/tune-pitch-line.png` });
+await page.keyboard.press("Space");
+await linted(card, "Tune's card with its pitch line");
 
 done(errors);
