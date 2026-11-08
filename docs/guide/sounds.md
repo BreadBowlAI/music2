@@ -2,7 +2,7 @@
 
 **In short**
 - music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and six more, the Clipper among them), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key, the Voice changer and the Vocoder: [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice), [Make a synth talk](audio.md#make-a-synth-talk)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
-- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 27 effects in eight groups.
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 28 effects in eight groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
@@ -201,7 +201,7 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 | `duck` | turns the sound down while the track it listens to plays |
 | `compress` | squeezes the sound while the track it listens to is loud (**No other track**: its own sound) |
 | `gate` | opens only while the track it listens to plays (**No other track**: its own sound) |
-| `vocoder` | gives the sound the shape of the track it listens to, its row called **Voice** (**No other track**: the sound as it is), [Make a synth talk](audio.md#make-a-synth-talk) |
+| `vocoder` | gives the sound the shape of the track it listens to, its row called **Talks with** (**No other track**: the sound as it is), [Make a synth talk](audio.md#make-a-synth-talk) |
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.

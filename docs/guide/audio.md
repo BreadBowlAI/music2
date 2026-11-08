@@ -140,19 +140,19 @@ The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and 
 | To do this | Do this | What happens |
 |---|---|---|
 | Add it to a synth | Select the synth's track, and in its Device view click **+** after its sound, then **Vocoder** (under Voice) | `vocoder(…, { clarity: 0.5, smooth: 0.05, formant: 0 })` is written into the track's own file. Until you pick a voice, the synth sounds as it did. |
-| Pick the voice | On its card, click **Voice: No other track**, and pick the vocal track (Vox) | `vox.out` is written into the call, and Vox is imported at the top of the file. One undo step. |
+| Pick the voice | On its card, click **Talks with: No other track**, and pick the vocal track in Talks with (Vox) | `vox.out` is written into the call, and Vox is imported at the top of the file. One undo step: "Lead talks with Vox". |
 | Make it talk | Play the synth's chords while the voice speaks or sings | Each band of the synth plays as loud as the voice is there: the synth takes the shape of the voice, its words on the synth's notes. |
 | Clearer words | Turn **Clarity** up (0 to 1) | More of the voice's own S, T and breath sounds come through. A synth has little that high, so without them the words mumble. |
-| Smoother or crisper | Turn **Smooth** (10 to 200 ms) | How fast the bands let go once the voice moves on: short is crisp, long is smooth. |
+| Smoother or crisper | Turn **Smooth** (10 to 200 ms) | How fast the bands let go once the voice moves on: short is crisp, long is smooth. Very short makes the low notes buzz. |
 | A deeper or brighter robot | Turn **Formant** (−12 to 12 semitones) | Down moves the voice's colour on the synth lower: a bigger, deeper robot. Up: smaller and brighter. The notes stay the synth's. |
 | See what it does | Play the song and look at its card | Its picture is the synth's spectrum: faint as it comes in, solid as it goes out, in the voice's shape. |
 
 - **The synth sounds only while the voice does.** A held chord under a silent voice is silent.
 - **Clarity's S and T sounds are the voice's own**, so they come through even where the synth is silent. Turn Clarity down if they stand out.
 - **To hear only the robot**, mute the vocal track in the song: the Vocoder still hears it (a sidechain hears its track, muted or not).
-- **It is quieter than the synth alone**: only the bands where the voice is loud play. Turn its track up. No band is ever louder than the synth.
+- **It is about 4 to 11 dB quieter than the synth alone** with a voice recorded at a normal level: only the bands where the voice is loud play. Turn its track up. A quiet voice and a loud one come out about as loud; a whisper about 14 dB under the synth, more than the fader's +12 dB can give back, so add a **Gain** after it. No band is ever louder than the synth.
 - **It adds no delay.**
-- **Any track can be the voice**: a drum loop makes the synth pulse with the drums.
+- **Any track can be the voice**: a drum loop makes the synth pulse with the drums. The loudest drum at each moment sets the level, so the kick turns the hats down while it rings.
 - **Agents:** `vocoder(x, voice, { clarity, smooth, formant })` from `"@m2/vocals"`; `vocoder(x)`, with no voice, plays `x` as it is.
 
 ## Edit a voice's notes
