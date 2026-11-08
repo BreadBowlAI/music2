@@ -2,15 +2,15 @@
 # with why.
 #
 # In short: these judge CPU time, each bound scaled by the machine's speed (m2_script::speed,
-# CARD-75), and pass on GitHub's Linux, the Linux server and a real Mac. On GitHub's Mac runner they
-# pass and fail from night to night (ci-flakes' runs 42494489844 and 42503673490): the one reference
-# work runs about as fast there as on the Linux server (ratio 1.07 to 1.44), but a few effect draws
-# take 2 to 4 times as long there as the ratio says, and the EQ drag's p99 is 2.2 to 2.6 times its
-# median (1.1 here). Work that allocates (QuickJS's collector, a measure's copy) or the virtual
-# machine's stolen time, likely: what the one reference can't see. ci/pr.sh rust leaves them out
-# only when M2_SHARED_CPU is set, as .github/workflows/nightly.yml's macos job sets it, and says so
-# in a "shared cpu" row; everywhere else they run as before, bounds unchanged. To bring one back:
-# a reference closer to its work (HANDOFF.md's "Known flakes"), then take its line out.
+# CARD-75), and pass on GitHub's Linux and the Linux server (a real Mac should pass them: not yet
+# run). On GitHub's Mac runner they passed and failed from night to night (ci-flakes' runs
+# 42494489844 and 42503673490, under the first reference, a std picture's draw, ratio 1.07 to 1.44
+# there): a few effect draws took 2 to 4 times as long there as here, and the EQ drag's p99 was 2.2
+# to 2.6 times its median (1.1 here). Work that allocates (QuickJS's collector, a measure's copy) or
+# the virtual machine's stolen time, likely: what one reference can't see. ci/pr.sh rust leaves
+# them out only when M2_SHARED_CPU is set, as .github/workflows/nightly.yml's macos job sets it,
+# and says so in a "shared cpu" row; everywhere else they run as before, bounds unchanged. To bring
+# one back: a reference closer to its work (HANDOFF.md's "Known flakes"), then take its line out.
 #
 # One line a test, as in ci/nightly-tests.txt: <nextest binary id> <test name> <why...>. Names must
 # match exactly: the "shared cpu list" row (ci/pr.sh rust, ci/check.sh, on Linux) fails on a name

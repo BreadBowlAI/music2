@@ -482,13 +482,13 @@ fn a_silent_player_let_go_stops_and_frees_its_engine() {
 }
 
 // RENDER-28a: the silent player keeps the wall clock's pace, as a device's clock does. Its clock
-// here oversleeps each sleep by 15 ms, as GitHub's Mac's do (a 10 ms sleep took up to 88 ms there),
+// here oversleeps each sleep by 15 ms, as GitHub's Mac's do (a sleep there ran up to 150 ms late),
 // and wakes at once from a sleep of nothing, as a real one does; its buffers are 128 frames, 2.7 ms.
 // Still the song plays a second each second, within 5%: it renders at once the buffers the wall
 // clock says are due. Before, it caught up two buffers a wake: three buffers each 17.7 ms, 45% of
 // the pace (0.896 s in 2 s). Its sleep waits for the wall clock without the OS's timers, so it lasts
-// what it asks and 15 ms on any machine: on GitHub's Mac, where a sleep ran up to 150 ms late, a
-// real one played the song at 85% (run 42494489844), its sleeps late past the 100 ms it catches up.
+// what it asks and 15 ms on any machine: on GitHub's Mac a real one played the song at 85% (run
+// 42494489844), its sleeps late past the 100 ms it catches up.
 #[test]
 fn a_silent_player_whose_sleeps_run_late_keeps_the_wall_clocks_pace() {
     let late = Duration::from_millis(15);
