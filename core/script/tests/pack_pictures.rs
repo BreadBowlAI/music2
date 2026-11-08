@@ -511,18 +511,19 @@ fn the_clipper_draws_its_ceiling_over_its_levels() {
     assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
     assert_eq!((&shapes[1]["axis"], &shapes[1]["at"]), (&json!("y"), &json!(-0.3)), "the ceiling's line");
     assert!(close(places(&d)[0], (1.5, -0.3)), "its dot on the line: {:?}", places(&d));
-    let tail = "4 times finer than the song's rate, so it adds no harsh tones";
+    // Review V2: true of a bright sound pushed hard too, and in plain words.
+    let works = "It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper; on very bright sounds pushed hard, a few";
     assert_eq!(
         d["words"],
         format!(
-            "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB, {tail}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling"
+            "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB. {works}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling"
         )
     );
     let d = draw(&runner, "effects", "clip", "level", json!({"gain": 0, "ceiling": -6})).unwrap();
     assert_eq!(
         d["words"],
         format!(
-            "Cuts every peak over −6 dB flat, {tail}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling"
+            "Cuts every peak over −6 dB flat. {works}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling"
         )
     );
     let d = draw(&runner, "effects", "clip", "level", json!({"gain": null, "ceiling": -1})).unwrap();

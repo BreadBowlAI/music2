@@ -602,5 +602,7 @@ export function levelWords(v: Values, names: { gain: string; ceiling: string }):
   const at = typeof ceiling === "number" ? dbWords(ceiling) : "a ceiling set by a cable or the code";
   const pushed = typeof gain !== "number" ? "Pushes your sound up by a gain set by a cable or the code" : gain === 0 ? null : `Pushes your sound up ${dbWords(gain)}`;
   const cuts = pushed === null ? `Cuts every peak over ${at} flat` : `${pushed} and cuts every peak flat at ${at}`;
-  return `${cuts}, 4 times finer than the song's rate, so it adds no harsh tones. Faint: your sound ${pushed === null ? "going in" : "pushed up"}; solid: what comes out. Drag the line to move the ceiling`;
+  // True of a bright sound pushed hard too (PACK-34's last step).
+  const works = "It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper; on very bright sounds pushed hard, a few";
+  return `${cuts}. ${works}. Faint: your sound ${pushed === null ? "going in" : "pushed up"}; solid: what comes out. Drag the line to move the ceiling`;
 }
