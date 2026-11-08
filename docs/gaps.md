@@ -281,6 +281,7 @@ Each line is one small gap, without a number.
 
 ### Tracks, knobs and the Device view
 
+- **A cable doesn't show the sound it carries**: in the Patch view (and the graph to come) a cable could light with its level, as some DAWs' patch views do. It needs a look at each cable, a core change, with a note of its own.
 - **Disconnecting a lane of names from the only choice it feeds is refused**, as the lane would have no names: take its automation out instead. A lane of names' header shows no value at the playhead, and Draw mode (B) paints only number lanes.
 - **A view's drag of two knobs isn't kept while the code doesn't compile**: it is refused, said in words (one knob's drag waits, C5; CARD-22).
 - **A sound's envelope is drawn with std's `adsr` sums** (CARD-96), which the packs' own voices may not follow exactly (std's drawn lowpass, which drew every filter inside a voice as a two-pole one, is gone since track `measure2-small`: the polysynth draws its ladder, CARD-136, and the Wavetable its own four shapes, CARD-133, each checked against a render). An envelope holds its sustain for a time of its own choosing, a quarter of the attack and decay. A value a lane drives is drawn at the lane's fallback, not at its value at the playhead; one a cable drives, one the code works out, or one written in a unit the picture doesn't draw (a cutoff in semitones) greys the picture, which says why: converting semitones to Hz for the picture isn't built.
@@ -421,6 +422,7 @@ Each line is one small gap, without a number.
 - **The `.deb` is tried on Ubuntu 24.04 only**: it asks for glibc 2.35 (what its programs need, computed by `ci/release.sh check`), so apt takes it on Ubuntu 22.04 and Debian 12 too, whose WebKitGTK 4.1 no one has opened it with yet. The AppImage needs glibc 2.38, for the libraries it carries from ubuntu-24.04.
 - **The AppImage's tools are pinned by checksum** (`ci/appimage-tools.sha256`), but its GTK and WebKit libraries are copied from the build machine, so a rebuild on a newer runner image carries newer ones.
 - **The AppImage's system libraries** (GTK, WebKitGTK and the rest linuxdeploy copies) carry only the Debian copyright files linuxdeploy brings; `THIRD-PARTY-NOTICES.txt` lists music2's crates, npm packages and font.
+- **`ci/release.sh build` doesn't look for the `file` program first**: linuxdeploy's AppImage tool needs it and fails late without it. `release.yml` installs it; a machine without it (this project's Linux server) needs an unpacked copy on `PATH` (`apt-get download file`).
 
 ## Checked on Linux only
 
