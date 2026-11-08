@@ -278,8 +278,9 @@ export const bitcrush = component(
 
 /**
  * Clipper: turns `x` up by `gain` dB and cuts every peak over `ceiling` dB flat, at four times the
- * song's rate, so the cut adds no harsh tones; no sample out is ever over the ceiling (PACK-34).
- * Under the ceiling it is `x` times the gain, bit for bit, 46 frames late: the song waits for it.
+ * song's rate, twice, so it adds far fewer harsh tones than a cut at the song's rate (on a bright
+ * sound pushed hard, a few); no sample out is ever over the ceiling (PACK-34). Under the ceiling it
+ * is `x` times the gain, bit for bit, 92 frames late: the song waits for it.
  */
 export const clip = component(
   {
