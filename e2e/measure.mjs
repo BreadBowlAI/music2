@@ -1,18 +1,20 @@
 // Track measure: curves and hits measured from the sound itself (CARD-80 to CARD-85). A test pack,
 // @test/measured, has a lowpass, Tone, whose face is its response: the curve the server measures by
 // playing a click through a copy of the call; and an instrument, Thump, whose face is its hit: one
-// note's sound, played by a copy of the call. Device's chain draws each. Dragging Tone's cutoff knob
-// moves the measured curve while the knob is held (the server measures it again at the dragged
-// value, CARD-85); stepping Thump's decay knob draws its hit again, shorter. An agent asking for the
+// note's sound, played by a copy of the call. Each node, expanded in the Graph (taste.md DV-12),
+// draws it. Dragging Tone's cutoff bar moves the measured curve while the bar is held (the server
+// measures it again at the dragged value, CARD-85); stepping Thump's decay bar draws its hit again,
+// shorter. An agent asking for the
 // picture reads the points the window drew (CARD-80). Each state linted.
 //
 //   node e2e/measure.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, view, box } = await open(1440, 900, { device: "chain" });
+const { page, errors, api, view, box } = await open(1440, 900);
 
 /** A request from outside the page: an agent's. */
 const agent = (path, body) =>
@@ -99,12 +101,15 @@ write(
 await until(async () => !!(await page.$('[data-module-tab="tone"]')), 20000);
 await page.click('[data-module-tab="tone"] [data-testid=track-label]');
 await view("graph");
-const card = '[data-testid=chain] [data-module="tone"] [data-node="tone"]';
+const card = '[data-testid=graph] [data-module="tone"] [data-node="tone"]';
+// Its cutoff is no face value: the expanded node shows it, and its curve across the top (DV-12).
+await until(async () => !!(await page.$(card)), 20000);
+check(await expand(page, card), "Tone's node expands");
 const pic = `${card} [data-picture="curve"]`;
 const curve = () => page.$eval(`${pic} polyline[data-response]`, (e) => e.getAttribute("points")).catch(() => null);
 check(await until(async () => ((await curve()) ?? "").split(" ").length === 256, 20000), `Tone's face draws its measured curve, 256 points (CARD-80): ${((await curve()) ?? "").split(" ").length}`);
 const drawnCount = () => page.$eval(pic, (e) => Number(e.dataset.drawn ?? 0));
-await linted(card, "the measured curve's card");
+await linted(card, "the measured curve's node");
 await page.screenshot({ path: `${ROOT}/measure-curve.png` });
 
 // The curve's highest point, in pixels from the top: a resonance at the cutoff.
@@ -115,8 +120,8 @@ const peakAt = async () => {
 const before = await curve();
 const peak0 = await peakAt();
 const code = read("tracks/tone.ts");
-const knob = `${card} [data-knob="cutoff"] svg[role=slider]`;
-check(await until(async () => !!(await page.$(knob)), 5000), "its cutoff knob shows");
+const knob = `${card} [data-knob="cutoff"] [role=slider]`;
+check(await until(async () => !!(await page.$(knob)), 5000), "its cutoff bar shows");
 const k = await box(knob);
 const [x0, y0] = [k.x + k.width / 2, k.y + k.height / 2];
 await page.mouse.move(x0, y0);
@@ -126,7 +131,7 @@ for (let i = 1; i <= 10; i++) {
   await page.mouse.move(x0, y0 - i * 6);
   await sleep(30);
 }
-check(await until(async () => (await drawnCount()) > drawn0 && (await curve()) !== before, 5000), "while the knob is held, the measured curve follows it: measured again at the dragged value (CARD-85)");
+check(await until(async () => (await drawnCount()) > drawn0 && (await curve()) !== before, 5000), "while the bar is held, the measured curve follows it: measured again at the dragged value (CARD-85)");
 const peak1 = await peakAt();
 check(peak1 > peak0 + 10, `the resonance moved up the frequencies with the cutoff: from x ${peak0} to ${peak1}`);
 check(read("tracks/tone.ts") === code, "nothing is written while it is held");
@@ -163,11 +168,13 @@ check(response.points[top] < -24, `far above it (${cutoff} Hz), it cuts past the
 // ---------------------------------------------------------------- the hit is drawn again when a knob moves
 
 await page.click('[data-module-tab="thump"] [data-testid=track-label]');
-const card2 = '[data-testid=chain] [data-module="thump"] [data-node="thump"]';
+const card2 = '[data-testid=graph] [data-module="thump"] [data-node="thump"]';
+await until(async () => !!(await page.$(card2)), 20000);
+check(await expand(page, card2), "Thump's node expands");
 const pic2 = `${card2} [data-picture="hit"]`;
 const hit = () => page.$eval(`${pic2} polygon[data-hit]`, (e) => e.getAttribute("points")).catch(() => null);
 check(await until(async () => ((await hit()) ?? "").split(" ").length === 512, 20000), `Thump's face draws its hit, 256 columns there and back (CARD-80): ${((await hit()) ?? "").split(" ").length}`);
-await linted(card2, "the hit's card");
+await linted(card2, "the hit's node");
 await page.screenshot({ path: `${ROOT}/measure-hit.png` });
 // How tall the hit is in its last half, in pixels: a shorter decay leaves less.
 const lateHeight = async () => {
@@ -182,14 +189,14 @@ const tall0 = await lateHeight();
 check(tall0 > 10, `the pluck still sounds in its last half: ${Math.round(tall0)} px`);
 const hit0 = await hit();
 const code2 = read("tracks/thump.ts");
-const decay = `${card2} [data-knob="decay"] svg[role=slider]`;
+const decay = `${card2} [data-knob="decay"] [role=slider]`;
 await page.$eval(decay, (e) => e.focus());
 await page.keyboard.down("Shift");
 for (let i = 0; i < 6; i++) await page.keyboard.press("ArrowDown");
 await page.keyboard.up("Shift");
-check(await until(async () => read("tracks/thump.ts") !== code2, 8000), `six ⇧↓ on its decay knob write a shorter decay: ${/decay: [^ }]*/.exec(read("tracks/thump.ts"))?.[0]}`);
+check(await until(async () => read("tracks/thump.ts") !== code2, 8000), `six ⇧↓ on its decay bar write a shorter decay: ${/decay: [^ }]*/.exec(read("tracks/thump.ts"))?.[0]}`);
 check(await until(async () => (await hit()) !== hit0, 8000), "the hit is drawn again (CARD-85)");
 check(await until(async () => (await lateHeight()) < tall0 * 0.8, 8000), `shorter: ${Math.round(await lateHeight())} px against ${Math.round(tall0)} px in its last half`);
-await linted(card2, "the hit's card after the knob");
+await linted(card2, "the hit's node after the bar");
 
 done(errors);

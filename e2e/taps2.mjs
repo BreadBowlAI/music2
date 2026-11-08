@@ -4,10 +4,12 @@
 // bass down, which moves with the kick; the spectrum of what goes into it (the bass, loudest low
 // down); the levels of what goes in and what comes out; and the Master's ceiling's meter. A meter
 // the duck doesn't give is refused in words, and a stopped look stops coming. Two scopes of one
-// call on one card share one ask (TAP-16): folding the card away from one doesn't stop the other.
+// call on one node share one ask (TAP-16): collapsing the node, which then shows only its face's
+// first view (taste.md DV-12), doesn't stop the other.
 //
 //   node e2e/taps2.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { expand, still } from "./graphlib.mjs";
 
 const { page, errors, api, state, view, posts } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
@@ -101,18 +103,22 @@ await until(async () => !!(await page.$('[data-module-tab="twice"]')), 15000);
 await page.click('[data-module-tab="twice"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-module="twice"] [data-node="twice"]';
-await until(async () => (await page.$$(`${card} [data-scope]`)).length === 2, 15000);
+await until(async () => !!(await page.$(card)), 15000);
+// Expanded, the node shows both views (DV-12).
+check(await expand(page, card), "Twice's node expands");
+check(await until(async () => (await page.$$(`${card} [data-scope]`)).length === 2, 15000), "and shows its two scopes");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "start", inline: "center" }));
 const drawn = () => page.$$eval(`${card} [data-scope]`, (els) => els.map((e) => Number(e.dataset.frames ?? 0)));
 check(await until(async () => (await drawn()).every((n) => n >= 3), 10000), `the card's two scopes of one call both draw while it plays (${await drawn()})`);
 const stops = () => posts.filter((p) => p.url === "/api/graph/look" && JSON.parse(p.body).module === "twice" && JSON.parse(p.body).on === false).length;
 const [was, stopped] = [(await drawn())[0], stops()];
-await page.click(`${card} [data-fold]`);
-await until(async () => (await page.$$(`${card} [data-scope]`)).length === 1, 5000);
+await page.click(`${card} [data-expand]`);
+await still(page);
+check(await until(async () => (await page.$$(`${card} [data-scope]`)).length === 1, 5000), "collapsed, it shows one of them, its face's first view");
 await sleep(1500);
 const now = (await drawn())[0];
 await page.mouse.click(10, 10);
-check(stops() === stopped && now >= was + 5, `folded away from one, the other goes on drawing, and no stop is sent (${stops() - stopped} stops; ${was} then ${now} drawings)`);
+check(stops() === stopped && now >= was + 5, `collapsed away from one, the other goes on drawing, and no stop is sent (${stops() - stopped} stops; ${was} then ${now} drawings)`);
 await page.keyboard.press("Space");
 await until(async () => !(await playing()), 3000);
 

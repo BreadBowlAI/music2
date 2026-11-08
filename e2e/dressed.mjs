@@ -1,5 +1,6 @@
 // music2's own sounds on the card (CARD-31 to CARD-33, wave 3; CARD-136), on a fresh copy of examples/first-song
-// with a Lead track added. The Lead's card shows its groups; its wave shape is a menu of four names,
+// with a Lead track added. The Lead's node, expanded, shows its groups as columns (taste.md DV-12); its
+// wave shape, collapsed, is a menu of four names,
 // and picking sine writes `shape: "sine"`, one undo step, and the sound changes while it plays: the
 // scope's frames lose the saw's sharp edge (their slope's energy falls). Its
 // envelope's attack corner, dragged right, writes a longer attack; its filter's peak, dragged up, a
@@ -10,6 +11,7 @@
 //   node e2e/dressed.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, api, key, view, box, posts } = await open(1440, 900);
@@ -55,10 +57,8 @@ await until(async () => !!(await page.$('[data-module-tab="lead"]')), 15000);
 await page.click('[data-module-tab="lead"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-module="lead"] [data-node="synth.lead"]';
-check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), "the Lead's card shows its groups");
-const groups = await page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
-check(JSON.stringify(groups.slice(0, 3)) === '["Sound","Filter","Loudness"]', `Sound, Filter and Loudness first (CARD-31): ${JSON.stringify(groups)}`);
-await linted(card, "the Lead's card");
+check(await until(async () => (await page.$eval(card, (e) => e.dataset.size).catch(() => null)) === "collapsed", 15000), "the Lead's node shows, collapsed");
+await linted(card, "the Lead's node, collapsed");
 
 // ---------------------------------------------------------------- the wave shape (CARD-32)
 
@@ -122,6 +122,13 @@ await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/lead.ts") === tracked), "⌘Z takes the code back, byte for byte");
 
+// ---------------------------------------------------------------- its groups (CARD-31), each a column (DV-12)
+
+check(await expand(page, card), "the Lead's node expands");
+const groups = await page.$$eval(`${card} [data-column]`, (els) => els.map((e) => e.dataset.column));
+check(JSON.stringify(groups.slice(0, 3)) === '["Sound","Filter","Loudness"]', `its groups' columns: Sound, Filter and Loudness first (CARD-31): ${JSON.stringify(groups)}`);
+await linted(card, "the Lead's node, expanded");
+
 // ---------------------------------------------------------------- the envelope's corner (CARD-31)
 
 const attack = `${card} [data-knob="attack"]`;
@@ -175,8 +182,11 @@ await page.screenshot({ path: `${ROOT}/dressed-lead.png` });
 await page.click('[data-module-tab="kick"] [data-testid=track-label]');
 await view("graph");
 const drum = '[data-module="kick"] [data-node="drums.drum"]';
+await until(async () => !!(await page.$(drum)), 15000);
+check(await expand(page, drum), "the kick's Drum expands");
 check(await until(async () => !!(await page.$(`${drum} [data-knob="sound"]`)), 15000), "the kick's Drum shows its drum menu");
-check(JSON.stringify(await page.$$eval(`${drum} [data-group]`, (els) => els.map((e) => e.textContent))) === '["Drum","More"]', "under its Drum group");
+const drumColumns = await page.$$eval(`${drum} [data-column]`, (els) => els.map((e) => e.dataset.column));
+check(JSON.stringify(drumColumns) === '["Drum","Setup"]' && !!(await page.$(`${drum} [data-column="Drum"] [data-knob="sound"]`)), `in its Drum group's column, its settings in Setup (DV-12): ${JSON.stringify(drumColumns)}`);
 const kick = read("tracks/kick.ts");
 const menu = `${drum} [data-knob="sound"]`;
 await seen(menu);
@@ -197,7 +207,7 @@ check(posts.slice(n).filter((p) => p.url === "/api/graph/set").length === 1, "on
 check(await stepIs("Drum sound"), `one undo step, named by its label: ${await undoTitle()}`);
 check(await until(async () => (await page.$eval(menu, (e) => e.dataset.value).catch(() => null)) === '"snare"'), "the menu shows the snare");
 for (const k of ["tune", "decay ×", "punch ±"]) check(!!(await page.$(`${drum} [data-knob="${k}"]`)), `its ${k} knob stays`);
-await linted(drum, "the Drum's card");
+await linted(drum, "the Drum's node");
 await page.screenshot({ path: `${ROOT}/dressed-drum.png` });
 await page.mouse.click(10, 10);
 await key("Meta+z");

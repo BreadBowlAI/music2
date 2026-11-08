@@ -1,5 +1,5 @@
 // Track ab's sampler in the app: std's Sampler is in the side browser in a group of its own, and
-// + Track adds it, its card in Device saying "Drop a WAV or FLAC here" on its recording (CARD-5). A
+// + Track adds it, its node in the Graph, expanded, saying "Drop a WAV or FLAC here" on its recording (CARD-5). A
 // WAV dropped on the card (as a browser drops it) comes into assets/ and the Sampler plays it: the call says `sample: "tone.wav"`,
 // a toast says so, it is one undo step ("Undo setting Sampler to tone.wav"), and the export
 // changes. ⌘Z takes the code back, and the export with it; the file stays. Each state linted.
@@ -8,6 +8,7 @@
 import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const M2 = process.argv[5];
@@ -97,11 +98,13 @@ write("data/sampler/notes.json", `{"clips": [\n  {"id": "abs4mplr", "start": 0, 
 const heard = async () => (await state()).timeline.tracks.find((t) => t.module === "sampler")?.lanes.find((l) => l.key === "notes")?.clips?.[0]?.notes?.length ?? 0;
 check(await until(async () => (await heard()) === 4), `its four notes are taken in: ${await heard()}`);
 
-// ---------------------------------------------------------------- its card in Device
+// ---------------------------------------------------------------- its node in the Graph
 
 await view("graph");
 const card = '[data-module="sampler"] [data-recording-call]';
-check(await until(async () => !!(await page.$(card))), "Device shows the Sampler's card");
+check(await until(async () => !!(await page.$(card))), "the Graph shows the Sampler's node");
+// Its recording is a setting, which shows on the expanded node (taste.md DV-12).
+check(await expand(page, card), "and it expands");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(200);
 const said = () => page.$eval(`${card} [data-testid=recording]`, (e) => e.textContent).catch(() => null);

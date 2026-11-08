@@ -1,10 +1,11 @@
 // Track pictures: a pack's picture on its card (CARD-60 to CARD-70). A test pack, @test/curve, has an
 // EQ-like sound, Curve EQ, whose face is its picture and its two gains: a curve worked out from its
 // two bands, and a dot for each band (across its frequency, up and down its gain, the wheel its q, a double-click its
-// on). Device's chain draws the curve; dragging band 2's dot moves the curve while the dot is held
-// (the server draws it again from the drag's leases, CARD-68), and the release writes both values in
-// one edit, one undo step, which ⌘Z takes back byte for byte. Picking a dot shows its band's tab
-// (taste.md DV-18); a double-click turns its band off (one write). An agent asking for the picture reads
+// on). Its node in the Graph draws the curve, collapsed and expanded (taste.md DV-12); dragging band
+// 2's dot moves the curve while the dot is held (the server draws it again from the drag's leases,
+// CARD-68), and the release writes both values in one edit, one undo step, which ⌘Z takes back byte
+// for byte. Picking a dot expands the node and lights its band's column (taste.md DV-18), and
+// picking a value in a column marks its band's dot; a double-click turns its band off (one write). An agent asking for the picture reads
 // the same shapes the window drew, as numbers, and each dot's knob ids (CARD-67). Each state linted.
 // No axis label covers the curve, at each height a picture is drawn (taste.md DV-17, DV-19). A
 // keyboard picture, on bare axes, shows no numbers and no grid (CARD-60).
@@ -13,9 +14,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
+import { expand, still } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, view, box, posts } = await open(1440, 900, { device: "chain" });
+const { page, errors, api, view, box, posts } = await open(1440, 900);
 
 /** A request from outside the page: an agent's. */
 const agent = (path, body) =>
@@ -110,15 +112,21 @@ write("song.ts", song.replace('import kick from "./tracks/kick";', 'import kick 
 await until(async () => !!(await page.$('[data-module-tab="eq"]')), 20000);
 await page.click('[data-module-tab="eq"] [data-testid=track-label]');
 await view("graph");
-const card = '[data-testid=chain] [data-module="eq"] [data-node="curve"]';
+const card = '[data-testid=graph] [data-module="eq"] [data-node="curve"]';
 const pic = `${card} [data-picture="curve"]`;
 check(await until(async () => !!(await page.$(`${pic}[data-drawn] polyline[data-line="curve"]`)), 20000), "Curve EQ's face draws its picture, asked for while it shows (taste.md DV-17)");
 check((await page.$eval(pic, (e) => e.dataset.asking)) === "true", "it asks while it is on screen");
 const words = () => page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null);
 check((await words()) === "Band 1: 0 dB at 200 Hz; Band 2: 3 dB at 2000 Hz", `its words are its accessible name: ${await words()}`);
 check((await page.$$(`${pic} [data-dot]`)).length === 2, "a dot for each band");
-await linted(card, "the picture's card");
+await linted(card, "the picture's node, collapsed");
 await page.screenshot({ path: `${ROOT}/pictures-card.png` });
+// Its text is never stretched (taste.md DV-17, review G9): an axis label, here at 48 px collapsed, is as wide expanded.
+const label = () => page.$eval(`${pic} text[data-tick]`, (e) => { const r = e.getBoundingClientRect(); return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10]; });
+const small = await label();
+// Expanded, its picture is 132 px tall across the node (DV-19): the drag and the dots' gestures there.
+check(await expand(page, card), "the node expands");
+await until(async () => !!(await page.$(`${pic}[data-drawn] polyline[data-line="curve"]`)), 15000);
 
 // ---------------------------------------------------------------- a drag: the curve follows, one undo step
 
@@ -162,7 +170,7 @@ check(line?.points?.length === 2 * drawnPoints && drawnPoints === 180, `and the 
 const h2 = asked.picture?.shapes?.filter((s) => s.kind === "handle")[1];
 const knobId = (slot) => node.knobs.find((k) => k.slot === slot)?.id;
 check(h2?.x === freq && h2?.y === gain && h2?.moves?.x?.knob === knobId("freq2") && h2?.moves?.y?.knob === knobId("gain2"), `and band 2's dot, at its values, with its knobs: ${JSON.stringify(h2?.moves)}`);
-check(h2?.opens === "Band 2" && h2?.mark === "2", "and the tab it opens, and its mark");
+check(h2?.opens === "Band 2" && h2?.mark === "2", "and the group it opens, and its mark");
 
 // ⌘Z takes the drag back, byte for byte, and the curve with it.
 await page.keyboard.down("Meta");
@@ -171,13 +179,19 @@ await page.keyboard.up("Meta");
 check(await until(async () => read("tracks/eq.ts") === code, 8000), "⌘Z takes the drag back, byte for byte");
 check(await until(async () => (await curvePoints()) === before, 8000), "and the curve is drawn as it was");
 
-// ---------------------------------------------------------------- the dot and its tab (taste.md DV-18), and a flip (CARD-70)
+// ---------------------------------------------------------------- the dot and its column (taste.md DV-18), and a flip (CARD-70)
 
-await page.click(`${card} [data-tab="All"]`).catch(() => {});
+// Picked on the collapsed node, a dot expands it first, and lights its band's column.
+await page.click(`${card} [data-expand]`);
+await still(page);
+await until(async () => (await page.$eval(card, (e) => e.dataset.size)) === "collapsed");
+await until(async () => !!(await page.$(`${pic}[data-drawn] [data-dot="0"]`)), 15000);
 await page.click(`${pic} [data-dot="0"]`);
-check(await until(async () => !!(await page.$(`${card} [data-tab-panel="Band 1"]`))), "picking band 1's dot shows its tab");
-await page.click(`${card} [data-tab="Band 2"]`);
-check(await until(async () => (await page.$eval(`${pic} [data-dot="1"]`, (e) => e.dataset.marked).catch(() => null)) === "true"), "picking band 2's tab marks its dot");
+check(await until(async () => (await page.$eval(card, (e) => e.dataset.size)) === "expanded" && !!(await page.$(`${card} [data-column="Band 1"][data-lit]`))), "picking band 1's dot expands the node and lights its column");
+await still(page);
+await page.$eval(`${card} [data-column="Band 2"] [data-knob="freq2"]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+await page.click(`${card} [data-column="Band 2"] [data-knob="freq2"] [role=slider]`);
+check(await until(async () => (await page.$eval(`${pic} [data-dot="1"]`, (e) => e.dataset.marked).catch(() => null)) === "true"), "picking a value in band 2's column marks its dot");
 const flipped = read("tracks/eq.ts");
 await page.click(`${pic} [data-dot="1"]`, { count: 2 });
 check(await until(async () => /on2: false/.test(read("tracks/eq.ts")), 8000), "a double-click on band 2's dot turns the band off: one write");
@@ -198,9 +212,9 @@ await page.keyboard.down("Meta");
 await page.keyboard.press("z");
 await page.keyboard.up("Meta");
 check(await until(async () => read("tracks/eq.ts") === steps0, 8000), "⌘Z takes the whole run back");
-// The wheel (review G4, G5): a step every 40 px, as a knob's, never scrolling the chain under it.
-const chainEl = "[data-testid=chain]";
-const scrolled = () => page.$eval(chainEl, (e) => e.scrollTop + e.scrollLeft);
+// The wheel (review G4, G5): a step every 40 px, as a knob's, never scrolling the graph under it.
+const graphEl = "[data-testid=graph]";
+const scrolled = () => page.$eval(graphEl, (e) => e.scrollTop + e.scrollLeft);
 const s0 = await scrolled();
 const d2 = await box(`${pic} [data-dot="1"]`);
 await page.mouse.move(d2.x + d2.width / 2, d2.y + d2.height / 2);
@@ -215,16 +229,10 @@ await page.keyboard.down("Meta");
 await page.keyboard.press("z");
 await page.keyboard.up("Meta");
 await until(async () => read("tracks/eq.ts") === steps0, 8000);
-// Its text is never stretched (taste.md DV-17, review G9): an axis label is as wide Expanded as at Normal.
-const label = () => page.$eval(`${pic} text[data-tick]`, (e) => { const r = e.getBoundingClientRect(); return [Math.round(r.width * 10) / 10, Math.round(r.height * 10) / 10]; });
-const normal = await label();
-await page.click(`${card} [data-size-to="expanded"]`);
-await until(async () => (await page.$eval(`${pic} svg`, (e) => e.dataset.size).catch(() => "")) !== "", 3000);
-await sleep(300);
+// The node is expanded: its axis label is as wide as it was collapsed.
 const wide = await label();
-check(Math.abs(wide[0] - normal[0]) < 1 && Math.abs(wide[1] - normal[1]) < 1, `an axis label keeps its size, Expanded: ${normal} then ${wide}`);
-await page.click(`${card} [data-size-to="normal"]`);
-await linted(card, "the card after its gestures");
+check(Math.abs(wide[0] - small[0]) < 1 && Math.abs(wide[1] - small[1]) < 1, `an axis label keeps its size, expanded: ${small} collapsed, then ${wide}`);
+await linted(card, "the node after its gestures");
 
 // ---------------------------------------------------------------- live layers (CARD-73)
 
@@ -240,9 +248,9 @@ await page.keyboard.press("Space");
 // ---------------------------------------------------------------- the axes' labels never cover a line (taste.md DV-17)
 
 // Band 1 at 20 Hz, 23 dB up and wide (q 0.1): the curve starts high at the picture's left edge,
-// where the y axis's labels go. At each height a picture is drawn (104 px beside a Normal face's values, 132 Expanded,
-// 48 on the patch's card, taste.md DV-19), no label's box holds a point of the curve's line or sits
-// on a fill, where the curve shows.
+// where the y axis's labels go. At each height a picture is drawn (48 px on a collapsed node, 132
+// expanded, taste.md DV-19), no label's box holds a point of the curve's line or sits on a fill,
+// where the curve shows.
 write("tracks/eq.ts", `import { track } from "@m2/core";\nimport { osc } from "std/dsp";\nimport { curve } from "@test/curve";\n\nexport default track("eq", { name: "EQ" }, () => curve(osc.saw(110), { freq1: 20, gain1: 23, q1: 0.1, freq2: 2000, gain2: 3 }));\n`);
 await until(async () => (await words()) === "Band 1: 23 dB at 20 Hz; Band 2: 3 dB at 2000 Hz", 10000);
 /** What a picture's axis labels cover, at the size it is drawn: each label's box against every point of its lines and fills, where they show. */
@@ -270,30 +278,28 @@ const covered = (sel) =>
   });
 /** The picture `sel` once its row is `tall` px (its view's row, taste.md DV-19), and what its labels cover. */
 const uncovered = async (sel, tall, where) => {
-  // Its row's own height, unscaled: the patch is drawn at its zoom.
+  // Its row's own height, unscaled: the graph is drawn at its zoom.
   const row = (s) => page.$eval(s, (e) => e.closest("[data-view]")?.offsetHeight ?? 0).catch(() => 0);
   await until(async () => (await row(sel)) === tall, 5000);
   await sleep(300);
   const [c, h] = [await covered(sel), await row(sel)];
   check(h === tall && c.labels > 0 && c.covered.length === 0, `${where}, ${h} px tall: no axis label covers the curve (${c.size}, ${c.labels} labels; covered: ${c.covered.join(" ") || "none"})`);
 };
-await uncovered(pic, 104, "beside the Normal face's values");
-// Its frequencies' labels (taste.md DV-17, review S9): a log axis's decades first, then its 5s where
-// they fit, so 100 and 1k show across the 198 px face (placed left to right, 500 took 1k's place).
-const across = await page.$eval(`${pic} svg`, (svg) => ({ size: svg.dataset.size, labels: [...svg.querySelectorAll('text[data-tick]:not([text-anchor="end"])')].map((t) => t.textContent) }));
-check(across.size?.startsWith("198x") && across.labels.includes("100") && across.labels.includes("1k"), `across the ${across.size} face its frequencies are labelled ${across.labels.join(" ")}: 100 and 1k among them`);
-await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-normal.png` });
-await page.click(`${card} [data-size-to="expanded"]`);
-await uncovered(pic, 132, "Expanded");
+await uncovered(pic, 132, "expanded");
 await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-expanded.png` });
-await page.click(`${card} [data-size-to="normal"]`);
-await page.click('[data-device="patch"]');
-const patchPic = '[data-testid=graph] [data-node="curve"] [data-picture="curve"]';
-await until(async () => !!(await page.$(patchPic)), 15000);
+await page.click("[data-testid=collapse-all]");
+await still(page);
+const patchPic = pic;
+await until(async () => (await page.$eval(card, (e) => e.dataset.size)) === "collapsed", 5000);
 await page.$eval(patchPic, (e) => e.scrollIntoView({ block: "center", inline: "center" })).catch(() => {});
 await until(async () => !!(await page.$(`${patchPic}[data-drawn] polyline[data-line="curve"]`)), 15000);
-await uncovered(patchPic, 48, "on the patch's card");
-await (await page.$('[data-testid=graph] [data-node="curve"]'))?.screenshot({ path: `${ROOT}/pictures-labels-patch.png` });
+await uncovered(patchPic, 48, "on a collapsed node");
+// Its frequencies' labels (taste.md DV-17, review S9): a log axis's decades first, then its 5s where
+// they fit, so 100 and 1k show across the collapsed node's narrow face (placed left to right, 500
+// took 1k's place).
+const across = await page.$eval(`${pic} svg`, (svg) => ({ size: svg.dataset.size, labels: [...svg.querySelectorAll('text[data-tick]:not([text-anchor="end"])')].map((t) => t.textContent) }));
+check(across.size?.startsWith("184x") && across.labels.includes("100") && across.labels.includes("1k"), `across the ${across.size} face its frequencies are labelled ${across.labels.join(" ")}: 100 and 1k among them`);
+await (await page.$(card))?.screenshot({ path: `${ROOT}/pictures-labels-collapsed.png` });
 
 // The live layers on the shapes' plot at any zoom (taste.md DV-17, review S10): zoomed, after it
 // showed, to where the picture is 40.65 px tall on screen (a size that isn't whole: its y labels fit
