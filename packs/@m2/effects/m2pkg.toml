@@ -1,4 +1,4 @@
-[package]
+description = "Grains (PACK-36): the last 2.5 s of its input; a grain starts on average every 1/density seconds (each gap from half to one and a half of that, at random), size seconds long in a Hann window, reading from back + u × spread seconds before the newest sound (u at random) at 2^(pitch/12) times its speed, back keeping it behind the newest sound until it ends; at most 16 at once, the oldest let go over 5 ms; summed and turned down by 1/sqrt(3/8 × n) when that is over 1, n = size × density (16 at most), then by 1/sqrt(R) when that is over 1, R the power of their sum over the sum of their powers in the last 50 ms. Its clock and its seeded random numbers, into which each grain mixes the newest sample, move only while playing is 1 (left out, always). Its meter, reads: how far back the newest grain that plays reads now, in seconds (0 when none plays)"[package]
 name = "@m2/effects"
 version = "1.4.0"
 license = "MIT OR Apache-2.0"
@@ -119,7 +119,6 @@ inputs = [
   "spread: control<seconds> = 0.3 in 0..2",
   "pitch: control<semitones> = 0 in -12..12",
   "mix: control<unit01> = 0.5",
-  "freeze: control<switch> = 0",
   "playing: control<unit01> = 1",
 ]
 outputs = ["out: audio<*>"]

@@ -1,8 +1,8 @@
 //! Grains (PACK-36), measured as its rule says it: how long its grains are and how many start a
 //! second, counted on a steady sound; that its level follows its input's; that Pitch moves a tone
-//! by the semitones asked; that Freeze holds a sound and silence comes out once the buffer has
-//! passed without it; that every grain is windowed, at most 16 play and the oldest goes first; that
-//! it reads only the past, follows the song, and is the same every time; at 44.1, 48 and 96 kHz.
+//! by the semitones asked; that silence comes out once the buffer has passed; that every grain is
+//! windowed, at most 16 play and the oldest goes first; that it reads only the past, follows the
+//! song, and is the same every time; at 44.1, 48 and 96 kHz.
 
 use std::f64::consts::TAU;
 
@@ -24,8 +24,7 @@ struct Set {
 }
 
 /// Grains at `sr` on `channels`, `frames` long, in calls of `split`: its input `x(c, t)`, its values
-/// `set`, Freeze `freeze(t)` and `playing(t)`. Its output and its meter.
-#[allow(clippy::too_many_arguments)]
+/// `set`, and `playing(t)`. Its output and its meter.
 fn grains(
     sr: f32,
     channels: usize,
@@ -33,7 +32,6 @@ fn grains(
     split: usize,
     set: Set,
     x: &dyn Fn(usize, usize) -> f32,
-    freeze: &dyn Fn(usize) -> f32,
     playing: &dyn Fn(usize) -> f32,
 ) -> Played {
     play_at::<Grains>(sr, channels, frames, split, &|p, c, t| match p {
@@ -43,22 +41,18 @@ fn grains(
         3 => set.spread,
         4 => set.pitch,
         5 => set.mix,
-        6 => freeze(t),
         _ => playing(t),
     })
 }
 
-/// Off, for Freeze; on, for `playing`.
-fn off(_: usize) -> f32 {
-    0.0
-}
+/// The song playing all along.
 fn on(_: usize) -> f32 {
     1.0
 }
 
 /// The grains alone (Mix 1) on a steady 0.5 at `sr`, mono, for `seconds`.
 fn on_a_steady_sound(sr: f32, set: Set, seconds: f32) -> Vec<f32> {
-    grains(sr, 1, (seconds * sr) as usize, BLOCK, Set { mix: 1.0, ..set }, &|_, _| 0.5, &off, &on).left()
+    grains(sr, 1, (seconds * sr) as usize, BLOCK, Set { mix: 1.0, ..set }, &|_, _| 0.5, &on).left()
 }
 
 /// Each run of samples other than 0 in `x[from..]`: where it starts, and how long it is.
@@ -97,8 +91,8 @@ fn level(set: Set) -> f64 {
 // latency.
 #[test]
 fn the_grains_manifest_is_its_code() {
-    let defaults = defaults_in(MANIFEST, "grains", &["in", "size", "density", "spread", "pitch", "mix", "freeze", "playing"]);
-    assert_eq!(defaults, [0.0, 0.1, 20.0, 0.3, 0.0, 0.5, 0.0, 1.0]);
+    let defaults = defaults_in(MANIFEST, "grains", &["in", "size", "density", "spread", "pitch", "mix", "playing"]);
+    assert_eq!(defaults, [0.0, 0.1, 20.0, 0.3, 0.0, 0.5, 1.0]);
     assert_eq!(manifest_in(MANIFEST, "grains").1, ["out"]);
     let entry = &MANIFEST[MANIFEST.find("name = \"grains\"").unwrap()..];
     let entry = &entry[..entry.find("[[kernel]]").unwrap_or(entry.len())];
@@ -107,14 +101,14 @@ fn the_grains_manifest_is_its_code() {
         "\"density: control<hz> = 20 in 1..50\"",
         "\"spread: control<seconds> = 0.3 in 0..2\"",
         "\"pitch: control<semitones> = 0 in -12..12\"",
-        "\"freeze: control<switch> = 0\"",
     ] {
         assert!(entry.contains(port), "{port}: {entry}");
     }
     assert!(entry.contains("meters = [\"reads: control<seconds>\"]"), "{entry}");
     assert!(!entry.lines().any(|l| l.starts_with("latency")), "no latency: {entry}");
-    assert_eq!((Grains::INPUTS, Grains::OUTPUTS), (8, 2));
-    assert_eq!((cloud::BUFFER, cloud::MOST, cloud::LET_GO), (3.0, 16, 0.005));
+    assert!(!entry.contains("freeze"), "no Freeze: {entry}");
+    assert_eq!((Grains::INPUTS, Grains::OUTPUTS), (7, 2));
+    assert_eq!((cloud::BUFFER, cloud::MOST, cloud::LET_GO), (2.5, 16, 0.005));
 }
 
 // PACK-36: Size and Density are a grain's length and how many start a second, counted: on a steady
@@ -183,7 +177,7 @@ fn its_level_follows_its_inputs() {
         for (sound, x, within) in [("under 5 kHz", &tones as &dyn Fn(usize, usize) -> f32, 1.0), ("white noise", &white, 2.0)] {
             for (size, density) in [(0.1f32, 40.0f32), (0.3, 10.0), (0.06, 50.0), (0.2, 40.0)] {
                 let set = Set { size, density, spread: 0.5, pitch: 0.0, mix: 1.0 };
-                let out = grains(sr, 1, s(6.0), BLOCK, set, x, &off, &on).left();
+                let out = grains(sr, 1, s(6.0), BLOCK, set, x, &on).left();
                 let input: Vec<f32> = (0..s(6.0)).map(|t| x(0, t)).collect();
                 let what = format!("{sr} Hz, {sound}, size {size}, density {density}");
                 let at = |a: f32, b: f32| db(rms(&out[s(a)..s(b)]) / rms(&input[s(a)..s(b)]));
@@ -229,7 +223,7 @@ fn pitch_moves_a_tone_by_the_semitones_asked() {
         for pitch in [-12.0f32, -7.0, 7.0, 12.0] {
             let set = Set { size: 0.1, density: 2.0, spread: 0.2, pitch, mix: 1.0 };
             let tone = |_, t: usize| (0.5 * (TAU * 440.0 * t as f64 / sr as f64).sin()) as f32;
-            let out = grains(sr, 1, (6.0 * sr) as usize, BLOCK, set, &tone, &off, &on).left();
+            let out = grains(sr, 1, (6.0 * sr) as usize, BLOCK, set, &tone, &on).left();
             let want = 440.0 * 2f64.powf(pitch as f64 / 12.0);
             // Each whole grain: a hump as long as Size, the first frame of it silent.
             let whole = (0.1 * sr).round() as usize - 1;
@@ -243,41 +237,12 @@ fn pitch_moves_a_tone_by_the_semitones_asked() {
     }
 }
 
-// PACK-36: Freeze holds a sound after it has stopped: noise for 1.5 s, Freeze on from 1.2 s, and
-// silence after; its grains alone play on from what it held, within 1.5 dB of their level before it
-// froze, for the 6 s after (and it says it is active all that time). With Freeze off the same
-// sound's grains end in silence within 1 s of it.
+// PACK-36: silence in gives silence out once its buffer has passed: noise for 1 s, then silence, at
+// the settings that reach furthest back (Spread 2 s, Size 0.5 s, an octave down) and at those it
+// opens at: exactly 0 from 2.6 s after the noise (the furthest a grain reads, and plays on, past it),
+// and it says it is done 2.5 s after it (its buffer's turn).
 #[test]
-fn freeze_holds_a_sound_after_it_has_stopped() {
-    let sr = 48_000.0;
-    let s = |x: f32| (x * sr) as usize;
-    let set = Set { size: 0.1, density: 30.0, spread: 0.5, pitch: 0.0, mix: 1.0 };
-    let x = |c, t| if t < s(1.5) { 0.3 * noise(c, t) } else { 0.0 };
-    let frozen = grains(sr, 2, s(8.0), BLOCK, set, &x, &|t| (t >= s(1.2)) as u8 as f32, &on);
-    let out = frozen.left();
-    let (before, after) = (rms(&out[s(0.7)..s(1.2)]), rms(&out[s(2.0)..s(8.0)]));
-    println!("frozen: {:+.2} dB against before", db(after / before));
-    assert!(db(after / before).abs() < 1.5, "frozen, its grains play at {:.2} dB against before", db(after / before));
-    for k in 0..12 {
-        let half = &out[s(2.0 + 0.5 * k as f32)..s(2.5 + 0.5 * k as f32)];
-        assert!(
-            db(rms(half) / before) > -3.0,
-            "frozen, half a second at {:.1} s is {:.1} dB down",
-            2.0 + 0.5 * k as f32,
-            db(rms(half) / before)
-        );
-    }
-    assert!(frozen.active[s(1.5)..].iter().all(|&a| a), "frozen, it says it is active");
-    let free = grains(sr, 2, s(8.0), BLOCK, set, &x, &off, &on).left();
-    assert!(free[s(2.5)..].iter().all(|&v| v == 0.0), "Freeze off: silence a second after the sound");
-}
-
-// PACK-36: with Freeze off, silence in gives silence out once its buffer has passed: noise for 1 s,
-// then silence, at the settings that reach furthest back (Spread 2 s, Size 0.5 s, an octave down)
-// and at those it opens at: exactly 0 from 2.6 s after the noise (the furthest a grain reads, and
-// plays on, past it), and it says it is done within 3.1 s (its 3 s buffer's turn).
-#[test]
-fn with_freeze_off_silence_in_gives_silence_out_once_its_buffer_has_passed() {
+fn silence_in_gives_silence_out_once_its_buffer_has_passed() {
     let sr = 48_000.0;
     let s = |x: f32| (x * sr) as usize;
     let x = |c, t| if t < s(1.0) { 0.5 * noise(c, t) } else { 0.0 };
@@ -285,11 +250,11 @@ fn with_freeze_off_silence_in_gives_silence_out_once_its_buffer_has_passed() {
         Set { size: 0.5, density: 50.0, spread: 2.0, pitch: -12.0, mix: 1.0 },
         Set { size: 0.1, density: 20.0, spread: 0.3, pitch: 0.0, mix: 0.5 },
     ] {
-        let played = grains(sr, 2, s(6.0), BLOCK, set, &x, &off, &on);
+        let played = grains(sr, 2, s(6.0), BLOCK, set, &x, &on);
         let last = played.out[0].iter().rposition(|f| f[0] != 0.0 || f[1] != 0.0).unwrap();
         assert!(last < s(3.6), "{set:?}: sound {:.3} s after the noise", last as f32 / sr - 1.0);
         let done = played.active.iter().rposition(|&a| a).map_or(0, |t| t + 1);
-        assert!(done > s(3.9) && done < s(4.1), "{set:?}: done {:.3} s after the noise", done as f32 / sr - 1.0);
+        assert!(done > s(3.4) && done < s(3.6), "{set:?}: done {:.3} s after the noise", done as f32 / sr - 1.0);
     }
 }
 
@@ -297,11 +262,11 @@ fn with_freeze_off_silence_in_gives_silence_out_once_its_buffer_has_passed() {
 #[test]
 fn mix_0_is_its_input_bit_for_bit() {
     for channels in [1, 2] {
-        for (set, freeze) in [
-            (Set { size: 0.1, density: 20.0, spread: 0.3, pitch: 0.0, mix: 0.0 }, 0.0),
-            (Set { size: 0.5, density: 50.0, spread: 2.0, pitch: 12.0, mix: 0.0 }, 1.0),
+        for set in [
+            Set { size: 0.1, density: 20.0, spread: 0.3, pitch: 0.0, mix: 0.0 },
+            Set { size: 0.5, density: 50.0, spread: 2.0, pitch: 12.0, mix: 0.0 },
         ] {
-            let out = grains(48_000.0, channels, 30_000, BLOCK, set, &noise, &|_| freeze, &on);
+            let out = grains(48_000.0, channels, 30_000, BLOCK, set, &noise, &on);
             for (t, f) in out.out[0].iter().enumerate() {
                 assert_eq!(f[0].to_bits(), noise(0, t).to_bits(), "{channels} ch, frame {t}");
                 if channels == 2 {
@@ -313,10 +278,10 @@ fn mix_0_is_its_input_bit_for_bit() {
 }
 
 // PACK-36: every grain is shaped by its window, so none clicks: on a slow 2.7 Hz tone at 0.9 (which
-// isn't where it was 3 s before), its grains alone never step from one sample to the next by more
+// isn't where it was 2.5 s before), its grains alone never step from one sample to the next by more
 // than 17 grains at their steepest can (a Hann window's π/length a sample, a grain let go's
-// 1/(5 ms), and the tone's own), at every Size, Density, Pitch and Spread at their ends, frozen and
-// not: a grain cut off, or reading past the newest sound into what is 3 s old, steps by far more.
+// 1/(5 ms), and the tone's own), at every Size, Density, Pitch and Spread at their ends: a grain cut
+// off, or reading past the newest sound into what is 2.5 s old, steps by far more.
 #[test]
 fn every_grain_is_windowed_so_none_clicks() {
     let sr = 48_000.0;
@@ -325,21 +290,18 @@ fn every_grain_is_windowed_so_none_clicks() {
         for density in [1.0f32, 20.0, 50.0] {
             for pitch in [-12.0f32, 0.0, 12.0] {
                 for spread in [0.0f32, 2.0] {
-                    for freeze in [0.0f32, 1.0] {
-                        let set = Set { size, density, spread, pitch, mix: 1.0 };
-                        let out =
-                            grains(sr, 1, (4.0 * sr) as usize, BLOCK, set, &tone, &|t| if t > 48_000 { freeze } else { 0.0 }, &on).left();
-                        let len = (size * sr).round() as f64;
-                        let ratio = 2f64.powf(pitch as f64 / 12.0);
-                        let steepest = (std::f64::consts::PI / len + 1.0 / (cloud::LET_GO as f64 * sr as f64)) * 0.9
-                            + ratio * TAU * 2.7 / sr as f64 * 0.9;
-                        let most = 17.0 * level(set) * steepest;
-                        let step = max_step(&out, 1, out.len()) as f64;
-                        assert!(
-                            step <= most,
-                            "size {size}, density {density}, pitch {pitch}, spread {spread}, freeze {freeze}: a step of {step:.5}, over {most:.5}"
-                        );
-                    }
+                    let set = Set { size, density, spread, pitch, mix: 1.0 };
+                    let out = grains(sr, 1, (4.0 * sr) as usize, BLOCK, set, &tone, &on).left();
+                    let len = (size * sr).round() as f64;
+                    let ratio = 2f64.powf(pitch as f64 / 12.0);
+                    let steepest =
+                        (std::f64::consts::PI / len + 1.0 / (cloud::LET_GO as f64 * sr as f64)) * 0.9 + ratio * TAU * 2.7 / sr as f64 * 0.9;
+                    let most = 17.0 * level(set) * steepest;
+                    let step = max_step(&out, 1, out.len()) as f64;
+                    assert!(
+                        step <= most,
+                        "size {size}, density {density}, pitch {pitch}, spread {spread}: a step of {step:.5}, over {most:.5}"
+                    );
                 }
             }
         }
@@ -384,7 +346,6 @@ fn its_meter_follows_the_newest_grain() {
         3 => set.spread,
         4 => set.pitch,
         5 => set.mix,
-        6 => 0.0,
         _ => 1.0,
     });
     let said = SAID.with(|s| s.borrow().clone());
@@ -451,7 +412,6 @@ fn at_most_16_play_and_the_oldest_goes_first() {
         3 => set.spread,
         4 => set.pitch,
         5 => set.mix,
-        6 => 0.0,
         _ => 1.0,
     });
     let gone = LET_GO.with(|n| n.get());
@@ -470,10 +430,10 @@ fn played_after_it_sat_stopped_it_plays_as_one_born_at_play() {
         for channels in [1, 2] {
             for split in [BLOCK, 7] {
                 let frames = 3 * 48_000;
-                let born = grains(48_000.0, channels, frames, split, set, &saw, &off, &on);
+                let born = grains(48_000.0, channels, frames, split, set, &saw, &on);
                 for idle in [5 * BLOCK, 20_003, 96_000] {
                     let x = |c, t| if t < idle { 0.0 } else { saw(c, t - idle) };
-                    let late = grains(48_000.0, channels, idle + frames, split, set, &x, &off, &|t| (t >= idle) as u8 as f32);
+                    let late = grains(48_000.0, channels, idle + frames, split, set, &x, &|t| (t >= idle) as u8 as f32);
                     let diff = late.out[0][idle..].iter().zip(&born.out[0]).position(|(a, b)| a.map(f32::to_bits) != b.map(f32::to_bits));
                     assert_eq!(diff, None, "{set:?}, {channels} ch, in calls of {split}, after {idle} frames stopped");
                 }
@@ -492,8 +452,8 @@ fn stopped_no_grain_starts_and_play_carries_its_clock_on() {
     let s = |x: f32| (x * sr) as usize;
     let set = Set { size: 0.02, density: 20.0, spread: 0.5, pitch: 0.0, mix: 1.0 };
     let steady = |_, _| 0.5;
-    let straight = grains(sr, 1, s(6.0), BLOCK, set, &steady, &off, &on).left();
-    let stopped = grains(sr, 1, s(8.0), BLOCK, set, &steady, &off, &|t| (t < s(1.0) || t >= s(3.0)) as u8 as f32).left();
+    let straight = grains(sr, 1, s(6.0), BLOCK, set, &steady, &on).left();
+    let stopped = grains(sr, 1, s(8.0), BLOCK, set, &steady, &|t| (t < s(1.0) || t >= s(3.0)) as u8 as f32).left();
     assert!(stopped[s(1.02)..s(3.0)].iter().all(|&v| v == 0.0), "a grain started while stopped");
     assert!(
         stopped[s(0.9)..s(1.0)].iter().any(|&v| v != 0.0) && stopped[s(3.0)..s(3.2)].iter().any(|&v| v != 0.0),
@@ -512,7 +472,7 @@ fn its_grains_read_only_the_past_from_its_band() {
     for sr in RATES {
         let at = sr as usize;
         let set = Set { size: 0.05, density: 50.0, spread: 0.3, pitch: 0.0, mix: 1.0 };
-        let out = grains(sr, 1, 3 * sr as usize, BLOCK, set, &|_, t| (t == at) as u8 as f32, &off, &on).left();
+        let out = grains(sr, 1, 3 * sr as usize, BLOCK, set, &|_, t| (t == at) as u8 as f32, &on).left();
         // A grain on the click comes out as long as it plays: Size after the click's place in it.
         let heard: Vec<usize> = (0..out.len()).filter(|&t| out[t] != 0.0).collect();
         assert!(!heard.is_empty(), "{sr} Hz: the click comes out");
@@ -531,7 +491,7 @@ fn its_grains_read_only_the_past_from_its_band() {
 fn grains_say_where_the_newest_reads() {
     let sr = 48_000.0;
     let set = Set { size: 0.05, density: 10.0, spread: 0.5, pitch: 0.0, mix: 1.0 };
-    let played = grains(sr, 1, 5 * 48_000, BLOCK, set, &|_, _| 0.5, &off, &|t| (t < 4 * 48_000) as u8 as f32);
+    let played = grains(sr, 1, 5 * 48_000, BLOCK, set, &|_, _| 0.5, &|t| (t < 4 * 48_000) as u8 as f32);
     let (out, reads) = (played.left(), played.out[1].iter().map(|f| f[0]).collect::<Vec<f32>>());
     let (mut places, mut none) = (vec![], 0);
     let band = 2.0 / sr..=0.5 + 2.0 / sr;
@@ -556,7 +516,7 @@ fn grains_say_where_the_newest_reads() {
 
 // PACK-36, the house rules: a control that isn't finite counts as an end: NaN as its low end, ±∞ as
 // the end it points to. Size NaN plays as 10 ms and ∞ as 500 ms; Density as 1 and 50; Spread as 0
-// and 2 s; Pitch as −12 and 12; Mix as 0 and 1; Freeze NaN as off.
+// and 2 s; Pitch as −12 and 12; Mix as 0 and 1.
 #[test]
 fn a_control_that_isnt_finite_counts_as_an_end() {
     let play = |port: usize, v: f32| {
@@ -568,7 +528,6 @@ fn a_control_that_isnt_finite_counts_as_an_end() {
             3 => 0.3,
             4 => 0.0,
             5 => 0.7,
-            6 => 0.0,
             _ => 1.0,
         })
         .out
@@ -582,11 +541,10 @@ fn a_control_that_isnt_finite_counts_as_an_end() {
         assert!(play(port, f32::INFINITY) == play(port, hi), "port {port}: ∞ plays as {hi}");
         assert!(play(port, f32::NEG_INFINITY) == play(port, lo), "port {port}: −∞ plays as {lo}");
     }
-    assert!(play(6, f32::NAN) == play(6, 0.0), "Freeze NaN is off");
 }
 
 // RENDER-28, PACK-36: once born, it allocates nothing while it plays, at 44.1, 48 and 96 kHz, in
-// stereo: noise, every value moving, frozen and not, stopping and playing, grains let go.
+// stereo: noise, every value moving, stopping and playing, grains let go.
 #[test]
 fn grains_allocate_nothing_while_they_play_at_every_rate() {
     for sr in RATES {
@@ -604,8 +562,7 @@ fn grains_allocate_nothing_while_they_play_at_every_rate() {
                 (3, (b % 5) as f32 * 0.5),
                 (4, (b % 9) as f32 * 3.0 - 12.0),
                 (5, (b % 3) as f32 / 2.0),
-                (6, (b % 400 > 300) as u8 as f32),
-                (7, (b % 50 != 0) as u8 as f32),
+                (6, (b % 50 != 0) as u8 as f32),
             ] {
                 h.port_mut(p)[..BLOCK].fill(v);
             }
@@ -618,8 +575,7 @@ fn grains_allocate_nothing_while_they_play_at_every_rate() {
 // PACK-36, RENDER-6a: it says it is active for as long as anything it took in can still come out.
 // Played a frame a call, a burst of noise that ends on one sample of 1, -1, 1e30 or the most a float
 // holds, at the values that reach furthest back, at 44.1, 48 and 96 kHz, mono and stereo: nothing
-// comes out after the call where it first says it is done, and it says so within 3.1 s. Frozen after
-// the burst, it never says it is done, and plays on.
+// comes out after the call where it first says it is done, and it says so within 2.6 s.
 #[test]
 fn nothing_comes_out_once_grains_says_it_is_done() {
     for sr in RATES {
@@ -638,26 +594,14 @@ fn nothing_comes_out_once_grains_says_it_is_done() {
                         0.0
                     }
                 };
-                let played = grains(sr, channels, stop + (3.5 * sr) as usize, 1, set, &x, &off, &on);
+                let played = grains(sr, channels, stop + (3.0 * sr) as usize, 1, set, &x, &on);
                 let out = &played.out[0];
                 let what = format!("{last} at {sr} Hz, {channels} channels");
                 let done = (stop..out.len()).find(|&t| !played.active[t]).unwrap_or_else(|| panic!("{what}: it never says it is done"));
-                assert!(done < stop + (3.1 * sr) as usize, "{what}: done {:.2} s after the burst", (done - stop) as f32 / sr);
+                assert!(done < stop + (2.6 * sr) as usize, "{what}: done {:.2} s after the burst", (done - stop) as f32 / sr);
                 let heard = out.iter().rposition(|f| f[0] != 0.0 || f[1] != 0.0).expect("it played");
                 assert!(heard <= done, "{what}: sound at frame {heard}, after it said it was done at {done}");
             }
         }
-        let held = grains(
-            sr,
-            1,
-            stop + (4.0 * sr) as usize,
-            BLOCK,
-            set,
-            &|c, t| if t < stop { 0.5 * noise(c, t) } else { 0.0 },
-            &|t| (t > stop) as u8 as f32,
-            &on,
-        );
-        assert!(held.active[stop..].iter().all(|&a| a), "{sr} Hz: frozen, it says it is active");
-        assert!(held.out[0][held.out[0].len() - 4_800..].iter().any(|f| f[0] != 0.0), "{sr} Hz: frozen, it plays on");
     }
 }

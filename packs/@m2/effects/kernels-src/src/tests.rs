@@ -19,7 +19,7 @@ const ALL: [Fx; 8] = [
     Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
     Fx { name: "clip", run: run::<Clip>, controls: &[6.0, -0.3] },
     Fx { name: "flanger", run: run::<Flanger>, controls: &[0.25, 0.7, 0.5, 0.5, 1.0] },
-    Fx { name: "grains", run: run::<Grains>, controls: &[0.1, 20.0, 0.3, 0.0, 0.5, 0.0, 1.0] },
+    Fx { name: "grains", run: run::<Grains>, controls: &[0.1, 20.0, 0.3, 0.0, 0.5, 1.0] },
 ];
 
 /// The effect named `name`.
@@ -135,7 +135,7 @@ fn kernels_with_lines_reset_in_place_to_where_they_started() {
     assert_reset_starts_over::<Reverb>(&[0.5, 0.6, 0.5, 0.5], 5_000);
     assert_reset_starts_over::<Widen>(&[0.5, 1.5], 5_000);
     assert_reset_starts_over::<Flanger>(&[0.5, 1.0, 0.7, 0.5, 0.5, 1.0], 5_000);
-    assert_reset_starts_over::<Grains>(&[0.5, 0.05, 40.0, 0.2, 7.0, 0.7, 0.0, 1.0], 20_000);
+    assert_reset_starts_over::<Grains>(&[0.5, 0.05, 40.0, 0.2, 7.0, 0.7, 1.0], 20_000);
 }
 
 // ---------------------------------------------------------------- each effect

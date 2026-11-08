@@ -1,7 +1,7 @@
 //! Grains (PACK-36): the sound broken into tiny pieces, its grains, played back overlapped.
 //!
-//! - **Its buffer**: the last [`BUFFER`] seconds of its input (3 s), each channel; Freeze on, it
-//!   stops taking in sound and holds what it last heard.
+//! - **Its buffer**: the last [`BUFFER`] seconds of its input (2.5 s), each channel: as far back as a
+//!   grain can read.
 //! - **Its grains.** One starts on average every `1 / density` seconds, each gap from half to one
 //!   and a half of that, at random. Each is `size` long, in a Hann window, and reads the buffer from
 //!   `back + u × spread` seconds before the newest sound (`u` at random) at `2^(pitch / 12)` times
@@ -21,9 +21,9 @@
 use m2_dsp::fx::{Glide, clampf, sane};
 use m2_kernel::{Cfg, Io, Kernel};
 
-/// How much of its input it keeps, in seconds: enough for a grain an octave up and 500 ms long to
-/// start 2 s back and still stay behind the newest sound, frozen too.
-pub const BUFFER: f32 = 3.0;
+/// How much of its input it keeps, in seconds: as far back as a grain can read, one an octave up and
+/// 500 ms long, started 2 s back.
+pub const BUFFER: f32 = 2.5;
 /// The most grains playing at once.
 pub const MOST: usize = 16;
 /// How long a grain let go takes to fade out, in seconds: shorter than the shortest gap between two
@@ -70,8 +70,8 @@ impl Grain {
     const NONE: Grain = Grain { on: false, born: 0, at: 0, back: 0.0, step: 1.0, n: 0, len: 2, scale: 0.0, fade: 0 };
 }
 
-/// Grains. Inputs: in, size (s), density (a second), spread (s), pitch (semitones), mix, freeze,
-/// playing. Outputs: out, and its meter `reads`.
+/// Grains. Inputs: in, size (s), density (a second), spread (s), pitch (semitones), mix, playing.
+/// Outputs: out, and its meter `reads`.
 pub struct Grains {
     sr: f32,
     stereo: bool,
@@ -136,9 +136,9 @@ impl Grains {
 
     /// A grain starts: `size` seconds long, from `back + u × spread` seconds back at `pitch`
     /// semitones, `back` keeping it behind the newest sound until it ends: `(ratio − 1) × size` when
-    /// that is over 0 (it reads faster than the sound comes), `ratio × size` frozen (no sound comes),
-    /// and `MARGIN` frames. With `MOST` playing, the oldest is let go first.
-    fn start(&mut self, size: f32, spread: f32, pitch: f32, frozen: bool) {
+    /// that is over 0 (it reads faster than the sound comes), and `MARGIN` frames. With `MOST`
+    /// playing, the oldest is let go first.
+    fn start(&mut self, size: f32, spread: f32, pitch: f32) {
         let u = self.unit();
         if self.grains.iter().filter(|g| g.on && g.fade == 0).count() >= MOST
             && let Some(oldest) = self.grains.iter_mut().filter(|g| g.on && g.fade == 0).min_by_key(|g| g.born)
@@ -147,7 +147,7 @@ impl Grains {
         }
         let len = ((size * self.sr).round() as u32).max(2);
         let step = 2f64.powf(pitch as f64 / 12.0);
-        let reach = if frozen { step * len as f64 } else { ((step - 1.0) * len as f64).max(0.0) };
+        let reach = ((step - 1.0) * len as f64).max(0.0);
         let grain = Grain {
             on: true,
             born: self.started,
@@ -183,7 +183,7 @@ impl Grains {
 }
 
 impl Kernel for Grains {
-    const INPUTS: usize = 8;
+    const INPUTS: usize = 7;
     const OUTPUTS: usize = 2;
 
     fn new(cfg: &Cfg) -> Self {
@@ -202,28 +202,25 @@ impl Kernel for Grains {
     }
 
     fn process(&mut self, io: &mut Io) {
-        let ([l, r, size, density, spread, pitch, mix, freeze, playing], [ol, or]) =
-            io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0), (7, 0)], [(0, 0), (0, 1)]);
+        let ([l, r, size, density, spread, pitch, mix, playing], [ol, or]) =
+            io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)], [(0, 0), (0, 1)]);
         let sides = if self.stereo { 2 } else { 1 };
         let furthest = self.len as f64 - 3.0;
         let mut reads = 0.0f64;
         for i in 0..ol.len() {
             let x = [sane(l[i]), if self.stereo { sane(r[i]) } else { 0.0 }];
-            let frozen = freeze[i] > 0.5;
-            if !frozen {
-                let at = (self.written % self.len as u64) as usize;
-                for (ring, x) in self.rings.iter_mut().zip(x).take(sides) {
-                    ring[at] = x;
-                }
-                self.written += 1;
-                self.since_sound = if x != [0.0; 2] { 0 } else { self.since_sound.saturating_add(1) };
+            let at = (self.written % self.len as u64) as usize;
+            for (ring, x) in self.rings.iter_mut().zip(x).take(sides) {
+                ring[at] = x;
             }
+            self.written += 1;
+            self.since_sound = if x != [0.0; 2] { 0 } else { self.since_sound.saturating_add(1) };
             let (size, density) = (clampf(size[i], SIZES.0, SIZES.1), clampf(density[i], DENSITIES.0, DENSITIES.1));
             if playing[i] > 0.5 {
                 self.clock += density / self.sr;
                 if self.clock >= self.gap {
                     self.clock -= self.gap;
-                    self.start(size, clampf(spread[i], 0.0, SPREAD), clampf(pitch[i], -PITCH, PITCH), frozen);
+                    self.start(size, clampf(spread[i], 0.0, SPREAD), clampf(pitch[i], -PITCH, PITCH));
                     self.gap = 0.5 + self.unit();
                 }
             }
@@ -273,7 +270,7 @@ impl Kernel for Grains {
     }
 
     /// What it took in can come out for as long as its buffer holds it: until a whole buffer of
-    /// silence has gone in, or, frozen, for as long as it is frozen.
+    /// silence has gone in.
     fn active(&self) -> bool {
         self.since_sound < self.len
     }
