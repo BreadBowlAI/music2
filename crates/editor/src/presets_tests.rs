@@ -283,7 +283,7 @@ fn every_factory_preset_loads() {
         }
     }
     assert_eq!(
-        n, 26,
-        "two each for Pluck, Pad, Bass, Reverb and Delay, for each of @m2/mixing's five tools, and Tune, and the Wavetable's four"
+        n, 28,
+        "two each for Pluck, Pad, Bass, Reverb and Delay, for each of @m2/mixing's five tools, and Tune, and the Voice changer, and the Wavetable's four"
     );
 }
