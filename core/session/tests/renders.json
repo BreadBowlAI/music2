@@ -3,7 +3,7 @@
     "core/session/tests/fixtures/clip": "894546c6bd6f34e7052b129e4057f843a2125f7e71a756d41f289ae3fa5f7ebd",
     "core/session/tests/fixtures/meters": "e5b5728800d41b83372ed293669d904d8a06e1d394453d48d9849984167c6a5a",
     "core/session/tests/fixtures/sampler-regions": "b850b806de5283ff77c0aacf0e807d76846841346cdc96f02c426735da1c4282",
-    "core/session/tests/fixtures/vocoder": "3b9ef7d8ea160b11a3a62264ec2adfe558ea837da6c21010e7a4393c3073816e",
+    "core/session/tests/fixtures/vocoder": "eb2fe20ae6794df7b1a9972cbcadbbcb8875d7c9eb4688d6cc2d48d6edfe8fcd",
     "examples/arp": "4706e90351e8a7afe1ece437b691636ef77985f17a4d1d34c9da09ea233483bf",
     "examples/first-song": "13efce4479917c18ae21bddaa585c02af85261010e2d94a809b040d748287ac7",
     "examples/resample": "db46e8fd17f48641709f2c184651729774d4fafb8cdaa569b9a9a603aaf02f51",
