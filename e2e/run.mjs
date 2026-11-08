@@ -167,7 +167,7 @@ export const SUITES = [
   ["live3a", "fix", { expect: 49, s: 15, tier: "nightly", why: "speed: a ruler click and a seek land within 1 s" }],
   ["live3b", "proj", { clap: true, expect: 60, s: 37, tier: "nightly", why: "speed: previews answer within 150 ms during a compile; flake: its release writes another db() (HANDOFF.md; twice at half CPU, 2026-10-21)" }],
   ["ph-window", "none", { clap: true, expect: 9, s: 3 }],
-  ["s5-knobs", "fix", { expect: 155, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
+  ["s5-knobs", "fix", { expect: 157, s: 5, tier: "nightly", why: "flake: the page detached after a double-click on a knob (HANDOFF.md)" }],
   ["s6-builders", "fix", { expect: 56, s: 5 }],
   ["s6-write", "fix", { expect: 36, s: 7 }],
   ["s6-fixes", "fix", { expect: 19, s: 4 }],
@@ -215,6 +215,7 @@ export const SUITES = [
   ["voice", "fix", { expect: 40, s: 30 }],
   // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
   ["vocoder", "fix", { expect: 28, s: 20 }],
+  ["flanger-grains", "fix", { expect: 38, s: 40 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
