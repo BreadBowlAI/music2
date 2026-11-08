@@ -753,7 +753,13 @@ fn the_voice_changer_draws_its_spectrum() {
     let x: Vec<f64> = d["shapes"].as_array().unwrap().iter().map(|s| s["x"].as_f64().unwrap()).collect();
     assert!(x[0] < 300.0 && (700.0..3000.0).contains(&x[1]), "Notes low, Colour in the middle: {x:?}");
     assert_eq!(d["words"], format!("Up 5 semitones, colour 3 semitones brighter. {layers}"));
-    assert_eq!(said(json!(5), json!(3))["shapes"], d["shapes"], "its shapes don't move with its values");
+    for (pitch, formant) in [(-5, -4), (0, 0), (12, 12)] {
+        assert_eq!(
+            said(json!(pitch), json!(formant))["shapes"],
+            d["shapes"],
+            "its shapes don't move with its values: at {pitch} and {formant}"
+        );
+    }
     assert_eq!(said(json!(-5), json!(-4))["words"], format!("Down 5 semitones, colour 4 semitones darker. {layers}"));
     assert_eq!(said(json!(1), json!(-1))["words"], format!("Up 1 semitone, colour 1 semitone darker. {layers}"));
     assert_eq!(said(json!(7), json!(0))["words"], format!("Up 7 semitones, colour as sung. {layers}"));
