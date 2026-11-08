@@ -1586,6 +1586,48 @@ mod vocoded {
         (best as f64 + 0.5 * (y0 - y2) / (y0 - 2.0 * y1 + y2)) / 4.0
     }
 
+    /// The carrier's bank, every band open, summed by `sign`: its gain in dB from 125 Hz to 6.4 kHz
+    /// at 400 points a log step apart, by a plain DFT of its answer to a click (half a second), at
+    /// least and at most.
+    fn bank(sr: f32, sign: &dyn Fn(usize) -> f32) -> (f64, f64) {
+        let bands: Vec<[m2_dsp::fx::Filter; 2]> = (0..BANDS).map(|k| [crate::bands::section(sr, centre(k)); 2]).collect();
+        let mut states = vec![[[0f32; 2]; 2]; BANDS];
+        let answer: Vec<f32> = (0..(0.5 * sr) as usize)
+            .map(|i| {
+                let x = if i == 0 { 1.0 } else { 0.0 };
+                (0..BANDS)
+                    .map(|k| {
+                        let a = bands[k][0].tick(&mut states[k][0], x);
+                        sign(k) * bands[k][1].tick(&mut states[k][1], a)
+                    })
+                    .sum()
+            })
+            .collect();
+        (0..400).fold((f64::MAX, f64::MIN), |(lo, hi), j| {
+            let f = 125.0 * (6400.0f64 / 125.0).powf(j as f64 / 399.0);
+            let w = std::f64::consts::TAU * f / sr as f64;
+            let (re, im) = answer
+                .iter()
+                .enumerate()
+                .fold((0.0, 0.0), |(re, im), (i, &v)| (re + v as f64 * (w * i as f64).cos(), im - v as f64 * (w * i as f64).sin()));
+            let db = 10.0 * (re * re + im * im).log10();
+            (lo.min(db), hi.max(db))
+        })
+    }
+
+    // VOX-29: the carrier's bands, all open, give it back within 1.6 dB, every other band's sign
+    // turned over as the kernel sums them (`bands::sign`), at 44.1, 48 and 96 kHz; summed as they
+    // are, two bands' phases cancel where they meet (130° apart), in notches over 20 dB deep.
+    #[test]
+    fn the_carriers_bands_all_open_give_it_back_within_1_6_db() {
+        for sr in RATES {
+            let (lo, hi) = bank(sr, &crate::bands::sign);
+            assert!(lo > -0.5 && hi < 1.6, "{sr}: all open, from {lo:.2} to {hi:.2} dB");
+            let (lo, _) = bank(sr, &|_| 1.0);
+            assert!(lo < -20.0, "{sr}: as they are, notches only {lo:.2} dB deep");
+        }
+    }
+
     // VOX-29: Formant moves the out's hills by the semitones asked, both ways, at every rate: the
     // out's gain curve over a 27.5 Hz saw, from 250 Hz to 4 kHz, at Formant −12, −7, 5 and 12 lies
     // that many semitones from the one at 0, within a tenth of a semitone (measured within 0.04).

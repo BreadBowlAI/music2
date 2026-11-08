@@ -55,8 +55,15 @@ pub fn centre(k: usize) -> f32 {
 }
 
 /// A band-pass of 0 dB at `f` Hz, one section: the state-variable filter's band, times 1/Q.
-fn section(sr: f32, f: f32) -> Filter {
+pub(crate) fn section(sr: f32, f: f32) -> Filter {
     Filter::new(prewarp(f, sr), 1.0 / Q, [0.0, 1.0 / Q, 0.0])
+}
+
+/// Band `k`'s sign in the carrier's sum: every other band's turned over. Where two bands meet their
+/// phases are 130° apart, so summed as they are they would cut a notch there; turned over, 50°, and
+/// all open they give the carrier back within 1.6 dB.
+pub(crate) fn sign(k: usize) -> f32 {
+    if k % 2 == 0 { 1.0 } else { -1.0 }
 }
 
 /// One band's two sections, and one channel's states of them.
@@ -163,10 +170,9 @@ impl Kernel for Vocoder {
                 *power = flush(p + (*power - p) * c);
                 loudest = loudest.max(*power);
             }
-            // Every other band's sign turned over: where two bands meet, their phases are 130° apart,
-            // and summed as they are they would cut a notch there; turned over, 50°.
+            // Each band's level over the loudest's plus the knee, by its sign.
             let by = 1.0 / (loudest.sqrt() + KNEE);
-            let gains: [f32; BANDS] = std::array::from_fn(|k| if k % 2 == 0 { by } else { -by } * self.power[k].sqrt());
+            let gains: [f32; BANDS] = std::array::from_fn(|k| sign(k) * by * self.power[k].sqrt());
             let clear = self.clarity.next(clampf(clarity[i], 0.0, 1.0));
             let x = [sane(l[i]), if stereo { sane(r[i]) } else { 0.0 }];
             let mut y = [0.0f32; 2];
