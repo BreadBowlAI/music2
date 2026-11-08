@@ -32,6 +32,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Tune a voice onto the song's key, gently or as the "robot" pop sound | **+** on the vocal track's lane in its **Device**, then **Tune** ([how](audio.md#tune-a-voice)) |
 | Make a voice deeper or higher, or a chipmunk | **+** on the vocal track's lane in its **Device**, then **Voice changer** ([how](audio.md#change-a-voice)) |
 | Make a synth talk with a voice (a vocoder) | **+** after the synth in its **Device**, then **Vocoder**, then pick the vocal track in its card's **Talks with** ([how](audio.md#make-a-synth-talk)) |
+| Add the jet's whoosh (a flanger), or break a sound into tiny pieces to smear or stretch it (granular) | **+** after the sound in its **Device**, then **Flanger** (Modulation) or **Grains** (Delay & Reverb) ([what each knob does](sounds.md)) |
 | Bring in WAV or FLAC files, long ones too | File ▸ Import Audio… (⇧⌘I), or drag them onto the window |
 | Keep an audio clip in time when the tempo changes | right-click the clip ▸ **Follow tempo** |
 | Turn a track into audio, to chop it, reverse it or pitch it; the song sounds the same | the track's menu ▸ **Bounce to audio** ([how](audio.md#bounce-a-track-to-audio)) |

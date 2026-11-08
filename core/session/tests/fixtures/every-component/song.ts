@@ -6,7 +6,7 @@ import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { drums } from "@m2/drums";
 import { bass, fm, pad, pluck, synth } from "@m2/synths";
-import { bitcrush, chorus, clip, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { bitcrush, chorus, clip, delay, drive, flanger, grains, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
 import { arp, chord, echo, lockToKey } from "@m2/notes";
 import { compress, duck, eq3, limit } from "std/fx";
@@ -75,5 +75,7 @@ export default song(({ lane, time }) => {
   const changed = voiceChanger(lowpass(pulse, 900), { pitch: -5 });
   const talking = vocoder(buzz, changed, { clarity: level, formant: -3 });
   const loud = clip(add(hit, pulse), { gain: 6 });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }));
+  const jet = flanger(soft, { feedback: -0.4 });
+  const cloud = grains(buzz, { pitch: 7 });
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }));
 });

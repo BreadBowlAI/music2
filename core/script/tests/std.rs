@@ -123,8 +123,13 @@ const INSTRUMENTS: [(&str, &str, &str); 15] = [
     ("std:sampler", "std/sampler", "sampler"),
 ];
 
-/// The effects added since step 5, as `(ComponentId, module, name)`: the Clipper (PACK-34).
-const ADDED_EFFECTS: [(&str, &str, &str); 1] = [("@m2/effects:clip", "@m2/effects", "clip")];
+/// The effects added since step 5, as `(ComponentId, module, name)`: the Clipper (PACK-34), the
+/// Flanger (PACK-35) and Grains (PACK-36).
+const ADDED_EFFECTS: [(&str, &str, &str); 3] = [
+    ("@m2/effects:clip", "@m2/effects", "clip"),
+    ("@m2/effects:flanger", "@m2/effects", "flanger"),
+    ("@m2/effects:grains", "@m2/effects", "grains"),
+];
 
 // PKG-1, PKG-2, PKG-9, PKG-17: std and the packs music2 ships declare every component with a
 // descriptor, each export is in the catalog under its ComponentId (std's sounds under the packs'
@@ -227,8 +232,9 @@ fn every_std_control_is_found_by_its_slot() {
 /// Every effect std and these packs offer, each as module, name, category, description, and what is
 /// written after the audio when one is added: the effects `m2pkg.toml` listed before step 5, as
 /// `[[effect]]` entries (their `args`), and those offered since, each marked where it is: Duck
-/// (track sidechain) and the Clipper (track voice2, `ADDED_EFFECTS`).
-const EFFECTS: [(&str, &str, &str, &str, &str); 19] = [
+/// (track sidechain), the Clipper (track voice2) and the Flanger and Grains (track effects3,
+/// `ADDED_EFFECTS`).
+const EFFECTS: [(&str, &str, &str, &str, &str); 21] = [
     ("std/filter", "lowpass", "Filter", "Darker: removes the highs above the cutoff", "1000"),
     ("std/filter", "highpass", "Filter", "Thinner: removes the lows below the cutoff", "200"),
     ("std/filter", "bandpass", "Filter", "Keeps only a band around the cutoff, like a telephone", "1000"),
@@ -261,6 +267,21 @@ const EFFECTS: [(&str, &str, &str, &str, &str); 19] = [
         "Dynamics",
         "Louder without going over: push the gain, and every peak is cut flat at the ceiling",
         "{ gain: 6, ceiling: -0.3 }",
+    ),
+    // Offered since track effects3, as they open (PACK-35, PACK-36).
+    (
+        "@m2/effects",
+        "flanger",
+        "Modulation",
+        "A jet-plane whoosh: a copy of the sound sweeps against it",
+        "{ rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 }",
+    ),
+    (
+        "@m2/effects",
+        "grains",
+        "Delay & Reverb",
+        "Breaks the sound into tiny pieces, to smear or stretch it",
+        "{ size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 }",
     ),
 ];
 

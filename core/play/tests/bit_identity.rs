@@ -22,8 +22,10 @@ use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2). One is
 /// late: `clip`, the Clipper's (92 frames, PACK-34), heard live as late as it is (RENDER-33), and
-/// silent until then. `vocoder` is a synth made to talk by another track's voice (VOX-29).
-const PURE: [&str; 11] = [
+/// silent until then. `vocoder` is a synth made to talk by another track's voice (VOX-29). `flanger`
+/// and `grains` are `@m2/effects`' Flanger and Grains (PACK-35, PACK-36), whose LFO, and whose clock
+/// and seeded random numbers, move only while the song plays.
+const PURE: [&str; 13] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -35,6 +37,8 @@ const PURE: [&str; 11] = [
     "core/session/tests/fixtures/meters",
     "core/session/tests/fixtures/clip",
     "core/session/tests/fixtures/vocoder",
+    "core/session/tests/fixtures/flanger",
+    "core/session/tests/fixtures/grains",
 ];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at

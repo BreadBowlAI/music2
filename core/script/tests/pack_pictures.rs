@@ -852,3 +852,188 @@ fn the_vocoder_draws_its_synth_in_and_out() {
         )
     );
 }
+
+// CARD-128, PACK-35: the Flanger's card. Rate, Depth, Feedback and Mix are on its face beside its
+// picture, `sweep`: one cycle of its sweep across (an axis drawn bare), where its notches are up, on
+// 20 Hz to 20 kHz on a log scale, from its own sum: its lowest, the line `notch`, from 5 kHz at the
+// cycle's start (0.1 ms) down to 1/(2 × 0.1 ms × 100^depth) half way, and the next two, faint, three
+// and five times it; with Feedback below 0, its lowest at 1/delay and the next two at two and three
+// times it. Its live line is its kernel's meter `phase`. No dot. Its words say the sweep, the
+// feedback, then the line.
+#[test]
+fn the_flanger_draws_its_sweep_and_where_it_is_now() {
+    let sweep = declared("effects", "flanger", "sweep");
+    assert_eq!(
+        (&sweep["x"]["lo"], &sweep["x"]["hi"], &sweep["x"]["unit"], &sweep["x"]["bare"]),
+        (&json!(0.0), &json!(1.0), &json!("unit01"), &json!(true))
+    );
+    assert_eq!(
+        (&sweep["y"]["lo"], &sweep["y"]["hi"], &sweep["y"]["unit"], &sweep["y"]["scale"]),
+        (&json!(20.0), &json!(20000.0), &json!("hz"), &json!("log"))
+    );
+    assert_eq!(sweep["live"], json!([{"kind": "playhead", "from": "phase"}]), "a line where its LFO is now");
+    let d = descriptor("effects", "flanger");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Flanger", Some("Modulation")));
+    assert_eq!(d.editor.face, ["sweep", "rate", "depth", "feedback", "mix"]);
+    let insert: Vec<(&str, f64)> = d.editor.insert.iter().map(|i| (i.slot.as_str(), i.value.value)).collect();
+    assert_eq!(insert, [("rate", 0.25), ("depth", 0.7), ("feedback", 0.5), ("mix", 0.5)]);
+    let runner = Runner::new();
+    let at = |depth: f64, phase: f64| 0.0001 * 100f64.powf(depth * (0.5 - 0.5 * (std::f64::consts::TAU * phase).cos()));
+    for (depth, feedback, teeth) in [(0.7, 0.5, [0.5, 1.5, 2.5]), (1.0, 0.0, [0.5, 1.5, 2.5]), (0.5, -0.5, [1.0, 2.0, 3.0])] {
+        let drawn =
+            draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": depth, "feedback": feedback, "mix": 0.5})).unwrap();
+        assert_eq!(kinds(&drawn), ["line", "line", "line"]);
+        assert!(handles(&drawn).is_empty(), "no dot");
+        let shapes = drawn["shapes"].as_array().unwrap();
+        assert_eq!((&shapes[0]["tone"], &shapes[1]["tone"], &shapes[2]["name"]), (&json!("faint"), &json!("faint"), &json!("notch")));
+        for (k, shape) in [2usize, 1, 0].into_iter().zip(shapes) {
+            let points: Vec<(f64, f64)> =
+                shape["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+            assert!(points[0].0 == 0.0 && points.last().unwrap().0 == 1.0, "a whole cycle");
+            // 120 steps a cycle: smooth, and half the time 240 took to draw (review X8).
+            assert_eq!(points.len(), 121, "a cycle in 120 steps");
+            for (phase, hz) in points {
+                let want = (teeth[k] / at(depth, phase)).min(20_000.0);
+                assert!((hz / want - 1.0).abs() < 1e-9, "depth {depth}, feedback {feedback}: notch {k} at {phase}: {hz} Hz, not {want}");
+            }
+        }
+    }
+    let words = |v: Value| draw(&runner, "effects", "flanger", "sweep", v).unwrap()["words"].as_str().unwrap().to_string();
+    let line = "The line: where they are now";
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.5, "mix": 0.5})),
+        format!(
+            "Its notches sweep from 5 kHz down to 199 Hz and back, once each 4 s. Feedback 0.5 rings at the peaks between them. {line}"
+        )
+    );
+    assert_eq!(
+        words(json!({"rate": 2, "depth": 1, "feedback": -0.5, "mix": 0.5})),
+        format!(
+            "Its notches sweep from 10 kHz down to 100 Hz and back, 2 times a second. Feedback −0.5 turns the copy over: its notches move half way, and its peaks ring where they were, a hollow sound. {line}"
+        )
+    );
+    assert_eq!(
+        words(json!({"rate": 1, "depth": 0.5, "feedback": 0, "mix": 0.5})),
+        format!("Its notches sweep from 5 kHz down to 500 Hz and back, once a second. No feedback: the plain sweep. {line}")
+    );
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0, "feedback": 0.5, "mix": 0.5})),
+        format!("Its notches stand still at 5 kHz and over. Feedback 0.5 rings at the peaks between them. {line}")
+    );
+    assert_eq!(
+        words(json!({"rate": null, "depth": 0.7, "feedback": 0.5, "mix": 0.5})),
+        format!(
+            "Its notches sweep from 5 kHz down to 199 Hz and back, as fast as a cable or the code says. Feedback 0.5 rings at the peaks between them. {line}"
+        )
+    );
+    // PACK-35, review X2: with its loudest peak 6 dB or more over the sound, (1 − mix) + mix / (1 − |f|),
+    // they say how loud, and what to do; with Mix set by a cable or the code, at the most it can be.
+    let loud = |db: &str| format!("{line}. It comes out up to {db} louder at its peaks: turn Mix or the track down");
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.9, "mix": 0.5})),
+        format!(
+            "Its notches sweep from 5 kHz down to 199 Hz and back, once each 4 s. Feedback 0.9 rings at the peaks between them. {}",
+            loud("14.8 dB")
+        )
+    );
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0.7, "feedback": -0.9, "mix": 1})),
+        format!(
+            "Its notches sweep from 10 kHz down to 398 Hz and back, once each 4 s. Feedback −0.9 turns the copy over: its notches move half way, and its peaks ring where they were, a hollow sound. {}",
+            loud("20 dB")
+        )
+    );
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.7, "mix": 0.5})).ends_with(&loud("6.72 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.5, "mix": 1})).ends_with(&loud("6.02 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.9, "mix": null})).ends_with(&loud("20 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.6, "mix": 0.5})).ends_with(line), "4.9 dB: no word of it");
+    let why = draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": null, "feedback": 0.5, "mix": 0.5})).unwrap_err();
+    assert!(why.contains("its depth is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
+}
+
+// CARD-129, PACK-36: Grains' card. Size, Density, Spread, Pitch and Mix are on its face beside its
+// picture, `cloud`: its buffer from now (0 s, at its left) to 2.5 s back, its window's level up on an
+// axis drawn bare, from its own sum at the song's rate: a faint band where its grains start, from
+// `back` (2 frames, plus (ratio − 1) × size an octave up) to `back + spread`, a dot at its far edge
+// that moves the spread across, and a guide line at 2.5 s, the oldest sound it holds, so its axis of
+// seconds keeps the whole buffer (CARD-102). Its live line is its kernel's meter `reads`. Its words
+// say the grains, how far back the band reaches and at what pitch, then the line and the dot.
+#[test]
+fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
+    let cloud = declared("effects", "grains", "cloud");
+    assert_eq!(
+        (&cloud["x"]["lo"], &cloud["x"]["hi"], &cloud["x"]["unit"], &cloud["x"]["scale"]),
+        (&json!(0.0), &json!(2.5), &json!("seconds"), &json!("lin"))
+    );
+    assert_eq!(
+        (&cloud["y"]["lo"], &cloud["y"]["hi"], &cloud["y"]["unit"], &cloud["y"]["bare"]),
+        (&json!(0.0), &json!(1.0), &json!("unit01"), &json!(true))
+    );
+    assert_eq!(cloud["live"], json!([{"kind": "playhead", "from": "reads"}]), "a line where the newest grain reads now");
+    let d = descriptor("effects", "grains");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Grains", Some("Delay & Reverb")));
+    assert_eq!(d.editor.description, "Breaks the sound into tiny pieces, to smear or stretch it");
+    assert_eq!(d.editor.face, ["cloud", "size", "density", "spread", "pitch", "mix"]);
+    assert!(d.controls.iter().all(|c| c.name != "freeze"), "no Freeze (review X1)");
+    let insert: Vec<(&str, f64)> = d.editor.insert.iter().map(|i| (i.slot.as_str(), i.value.value)).collect();
+    assert_eq!(insert, [("size", 0.1), ("density", 20.0), ("spread", 0.3), ("pitch", 0.0), ("mix", 0.5)]);
+    let runner = Runner::new();
+    let values = |size: f64, spread: f64, pitch: f64| json!({"size": size, "density": 20, "spread": spread, "pitch": pitch, "mix": 0.5});
+    for (rate, size, spread, pitch, reach) in [
+        (48_000u32, 0.1, 0.3, 0.0, 0.0),
+        (48_000, 0.1, 0.3, 12.0, 4_800.0),
+        (44_100, 0.25, 1.0, 7.0, (2f64.powf(7.0 / 12.0) - 1.0) * 11_025.0),
+        (96_000, 0.5, 2.0, 12.0, 48_000.0),
+        (48_000, 0.1, 0.0, -12.0, 0.0),
+    ] {
+        let drawn = draw_at(&runner, rate, "effects", "grains", "cloud", values(size, spread, pitch)).unwrap();
+        assert_eq!(kinds(&drawn), ["mark", "fill", "handle"]);
+        let oldest = &drawn["shapes"][0];
+        assert_eq!(
+            (&oldest["axis"], &oldest["at"], &oldest["words"]),
+            (&json!("x"), &json!(2.5), &json!("The oldest sound it holds: 2.5 s back"))
+        );
+        assert_eq!(drawn["shapes"][1]["tone"], "faint");
+        let near = (reach + 2.0) / rate as f64;
+        let band: Vec<f64> = drawn["shapes"][1]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        let want = [near, 0.0, near + spread, 0.0, near + spread, 1.0, near, 1.0];
+        assert!(
+            band.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9),
+            "at {rate} Hz, size {size}, spread {spread}, pitch {pitch}: {band:?}, not {want:?}"
+        );
+        assert_eq!(dots(&drawn), ["x=spread"]);
+        assert!(close(places(&drawn)[0], (near + spread, 0.5)), "its dot at the band's far edge: {:?}", places(&drawn));
+    }
+    let words = |v: Value| draw(&runner, "effects", "grains", "cloud", v).unwrap()["words"].as_str().unwrap().to_string();
+    let tail = "The line: where the newest grain reads now. Drag the band's edge for the spread";
+    assert_eq!(words(values(0.1, 0.3, 0.0)), format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). {tail}"));
+    // Review X10: the band's far edge, a grain's length further back an octave up.
+    assert_eq!(
+        words(values(0.1, 0.3, 12.0)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 400 ms back and an octave higher (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.25, 1.5, 7.0)),
+        format!("Pieces of 250 ms, 20 a second, each from up to 1.62 s back and 7 semitones higher (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.1, 0.3, -12.0)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back and an octave lower (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.1, 0.3, 1.0)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 306 ms back and 1 semitone higher (the band). {tail}")
+    );
+    assert_eq!(words(values(0.1, 0.0, 0.0)), format!("Pieces of 100 ms, 20 a second, each from just behind your sound (the band). {tail}"));
+    assert_eq!(
+        words(values(0.1, 0.0, 12.0)),
+        format!("Pieces of 100 ms, 20 a second, each from 100 ms back and an octave higher (the band). {tail}")
+    );
+    assert_eq!(
+        words(json!({"size": 0.1, "density": null, "spread": 0.3, "pitch": 0, "mix": 0.5})),
+        format!("Pieces of 100 ms, as many a second as a cable or the code says, each from up to 300 ms back (the band). {tail}")
+    );
+    let why = draw(&runner, "effects", "grains", "cloud", json!({"size": 0.1, "density": 20, "spread": null, "pitch": 0, "mix": 0.5}))
+        .unwrap_err();
+    assert!(why.contains("its spread is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
+}

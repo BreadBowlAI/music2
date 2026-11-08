@@ -2,8 +2,8 @@
 //! D13): each against a render of the effect it draws, within 0.5 dB, at 44.1, 48 and 96 kHz, each
 //! drawn at the rate rendered (CARD-87). The transient shaper's hit,
 //! Pump's dip, the delay's echoes, the reverb's tail, the chorus's, phaser's and tremolo's motion,
-//! drive's curve, the bitcrusher's sine and the widener's width. And the multiband's split, which is
-//! measured from its sound under its thresholds (CARD-115).
+//! the Flanger's sweep, Grains' band, drive's curve, the bitcrusher's sine and the widener's width.
+//! And the multiband's split, which is measured from its sound under its thresholds (CARD-115).
 
 use std::path::{Path, PathBuf};
 
@@ -82,7 +82,7 @@ fn render(rate: f64, body: &str, seconds: f64) -> Vec<[f64; 2]> {
         format!(
             "import {{ db, song, time }} from '@m2/core';\nimport {{ adsr, gain, osc, pan, vca }} from 'std/dsp';\nimport {{ lfo }} from 'std/control';\n\
              import {{ deesser, multiband, pump, transient }} from '@m2/mixing';\n\
-             import {{ bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen }} from '@m2/effects';\n{body}"
+             import {{ bitcrush, chorus, delay, drive, flanger, grains, phaser, reverb, tremolo, widen }} from '@m2/effects';\n{body}"
         ),
     );
     let s = f.open();
@@ -467,6 +467,103 @@ fn the_tremolo_motion_is_its_sound() {
             checked += 1;
         }
         assert!(checked > 100, "{checked} points checked");
+    }
+}
+
+// CARD-128, CARD-99: the Flanger's sweep, drawn from its own sum, is what it plays: a 1 kHz tone
+// through it (feedback 0, mix 0.5) is as loud as its comb, at the lowest notch the picture draws for
+// that moment of its cycle, makes it, |cos(π · 1000 / (2 · notch))|, within 0.5 dB, wherever that is
+// above −10 dB, over two cycles.
+#[test]
+fn the_flangers_sweep_is_its_sound() {
+    for (sr, (rate, depth)) in RATES.into_iter().flat_map(|r| [(1.0, 0.7), (2.0, 0.5)].map(|x| (r, x))) {
+        let notch =
+            line(&drawn(sr, "effects", "flanger", "sweep", json!({"rate": rate, "depth": depth, "feedback": 0, "mix": 0.5})), "notch");
+        // A quarter of the tone's cycle, in samples.
+        let quarter = (sr / 4000.0).round() as usize;
+        let out = left(
+            sr,
+            &format!("export default song(() => flanger(osc.sine(1000), {{ rate: {rate}, depth: {depth}, feedback: 0, mix: 0.5 }}));\n"),
+            2.0 / rate,
+        );
+        let mut checked = 0;
+        for cycle in 0..2 {
+            for &(phase, hz) in &notch {
+                let t = (phase + cycle as f64) / rate;
+                let i = (t * sr).round() as usize;
+                let want = db((std::f64::consts::PI * 1000.0 / (2.0 * hz)).cos());
+                if t < 0.02 || i + quarter >= out.len() || want < -10.0 {
+                    continue;
+                }
+                // Its level now: the sample and the one a quarter of a cycle on, a tone's two sides.
+                let heard = db((out[i] * out[i] + out[i + quarter] * out[i + quarter]).sqrt());
+                assert!(
+                    (heard - want).abs() <= 0.5,
+                    "at {sr} Hz, rate {rate}, depth {depth}: at {t:.3} s its notch at {hz:.0} Hz makes {want:.2} dB, the Flanger plays {heard:.2} dB"
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 100, "{checked} points checked");
+    }
+}
+
+// CARD-129, CARD-99: Grains' band, drawn from its own sum, is where its grains come from: a 1 kHz tone
+// on for 2 s and off for 2 s, eight times, through its grains alone, 16 at once, at Pitch 0 (each
+// reads from one place all its life) and an octave up (each starts a grain's length further back,
+// and reads its way up to the newest sound). After every stop they are silent from the band's far
+// edge on (and 4 frames for the read between samples); at Pitch 0, after every start they sound from
+// its near edge on. And they reach the edges: the last grain heard after a stop comes within a tenth
+// of the spread of the far edge, and at Pitch 0 the first after a start within a tenth of it of the
+// near edge, at least once. Each is the furthest of a few grains' places at random (at Pitch 0, a
+// tenth from the edge 1 stop in 5), so eight stops and starts. An octave up the last heard is a grain
+// that started near the far edge's time and reads from near it, heard as it begins, so it comes
+// within a quarter of the spread (a band a grain's length off, 500 ms, is far outside either); and a
+// grain that started before a start reads its way up to the new sound sooner, so no near edge.
+#[test]
+fn grains_band_is_where_its_grains_come_from() {
+    for (sr, spread, pitch) in RATES.into_iter().flat_map(|r| [(0.3, 0), (1.0, 0), (0.3, 12), (1.0, 12)].map(|(s, p)| (r, s, p))) {
+        let values = json!({"size": 0.5, "density": 50, "spread": spread, "pitch": pitch, "mix": 1});
+        let d = drawn(sr, "effects", "grains", "cloud", values);
+        let band = pairs(&d["shapes"].as_array().unwrap().iter().find(|s| s["kind"] == "fill").expect("its band")["points"]);
+        let (near, far) = (band[0].0, band[1].0);
+        assert!((far - near - spread).abs() < 1e-9, "the band is the spread wide: {band:?}");
+        // On for 2 s (4 beats at 120 bpm), off for 2 s.
+        let gated = "vca(osc.sine(1000), lfo(time.beats, { period: 8, shape: \"square\" }))";
+        let out = left(
+            sr,
+            &format!(
+                "export default song(({{ time }}) => grains({gated}, {{ size: 0.5, density: 50, spread: {spread}, pitch: {pitch}, mix: 1 }}));\n"
+            ),
+            34.0,
+        );
+        let (frame, what) = (1.0 / sr, format!("{sr} Hz, spread {spread}, pitch {pitch}"));
+        let at = |t: f64| (t * sr).round() as usize;
+        let (mut furthest, mut nearest) = (f64::MIN, f64::MAX);
+        for k in 0..8 {
+            let (stop, start) = (2.0 + 4.0 * k as f64, 4.0 + 4.0 * k as f64);
+            let last = (at(stop)..at(start)).rev().find(|&i| out[i] != 0.0).unwrap() as f64 / sr - stop;
+            let first = (at(start)..at(start + 2.0).min(out.len())).find(|&i| out[i] != 0.0).unwrap() as f64 / sr - start;
+            assert!(last <= far + 4.0 * frame, "{what}: a grain heard {last:.4} s after stop {k}, past the band's far edge, {far:.4}");
+            if pitch == 0 {
+                assert!(first >= near - 4.0 * frame, "{what}: a grain heard {first:.4} s after start {k}, nearer than the band, {near:.4}");
+            }
+            (furthest, nearest) = (furthest.max(last), nearest.min(first));
+        }
+        println!(
+            "{what}: the band {near:.4} to {far:.4} s; the last grain heard at most {furthest:.4} s after a stop, the first at least {nearest:.4} s after a start"
+        );
+        let within = if pitch == 0 { 0.1 } else { 0.25 } * spread;
+        assert!(
+            furthest >= far - within,
+            "{what}: the last grain heard at most {furthest:.4} s after a stop, short of the band's far edge, {far:.4}"
+        );
+        if pitch == 0 {
+            assert!(
+                nearest <= near + 0.1 * spread,
+                "{what}: the first grain heard at least {nearest:.4} s after a start, far from the band's near edge, {near:.4}"
+            );
+        }
     }
 }
 
