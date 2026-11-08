@@ -211,7 +211,7 @@ fn find_notes_on_an_older_vocals_says_to_update() {
     let f = song(CLIP);
     let pack = f.0.join("old-vocals");
     let from = m2_song::pack::source_packs().join("@m2/vocals");
-    for rel in ["m2pkg.toml", "README.md", "src/index.ts", "kernels/vocals.wasm"] {
+    for rel in ["m2pkg.toml", "README.md", "src/index.ts", "src/pictures.ts", "kernels/vocals.wasm"] {
         let to = pack.join(rel);
         std::fs::create_dir_all(to.parent().unwrap()).unwrap();
         std::fs::copy(from.join(rel), &to).unwrap();
@@ -224,7 +224,9 @@ fn find_notes_on_an_older_vocals_says_to_update() {
     }
     let manifest = std::fs::read_to_string(pack.join("m2pkg.toml")).unwrap();
     let cut = manifest.find("[[kernel]]\nname = \"notes\"").unwrap();
-    std::fs::write(pack.join("m2pkg.toml"), manifest[..cut].replace("version = \"1.1.0\"", "version = \"1.0.0\"")).unwrap();
+    // The version music2 comes with, whichever it is, made 1.0.0: one before `notes`.
+    let now = manifest.lines().find(|l| l.starts_with("version = \"")).unwrap();
+    std::fs::write(pack.join("m2pkg.toml"), manifest[..cut].replacen(now, "version = \"1.0.0\"", 1)).unwrap();
     f.write("music2.toml", format!("{MANIFEST}\"@m2/vocals\" = {{ path = \"old-vocals\" }}\n"));
     let s = f.open();
     let why = crate::sung::packages_for(&s, "@m2/vocals:notes", "@m2/vocals:voice").map(drop).unwrap_err().to_string();
