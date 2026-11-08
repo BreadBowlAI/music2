@@ -14,4 +14,4 @@ import { tune, voiceChanger } from "@m2/vocals";
 
 Its sound code is its own kernels, `@m2/vocals:pitch`, `snap`, `shift`, `notes` and `voice`, in `kernels/vocals.wasm`.
 Tune and the Voice changer make the song play 15 ms later, so every track stays in time with them. The guide's page
-Audio says how to use it, under Tune a voice and Edit a voice's notes: `m2 docs audio` prints it.
+Audio says how to use it, under Tune a voice, Change a voice and Edit a voice's notes: `m2 docs audio` prints it.
