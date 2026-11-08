@@ -94,3 +94,17 @@ inputs = ["in: audio<*>", "gain: control<db> = 0 in 0..24", "ceiling: control<db
 outputs = ["out: audio<*>"]
 meters = ["pushed: control<db>"]
 latency = 92
+
+[[kernel]]
+name = "flanger"
+description = "Flanger (PACK-35): the sound and a copy of it 0.1 ms × 100^(depth × (0.5 − 0.5 cos 2πφ)) late, φ its LFO's phase (0 at the start; on a stereo sound the right side a quarter cycle behind), read between samples; its line takes in the sound plus the copy times feedback, and out is (1 − mix) × in + mix × the copy, turned over when feedback is below 0. Its LFO moves only while playing is 1 (left out, always). Its meter, phase: its LFO's phase at the call's last frame, 0 to 1"
+inputs = [
+  "in: audio<*>",
+  "rate: control<hz> = 0.25 in 0.05..10",
+  "depth: control<unit01> = 0.7",
+  "feedback: control<bipolar> = 0.5 in -0.9..0.9",
+  "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]
+meters = ["phase: control<unit01>"]

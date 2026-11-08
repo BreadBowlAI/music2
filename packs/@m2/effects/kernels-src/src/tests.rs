@@ -11,13 +11,14 @@ use super::*;
 /// Every effect at the settings the effect menu starts it with, and playing: the last of phaser's,
 /// tremolo's and bitcrush's is `playing`, 1. (The delay is tried below, as std tried it: its own
 /// tests, and the ABI's.)
-const ALL: [Fx; 6] = [
+const ALL: [Fx; 7] = [
     Fx { name: "reverb", run: run::<Reverb>, controls: &[0.6, 0.5, 0.25] },
     Fx { name: "phaser", run: run::<Phaser>, controls: &[0.4, 0.7, 0.5, 0.5, 1.0] },
     Fx { name: "tremolo", run: run::<Tremolo>, controls: &[5.0, 0.5, 1.0] },
     Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0, 1.0] },
     Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
     Fx { name: "clip", run: run::<Clip>, controls: &[6.0, -0.3] },
+    Fx { name: "flanger", run: run::<Flanger>, controls: &[0.25, 0.7, 0.5, 0.5, 1.0] },
 ];
 
 /// The effect named `name`.
@@ -25,8 +26,8 @@ fn fx(name: &str) -> &'static Fx {
     ALL.iter().find(|fx| fx.name == name).unwrap()
 }
 
-/// The effects whose last input is `playing`.
-const FOLLOW: [&str; 3] = ["phaser", "tremolo", "bitcrush"];
+/// The effects whose last input is `playing`, and that wait while it is 0.
+const FOLLOW: [&str; 4] = ["phaser", "tremolo", "bitcrush", "flanger"];
 
 // ---------------------------------------------------------------- every effect
 
@@ -132,6 +133,7 @@ fn kernels_with_lines_reset_in_place_to_where_they_started() {
     assert_reset_starts_over::<Delay>(&[0.5, 0.01, 0.5, 0.5], 5_000);
     assert_reset_starts_over::<Reverb>(&[0.5, 0.6, 0.5, 0.5], 5_000);
     assert_reset_starts_over::<Widen>(&[0.5, 1.5], 5_000);
+    assert_reset_starts_over::<Flanger>(&[0.5, 1.0, 0.7, 0.5, 0.5, 1.0], 5_000);
 }
 
 // ---------------------------------------------------------------- each effect
@@ -744,3 +746,48 @@ fn nothing_comes_out_once_the_clipper_says_it_is_done() {
         }
     }
 }
+
+// ---------------------------------------------------------------- what every kernel guarantees
+
+mod counting {
+    //! A count of what this thread allocates and frees.
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static HERE: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    fn count() {
+        let _ = HERE.try_with(|c| c.set(c.get() + 1));
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            count();
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            count();
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// What this thread has allocated and freed so far.
+    pub fn here() -> u64 {
+        HERE.with(Cell::get)
+    }
+}
+
+// ---------------------------------------------------------------- the Flanger (PACK-35)
+
+mod flanger;
