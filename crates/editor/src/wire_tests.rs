@@ -1,4 +1,4 @@
-//! + on a wire (CARD-36): each wire of the view says where an effect goes on it, by one of the add
+//! The + on a wire (CARD-36): each wire of the view says where an effect goes on it, by one of the add
 //! route's two forms, or why none can, in words; the second form wraps one argument of one reader;
 //! and Remove says why it can't take a node out, in the view and the route alike.
 

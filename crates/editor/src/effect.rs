@@ -193,17 +193,19 @@ fn argument_of(s: &Session, reader: &Site, source: &Site, at: Option<&[String]>)
         let w = if w.chars().count() > 24 { format!("{}…", w.chars().take(23).collect::<String>()) } else { w };
         format!("{them} reads {it} as `{w}`, not where it is made: change it in code.")
     };
-    if source.file == reader.file && reader.start <= source.start && source.end <= reader.end && source.id != reader.id {
-        if let Some(path) = crate::view::path_around(reader, source.start)
-            && let Some(arg) = reader.arg(&path)
-        {
-            let (start, end) = arg.span();
-            return match () {
-                _ if (start, end) == (source.start, source.end) => Ok(path),
-                _ if spreads(text, arg) => Err(spread()),
-                _ => Err(quoted(&text[start as usize..end as usize])),
-            };
-        }
+    if source.file == reader.file
+        && reader.start <= source.start
+        && source.end <= reader.end
+        && source.id != reader.id
+        && let Some(path) = crate::view::path_around(reader, source.start)
+        && let Some(arg) = reader.arg(&path)
+    {
+        let (start, end) = arg.span();
+        return match () {
+            _ if (start, end) == (source.start, source.end) => Ok(path),
+            _ if spreads(text, arg) => Err(spread()),
+            _ => Err(quoted(&text[start as usize..end as usize])),
+        };
     }
     if let (Some(name), true, true) = (&source.binding, source.constant, source.file == reader.file) {
         if let Some(at) = at
