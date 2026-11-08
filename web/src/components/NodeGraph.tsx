@@ -68,7 +68,7 @@ import { laneMade } from "../lib/events";
 import { useExpanded } from "../lib/expanded";
 import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
-import { COL_W, EXPR_H, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, SEG_H, VALUE_H, gridRows, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
+import { COL_W, EXPR_H, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, VALUE_H, gridRows, segHeight, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
 import { trackColors } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -1015,7 +1015,7 @@ function Node({
               </div>
             )}
             {shape.expanded ? (
-              <Columns columns={shape.columns} lit={lit} render={value} />
+              <Columns columns={shape.columns} lit={lit} render={value} onPick={(group) => useExpanded.getState().light(key, group)} />
             ) : (
               shape.values.length > 0 && (
                 <div data-values style={{ paddingTop: PAD, paddingBottom: PAD }} className="px-2">
@@ -1058,7 +1058,7 @@ function Node({
 const valueKey = (v: Value) => (v.t === "setting" ? `setting:${v.x.id}` : v.t === "view" ? `view:${v.v.name}` : `${v.t}:${v.port.id}`);
 
 /** An expanded node's columns (DV-12): side by side, 176 px each, wrapping after four; a lit one in the accent's wash (DV-18). */
-function Columns({ columns, lit, render }: { columns: Column[]; lit: string | null; render: (v: Value) => React.ReactNode }) {
+function Columns({ columns, lit, render, onPick }: { columns: Column[]; lit: string | null; render: (v: Value) => React.ReactNode; onPick: (group: string) => void }) {
   return (
     <div className="grid border-t border-line" style={{ gridTemplateColumns: `repeat(${Math.min(columns.length, 4)}, ${COL_W}px)` }}>
       {columns.map((c, i) => (
@@ -1069,6 +1069,9 @@ function Columns({ columns, lit, render }: { columns: Column[]; lit: string | nu
           aria-label={c.name}
           className={clsx("min-w-0 flex flex-col px-2", i % 4 !== 0 && "border-l border-line", i >= 4 && "border-t border-line", lit === c.name && "bg-accent-wash")}
           style={{ paddingBottom: PAD }}
+          // A value picked here lights its column, and so marks the dot whose `opens` names it (DV-18).
+          onPointerDownCapture={(e) => (e.target as HTMLElement).closest("[data-knob], [data-setting]") && lit !== c.name && onPick(c.name)}
+          onFocusCapture={(e) => (e.target as HTMLElement).closest("[data-knob], [data-setting]") && lit !== c.name && onPick(c.name)}
         >
           <div className="shrink-0 px-1 flex items-end pb-1 text-xs font-semibold text-fg-muted truncate" style={{ height: GROUP_H }}>
             {c.name}
@@ -2199,13 +2202,16 @@ function PickControl({
         // And one it can't: dimmed, its words on hover (DV-6).
         "[[data-cabling]_&[data-no-cable]]:opacity-40",
       )}
-      style={{ height: segmented ? SEG_H : VALUE_H }}
+      style={{ height: segmented ? segHeight((knob.options ?? []).map((o) => o.label)) : VALUE_H }}
     >
       <div className={clsx("min-w-0 text-xs text-fg-muted truncate", !segmented && "flex-1")}>{label}</div>
       {knob.kind === "switch" ? (
         <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
       ) : segmented ? (
-        <Segmented value={knob} label={label} off={off} title={title} onPick={pick} />
+        // Its options wrap onto a second row rather than spill past the column (DV-12, DV-14).
+        <div className="min-w-0 w-full [&>[role=radiogroup]]:ml-0 [&>[role=radiogroup]]:h-auto [&>[role=radiogroup]]:flex-wrap [&>[role=radiogroup]]:w-fit [&>[role=radiogroup]]:max-w-full">
+          <Segmented value={knob} label={label} off={off} title={title} onPick={pick} />
+        </div>
       ) : (
         <MenuValue value={knob} label={label} off={off} title={title} onPick={pick} />
       )}

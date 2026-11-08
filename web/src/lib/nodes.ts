@@ -150,7 +150,7 @@ function valueHeight(n: ViewNode, v: Value, expanded: boolean): number {
   switch (v.t) {
     case "knob": {
       const k = n.knobs.find((x) => x.id === v.port.knob);
-      return expanded && k && picks(k) && k.kind === "choice" && (k.options?.length ?? 0) <= 5 ? SEG_H : VALUE_H;
+      return expanded && k && picks(k) && k.kind === "choice" && (k.options?.length ?? 0) <= 5 ? segHeight(k.options.map((o) => o.label)) : VALUE_H;
     }
     case "lane":
       return VALUE_H;
@@ -162,6 +162,23 @@ function valueHeight(n: ViewNode, v: Value, expanded: boolean): number {
       return v.v.kind === "picture" ? (expanded ? EXPANDED_PICTURE_H : COLLAPSED_PICTURE_H) : VIEW_H[v.v.kind];
   }
 }
+
+/** The room a segmented choice has in a column: the column less its sides and the control's own. */
+const SEG_ROOM = COL_W - 16 - 4;
+/** A segmented choice's options, on as many rows as they need in a column, each whole (DV-14). */
+export function segRows(labels: string[]) {
+  let rows = 1, at = 0;
+  for (const l of labels) {
+    const w = measure(l, "500 11px {sans}") + 12 + 2;
+    if (at > 0 && at + w > SEG_ROOM) {
+      rows++;
+      at = w;
+    } else at += w;
+  }
+  return rows;
+}
+/** Its height: its label over its rows of options, 22 px each after the first. */
+export const segHeight = (labels: string[]) => SEG_H + (segRows(labels) - 1) * 22;
 
 /** How tall a collapsed node's values are: bars two to a row, a row naming a source across it. */
 export function gridRows(values: Value[]): Value[][] {
