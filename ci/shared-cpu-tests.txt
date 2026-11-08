@@ -1,0 +1,21 @@
+# ci/shared-cpu-tests.txt: the Rust speed tests a shared virtual machine's CPU time misjudges, each
+# with why.
+#
+# In short: these judge CPU time, each bound scaled by the machine's speed (m2_script::speed,
+# CARD-75), and pass on GitHub's Linux, the Linux server and a real Mac. On GitHub's Mac runner they
+# pass and fail from night to night (ci-flakes' runs 42494489844 and 42503673490): the one reference
+# work runs about as fast there as on the Linux server (ratio 1.07 to 1.44), but a few effect draws
+# take 2 to 4 times as long there as the ratio says, and the EQ drag's p99 is 2.2 to 2.6 times its
+# median (1.1 here). Work that allocates (QuickJS's collector, a measure's copy) or the virtual
+# machine's stolen time, likely: what the one reference can't see. ci/pr.sh rust leaves them out
+# only when M2_SHARED_CPU is set, as .github/workflows/nightly.yml's macos job sets it, and says so
+# in a "shared cpu" row; everywhere else they run as before, bounds unchanged. To bring one back:
+# a reference closer to its work (HANDOFF.md's "Known flakes"), then take its line out.
+#
+# One line a test, as in ci/nightly-tests.txt: <nextest binary id> <test name> <why...>. Names must
+# match exactly: the "shared cpu list" row (ci/pr.sh rust, ci/check.sh, on Linux) fails on a name
+# nextest can't find.
+
+m2-script::pack_pictures every_pack_picture_draws_inside_a_fifth_of_its_limit  GitHub's Mac: the chorus's motion draws 2 and 4 at 44.1 kHz 5.2 ms (1.3 here), the phaser's motion's first 5.4 to 6.0 ms (2.9), the reverb's tail's first at 48 kHz 6.5 ms (3.2), against 4.4 to 5.8 ms scaled by 1.09 to 1.44 (core/script/tests/pack_pictures.rs)
+m2-editor measure::tests::a_drag_frame_of_the_eq_stays_under_8_ms  GitHub's Mac: p99 8.9 and 10.5 ms, its median 4.0 to 4.2 ms, against 8.6 ms scaled by 1.07; here p99 about 1.1 times its median (crates/editor/src/measure_tests.rs)
+m2-editor measure::tests::a_measure_follows_a_drag_inside_its_budget  GitHub's Mac: one measure of a hundred past its budget (Slow), at ratios 1.10 and 1.16, on both tries (crates/editor/src/measure_tests.rs)

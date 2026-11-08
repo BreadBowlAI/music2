@@ -1,10 +1,12 @@
-# ci/nightly-list.sh: ci/nightly-tests.txt and ci/sleeps-tests.txt as cargo-nextest sees them.
+# ci/nightly-list.sh: ci/nightly-tests.txt, ci/sleeps-tests.txt and ci/shared-cpu-tests.txt as
+# cargo-nextest sees them.
 # ci/pr.sh and ci/check.sh source it, so the PR tier and the full check judge the lists the same
 # way. Bash 3.2.
 #
 # In short: nightly_filter turns ci/nightly-tests.txt's lines into one nextest filter (ci/pr.sh
 # rust leaves those tests out with it); sleeps_filter does the same for ci/sleeps-tests.txt (left
-# out only with M2_LATE_SLEEPS). nightly_list and sleeps_list check that nextest finds exactly the
+# out only with M2_LATE_SLEEPS), and shared_filter for ci/shared-cpu-tests.txt (left out only with
+# M2_SHARED_CPU). nightly_list, sleeps_list and shared_list check that nextest finds exactly the
 # tests their file names, so a renamed test can't slip back in unseen. Run them in the repo's top
 # folder; the lists need cargo-nextest on PATH, and build the test binaries if they aren't built.
 
@@ -36,8 +38,14 @@ nightly_list() { list_check ci/nightly-tests.txt "$1" nightly; }
 sleeps_filter() { list_filter ci/sleeps-tests.txt; }
 sleeps_list() { list_check ci/sleeps-tests.txt "$1" sleeps; }
 
-# sleeps_names: ci/sleeps-tests.txt's test names, comma-separated, for a row that says what was
-# left out.
-sleeps_names() {
-  awk '!/^#/ && NF >= 2 { printf "%s%s", (n++ ? ", " : ""), $2 }' ci/sleeps-tests.txt
+# shared_filter, shared_list <dir>: ci/shared-cpu-tests.txt's tests (a shared virtual machine's CPU
+# time misjudges them).
+shared_filter() { list_filter ci/shared-cpu-tests.txt; }
+shared_list() { list_check ci/shared-cpu-tests.txt "$1" shared; }
+
+# list_names <file>: its test names, comma-separated, for a row that says what was left out.
+list_names() {
+  awk '!/^#/ && NF >= 2 { printf "%s%s", (n++ ? ", " : ""), $2 }' "$1"
 }
+sleeps_names() { list_names ci/sleeps-tests.txt; }
+shared_names() { list_names ci/shared-cpu-tests.txt; }
