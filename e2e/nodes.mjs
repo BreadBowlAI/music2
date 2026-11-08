@@ -17,6 +17,7 @@
 import { ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const { page, errors, api, view, box, posts, key, caughtUp } = await open(1440, 900);
 
@@ -492,5 +493,23 @@ check(await until(async () => !!(await page.$(`${vx} [data-node="noise"]`)), 150
 const perNote = await page.$$eval(`${vx} [data-node]`, (els) => els.map((e) => `${e.dataset.node}:${!!e.querySelector("[data-per-note]")}`).sort());
 check(perNote.includes("noise:true") && perNote.includes("osc.saw:true") && perNote.includes("adsr:true"), `the voice's parts say per note, the noise too: ${perNote.join(" ")}`);
 check(perNote.filter((x) => x.startsWith("lowpass:")).sort().join() === "lowpass:false,lowpass:true" && perNote.includes("poly:false"), "the Lowpass after the voices and the poly call don't");
+
+// ---------------------------------------------------------------- a node with no groups, expanded (DV-12, review Z10)
+
+// A track's own mixer of ten sounds: a value each, no groups. Expanded, they go in columns of eight.
+write("tracks/vx.ts", `import { track } from "@m2/core";
+import { osc } from "std/dsp";
+import { mixer } from "std/mix";
+
+export default track("vx", { name: "Vx" }, () =>
+  mixer({ ${[..."abcdefghij"].map((c, i) => `${c}: osc.sine(${110 * (i + 1)})`).join(", ")} }),
+);
+`);
+const mx = `${vx} [data-node="mixer"]`;
+check(await until(async () => !!(await page.$(mx)), 15000), "Vx is a mixer of ten sounds");
+await expand(page, mx);
+const cols = await page.$$eval(`${mx} [data-column]`, (els) => els.map((e) => `${e.dataset.column}:${e.querySelectorAll("[data-knob]").length}`));
+const mixed = await page.$$eval(`${mx} [data-knob]`, (els) => els.length);
+check(mixed >= 10 && cols[0] === "Values:8" && cols[1] === `Values 2:${Math.min(8, mixed - 8)}`, `its ${mixed} values in columns of eight: ${cols.join(" ")}`);
 
 done(errors);

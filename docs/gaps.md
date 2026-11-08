@@ -282,6 +282,7 @@ Each line is one small gap, without a number.
 
 ### Tracks, knobs and the Device view
 
+- **A tall graph scrolls where its width sits empty** (since Fit became 100%, review Z8): the layout stacks the sources of one column (the song's tracks, a branch's LFO) under each other, so `examples/sounds`' Song is a long scroll with most of the dock's width empty. The plan, for track `graph-insert`: when the graph is taller than the dock and narrower than it, the layout spreads a column's stacked sources sideways, into columns of their own before it (each source still just before what reads it, its wire through the gaps), until the graph fits the dock's height or fills its width; only then does it scroll. A pure change to `layout` in `NodeGraph.tsx`, with a `nodes` check that the Song of `examples/sounds` fits more of its nodes in the dock's first view.
 - **A cable doesn't show the sound it carries**: in the Patch view (and the graph to come) a cable could light with its level, as some DAWs' patch views do. It needs a look at each cable, a core change, with a note of its own.
 - **Disconnecting a lane of names from the only choice it feeds is refused**, as the lane would have no names: take its automation out instead. A lane of names' header shows no value at the playhead, and Draw mode (B) paints only number lanes.
 - **A view's drag of two knobs isn't kept while the code doesn't compile**: it is refused, said in words (one knob's drag waits, C5; CARD-22).

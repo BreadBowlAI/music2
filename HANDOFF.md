@@ -259,6 +259,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |
 | `a_hung_host_process_is_ended_and_said` | the plugin host's timing | once, passed on retry |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
+| `dress2a-fix` | "over the gate's last 3 s (90 reads), each closing is drawn as deep as the others, within 1 dB": one closing drawn at 33.35 dB against about 56 | once in 17 runs on branch `graph-node` (2026-11-08); the check reads only the gate's down meter history, which the branch didn't touch, so a read the meter's drawing (CARD-73) missed is the likely cause; not found |
 | `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read. The next Mac nightly (`53382be`, run 40666853783) passed it with no retry |
 | `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
