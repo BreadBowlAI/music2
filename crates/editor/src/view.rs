@@ -138,6 +138,9 @@ pub struct OutputPort {
 #[derive(Clone, Debug, Serialize, PartialEq)]
 pub struct ViewNode {
     pub id: String,
+    /// What a window keeps its own state by (which nodes are expanded, CARD-25): a key that edits
+    /// keep. Its id here; the server gives a call's node the key its call had in the view before.
+    pub key: String,
     pub label: String,
     /// `call`, `lane`, `time`, `import`, `value` or `export`.
     pub kind: &'static str,
@@ -908,6 +911,7 @@ pub fn view(session: &Session) -> GraphView {
                 _ => None,
             };
             nodes.push(ViewNode {
+                key: id.clone(),
                 id: id.clone(),
                 label,
                 kind,
@@ -1022,6 +1026,7 @@ pub fn view(session: &Session) -> GraphView {
         for (name, r) in &m.exports {
             let id = format!("export:{name}");
             nodes.push(ViewNode {
+                key: id.clone(),
                 id: id.clone(),
                 label: name.clone(),
                 kind: "export",

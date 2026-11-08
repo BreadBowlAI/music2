@@ -306,6 +306,8 @@ pub(crate) struct Open {
     /// The packages `types` was made from, and the revision it was made at, which the state says
     /// so the code editor loads them again.
     types_of: (Arc<m2_runtime::View>, u64),
+    /// Each node's key, kept across edits (CARD-25).
+    keys: super::keys::Keys,
     /// Plugin instances that asked to be restarted (`HostEvent::Restart`): the next activation,
     /// made at once, replaces each from its committed state (HOST-5).
     pub(crate) restarts: HashSet<Handle>,
@@ -875,7 +877,9 @@ impl Open {
         // A `layout.json` that doesn't read is a problem of its own, with Reset layout (FMT-19).
         // Each in plain words too, where a rule knows it (the studio plan's D2).
         let problems = files::plain_problems(s, &[s.problems(), &m2_editor::layout::problems(s)[..]].concat());
-        let view = Arc::new(s.view());
+        let mut view = s.view();
+        self.keys.stamp(&s.accepted_arc(), &mut view);
+        let view = Arc::new(view);
         Shown {
             view: view.clone(),
             revision: rev.number,
@@ -1517,6 +1521,7 @@ impl Actor {
             codes: VecDeque::new(),
             types,
             types_of,
+            keys: Default::default(),
             restarts: HashSet::new(),
             relatent: false,
             told_feedback: vec![],
