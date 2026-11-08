@@ -332,19 +332,18 @@ fn each_face_is_the_one_its_rule_lists() {
 
 /// The time a picture's draw takes, its first in a fresh runtime (`warm`, a cheap picture of the same
 /// package, loads the package's code first, which has its own limit): the median of five fresh
-/// runners, each in CPU time: the runtime's thread's for the draw and Rust's checks of its shapes
-/// (`Runner::draw_timed`), and this thread's for what the test's own `draw` does around it, reading
-/// every pack's manifest for the ask and the shapes' JSON (about 1.5 ms here), as the wall clock
-/// counted before, so the bound is no looser here than it was (review Y8). Not the wait for a CPU.
+/// runners, each the CPU time of the runtime's thread for the draw and Rust's checks of its shapes
+/// (`Runner::draw_timed`, CARD-75). Not the test's own setup: the ask is made first, reading every
+/// pack's manifest (about 1.5 ms here, which the wall clock counted before), nor the wait for a CPU.
 fn first_draw(warm: (&str, &str, Value), cid: &str, view: &str, values: &Value) -> std::time::Duration {
     let mut times: Vec<std::time::Duration> = (0..5)
         .map(|_| {
             let runner = Runner::new();
             draw(&runner, warm.0, warm.1, warm.2.clone()).unwrap_or_else(|why| panic!("{}'s {}: {why}", warm.0, warm.1));
-            let here = m2_os::thread::cpu_time();
-            let (drawn, took) = runner.draw_timed(ask(cid, view, values.clone()));
+            let asked = ask(cid, view, values.clone());
+            let (drawn, took) = runner.draw_timed(asked);
             shapes(drawn, cid, view).unwrap_or_else(|why| panic!("{cid}'s {view}: {why}"));
-            took + m2_os::thread::cpu_time().saturating_sub(here)
+            took
         })
         .collect();
     times.sort();
