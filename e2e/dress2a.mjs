@@ -1,8 +1,8 @@
 // Track dress2a: @m2/mixing's and @m2/effects' cards wear their pictures (CARD-110 to CARD-126).
 // Two tracks play a saw that hits each half beat: Mix A through the Parametric EQ, the gate, the
 // transient shaper, the de-esser, the multiband and Pump; FX A through the delay, the reverb, the
-// chorus, the phaser, the tremolo, drive, the bitcrusher and the widener. Device's chain draws each
-// card's picture on its face; while the song plays, the live ones move (the spectra, the levels over
+// chorus, the phaser, the tremolo, drive, the bitcrusher and the widener. The graph's nodes,
+// expanded, draw each one's face pictures across their tops; while the song plays, the live ones move (the spectra, the levels over
 // time, Pump's playhead), and the meters the gate, the de-esser and the multiband send (track
 // meters2, CARD-126): the gate's strip lights on the hits and goes dark between them, and its and
 // the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
@@ -21,6 +21,7 @@ import path from "node:path";
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 import { dress2aSong } from "./dress2a-song.mjs";
+import { expand } from "./graphlib.mjs";
 
 // ---------------------------------------------------------------- the song: two tracks of the packs' effects
 
@@ -28,7 +29,7 @@ dress2aSong();
 
 const SHOTS = process.env.E2E_SHOTS ?? ROOT;
 fs.mkdirSync(SHOTS, { recursive: true });
-const { page, errors, api, view, box, key } = await open(1920, 1080, { device: "chain" });
+const { page, errors, api, view, box, key } = await open(1920, 1080);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
@@ -82,13 +83,16 @@ const num = (code, name) => Number(new RegExp(`${name}: (-?[0-9.]+)`).exec(code)
 check(await until(async () => !!(await page.$('[data-module-tab="mixa"]')) && !!(await page.$('[data-module-tab="fxa"]')), 30000), "the song has its Mix A and FX A tracks");
 await page.click('[data-module-tab="mixa"] [data-testid=track-label]');
 await view("graph");
-const mixa = '[data-testid=chain] [data-module="mixa"]';
-check(await until(async () => !!(await page.$(`${mixa} [data-node="pump"]`)), 20000), "Mix A's chain has its six cards");
+const mixa = '[data-testid=graph] [data-module="mixa"]';
+const six = ["eq", "gate", "transient", "deesser", "multiband", "pump"];
+check(await until(async () => (await Promise.all(six.map((n) => page.$(`${mixa} [data-node="${n}"]`)))).every(Boolean), 20000), "Mix A's graph has its six nodes");
+// Their pictures big, as a chain card's face had them: expanded, 132 px (DV-19).
+check(await expand(page, `${mixa} [data-node]`), "each one expanded");
 
 // ---------------------------------------------------------------- the Parametric EQ (CARD-111)
 
 const eq = `${mixa} [data-node="eq"]`;
-const eqPic = `${eq} [data-face] [data-picture="curve"]`;
+const eqPic = `${eq} [data-views] [data-picture="curve"]`;
 await shown(eq);
 check(await until(async () => (await points(`${eqPic} polyline[data-response]`)) === 256, 20000), `the EQ's face draws its curve, measured from its own sound: ${await points(`${eqPic} polyline[data-response]`)} points`);
 const eqMarks = await page.$$eval(`${eqPic} [data-dot]`, (els) => els.map((e) => e.parentElement?.querySelector("text")?.textContent?.trim() ?? ""));
@@ -101,11 +105,11 @@ await drag(eqPic, 3, 0, -30, "tracks/mixa.ts", (c) => num(c, "gain4") > -3, "Par
 // ---------------------------------------------------------------- the gate (CARD-112)
 
 const gate = `${mixa} [data-node="gate"]`;
-const gatePic = `${gate} [data-face] [data-picture="levels"]`;
+const gatePic = `${gate} [data-views] [data-picture="levels"]`;
 await shown(gate);
 check(await until(async () => (await points(`${gatePic} polyline[data-line="threshold"]`)) === 2, 20000), "the gate's face draws where it opens, a line");
 check((await words(gatePic)) === "Opens when the sound reaches −30 dB; below that it turns it down to −80 dB. The strip at the foot lights while it is open. Drag the line", `its words: ${await words(gatePic)}`);
-const gateDown = `${gate} [data-face] [data-picture="down"]`;
+const gateDown = `${gate} [data-views] [data-picture="down"]`;
 check(
   await until(async () => (await words(gateDown)) === "How far it turns the sound down: none while it is open, up to 80 dB once it closes", 20000),
   `beside it, how far it turns down: ${await words(gateDown)}`,
@@ -117,7 +121,7 @@ await drag(gatePic, 0, 0, 20, "tracks/mixa.ts", (c) => num(c, "threshold") < -30
 // ---------------------------------------------------------------- the transient shaper (CARD-113)
 
 const tr = `${mixa} [data-node="transient"]`;
-const trPic = `${tr} [data-face] [data-picture="hit"]`;
+const trPic = `${tr} [data-views] [data-picture="hit"]`;
 await shown(tr);
 check(await until(async () => (await points(`${trPic} polyline[data-line="after"]`)) === 400, 20000), "the transient shaper's face draws one hit, after it, a point each millisecond");
 check((await words(trPic)) === "One hit, before (faint) and after: its start up 6 dB, its tail down 3 dB", `its words: ${await words(trPic)}`);
@@ -128,11 +132,11 @@ await drag(trPic, 0, 0, -20, "tracks/mixa.ts", (c) => num(c, "attack") > 6, "Tra
 // ---------------------------------------------------------------- the de-esser (CARD-114)
 
 const de = `${mixa} [data-node="deesser"]`;
-const dePic = `${de} [data-face] [data-picture="band"]`;
+const dePic = `${de} [data-views] [data-picture="band"]`;
 await shown(de);
 check(await until(async () => (await page.$$(`${dePic} [data-dot]`)).length === 1, 20000), "the de-esser's face draws its band and one dot");
 check(/^Listens from 3\.71 kHz to 9\.71 kHz: when that band's peaks go over −40 dB/.test((await words(dePic)) ?? ""), `its words: ${await words(dePic)}`);
-const deDown = `${de} [data-face] [data-picture="down"]`;
+const deDown = `${de} [data-views] [data-picture="down"]`;
 check(
   await until(async () => (await words(deDown)) === "How far it turns the band down at 6 kHz: up to 6 dB, while the band's peaks are over −40 dB", 20000),
   `beside it, how far it turns its band down: ${await words(deDown)}`,
@@ -144,12 +148,12 @@ await drag(dePic, 0, 30, 0, "tracks/mixa.ts", (c) => num(c, "freq") > 6000, "De-
 // ---------------------------------------------------------------- the multiband (CARD-115)
 
 const mb = `${mixa} [data-node="multiband"]`;
-const mbPic = `${mb} [data-face] [data-picture="split"]`;
+const mbPic = `${mb} [data-views] [data-picture="split"]`;
 await shown(mb);
 check(await until(async () => (await points(`${mbPic} polyline[data-response][data-line="split"]`)) === 256, 20000), "the multiband's face draws its split, measured from its sound under its thresholds");
 const opens = await page.$$eval(`${mbPic} [data-dot]`, (els) => els.map((e) => e.dataset.opens ?? ""));
-check(JSON.stringify(opens) === JSON.stringify(["", "", "Low", "Mid", "High"]), `a dot on each crossover, and one for each band's gain that shows its tab: ${JSON.stringify(opens)}`);
-const mbDown = `${mb} [data-face] [data-picture="down"]`;
+check(JSON.stringify(opens) === JSON.stringify(["", "", "Low", "Mid", "High"]), `a dot on each crossover, and one for each band's gain that lights its column: ${JSON.stringify(opens)}`);
+const mbDown = `${mb} [data-views] [data-picture="down"]`;
 check(
   await until(async () => (await words(mbDown)) === "Low, mid, high: how far each band is turned down now, a bar each, up to 24 dB (further stays at the top)", 20000),
   `beside it, how far each band turns down: ${await words(mbDown)}`,
@@ -161,13 +165,13 @@ await drag(mbPic, 3, 0, -20, "tracks/mixa.ts", (c) => num(c, "midGain") > -2, "M
 // ---------------------------------------------------------------- Pump (CARD-116)
 
 const pump = `${mixa} [data-node="pump"]`;
-const pumpPic = `${pump} [data-face] [data-picture="dip"]`;
+const pumpPic = `${pump} [data-views] [data-picture="dip"]`;
 await shown(pump);
 check(await until(async () => (await points(`${pumpPic} polyline[data-line="dip"]`)) > 150, 20000), "Pump's face draws its dip over a bar, from its own sum");
 check((await page.$eval(`${pumpPic} svg`, (e) => e.dataset.xSpan).catch(() => "")) === "0,4", "over 4 beats");
 check(/^Dips 8 dB every 1\/4 note/.test((await words(pumpPic)) ?? ""), `its words: ${await words(pumpPic)}`);
 const rate = await page.$eval(`${pump} [data-testid=setting-menu]`, (e) => e.textContent?.trim()).catch(() => null);
-check(/1\/4/.test(rate ?? ""), `its rate is on its face, its menu: ${rate}`);
+check(/1\/4/.test(rate ?? ""), `its rate is on its node, expanded (settings show only there), its menu: ${rate}`);
 await linted(pump, "Pump's card");
 await shoot(pump, "pump");
 await drag(pumpPic, 0, 0, 20, "tracks/mixa.ts", (c) => num(c, "depth") < -8, "Pump depth", "the foot dragged down deepens the dip");
@@ -255,11 +259,13 @@ await page.keyboard.press("Space");
 // ---------------------------------------------------------------- FX A: the effects
 
 await page.click('[data-module-tab="fxa"] [data-testid=track-label]');
-const fxa = '[data-testid=chain] [data-module="fxa"]';
-check(await until(async () => !!(await page.$(`${fxa} [data-node="widen"]`)), 20000), "FX A's chain has its eight cards");
+const fxa = '[data-testid=graph] [data-module="fxa"]';
+const eight = ["delay", "reverb", "chorus", "phaser", "tremolo", "drive", "bitcrush", "widen"];
+check(await until(async () => (await Promise.all(eight.map((n) => page.$(`${fxa} [data-node="${n}"]`)))).every(Boolean), 20000), "FX A's graph has its eight nodes");
+check(await expand(page, `${fxa} [data-node]`), "each one expanded");
 
 const dl = `${fxa} [data-node="delay"]`;
-const dlPic = `${dl} [data-face] [data-picture="echoes"]`;
+const dlPic = `${dl} [data-views] [data-picture="echoes"]`;
 await shown(dl);
 check(await until(async () => (await page.$$(`${dlPic} rect`)).length >= 7, 20000), `the delay's face draws its click and its echoes as bars: ${(await page.$$(`${dlPic} rect`)).length}`);
 check(/^An echo every 250 ms, each 7\.96 dB quieter/.test((await words(dlPic)) ?? ""), `its words: ${await words(dlPic)}`);
@@ -268,7 +274,7 @@ await shoot(dl, "delay");
 await drag(dlPic, 0, 30, 0, "tracks/fxa.ts", (c) => num(c, "time") > 0.25, "Delay time", "the first echo dragged right makes the time longer");
 
 const rv = `${fxa} [data-node="reverb"]`;
-const rvPic = `${rv} [data-face] [data-picture="tail"]`;
+const rvPic = `${rv} [data-views] [data-picture="tail"]`;
 await shown(rv);
 check(await until(async () => (await points(`${rvPic} polyline[data-line="tail"]`)) === 48, 20000), "the reverb's face draws its tail, from its own sums");
 check(/^Its tail fades 30 dB in /.test((await words(rvPic)) ?? ""), `its words: ${await words(rvPic)}`);
@@ -282,7 +288,7 @@ for (const [node, line, n, said0] of [
   ["tremolo", "level", 241, /^The level dips to 0\.5 and back, 5 times a second/],
 ]) {
   const card = `${fxa} [data-node="${node}"]`;
-  const pic = `${card} [data-face] [data-picture="motion"]`;
+  const pic = `${card} [data-views] [data-picture="motion"]`;
   await shown(card);
   check(await until(async () => (await points(`${pic} polyline[data-line="${line}"]`)) === n, 20000), `the ${node}'s face draws a second of its motion`);
   check(said0.test((await words(pic)) ?? ""), `its words: ${await words(pic)}`);
@@ -291,7 +297,7 @@ for (const [node, line, n, said0] of [
 }
 
 const dr = `${fxa} [data-node="drive"]`;
-const drPic = `${dr} [data-face] [data-picture="curve"]`;
+const drPic = `${dr} [data-views] [data-picture="curve"]`;
 await shown(dr);
 check(await until(async () => (await points(`${drPic} polyline[data-line="curve"]`)) === 201, 20000), "drive's face draws its curve, from its own sum");
 await linted(dr, "drive's card");
@@ -299,7 +305,7 @@ await shoot(dr, "drive");
 await drag(drPic, 0, 0, -30, "tracks/fxa.ts", (c) => num(c, "amount") > 9, "Drive amount", "its dot dragged up drives harder");
 
 const bc = `${fxa} [data-node="bitcrush"]`;
-const bcPic = `${bc} [data-face] [data-picture="crush"]`;
+const bcPic = `${bc} [data-views] [data-picture="crush"]`;
 await shown(bc);
 check(await until(async () => (await points(`${bcPic} polyline[data-line="crushed"]`)) === 96, 20000), "the bitcrusher's face draws a sine, crushed, a step each sample");
 check((await words(bcPic)) === "A 1 kHz sine, rounded to 6 bits and held 12 thousand times a second", `its words: ${await words(bcPic)}`);
@@ -307,7 +313,7 @@ await linted(bc, "the bitcrusher's card");
 await shoot(bc, "bitcrush");
 
 const wd = `${fxa} [data-node="widen"]`;
-const wdPic = `${wd} [data-face] [data-picture="field"]`;
+const wdPic = `${wd} [data-views] [data-picture="field"]`;
 await shown(wd);
 check(await until(async () => (await points(`${wdPic} polyline[data-line="field"]`)) === 3, 20000), "the widener's face draws its field");
 check((await points(`${wdPic} polyline[data-line="made"]`)) === 3, "and, past width 1, the fainter fan of the width it makes up for a mono sound");
@@ -315,7 +321,7 @@ await linted(wd, "the widener's card");
 await shoot(wd, "widen");
 await drag(wdPic, 0, 20, 0, "tracks/fxa.ts", (c) => num(c, "width") > 1.5, "Widen width", "its edge dragged right widens it");
 
-// The whole chains, to compare with the mockup.
+// The whole graphs, to compare with the mockup.
 await page.screenshot({ path: `${SHOTS}/dress2a-fxa.png` });
 await page.click('[data-module-tab="mixa"] [data-testid=track-label]');
 await sleep(500);

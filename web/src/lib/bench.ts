@@ -43,7 +43,7 @@ export async function pictures() {
       }
       return null;
     });
-    // Show its card: its track, and Device.
+    // Show its node: its track, and the Graph.
     document.querySelector<HTMLElement>(`[data-module-tab="${CSS.escape(found.module)}"] [data-testid=track-label]`)?.click();
     document.querySelector<HTMLElement>('[data-view-tab="graph"]')?.click();
     const shown = await until(() => document.querySelector<HTMLElement>(`[data-picture="${CSS.escape(found.view)}"][data-drawn]`));

@@ -1,15 +1,16 @@
 // Track dress2b: music2's own instruments wear their pictures (CARD-130 to CARD-144), and std's
 // Limit and Master their ceiling. On first-song, with a Wavetable, a Polysynth and an FM synth added
-// and a Limit after the keys: Device's chain draws the Wavetable's table (its frames, the LFO's
-// reach), its filter's shape, its LFO and table B on their tabs; the Polysynth's one note, measured,
+// and a Limit after the keys: the graph's nodes, expanded, draw the Wavetable's table (its frames,
+// the LFO's reach), its filter's shape, its LFO and table B in their groups' columns; the Polysynth's one note, measured,
 // and its 24 dB ladder; the FM synth's partials; the Kick's Drum's hit, measured; the Limit's and
 // the Master's ceiling. A dot dragged on each draggable picture writes its value, stays under the
 // pointer, is one undo step, and ⌘Z takes it back; while the song plays the Master's and the
-// Limit's last seconds move. Each card linted and shot, to compare with the design's mockup.
+// Limit's last seconds move. Each node linted and shot, to compare with the design's mockup.
 //
 //   node e2e/instruments.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 // ---------------------------------------------------------------- the song: three instruments more, a Limit after the keys
 
@@ -55,7 +56,7 @@ write(
     .replace("keys: { in: keys.out, db: db(-5), pan: -0.25 },", "keys: { in: keys.out, db: db(-5), pan: -0.25 },\n      wt: wt.out,\n      poly: poly.out,\n      fm: fm.out,"),
 );
 
-const { page, errors, api, view, box, key } = await open(1920, 1080, { device: "chain" });
+const { page, errors, api, view, box, key } = await open(1920, 1080);
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
   check(bad.length === 0, `lint: ${what}${bad.length ? `: ${bad.slice(0, 3).join(" | ")}` : ""}`);
@@ -90,7 +91,7 @@ async function undo(file, was) {
   if (read(file) !== was) await key("Meta+z");
   return until(() => read(file) === was, 8000);
 }
-/** A shot of the card `sel` alone, to the run's folder. */
+/** A shot of the node `sel` alone, to the run's folder. */
 const shot = async (sel, name) => (await page.$(sel))?.screenshot({ path: `${ROOT}/instruments-${name}.png` });
 const select = async (track) => {
   await page.click(`[data-module-tab="${track}"] [data-testid=track-label]`);
@@ -102,17 +103,19 @@ check(await until(async () => !!(await page.$('[data-module-tab="fm"]')), 30000)
 // ---------------------------------------------------------------- the Wavetable (CARD-131 to CARD-135)
 
 await select("wt");
-const wt = '[data-testid=chain] [data-module="wt"] [data-node="wavetable"]';
-check(await until(async () => !!(await page.$(wt)), 20000), "Wave's chain has the Wavetable's card");
+const wt = '[data-testid=graph] [data-module="wt"] [data-node="wavetable"]';
+check(await until(async () => !!(await page.$(wt)), 20000), "Wave's graph has the Wavetable's node");
+// Its pictures big, and every group's (DV-19): expanded.
+check(await expand(page, wt), "expanded");
 await shown(wt);
 const table = `${wt} [data-picture="wavesA"]`;
 check(await until(async () => (await points(`${table} polyline[data-line="frame"]`)) === 65, 20000), "its face draws table A: the frame playing, 65 points");
 // Eight frames behind it, and the two at the ends of the LFO's reach, with the line between them.
 check((await page.$$(`${table} polyline:not([data-line])`)).length === 10 && !!(await page.$(`${table} polyline[data-line="reach"]`)), "eight frames behind it, and the LFO's reach");
 check(/^Table A, vowels, at position 0\.35: drag across to move through it\. The LFO moves it from 0\.05 to 0\.65$/.test((await words(table)) ?? ""), `its words: ${await words(table)}`);
-const tabs = await page.$$eval(`${wt} [role=tab]`, (els) => els.map((e) => e.dataset.tab));
-check(JSON.stringify(tabs) === '["Osc A","Osc B","Filter","Env","LFO","More","All"]', `its tabs: ${JSON.stringify(tabs)}`);
-await linted(wt, "the Wavetable's card");
+const columns = await page.$$eval(`${wt} [data-column]`, (els) => els.map((e) => e.dataset.column));
+check(JSON.stringify(columns) === '["Osc A","Osc B","Filter","Env","LFO","More","Setup"]', `its groups, a column each, its settings last (All gone: none hidden): ${JSON.stringify(columns)}`);
+await linted(wt, "the Wavetable's node");
 await shot(wt, "wavetable");
 const wtCode = read("tracks/wt.ts");
 check(await drag(`${table} [data-dot="0"]`, 40, 0), "the position's dot, held, stays under the pointer");
@@ -120,30 +123,32 @@ const position = () => Number(/positionA: ([0-9.]+)/.exec(read("tracks/wt.ts"))?
 check(await until(() => position() > 0.36, 8000), `dragged right, it writes a later position A: ${position()}`);
 check(await until(async () => /^Undo Wavetable position A/.test((await undoTitle()) ?? "")), `one undo step: ${await undoTitle()}`);
 check(await undo("tracks/wt.ts", wtCode), "⌘Z takes it back");
-await page.click(`${wt} [data-tab="Filter"]`);
-const curve = `${wt} [data-picture="curve"]`;
-check(await until(async () => (await points(`${curve} polyline[data-line="curve"]`)) === 241, 15000), "its Filter tab draws its own shape's curve");
+// Each column drawn once in sight, as a tab was once shown (DV-17: a picture is asked for while it shows).
+await shown(`${wt} [data-column="Filter"]`);
+const curve = `${wt} [data-column="Filter"] [data-picture="curve"]`;
+check(await until(async () => (await points(`${curve} polyline[data-line="curve"]`)) === 241, 15000), "its Filter column draws its own shape's curve");
 check(/^Cuts the highs above 8 kHz, q 0\.7/.test((await words(curve)) ?? ""), `its words: ${await words(curve)}`);
-await page.click(`${wt} [data-tab="LFO"]`);
-check(await until(async () => (await points(`${wt} [data-picture="lfo"] polyline[data-line="shape"]`)) > 30, 15000), "its LFO tab draws the LFO's sine");
-await page.click(`${wt} [data-tab="Osc B"]`);
-check(await until(async () => (await points(`${wt} [data-picture="wavesB"] polyline[data-line="frame"]`)) === 65, 15000), "its Osc B tab draws table B");
+await shown(`${wt} [data-column="LFO"]`);
+check(await until(async () => (await points(`${wt} [data-column="LFO"] [data-picture="lfo"] polyline[data-line="shape"]`)) > 30, 15000), "its LFO column draws the LFO's sine");
+await shown(`${wt} [data-column="Osc B"]`);
+check(await until(async () => (await points(`${wt} [data-column="Osc B"] [data-picture="wavesB"] polyline[data-line="frame"]`)) === 65, 15000), "its Osc B column draws table B");
 
 // ---------------------------------------------------------------- the Polysynth (CARD-136, CARD-138)
 
 await select("poly");
-const poly = '[data-testid=chain] [data-module="poly"] [data-node="synth.custom"]';
-check(await until(async () => !!(await page.$(poly)), 20000), "Poly's chain has the Polysynth's card");
+const poly = '[data-testid=graph] [data-module="poly"] [data-node="synth.custom"]';
+check(await until(async () => !!(await page.$(poly)), 20000), "Poly's graph has the Polysynth's node");
+check(await expand(page, poly), "expanded");
 await shown(poly);
 const note = `${poly} [data-picture="note"]`;
 check(await until(async () => (await points(`${note} polygon[data-hit]`)) === 512, 20000), "its face draws one note, measured from its own sound");
 check(!!(await page.$(`${note} rect[data-play="60"]`)), "a place over it that plays middle C");
 check(await until(async () => (await page.$$(`${poly} [data-picture="amp"] [data-dot]`)).length === 3, 15000), "beside its envelope, three corners");
-await linted(poly, "the Polysynth's card");
+await linted(poly, "the Polysynth's node");
 await shot(poly, "polysynth");
-await page.click(`${poly} [data-tab="Filter"]`);
-const ladder = `${poly} [data-picture="filter"]`;
-check(await until(async () => (await points(`${ladder} polyline[data-line="curve"]`)) === 241, 15000), "its Filter tab draws its ladder");
+await shown(`${poly} [data-column="Filter"]`);
+const ladder = `${poly} [data-column="Filter"] [data-picture="filter"]`;
+check(await until(async () => (await points(`${ladder} polyline[data-line="curve"]`)) === 241, 15000), "its Filter column draws its ladder");
 check(/24 dB an octave/.test((await words(ladder)) ?? ""), `its words: ${await words(ladder)}`);
 const polyCode = read("tracks/poly.ts");
 check(await drag(`${ladder} [data-dot="0"]`, -30, 0), "the cutoff's dot, held, stays under the pointer");
@@ -154,13 +159,14 @@ await shot(poly, "ladder");
 // ---------------------------------------------------------------- the FM synth (CARD-140)
 
 await select("fm");
-const fmc = '[data-testid=chain] [data-module="fm"] [data-node="fm.custom"]';
-check(await until(async () => !!(await page.$(fmc)), 20000), "FM's chain has the FM synth's card");
+const fmc = '[data-testid=graph] [data-module="fm"] [data-node="fm.custom"]';
+check(await until(async () => !!(await page.$(fmc)), 20000), "FM's graph has the FM synth's node");
+check(await expand(page, fmc), "expanded");
 await shown(fmc);
 const parts = `${fmc} [data-picture="partials"]`;
 check(await until(async () => (await page.$$(`${parts} g > rect`)).length > 5, 15000), "its face draws its partials as bars");
 check((await page.$$(`${parts} [data-dot]`)).length === 2, "a dot for each pair");
-await linted(fmc, "the FM synth's card");
+await linted(fmc, "the FM synth's node");
 await shot(fmc, "fm");
 const fmCode = read("tracks/fm.ts");
 check(await drag(`${parts} [data-dot="0"]`, 30, 0), "pair A's dot, held, stays under the pointer");
@@ -171,8 +177,9 @@ check(await undo("tracks/fm.ts", fmCode), "⌘Z takes it back");
 // ---------------------------------------------------------------- the Drum (CARD-141)
 
 await select("kick");
-const drum = '[data-testid=chain] [data-module="kick"] [data-node="drums.drum"]';
-check(await until(async () => !!(await page.$(drum)), 20000), "Kick's chain has the Drum's card");
+const drum = '[data-testid=graph] [data-module="kick"] [data-node="drums.drum"]';
+check(await until(async () => !!(await page.$(drum)), 20000), "Kick's graph has the Drum's node");
+check(await expand(page, drum), "expanded");
 await shown(drum);
 const hit = `${drum} [data-picture="hit"]`;
 check(await until(async () => (await points(`${hit} polygon[data-hit]`)) === 512, 20000), "its face draws its hit, measured from its own sound");
@@ -183,7 +190,7 @@ const kickBefore = read("tracks/kick.ts");
 await page.click(`${hit} rect[data-play="45"]`);
 await sleep(300);
 check(read("tracks/kick.ts") === kickBefore, "clicking it plays (or says why not) and writes nothing");
-await linted(drum, "the Drum's card");
+await linted(drum, "the Drum's node");
 await shot(drum, "drum");
 const kickCode = read("tracks/kick.ts");
 const hit0 = await page.$eval(`${hit} polygon[data-hit]`, (e) => e.getAttribute("points"));
@@ -197,7 +204,8 @@ check(await undo("tracks/kick.ts", kickCode), "⌘Z takes it back");
 // ---------------------------------------------------------------- the Limit and the Master (CARD-143, CARD-144)
 
 await select("keys");
-const lim = '[data-testid=chain] [data-module="keys"] [data-node="limit"]';
+const lim = '[data-testid=graph] [data-module="keys"] [data-node="limit"]';
+check(await until(async () => !!(await page.$(lim)), 20000) && (await expand(page, lim)), "Keys' Limit, expanded");
 check(await until(async () => !!(await page.$(`${lim} [data-picture="level"] [data-dot]`)), 20000), "Keys' Limit draws its ceiling, with a dot");
 check((await words(`${lim} [data-picture="level"]`)) === "Turns peaks down so they stay under −6 dB. Drag the line to move the ceiling", `its words: ${await words(`${lim} [data-picture="level"]`)}`);
 const keysCode = read("tracks/keys.ts");
@@ -207,11 +215,12 @@ check(await until(() => ceiling() < -6, 8000), `dragged down, it writes a lower 
 check(await undo("tracks/keys.ts", keysCode), "⌘Z takes it back");
 
 await page.click('[data-module-tab="song"]');
-const master = '[data-testid=chain] [data-module="song"] [data-node="master"]';
+const master = '[data-testid=graph] [data-module="song"] [data-node="master"]';
+check(await until(async () => !!(await page.$(master)), 20000) && (await expand(page, master)), "the Master, expanded");
 const ml = `${master} [data-picture="level"]`;
 check(await until(async () => !!(await page.$(`${ml} [data-dot]`)), 20000), "the Master draws its ceiling, with a dot");
 await shown(master);
-await linted(master, "the Master's card");
+await linted(master, "the Master's node");
 // While the song plays, the Master's last seconds move: what comes out of it, read again and again.
 const said = (sel) => page.$eval(`${sel} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
 const reads = (sel) => page.$eval(`${sel} canvas[data-live]`, (e) => Number(e.dataset.reads ?? 0)).catch(() => 0);

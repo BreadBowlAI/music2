@@ -9,6 +9,7 @@ const H = process.env.M2_E2E_HOME ?? `${S}/testhome`;
 const proj = process.env.M2_E2E_PROJ ?? `${S}/proj`;
 const sess = JSON.parse(fs.readFileSync(`${H}/.music2/session.json`, "utf8"));
 import { exe } from "./chrome.mjs";
+import { expand } from "./graphlib.mjs";
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1440, height: 900 });
@@ -16,7 +17,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+  window.__M2__ = { native: false, token, platform: "macos" };
 }, sess.page_token);
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.page_token } })).json();
 
@@ -97,6 +98,8 @@ const compArgs = "{ threshold: -18, ratio: 3, attack: 0.01, release: 0.15, makeu
 check(await add("pluck", "comp", "compress"), "a compressor goes after the pluck too");
 const compressed = `reverb(compress(${pluck}, ${compArgs}), ${reverbArgs})`;
 check(await until(async () => read().includes(`({ lane }) => ${compressed}`)), `between the pluck and the reverb: ${compressed}`);
+// Collapsed, a node shows four of its values; expanded, all five (taste.md DV-12, DV-13).
+await expand(page, '[data-module="keys"] [data-node="compress"]');
 const c = await knobs("compress");
 check(
   // dB with one decimal, a true minus and a plus on gain (taste.md, Words and numbers).
@@ -135,14 +138,14 @@ check(state.view.draft_errors.length === 0 && state.diagnostics.length === 0, "t
 
 // ---------------------------------------------------------------- a knob turns the reverb's mix
 const mixKnob = knob("reverb", "mix");
-await page.$eval(`${mixKnob} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-const kb = await (await page.$(`${mixKnob} svg`)).boundingBox();
+await page.$eval(`${mixKnob} [role=slider]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+const kb = await (await page.$(`${mixKnob} [role=slider]`)).boundingBox();
 const kx = kb.x + kb.width / 2, ky = kb.y + kb.height / 2;
 await page.mouse.move(kx, ky);
 await page.mouse.down();
 for (let i = 1; i <= 8; i++) await page.mouse.move(kx, ky - i * 7.5);
 await page.mouse.up();
-// 60px of 300 (a knob's whole range, taste.md KN-1) on a 0..1 range: 0.25 → 0.45.
+// 60px of 300 (a bar's whole range, as a knob's, taste.md KN-1, DV-14) on a 0..1 range: 0.25 → 0.45.
 const turned = await until(async () => read().includes("{ size: 0.6, damping: 0.5, mix: 0.45 }"));
 check(turned, `dragging the reverb's mix knob up writes mix: 0.45${turned ? "" : ` (${read().match(/\{ size[^}]*\}/)?.[0]}; shown ${await page.$eval(mixKnob, (e) => e.dataset.value)})`}`);
 

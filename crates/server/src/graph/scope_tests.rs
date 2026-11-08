@@ -366,7 +366,7 @@ fn a_look_past_the_rings_is_refused_in_words() {
     }
     let (module, node) = &sines[31];
     let no = rig.graph.look(token, "w2", &look(module, node, "level", "out"), true).unwrap_err();
-    assert_eq!(format!("{no:#}"), "No room to show this: 31 sounds are shown already. Fold a card or scroll one away, then try again.");
+    assert_eq!(format!("{no:#}"), "No room to show this: 31 sounds are shown already. Collapse a node or scroll one away, then try again.");
     rig.graph.look(token, "w1", &look(&sines[0].0, &sines[0].1, "scope", "out"), true).expect("a point shown already has room");
     // A meter's slots, as many as a plan has, and one more.
     let mut cp = rig.graph.inner.control.lock();
@@ -375,7 +375,10 @@ fn a_look_past_the_rings_is_refused_in_words() {
         cp.asks.add("w1", What::Box(look("t0", &format!("x#{k}"), "meter", "reduction")), now).unwrap();
     }
     let no = cp.asks.add("w1", What::Box(look("t0", "x#x", "meter", "reduction")), now).err().unwrap();
-    assert_eq!(format!("{no:#}"), "No room to show this: 256 meters are shown already. Fold a card or scroll one away, then try again.");
+    assert_eq!(
+        format!("{no:#}"),
+        "No room to show this: 256 meters are shown already. Collapse a node or scroll one away, then try again."
+    );
     drop(cp);
     for (kind, at, says) in [
         ("meter", "out", "A meter look names the meter it shows, such as at: \"reduction\"."),

@@ -1,4 +1,5 @@
-// Track cards: a call's settings on its card in Device (CARD-1 to CARD-6, taste.md DV-8). Bass's LFO shows its
+// Track cards: a call's settings on its node in the Graph (CARD-1 to CARD-6, taste.md DV-8), which shows
+// them once the node is expanded (DV-12). Bass's LFO shows its
 // shape as a menu, at its default (sine, in grey) and saying a change rebuilds the sound; picking
 // saw writes `shape: "saw"` into its call, one undo step ("Undo LFO shape"), and ⌘Z takes the code
 // back byte for byte. A track whose sound is a component of the song's own (Box) shows a switch, a
@@ -13,6 +14,7 @@
 //   node e2e/cards.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, key, view, toasts, box } = await open(1440, 900);
@@ -24,7 +26,7 @@ const linted = async (sel, what) => {
 };
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title).catch(() => null);
 const stepIs = async (want) => until(async () => (await undoTitle()) === `Undo ${want} (⌘Z)`);
-/** Select track `m` and show its sound in Device. */
+/** Select track `m` and show its sound in the Graph. */
 const device = async (m) => {
   await until(async () => !!(await page.$(`[data-module-tab="${m}"]`)));
   await page.click(`[data-module-tab="${m}"] [data-testid=track-label]`);
@@ -91,6 +93,8 @@ async function dropFiles(x, y, files) {
 const bass = read("tracks/bass.ts");
 await device("bass");
 const lfo = '[data-module="bass"] [data-node="lfo"]';
+// Settings show on an expanded node only (DV-12).
+check(await expand(page, lfo), "the LFO's node expands");
 await page.$eval(lfo, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(150);
 const shape = await row(lfo, "shape");
@@ -140,6 +144,8 @@ export default track("box", { name: "Box" }, ({ lane }) => box(lane.notes("notes
 write("song.ts", song.replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport box from "./tracks/box";').replace("      kick: kick.out,", "      kick: kick.out,\n      box: box.out,"));
 await device("box");
 const card = '[data-module="box"] [data-node="box"]';
+await until(async () => !!(await page.$(card)));
+check(await expand(page, card), "Box's node expands");
 check(await until(async () => !!(await page.$(`${card} [data-setting="held"]`))), "Box's card shows its settings");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
 await sleep(150);

@@ -8,16 +8,17 @@
 // round of the loop (about 1 s of 3 s at first-song's 124 bpm): while it sings, what goes out is the
 // saw in the voice's shape, far louder against what comes in about the voice's first formant than at
 // the saw's own note; while it rests, nothing goes out, though the saw comes in (each read from an
-// agent's look, two looks in a row agreeing). In the patch and on Device's chain at Normal and
-// Expanded, the card's own picture draws its out layer at the voice's level while it sings and at
-// nothing while it rests, two reads in a row, and is shot then (review W5): to $E2E_SHOTS when set,
-// else the run's folder, as `vocoder-<patch|normal|expanded>-<sings|rests>.png`. ⌘Z takes the voice
+// agent's look, two looks in a row agreeing). In the graph, its node collapsed and expanded, the
+// node's own picture draws its out layer at the voice's level while it sings and at nothing while it
+// rests, two reads in a row, and is shot then (review W5): to $E2E_SHOTS when set, else the run's
+// folder, as `vocoder-<collapsed|expanded>-<sings|rests>.png`. ⌘Z takes the voice
 // out, byte for byte. Each state linted.
 //
 //   node e2e/vocoder.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { ROOT, PROJ, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const RATE = 48000;
 const SHOTS = process.env.E2E_SHOTS ?? ROOT;
@@ -193,23 +194,19 @@ check(
 );
 check(runs.silent >= 2, `while the voice is silent, nothing goes out though the saw comes in: ${told(last.silent)}`);
 
-// ---------------------------------------------------------------- its card, live (review W5)
+// ---------------------------------------------------------------- its node, live (review W5)
 
-// In the patch, then on Device's chain at Normal and at Expanded, the card's own picture: what the
+// In the graph, its node collapsed (48 px) and then expanded (132 px, DV-19), the node's own picture: what the
 // window drew last (CARD-103's `data-said`, a spectrum's loudest bin). While the voice sings, its out
 // layer is at the voice's level, over SINGS dB; while it rests, at nothing, at or under RESTS dB. A
 // state counts once two reads in a row say it, the agent's looks agreeing; the card is shot then, and
 // the shot stands once the read after it says the same (else it is taken again).
 const SINGS = -40;
 const RESTS = -90;
-const chained = `[data-testid=chain] ${card}`;
-for (const place of ["patch", "normal", "expanded"]) {
-  const at = place === "patch" ? `[data-testid=graph] ${card}` : chained;
-  if (place === "normal") {
-    await page.click("[data-device=chain]").catch(() => {});
-    check(await until(async () => !!(await page.$(chained)), 15000), "a card on Device's chain");
-  }
-  if (place !== "patch") await page.click(`${chained} [data-size-to="${place}"]`).catch(() => {});
+const at = `[data-testid=graph] ${card}`;
+for (const place of ["collapsed", "expanded"]) {
+  if (place === "expanded") await expand(page, at);
+  await until(async () => (await page.$eval(at, (e) => e.dataset.size).catch(() => null)) === place);
   await seen(at);
   await page.mouse.move(1, 1);
   const drawn = `${at} [data-picture="spectrum"]`;
@@ -241,8 +238,7 @@ for (const place of ["patch", "normal", "expanded"]) {
   check(stands.sings !== null, `${place}: while the voice sings, its picture draws the out over ${SINGS} dB, and is shot: ${stands.sings ?? heard.sings}`);
   check(stands.rests !== null, `${place}: while it rests, its picture draws the out at or under ${RESTS} dB, and is shot: ${stands.rests ?? heard.rests}`);
 }
-await linted(chained, "its chain card, Expanded");
-await page.click(`${chained} [data-size-to="normal"]`).catch(() => {});
+await linted(at, "its node, expanded");
 await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "in", on: false });
 await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "out", on: false });
 await page.mouse.click(10, 10);

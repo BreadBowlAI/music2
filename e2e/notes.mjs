@@ -17,7 +17,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 // The dock as tall as the panel it replaced was at this size (45%), so the roll shows as many rows.
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { localStorage.setItem("m2.graph.panel", "450"); } catch {} }, sess.page_token);
 
 let pass = 0, fail = 0;
 const check = (ok, what) => { console.log(`${ok ? "PASS" : "FAIL"}  ${what}`); ok ? pass++ : fail++; };
@@ -64,7 +64,7 @@ const clipBox = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])
 await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
 check(await until(async () => (await notes()).length === 48), "double-clicking Bass's notes clip opens the piano roll with its 48 notes");
 // The chip, the switcher, then the clip's bars: one notes lane, so no "Notes" beside the Notes tab.
-check(/^BassDeviceNotesMixCodebars 1–8/.test(await header()) && (await header()).includes("Length"), `the header names the clip, after the switcher: ${await header()}`);
+check(/^BassGraphNotesMixCodebars 1–8/.test(await header()) && (await header()).includes("Length"), `the header names the clip, after the switcher: ${await header()}`);
 const lengthInput = await page.$('[data-testid=dock] input[aria-label="Clip length in bars"]');
 check((await lengthInput.evaluate((e) => e.value)) === "8", "its length is 8 bars");
 const rows = await page.$$eval("[data-testid=notes] [data-key]", (els) => els.length);

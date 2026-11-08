@@ -73,7 +73,7 @@ Move to a row with ↓ or ↑ (or click it) and press **Space**: you hear the sa
 |---|---|
 | **Enter** | adds it at the bar where the playhead is: on the selected track if it plays audio, else on a new audio track after it |
 | Drag the row onto the timeline | adds it where you drop it: on an audio track, or on a new audio track below the others |
-| Drag it onto a Sampler's card (in the Device view) | the Sampler plays it: a one-shot to play from notes |
+| Drag it onto a Sampler's node (in the Graph) | the Sampler plays it: a one-shot to play from notes |
 
 Every way is **one undo step**: ⌘Z takes the clip (and a new track) back. The file stays in your song's `assets` folder, as an imported file does.
 

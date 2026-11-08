@@ -1,4 +1,4 @@
-// Sidechain from the card (CARD-35, CARD-36, PKG-19): a Duck added from + after the bass's sound
+// Sidechain from the node (CARD-35, CARD-36, PKG-19): a Duck added from + after the bass's sound
 // where the song reads it (`bass: bass.out`) listens to nothing and says None; Listens to lists the
 // song's other tracks and None, and picking Kick writes `kick.env` in its call, one undo step
 // ("Bass's duck listens to Kick"); ⌘Z puts the call back as it was added. What the Duck does to the
@@ -7,10 +7,7 @@
 // On first-song (the `fix` kind), its bass made a steady tone first (its lanes kept, unplayed), and
 // its Duck taken out of song.ts.
 //
-// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11) whole: the + after a
-// track's sound in the song is its row's there, and every check holds.
-//
-//   node e2e/sidechain.mjs <root> <home> <project>     (the `fix` or `chain` kind)
+//   node e2e/sidechain.mjs <root> <home> <project>     (the `fix` kind)
 import { check, done, open, read, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
@@ -39,8 +36,6 @@ await until(async () => !!(await page.$('[data-module="song"]')), 9000);
 await show("song");
 const bass = '[data-module="song"] [data-node="Bass.out"]';
 check(await until(async () => !!(await page.$(`${bass} button[aria-label="Add an effect after Bass.out"]`)), 9000), "the bass's sound in the song has a + (CARD-36)");
-// On the chain run, that + is the Bass row's, beside the mix (taste.md DV-11).
-if (process.env.E2E_DEVICE === "chain") check(!!(await page.$(`[data-testid=chain] [data-branch="Bass"] ${bass.replace('[data-module="song"] ', "")}`)), "on the chain, it is the Bass row's");
 
 // ---------------------------------------------------------------- add a Duck from +
 await page.click(`${bass} button[aria-label="Add an effect after Bass.out"]`);
@@ -51,7 +46,7 @@ check(await until(() => read("song.ts").includes("bass: duck(bass.out, { depth: 
 check(read("song.ts").replace('import { duck } from "std/fx";\n', "") === added, "and nothing else changes");
 const duck = '[data-module="song"] [data-node="duck"]';
 const listening = () => page.$eval(`${duck} [data-listens]`, (e) => e.textContent).catch(() => null);
-check(await until(async () => (await listening()) === "Listens to:None"), `its card says it listens to nothing: ${await listening()}`);
+check(await until(async () => (await listening()) === "Listens to:None"), `its node says it listens to nothing: ${await listening()}`);
 
 // ---------------------------------------------------------------- pick Kick
 await page.click(`${duck} [data-testid=listens-to]`).catch(() => {});

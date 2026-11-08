@@ -50,6 +50,7 @@ pub mod focus;
 mod fx;
 mod import;
 mod instrument;
+mod keys;
 mod lanes;
 pub mod lease;
 mod library;

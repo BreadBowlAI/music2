@@ -215,3 +215,12 @@ fn bars_past_the_songs_end_are_refused() {
         assert!(e.to_string().contains(&format!("{bars} bars")), "{bad}: {e}");
     }
 }
+
+// AGENT-6: the dock's view is the Graph since track `graph-node` (the graph note's §8): agents read
+// `graph`, and the old word, `device`, is no view now.
+#[test]
+fn the_docks_graph_is_called_graph() {
+    let graph: Focus = serde_json::from_value(json!({"session": 1, "view": "graph"})).expect("graph is a view");
+    assert_eq!(serde_json::to_value(&graph).unwrap()["view"], "graph");
+    assert!(serde_json::from_value::<Focus>(json!({"session": 1, "view": "device"})).is_err(), "device is no view now");
+}

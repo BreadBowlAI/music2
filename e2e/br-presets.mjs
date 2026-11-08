@@ -6,6 +6,7 @@
 //   node e2e/br-presets.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { HOME, PROJ, check, done, open, read, until } from "./fixlib.mjs";
 import fs from "node:fs";
+import { expand } from "./graphlib.mjs";
 
 const { page, errors, toasts, state, api, view } = await open(1440, 900);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
@@ -18,8 +19,11 @@ const file = `tracks/${module}.ts`;
 await view("graph");
 await until(async () => !!(await page.$(`[data-module-tab="${module}"]`)));
 await page.click(`[data-module-tab="${module}"] [data-testid=track-label]`);
+// Presets is on an expanded node's header (the graph note §5): expand the sound's node.
+await until(() => page.$(`[data-module="${module}"] [data-node][data-size]`), 15000);
+await expand(page, `[data-module="${module}"] [data-node]`);
 const button = `[data-module="${module}"] [data-presets]`;
-check(await until(() => page.$(button)), "a Synth pluck card has Presets");
+check(await until(() => page.$(button)), "a Synth pluck node, expanded, has Presets");
 const before = read(file);
 
 const openPresets = async () => {
@@ -86,8 +90,10 @@ const pm = probe.body.module;
 const blob = `${PROJ}/data/${pm}/${pm}.state`;
 await until(async () => !!(await page.$(`[data-module-tab="${pm}"]`)));
 await page.click(`[data-module-tab="${pm}"] [data-testid=track-label]`);
+await until(() => page.$(`[data-module="${pm}"] [data-node][data-size]`), 15000);
+await expand(page, `[data-module="${pm}"] [data-node]`);
 const probeButton = `[data-module="${pm}"] [data-presets]`;
-check(await until(() => page.$(probeButton)), "the probe's card has Presets");
+check(await until(() => page.$(probeButton)), "the probe's node, expanded, has Presets");
 await page.click(probeButton);
 check(await until(() => page.$("[data-preset-group=plugin] [data-preset]")), "its popover lists the plugin's own");
 const probeGroups = await page.$$eval("[data-testid=preset-popover] [role=group]", (els) => els.map((e) => e.getAttribute("aria-label")));

@@ -126,7 +126,7 @@ const knobTip = await page.$eval("[data-testid=graph] [data-knob-id]", (e) => e.
 check(knobTip.startsWith("Drag (⇧ for fine)") && /\nIn your code: tracks\/\w+\.ts, line \d+ \(/.test(knobTip), `a knob's tooltip leads with how to use it, then where it is in the code: ${knobTip.replace(/\n/g, " / ")}`);
 for (const m of ["kick", "hats", "keys", "song", "bass"]) {
   await show(m);
-  await place("[data-testid=graph]", `the Device view of ${m}`);
+  await place("[data-testid=graph]", `the Graph view of ${m}`);
 }
 
 // A knob's menu, the value typed in.
@@ -257,7 +257,7 @@ async function appPage() {
   await p.setViewport({ width: 1440, height: 900 });
   p.on("pageerror", (e) => errors.push(`app page: ${e}`));
   await p.evaluateOnNewDocument((token) => {
-    window.__M2__ = { native: true, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+    window.__M2__ = { native: true, token, platform: "macos" };
     const callbacks = new Map();
     const menu = [];
     let next = 1;

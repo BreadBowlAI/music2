@@ -39,7 +39,7 @@ function placed(p: Pointer, area: DOMRect, aside: boolean): Place | null {
   box ??= folded;
   if (!box) {
     // Not drawn now (a knob of the dock's track in another of its views): it waits at the top of
-    // the dock, and Show shows Device.
+    // the dock, and Show shows the Graph.
     return { mark: null, style: { left: left(area.left + area.width / 2 - NOTE_W / 2), top: area.top + 8 }, edge: "down", show: true };
   }
   const seen = box.right > area.left && box.left < area.right && box.bottom > area.top && box.top < area.bottom;

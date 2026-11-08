@@ -1,33 +1,23 @@
-// Track views: the card's menus, switches, groups and views (CARD-20 to CARD-26, taste.md DV-9 and DV-10), and a lane of
-// names on the timeline. A sound of the song's own, Wobble, declares a choice, a switch, an
-// envelope's and a filter's controls, regions, all four views and three groups. Its card shows
-// them under their groups' titles (More last), and folds to its first; its shape is a menu whose
-// pick writes `shape: "square"`, one undo step ("Undo Wobble shape"), ⌘Z taking it back byte for
-// byte; its switch writes `sub: true`. The envelope's attack corner, dragged right, writes a longer
-// attack, which the attack knob shows, one undo step; the filter's peak moves cutoff and q in one
-// edit. The keys view draws its region. While the song plays, the scope draws the sound's frames.
-// Automate on the shape makes a lane of names: a clip on it shows its name, and a click on the clip
-// picks a name from a menu there, one points gesture. Each state linted.
+// Track views: the node's menus, switches, groups and views (CARD-20 to CARD-26, taste.md DV-9, DV-10 and
+// DV-12), and a lane of names on the timeline. A sound of the song's own, Wobble, declares a choice, a
+// switch, an envelope's and a filter's controls, regions, all four views and three groups. Expanded,
+// its node shows them in its groups' columns (More last); collapsed, it shows its first group's
+// values, and +N stands for the rest (DV-16); its shape is a menu whose pick writes
+// `shape: "square"`, one undo step ("Undo Wobble shape"), ⌘Z taking it back byte for byte; its
+// switch writes `sub: true`. The envelope's attack corner, dragged right, writes a longer attack,
+// which the attack bar shows, one undo step; the filter's peak moves cutoff and q in one edit. The
+// keys view draws its region. While the song plays, the scope draws the sound's frames. Automate on
+// the shape makes a lane of names: a clip on it shows its name, and a click on the clip picks a name
+// from a menu there, one points gesture. Each state linted.
 //
-// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11): its groups are tabs
-// there, so the patch's own checks (the titles, folding, its "N more" row, the shape's menu, the
-// scope scrolled out of sight) are left to the patch run, and the pictures are reached by their tabs.
-//
-//   node e2e/card-views.mjs <root> <home> <project>     (the `fix` or `chain` kind: examples/first-song open)
+//   node e2e/card-views.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
+import { expand, still } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-/** Run on Device's chain (the `chain` kind), else on the patch. */
-const CHAIN = process.env.E2E_DEVICE === "chain";
-/** The scroller Device draws in. */
-const DEVICE = CHAIN ? "[data-testid=chain]" : "[data-testid=graph]";
-/** On the chain, show the tab that holds `name`'s values (taste.md DV-12); on the patch every group shows. */
-const tab = async (name) => {
-  if (!CHAIN) return;
-  await page.click(`${card} [data-tab="${name}"]`);
-  await until(async () => !!(await page.$(`${card} [data-tab-panel="${name}"]`)));
-};
+/** The scroller the graph draws in. */
+const DEVICE = "[data-testid=graph]";
 
 const { page, errors, api, key, view, box, posts } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
@@ -142,28 +132,38 @@ await until(async () => !!(await page.$('[data-module-tab="wobble"]')), 15000);
 await page.click('[data-module-tab="wobble"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-module="wobble"] [data-node="wobble"]';
-check(await until(async () => !!(await page.$(CHAIN ? `${card}[data-frame] [data-tab="Amp"]` : `${card} [data-group]`)), 15000), CHAIN ? "Wobble's card shows its groups as tabs" : "Wobble's card shows its groups");
+check(await until(async () => !!(await page.$(`${card}[data-size]`)), 15000), "Wobble's node shows");
+check(await expand(page, card), "and expands (DV-12)");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "start", inline: "center" }));
 await sleep(200);
 
-if (!CHAIN) {
-// ---------------------------------------------------------------- groups (CARD-25)
+// ---------------------------------------------------------------- groups (CARD-25), each a column (DV-12)
 
-const groups = () => page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
-check(JSON.stringify(await groups()) === '["Sound","Filter","Amp","More"]', `its groups' titles, in their order, More last: ${JSON.stringify(await groups())}`);
-const order = await page.$$eval(`${card} [data-node-body] > *`, (els) => els.map((e) => e.dataset.group ?? e.dataset.knob ?? e.dataset.view ?? e.dataset.setting ?? e.dataset.input ?? "?"));
+const groups = () => page.$$eval(`${card} [data-column]`, (els) => els.map((e) => e.dataset.column));
+const COLUMNS = '["Sound","Filter","Amp","More","Setup"]';
+check(JSON.stringify(await groups()) === COLUMNS, `its groups' columns, in their order, More last of the values, then its settings in Setup (DV-12): ${JSON.stringify(await groups())}`);
+// What each column holds, top to bottom: its values, views and settings; the face's views (here its
+// first group's, Sound's scope) go across the top (DV-12).
+const across = await page.$$eval(`${card} [data-views] [data-view]`, (els) => els.map((e) => e.dataset.view));
+const order = await page.$$eval(`${card} [data-column]`, (cols) =>
+  cols.flatMap((c) => [c.dataset.column, ...[...c.querySelectorAll("[data-knob], [data-view], [data-setting]")].map((e) => e.dataset.knob ?? e.dataset.view ?? e.dataset.setting)]),
+);
 const at = (x) => order.indexOf(x);
 check(
-  at("Sound") < at("shape") && at("shape") < at("sub") && at("sub") < at("scope") && at("scope") < at("Filter") && at("Filter") < at("filter") && at("amp") < at("attack") && at("More") < at("regions") && at("regions") < at("keys"),
-  `each row under its group, as the sound names them: ${order.join(" ")}`,
+  JSON.stringify(across) === '["scope"]' && at("Sound") < at("shape") && at("shape") < at("sub") && at("sub") < at("Filter") && at("Filter") < at("filter") && at("filter") < at("cutoff") && at("amp") < at("attack") && at("More") < at("keys") && at("keys") < at("Setup") && at("Setup") < at("regions"),
+  `each row under its group, as the sound names them: across the top ${across.join(" ")}; ${order.join(" ")}`,
 );
-await linted(card, "Wobble's card");
+await linted(card, "Wobble's node");
 await page.screenshot({ path: `${ROOT}/views-card.png` });
-await page.click(`${card} [data-fold]`);
-check(await until(async () => JSON.stringify(await groups()) === '["Sound"]'), `folded, it shows its first group: ${JSON.stringify(await groups())}`);
-check(!!(await page.$(`${card} [data-unfold]`)), "and says how many more rows there are");
-// A knob the folded card hides is still a knob (AGENT-5, AGENT-6): an agent's change to it lights
-// the "N more" row, an agent's pointer at it shows there, and Show unfolds the card to it.
+// Collapsed, it shows its face, here its first group (DV-12): +N stands for the rest (DV-16).
+await page.click(`${card} [data-expand]`);
+await still(page);
+check(await until(async () => (await page.$eval(card, (e) => e.dataset.size)) === "collapsed"), "⤢ collapses it");
+const shown = await page.$$eval(`${card} [data-knob]`, (els) => els.map((e) => e.dataset.knob));
+check(JSON.stringify(shown) === '["shape","sub"]', `collapsed, it shows its first group's values: ${JSON.stringify(shown)}`);
+check(/^\+\d+$/.test((await page.$eval(`${card} [data-more]`, (e) => e.textContent?.trim()).catch(() => "")) ?? ""), "and +N says how many more values there are");
+// A knob the collapsed node hides is still a knob (AGENT-5, AGENT-6): an agent's change to it lights
+// +N, an agent's pointer at it shows there, and Show expands the node to it.
 const state = (await api("")).body;
 const sustainId = state.view.modules.find((m) => m.key === "wobble").nodes.find((n) => n.title === "Wobble").knobs.find((k) => k.slot === "sustain").id;
 const agent = (path, body) =>
@@ -174,24 +174,27 @@ const agent = (path, body) =>
     path,
     body,
   );
-check((await agent("/api/graph/set", { session: state.session, revision: state.view.revision, id: sustainId, gesture: "agent", value: 0.5 })) === 200, "an agent sets the sustain, which the folded card hides");
-check(await until(async () => !!(await page.$(`${card} [data-unfold][data-glow]`))), "its change lights the row that stands for it");
+check(((await page.$eval(`${card} [data-more]`, (e) => e.dataset.hides).catch(() => "")) ?? "").split(" ").includes(sustainId), "+N stands for the sustain, which the collapsed node hides");
+check((await agent("/api/graph/set", { session: state.session, revision: state.view.revision, id: sustainId, gesture: "agent", value: 0.5 })) === 200, "an agent sets the sustain, which the collapsed node hides");
+check(await until(async () => !!(await page.$(`${card} [data-more][data-glow]`))), "its change lights +N, which stands for it");
 // Written now, the knob has its written id.
 const sustainNow = (await api("")).body.view.modules.find((m) => m.key === "wobble").nodes.find((n) => n.title === "Wobble").knobs.find((k) => k.slot === "sustain").id;
 check((await agent("/api/point", { session: state.session, target: `knob:${sustainNow}`, words: "this one" })) === 200, "an agent points at it");
 check(await until(async () => !!(await page.$("[data-testid=pointer-show]"))), "the pointer offers Show");
 await page.click("[data-testid=pointer-show]");
-check(await until(async () => (await groups()).length === 4 && !!(await page.$(`${card} [data-knob-id="${sustainNow}"]`))), "Show unfolds the card to the knob");
+check(await until(async () => JSON.stringify(await groups()) === COLUMNS && !!(await page.$(`${card} [data-knob-id="${sustainNow}"]`))), "Show expands the node, the value in sight");
 await page.click("[data-testid=pointer-ok]").catch(() => {});
-}
+// The shape's menu and the switch are the collapsed node's (an expanded one draws a choice of three as a segmented control).
+await still(page);
+await page.click(`${card} [data-expand]`);
+await still(page);
+await until(async () => (await page.$eval(card, (e) => e.dataset.size)) === "collapsed");
 
 // ---------------------------------------------------------------- a choice's menu and a switch (CARD-20, CARD-21)
 
 const tracked = read("tracks/wobble.ts");
 const shape = `${card} [data-knob="shape"]`;
-// The menu is the patch's: the chain draws a choice of three as a segmented control (frame).
 let n = posts.length;
-if (!CHAIN) {
 check((await page.$eval(shape, (e) => `${e.dataset.kind} ${e.dataset.value} ${!!e.dataset.knobId}`)) === 'choice "saw" true', "shape is a menu, at saw, and still a knob (its id)");
 await page.click(`${shape} [data-testid=setting-menu]`);
 await page.waitForSelector("[data-testid=setting-options]");
@@ -207,7 +210,6 @@ check(await until(async () => (await page.$eval(shape, (e) => e.dataset.value)) 
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes the code back, byte for byte");
-}
 const sub = `${card} [data-knob="sub"] [role=switch]`;
 await seen(sub);
 check((await page.$eval(sub, (e) => e.getAttribute("aria-checked"))) === "false", "sub is a switch, off");
@@ -220,7 +222,8 @@ check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes i
 
 // ---------------------------------------------------------------- the envelope's corner (CARD-27, CARD-22)
 
-await tab("Amp");
+// The pictures and the envelope's values are in their groups' columns, on the expanded node.
+check(await expand(page, card), "expanded again for its pictures");
 const attack = `${card} [data-knob="attack"]`;
 const attackBefore = await page.$eval(attack, (e) => Number(e.dataset.value));
 // std's envelope picture (CARD-96): its attack corner is its first dot.
@@ -244,7 +247,6 @@ await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "⌘Z takes it back");
 
 // The filter's peak: cutoff and q in one edit.
-await tab("Filter");
 const peak = await seen(`${card} [data-picture="filter"] [data-dot="0"]`);
 await page.mouse.move(peak.x + peak.width / 2, peak.y + peak.height / 2);
 await page.mouse.down();
@@ -272,7 +274,6 @@ await key("Meta+z");
 check(await until(() => read("tracks/wobble.ts") === tracked), "and ⌘Z takes it back");
 
 // The keys view: its region over its keys; a click plays the key under it, as hard as it is high.
-await tab("More");
 await seen(`${card} [data-view="keys"]`);
 await page.screenshot({ path: `${ROOT}/views-pictures.png` });
 check(!!(await page.$(`${card} [data-view="keys"] [data-region="tone.wav"]`)), "the keys view draws tone.wav's region");
@@ -296,10 +297,10 @@ await seen(`${card} [data-scope]`);
 const frames = () => page.$eval(`${card} [data-scope]`, (e) => Number(e.dataset.frames ?? 0)).catch(() => 0);
 check(await until(async () => (await frames()) >= 5, 10000), `while the song plays, the scope draws the sound's frames (${await frames()} drawings)`);
 await page.keyboard.press("Space");
-// Out of sight, the card stops asking (TAP-4): scrolled out of the Device view, or the view left.
+// Out of sight, the card stops asking (TAP-4): scrolled out of the Graph view, or the view left.
 const scopeAsks = () => posts.filter((p) => p.url === "/api/graph/look").map((p) => JSON.parse(p.body).on);
-// The patch is taller than the dock, so its scope can be scrolled away; the chain's card fits.
-if (!CHAIN) {
+// The graph is taller than the dock, so its scope can be scrolled away.
+{
   await page.$eval("[data-testid=graph]", (e) => e.scrollTo({ top: 0, left: 0 }));
   await page.$eval(`${card} [data-scope]`, (e) => {
     const g = document.querySelector("[data-testid=graph]");
@@ -310,7 +311,7 @@ if (!CHAIN) {
   check(await until(() => scopeAsks().at(-1) === true), "back in sight, it asks again");
 }
 await view("mix");
-check(await until(() => scopeAsks().at(-1) === false), "the Device view left, it stops");
+check(await until(() => scopeAsks().at(-1) === false), "the Graph view left, it stops");
 await view("graph");
 
 // ---------------------------------------------------------------- a lane of names (CARD-23, CARD-24)

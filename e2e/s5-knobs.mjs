@@ -19,6 +19,7 @@
 //            `pan: 0` into its entry and names the new knob (design-8b §5.2, §5.3).
 //   node run.mjs s5-knobs fix
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const { browser, page, errors, api, state, caughtUp, toasts, show, view, box } = await open(1440, 900);
 
@@ -86,25 +87,29 @@ for (const [module, component, slot, written, range, log] of EXPECTED) {
   if (range) check(range[0] <= x.k.value && x.k.value <= range[1], `${what}: ${x.k.value} lies in its range`);
 }
 
-// On the page: each is a knob on its call's box, a default drawn as one (`data-default`, its value in
-// the muted grey, never italic), turned to where its value sits in the declared range. The song's
-// mixer is one compact card there: its levels and pans are on the Mix view's strips (MX-6), below.
+// On the page: each is a bar on its call's node, a default drawn as one (`data-default`, its value in
+// the muted grey, never italic), filled to where its value sits in the declared range. A collapsed
+// node shows four of its values, so each node is expanded first: then it shows every one (DV-12,
+// DV-13). The song's mixer is one compact node there: its levels and pans are on the Mix view's
+// strips (MX-6), below.
 const onStrip = (x) => x.module === "song" && x.k.component === "std:mixer";
 const LOOK = { song: [], bass: [], hats: [], keys: [], kick: [] };
 // A choice is a menu, not a knob to turn (its own suites, card-views and dressed, check it there).
 for (const x of all) if (!onStrip(x) && x.k.kind !== "choice") LOOK[x.module].push(x);
 for (const [module, list] of Object.entries(LOOK)) {
   await show(module);
+  await page.waitForSelector(`[data-module="${module}"] [data-node]`);
+  await expand(page, `[data-module="${module}"] [data-node]`);
   for (const { node, k } of list) {
     const sel = `[data-module="${module}"] [data-node-id="${node.id}"] [data-knob-id="${k.id}"]`;
     const seen = await page.$eval(sel, (e) => ({
       dflt: e.dataset.default === "true",
       muted: ((v) => getComputedStyle(v).color === "rgb(101, 105, 111)" && getComputedStyle(v).fontStyle !== "italic")(e.querySelector("span.tabular-nums")),
-      at: Number(e.querySelector("svg[role=slider]").getAttribute("aria-valuenow")),
+      at: Number(e.querySelector("[role=slider][data-bar]").getAttribute("aria-valuenow")),
       title: e.title,
     })).catch(() => null);
     if (!seen) {
-      check(false, `${module}: the ${k.slot} knob is on ${node.label}'s box`);
+      check(false, `${module}: the ${k.slot} bar is on ${node.label}'s node`);
       continue;
     }
     const where = k.range ? (k.log ? Math.log(k.value / k.range[0]) / Math.log(k.range[1] / k.range[0]) : (k.value - k.range[0]) / (k.range[1] - k.range[0])) : null;
@@ -141,9 +146,9 @@ await sleep(300);
 await page.screenshot({ path: `${ROOT}/s5-bass.png` });
 
 // ------------------------------------------------------------------ insert
-/** Drag the knob `sel` (or a fader, by its thumb) up by `dy` pixels and let go. */
+/** Drag the bar `sel` (or a fader, by its thumb) up by `dy` pixels and let go. */
 const turn = async (sel, dy) => {
-  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  const grip = `${sel} [role=slider][data-bar], ${sel} [data-testid=fader-thumb]`;
   await page.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const b = await box(grip);
   const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
@@ -162,6 +167,7 @@ const undo = async () => {
 const beat = read("tracks/kick.ts");
 await show("kick");
 const decay = '[data-module="kick"] [data-node="drums.drum"] [data-knob="decay ×"]';
+await expand(page, '[data-module="kick"] [data-node]');
 await turn(decay, 32);
 const insertedDecay = /drums\.drum\(lane\.notes\("hits"\), \{ decay: (-?[0-9.e-]+) \}\)/;
 check(await until(() => insertedDecay.test(read("tracks/kick.ts"))), `turning the kick's decay writes it into the call (${read("tracks/kick.ts").match(/drums\.drum\(.*\)/)?.[0]})`);
@@ -183,6 +189,7 @@ check(await until(async () => (await knobOf("kick", "@m2/drums:drum", "decay"))?
 const kick = read("tracks/kick.ts");
 await show("kick");
 const attack = '[data-module="kick"] [data-node="follow"] [data-knob="attack"]';
+await expand(page, '[data-module="kick"] [data-node]');
 await turn(attack, 24);
 const insertedAttack = /follow\(out, \{ release: ms\(150\), attack: (-?[0-9.e-]+) \}\)/;
 check(await until(() => insertedAttack.test(read("tracks/kick.ts"))), `turning follow's attack writes it after the options written (${read("tracks/kick.ts").match(/follow\(.*\)/)?.[0]})`);
@@ -192,8 +199,8 @@ check(await until(() => read("tracks/kick.ts") === kick), "undo takes it out aga
 // An ⌥-click puts a knob at its declared default (taste.md §5.2; a double-click types a value now):
 // for one already there, that writes nothing.
 const tune = '[data-module="kick"] [data-node="drums.drum"] [data-knob="tune"]';
-await page.$eval(`${tune} svg`, (e) => e.scrollIntoView({ block: "center" }));
-const tb = await box(`${tune} svg`);
+await page.$eval(`${tune} [role=slider]`, (e) => e.scrollIntoView({ block: "center" }));
+const tb = await box(`${tune} [role=slider]`);
 const revision = (await state()).view.revision;
 await page.keyboard.down("Alt");
 await page.mouse.click(tb.x + tb.width / 2, tb.y + tb.height / 2);
@@ -304,8 +311,11 @@ check(
   `with delay's three knobs, at their defaults, in their declared ranges: ${JSON.stringify(delayKnobs)}`,
 );
 await show("keys");
-const remove = '[data-module="keys"] [data-node="echo"] button[aria-label="Remove Delay"]';
-check(await until(async () => !!(await page.$(remove))), "its box offers Remove Delay");
+// Remove is in its node's ⋯ menu (the graph note §3).
+await page.waitForSelector('[data-module="keys"] [data-node="echo"] [data-node-menu]');
+await page.click('[data-module="keys"] [data-node="echo"] [data-node-menu]');
+const remove = '[data-testid=effect-menu] [data-testid=node-remove][aria-label="Remove Delay"]';
+check(await until(async () => !!(await page.$(remove))), "its ⋯ menu offers Remove Delay");
 await page.click(remove);
 check(await until(() => read("tracks/keys.ts").includes('({ lane }) => pluck(lane.notes("chords"))')), "removing it unwraps the pluck");
 write("tracks/keys.ts", keys);

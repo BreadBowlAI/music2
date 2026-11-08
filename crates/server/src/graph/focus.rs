@@ -17,7 +17,8 @@ use super::{Graph, Inner, Published};
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum View {
-    Device,
+    /// The sound's graph of nodes (`device` until track `graph-node`).
+    Graph,
     Notes,
     Mix,
     Code,

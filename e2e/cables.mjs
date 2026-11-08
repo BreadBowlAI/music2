@@ -10,7 +10,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 await page.setViewport({ width: 1600, height: 1000 });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph]");
 // The panel shows one module at a time: pick the one under test.
@@ -32,7 +32,7 @@ async function drag(fromSel, toSel) {
 const html = () => page.content();
 
 ok(!!(await page.$('[data-outlet="wobble"]')), "wobble has an output handle");
-const drew = await drag('[data-outlet="wobble"]', '[data-knob="cutoff"] svg');
+const drew = await drag('[data-outlet="wobble"]', '[data-knob="cutoff"] [role=slider]');
 ok(drew, "a cable follows the pointer while dragging");
 await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === original.replace("svf.lowpass(osc.saw(hz(55)), hz(1000))", "svf.lowpass(osc.saw(hz(55)), wobble)"), "dropping on cutoff wrote `wobble` there, nothing else");
@@ -47,7 +47,7 @@ ok(fs.readFileSync(song, "utf8") === original, "disconnecting wrote the declared
 ok(!!(await page.$('[data-knob="cutoff"]')), "the cutoff knob is back");
 
 const errorsBeforeRefusal = [...errors];
-await drag('[data-outlet="wobble"]', '[data-knob="period"] svg');
+await drag('[data-outlet="wobble"]', '[data-knob="period"] [role=slider]');
 await sleep(1200);
 ok((await html()).includes("declared after this value"), "connecting into its own declaration is refused with a reason");
 ok(fs.readFileSync(song, "utf8") === original, "and the file is unchanged");
@@ -62,7 +62,7 @@ await page.mouse.move(w.x + 30, w.y + 8, { steps: 4 });
 // The Gate sits below the fold: scrolled into view while the cable is dragged, as a hand would.
 await page.$eval('[data-knob="gate"]', (e) => e.scrollIntoView({ block: "end", inline: "nearest" }));
 await sleep(200);
-const g = await center('[data-knob="gate"] svg');
+const g = await center('[data-knob="gate"] [role=slider]');
 await page.mouse.move(g.x, g.y, { steps: 4 });
 const shown = await page.$eval('[data-knob="gate"]', (e) => ({ title: e.getAttribute("title"), opacity: Number(getComputedStyle(e).opacity) }));
 ok(shown.title === words && shown.opacity < 1, `while a cable is dragged, the Arpeggiator's Gate is dimmed and says why: ${JSON.stringify(shown)}`);

@@ -9,19 +9,21 @@
 //   node e2e/dress2a-strip.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, sleep, until } from "./fixlib.mjs";
 import { dress2aSong } from "./dress2a-song.mjs";
+import { expand } from "./graphlib.mjs";
 
 dress2aSong();
 
-const { page, errors, api, view } = await open(1920, 1080, { device: "chain" });
+const { page, errors, api, view } = await open(1920, 1080);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
-const mixa = '[data-testid=chain] [data-module="mixa"]';
+const mixa = '[data-testid=graph] [data-module="mixa"]';
 const gate = `${mixa} [data-node="gate"]`;
-const gatePic = `${gate} [data-face] [data-picture="levels"]`;
-const gateDown = `${gate} [data-face] [data-picture="down"]`;
+const gatePic = `${gate} [data-views] [data-picture="levels"]`;
+const gateDown = `${gate} [data-views] [data-picture="down"]`;
 
 check(await until(async () => !!(await page.$('[data-module-tab="mixa"]')), 30000), "the song has its Mix A track");
 await page.click('[data-module-tab="mixa"] [data-testid=track-label]');
 await view("graph");
+check(await until(async () => !!(await page.$(gate)), 20000) && (await expand(page, `${mixa} [data-node]`)), "Mix A's gate is in the graph, its nodes expanded");
 check(
   await until(async () => !!(await page.$(`${gatePic} canvas[data-live]`)) && !!(await page.$(`${gateDown} canvas[data-live]`)), 20000),
   "Mix A's gate draws its levels and how far it turns down, live",
@@ -39,6 +41,8 @@ const histories = () =>
     gateDown,
     gatePic,
   );
+// Their last 3 s all heard: the song past 3.5 s (a history may start full, at the floor).
+await until(async () => (await api("/status")).body.seconds >= 3.5, 20000);
 await until(async () => (await histories()).every((h) => h.length === 90), 20000);
 const runs = (h, on) => {
   const out = [];

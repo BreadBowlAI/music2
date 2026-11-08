@@ -9,8 +9,6 @@
 //              cables  a one-file song (fixtures/)     node suite <root>
 //              fix     examples/first-song open        node suite <root> <home> <project>
 //              attn    same as fix                     node suite <root> <home> <project>
-//              chain   same as fix, with E2E_DEVICE=chain: the window's Device shows the chain
-//                      (taste.md DV-11), so a suite's checks that aren't the patch's own run on it
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
@@ -111,14 +109,9 @@ export const SUITES = [
   ["ag-focus", "export", { expect: 91, s: 8 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
-  // On Device's chain (taste.md DV-11): all but the dashed cable, which the chain doesn't draw.
-  ["nx-effects", "chain", { expect: 46, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["sidechain", "fix", { expect: 15, s: 13 }],
   // sidechain's dip, apart: it needs the meters read every 33 ms.
   ["sidechain-dip", "fix", { expect: 6, s: 18, sleeps: "the bass's meter dips while the kick's is up, message by message: the meters' 33 ms tick is a sleep, and read every 120 ms a message holds a kick and the gap after it, and reads the bass's loudest; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
-  ["sidechain-dip", "chain", { expect: 6, s: 18, sleeps: "as its fix kind: the meters' 33 ms tick is a sleep; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
-  // Its checks on Device's chain too (taste.md DV-11): every one holds there, and one more says the + is the Bass row's.
-  ["sidechain", "chain", { expect: 16, s: 13 }],
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
@@ -185,7 +178,7 @@ export const SUITES = [
   ["nx-click", "fix", { expect: 20, s: 8, sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["s8-mix", "fix", { expect: 80, s: 23 }],
   ["taps", "fix", { expect: 23, s: 20 }],
-  ["taps2", "fix", { expect: 17, s: 14 }],
+  ["taps2", "fix", { expect: 20, s: 14 }],
   ["pl-mix", "fix", { expect: 47, s: 14, tier: "nightly", why: "speed: the meters floor within a second after a stop; flake: a first run failed (2026-10-18)" }],
   ["bus-mix", "fix", { expect: 38, s: 8 }],
   ["kits", "fix", { expect: 18, s: 6 }],
@@ -196,32 +189,29 @@ export const SUITES = [
   ["pl-sounds", "fix", { expect: 46, s: 4 }],
   ["pl-ids", "fix", { expect: 39, s: 3, tier: "nightly", why: "flake: a rename took more than one revision, at half CPU (2026-10-21)" }],
   ["pc-keys", "fix", { expect: 37, s: 3 }],
-  ["ab-sampler", "export", { expect: 23, s: 4 }],
-  ["cards", "fix", { expect: 36, s: 6 }],
-  ["card-views", "fix", { expect: 61, s: 12 }],
-  // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
-  ["card-views", "chain", { expect: 41, s: 12 }],
-  ["frame", "fix", { expect: 86, s: 14 }],
+  ["ab-sampler", "export", { expect: 24, s: 4 }],
+  ["cards", "fix", { expect: 38, s: 6 }],
+  ["card-views", "fix", { expect: 65, s: 12 }],
+  // Track graph-node: the graph's nodes at two sizes, the bar, +N, selection and the keyboard (taste.md DV-12 to DV-16).
+  ["nodes", "fix", { expect: 121, s: 30 }],
   ["pictures", "fix", { expect: 45, s: 10 }],
-  ["measure", "fix", { expect: 20, s: 8 }],
+  ["measure", "fix", { expect: 22, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
-  ["dress2a", "fix", { expect: 92, s: 20 }],
+  ["dress2a", "fix", { expect: 94, s: 20 }],
   // dress2a's gate strip, apart: it needs the meters read every 33 ms.
-  ["dress2a-strip", "fix", { expect: 4, s: 6, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
-  ["dressed", "fix", { expect: 38, s: 10 }],
-  // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, on the chain.
-  ["instruments", "fix", { expect: 52, s: 12 }],
+  ["dress2a-strip", "fix", { expect: 5, s: 6, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
+  ["dressed", "fix", { expect: 41, s: 10 }],
+  // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, in the graph.
+  ["instruments", "fix", { expect: 58, s: 12 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
-  ["mixing", "fix", { expect: 25, s: 5 }],
-  ["tune", "fix", { expect: 37, s: 16 }],
-  // Its checks on Device's chain too (taste.md DV-11): the key line is on a chain card as on the patch's.
-  ["tune", "chain", { expect: 37, s: 16 }],
+  ["mixing", "fix", { expect: 29, s: 5 }],
+  ["tune", "fix", { expect: 38, s: 16 }],
   // Track voice2: the Voice changer's and the Clipper's cards, and the three new cards shot live.
-  ["voice", "fix", { expect: 40, s: 30 }],
+  ["voice", "fix", { expect: 38, s: 30 }],
   // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
-  ["vocoder", "fix", { expect: 28, s: 20 }],
-  ["flanger-grains", "fix", { expect: 43, s: 40 }],
-  ["wavetable", "fix", { expect: 32, s: 6 }],
+  ["vocoder", "fix", { expect: 25, s: 20 }],
+  ["flanger-grains", "fix", { expect: 42, s: 40 }],
+  ["wavetable", "fix", { expect: 33, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
   ["br-presets", "fix", { probe: true, expect: 29, s: 2 }],
@@ -233,7 +223,7 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
 ];
-const KINDS = ["proj", "cables", "fix", "attn", "chain", "empty", "none", "export", "library"];
+const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
@@ -429,7 +419,6 @@ function prepare(dir, kind) {
     cables: [dir],
     fix: [dir, home, proj],
     attn: [dir, home, proj],
-    chain: [dir, home, proj],
     empty: [dir, "empty"],
     none: [dir, home],
     export: [dir, home, proj, cli],
@@ -521,9 +510,6 @@ function envFor(home, clap, probe, kind) {
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   // The probe plugin, which a debug server installs (br-plugins).
   if (probe) env.M2_PROBE = "1";
-  // The chain kind: the suite's page opens with Device showing the chain (fixlib's open).
-  delete env.E2E_DEVICE;
-  if (kind === "chain") env.E2E_DEVICE = "chain";
   return env;
 }
 

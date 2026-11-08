@@ -11,7 +11,7 @@ import { EmptyState } from "./ui";
  * the category's header (never on each item). A category is a free string a package's descriptor
  * gives (PKG-7): any other is a group of its own after these, with a plain icon.
  */
-// No dock view's icon (Device's sliders, Mix's faders): one icon, one meaning (taste.md §2.12).
+// No dock view's icon (the Graph's, Mix's faders): one icon, one meaning (taste.md §2.12).
 export const CATEGORIES: { name: string; Icon: typeof Waves }[] = [
   { name: "Filter", Icon: AudioWaveform },
   { name: "EQ", Icon: ChartSpline },

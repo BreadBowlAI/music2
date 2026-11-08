@@ -111,7 +111,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Compressor** | Turns loud moments down, so everything is more even and punchy | `compress` |
 | **Limiter** | A very strict compressor at the end that stops anything getting too loud | `limit` |
 
-**In music2:** add an effect with **+** on a box in the Device view (⌥1), or drag one from the side browser onto a track. Its **⋯** menu turns it off and on, or moves it before or after its neighbour. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
+**In music2:** add an effect with **+** on a node in the Graph (⌥1), or drag one from the side browser onto a track. Its ⏻ turns it off and on, and its **⋯** menu moves it before or after its neighbour, or removes it. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
 
 ## Mixing: making the parts fit together
 
@@ -132,7 +132,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 
 **In music2:**
 - Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
-- A sidechain is a Duck: add it after the bass's sound in the song (the **song** tab's **Bass.out**, **+**, **Duck**), then pick **Kick** in its card's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
+- A sidechain is a Duck: add it after the bass's sound in the song (the **song** tab's **Bass.out**, **+**, **Duck**), then pick **Kick** in its node's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
 - For the pump with no kick at all, add **Pump** (Dynamics): it dips the sound on every beat by itself.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
 - Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).

@@ -30,7 +30,7 @@ const watcher = setInterval(async () => {
 const MOVED = "The song changed while you pressed. Try again.";
 const said = () => `toasts: ${JSON.stringify(seen)}, refused: ${JSON.stringify(refusals)}`;
 const turn = async (sel, dy) => {
-  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  const grip = `${sel} svg, ${sel} [data-bar][role=slider], ${sel} [data-testid=fader-thumb]`;
   await page.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const b = await box(grip);
   const cx = b.x + b.width / 2, cy = b.y + b.height / 2;

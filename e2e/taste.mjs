@@ -118,7 +118,7 @@ linux.on("console", (m) => m.type() === "error" && !/Failed to load resource/.te
 linux.on("pageerror", (e) => errors.push(`linux page: ${e}`));
 await linux.setViewport({ width: 1440, height: 900 });
 await linux.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: false, token, platform: "linux" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+  window.__M2__ = { native: false, token, platform: "linux" };
 }, sess.page_token);
 await linux.goto(sess.url, { waitUntil: "domcontentloaded" });
 await linux.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
@@ -237,7 +237,7 @@ await page.waitForSelector("[data-testid=knob-menu]");
 await state("the knob menu");
 await key("Escape");
 // A value typed into the knob (taste.md §2.14), one that doesn't read: the field and its message.
-const driveKnob = mid(await box('[data-knob="drive"] svg'));
+const driveKnob = mid(await box('[data-knob="drive"] [role=slider]'));
 await page.mouse.click(driveKnob.x, driveKnob.y, { count: 2 });
 await page.waitForSelector("[data-testid=knob-type-in]");
 await page.keyboard.type("loud");

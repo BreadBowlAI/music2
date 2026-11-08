@@ -277,7 +277,7 @@ await app.setViewport({ width: 1440, height: 900 });
 app.on("pageerror", (e) => errors.push(String(e)));
 await app.evaluateOnNewDocument(
   (token, picked) => {
-    window.__M2__ = { native: true, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+    window.__M2__ = { native: true, token, platform: "macos" };
     const callbacks = new Map();
     const menu = [];
     let next = 1;

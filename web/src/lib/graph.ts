@@ -104,6 +104,10 @@ export const picks = (k: Knob): k is PickKnob => k.kind === "choice" || k.kind =
 
 export interface ViewNode {
   id: string;
+  /** What the window keeps its own state by (which nodes are expanded): a key that edits keep (CARD-25). */
+  key: string;
+  /** It plays inside an instrument's voices, once for each note (CARD-25). */
+  per_note?: boolean;
   label: string;
   /** `voice`: the note a `poly` voice plays (its pitch, gate, …), beside the `poly` call. */
   kind: "call" | "lane" | "time" | "import" | "value" | "export" | "voice";

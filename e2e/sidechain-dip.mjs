@@ -1,15 +1,14 @@
 // Sidechain's dip (CARD-35, CARD-36), apart from sidechain.mjs: on first-song with a steady bass, a
 // Duck around `bass.out` that listens to nothing plays the bass as it was, its meter still; made to
-// listen to the kick by its card's Listens to (`kick.env` in its call), the bass's meter dips
+// listen to the kick by its node's Listens to (`kick.env` in its call), the bass's meter dips
 // each time the kick's meter rises. Each meters message holds the most since the one before, so
 // that needs messages shorter than the kick's dip: the meters' 33 ms tick, a sleep. So it is tagged
 // `sleeps` (left out of GitHub's Mac job, whose tick comes every 70 to 250 ms: since the silent
 // player keeps the wall clock's pace there, a message holds that much sound, a kick and the gap
 // after it, and reads the bass's loudest; they passed there until RENDER-28a made each message hold
-// the wall clock's worth of sound). sidechain.mjs checks the card's menu and its undo. As the `chain`
-// kind (E2E_DEVICE=chain) it runs on Device's chain, as sidechain's dip did.
+// the wall clock's worth of sound). sidechain.mjs checks the node's menu and its undo.
 //
-//   node e2e/sidechain-dip.mjs <root> <home> <project>     (the `fix` or `chain` kind)
+//   node e2e/sidechain-dip.mjs <root> <home> <project>     (the `fix` kind)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
 // The bass as sidechain.mjs makes it: a steady 440 Hz sine, whose peak every block holds.
@@ -37,7 +36,7 @@ await until(async () => !!(await page.$('[data-module="song"]')), 9000);
 await show("song");
 const duck = '[data-module="song"] [data-node="duck"]';
 const listening = () => page.$eval(`${duck} [data-listens]`, (e) => e.textContent).catch(() => null);
-check(await until(async () => (await listening()) === "Listens to:None"), `its card says it listens to nothing: ${await listening()}`);
+check(await until(async () => (await listening()) === "Listens to:None"), `its node says it listens to nothing: ${await listening()}`);
 
 // The server's meters messages, as the page gets them: each track's peak (linear).
 const meters = [];
@@ -78,14 +77,14 @@ const said = (h) => `bass ${h.up.toFixed(1)} dB with the kick up, ${h.down.toFix
 const alone = await heard(3000);
 check(alone.n[0] > 3 && alone.n[1] > 3 && alone.moved < 1.5, `with None it plays the bass as it was: ${said(alone)}`);
 
-// ---------------------------------------------------------------- listening to the kick, by the card
-// The call the card writes is what makes the bass dip (review Y6), not one written by hand.
+// ---------------------------------------------------------------- listening to the kick, by its node
+// The call its node writes is what makes the bass dip (review Y6), not one written by hand.
 await page.click(`${duck} [data-testid=listens-to]`).catch(() => {});
 await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
 await page.click('[data-testid=listens-menu] [data-track="kick"]').catch(() => {});
 check(
   await until(() => read("song.ts").includes("bass: duck(bass.out, kick.env, { depth: -8 }),"), 9000) && (await until(async () => (await listening()) === "Listens to:Kick", 9000)),
-  `picking Kick in its card writes kick.env in the call, and the card says Kick: ${await listening()}`,
+  `picking Kick in its node writes kick.env in the call, and the node says Kick: ${await listening()}`,
 );
 const ducked = await heard(3000);
 // Each message's peak is the loudest of its window, so a dip shows less than its depth (-8 dB at the

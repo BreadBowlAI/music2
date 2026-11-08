@@ -5,7 +5,7 @@
 // knob of a track the dock doesn't show is named beside that track's header instead.
 
 import { create } from "zustand";
-import { unfoldFor } from "./folded";
+import { expandFor } from "./expanded";
 import { token } from "./native";
 import { canvas, useShell } from "./shell";
 import { useStore } from "./store";
@@ -75,7 +75,7 @@ export function dismissPointer() {
 /** The rows and things a pointer names, as the page draws them. */
 const rowOf = (track: string, lane: string) => document.querySelector<HTMLElement>(`[data-lane="${CSS.escape(`${track}.${lane}`)}"]`);
 const headerOf = (track: string) => document.querySelector<HTMLElement>(`[data-module-tab="${CSS.escape(track)}"]`);
-/** A knob, or the row of a folded card that hides it (CARD-25), which stands for it. */
+/** A knob, or the +N of a collapsed node that hides it (DV-16), which stands for it. */
 const knobOf = (id: string) =>
   document.querySelector<HTMLElement>(`[data-knob-id="${CSS.escape(id)}"]`) ?? document.querySelector<HTMLElement>(`[data-hides~="${CSS.escape(id)}"]`);
 
@@ -103,7 +103,7 @@ export function targetBox(p: Pointer): DOMRect | null {
   }
 }
 
-/** Whether `p` is a knob a folded card hides (CARD-25): its "N more" row stands for it, and Show unfolds the card. */
+/** Whether `p` is a knob a collapsed node hides (DV-16): its +N stands for it, and Show expands the node. */
 export function behindFold(p: Pointer): boolean {
   return p.kind === "knob" && !!p.knob && !document.querySelector(`[data-knob-id="${CSS.escape(p.knob)}"]`) && !!document.querySelector(`[data-hides~="${CSS.escape(p.knob)}"]`);
 }
@@ -129,7 +129,7 @@ export function seenIn(p: Pointer): DOMRect | null {
 /**
  * Show: the one way a pointer moves the view, and it never selects. The bars scroll into the
  * timeline; a track, a lane or a clip into view, a track's folded automation unfolded for a lane; a
- * knob of the track the dock shows into the dock, in Device; a knob of another track, its track's
+ * knob of the track the dock shows into the dock, in the Graph; a knob of another track, its track's
  * header into view.
  */
 export function reveal(p: Pointer) {
@@ -142,10 +142,10 @@ export function reveal(p: Pointer) {
       return;
     case "knob":
       if (elsewhere(p)) return into(() => (p.track ? headerOf(p.track) : null));
-      // A folded card unfolds to show it (CARD-25).
-      if (p.knob) unfoldFor(p.knob);
+      // A collapsed node expands to show it (DV-16).
+      if (p.knob) expandFor(p.knob);
       if (p.knob && !knobOf(p.knob)) {
-        if (shell.view !== "device" && shell.view !== "mix") shell.setView("device");
+        if (shell.view !== "graph" && shell.view !== "mix") shell.setView("graph");
         else if (!shell.dock) shell.setDock(true);
       }
       return into(() => (p.knob ? knobOf(p.knob) : null));
