@@ -213,7 +213,7 @@ export const SUITES = [
   ["tune", "chain", { expect: 37, s: 16 }],
   // Track voice2: the Voice changer's and the Clipper's cards, and the three new cards shot live.
   ["voice", "fix", { expect: 40, s: 30 }],
-  // Track vocoder: the Vocoder added after a synth, its Voice row picking a vocal track, its picture moving with the song.
+  // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
   ["vocoder", "fix", { expect: 23, s: 20 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],

@@ -21,7 +21,7 @@ export const vocals: Audio[] = [
   tune(0.5),
 ];
 
-// The Vocoder: with no voice, as + Effect adds it; with one, as its card's Voice row writes it.
+// The Vocoder: with no voice, as + Effect adds it; with one, as its card's Talks with row writes it.
 export const vocoded: Audio[] = [
   vocoder(x),
   vocoder(x, { clarity: 0.5, smooth: 0.05, formant: 0 }),

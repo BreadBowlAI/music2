@@ -1152,10 +1152,11 @@ fn a_duck_added_from_the_browser_listens_to_nothing_until_picked() {
 
 // VOX-29, CARD-35, PKG-19: a Vocoder added from + Effect after a synth's sound where the song reads
 // it listens to no voice (it plays its sound as it was: `a_vocoder_with_no_voice_plays_its_input_bit_
-// for_bit`). Its row is called Voice, its input's label; with the input left out it says what
+// for_bit`). Its row is called Talks with, its input's label; with the input left out it says what
 // CARD-35 says of any audio input left out, "No other track"; it may be left out, and offers the
 // song's other tracks. Picking one writes that track's sound into the call, before its options:
-// one undo step named by the tracks. None takes it out again, byte for byte.
+// one undo step named by the tracks as a sentence, "Hook talks with Chords" (review W7). None takes
+// it out again, byte for byte.
 #[test]
 fn a_vocoder_added_from_the_browser_listens_to_no_voice_until_picked() {
     let f = crate::testing::fixture("templates/starter");
@@ -1169,10 +1170,10 @@ fn a_vocoder_added_from_the_browser_listens_to_no_voice_until_picked() {
     let alone = f.read("song.ts");
     assert!(alone.contains("hook: { in: vocoder(hook.out, { clarity: 0.5, smooth: 0.05, formant: 0 }), db: db(4) },"), "{alone}");
     assert!(alone.contains("import { vocoder } from \"@m2/vocals\";"), "{alone}");
-    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).expect("the Vocoder's Voice row");
+    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).expect("the Vocoder's Talks with row");
     assert_eq!(
         (r.label.as_deref(), r.track.as_deref(), r.given, r.optional, r.heard, r.nothing.as_str(), r.of.as_deref()),
-        (Some("Voice"), None, false, true, false, "No other track", Some("Hook")),
+        (Some("Talks with"), None, false, true, false, "No other track", Some("Hook")),
         "{r:?}"
     );
     let names: Vec<&str> = r.choices.iter().map(|(_, n)| n.as_str()).collect();
@@ -1181,7 +1182,7 @@ fn a_vocoder_added_from_the_browser_listens_to_no_voice_until_picked() {
     let picked = sidechain(&mut s, at, &id, Some("chords")).unwrap();
     assert_eq!((picked.before.as_str(), picked.after.as_str()), ("", "chords.out"));
     assert_eq!(f.read("song.ts"), alone.replace("vocoder(hook.out, {", "vocoder(hook.out, chords.out, {"), "the voice, and nothing else");
-    assert_eq!(s.step_names().0.and_then(|n| n.name), Some("Hook voice Chords".to_string()), "named by the tracks");
+    assert_eq!(s.step_names().0.and_then(|n| n.name), Some("Hook talks with Chords".to_string()), "named by the tracks");
     let r = row(&s, &call_on(&s, "vocoder", "hook.out")).unwrap();
     assert_eq!((r.track.as_deref(), r.given, r.heard), (Some("chords"), true, true));
     let (at, id) = (rev(&s), call_on(&s, "vocoder", "hook.out"));

@@ -770,10 +770,11 @@ fn the_voice_changer_draws_its_spectrum() {
 }
 
 // VOX-29: the Vocoder's card. Its voice is an input that only listens, may be left out, and names
-// its card's row Voice (CARD-35); Clarity, Smooth and Formant are on its face beside its picture: the
-// synth's spectrum live as it comes in (faint) and as it goes out, across 20 Hz to 20 kHz on a log
-// scale, up −90 to 0 dB (the spectrum's own scale), with no shapes: nothing worked out from sums, so
-// at silence it is still. Its words say what Formant did, then what the layers are.
+// its card's row Talks with (CARD-35, review W7); Clarity, Smooth and Formant are on its face beside
+// its picture: the synth's spectrum live as it comes in (faint) and as it goes out, across 20 Hz to
+// 20 kHz on a log scale, up −90 to 0 dB (the spectrum's own scale), with no shapes: nothing worked
+// out from sums, so at silence it is still. Its words give each knob's meaning (review W6), then
+// what the layers are.
 #[test]
 fn the_vocoder_draws_its_synth_in_and_out() {
     let picture = declared("vocals", "vocoder", "spectrum");
@@ -789,26 +790,35 @@ fn the_vocoder_draws_its_synth_in_and_out() {
     );
     let d = descriptor("vocals", "vocoder");
     assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Vocoder", Some("Voice")));
-    assert_eq!(d.editor.description, "Makes this sound talk: it takes the shape of the voice you pick in Voice");
+    assert_eq!(d.editor.description, "Makes this sound talk: it takes the shape of the voice you pick in Talks with");
     assert_eq!(d.editor.face, ["spectrum", "clarity", "smooth", "formant"]);
     let voice = d.inputs.iter().find(|i| i.name == "voice").expect("its voice");
-    assert_eq!((voice.sidechain, voice.optional, voice.label.as_deref()), (true, true, Some("Voice")), "{voice:?}");
+    assert_eq!((voice.sidechain, voice.optional, voice.label.as_deref()), (true, true, Some("Talks with")), "{voice:?}");
     let insert: Vec<(&str, f64)> = d.editor.insert.iter().map(|i| (i.slot.as_str(), i.value.value)).collect();
     assert_eq!(insert, [("clarity", 0.5), ("smooth", 0.05), ("formant", 0.0)]);
     let runner = Runner::new();
-    let said = |formant: Value| {
-        draw(&runner, "vocals", "vocoder", "spectrum", json!({"clarity": 0.5, "smooth": 0.05, "formant": formant})).unwrap()
+    let said = |clarity: Value, smooth: Value, formant: Value| {
+        draw(&runner, "vocals", "vocoder", "spectrum", json!({"clarity": clarity, "smooth": smooth, "formant": formant})).unwrap()
     };
-    let layers = "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Voice: its hills are the voice's vowels, and they move as it talks";
-    let d = said(json!(0));
+    let layers = "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Talks with: its hills are the voice's vowels, and they move as it talks";
+    let d = said(json!(0.5), json!(0.05), json!(0));
     assert_eq!(kinds(&d), Vec::<&str>::new(), "no shapes: nothing worked out from sums");
-    assert_eq!(d["words"], layers);
+    assert_eq!(d["words"], format!("Half of the voice's S and T sounds come through, and each sound lets go in 50 ms. {layers}"));
     for formant in [json!(3), json!(-12), Value::Null] {
-        assert_eq!(said(formant.clone())["shapes"], d["shapes"], "its shapes don't move with Formant: at {formant}");
+        assert_eq!(said(json!(0.5), json!(0.05), formant.clone())["shapes"], d["shapes"], "its shapes don't move with Formant: at {formant}");
     }
-    assert_eq!(said(json!(3))["words"], format!("Its hills 3 semitones higher than the voice's: a brighter robot. {layers}"));
-    assert_eq!(said(json!(-5))["words"], format!("Its hills 5 semitones lower than the voice's: a deeper robot. {layers}"));
-    assert_eq!(said(json!(1))["words"], format!("Its hills 1 semitone higher than the voice's: a brighter robot. {layers}"));
-    assert_eq!(said(json!(-2.5))["words"], format!("Its hills 2.5 semitones lower than the voice's: a deeper robot. {layers}"));
-    assert_eq!(said(Value::Null)["words"], format!("Its hills moved by a cable or the code. {layers}"));
+    let words = |clarity: Value, smooth: Value, formant: Value| said(clarity, smooth, formant)["words"].as_str().unwrap().to_string();
+    let half = "Half of the voice's S and T sounds come through, and each sound lets go in 50 ms";
+    assert_eq!(words(json!(0.5), json!(0.05), json!(3)), format!("Its hills 3 semitones higher than the voice's: a brighter robot. {half}. {layers}"));
+    assert_eq!(words(json!(0.5), json!(0.05), json!(-5)), format!("Its hills 5 semitones lower than the voice's: a deeper robot. {half}. {layers}"));
+    assert_eq!(words(json!(0.5), json!(0.05), json!(1)), format!("Its hills 1 semitone higher than the voice's: a brighter robot. {half}. {layers}"));
+    assert_eq!(words(json!(0.5), json!(0.05), json!(-2.5)), format!("Its hills 2.5 semitones lower than the voice's: a deeper robot. {half}. {layers}"));
+    assert_eq!(words(json!(0.5), json!(0.05), Value::Null), format!("Its hills moved by a cable or the code. {half}. {layers}"));
+    assert_eq!(words(json!(0), json!(0.2), json!(0)), format!("None of the voice's S and T sounds come through, and each sound lets go in 200 ms. {layers}"));
+    assert_eq!(words(json!(1), json!(0.01), json!(0)), format!("All of the voice's S and T sounds come through, and each sound lets go in 10 ms. {layers}"));
+    assert_eq!(words(json!(0.3), json!(0.0125), json!(0)), format!("30% of the voice's S and T sounds come through, and each sound lets go in 12.5 ms. {layers}"));
+    assert_eq!(
+        words(Value::Null, Value::Null, json!(0)),
+        format!("The voice's S and T sounds come through as a cable or the code says, and each sound lets go as a cable or the code says. {layers}")
+    );
 }

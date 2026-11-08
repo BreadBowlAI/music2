@@ -18,8 +18,8 @@
 // as the voice comes in and goes out, live. Its presets are Deep and Chipmunk.
 //
 // The Vocoder (VOX-29) makes a synth talk: one kernel of the pack's own, `vocoder`, shapes the
-// sound it goes after with another track's voice, picked on its card's Voice row (CARD-35). With no
-// voice it plays its sound as it is.
+// sound it goes after with another track's voice, picked on its card's Talks with row (CARD-35).
+// With no voice it plays its sound as it is.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params } from "@m2/core";
 import { pitchLine, pitchPicture, pitchWords, vocoderWords, voicePicture, voiceWords } from "./pictures";
@@ -96,7 +96,7 @@ export const voiceChanger = component(
  * the voice, a third of an octave each, set the same bands of the synth, against the voice's loudest.
  * `clarity` mixes in the voice's own S and T sounds (over 5 kHz), `smooth` is how fast the bands let
  * go, and `formant` moves the voice's hills on the synth, up brighter, down deeper. With no voice it
- * plays `x` as it is: its card's Voice row picks one.
+ * plays `x` as it is: its card's Talks with row picks one.
  */
 export const vocoder = component(
   {
@@ -104,8 +104,9 @@ export const vocoder = component(
     label: "Vocoder",
     signature: signature<(x: Audio, voice?: Audio) => Audio>(),
     // `voice` only listens (PKG-13): muting the track it comes from doesn't stop the synth talking. A
-    // call may leave it out (PKG-18): its card's row, called Voice by its label, picks it (CARD-35).
-    inputs: { in: port.audio(), voice: port.audio({ sidechain: true, label: "Voice" }).optional() },
+    // call may leave it out (PKG-18): its card's row, called Talks with by its label, picks it
+    // (CARD-35), and its undo step reads "Lead talks with Vox".
+    inputs: { in: port.audio(), voice: port.audio({ sidechain: true, label: "Talks with" }).optional() },
     controls: {
       clarity: control.frac(0.5).range(0, 1),
       smooth: control.secs(0.05).range(0.01, 0.2).log(),
@@ -114,7 +115,7 @@ export const vocoder = component(
     output: port.audio(),
     editor: {
       category: "Voice",
-      description: "Makes this sound talk: it takes the shape of the voice you pick in Voice",
+      description: "Makes this sound talk: it takes the shape of the voice you pick in Talks with",
       insert: { clarity: 0.5, smooth: 0.05, formant: 0 },
       // The synth's spectrum as it comes in and goes out, live: the Voice changer's picture.
       views: { spectrum: voicePicture() },
@@ -126,5 +127,5 @@ export const vocoder = component(
   (x: Audio, voice: Audio | undefined, { clarity, smooth, formant }: Params) =>
     kernel("@m2/vocals:vocoder", { in: x, voice, clarity, smooth, formant, listen: voice === undefined ? 0 : 1 }),
   // It draws no shapes: what moves is the sound itself, its layers.
-  { spectrum: { draw: () => [], words: (v) => vocoderWords(v, { formant: "formant" }) } },
+  { spectrum: { draw: () => [], words: (v) => vocoderWords(v, { formant: "formant", clarity: "clarity", smooth: "smooth" }) } },
 );

@@ -87,15 +87,30 @@ export function voiceWords(v: Values, names: { pitch: string; formant: string })
 
 // ---------------------------------------------------------------- the Vocoder
 
-/** What the Vocoder's picture shows, in words, after what Formant did (VOX-29). */
-export function vocoderWords(v: Values, names: { formant: string }): string {
-  const formant = v[names.formant];
+/**
+ * What the Vocoder's picture shows, in words (VOX-29): what Formant did, what Clarity and Smooth
+ * do, then what its two layers are.
+ */
+export function vocoderWords(v: Values, names: { formant: string; clarity: string; smooth: string }): string {
+  const [formant, clarity, smooth] = [v[names.formant], v[names.clarity], v[names.smooth]];
   const layers =
-    "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Voice: its hills are the voice's vowels, and they move as it talks";
-  if (formant === 0) return layers;
+    "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Talks with: its hills are the voice's vowels, and they move as it talks";
   const moved =
-    typeof formant !== "number"
-      ? "Its hills moved by a cable or the code"
-      : `Its hills ${semitones(formant)} ${formant > 0 ? "higher" : "lower"} than the voice's: a ${formant > 0 ? "brighter" : "deeper"} robot`;
-  return `${moved}. ${layers}`;
+    formant === 0
+      ? ""
+      : typeof formant !== "number"
+        ? "Its hills moved by a cable or the code. "
+        : `Its hills ${semitones(formant)} ${formant > 0 ? "higher" : "lower"} than the voice's: a ${formant > 0 ? "brighter" : "deeper"} robot. `;
+  const how =
+    typeof clarity !== "number"
+      ? "The voice's S and T sounds come through as a cable or the code says"
+      : clarity === 0
+        ? "None of the voice's S and T sounds come through"
+        : clarity === 1
+          ? "All of the voice's S and T sounds come through"
+          : clarity === 0.5
+            ? "Half of the voice's S and T sounds come through"
+            : `${Math.round(clarity * 100)}% of the voice's S and T sounds come through`;
+  const goes = typeof smooth !== "number" ? "each sound lets go as a cable or the code says" : `each sound lets go in ${secondsWords(smooth)}`;
+  return `${moved}${how}, and ${goes}. ${layers}`;
 }
