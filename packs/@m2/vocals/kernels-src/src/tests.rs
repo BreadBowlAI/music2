@@ -1652,10 +1652,10 @@ mod vocoded {
     }
 
     // VOX-29: Formant moved while the song plays moves the hills (review W3): stepped from 0 to 7
-    // half way through, under a 27.5 Hz saw, the out's gain curve from 150 ms after the step (its
-    // glide, 20 ms, has landed within 0.004 semitone) lies 7 semitones up from the one before it,
-    // within 0.1, at every rate. The carrier's bands are placed again as Formant moves, every 16
-    // frames; placed once only (review W3's M2), the hills don't move.
+    // half way through, under a 27.5 Hz saw, the out's gain curve over the 0.7 s from 40 ms after
+    // the step (Formant glides there in 20 ms, a time constant) lies 7 semitones up from the one
+    // before it, within 0.1, at every rate. The carrier's bands are placed again as Formant moves,
+    // every 16 frames; placed once only (review W3's M2), the hills don't move.
     #[test]
     fn formant_moved_while_playing_moves_the_hills() {
         for sr in RATES {
@@ -1675,7 +1675,7 @@ mod vocoded {
             // About 0.7 s at every rate, so its harmonics stand apart in the spectrum.
             let window = ((0.6 * sr) as usize).next_power_of_two();
             let curve = |from: usize| gain_curve_of(&out[from..from + window], &c[from..from + window], sr);
-            let by = moved(&curve((0.5 * sr) as usize), &curve(step + (0.15 * sr) as usize));
+            let by = moved(&curve((0.5 * sr) as usize), &curve(step + (0.04 * sr) as usize));
             assert!((by - 7.0).abs() < 0.1, "{sr}: Formant stepped to 7 while playing moves the hills {by:.3} semitones");
         }
     }
