@@ -309,7 +309,7 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 /// Sampler playing regions (PKG-16): two velocity layers, two takes in turn, a release and a loop.
 /// `meters` is `@m2/mixing`'s gate, de-esser and multiband, each working, whose sound their meters
 /// must not change (PACK-26).
-/// `clip` is `@m2/effects`' Clipper played hard, 46 frames late (PACK-34).
+/// `clip` is `@m2/effects`' Clipper played hard, 92 frames late (PACK-34).
 const PURE: [&str; 10] = [
     "examples/arp",
     "examples/first-song",

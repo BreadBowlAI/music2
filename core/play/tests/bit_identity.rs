@@ -21,7 +21,8 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2). One is
-/// late: `clip`, the Clipper's (46 frames, PACK-34), heard live as late as it is (RENDER-33).
+/// late: `clip`, the Clipper's (92 frames, PACK-34), heard live as late as it is (RENDER-33), and
+/// silent until then.
 const PURE: [&str; 10] = [
     "examples/arp",
     "examples/first-song",
@@ -71,6 +72,7 @@ fn check(name: &str, song: &Song, frames: usize, swap_at: Option<usize>) {
     let late = song.renderer().latency() as usize;
     let heard = live(song, frames + late, swap_at);
     assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
+    assert!(heard[..late].iter().all(|f| *f == [0.0; 2]), "{name}: sound while it is late");
     assert_eq!(first_diff(&heard[late..], &export), None, "{name}: live differs from the export");
 }
 
@@ -117,6 +119,7 @@ fn copy_taps_change_no_bit() {
         assert_eq!(first_diff(&tapped, &export), None, "{name}: a copy tap changed what renders");
         // The output's copy is what the engine made, the latency's frames (RENDER-19) before it too.
         let late = song.renderer().latency() as usize;
+        assert!(copied[..late].iter().all(|f| *f == [0.0; 2]), "{name}: the output's copy sounds while it is late");
         assert_eq!(first_diff(&copied[late..late + frames], &export), None, "{name}: the output's copy is what rendered");
     }
 }
@@ -186,6 +189,7 @@ fn every_tap_on_changes_no_bit() {
         });
         assert!(peak(&export) > 0.0 || name.contains("empty"), "{name} makes sound");
         assert!(framed > 0, "{name}: the rings were read");
+        assert!(heard[..late].iter().all(|f| *f == [0.0; 2]), "{name}: sound while it is late");
         assert_eq!(first_diff(&heard[late..], &export), None, "{name}: a tap changed what plays");
     }
     assert!(metered > 0, "some meter said a kernel turned a sound down");
@@ -328,6 +332,9 @@ fn std_plays_the_export_after_the_engine_sat_stopped() {
         let late = song.renderer().latency() as usize;
         for idle in [2 * SR as usize, 5 * BLOCK] {
             let heard = live_after_idle(&song, idle, frames + late);
+            if let Some(at) = heard[..late].iter().position(|f| *f != [0.0; 2]) {
+                differs.push(format!("{name}, played after {idle} frames stopped: sound at frame {at}, while it is late"));
+            }
             if let Some(at) = first_diff(&heard[late..], &export) {
                 differs.push(format!("{name}, played after {idle} frames stopped: from frame {at}"));
             }
@@ -845,6 +852,7 @@ fn live_on_n_threads_is_the_export_on_1() {
         for n in [2, 4, 7] {
             let (_pool, runner) = engine_threads(n);
             let heard = live_on(&song, song.rate, frames + late, runner, None);
+            assert!(heard.out[..late].iter().all(|f| *f == [0.0; 2]), "{name} live on {n} threads: sound while it is late");
             assert_eq!(first_diff(&heard.out[late..], &export), None, "{name} live on {n} threads: the export's bits");
             assert!(parts < 2 || heard.on_workers > 0, "{name} on {n} threads: tasks ran on workers");
             across += heard.across;
