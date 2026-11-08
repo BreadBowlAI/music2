@@ -163,7 +163,10 @@ fn the_gate_draws_where_it_opens_over_its_levels() {
     assert_eq!(line(&d, "threshold"), [(0.0, -40.0), (3.0, -40.0)]);
     assert_eq!(dots(&d), ["y=threshold"]);
     assert!(close(places(&d)[0], (2.8, -40.0)), "near its right end, now");
-    assert_eq!(d["words"], "Opens when the sound reaches −40 dB; below that it turns it down to −80 dB. The strip at the foot lights while it is open. Drag the line");
+    assert_eq!(
+        d["words"],
+        "Opens when the sound reaches −40 dB; below that it turns it down to −80 dB. The strip at the foot lights while it is open. Drag the line"
+    );
 }
 
 // CARD-112, CARD-126: the gate shows whether it is open, its kernel's meter `open` over its last
@@ -189,7 +192,10 @@ fn the_gate_shows_whether_it_is_open_and_how_far_it_turns_down() {
     let mut cabled = v;
     cabled["range"] = Value::Null;
     let d = draw(&runner, "mixing", "gate", "down", cabled).unwrap();
-    assert_eq!((&d["shapes"], &d["words"]), (&json!([]), &json!("How far it turns the sound down: none while it is open, as far as its range says once it closes")));
+    assert_eq!(
+        (&d["shapes"], &d["words"]),
+        (&json!([]), &json!("How far it turns the sound down: none while it is open, as far as its range says once it closes"))
+    );
 }
 
 // CARD-113: the transient shaper draws one hit, before (faint) and after (the line `after`), from
@@ -287,7 +293,14 @@ fn the_multiband_draws_its_split() {
     // CARD-115, CARD-126: how far each band turns down, its kernel's meters, a bar each, low to high.
     let live = declared("mixing", "multiband", "split")["live"].clone();
     let meters: Vec<&Value> = live.as_array().unwrap().iter().filter(|l| l["kind"] == "meter").collect();
-    assert_eq!(meters, [&json!({"kind": "meter", "name": "low_reduction"}), &json!({"kind": "meter", "name": "mid_reduction"}), &json!({"kind": "meter", "name": "high_reduction"})]);
+    assert_eq!(
+        meters,
+        [
+            &json!({"kind": "meter", "name": "low_reduction"}),
+            &json!({"kind": "meter", "name": "mid_reduction"}),
+            &json!({"kind": "meter", "name": "high_reduction"})
+        ]
+    );
     v["lowMid"] = json!(3000);
     let crossed = draw(&runner, "mixing", "multiband", "split", v).unwrap();
     let marks: Vec<f64> =
@@ -608,7 +621,10 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
 fn tune_draws_its_pitch_line() {
     let pitch = declared("vocals", "tune", "pitch");
     assert_eq!((&pitch["x"]["lo"], &pitch["x"]["hi"], &pitch["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
-    assert_eq!((&pitch["y"]["lo"], &pitch["y"]["hi"], &pitch["y"]["unit"], &pitch["y"]["bare"]), (&json!(36.0), &json!(84.0), &json!("semitones"), &json!(true)));
+    assert_eq!(
+        (&pitch["y"]["lo"], &pitch["y"]["hi"], &pitch["y"]["unit"], &pitch["y"]["bare"]),
+        (&json!(36.0), &json!(84.0), &json!("semitones"), &json!(true))
+    );
     let mut heard = history_of("heard");
     heard["tone"] = json!("faint");
     assert_eq!(pitch["live"], json!([heard, history_of("note")]));
@@ -618,11 +634,18 @@ fn tune_draws_its_pitch_line() {
     assert_eq!(kinds(&d), ["mark", "mark", "mark", "mark", "label"]);
     let shapes = d["shapes"].as_array().unwrap();
     assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
-    let cs: Vec<(f64, &str)> = shapes.iter().filter(|s| s["kind"] == "mark" && s["axis"] == "y").map(|s| (s["at"].as_f64().unwrap(), s["words"].as_str().unwrap())).collect();
+    let cs: Vec<(f64, &str)> = shapes
+        .iter()
+        .filter(|s| s["kind"] == "mark" && s["axis"] == "y")
+        .map(|s| (s["at"].as_f64().unwrap(), s["words"].as_str().unwrap()))
+        .collect();
     assert_eq!(cs, [(48.0, "C3"), (60.0, "C4, middle C"), (72.0, "C5")]);
     let names: Vec<&str> = shapes.iter().filter(|s| s["kind"] == "label").map(|s| s["words"].as_str().unwrap()).collect();
     assert_eq!(names, ["C4"], "middle C alone named: at 48 px tall an octave is too little for a name each");
-    assert_eq!(d["words"], "Your voice (faint), and the note of the key it moves it to: in about 100 ms, all the way. Silence and breaths rest at the foot");
+    assert_eq!(
+        d["words"],
+        "Your voice (faint), and the note of the key it moves it to: in about 100 ms, all the way. Silence and breaths rest at the foot"
+    );
     for (glide, amount, how) in [
         (json!(0), json!(1), "there at once, all the way"),
         (json!(0.05), json!(0.8), "in about 50 ms, 80% of the way"),
@@ -630,6 +653,9 @@ fn tune_draws_its_pitch_line() {
         (Value::Null, json!(1), "as its glide and amount, set by a cable or the code, say"),
     ] {
         let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
-        assert_eq!(d["words"], format!("Your voice (faint), and the note of the key it moves it to: {how}. Silence and breaths rest at the foot"));
+        assert_eq!(
+            d["words"],
+            format!("Your voice (faint), and the note of the key it moves it to: {how}. Silence and breaths rest at the foot")
+        );
     }
 }
