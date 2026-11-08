@@ -41,7 +41,8 @@ fn a_flush_to_zero_set_by_the_caller_changes_no_bit() {
 /// One note on `@m2/synths`' synth and fm voices, then nothing, through every kernel music2 ships
 /// that keeps state: std's filter, chorus, compressor, eq, limiter, drive, and a ducker following
 /// the fm voice, and `@m2/effects`' own delay and reverb on long feedback, phaser, tremolo,
-/// bitcrusher and widener (PACK-21), all summed.
+/// bitcrusher, widener, Flanger (Feedback 0.9, its copy alone) and Grains (16 at once, an octave up,
+/// its grains alone) (PACK-21), all summed.
 fn long_tail() -> (Ir, DataSet) {
     let voice = |kernel: &str| {
         json!({"op": "poly", "events": "n", "voices": 2, "body": {"out": "x", "nodes": [
@@ -65,6 +66,9 @@ fn long_tail() -> (Ir, DataSet) {
         c("cut", 800.0),
         c("deep", -30.0),
         c("ratio", 8.0),
+        c("half", 0.5),
+        c("many", 50.0),
+        c("octave", 12.0),
     ]);
     nodes.extend([
         fx("fs", "std:pan", json!({"in": "f"})),
@@ -83,10 +87,12 @@ fn long_tail() -> (Ir, DataSet) {
         fx("follow", "std:follow", json!({"in": "f"})),
         fx("duck", "std:duck", json!({"in": "s", "side": "follow"})),
         fx("widen", "@m2/effects:widen", json!({"in": "s"})),
+        fx("flanger", "@m2/effects:flanger", json!({"in": "s", "feedback": "hi", "mix": "one"})),
+        fx("grains", "@m2/effects:grains", json!({"in": "s", "size": "half", "density": "many", "pitch": "octave", "mix": "one"})),
     ]);
     let sum = [
         "svf.lp", "svf.bp", "svf.hp", "delay", "reverb", "verb2", "chorus", "phaser", "tremolo", "compress", "eq3", "bitcrush", "limit",
-        "drive", "duck", "widen",
+        "drive", "duck", "widen", "flanger", "grains",
     ];
     let mut last = "fs".to_string();
     for (k, x) in sum.iter().enumerate() {

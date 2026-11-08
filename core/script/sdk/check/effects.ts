@@ -1,10 +1,25 @@
-// The pictures of @m2/effects (CARD-117 to CARD-124), checked as the app's code editor checks songs:
+// The pictures of @m2/effects (CARD-117 to CARD-129), checked as the app's code editor checks songs:
 // each dot names the card's own value in the unit its axis draws, or a number control where it
 // moves as its knob does (CARD-62). A line that should fail carries `@ts-expect-error`, so a type
 // that stops refusing it fails the check too.
 
 import { component, control, port } from "@m2/core";
-import { drive, echoes, echoesPicture, field, fieldPicture, motionPicture, shapePicture, tail, tailPicture, tremoloMotion } from "../../../../packs/@m2/effects/src/pictures";
+import {
+  cloud,
+  cloudPicture,
+  drive,
+  echoes,
+  echoesPicture,
+  field,
+  fieldPicture,
+  motionPicture,
+  shapePicture,
+  sweep,
+  sweepPicture,
+  tail,
+  tailPicture,
+  tremoloMotion,
+} from "../../../../packs/@m2/effects/src/pictures";
 
 export const dots = [
   component(
@@ -106,6 +121,34 @@ export const dots = [
         // @ts-expect-error a width in dB, moved across a width
         draw: (v, p) => field(p, v, { width: "width" }),
         words: () => "a field",
+      },
+    },
+  ),
+  component(
+    {
+      id: "spread-in-hz",
+      inputs: { in: port.audio() },
+      controls: { size: control.secs(0.1), spread: control.hz(3), pitch: control.semis(0) },
+      output: port.audio(),
+      editor: { views: { cloud: cloudPicture() } },
+    },
+    (x) => x,
+    {
+      cloud: {
+        // @ts-expect-error Grains' spread that is a frequency, moved across seconds back
+        draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch" }),
+        words: () => "a cloud",
+      },
+    },
+  ),
+  component(
+    { id: "depth-misspelt", inputs: { in: port.audio() }, controls: { depth: control.frac(0.7), feedback: control.bipolar(0.5) }, output: port.audio(), editor: { views: { sweep: sweepPicture() } } },
+    (x) => x,
+    {
+      sweep: {
+        // @ts-expect-error a depth the sound doesn't have
+        draw: (v, p) => sweep(p, v, { depth: "dept", feedback: "feedback" }),
+        words: () => "a sweep",
       },
     },
   ),
