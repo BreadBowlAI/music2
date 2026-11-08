@@ -405,3 +405,31 @@ export default song(() => {
     let late: Vec<(&str, &str)> = m.port_edges.iter().filter(|e| e.late).map(|e| (label(&e.from), label(&e.to))).collect();
     assert_eq!(late, [("lowpass", "feedback")]);
 }
+
+// CARD-25 (review Z3): a call made inside a `poly` voice's body plays once for each note, and the
+// view says so, whether or not it reads the note (`noise()` doesn't); the `poly` call itself, and
+// what reads the voices' sum, don't.
+#[test]
+fn a_call_inside_a_voice_says_it_plays_per_note() {
+    let fixture = Fixture::song(
+        r#"import { poly, song } from "@m2/core";
+import { adsr, noise, osc, vca } from "std/dsp";
+import { lowpass } from "std/filter";
+import { sum } from "std/math";
+export default song(({ lane }) => {
+  const voice = poly(lane.notes("notes"), (n) => vca(lowpass(sum(osc.saw(n.pitch), noise()), { cutoff: 1200 }), adsr(n.gate)));
+  return lowpass(voice, { cutoff: 4000 });
+});
+"#,
+    );
+    let v = fixture.open().view();
+    let m = module(&v, "song");
+    let per_note = |label: &str| m.nodes.iter().filter(|n| n.label == label).map(|n| n.per_note).collect::<Vec<_>>();
+    for label in ["osc.saw", "noise", "sum", "vca", "adsr"] {
+        assert_eq!(per_note(label), [true], "{label} plays once for each note");
+    }
+    let mut lowpasses = per_note("lowpass");
+    lowpasses.sort();
+    assert_eq!(lowpasses, [false, true], "the voice's Lowpass does, the one after the poly doesn't");
+    assert_eq!(per_note("poly"), [false], "the poly call is no part of a voice");
+}

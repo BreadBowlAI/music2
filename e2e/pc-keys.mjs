@@ -68,7 +68,7 @@ check(
   `the top bar's tooltips say Ctrl+Z, Ctrl+Shift+Z, Ctrl+Shift+E, Ctrl+Alt+B and Enter: ${Object.values(bar).join(" | ")}`,
 );
 const tabs = await page.$$eval("[data-view-tab]", (els) => els.map((e) => e.title));
-check(same(tabs, ["Device (Alt+1)", "Notes (Alt+2)", "Mix (Alt+3)", "Code (Alt+4)"]), `the dock's tabs say Alt+1 to Alt+4: ${tabs.join(" | ")}`);
+check(same(tabs, ["Graph (Alt+1)", "Notes (Alt+2)", "Mix (Alt+3)", "Code (Alt+4)"]), `the dock's tabs say Alt+1 to Alt+4: ${tabs.join(" | ")}`);
 // The song bar (8b.2): the tempo's drag spells Shift; Play says Space, with no Shift+Space.
 const song = { tempo: await title("[data-testid=tempo-field]"), play: await title("[data-testid=play]") };
 check(
@@ -90,7 +90,7 @@ const want = {
   "New track": "Ctrl+T",
   "Delete the selected track": "Ctrl+Backspace",
   "Rename the selected track": "Ctrl+R / Shift+Enter",
-  "Device / Notes / Mix / Code": "Alt+1 / Alt+2 / Alt+3 / Alt+4",
+  "Graph / Notes / Mix / Code": "Alt+1 / Alt+2 / Alt+3 / Alt+4",
   "Show / hide the browser": "Ctrl+Alt+B",
   "Keyboard shortcuts": "Alt+K",
   "Export": "Ctrl+Shift+E",
@@ -166,12 +166,12 @@ await until(async () => same(await shown(), ["kick", "hats", "bass", "keys"]));
 await select("kick");
 await key("Alt+3");
 check(await until(async () => (await selectedView()) === "mix"), "Alt+3 shows Mix");
-// Bass's clip, opened in Notes by a double-click; then Device and back.
+// Bass's clip, opened in Notes by a double-click; then Graph and back.
 const clip = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(clip.x + 60, clip.y + clip.height / 2, { count: 2 });
 await until(() => page.$("[data-testid=roll-grid]"));
 await key("Alt+1");
-check(await until(async () => (await selectedView()) === "graph"), "Alt+1 shows Device");
+check(await until(async () => (await selectedView()) === "graph"), "Alt+1 shows Graph");
 await key("Alt+2");
 check(await until(async () => (await selectedView()) === "notes" && !!(await page.$("[data-testid=roll-grid]"))), "Alt+2 shows Notes, on Bass's clip");
 const roll = await title("[data-testid=roll-grid]");

@@ -445,7 +445,7 @@ each marker means something. The markers and the `fg-muted` default text replace
   - follow the playhead `ArrowRightFromLine`;
   - change a track's instrument `ArrowLeftRight`;
   - metronome `Metronome`;
-  - dock views: Device `SlidersHorizontal`, Notes `Piano`, Mix `SlidersVertical`, Code `CodeXml`;
+  - dock views: Graph `Workflow`, Notes `Piano`, Mix `SlidersVertical`, Code `CodeXml`;
   - fold `ChevronRight`.
 - All of these are in the installed version, so there are no custom icons.
 - A category's icon appears once, in its browser header, never on each item.
@@ -670,7 +670,7 @@ Keep these rules that already follow the block in `index.css`, with these change
 │   High-pass      ├────────────────────────┼────────────────────────────────────────────────────────────────────────┤
 │ > EQ             │ ▌   Song             ▮ │ (the Song's own lanes: mix automation)                                 │
 │ > Dynamics       ├────────────────────────┴────────────────────────────────────────────────────────────────────────┤
-│ > Delay & Reverb │ ▌Bass  [ Device | Notes | Mix | Code ]                     [ Chain | Patch ]    ...   v         │
+│ > Delay & Reverb │ ▌Bass  [ Graph | Notes | Mix | Code ]                                             ...   v         │
 │ > Modulation     ├─────────────────────────────────────────────────────────────────────────────────────────────────┤
 │ > Utility        │  ┏━━ Bass ━━━━━━━━━━━━━━┓ ┌─ Drive ──────┐ ┌─ Reverb ───────────────┐  [+]                      │
 │                  │  ┃  (o)     (o)     (o)  ┃ │  (o)    (o)  │ │  (o)     (o)     (o)   │                          │
@@ -802,45 +802,32 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
 **Header (32 px, `chrome`):**
 - At the left: the selection chip, which is an 8 px colour chip plus the name in `text-sm` 600.
   Clicking it opens the header menu.
-- Then the segmented control `Device · Notes · Mix · Code` (⌥1 to ⌥4).
+- Then the segmented control `Graph · Notes · Mix · Code` (⌥1 to ⌥4).
 - Then the current view's tools, right-aligned.
 - At the far right, `ChevronDown` hides the dock (E).
 - The body is `canvas` and edge to edge: no card, no title row, no legend, no hint.
 
-**Device** (the view at first launch; after that the dock keeps whichever view was chosen, §3.7):
-- The track's sound as a chain, left to right, top-left aligned, at 100% scale, scrolling
-  horizontally: the instrument card, then its effect cards, then a 28 px "+" slot. Today's Chords
-  chain (`e02-…-chords`) is the model.
-- **Card:**
-  - `raised`, 1 px `line`, `rounded-md`, 12 px padding, at least 128 px wide;
-  - the instrument card has a 3 px colour bar along its top;
-  - header (24 px): the label in `text-sm` 600 ("Reverb", from `descriptor.label`) and ⋯ on hover;
-  - the menu holds Turn off (or Turn on), Move left and right, Delete ⌫, —, Edit in code (with
-    the file:line as the detail). As `next` built it (D1, D2): a card turned off stays where it was,
-    dimmed, its title "Reverb · Off", its knobs still there to set; a move that can't be done is a
-    grey row whose tooltip says why. A Duck's side row says "Listens to: Kick ▾" and lists the
-    song's other tracks (D3).
-- **Controls** sit in 56 px columns: the knob (28 px), the label (`text-xs` `fg-muted`) and the
-  value (`text-xs` `fg`, with its home marker).
-- **When the sound isn't a chain:** if the audio path from the track's lanes to `out` isn't a line
-  of components, Device opens Patch instead, with one `text-sm` `fg-muted` line in the header: "This
-  sound is built from parts. Showing its patch." The Clap (`e02-…-clap`) is an example.
-  - Modulators that feed controls, such as `lfo → xrange → blend` in the Bass, are not cards. The
-    control they drive reads "← blend", and Patch shows them.
-- **Song selected:** Device shows the song's own chain (duck, master). The mixer is one compact card,
-  "Mixer · 16 channels · open Mix ⌥3", never a 16-row node (`f03`).
-- **Tools:** `Chain · Patch` segmented.
-
-**Patch** (sound design; today's graph, cleaned up):
-- port shapes and neutral cables (§2.8);
-- node titles in `text-sm` 600 from the label, with the code name in the tooltip;
-- no file:line;
-- Fit is clamped to 75–100%, top-left aligned. It fits the panel less a scrollbar's room each way,
-  never the room the scrollbars showing now leave: a scrollbar coming or going never changes the
-  fit, so the graph never flickers between two sizes;
-- the zoom bar shows only when the content overflows.
-- **Cable drag (fixes D3):** only compatible inputs get an `accent` ring. Others dim to 40% and say
+**Graph** (the view at first launch; after that the dock keeps whichever view was chosen, §3.7):
+- One view of the track's sound: the graph of its code, as [The graph: nodes you expand](../graph/design.md)
+  draws it. Every box in it is a **node**: a call, or a place a sound or notes come from or go to.
+  Device's Chain and Patch, and the switch between them, are gone (2026-11-08, that note's D1).
+- A call's node has two sizes, **collapsed** (the default) and **expanded** (⤢), the window's own
+  (DV-12, DV-13). Its values are **bars** (DV-14).
+- Port shapes and neutral wires (§2.8); node titles in `text-sm` 600 from the label, with the code
+  name in the tooltip; no file:line.
+- Fit is 100%, top-left aligned: a node's text never draws under the type scale. A graph bigger
+  than the panel scrolls, across first, as signal reads. (75% was Fit's floor until 2026-11-08's
+  review Z8: at 75% a 12 px title drew at 9 px.) Expanding a node never changes the zoom.
+- A wire never runs behind a node it doesn't touch: one that skips a column passes through a gap
+  the layout leaves in it. (Since review Z7: `layout` in `web/src/components/NodeGraph.tsx` holds the gap
+  open with a stand-in a wire's height, and `routed` draws the wire through it; tested by `nodes`
+  on Wob, the kick and the song.) Fit's 100% is `FIT` there; tested by `nodes`.
+- **Song selected:** the song's graph. The mixer is one compact node, "16 channels · Open Mix ⌥3",
+  never a 16-row node (`f03`, MX-6).
+- **Wire drag (fixes D3):** only inputs that fit get an `accent` ring. Others dim to 40% and say
   why on hover: "Frequency (Hz) can't drive Drive (dB)", using the label and never the slot (`amount`).
+- **Tools:** none of its own; the zoom bar (zoom out, the zoom, zoom in, Fit, Collapse all) floats
+  at the panel's bottom right.
 
 **Notes:**
 
@@ -935,10 +922,10 @@ This replaces "TRACKS" and "4/4 · 124 BPM".
 - **Search** matches the label, the description and `editor.keywords`, a std addition: Duck gets
   `["sidechain", "pump"]`. Today searching "sidechain" finds nothing (`c12`).
 - **Drag:**
-  - onto a track header or the Device chain: add after the last effect (or at the drop slot);
+  - onto a track header or the Graph: add after the last effect (or at the drop slot);
   - onto empty arrangement space below the tracks: add a track with that instrument (8b add track);
   - Enter on a selected row adds it to the selected track.
-- **The "+" in Device and the "+ Track" button** open the same list as a popover anchored to the
+- **The "+" in the Graph and the "+ Track" button** open the same list as a popover anchored to the
   button, with typeahead (today's behaviour, `c11`). One list in two places is the one allowed
   duplicate, because the popover is the keyboard path.
 - **Its search is the library's** ([LIB-1](../../architecture.md#library)): typing asks the server's
@@ -960,18 +947,18 @@ added, as a panel over the window, Spotlight-like.
 
 ### 3.7 Selection drives the dock's content, never its view
 
-The dock's view (Device, Notes, Mix or Code) is one choice for the window, kept in `view.json`. It
+The dock's view (Graph, Notes, Mix or Code) is one choice for the window, kept in `view.json`. It
 changes only when the producer changes it: ⌥1 to ⌥4, the segmented control, X, or a double-click on
 a notes clip, which opens Notes on it. Selecting a track, a clip or the Song row never changes it, so
-clicking Kick's header to press M or ⌘D while mixing in ⌥3 keeps the mixer in view. Device is the
+clicking Kick's header to press M or ⌘D while mixing in ⌥3 keeps the mixer in view. Graph is the
 view at first launch.
 
 | You select | The dock shows (in the current view) | Notes |
 |---|---|---|
-| a track header | Device: its chain. Notes: its selected clip, or the empty state. Mix: every strip, its own highlighted. Code: its file | ⌥1 to ⌥4 switch views at any time |
+| a track header | Graph: its sound's graph. Notes: its selected clip, or the empty state. Mix: every strip, its own highlighted. Code: its file | ⌥1 to ⌥4 switch views at any time |
 | a notes clip (one click) | the clip is selected; the view stays | A double-click opens Notes on that clip. |
 | an automation clip or lane | its track, as above | Automation is edited in place in the timeline (8b clip editing). The dock never shows a dead end (D11). |
-| the Song row | Device: the song's chain. Mix: every strip. Code: `song.ts` | |
+| the Song row | Graph: the song's graph. Mix: every strip. Code: `song.ts` | |
 | nothing (Esc) | the last track's content | The dock never goes blank. |
 
 ### 3.8 Small windows
@@ -989,7 +976,7 @@ view at first launch.
   the status pill, ranked below every problem (ST-1): nothing sits under the song's name (lead
   decision T2).
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
-- Nothing scrolls horizontally except the arrangement, the roll, the Device chain and the Mix
+- Nothing scrolls horizontally except the arrangement, the roll, the Graph and the Mix
   strips.
 
 ### 3.9 The keyboard piano and Settings (as `next` built them)
@@ -1082,7 +1069,7 @@ new says "(new)".
 | # | Do | What | Spec | Shots | Lands with |
 |---|---|---|---|---|---|
 | DK-1 | REMOVE | Module tabs (Song, Bass, Hats…) | The selection drives the dock (§3.7). Fixes D9's overflow. | `b01`, `f02` | S |
-| DK-2 | CHANGE (new) | Dock header | Selection chip, `Device · Notes · Mix · Code`, view tools, hide. 32 px. | — | S |
+| DK-2 | CHANGE (new) | Dock header | Selection chip, `Graph · Notes · Mix · Code`, view tools, hide. 32 px. | — | S |
 | DK-3 | REMOVE | The outer rounded card, the "Bass track" title row, the legend and the hint | The canvas is the panel. | `b02-…-kick`, `e13` | S |
 | DK-4 | CHANGE | No disabled tabs | Notes with no clip shows an empty-state line (§3.5). | `b01` | S |
 | DK-5 | CHANGE | Splitter | 1 px, a 6 px hit area, a double-click hides or shows, height kept per window. | — | S |
@@ -1098,72 +1085,73 @@ new says "(new)".
 | MX-5 | CHANGE (new) | Master strip | Graphite, pinned right, no M or S; a fader once std's `master` has a gain. | `f08` | 8b:mixer + std |
 | MX-6 | REMOVE | Mixing in the Song graph | The mixer node with `t01.db` rows at 50% zoom becomes one compact card (§3.5). | `f03` | 8b:mixer |
 
-### DV: Device and Patch (`b02-*`, `e02-*`, `c13`, `c14`, `c21`, `d01`, `d02`, `f07`)
+### DV: The graph (`b02-*`, `e02-*`, `c13`, `c14`, `c21`, `d01`, `d02`, `f07`)
 
 | # | Do | What | Spec | Shots | Lands with |
 |---|---|---|---|---|---|
-| DV-1 | CHANGE (new) | The Device chain view is the default | As in §3.5, including the rule for when Device falls back to Patch. | `e02-…-chords` (the model), `e02-…-clap` | UI |
+| DV-1 | REMOVE | ~~The Device chain view is the default~~ | Removed 2026-11-08: one view, the Graph ([the graph note](../graph/design.md) §9). | — | — |
 | DV-2 | CHANGE | Titles are labels | "Reverb", not `reverb`, in sans 600; the code name is in the tooltip. | `f07` | T |
 | DV-3 | REMOVE | file:line under every title | It moves to the card menu's "Edit in code" detail. | `f07` | T |
 | DV-4 | CHANGE | Home markers, not italics | As in §2.10. | `b02-…-bass` | UI |
-| DV-5 | CHANGE | Patch view cleanup | Port shapes, neutral cables, Fit clamped to 75–100%, top-left, the zoom bar only on overflow. | `e02-…-clap`, `b02-…-kick` | T (shapes, colours); UI (fit) |
-| DV-6 | CHANGE | Cable drag offers only what it accepts (D3) | Compatible inputs get an `accent` ring; others dim with a reason that uses labels. | `d01`, `d02` | UI |
-| DV-7 | KEEP | "+" after a node opens the typeahead; effects can be deleted | Delete moves into the card menu and ⌫ on a selected card. | `c09`, `c14` | — |
+| DV-5 | CHANGE | The graph's cleanup | Port shapes, neutral wires, Fit at 100% (a bigger graph scrolls), top-left; a wire passes through a gap in each column it skips, never behind a node. | `e02-…-clap`, `b02-…-kick` | T (shapes, colours); UI (fit) |
+| DV-6 | CHANGE | A wire drag offers only what it accepts (D3) | Inputs that fit get an `accent` ring; others dim with a reason that uses labels. Dropped on a collapsed node, a menu lists its values: those that fit, and the rest dimmed with their reason. | `d01`, `d02` | UI |
+| DV-7 | CHANGE | + on a wire; Remove in ⋯ and with Delete | + on a wire puts an effect or a note effect there, offering only what fits that wire ([the graph note](../graph/design.md) §3). Remove is in a node's ⋯, and Delete removes the selected node. | `c09`, `c14` | UI |
 
-**The card in Device (DV-8 to DV-19).** These rules say how the window draws a sound's card: its widgets, its
-frame in Device's chain, its sizes, its keys, and how it draws a picture's shapes. They were rules of the
-contract until 2026-11-07 (each says its old id); they moved here because nothing outside the window relies on
-them. What a pack, an agent or the API relies on stays in the contract's [Cards](../../architecture.md#cards)
-section, and wins where the two disagree. "The design" in them is [Cards you play with](../cards2/design.md), and
-its D numbers are that note's decisions.
+**The node in the Graph (DV-8 to DV-19).** These rules say how the window draws a sound's node: its widgets,
+its two sizes, its keys, and how it draws a picture's shapes. They were rules of the contract until 2026-11-07
+(each says its old id); they moved here because nothing outside the window relies on them. What a pack, an agent
+or the API relies on stays in the contract's [Cards](../../architecture.md#cards) section, and wins where the two
+disagree. Since 2026-11-08 they follow [The graph: nodes you expand](../graph/design.md) (its §9 maps each one):
+Device's Chain, its three card sizes and its tabs are gone, and a "card" is a node. "The design" in the older
+rules is [Cards you play with](../cards2/design.md), and its D numbers are that note's decisions.
 
-**DV-8.** (Was CARD-7.) The card MUST show each setting with its knobs, after them, in its descriptor's order, as this page draws controls: a menu for a choice, a switch for a switch, a number box for a number (it commits on Enter or when it loses the focus, never on each key, and a whole number refuses a fraction in words under it), a recording's waveform (a WAV or FLAC dropped on it plays there instead), a menu of the song's tracks for a track, and a sentence for regions and a keymap. A setting it can't change shows its value, or the code that works it out, with **edit in code** and why in its tooltip. One left out that it can't change and that has nothing to show (a keymap with no notes, a Sampler's file while it plays regions) isn't drawn. A plugin's choice or switch is a menu or a switch in its knob's row, which stays a knob to the rest of the app: its id for the focus, the pointer and cables ([AGENT-6](../../architecture.md#agents)), its glow when it is changed elsewhere ([AGENT-5](../../architecture.md#agents)), and the shared-value words.
+**DV-8.** (Was CARD-7.) The node MUST show each setting after its values, in its descriptor's order (on an expanded node, in its Setup column, DV-12), as this page draws controls: a menu for a choice, a switch for a switch, a number box for a number (it commits on Enter or when it loses the focus, never on each key, and a whole number refuses a fraction in words under it), a recording's waveform (a WAV or FLAC dropped on it plays there instead), a menu of the song's tracks for a track, and a sentence for regions and a keymap. A setting it can't change shows its value, or the code that works it out, with **edit in code** and why in its tooltip. One left out that it can't change and that has nothing to show (a keymap with no notes, a Sampler's file while it plays regions) isn't drawn. A plugin's choice or switch is a menu or a switch in its knob's row, which stays a knob to the rest of the app: its id for the focus, the pointer and cables ([AGENT-6](../../architecture.md#agents)), its glow when it is changed elsewhere ([AGENT-5](../../architecture.md#agents)), and the shared-value words.
 - *Why:* the type says what; the app draws every card the same way (principle 2).
-- *Today:* since track `cards`: `web/src/components/Settings.tsx`, in `NodeGraph.tsx`'s cards; a knob's row (`KnobControl`) draws a knob, a menu or a switch by its kind. The Sampler's file row is a recording's row. A track's menu lists the song's tracks top to bottom, as the timeline has them, or the options its setting gives (a mixer channel's: Master and its bus channels). Tested by `e2e/cards.mjs` (the LFO's shape changed from its card and undone, a switch flipped, a whole number refused, a track picked, a WAV dropped on a recording) and `e2e/br-plugins.mjs` (a plugin's menu and switch, their ids and a glow). Settings themselves have no glow and no pointer (AGENT-5 and AGENT-6 name knobs; gaps #35).
+- *Today:* since track `cards`: `web/src/components/Settings.tsx`, in `NodeGraph.tsx`'s nodes; a value's row (`KnobControl`, `PickControl`) draws a bar, a menu or a switch by its kind. The Sampler's file row is a recording's row. A track's menu lists the song's tracks top to bottom, as the timeline has them, or the options its setting gives (a mixer channel's: Master and its bus channels). Tested by `e2e/cards.mjs` (the LFO's shape changed from its card and undone, a switch flipped, a whole number refused, a track picked, a WAV dropped on a recording) and `e2e/br-plugins.mjs` (a plugin's menu and switch, their ids and a glow). Settings themselves have no glow and no pointer (AGENT-5 and AGENT-6 name knobs; gaps #35).
 
 **DV-9.** (Was CARD-28.) The keys view MUST draw a keyboard of the notes its regions cover (two either side, at least two octaves), and each region as a box over its keys and velocities (the hardest at the top); clicking MUST play the note under the pointer on the card's notes lane through audition ([MON-7](../../architecture.md#monitoring-overlays-and-mute-in-song)), as the piano roll's keys do (only while audition is on, and saying so in its tooltip when it is off), as hard as the click is high (the keys themselves at the usual velocity), and let it go when the pointer lifts. With no regions it shows two octaves about middle C.
 - *Why:* which recording plays where is the first question about a sampled instrument, and hearing a key answers it.
 - *Today:* since track `views`: `KeysView` in `CardViews.tsx`, through `audition`'s `strike` and `release` (review V14). Tested by `card-views` (its region drawn; a press near the top plays A3 hard on Wobble's notes lane, the socket's audition message checked, and lets it go with the pointer).
 
-**DV-10.** (Was CARD-29.) The scope view MUST ask for its card's scope ([TAP-8](../../architecture.md#taps)) while it is on screen in a window that shows, ask again every few seconds, and stop asking when it goes: scrolled out of sight, its card folded or gone, its view left, or its window hidden. It draws the last frames each `looks` message brings for its call, and says in words why it shows none (the ask refused, or the message's `why`).
+**DV-10.** (Was CARD-29.) The scope view MUST ask for its card's scope ([TAP-8](../../architecture.md#taps)) while it is on screen in a window that shows, ask again every few seconds, and stop asking when it goes: scrolled out of sight, its node collapsed away from it or gone, its view left, or its window hidden. It draws the last frames each `looks` message brings for its call, and says in words why it shows none (the ask refused, or the message's `why`).
 - *Why:* looking costs nothing only while no one looks ([TAP-4](../../architecture.md#taps)).
-- *Today:* since track `views`: `ScopeView` in `CardViews.tsx` asks every 4 s while an `IntersectionObserver` sees it and the page is visible, stops otherwise (review V12), and draws the channels' mean of each `looks` message on a canvas. Tested by `card-views` (frames drawn while the song plays; scrolled out of sight it stops asking, back in sight it asks again, and leaving Device stops it).
+- *Today:* since track `views`: `ScopeView` in `CardViews.tsx` asks every 4 s while an `IntersectionObserver` sees it and the page is visible, stops otherwise (review V12), and draws the channels' mean of each `looks` message on a canvas. Tested by `card-views` (frames drawn while the song plays; scrolled out of sight it stops asking, back in sight it asks again, and leaving the Graph stops it).
 
-**DV-11.** (Was CARD-42.) Device MUST show a sound as a chain when its calls that make audio and are heard form one line, each feeding the next: their cards left to right in that order, at full size, with no ports, no cables and no row for a connection (its notes in, its audio in, however it is written, a const's name too). A call that makes no audio (an LFO, a follower) is no card there: the value it drives reads "← its name", and the patch shows it; nor is one whose sound reaches no output. A mix is a chain too: where tracks' sounds meet in one call (the song's mixer), each track's sound it reads is a row, its name and a **+** that adds an effect after it ([CARD-36](../../architecture.md#listening-to-another-track)), then that sound's effects in order (a Duck, a Compress), and the line goes on from where they meet (the mixer, then the master). Otherwise Device shows the patch, the graph as before, and says why in words: "Saw and Saw are mixed here." when two sounds made in it meet, "This sound has a note effect, which the chain can't show yet." when a call in it takes notes and gives notes ([PKG-21](../../architecture.md#component-descriptors)), until the chain shows note effects as cards, else "This sound is built from parts.", then "Showing its patch." The dock's **Chain · Patch** switch picks one where the chain can show the sound; where it can't, Chain is greyed and its tooltip says why. The choice is the window's own, kept for it: it writes nothing. The patch of a sound that has a chain says "This sound is a chain: Chain shows it as cards." A chain card still shows its "Listens to" row ([CARD-35](../../architecture.md#listening-to-another-track)), the one connection a musician sets there.
-- *Why:* Device is for playing a sound; Patch is for wiring it (§3.5, the design's D10).
-- *Today:* since track `frame`: `chainOf` (`web/src/lib/frame.ts`), `Device` and `Chain` (`web/src/components/Chain.tsx`); the choice is the shell's `device`, in the window's `localStorage` (`m2.dock.device`). Every browser suite sets it to Patch as its page opens, as they drive the patch, but `frame` and the runs of kind `chain` (`nx-effects`, `card-views`, `sidechain`), whose checks that aren't the patch's own run on the chain too (`e2e/README.md`). Tested by `frame` (Wob and a Lowpass, written through a const, left to right with no ports and no row for the sound coming in; the Song with two effects as a row for each track, its effects and its +, then Mixer and Master; the switch kept across a reload, and its hint in the patch; two saws summed shown as a patch, in those words) and `sidechain`'s chain run (an effect added after a track's sound from its + in the song).
+**DV-11.** (Was CARD-42.) **Removed** 2026-11-08: the dock shows one view, the Graph ([the graph note](../graph/design.md) §9, D1). Device's Chain, its rule for when a sound is a chain, its Chain · Patch switch and the window's choice between them (`m2.dock.device`) are gone; the graph shows every sound, its modulators and its wires.
+- *Why:* a chain hid the structure: a modulator had no card, a sidechain was a menu row, and a sound that wasn't a line greyed Chain out. One view, drawn once, shows the program's own parts.
+- *Today:* since track `graph-node`: `Chain.tsx` and `chainOf` are gone. The `frame` suite and the `chain` runs of `nx-effects`, `sidechain`, `card-views` and `tune` went with it; their checks of what stays moved to `nodes` and to the suites' own `fix` runs.
 
-**DV-12.** (Was CARD-43.) A chain card MUST be drawn as a frame: a header (its label, its package, `std` for std's, its three sizes, then Presets, ⋯, remove and + as before; Folded, its label and its sizes only, so its name always shows; an instrument's 3 px track colour along its top), its face, a tab bar and one tab's values, then its code line ([CARD-41](../../architecture.md#the-cards-frame)). The face is the descriptor's face, else its first group, else every value. The face draws its pictures beside its values, so a Normal card fits the dock's first height. The tab bar, a track of tabs with the one shown raised, holds each group that isn't the face, in order, then All: every value in one list, as the patch's card lists them, each with its id for `m2 set` in its tooltip. With every value on the face there is no tab bar. A tab whose values include a switch named `on…` shows it as a dot on the tab, filled when it is on. The code line wraps, three lines at most, the rest in its tooltip. A tab bar wider than its card scrolls, faded at an edge that hides tabs. Which tab shows is the window's own, as the size is.
-- *Why:* one long list says nothing about where to start; the author's groups are already the tabs, and All keeps every value one click away (D1, D4).
-- *Today:* since track `frame`: `frameOf` (`web/src/lib/frame.ts`) and `Frame` (`web/src/components/Chain.tsx`), the window's tabs and sizes in `useCards` (`web/src/lib/folded.ts`). A face's views draw as on the patch's card, until track `pictures`. Tested by `frame` (the face, the tabs, More and All, an `on…` dot, the fade, the code line after a change and wrapped, the colour bar on Keys' Pluck and none on an effect, the whole card in the dock at its first height, a Folded effect's name, and a tooltip on every control).
+**DV-12.** (Was CARD-43.) A call's node MUST be drawn at one of two sizes, **collapsed** (the default) or **expanded**, the window's own, never the song's. **Collapsed**, from top to bottom: a 24 px header (⏻ where bypass works, its label never shortened: one too long for the line wraps to a second; **per note** on a node that plays inside an instrument's voices, once for each note, as the view says ([CARD-25](../../architecture.md#views-on-the-card)); **+N** when N values are hidden; ⋯; ⤢; an instrument's 3 px track colour along its top; its pack in the label's tooltip); its lines (the voices line, the key line with Set the key, VOX-26, a plugin's row, HOST-7); its inputs, one row each with its shape on the left edge (every sound or notes input, every value a wire drives, an unwired Listens to or Cut by with its None ▾, CARD-35); its outputs, output *i* on the right of input row *i*, those beyond the rows on rows of their own, the first on the header when it has no input rows; its face's first view of any kind, 48 px tall and live (a picture that can't be drawn says so in one short line, its whole why in its tooltip); and up to four of its face's values, as bars, two to a row (one a lane or the code drives is a row naming its source, across the node; one a wire drives is already an input row). Its other values, its settings among them, are hidden. **Expanded**: the header with its pack and Presets (a node one column wide names its pack under its code line instead, so its label keeps its room); the same lines, inputs and outputs at the same places, so expanding a node never moves the end of a wire on it; its face's views across its whole width, 132 px tall; every group as a column 176 px wide, side by side, wrapping after four (face values in no group first in the first column, values in no group in a last column, More, settings in Setup after the values, DV-8; a node with no groups has its values in columns of eight at most, Values, Values 2 and on; a group's own pictures at the top of its column); and its code line ([CARD-41](../../architecture.md#the-cards-frame)), wrapped to its width. Its face is the descriptor's face, else its first group, else every value. An expanded node has no tabs: it hides nothing. The Song's mixer, one compact node with Open Mix (MX-6), has one size, and no ⤢.
+- *Why:* a beginner opens what they are shaping and leaves the rest small, and a sound's graph fits the dock's first height (the graph note's §4).
+- *Today:* since track `graph-node`: `shapeOf` (`web/src/lib/nodes.ts`: what a node draws and where, for the layout and the drawing both), `Node` and `layout` in `web/src/components/NodeGraph.tsx`, the window's expanded set in `useExpanded` (`web/src/lib/expanded.ts`), kept by each node's `key` ([CARD-25](../../architecture.md#views-on-the-card)). Tested by `nodes` (a node collapsed by default, its four values, its +N, expanded with every column and its code line, the end of its wires unmoved, a 16-letter label whole, and an instrument's colour).
 
-**DV-13.** (Was CARD-44.) A chain card MUST have three sizes, the window's own as folding is ([CARD-25](../../architecture.md#views-on-the-card), D6): **Folded**, its header and one sentence of its face's values ("Cutoff 2.4 kHz · Attack 5 ms"), 240 px wide; **Normal**, its face, its tab bar, one tab and its code line, 380 px wide, or 460 with a picture on its face; **Expanded**, twice that, its face drawn bigger (its knobs 44 px, under its pictures), every tab side by side under its name, All behind a disclosure ("All values", with its arrow), and its code line.
-- *Why:* a beginner folds what is done and opens what they are shaping; how big a card is doesn't change the music.
-- *Today:* since track `frame`: `Frame` and `useCards` (`web/src/lib/folded.ts`); the sentence names each value as its knob does (`controlLabel`: the Master's level is Volume), since track `dress1`. Tested by `frame` (each size, and that none writes the song; a Folded Master says "Volume 0.0 dB · Ceiling −1.0 dB"; a Folded card with a picture on its face says the picture's words).
+**DV-13.** (Was CARD-44.) A collapsed node MUST be 216 px wide; an expanded one as wide as its columns, up to four, and never narrower. **⤢** expands it and collapses it again, and so does Enter on its header; **Collapse all**, beside Fit in the zoom bar, collapses every node. Expanding or collapsing a node runs the layout again with the node's new size: the others move aside, the zoom stays as it is (Fit isn't worked out again), and the graph scrolls the node's top into view. Neither writes anything. Which nodes are expanded is kept by each node's key, so an edit (an effect added, a value set, ⋯ ▸ Move, Remove, an undo or a redo) never moves it to another node nor loses it, and a node an edit adds starts collapsed.
+- *Why:* expanding a node pushes the others aside so the wires stay true and nothing jumps in size (the graph note's D3); a node's number changes with an edit above it, its key doesn't.
+- *Today:* since track `graph-node`: `useExpanded` (`web/src/lib/expanded.ts`), the zoom bar's Collapse all in `NodeGraph.tsx`. Tested by `nodes` (⤢ and Enter, its width and the others moved aside, the zoom kept, Collapse all, nothing written, and the expanded node kept across an effect added before it in its file and its undo).
 
-**DV-14.** (Was CARD-45.) A chain card's values MUST be a grid of 64 px columns: a knob over its label and its value, 36 px on the face and 28 px on a tab, with the knob's gestures (§5.2). A choice of five options or fewer is a segmented control across the grid, and a longer one a menu; a switch is a cell, as a knob is, its switch over its label. A setting, a recording, a view, a value a cable or a lane drives and one the code works out each take a row across the grid, as on the patch's card (DV-8, [CARD-26](../../architecture.md#views-on-the-card)). A default shows in `fg-muted` and a written value in `fg` (HOME-1).
-- *Why:* knobs side by side read as an instrument, and a choice you can see whole is one click, not two.
-- *Today:* since track `frame`: `KnobControl`'s and `PickControl`'s cells (`web/src/components/NodeGraph.tsx`), `Segmented` (`web/src/components/Settings.tsx`). Tested by `frame` (a knob dragged in the grid, a segmented choice picked, each one undo step).
+**DV-14.** (Was CARD-45.) Each value a node can set MUST be one control, the **bar**, at both sizes: its label, its number and a fill for how far along its range the value is. The fill follows the knob's own curve (a frequency fills on a log scale); a value with two sides (a range centred on 0: Pan, Formant, Feedback) fills from the middle, left or right, so 0 reads as empty. It drags up and down only, never sideways (300 px for the whole range, ⇧ for fine steps, §5.2); a double-click types a number; ⌥-click or ⌫ resets it to its default; right-click opens its menu (Automate, Reset). The wheel never edits a bar: it scrolls the graph, wherever the pointer is (a picture's dot keeps its wheel, DV-17). A choice of five options or fewer is a segmented control on an expanded node, and a longer one a menu; a switch is a switch. A value a wire, a lane or the code drives is no bar: it is a row that names its source. A default shows in `fg-muted` and a written value in `fg` (HOME-1). Each value's tooltip says how to use it, then its whole label, its value and its range (a label the bar cuts is whole there), where it is written, and its id for `m2 set`. Every bar stays a knob to the rest of the app (`data-knob`, `data-knob-id`): the focus, the pointer, wires and glows find it.
+- *Why:* one control in place of knobs takes half the room and shows the exact number at a glance (the graph note's D5); a drag read one way never jumps from a crooked hand, and leaves a sideways drag free.
+- *Today:* since track `graph-node`: `Bar` in `web/src/components/Bar.tsx`, drawn by `KnobControl` in `NodeGraph.tsx`; `PickControl` for a choice or a switch; `Segmented` (`web/src/components/Settings.tsx`). Tested by `nodes` (a drag up and down, ⇧, a double-click typed, ⌥-click, ⌫, a sideways drag that moves nothing, the wheel over a bar writing nothing and its tooltip naming Cutoff, its value and its range (review Z6, Z11), a cutoff's fill on its log curve, a pan's from the middle, and a wire's, a lane's and the code's rows) and the suites that drag a value.
 
-**DV-15.** (Was CARD-46.) The keyboard MUST reach every part of a chain card, in the order Tab takes: its header, its face, its tab bar, then the tab's values. On a knob, ↑ and ↓ (and → and ←) move it one step and with ⇧ ten (§5.2), PageUp and PageDown a tenth of its range, Home and End to its lowest and highest, ⌫ to its default, and Enter types a value. On the tab bar, ← and → pick the previous and the next tab. A knob that its own keys or menu write while it has the focus keeps it when that write gives it a new id and it is drawn again; no other knob, nor a copy of it elsewhere on the card, takes it, and a knob left by the musician never takes the focus back, whatever writes it later.
-- *Why:* hands stay on the keyboard (principle 5), and a screen reader meets the card in the order it is drawn.
-- *Today:* since track `frame`: `MiniKnob`'s keys (`web/src/components/Knob.tsx`), on every knob, the patch's too; `focused` in `NodeGraph.tsx`; the tab bar's keys in `TabBar` (`Chain.tsx`). Tested by `frame` (End, the focus kept, Home, PageUp, ⌫, the tab bar's arrows, and a knob left by a click that an agent then writes, which doesn't take the focus back, review F1).
+**DV-15.** (Was CARD-46.) A click on a node's header MUST select it: the selected node has a ring. Tab goes through the nodes in layout order, and inside a node through its header's buttons, then its values. Enter on a header expands or collapses its node; Delete removes the selected node where Remove is offered (an effect or a note effect); Esc clears the selection. On a bar, ↑ and ↓ (and → and ←) move it one step and with ⇧ ten (§5.2), PageUp and PageDown a tenth of its range, Home and End to its lowest and highest, ⌫ to its default, and Enter types a value. A bar that its own keys or menu write while it has the focus keeps it when that write gives it a new id and it is drawn again; no other bar, nor a copy of it elsewhere, takes it, and a bar left by the musician never takes the focus back, whatever writes it later. The selection is the window's own and writes nothing.
+- *Why:* hands stay on the keyboard (principle 5), and a screen reader meets the graph in the order it is drawn.
+- *Today:* since track `graph-node`: the header's keys and the selection in `NodeGraph.tsx` (`useExpanded`'s `selected`), the bar's keys in `Bar.tsx`, `focused` in `NodeGraph.tsx`. Tested by `nodes` (a click selects, Esc clears, Tab's order, Enter, Delete removing an effect and refusing nothing else, End, Home, PageUp and ⌫ on a bar, its focus kept across its first write, and a bar left by a click that an agent then writes, which doesn't take the focus back).
 
-**DV-16.** (Was CARD-47.) A knob a chain card doesn't draw now, on a tab not shown or on a Folded card, MUST stay a knob to the rest of the app: its tab, or a Folded card's sentence, stands for it, but not for a knob drawn in sight on the face or the tab shown. That tab lights when an agent changes the knob ([AGENT-5](../../architecture.md#agents)); an agent's pointer at the knob shows there, and Show opens its tab, and a Folded card to Normal ([AGENT-6](../../architecture.md#agents)), as a folded card's "N more" row does on the patch.
+**DV-16.** (Was CARD-47.) A value a collapsed node doesn't draw MUST stay a knob to the rest of the app: its node's **+N** stands for it (every value it hides, never one drawn). +N lights when an agent changes one ([AGENT-5](../../architecture.md#agents)); an agent's pointer at one shows on it, and Show expands the node and scrolls to that value ([AGENT-6](../../architecture.md#agents)); a click on it expands the node. A wire dropped on a collapsed node offers its values in a menu (DV-6).
 - *Why:* an agent's change must be seen wherever the musician is looking (the design's §3.5).
-- *Today:* since track `frame`: `data-hides` on the tabs and the sentence, `unfoldFor` (`web/src/lib/folded.ts`). Tested by `frame` (an agent's change to a knob on a hidden tab, its pointer, and Show; an agent's change to a face knob lights no tab, review F8).
+- *Today:* since track `graph-node`: `data-hides` on +N, `expandFor` (`web/src/lib/expanded.ts`), the drop menu in `NodeGraph.tsx`. Tested by `nodes` (an agent's change to a hidden value lighting +N, its pointer, and Show expanding the node; a face value's change lighting no +N; a wire dropped on a collapsed node and its menu).
 
 **DV-17.** (Was CARD-69.) The window MUST draw a picture from its shapes in music2's own style: an SVG at the picture's own size in pixels, over its grid, its axes' lines and labels as this page formats each unit (§1, Words and numbers) (a log axis at 1, 2 and 5 of each decade, "1k" for 1000 Hz, "−12" for dB), its labels never over a line (a bare axis, [CARD-60](../../architecture.md#pictures-on-the-card), has no grid lines and no labels, and no room for them: the plot runs to that edge): the x axis's in the room at its foot, each clear of the others and of the right edge, where they don't all fit a log axis's decades first (100, 1k, 10k: what a beginner reads a spectrum by), then its 5s where they fit; the y axis's in room of their own at its left, as wide as its longest label, each by its line (one each 12 px at the least, counted from 0), and its shapes and live layers drawn only on the plot between, at every height (DV-19), both laid out from one size, rounded, so at any zoom of the patch a live layer sits on its shapes' plot; hairlines, its tones as music2's greys, a fill as a faint tint of its line, the accent only on the dot picked, no gradients, its text and its dots never stretched at any size. Each dot is a 7 px circle with its `mark` on it, hollow when `off` or fixed, a button in a group named by the picture's words, which are its tooltip too. While a picture is asked for and its answer hasn't come, its frame shows; one that can't be drawn is greyed with its `why` in words. It asks for its shapes only while it is on screen in a window that shows (as DV-10's scope does), and draws each `pictures` message for it.
 - *Why:* every pack's picture looks like music2's, so a beginner learns one card (D2, the design's §4.4 rule 6); a screen reader reaches each dot (review G9, G17).
 - *Today:* since track `pictures`: `PictureView`, `Shapes` and `Dot` (`web/src/components/PictureView.tsx`); the labels' room (`layout`, `yLabels`) since track `measure2-small`, after 0.2.0's Drum's hit and Polysynth's note drew their y labels on the wave. Tested by the `pictures` suite (asked for while it shows, its words its group's name, an axis label as wide Expanded as at Normal, no axis label's box over a point of the curve at 104, 132 and 48 px, 100 and 1k shown across a 198 px face, the live layers' plot the curve's at a zoom where the picture is 40.65 px tall on screen, linted); the decades first since `measure2-small`'s review (S9), where labels placed left to right showed 50, 100, 500 and 5k on a 198 px face and dropped 1k; a bare axis (`ticks`, `layout`) since track `notes-pack`, tested by the `pictures` suite (Chord's keyboard shows no number and no grid line).
 
-**DV-18.** (Was CARD-71.) A dot whose `opens` names a group of its card MUST show that group's tab when it is picked (DV-12), and picking that tab MUST mark the dot whose `opens` names it, in the accent, until another is picked.
-- *Why:* the dot and its tab are one band (the design's §3.1): picking EQ band 3's dot shows its "3" tab.
-- *Today:* since track `pictures`. Tested by the `pictures` suite.
+**DV-18.** (Was CARD-71.) A dot whose `opens` names a group of its node MUST light that group's column when it is picked, and scroll the graph to it (expanding a collapsed node first); picking a value in that column MUST mark the dot whose `opens` names it, in the accent, until another is picked.
+- *Why:* the dot and its column are one band (the design's §3.1): picking EQ band 3's dot shows band 3's column, which was its tab until 2026-11-08.
+- *Today:* since track `pictures`; its column since track `graph-node` (`PictureView.tsx`, `useExpanded`'s `lit`). Tested by the `pictures` suite.
 
-**DV-19.** (Was CARD-105.) A picture on a patch's card MUST be drawn 48 px tall, as small as a Folded card's (the design's §3.3), so that a card's picture never pushes the patch's other cards out of its first view; Device's chain draws it big: on a Normal card's face 104 px tall, 76 each when there are two, so the card fits the dock's first height (DV-12), and Expanded each at its own 132 px. Its dots and live layers work there as anywhere.
-- *Why:* the patch is for wiring and the chain for playing (D10, DV-11). When std's LFO gained its picture (CARD-98), a picture as tall as the chain's pushed the next card's knobs out of the patch's view, where a cable is dropped (the `cables` and `undo` suites).
-- *Today:* since track `dress1`: `PATCH_PICTURE_H` in `web/src/components/NodeGraph.tsx`, `FACE_PICTURE_H` in `web/src/components/Chain.tsx`. Tested by the `cables` and `undo` suites (a cable dropped on an SVF's cutoff under an LFO with its picture), the `dress` suite (the LFO's picture in the patch, its playhead) and the `frame` suite (a face with a picture fits the dock, Keys' Pluck with none is 380 px, the Master with its ceiling's picture 460).
+**DV-19.** (Was CARD-105.) A picture MUST be drawn 48 px tall on a collapsed node, so a node's picture never pushes the graph's other nodes out of its first view, and 132 px tall on an expanded one, across its width or at the top of its group's column. Its dots and live layers work there as anywhere.
+- *Why:* collapsed is for wiring and glancing, expanded for shaping (the graph note's §2). When std's LFO gained its picture (CARD-98), a picture as tall as the chain's pushed the next node's knobs out of the graph's view, where a cable is dropped (the `cables` and `undo` suites). Normal's 104 px went with Normal.
+- *Today:* since track `dress1`; its sizes since track `graph-node`: `COLLAPSED_PICTURE_H` and `EXPANDED_PICTURE_H` in `web/src/lib/nodes.ts`. Tested by the `cables` and `undo` suites (a wire dropped on an SVF's cutoff under an LFO with its picture), the `dress` suite (the LFO's picture in the graph, its playhead) and `nodes` (48 px collapsed, 132 expanded).
 
 ### NT: Notes, the piano roll (`b08`–`b12`, `e03`–`e06`, `c22`, `e15`, `f09`)
 
@@ -1205,7 +1193,7 @@ its D numbers are that note's decisions.
 
 | # | Do | What | Spec | Shots | Lands with |
 |---|---|---|---|---|---|
-| BR-1 | CHANGE (new) | The side browser | As in §3.6, including dragging onto tracks, Device and empty space. | — | S (list); 8b:tracks (dropping onto empty space) |
+| BR-1 | CHANGE (new) | The side browser | As in §3.6, including dragging onto tracks, the Graph and empty space. | — | S (list); 8b:tracks (dropping onto empty space) |
 | BR-2 | CHANGE | Names are labels | "Low-pass", "Reverb"; the code name is in the tooltip. | `c09` | T |
 | BR-3 | CHANGE | Search finds by use | Matches the label, the description and `editor.keywords` (std adds them: Duck gets "sidechain" and "pump"). | `c12` | UI + std |
 | BR-4 | REMOVE | The icon and colour on every item, the "esc" key cap and the "↑↓ to move · ↵ to add" hint | One icon per category header. | `c09` | T |
@@ -1297,7 +1285,7 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Triplet grid | ⌘3 | — | — | ⌘3 |
 | Snap on / off | ⌘4 | — | — | ⌘4 |
 | Bypass snap while dragging | hold ⌘ | — | — | hold ⌘ |
-| Device / Notes / Mix / Code | ⌥1 / ⌥2 / ⌥3 / ⌥4 | tabs | B, P, X (Smart Controls, Piano Roll, Mixer) | ⇧Tab toggles Clip/Device |
+| Graph / Notes / Mix / Code | ⌥1 / ⌥2 / ⌥3 / ⌥4 | tabs | B, P, X (Smart Controls, Piano Roll, Mixer) | ⇧Tab toggles Clip/Device |
 | Mix | X (also ⌥3) | — | X | ⌥⌘M |
 | Show / hide the dock | E | — | E | ⌥⌘L |
 | Find sounds (the library's one search) | ⌘F | — | — | ⌘F (search the browser) |

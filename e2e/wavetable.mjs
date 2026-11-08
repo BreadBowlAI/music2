@@ -1,6 +1,6 @@
 // The wavetable synth, a bundled pack (PACK-27). + Track lists Wavetable among its instruments, as
 // music2's own; picking it adds a track that plays it, the song listing and locking its pack
-// (PACK-10). Its card in Device shows its groups (Osc A, Osc B, Filter, Env, LFO, then More:
+// (PACK-10). Its node in the Graph, expanded, shows its groups as columns (Osc A, Osc B, Filter, Env, LFO, then More:
 // CARD-135); its settings read by their labels (Table A, never TableA: CARD-34); table A is a menu of
 // the five built-in tables, and picking vowels writes `tableA: "vowels"`, one undo step ("Undo
 // Wavetable table A") that ⌘Z takes back byte for byte; once the page shows the revision ⇧⌘Z made
@@ -12,6 +12,7 @@
 //   node e2e/wavetable.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until } from "./fixlib.mjs";
+import { expand, still } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, api, key, view, box, toasts } = await open(1440, 900);
@@ -51,12 +52,14 @@ await until(async () => !!(await page.$('[data-module-tab="wavetable"]')), 15000
 await page.click('[data-module-tab="wavetable"] [data-testid=track-label]');
 await view("graph");
 const card = '[data-module="wavetable"] [data-node="wavetable"]';
-check(await until(async () => !!(await page.$(`${card} [data-group]`)), 15000), "the Wavetable's card shows its groups");
+await until(async () => !!(await page.$(card)), 15000);
+check(await expand(page, card), "the Wavetable's node expands (taste.md DV-12)");
+check(await until(async () => !!(await page.$(`${card} [data-column]`)), 15000), "the Wavetable's node shows its groups");
 await page.$eval(card, (e) => e.scrollIntoView({ block: "start", inline: "center" }));
 await sleep(200);
-const groups = await page.$$eval(`${card} [data-group]`, (els) => els.map((e) => e.textContent));
-check(JSON.stringify(groups) === '["Osc A","Osc B","Filter","Env","LFO","More"]', `its groups, in order, More last: ${JSON.stringify(groups)}`);
-await linted(card, "the Wavetable's card");
+const groups = await page.$$eval(`${card} [data-column]`, (els) => els.map((e) => e.dataset.column));
+check(JSON.stringify(groups) === '["Osc A","Osc B","Filter","Env","LFO","More","Setup"]', `its groups' columns, in order, More last of the values, then its settings in Setup (DV-12): ${JSON.stringify(groups)}`);
+await linted(card, "the Wavetable's node");
 await page.screenshot({ path: `${ROOT}/wavetable-card.png` });
 
 // ---------------------------------------------------------------- a table from its menu
@@ -86,10 +89,11 @@ check(await until(() => read(file) === vowels), "and ⇧⌘Z puts vowels back");
 // Right after ⇧⌘Z, which changed this call: the drag waits for the page to show the redo, and goes
 // from it (AGENT-2), never refused ("the code changed around this control …").
 const position = `${card} [data-knob="position A"]`;
-check(await until(async () => !!(await page.$(position))), "position A is a knob");
+check(await until(async () => !!(await page.$(`${position} [role=slider]`))), "position A is a bar");
 await until(async () => (await page.$eval(position, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
-await page.$eval(`${position} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-const b = await box(`${position} svg`);
+await page.$eval(`${position} [role=slider]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+await still(page);
+const b = await box(`${position} [role=slider]`);
 await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
 await page.mouse.down();
 for (let i = 1; i <= 12; i++) await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2 - (30 * i) / 12);

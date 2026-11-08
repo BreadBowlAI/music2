@@ -44,12 +44,12 @@ function chainEnd(graph: GraphState, module: string) {
   return { node, also };
 }
 
-/** A call's name on screen, its component's label ("Pluck"), as its card in Device says it. */
+/** A call's name on screen, its component's label ("Pluck"), as its node in the Graph says it. */
 const title = (graph: GraphState, n: ViewNode) => n.effect ?? n.title ?? graph.effects.find((e) => e.component === n.component)?.label ?? n.label;
 
 /**
  * Add `effect` at the end of `module`'s sound: one edit, said in words with its Undo, as the
- * Device view's + says it ("Added Reverb after Pluck"). When what it goes after also feeds
+ * Graph's + says it ("Added Reverb after Pluck"). When what it goes after also feeds
  * something else (a sidechain's follower), it asks first: the effect would reach that too.
  */
 export function addEffectTo(module: string, component: string) {
@@ -107,7 +107,7 @@ function readFolded(key = FOLDED_KEY): Set<string> {
  * filters it through the library's one search (LIB-1), as ⌘F does: at once in the window, then by
  * the search's answer for the words typed. ↓ moves into the list and Enter adds the row to the
  * selected track, once the search answered the words typed; a row can be dragged onto a track or
- * the Device view. Instruments add a track: Enter or a double-click, below
+ * the Graph. Instruments add a track: Enter or a double-click, below
  * the selected one; dragged, below the tracks (BR-1). The installed plugins (gaps #32) are a Plugins
  * group under the instruments and one under the effects, folded until opened: opening one asks for
  * the list, which the plugin host process scans.

@@ -89,7 +89,7 @@ async function pageOn(s) {
   page.on("console", (m) => m.type() === "error" && !/Failed to load resource/.test(m.text()) && errors.push(m.text()));
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.evaluateOnNewDocument((token) => {
-    window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+    window.__M2__ = { native: false, token, platform: "macos" };
   }, s.page_token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
   await page.waitForSelector("[data-testid=timeline]", { timeout: 20000 });

@@ -1,17 +1,12 @@
-// An effect card's ⋯ menu (next, lane D): turn an effect off and on again (D1), move it before or
-// after the effect written next to it (D2); and what a Duck listens to (D3). Each is one undo step,
-// written in the effects' own calls; the cards say so at once, so no toast does.
+// An effect's node (next, lane D): turn an effect off and on again with ⏻ in its header (D1), move it
+// before or after the effect written next to it from its ⋯ menu (D2); and what a Duck listens to (D3).
+// Each is one undo step, written in the effects' own calls; the nodes say so at once, so no toast does.
 //
-// As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11), which draws no cables,
-// so the dashed line out of a card turned off is the patch run's alone.
-//
-//   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` or `chain` kind: examples/first-song open)
+//   node e2e/nx-effects.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, toasts, show, view, key, box, caughtUp } = await open(1440, 900);
-/** Run on Device's chain (the `chain` kind), else on the patch. */
-const CHAIN = process.env.E2E_DEVICE === "chain";
 const orig = { keys: read("tracks/keys.ts"), song: read("song.ts") };
 
 /** The lint over what is inside `sel`. */
@@ -41,6 +36,12 @@ const row = (words) =>
     return !!r;
   }, words);
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (b) => b.title);
+/** ⏻ in the header of `label`'s node in `module` (the graph note §3): its words, and a click on it. */
+const power = (module, label) => `${card(module, label)} [data-bypass]`;
+const powerSays = (module, label) =>
+  page.$eval(power(module, label), (b) => ({ label: b.getAttribute("aria-label"), title: b.title, disabled: b.disabled })).catch(() => null);
+/** The ⋯ menu's rows, by their words: Turn off is ⏻ now, in the header. */
+const MENU = "Remove,Move left,Move right,Show in code,Copy its id";
 
 // ---------------------------------------------------------------- D1: turn an effect off and on
 
@@ -55,11 +56,13 @@ await until(async () => !(await toasts()).length, 9000);
 const added = read("tracks/keys.ts");
 
 const rows = await menu("keys", "reverb");
-check(rows.map((r) => r.text).join() === "Turn off,Move left,Move right", `the Reverb card's ⋯ menu: ${rows.map((r) => r.text).join()}`);
-check(rows[0]?.title === "Turn Reverb off (keeps its settings)" && !rows[0]?.disabled, `its tooltip: ${rows[0]?.title}`);
+check(rows.map((r) => r.text).join() === MENU, `the Reverb node's ⋯ menu, with no Turn off: ${rows.map((r) => r.text).join()}`);
 await linted("[data-testid=effect-menu]", "the ⋯ menu");
+await closeMenu();
+const offer = await powerSays("keys", "reverb");
+check(offer?.label === "Turn Reverb off" && offer?.title === "Turn Reverb off (keeps its settings)" && !offer?.disabled, `⏻ in its header turns it off; its tooltip: ${offer?.title}`);
 const before = await box(card("keys", "reverb"));
-await row("Turn off");
+await page.click(power("keys", "reverb"));
 const off = added.replace(reverbed, 'reverb(pluck(lane.notes("chords")), { size: 0.6, damping: 0.5, mix: 0.25, bypass: true })');
 check(await until(() => read("tracks/keys.ts") === off), "Turn off writes bypass: true into the call, and nothing else");
 check(await until(async () => !!(await page.$(`${card("keys", "reverb")}[data-bypassed]`))), "the card is off");
@@ -80,16 +83,13 @@ check(look.opacity === "0.5", `its body is half seen: ${look.opacity}`);
 const after = await box(card("keys", "reverb"));
 check(!!before && !!after && Math.abs(before.x - after.x) < 1 && Math.abs(before.y - after.y) < 1, `the card keeps its place: ${JSON.stringify([before?.x, before?.y])} → ${JSON.stringify([after?.x, after?.y])}`);
 const reverbId = await page.$eval(card("keys", "reverb"), (e) => e.dataset.nodeId);
-if (!CHAIN) {
-  const dashed = await page.$$eval(`[data-module="keys"] path[data-from="${reverbId}"]`, (ps) => ps.map((p) => [p.dataset.bypassed, p.getAttribute("stroke-dasharray")].join()));
-  check(dashed.length === 1 && dashed[0] === "true,6 5", `the line out of it is dashed: ${dashed}`);
-}
+const dashed = await page.$$eval(`[data-module="keys"] path[data-from="${reverbId}"]`, (ps) => ps.map((p) => [p.dataset.bypassed, p.getAttribute("stroke-dasharray")].join()));
+check(dashed.length === 1 && dashed[0] === "true,6 5", `the line out of it is dashed: ${dashed}`);
 check((await toasts()).length === 0, `no toast: the card says it (${(await toasts()).join(" | ")})`);
 check(/^Undo turning Reverb off \(/.test(await undoTitle()), `Undo says what it undoes: ${await undoTitle()}`);
 await linted(card("keys", "reverb"), "the card turned off");
-await menu("keys", "reverb");
-check((await page.$$eval("[data-testid=effect-menu] [role=menuitem]", (r) => r.map((x) => `${x.textContent}|${x.title}`)))[0] === "Turn on|Turn Reverb back on", "its menu says Turn on now");
-await closeMenu();
+const onNow = await powerSays("keys", "reverb");
+check(onNow?.label === "Turn Reverb on" && onNow?.title === "Turn Reverb back on", `its ⏻ says Turn on now: ${onNow?.label}|${onNow?.title}`);
 
 // The code editor takes `bypass` as an option of every effect: no marker.
 await view("code");
@@ -102,12 +102,10 @@ await page.waitForSelector(card("keys", "reverb"));
 await key("Meta+z");
 check(await until(() => read("tracks/keys.ts") === added), "⌘Z takes it back");
 check(await until(async () => !(await page.$(`${card("keys", "reverb")}[data-bypassed]`))), "the card is on again");
-await menu("keys", "reverb");
-await row("Turn off");
+await page.click(power("keys", "reverb"));
 check(await until(() => read("tracks/keys.ts") === off), "off again");
 await until(async () => !!(await page.$(`${card("keys", "reverb")}[data-bypassed]`)));
-await menu("keys", "reverb");
-await row("Turn on");
+await page.click(power("keys", "reverb"));
 check(await until(() => read("tracks/keys.ts") === added), "Turn on takes `bypass: true` out, and the options object is as it was");
 check(await until(async () => /^Undo turning Reverb on \(/.test(await undoTitle())), `Undo: ${await undoTitle()}`);
 
@@ -161,7 +159,7 @@ check(await until(async () => !(await page.$(card("keys", "delay")))), "back to 
   await pc.page.click(`${card("keys", "reverb")} [data-effect-menu]`);
   await pc.page.waitForSelector("[data-testid=effect-menu]");
   const words = await pc.page.$$eval("[data-testid=effect-menu] [role=menuitem]", (r) => r.map((x) => x.textContent));
-  check(words.join() === "Turn off,Move left,Move right", `a PC page's menu: ${words.join()}`);
+  check(words.join() === MENU, `a PC page's menu: ${words.join()}`);
   check(pc.errors.length === 0, `no console errors on the PC page ${pc.errors.slice(0, 2).join(" | ")}`);
   await pc.browser.close();
 }

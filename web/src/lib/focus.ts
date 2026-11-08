@@ -94,7 +94,7 @@ const soon = () => {
   timer = setTimeout(postFocus, 200);
 };
 
-/** The knob a press or the keyboard reached last: in Device or Mix, by its id. */
+/** The knob a press or the keyboard reached last: in the Graph or Mix, by its id. */
 function touched(e: Event) {
   const knob = e.target instanceof Element ? e.target.closest<HTMLElement>("[data-knob-id]")?.dataset.knobId : undefined;
   if (knob) look({ knob });

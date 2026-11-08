@@ -30,7 +30,7 @@ export const STEPS: { id: StepId; title: string; hint: () => string }[] = [
   { id: "bass", title: "Add a bass.", hint: () => `Press ${chord("T")} and pick Synth bass or 808 sub.` },
   { id: "bassline", title: "Play some bass notes.", hint: () => "Make a clip on it. In Notes, double-click a few notes." },
   { id: "listen", title: "Listen.", hint: () => "Press Space. Press it again to stop." },
-  { id: "sound", title: "Change a sound.", hint: () => `Turn a knob in Device (${opt("1")}), or right-click a track, then Change instrument.` },
+  { id: "sound", title: "Change a sound.", hint: () => `Drag a value in the Graph (${opt("1")}), or right-click a track, then Change instrument.` },
   { id: "export", title: "Export it.", hint: () => `Press ${chord("E", { shift: true })}. Your song becomes a file you can share.` },
 ];
 

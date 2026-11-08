@@ -146,7 +146,7 @@ await view("graph");
 await show("bass");
 const hi = knobIn("bass", "hi");
 check((await reads(hi)) === "2.5 kHz", `the bass's xrange hi reads 2.5 kHz (${await reads(hi)})`);
-await page.$eval(`${hi} svg`, (e) => e.focus());
+await page.$eval(`${hi} [role=slider]`, (e) => e.focus());
 await page.keyboard.press("Enter");
 await page.waitForSelector(`${hi} [data-testid=knob-type-in]`, { timeout: 2000 });
 await page.keyboard.type("2k");

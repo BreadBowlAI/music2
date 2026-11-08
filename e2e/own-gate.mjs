@@ -34,9 +34,9 @@ const watch = () => {
 };
 const MOVED = "The song changed while you pressed. Try again.";
 const said = () => `toasts: ${JSON.stringify(seen)}, refused: ${JSON.stringify(refusals)}`;
-/** Drag the knob (or fader) `sel` up by `dy` pixels and let go: nothing waited for. */
+/** Drag the knob, bar (or fader) `sel` up by `dy` pixels and let go: nothing waited for. */
 const turn = async (sel, dy) => {
-  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  const grip = `${sel} svg, ${sel} [data-bar][role=slider], ${sel} [data-testid=fader-thumb]`;
   await page.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const b = await box(grip);
   const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
@@ -97,7 +97,7 @@ await page.waitForSelector('[data-effect="reverb"]');
 await page.click('[data-effect="reverb"]');
 check(await until(() => read("tracks/keys.ts").includes("reverb(pluck(")), "a first Reverb after the keys' pluck");
 const size = '[data-module="keys"] [data-node="reverb"] [data-knob="size"]';
-await page.waitForSelector(`${size} svg`);
+await page.waitForSelector(`${size} [role=slider]`);
 await settle();
 let n = refusals.length;
 watch();

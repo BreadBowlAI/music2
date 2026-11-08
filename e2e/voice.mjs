@@ -2,21 +2,22 @@
 // (an audio lane playing a sung vowel at 216 Hz) and a Loud track (a saw). The + on the vocal's
 // lane lists the Voice changer under Voice, beside Tune, and picking it writes
 // `voiceChanger(lane.audio("clips"), { pitch: 0, formant: 0 })` in the track's own code with the
-// pack's line and lock; Pitch and Formant are knobs, each drag one undo step; Presets lists Deep and
+// pack's line and lock; Pitch and Formant are bars, each drag one undo step; Presets lists Deep and
 // Chipmunk, and Deep writes both down; its face draws the voice's spectrum, and while the song plays
 // an agent's look at it finds the notes moved down by Deep: the loudest band coming out about 5 under
 // the one going in. The + after the saw lists the Clipper under Dynamics; picking it writes
 // `clip(…, { gain: 6, ceiling: -0.3 })`; its face draws its ceiling over its levels, its dot dragged
 // down writes a lower ceiling, one undo step; while the saw plays, the faint line (the sound pushed
 // up, its kernel's meter) stands over the ceiling and the solid one (what comes out) at it. Then the
-// three new things' cards are shot live, while the song plays, in the patch and on Device's chain at
-// Normal and Expanded (to $E2E_SHOTS when set, else the run's folder): Tune's with Formant, the
+// three new things' nodes are shot live, while the song plays, in the graph collapsed and expanded
+// (to $E2E_SHOTS when set, else the run's folder): Tune's with Formant, the
 // Voice changer's, and the Clipper's. Each state linted.
 //
 //   node e2e/voice.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const RATE = 48000;
 const SHOTS = process.env.E2E_SHOTS ?? ROOT;
@@ -79,9 +80,9 @@ const seen = async (sel) => {
   await sleep(150);
   return box(sel);
 };
-/** Drag the knob `sel` up by `px`. */
+/** Drag the bar `sel` up by `px`. */
 const turn = async (sel, px) => {
-  const g = await seen(`${sel} svg`);
+  const g = await seen(`${sel} [role=slider]`);
   await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
   await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 - (px * i) / 10);
@@ -134,7 +135,7 @@ check(
 
 const before = vox();
 const pitch = `${changer} [data-knob="pitch"]`;
-check(!!(await until(() => page.$(pitch), 5000)), "Pitch is a knob");
+check(!!(await until(() => page.$(`${pitch} [role=slider]`), 5000)), "Pitch is a bar");
 await until(async () => (await page.$eval(pitch, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(pitch, 30);
 check(await until(() => /\{ pitch: [1-9][0-9.]*, formant: 0 \}/.test(vox())), `dragging Pitch up moves the notes up: ${vox().match(/=> .*/)?.[0]}`);
@@ -149,6 +150,8 @@ await key("Meta+z");
 await key("Meta+z");
 check(await until(() => vox() === before), "two ⌘Z take them back, byte for byte");
 
+// Presets is on the expanded node's header.
+check(await expand(page, `[data-testid=graph] ${changer}`), "the Voice changer's node expanded");
 await seen(`${changer} [data-presets]`);
 await page.click(`${changer} [data-presets]`);
 check(!!(await until(() => page.$("[data-preset-group=std] [data-preset='Deep']"), 5000)) && !!(await page.$("[data-preset-group=std] [data-preset='Chipmunk']")), "Presets lists Deep and Chipmunk, music2's own");
@@ -249,9 +252,9 @@ for (let i = 0; i < 60 && !over(lines); i++) {
 check(over(lines), `while the saw plays, the sound pushed into the cut stands over the ceiling and what comes out at it: ${JSON.stringify(lines.map((l) => l && l.v))}`);
 await linted(clipper, "the Clipper's card");
 
-// ---------------------------------------------------------------- the three cards, live
+// ---------------------------------------------------------------- the three nodes, live
 
-// Tune after the Voice changer, its Formant up 3, so its card shows Formant beside Glide and Amount.
+// Tune after the Voice changer, its Formant up 3, so its node shows Formant beside Glide and Amount.
 write("tracks/vox.ts", vox().replace(/=> voiceChanger\((.*)\)\);/, '=> tune(voiceChanger($1), { glide: 0.1, amount: 1, formant: 3 }));').replace('import { voiceChanger } from "@m2/vocals";', 'import { tune, voiceChanger } from "@m2/vocals";'));
 await show("vox");
 await view("graph");
@@ -261,28 +264,19 @@ const shots = [
   ["vox", "voiceChanger", "voice-changer"],
   ["loud", "clip", "clipper"],
 ];
-// In the patch, while the song plays.
+// In the graph, while the song plays: each node collapsed, then expanded.
+await page.click("[data-testid=collapse-all]").catch(() => {});
 for (const [module, node, name] of shots) {
   await show(module);
   await view("graph");
-  await until(async () => !!(await page.$(`[data-testid=graph] [data-module="${module}"] [data-node="${node}"]`)), 15000);
+  const at = `[data-testid=graph] [data-module="${module}"] [data-node="${node}"]`;
+  await until(async () => (await page.$eval(at, (e) => e.dataset.size).catch(() => null)) === "collapsed", 15000);
   await sleep(1500);
-  await shoot(`[data-testid=graph] [data-module="${module}"] [data-node="${node}"]`, `${name}-patch`);
-}
-// On Device's chain, Normal and Expanded.
-await page.click("[data-device=chain]").catch(() => {});
-for (const [module, node, name] of shots) {
-  await show(module);
-  await view("graph");
-  const card = `[data-testid=chain] [data-module="${module}"] [data-node="${node}"]`;
-  check(await until(async () => !!(await page.$(card)), 15000), `${name}: a card on Device's chain`);
-  for (const size of ["normal", "expanded"]) {
-    await page.click(`${card} [data-size-to="${size}"]`).catch(() => {});
-    await sleep(1500);
-    await shoot(card, `${name}-${size}`);
-  }
-  await linted(card, `${name}'s chain card, Expanded`);
-  await page.click(`${card} [data-size-to="normal"]`).catch(() => {});
+  await shoot(at, `${name}-collapsed`);
+  await expand(page, at);
+  await sleep(1500);
+  await shoot(at, `${name}-expanded`);
+  await linted(at, `${name}'s node, expanded`);
 }
 await page.keyboard.press("Space");
 

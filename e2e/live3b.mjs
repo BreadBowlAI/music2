@@ -46,7 +46,7 @@ const newPage = async (s = sess) => {
   await page.setViewport({ width: 1600, height: 1000 });
   page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
   page.on("pageerror", (e) => consoleErrors.push(String(e)));
-  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, s.page_token);
+  await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, s.page_token);
   await page.goto(s.url, { waitUntil: "domcontentloaded" });
   // The dock opens on the view this browser chose last: Device, or Mix.
   await page.waitForSelector("[data-testid=graph], [data-testid=mix]", { timeout: 8000 });

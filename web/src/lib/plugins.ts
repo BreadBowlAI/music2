@@ -1,4 +1,4 @@
-// The installed plugins (gaps #32): what the side browser's Plugins groups, the Device view's + and
+// The installed plugins (gaps #32): what the side browser's Plugins groups, the Graph's + and
 // + Track list. The server asks the plugin host process to scan (HOST-3) on the first ask, and keeps
 // the list for the app run; Look again scans again. A list is asked for only when one opens, so a
 // song with no plugins starts no host process until then.

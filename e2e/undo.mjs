@@ -11,7 +11,7 @@ const page = await browser.newPage();
 const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 await page.setViewport({ width: 1600, height: 1000 });
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph]");
 // The panel shows one module at a time: pick the one under test.
@@ -24,7 +24,7 @@ const disabled = (label) => page.$eval(`button[aria-label="${label}"]`, (b) => b
 const center = async (sel) => { const b = await (await page.waitForSelector(sel)).boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 
 ok(await disabled("Undo") && await disabled("Redo"), "nothing to undo or redo at first");
-const a = await center('[data-outlet="wobble"]'), b = await center('[data-knob="cutoff"] svg');
+const a = await center('[data-outlet="wobble"]'), b = await center('[data-knob="cutoff"] [role=slider]');
 await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 8 }); await page.mouse.up();
 await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === wired, "connected");
