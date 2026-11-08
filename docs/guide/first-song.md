@@ -14,7 +14,7 @@ Things to try:
 2. **Turn a knob.** Click the **Song** row at the foot of the timeline. The dock below shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
 3. **Add a clip.** In the timeline, double-click the Bass row past the end of the song. A one-bar clip appears, and opens in the dock's **Notes** view (a piano roll).
 4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one, a drag draws one as long as you drag, and ⌥-drag paints one in each grid step), drag a note to move it, and drag its right edge to make it longer.
-5. **Add an effect.** Press ⌥1 (or click **Graph**), then click **+** on a node that makes sound and pick an effect such as reverb, or drag one from the browser on the left onto a track.
+5. **Add an effect.** Press ⌥1 (or click **Graph**), then press **+** on the wire after the sound (point at the wire, or click the sound's node, and a small **+** shows on it) and pick an effect such as reverb. Or drag one from the browser on the left onto a track.
 6. **Undo.** Press ⌘Z to take these back, one at a time.
 7. **Export it.** Click **Export** in the top bar (or File → Export…, ⇧⌘E), keep **Song**, and save. The song is written to a WAV file you can play anywhere or share; click **Show in Finder** when it's done (**Show in Folder** on Linux).
 
