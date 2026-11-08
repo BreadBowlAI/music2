@@ -148,6 +148,7 @@ The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and 
 | See what it does | Play the song and look at its card | Its picture is the synth's spectrum: faint as it comes in, solid as it goes out, in the voice's shape. |
 
 - **The synth sounds only while the voice does.** A held chord under a silent voice is silent.
+- **Clarity's S and T sounds are the voice's own**, so they come through even where the synth is silent. Turn Clarity down if they stand out.
 - **To hear only the robot**, mute the vocal track in the song: the Vocoder still hears it (a sidechain hears its track, muted or not).
 - **It is quieter than the synth alone**: only the bands where the voice is loud play. Turn its track up. No band is ever louder than the synth.
 - **It adds no delay.**
