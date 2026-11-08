@@ -22,8 +22,8 @@ use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2). One is
 /// late: `clip`, the Clipper's (92 frames, PACK-34), heard live as late as it is (RENDER-33), and
-/// silent until then.
-const PURE: [&str; 10] = [
+/// silent until then. `vocoder` is a synth made to talk by another track's voice (VOX-29).
+const PURE: [&str; 11] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -34,6 +34,7 @@ const PURE: [&str; 10] = [
     "core/session/tests/fixtures/sampler-regions",
     "core/session/tests/fixtures/meters",
     "core/session/tests/fixtures/clip",
+    "core/session/tests/fixtures/vocoder",
 ];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at

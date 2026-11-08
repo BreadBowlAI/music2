@@ -1,5 +1,5 @@
-// @m2/vocals' pictures: Tune's pitch line (VOX-27) and the Voice changer's spectrum (VOX-28), in
-// TypeScript over the picture words (CARD-61).
+// @m2/vocals' pictures: Tune's pitch line (VOX-27), and the Voice changer's and the Vocoder's
+// spectrum (VOX-28, VOX-29), in TypeScript over the picture words (CARD-61).
 // The lines are no sums of the pack's: they are what Tune's own kernel hears and does, its meters
 // (`@m2/vocals:snap`'s `off` and `left`, VOX-22), which the window draws as they come. A picture
 // never reads the song's key: the card says it under its name (VOX-26), and the meters are what
@@ -60,7 +60,8 @@ export function pitchWords(v: Values, names: { glide: string; amount: string }):
  * The Voice changer's spectrum (VOX-28): live, as the voice comes in (faint) and goes out, across 20
  * Hz to 20 kHz on a log scale, up −90 to 0 dB, the spectrum's own scale (CARD-103): its notes'
  * harmonics are the spikes that Pitch moves, its vowel's hills the colour that Formant moves. It
- * draws no shapes, nothing worked out from sums: at silence it is still (CARD-73).
+ * draws no shapes, nothing worked out from sums: at silence it is still (CARD-73). The Vocoder's
+ * too (VOX-29): the synth as it comes in, and as it goes out in the voice's shape.
  */
 export function voicePicture(): PictureDecl<"hz", "db"> {
   return view.picture({
@@ -82,4 +83,34 @@ export function voiceWords(v: Values, names: { pitch: string; formant: string })
   const colour =
     typeof formant !== "number" ? "colour moved by a cable or the code" : formant === 0 ? "colour as sung" : `colour ${semitones(formant)} ${formant > 0 ? "brighter" : "darker"}`;
   return `${notes}, ${colour}. ${layers}`;
+}
+
+// ---------------------------------------------------------------- the Vocoder
+
+/**
+ * What the Vocoder's picture shows, in words (VOX-29): what Formant did, what Clarity and Smooth
+ * do, then what its two layers are.
+ */
+export function vocoderWords(v: Values, names: { formant: string; clarity: string; smooth: string }): string {
+  const [formant, clarity, smooth] = [v[names.formant], v[names.clarity], v[names.smooth]];
+  const layers =
+    "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Talks with: its hills are the voice's vowels, and they move as it talks";
+  const moved =
+    formant === 0
+      ? ""
+      : typeof formant !== "number"
+        ? "Its hills moved by a cable or the code. "
+        : `Its hills ${semitones(formant)} ${formant > 0 ? "higher" : "lower"} than the voice's: a ${formant > 0 ? "brighter" : "deeper"} robot. `;
+  const how =
+    typeof clarity !== "number"
+      ? "The voice's S and T sounds come through as a cable or the code says"
+      : clarity === 0
+        ? "None of the voice's S and T sounds come through"
+        : clarity === 1
+          ? "All of the voice's S and T sounds come through"
+          : clarity === 0.5
+            ? "Half of the voice's S and T sounds come through"
+            : `${Math.round(clarity * 100)}% of the voice's S and T sounds come through`;
+  const goes = typeof smooth !== "number" ? "each sound lets go as a cable or the code says" : `each sound lets go in ${secondsWords(smooth)}`;
+  return `${moved}${how}, and ${goes}. ${layers}`;
 }

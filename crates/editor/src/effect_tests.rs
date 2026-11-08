@@ -1150,6 +1150,46 @@ fn a_duck_added_from_the_browser_listens_to_nothing_until_picked() {
     assert!(song.contains("}), kick.env, { depth: -8 })"), "{song}");
 }
 
+// VOX-29, CARD-35, PKG-19: a Vocoder added from + Effect after a synth's sound where the song reads
+// it listens to no voice (it plays its sound as it was: `a_vocoder_with_no_voice_plays_its_input_bit_
+// for_bit`). Its row is called Talks with, its input's label; with the input left out it says what
+// CARD-35 says of any audio input left out, "No other track"; it may be left out, and offers the
+// song's other tracks. Picking one writes that track's sound into the call, before its options:
+// one undo step named by the tracks as a sentence, "Hook talks with Chords" (review W7). None takes
+// it out again, byte for byte.
+#[test]
+fn a_vocoder_added_from_the_browser_listens_to_no_voice_until_picked() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let at = rev(&s);
+    let added = s.add_effect(at, "import:hook.out", "@m2/vocals:vocoder").unwrap();
+    assert_eq!(
+        (added.before.as_str(), added.after.as_str()),
+        ("hook.out", "vocoder(hook.out, { clarity: 0.5, smooth: 0.05, formant: 0 })")
+    );
+    let alone = f.read("song.ts");
+    assert!(alone.contains("hook: { in: vocoder(hook.out, { clarity: 0.5, smooth: 0.05, formant: 0 }), db: db(4) },"), "{alone}");
+    assert!(alone.contains("import { vocoder } from \"@m2/vocals\";"), "{alone}");
+    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).expect("the Vocoder's Talks with row");
+    assert_eq!(
+        (r.label.as_deref(), r.track.as_deref(), r.given, r.optional, r.heard, r.nothing.as_str(), r.of.as_deref()),
+        (Some("Talks with"), None, false, true, false, "No other track", Some("Hook")),
+        "{r:?}"
+    );
+    let names: Vec<&str> = r.choices.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(names, ["Bass", "Chords", "Clap", "Hats", "Kick"], "the song's other tracks, by name");
+    let (at, id) = (rev(&s), call_on(&s, "vocoder", "hook.out"));
+    let picked = sidechain(&mut s, at, &id, Some("chords")).unwrap();
+    assert_eq!((picked.before.as_str(), picked.after.as_str()), ("", "chords.out"));
+    assert_eq!(f.read("song.ts"), alone.replace("vocoder(hook.out, {", "vocoder(hook.out, chords.out, {"), "the voice, and nothing else");
+    assert_eq!(s.step_names().0.and_then(|n| n.name), Some("Hook talks with Chords".to_string()), "named by the tracks");
+    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).unwrap();
+    assert_eq!((r.track.as_deref(), r.given, r.heard), (Some("chords"), true, true));
+    let (at, id) = (rev(&s), call_on(&s, "vocoder", "hook.out"));
+    sidechain(&mut s, at, &id, None).unwrap();
+    assert_eq!(f.read("song.ts"), alone, "None takes the voice out, byte for byte");
+}
+
 // CARD-36: a track's sound where the song reads it (`hook: hook.out`) takes an effect too, written
 // around that read, so a Duck goes on a track's channel in song.ts, where it can hear the others;
 // then its row picks the kick. A sound the song reads twice has no + (which read would it be?).
