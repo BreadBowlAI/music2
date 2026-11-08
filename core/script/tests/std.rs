@@ -280,7 +280,7 @@ const EFFECTS: [(&str, &str, &str, &str, &str); 21] = [
         "@m2/effects",
         "grains",
         "Delay & Reverb",
-        "Breaks the sound into tiny pieces, to smear, stretch or freeze it",
+        "Breaks the sound into tiny pieces, to smear or stretch it",
         "{ size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 }",
     ),
 ];

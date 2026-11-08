@@ -671,9 +671,9 @@ export function sweepWords(v: Values, names: { rate: string; depth: string; feed
 // ---------------------------------------------------------------- grains
 
 /** Grains' buffer, in seconds, how far its grains stay behind the newest sound, in frames, and its values' ranges: its kernel's. */
-const GRAINS = { buffer: 3, margin: 2, sizes: [0.01, 0.5], spread: 2, pitch: 12 } as const;
+const GRAINS = { buffer: 2.5, margin: 2, sizes: [0.01, 0.5], spread: 2, pitch: 12 } as const;
 
-/** Grains' buffer (CARD-129): from now, 0 s, to 3 s back, across; its window's level up, bare; and a line where its newest grain reads now. */
+/** Grains' buffer (CARD-129): from now, 0 s, to 2.5 s back, across; its window's level up, bare; and a line where its newest grain reads now. */
 export function cloudPicture(): PictureDecl<"seconds", "unit01"> {
   return view.picture({ x: axis.lin("seconds", 0, GRAINS.buffer), y: axis.lin("unit01", 0, 1, { bare: true }), live: [live.playhead("reads")] });
 }
@@ -681,26 +681,25 @@ export function cloudPicture(): PictureDecl<"seconds", "unit01"> {
 /**
  * Where Grains' grains start, in seconds back from the newest sound, at the song's rate `sr`
  * (`@m2/effects:grains`' own sum): from `back` to `back + spread`, where `back` keeps a grain behind
- * the newest sound until it ends: `(ratio − 1) × size` when that is over 0, `ratio × size` frozen,
- * and 2 frames, a grain `round(size × sr)` frames long at `2^(pitch / 12)` its speed.
+ * the newest sound until it ends: `(ratio − 1) × size` when that is over 0, and 2 frames, a grain
+ * `round(size × sr)` frames long at `2^(pitch / 12)` its speed.
  */
-export function zone(size: number, spread: number, pitch: number, frozen: boolean, sr: number): [number, number] {
+export function zone(size: number, spread: number, pitch: number, sr: number): [number, number] {
   const len = Math.max(2, Math.round(f32(clamp(size, GRAINS.sizes[0], GRAINS.sizes[1]) * sr)));
   const ratio = 2 ** (clamp(pitch, -GRAINS.pitch, GRAINS.pitch) / 12);
-  const reach = frozen ? ratio * len : Math.max(0, (ratio - 1) * len);
-  const back = (reach + GRAINS.margin) / sr;
+  const back = (Math.max(0, (ratio - 1) * len) + GRAINS.margin) / sr;
   return [back, back + clamp(spread, 0, GRAINS.spread)];
 }
 
 /**
- * Grains' buffer (CARD-129), from its own sum (`zone`): a guide line at 3 s, the oldest sound it holds
- * (an axis of seconds is drawn to its furthest shape, CARD-102, so the line keeps the whole buffer in
- * view), a faint band where its grains start, and a dot at its far edge that moves the spread across.
- * Its live line, where the newest grain reads now, is its kernel's.
+ * Grains' buffer (CARD-129), from its own sum (`zone`): a guide line at 2.5 s, the oldest sound it
+ * holds (an axis of seconds is drawn to its furthest shape, CARD-102, so the line keeps the whole
+ * buffer in view), a faint band where its grains start, and a dot at its far edge that moves the
+ * spread across. Its live line, where the newest grain reads now, is its kernel's.
  */
-export function cloud<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { size: Num<D>; spread: In<D, "seconds">; pitch: Num<D>; freeze: Read<D> }): Shape[] {
+export function cloud<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { size: Num<D>; spread: In<D, "seconds">; pitch: Num<D> }): Shape[] {
   const size = known(v, names.size, "size"), spread = known(v, names.spread, "spread"), pitch = known(v, names.pitch, "pitch");
-  const [near, far] = zone(size, spread, pitch, v[names.freeze] === true, p.rate);
+  const [near, far] = zone(size, spread, pitch, p.rate);
   return [
     p.mark("x", GRAINS.buffer, `The oldest sound it holds: ${GRAINS.buffer} s back`),
     p.fill([near, 0, far, 0, far, 1, near, 1], { tone: "faint" }),
@@ -708,13 +707,17 @@ export function cloud<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: {
   ];
 }
 
-/** What `cloud` draws, in words: its grains, where from and at what pitch, then its line and its dot. */
-export function cloudWords(v: Values, names: { size: string; density: string; spread: string; pitch: string; freeze: string }): string {
-  const [size, density, spread, pitch, freeze] = [v[names.size], v[names.density], v[names.spread], v[names.pitch], v[names.freeze]];
-  const frozen = freeze === true ? "Frozen: it holds what it last heard, and plays pieces of it again and again. " : freeze === null ? "Freeze is set by a cable or the code. " : "";
+/** What `cloud` draws, in words, at the song's rate `sr`: its grains, how far back its band reaches and at what pitch, then its line and its dot. */
+export function cloudWords(v: Values, names: { size: string; density: string; spread: string; pitch: string }, sr: number): string {
+  const [size, density, spread, pitch] = [v[names.size], v[names.density], v[names.spread], v[names.pitch]];
   const pieces = typeof size === "number" ? `Pieces of ${secondsWords(size)}` : "Pieces as long as a cable or the code says";
   const many = typeof density === "number" ? `${figures(density)} a second` : "as many a second as a cable or the code says";
-  const from = typeof spread !== "number" ? "each from as far back as a cable or the code says" : spread <= 0 ? "each from just behind your sound" : `each from up to ${secondsWords(spread)} back`;
+  let from = "each from as far back as a cable or the code says";
+  if (typeof size === "number" && typeof spread === "number" && typeof pitch === "number") {
+    // The band's far edge (review X10): an octave up starts them a grain's length further back.
+    const [near, far] = zone(size, spread, pitch, sr);
+    from = spread > 0 ? `each from up to ${secondsWords(far)} back` : near * sr > GRAINS.margin + 0.5 ? `each from ${secondsWords(near)} back` : "each from just behind your sound";
+  }
   const semitones = typeof pitch === "number" ? Math.abs(pitch) : 0;
   const pitched =
     typeof pitch !== "number"
@@ -722,5 +725,5 @@ export function cloudWords(v: Values, names: { size: string; density: string; sp
       : pitch === 0
         ? ""
         : ` and ${semitones === 12 ? "an octave" : `${figures(semitones)} semitone${semitones === 1 ? "" : "s"}`} ${pitch > 0 ? "higher" : "lower"}`;
-  return `${frozen}${pieces}, ${many}, ${from}${pitched} (the band). The line: where the newest one reads now. Drag the band's edge for the spread`;
+  return `${pieces}, ${many}, ${from}${pitched} (the band). The line: where the newest grain reads now. Drag the band's edge for the spread`;
 }

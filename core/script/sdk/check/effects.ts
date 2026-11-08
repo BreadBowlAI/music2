@@ -128,7 +128,7 @@ export const dots = [
     {
       id: "spread-in-hz",
       inputs: { in: port.audio() },
-      controls: { size: control.secs(0.1), spread: control.hz(3), pitch: control.semis(0), freeze: control.bool(false) },
+      controls: { size: control.secs(0.1), spread: control.hz(3), pitch: control.semis(0) },
       output: port.audio(),
       editor: { views: { cloud: cloudPicture() } },
     },
@@ -136,7 +136,7 @@ export const dots = [
     {
       cloud: {
         // @ts-expect-error Grains' spread that is a frequency, moved across seconds back
-        draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch", freeze: "freeze" }),
+        draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch" }),
         words: () => "a cloud",
       },
     },

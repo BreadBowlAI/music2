@@ -116,11 +116,10 @@ export const reverb = component(
 );
 
 /**
- * Grains: `x` broken into tiny pieces, its grains, played back overlapped, to smear, stretch or
- * freeze it (PACK-36). Each is `size` seconds long (0.01 to 0.5), `density` start a second (1 to 50),
- * each from up to `spread` seconds back (0 to 2) in the last 3 s of the sound, `pitch` semitones
- * higher or lower (−12 to 12); `mix` 0..1. `freeze` holds the sound it last heard. No latency: its
- * grains read only the past.
+ * Grains: `x` broken into tiny pieces, its grains, played back overlapped, to smear or stretch it
+ * (PACK-36). Each is `size` seconds long (0.01 to 0.5), `density` start a second (1 to 50), each from
+ * up to `spread` seconds back (0 to 2) in the last 2.5 s of the sound, `pitch` semitones higher or
+ * lower (−12 to 12); `mix` 0..1. No latency: its grains read only the past.
  */
 export const grains = component(
   {
@@ -135,24 +134,22 @@ export const grains = component(
       spread: control.secs(0.3).range(0, 2),
       pitch: control.semis(0).range(-12, 12),
       mix: control.frac(0.5).range(0, 1),
-      freeze: control.bool(false),
     },
     output: port.audio(),
     editor: {
       category: "Delay & Reverb",
-      description: "Breaks the sound into tiny pieces, to smear, stretch or freeze it",
+      description: "Breaks the sound into tiny pieces, to smear or stretch it",
       insert: { size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 },
       // Where its grains start, and where the newest reads now (CARD-129).
       views: { cloud: cloudPicture() },
-      face: ["cloud", "size", "density", "spread", "pitch", "mix", "freeze"],
+      face: ["cloud", "size", "density", "spread", "pitch", "mix"],
     },
   },
-  (x: Audio, { size, density, spread, pitch, mix, freeze }: Params) =>
-    kernel("@m2/effects:grains", { in: x, size, density, spread, pitch, mix, freeze, playing: time.playing }),
+  (x: Audio, { size, density, spread, pitch, mix }: Params) => kernel("@m2/effects:grains", { in: x, size, density, spread, pitch, mix, playing: time.playing }),
   {
     cloud: {
-      draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch", freeze: "freeze" }),
-      words: (v) => cloudWords(v, { size: "size", density: "density", spread: "spread", pitch: "pitch", freeze: "freeze" }),
+      draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch" }),
+      words: (v, p) => cloudWords(v, { size: "size", density: "density", spread: "spread", pitch: "pitch" }, p.rate),
     },
   },
 );
