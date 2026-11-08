@@ -111,7 +111,7 @@ meters = ["phase: control<unit01>"]
 
 [[kernel]]
 name = "grains"
-description = "Grains (PACK-36): the last 3 s of its input; a grain starts on average every 1/density seconds (each gap from half to one and a half of that, at random), size seconds long in a Hann window, reading from back + u × spread seconds before the newest sound (u at random) at 2^(pitch/12) times its speed, back keeping it behind the newest sound until it ends; at most 16 at once, the oldest let go over 5 ms; summed and turned down by 1/sqrt(3/8 × size × density) when that is over 1. Freeze, on, holds the buffer. Its clock and its seeded random numbers move only while playing is 1 (left out, always). Its meter, reads: how far back the newest grain that plays reads now, in seconds (0 when none plays)"
+description = "Grains (PACK-36): the last 3 s of its input; a grain starts on average every 1/density seconds (each gap from half to one and a half of that, at random), size seconds long in a Hann window, reading from back + u × spread seconds before the newest sound (u at random) at 2^(pitch/12) times its speed, back keeping it behind the newest sound until it ends; at most 16 at once, the oldest let go over 5 ms; summed and turned down by 1/sqrt(3/8 × n) when that is over 1, n = size × density (16 at most). Freeze, on, holds the buffer. Its clock and its seeded random numbers move only while playing is 1 (left out, always). Its meter, reads: how far back the newest grain that plays reads now, in seconds (0 when none plays)"
 inputs = [
   "in: audio<*>",
   "size: control<seconds> = 0.1 in 0.01..0.5",
