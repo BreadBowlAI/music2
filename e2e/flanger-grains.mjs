@@ -3,17 +3,21 @@
 // picking the Flanger writes `flanger(osc.saw(110), { rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 })`
 // in the Lead's own code, with the pack's import, line and lock; its face draws its sweep beside Rate,
 // Depth, Feedback and Mix, and its words say the sweep. Its knobs write the call: Feedback's End and
-// Home write 0.9 and −0.9, each one undo step, and its words turn hollow. The + after the Flanger adds
-// Grains: `grains(flanger(…), { size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 })`, its face
-// its band beside Size, Density, Spread, Pitch, Mix and Freeze; Pitch's End writes 12, its band's edge
-// dragged right writes a longer spread, and its Freeze switch writes `freeze: true` and back. Then,
-// the song looped, each picture's live line (from its kernel's meter, CARD-73) moves while the song
-// plays and stands still while it is stopped: a state counts once two reads in a row show it (the
-// first may be stale: voice2's review V1), each read of what the card drew (CARD-103's `data-said`)
-// and of an agent's look at the meter, which agree. The cards are shot while the song plays, in the
-// patch and on Device's chain at Normal and Expanded: to $E2E_SHOTS when set, else the run's folder,
-// as `flanger-<patch|normal|expanded>.png` and `grains-…`. ⌘Z steps back, byte for byte. Each card
-// linted.
+// Home write 0.9 and −0.9, each one undo step, and its words turn hollow and say how loud it comes out.
+// The + after the Flanger adds Grains: `grains(flanger(…), { size: 0.1, density: 20, spread: 0.3, pitch:
+// 0, mix: 0.5 })`, its face its band beside Size, Density, Spread, Pitch and Mix (no Freeze); Pitch's End
+// writes 12 and its words say the band's far edge an octave up, a grain's length further back; its
+// band's edge dragged right writes a longer spread; Size's End and Density's Home write 0.5 and 1,
+// long grains far apart in time. Then, the song looped, each picture's live line (from its kernel's
+// meter, CARD-73) moves while the song plays and stands still while it is stopped: a state counts once
+// two reads in a row show it (the first may be stale: voice2's review V1). A read is where the card's
+// canvas lit its line (its pixels, by the plot's place in `data-plot`: CARD-103's `data-said` holds no
+// meter playhead's place) and an agent's look at the meter. The Flanger's line is drawn at its LFO's
+// phase; Grains' at `reads / 2.5 s` across, its buffer, each within 0.05 of the plot, read between two
+// looks that agree (no grain started between them) after the canvas drew twice. The cards are shot
+// while the song plays, in the patch and on Device's chain at Normal and Expanded: to $E2E_SHOTS when
+// set, else the run's folder, as `flanger-<patch|normal|expanded>.png` and `grains-…`. ⌘Z steps back,
+// byte for byte, a step at a time. Each card linted.
 //
 //   node e2e/flanger-grains.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -48,8 +52,6 @@ const seen = async (sel) => {
 };
 /** A picture's words, its group's name. */
 const words = (pic) => page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null);
-/** What each live layer of a picture drew last (CARD-103). */
-const said = (pic) => page.$eval(`${pic} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
 /** A card's shot. */
 const shoot = async (card, name) => {
   const b = await seen(card);
@@ -103,6 +105,10 @@ check(await until(async () => ((await undoTitle()) ?? "").startsWith("Undo Flang
 await keys(fcard, "feedback", "Home");
 check(await until(() => lead().includes("feedback: -0.9")), `Home writes its lowest, −0.9, the hollow sound: ${lead().match(/=> .*/)?.[0]}`);
 check(await until(async () => ((await words(sweep)) ?? "").includes("Feedback −0.9 turns the copy over")), `its words turn hollow: ${await words(sweep)}`);
+check(
+  await until(async () => ((await words(sweep)) ?? "").endsWith(`${line}. It comes out up to 14.8 dB louder at its peaks: turn Mix or the track down`)),
+  `and say how loud it comes out (PACK-35): ${await words(sweep)}`,
+);
 
 // ---------------------------------------------------------------- + ▸ Grains (PACK-36)
 
@@ -118,8 +124,11 @@ const gcard = '[data-module="lead"] [data-node="grains"]';
 const cloud = `${gcard} [data-picture="cloud"]`;
 check(!!(await until(() => page.$(`${cloud} svg`), 15000)), "its face draws its band");
 const gknobs = await knobsOf(gcard);
-check(["size", "density", "spread", "pitch", "mix", "freeze"].every((k) => gknobs.includes(k)), `Size, Density, Spread, Pitch, Mix and Freeze are on its face: ${gknobs.join()}`);
-const tail = "The line: where the newest one reads now. Drag the band's edge for the spread";
+check(
+  ["size", "density", "spread", "pitch", "mix"].every((k) => gknobs.includes(k)) && !gknobs.includes("freeze"),
+  `Size, Density, Spread, Pitch and Mix are on its face, and no Freeze: ${gknobs.join()}`,
+);
+const tail = "The line: where the newest grain reads now. Drag the band's edge for the spread";
 check(
   await until(async () => (await words(cloud)) === `Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). ${tail}`),
   `its words say its grains: ${await words(cloud)}`,
@@ -132,7 +141,10 @@ const dotAt = () => page.$eval(dot, (e) => Number(e.getAttribute("cx"))).catch((
 const was = await dotAt();
 await keys(gcard, "pitch", "End");
 check(await until(() => lead().includes("{ size: 0.1, density: 20, spread: 0.3, pitch: 12, mix: 0.5 }")), `Pitch's End writes 12, an octave up: ${lead().match(/=> .*/)?.[0]}`);
-check(await until(async () => ((await words(cloud)) ?? "").includes("each from up to 300 ms back and an octave higher (the band)")), `its words say so: ${await words(cloud)}`);
+check(
+  await until(async () => ((await words(cloud)) ?? "").includes("each from up to 400 ms back and an octave higher (the band)")),
+  `its words say so, and the band's far edge a grain's length further back: ${await words(cloud)}`,
+);
 // Its band moves back by a grain's length an octave up (PACK-36's back): drawn again, its dot has moved.
 check(await until(async () => (await dotAt()) !== null && (await dotAt()) > was), `its band is drawn again, an octave up further back: its dot from ${was} to ${await dotAt()}`);
 // The band's edge, its dot, dragged 60 px right: a longer spread, one undo step.
@@ -149,14 +161,12 @@ if (d) {
 }
 check(await until(() => spreadOf() > 0.4, 8000), `its band's edge dragged right writes a longer spread: ${spreadOf()}`);
 check(await until(async () => ((await undoTitle()) ?? "").startsWith("Undo Grains spread")), `one undo step: ${await undoTitle()}`);
-const unfrozen = lead();
-await seen(`${gcard} [data-knob="freeze"]`);
-await page.click(`${gcard} [data-knob="freeze"] [role=switch]`).catch(() => {});
-check(await until(() => lead().includes("freeze: true")), `its Freeze switch writes freeze: true: ${lead().match(/=> .*/)?.[0]}`);
-check(await until(async () => ((await words(cloud)) ?? "").startsWith("Frozen: it holds what it last heard")), `its words say it is frozen: ${await words(cloud)}`);
-await page.mouse.click(10, 10);
-await key("Meta+z");
-check(await until(() => lead() === unfrozen), "⌘Z unfreezes it, byte for byte");
+// Long grains, far apart in time, so its line holds still long enough to be read against its meter.
+await keys(gcard, "size", "End");
+check(await until(() => /size: 0\.5, density: 20,/.test(lead())), `Size's End writes 0.5 s: ${lead().match(/=> .*/)?.[0]}`);
+await keys(gcard, "density", "Home");
+check(await until(() => /size: 0\.5, density: 1,/.test(lead())), `Density's Home writes 1 a second: ${lead().match(/=> .*/)?.[0]}`);
+check(await until(async () => ((await words(cloud)) ?? "").startsWith("Pieces of 500 ms, 1 a second, each from up to ")), `its words say so: ${await words(cloud)}`);
 
 // ---------------------------------------------------------------- the pictures, live (CARD-73)
 
@@ -213,6 +223,23 @@ check(m.ok, `while the song plays, the Flanger's line moves with its sweep, and 
 check(known(m.last, m.last, "sweep") && known(m.last, m.last, "phase") && Math.abs(m.last.sweep - m.last.phase) < 0.05, `the Flanger's line is drawn at its LFO's phase: ${told(m.last)}`);
 m = await twice((a, b) => moved(a, b, "cloud") && moved(a, b, "reads"), 400, 15000);
 check(m.ok, `while the song plays, Grains' line jumps from grain to grain, and so does an agent's look at its meter: ${told(m.last)}`);
+// Drawn where its meter says its newest grain reads, `reads / 2.5 s` across: read between two looks
+// that agree (no grain started between them: an octave up a grain's place drifts 0.1 s in the time),
+// once the canvas has drawn twice since the first, twice in a row.
+const drew = () => page.$eval(`${cloud} canvas[data-live]`, (c) => Number(c.dataset.reads ?? 0)).catch(() => 0);
+const against = [];
+for (const end = Date.now() + 20000; Date.now() < end && against.length < 2; ) {
+  const a = (await look("grains", "reads"))?.now;
+  const r0 = await drew();
+  await until(async () => (await drew()) >= r0 + 2, 2000);
+  const c = await drawn(cloud);
+  const b = (await look("grains", "reads"))?.now;
+  if (!(a > 0 && b > 0 && Math.abs(a - b) < 0.1 && typeof c === "number")) continue;
+  const off = Math.abs(c - (a + b) / 2 / 2.5);
+  if (off < 0.05) against.push(+off.toFixed(4));
+  else against.length = 0;
+}
+check(against.length === 2, `Grains' line is drawn at reads / 2.5 s across, within 0.05 (off by ${against.join(", ")})`);
 // Shot while the song plays: in the patch, then on Device's chain at Normal and Expanded.
 await shoot(`[data-testid=graph] ${fcard}`, "flanger-patch");
 await shoot(`[data-testid=graph] ${gcard}`, "grains-patch");
@@ -252,9 +279,12 @@ for (const [label, name] of [
 
 // ---------------------------------------------------------------- ⌘Z
 
-const before = lead();
 await page.mouse.click(10, 10);
 await key("Meta+z");
-check(await until(() => lead() !== before && lead().includes("spread: 0.3")), "⌘Z takes the spread back");
+check(await until(() => /size: 0\.5, density: 20,/.test(lead())), `⌘Z takes Density back: ${lead().match(/=> .*/)?.[0]}`);
+await key("Meta+z");
+check(await until(() => /size: 0\.1, density: 20,/.test(lead())), `⌘Z takes Size back: ${lead().match(/=> .*/)?.[0]}`);
+await key("Meta+z");
+check(await until(() => lead().includes("spread: 0.3")), "⌘Z takes the spread back");
 
 done(errors);
