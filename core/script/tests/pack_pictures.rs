@@ -609,11 +609,36 @@ fn a_misnamed_value_is_said_as_one() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A component's values for a speed test: each control at its default times `nudge` (a switch, a
+/// menu at its default), each setting at its default.
+fn nudged(d: &m2_script::component::Descriptor, nudge: f64) -> String {
+    let mut values = serde_json::Map::new();
+    for c in d.controls.iter().filter(|c| c.each.is_none()) {
+        let at = c.default.as_ref().map_or(0.0, |s| s.value);
+        values.insert(
+            c.name.clone(),
+            match c.unit {
+                Some(m2_ir::Unit::Switch) => json!(at != 0.0),
+                _ => match c.options() {
+                    Some(names) => json!(names.name(at as usize).unwrap_or_default()),
+                    None => json!(at * nudge),
+                },
+            },
+        );
+    }
+    for s in &d.settings {
+        values.insert(s.name.clone(), s.default.clone().filter(|v| v.is_number() || v.is_string()).unwrap_or(Value::Null));
+    }
+    Value::Object(values).to_string()
+}
+
 // CARD-75 (a fifth of CARD-64's limit): every picture of both packs draws in 4 ms at most, its first
 // draw too (which works out its kept sums, CARD-110), once its module is loaded (a limit of its own):
 // at its defaults, then at five more values; at 44.1, 48 and 96 kHz, each rate's first draws working
 // out its sums again (CARD-87). It judges speed, so it runs in the nightly tier, in the CPU time of
 // the draw's thread, the 4 ms scaled by this machine's speed against the Linux server's (CARD-75).
+// A first draw, timed once, came and went with what else ran (review Y4): it is judged by its median
+// over five fresh runtimes, each loaded first by another picture of the pack.
 #[test]
 fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
     let fifth = m2_script::speed::scaled(std::time::Duration::from_millis(4));
@@ -621,53 +646,56 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
     for (pack, rate) in ["mixing", "effects"].into_iter().flat_map(|p| [44_100, 48_000, 96_000].map(|r| (p, r))) {
         let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
         let catalog = m2_script::describe(&packages);
+        let pictures: Vec<(&String, &std::sync::Arc<m2_script::component::Descriptor>, String)> = catalog
+            .components
+            .iter()
+            .filter(|(c, _)| c.starts_with(&format!("@m2/{pack}:")))
+            .flat_map(|(cid, d)| {
+                d.editor
+                    .views
+                    .iter()
+                    .filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. }))
+                    .map(move |v| (cid, d, v.name.clone()))
+            })
+            .collect();
+        let ask = |cid: &str, d: &std::sync::Arc<m2_script::component::Descriptor>, view: &str, nudge: f64| Ask {
+            key: pack.into(),
+            packages: packages.clone(),
+            song: None,
+            module: d.module.clone(),
+            descriptor: d.clone(),
+            view: view.into(),
+            values: nudged(d, nudge),
+            memo: format!("{cid}\u{0}{view}"),
+            rate,
+        };
         let runner = Runner::new();
-        let mut loaded = false;
-        for (cid, d) in catalog.components.iter().filter(|(c, _)| c.starts_with(&format!("@m2/{pack}:"))) {
-            for view in d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })) {
-                let defaults = |nudge: f64| {
-                    let mut values = serde_json::Map::new();
-                    for c in d.controls.iter().filter(|c| c.each.is_none()) {
-                        let at = c.default.as_ref().map_or(0.0, |s| s.value);
-                        values.insert(
-                            c.name.clone(),
-                            match c.unit {
-                                Some(m2_ir::Unit::Switch) => json!(at != 0.0),
-                                _ => match c.options() {
-                                    Some(names) => json!(names.name(at as usize).unwrap_or_default()),
-                                    None => json!(at * nudge),
-                                },
-                            },
-                        );
-                    }
-                    for s in &d.settings {
-                        values.insert(s.name.clone(), s.default.clone().filter(|v| v.is_number() || v.is_string()).unwrap_or(Value::Null));
-                    }
-                    Value::Object(values).to_string()
-                };
-                for (i, nudge) in [1.0, 0.9, 0.8, 1.1, 0.7, 0.95].into_iter().enumerate() {
-                    let ask = Ask {
-                        key: pack.into(),
-                        packages: packages.clone(),
-                        song: None,
-                        module: d.module.clone(),
-                        descriptor: d.clone(),
-                        view: view.name.clone(),
-                        values: defaults(nudge),
-                        memo: format!("{cid}\u{0}{}", view.name),
-                        rate,
-                    };
-                    // The module's load first: it has a limit of its own (CARD-64).
-                    if !loaded {
-                        let _ = runner.draw(ask.clone());
-                        loaded = true;
-                        continue;
-                    }
-                    let (drawn, took) = runner.draw_timed(ask);
-                    assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
-                    if took > fifth {
-                        slow.push(format!("{cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name));
-                    }
+        // The module's load first: it has a limit of its own (CARD-64).
+        let (c0, d0, v0) = &pictures[0];
+        let _ = runner.draw(ask(c0, d0, v0, 1.0));
+        for (k, (cid, d, view)) in pictures.iter().enumerate() {
+            // A first draw: its median over five fresh runtimes, each loaded by another picture.
+            let (wc, wd, wv) = &pictures[if k == 0 { 1 } else { 0 }];
+            let mut firsts: Vec<std::time::Duration> = (0..5)
+                .map(|_| {
+                    let fresh = Runner::new();
+                    let _ = fresh.draw(ask(wc, wd, wv, 1.0));
+                    let (drawn, took) = fresh.draw_timed(ask(cid, d, view, 1.0));
+                    assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {view}: {drawn:?}");
+                    took
+                })
+                .collect();
+            firsts.sort();
+            if firsts[2] > fifth {
+                slow.push(format!("{cid}'s {view} draw 0 at {rate} Hz: {:?} (the median of five first draws: {firsts:?})", firsts[2]));
+            }
+            // Then on the shared runtime: its first draw there, and five more values, each timed once.
+            let _ = runner.draw(ask(cid, d, view, 1.0));
+            for (i, nudge) in [0.9, 0.8, 1.1, 0.7, 0.95].into_iter().enumerate() {
+                let (drawn, took) = runner.draw_timed(ask(cid, d, view, nudge));
+                assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {view}: {drawn:?}");
+                if took > fifth {
+                    slow.push(format!("{cid}'s {view} draw {} at {rate} Hz: {took:?}", i + 1));
                 }
             }
         }
