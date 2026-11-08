@@ -199,6 +199,8 @@ export const SUITES = [
   // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
   ["frame", "fix", { expect: 86, s: 14 }],
+  // Track graph-node: the graph's nodes at two sizes, the bar, +N, selection and the keyboard (taste.md DV-12 to DV-16).
+  ["nodes", "fix", { expect: 100, s: 20 }],
   ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
