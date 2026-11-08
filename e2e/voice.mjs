@@ -177,14 +177,19 @@ const loudest = (l) => {
   for (let i = 0; i < bins.length; i++) if (k < 0 || bins[i] > bins[k]) k = i;
   return k < 0 || bins[k] < -80 ? -1 : k;
 };
+// The first look may still hold what played before Deep (review V1): a move two looks in a row agree on.
 let moved = null;
 let answered = null;
+let last = null;
 for (let i = 0; i < 40 && moved === null; i++) {
   await sleep(150);
   const [inn, out] = [await look("in"), await look("out")];
   answered = { in: Object.keys(inn ?? {}), node };
   const [a, b] = [loudest(inn), loudest(out)];
-  if (a > 0 && b > 0) moved = a - b;
+  if (a > 0 && b > 0) {
+    if (last === a - b) moved = last;
+    last = a - b;
+  }
 }
 check(moved !== null && moved >= 4 && moved <= 6, `while the voice plays through Deep, its loudest band comes out ${moved} bands (semitones) under the one going in${moved === null ? `: ${JSON.stringify(answered)}` : ""}`);
 const layers = await said(changerPic);
@@ -210,7 +215,7 @@ const level = `${clipper} [data-picture="level"]`;
 check(!!(await until(() => page.$(`${level} svg`), 15000)), "its face draws its ceiling over its levels");
 check(
   (await words(level)) ===
-    "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB, 4 times finer than the song's rate, so it adds no harsh tones. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling",
+    "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB. It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper; on very bright sounds pushed hard, a few. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling",
   `its words: ${await words(level)}`,
 );
 const kept = loud();
