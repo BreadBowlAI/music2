@@ -296,6 +296,34 @@ fn turning_its_knobs_never_clicks() {
     }
 }
 
+// PACK-36: its random numbers are its own: two Grains with the same values, one on noise and one on a
+// tone, start their grains at different moments: of the first 100 each starts, fewer than 10 on the
+// same frame. With one seed alone every Grains in a song started its grains on the very same frames
+// (review X7).
+#[test]
+fn two_grains_on_different_sounds_start_at_different_moments() {
+    let set = Set { size: 0.1, density: 20.0, spread: 0.3, pitch: 0.0, mix: 0.5 };
+    let starts = |x: &dyn Fn(usize, usize) -> f32| {
+        SAID.with(|s| s.borrow_mut().clear());
+        play_at::<Metered>(48_000.0, 1, 6 * 48_000, 1, &|p, c, t| match p {
+            0 => x(c, t),
+            1 => set.size,
+            2 => set.density,
+            3 => set.spread,
+            4 => set.pitch,
+            5 => set.mix,
+            _ => 1.0,
+        });
+        let said = SAID.with(|s| s.borrow().clone());
+        (1..said.len()).filter(|&t| said[t].0 > said[t - 1].0).take(100).collect::<Vec<usize>>()
+    };
+    let a = starts(&|c, t| 0.5 * noise(c, t));
+    let b = starts(&|_, t| (0.3 * (TAU * 220.0 * t as f64 / 48_000.0).sin()) as f32);
+    assert!(a.len() == 100 && b.len() == 100, "{} and {} grains started", a.len(), b.len());
+    let same = a.iter().filter(|t| b.contains(t)).count();
+    assert!(same < 10, "{same} of 100 grains started on the same frame in both");
+}
+
 /// The frequency of a tone in a window, `x`, at `sr`, near `want`: where its spectrum is loudest,
 /// found to a hundred-thousandth.
 fn tone_of(x: &[f32], sr: f32, want: f64) -> f64 {

@@ -14,9 +14,10 @@
 //!   [`MEASURE`] (`B / W` is how loud the sound under their windows is). Grains read from one place
 //!   add up in level, from places far apart in power: this turns either down to the sound's own.
 //!
-//! Its clock and its random numbers (one 32-bit xorshift from [`SEED`]) move only while `playing` is
-//! 1, so it follows the song: no grain starts while it is stopped, and after the engine sat stopped
-//! its grains start where an export's do. Where a grain reads is counted from the frames written
+//! Its clock and its random numbers (one 32-bit xorshift from [`SEED`], into which each grain mixes
+//! the newest sample as it starts) move only while `playing` is 1, so it follows the song: no grain
+//! starts while it is stopped, and after the engine sat stopped its grains start where an export's
+//! do. Where a grain reads is counted from the frames written
 //! since it started, never from its birth, so a grain plays the same bits whenever it starts. Every
 //! buffer is made at its birth: nothing is taken while it plays (RENDER-28). Its meter `reads` is how
 //! far back the newest grain reads now, in seconds, which its card's picture draws (CARD-129).
@@ -140,6 +141,15 @@ impl Grains {
         }
     }
 
+    /// The newest sample's bits mixed into its random numbers as a grain starts, unless it is
+    /// silence, so two Grains on different sounds start their grains at different moments; never to
+    /// 0, where a xorshift stays.
+    fn stir(&mut self, x: [f32; 2]) {
+        if x != [0.0; 2] {
+            self.rng = (self.rng ^ x[0].to_bits() ^ x[1].to_bits().rotate_left(16)).max(1);
+        }
+    }
+
     /// A number from 0 to 1, at random: the next of its xorshift.
     fn unit(&mut self) -> f32 {
         let mut x = self.rng;
@@ -236,6 +246,7 @@ impl Kernel for Grains {
                 self.clock += density / self.sr;
                 if self.clock >= self.gap {
                     self.clock -= self.gap;
+                    self.stir(x);
                     self.start(size, clampf(spread[i], 0.0, SPREAD), clampf(pitch[i], -PITCH, PITCH));
                     self.gap = 0.5 + self.unit();
                 }
