@@ -74,3 +74,36 @@ fn tune_renders_the_same_bits_every_time() {
     assert!(once == again, "two renders differ");
     std::fs::remove_dir_all(dir).ok();
 }
+
+// VOX-22, VOX-27, ABI-13, TAP-15: snap's meters, Tune's pitch line, reach a look, read once a
+// block: before pitch has read the voice, no pitch, 0 and 0; two seconds in, the voice sliding up
+// past 229 Hz (57.69 as a MIDI number), how far it is from the note of C major it aims at, A (57):
+// within a tenth of a semitone of +0.69; and how far Tune leaves it: a glide of 50 ms trails a voice
+// rising 1.25 semitones a second by about 6 cents, sharp.
+#[test]
+fn tunes_pitch_line_reaches_a_look() {
+    let ir = tuned(0.05);
+    let (tl, dir) = sliding(&ir);
+    let pk = own_packages();
+    let flat = check(&ir, &pk).unwrap_or_else(|e| panic!("{e:?}"));
+    let mut r = Renderer::prepare(&flat, &tl, &pk, SR, &mut audio::Cache::default(), &m2_plugins::Owner::discard(), Basis::Fresh).unwrap();
+    r.set_transport(Transport::new(0, true));
+    let taps = r.info().taps.clone().expect("a live plan has taps");
+    let snap = flat.nodes.iter().position(|n| n.name == "song/s").expect("snap's node");
+    // Its meters follow its one output: off, then left.
+    taps.point_meter(0, Some(TapAt::Port(snap, 1))).unwrap();
+    taps.point_meter(1, Some(TapAt::Port(snap, 2))).unwrap();
+    let mut read = |until: f64| {
+        while (r.clock() as f64) < until * SR as f64 {
+            r.render_block(r.clock()).unwrap();
+        }
+        (taps.meter(0).expect("a reading").now, taps.meter(1).expect("a reading").now)
+    };
+    assert_eq!(read(0.001), (0.0, 0.0), "no pitch read yet");
+    let (off, left) = read(2.0);
+    // The lane's pitch where the block ends: 196 Hz to 262 Hz over 4 s.
+    let lane = 69.0 + 12.0 * ((196.0 + 66.0 * r.clock() as f64 / SR as f64 / 4.0) / 440.0).log2();
+    assert!((off as f64 - (lane - 57.0)).abs() < 0.1, "off {off}: the voice is at {lane:.2}, A at 57");
+    assert!((left as f64 - 0.06).abs() < 0.03, "left {left}: Tune trails the rising voice by about 0.06");
+    std::fs::remove_dir_all(dir).ok();
+}

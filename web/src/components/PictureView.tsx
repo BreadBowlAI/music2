@@ -596,8 +596,21 @@ function lookOf(l: LiveLayer): { kind: LookKind; at: string } | null {
 
 /** How many reads a history keeps: about 3 s at 30 a second. */
 const HISTORY = 90;
+/** A meter's bar's width, and the step from one bar to the next, at the canvas's twice-the-pixels scale (CARD-73). */
+const BAR = 8;
+const BAR_STEP = 12;
+/** How tall a switch's strip is along the foot, at that scale. */
+const STRIP = 6;
 /** A spectrum's and a level's dB, from the foot of the picture to its top. */
 const DB_FOOT = -90;
+
+/**
+ * What a meter's read is drawn as (CARD-73): a meter in dB, or of a switch, the most it said since
+ * the read before, so no peak or opening between two reads is missed; one in any other unit (a
+ * pitch, a step) what it says now, since the most of a place over 33 ms is no place. Its unit comes
+ * with the answer to its ask (TAP-15): until then, now.
+ */
+const drawn = (s: Seen) => ((s.unit === "db" || s.unit === "switch") && s.most !== undefined ? s.most : (s.now ?? 0));
 
 /**
  * A picture's live layers, on a canvas under its shapes (CARD-73): each looks at what plays while
@@ -665,8 +678,12 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
     // and for a spectrum always, from −90 dB at the foot to 0 dB at the top.
     const ownY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
     const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : ownY(db));
-    /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1. */
-    const said: ({ v: number; x?: number; y: number } | null)[] = layers.map(() => null);
+    /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1; a history's values too, oldest first. */
+    const said: ({ v: number; x?: number; y: number; h?: number[] } | null)[] = layers.map(() => null);
+    // Several meters' bars stand side by side, in the order the picture lists them, the last at the
+    // right edge, so none hides another (CARD-73): where each one's bar starts.
+    const meters = layers.filter((l) => l.kind === "meter").length;
+    const meterX = (i: number) => c.width - 2 - BAR - BAR_STEP * (meters - 1 - layers.slice(0, i).filter((l) => l.kind === "meter").length);
     g.clearRect(0, 0, c.width, c.height);
     layers.forEach((l, i) => {
       const all = seen.current.get(i) ?? [];
@@ -709,18 +726,29 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
         }
       } else if (l.kind === "meter" && last?.now !== undefined) {
         // A bar at the right edge, from the axis's 0 to the meter's number, in the y axis's unit.
-        const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(last.now, view.y)) * plot;
-        g.fillRect(c.width - 10, Math.min(y0, y1), 8, Math.abs(y1 - y0));
-        said[i] = { v: last.now, y: y1 / plot };
+        const v = drawn(last);
+        const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(v, view.y)) * plot;
+        const x = meterX(i);
+        g.fillRect(x, Math.min(y0, y1), BAR, Math.abs(y1 - y0));
+        said[i] = { v, x: (x + BAR / 2) / c.width, y: y1 / plot };
+      } else if (l.kind === "history" && all.length > 1 && last?.unit === "switch") {
+        // A switch over time (CARD-73): a strip along the plot's foot, lit where it was on at all.
+        const at = (j: number) => across(Math.max(0, (j + HISTORY - all.length) / (HISTORY - 1)));
+        all.forEach((s, j) => {
+          if (drawn(s) >= 0.5) g.fillRect(at(j - 1), plot - STRIP, Math.max(1, at(j) - at(j - 1)), STRIP);
+        });
+        said[i] = { v: drawn(last), y: (plot - STRIP / 2) / plot, h: all.map(drawn) };
       } else if (l.kind === "history" && all.length > 1) {
         g.beginPath();
+        const h: number[] = [];
         all.forEach((s, j) => {
-          const v = s.peak ? 20 * Math.log10(Math.max(1e-6, Math.max(...s.peak))) : (s.now ?? 0);
+          const v = s.peak ? 20 * Math.log10(Math.max(1e-6, Math.max(...s.peak))) : drawn(s);
           const y = s.peak ? dbY(v) : (1 - px(v, view.y)) * plot;
           const x = across((j + HISTORY - all.length) / (HISTORY - 1));
           if (j) g.lineTo(x, y);
           else g.moveTo(x, y);
-          said[i] = { v, y: y / plot };
+          h.push(v);
+          said[i] = { v, y: y / plot, h };
         });
         g.stroke();
       } else if (l.kind === "playhead") {
@@ -738,7 +766,7 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
             t = (beat - bar.start) / bar.length;
           }
           if (t !== null) said[i] = { v: beat, x: t, y: 0 };
-        } else if (last?.now !== undefined) t = px(last.now, view.x);
+        } else if (last?.now !== undefined) t = px(last.now, view.x); // a place: where it is now, never its most
         if (t !== null) g.fillRect(across(t) - 1, 0, 2, plot);
       } else if (l.kind === "scope" && last?.frames?.length) {
         const f = last.frames;
@@ -756,7 +784,7 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
     c.dataset.reads = String(reads.current);
     // Where it laid the plot out, in pixels, for the suites to hold against the shapes' (taste.md DV-17).
     c.dataset.plot = `${lay.left},${lay.span},${lay.plot}`;
-    c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4) }));
+    c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4), ...(x.h ? { h: x.h.map((v) => +v.toFixed(2)) } : {}) }));
     c.dataset.span = `${view.x.lo},${view.x.hi}`;
   };
   latest.current = draw;

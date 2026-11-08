@@ -89,11 +89,13 @@ Singers often record a line a few times and keep the best bits of each. **Compin
 | The hard, stepped pop sound | Load the **Robot** preset (Presets on its card), or turn **Glide** to 0 | Each note jumps to its pitch at once. |
 | A gentle fix | Turn **Glide** up to about 0.1 s (Natural) or more | Each note slides to its pitch, and the singer's wobble (vibrato) stays. |
 | Fix only part of each note's error | Turn **Amount** down | At 0.5, half of each note's error is fixed; at 0, none. |
+| See what it does | Play the song and look at its card | Its **pitch line** shows the last 3 seconds: how far your voice is from its note, faint, and how far Tune leaves it, solid. The middle line is the note; up is sharp, down is flat, a semitone each way. Its words say how fast and how far it moves the voice. |
 
 - **No key set:** every note is allowed, so Tune moves each sung note to the nearest of all twelve. Its card says "Every note allowed" with **Set the key**.
 - **Glide** is how long a note takes to reach its pitch: 0 to 0.4 seconds. **Amount** is how much of the error it fixes: 0 to 1.
 - **The voice keeps its colour.** Tune moves the pitch without making the singer sound like a chipmunk or a giant.
-- **A breath or an "s"** has no pitch, so Tune lets it through as it is.
+- **A breath or an "s"** has no pitch, so Tune lets it through as it is. On the pitch line, both lines rest on the middle line.
+- **The pitch line comes from Tune itself**: how far off it hears each note, and how far off it leaves it, as it plays. A note sung more than a semitone off is drawn at the edge. At Amount 0 the two lines are one; with Glide at 0 and Amount at 1, the solid line stays on the middle line.
 - **The whole song plays 15 ms later** (15 thousandths of a second) while Tune is on any track, so every track stays in time with the tuned voice. You won't hear the delay, but a singer listening to themselves may feel it. A take you record still lands where you heard it.
 - **An export sounds the same as playback.**
 - **Tune works from about D2 (73 Hz) up to about D6 (1,200 Hz).** A lower note, such as a bass singer's low C, comes through untuned.

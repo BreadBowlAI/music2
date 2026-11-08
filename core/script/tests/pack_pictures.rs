@@ -1,7 +1,8 @@
-//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-124): each draws, from the
-//! pack's own code, with the dots and the words its rule says, as the picture runner draws it for a
-//! window or an agent. Whether a picture drawn from a pack's own sums is the sound is checked
-//! against a render in `crates/editor/src/pack_pictures_tests.rs` (CARD-99).
+//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-126), and `@m2/vocals`' Tune's
+//! pitch line (VOX-27): each draws, from the pack's own code, with the dots, the words and the live
+//! layers its rule says, as the picture runner draws it for a window or an agent. Whether a picture
+//! drawn from a pack's own sums is the sound is checked against a render in
+//! `crates/editor/src/pack_pictures_tests.rs` (CARD-99).
 
 use std::path::{Path, PathBuf};
 
@@ -43,6 +44,25 @@ fn draw_at(runner: &Runner, rate: u32, pack: &str, component: &str, view: &str, 
 
 fn kinds(drawn: &Value) -> Vec<&str> {
     drawn["shapes"].as_array().unwrap().iter().map(|s| s["kind"].as_str().unwrap()).collect()
+}
+
+/// `@m2/<pack>`'s `component`'s descriptor, as the catalog carries it.
+fn descriptor(pack: &str, component: &str) -> std::sync::Arc<m2_script::component::Descriptor> {
+    let packages = vec![(format!("@m2/{pack}"), repo().join("packs/@m2").join(pack)), ("std".to_string(), repo().join("std"))];
+    let catalog = m2_script::describe(&packages);
+    catalog.components.get(&format!("@m2/{pack}:{component}")).cloned().unwrap_or_else(|| panic!("no {component}: {:?}", catalog.problems))
+}
+
+/// Picture `view`'s declaration, as the descriptor carries it: its axes and its live layers (CARD-73).
+fn declared(pack: &str, component: &str, view: &str) -> Value {
+    let d = descriptor(pack, component);
+    let v = d.editor.views.iter().find(|v| v.name == view).unwrap_or_else(|| panic!("{component} has no {view}"));
+    serde_json::to_value(&v.of).unwrap()
+}
+
+/// A live layer's history of meter `name` (CARD-73), as a declaration carries it.
+fn history_of(name: &str) -> Value {
+    json!({"kind": "history", "of": {"kind": "meter", "name": name}})
 }
 
 /// The handles a picture drew.
@@ -143,7 +163,39 @@ fn the_gate_draws_where_it_opens_over_its_levels() {
     assert_eq!(line(&d, "threshold"), [(0.0, -40.0), (3.0, -40.0)]);
     assert_eq!(dots(&d), ["y=threshold"]);
     assert!(close(places(&d)[0], (2.8, -40.0)), "near its right end, now");
-    assert_eq!(d["words"], "Opens when the sound reaches −40 dB; below that it turns it down to −80 dB. Drag the line");
+    assert_eq!(
+        d["words"],
+        "Opens when the sound reaches −40 dB; below that it turns it down to −80 dB. The strip at the foot lights while it is open. Drag the line"
+    );
+}
+
+// CARD-112, CARD-126: the gate shows whether it is open, its kernel's meter `open` over its last
+// seconds (a strip along its levels' foot, CARD-73), and, beside it, how far it turns down, its
+// meter `reduction` on std's reduction picture from 0 to 80 dB, with its range as the guide line of
+// the most it turns down; a range set elsewhere draws none, and its words say so.
+#[test]
+fn the_gate_shows_whether_it_is_open_and_how_far_it_turns_down() {
+    let live = &declared("mixing", "gate", "levels")["live"];
+    assert_eq!(live.as_array().unwrap().last().unwrap(), &history_of("open"), "its levels' last layer: {live}");
+    let down = declared("mixing", "gate", "down");
+    assert_eq!((&down["y"]["lo"], &down["y"]["hi"]), (&json!(0.0), &json!(80.0)));
+    assert_eq!(down["live"], json!([history_of("reduction"), {"kind": "meter", "name": "reduction"}]));
+    assert_eq!(descriptor("mixing", "gate").editor.face, ["levels", "down", "threshold", "attack", "hold", "release", "range"]);
+    let runner = Runner::new();
+    let v = json!({"threshold": -40, "attack": 0.001, "hold": 0.05, "release": 0.1, "range": -80});
+    let d = draw(&runner, "mixing", "gate", "down", v.clone()).unwrap();
+    assert_eq!(d["shapes"], json!([{"kind": "mark", "axis": "y", "at": 80.0, "words": "The most it turns down: 80 dB"}]));
+    assert_eq!(d["words"], "How far it turns the sound down: none while it is open, up to 80 dB once it closes");
+    let mut gentle = v.clone();
+    gentle["range"] = json!(-12);
+    assert_eq!(draw(&runner, "mixing", "gate", "down", gentle).unwrap()["shapes"][0]["at"], 12.0, "a gentle gate's guide at 12 dB");
+    let mut cabled = v;
+    cabled["range"] = Value::Null;
+    let d = draw(&runner, "mixing", "gate", "down", cabled).unwrap();
+    assert_eq!(
+        (&d["shapes"], &d["words"]),
+        (&json!([]), &json!("How far it turns the sound down: none while it is open, as far as its range says once it closes"))
+    );
 }
 
 // CARD-113: the transient shaper draws one hit, before (faint) and after (the line `after`), from
@@ -191,6 +243,21 @@ fn the_deesser_draws_its_band_over_the_spectrum() {
     );
 }
 
+// CARD-114, CARD-126: beside its band, the de-esser shows how far it turns that band down, its
+// kernel's meter `reduction` on std's reduction picture from 0 to 24 dB, with its amount as the
+// guide line of the most it turns down.
+#[test]
+fn the_deesser_shows_how_far_it_turns_its_band_down() {
+    let down = declared("mixing", "deesser", "down");
+    assert_eq!((&down["y"]["lo"], &down["y"]["hi"]), (&json!(0.0), &json!(24.0)));
+    assert_eq!(down["live"], json!([history_of("reduction"), {"kind": "meter", "name": "reduction"}]));
+    assert_eq!(descriptor("mixing", "deesser").editor.face, ["band", "down", "freq", "threshold", "amount"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "mixing", "deesser", "down", json!({"freq": 6000, "threshold": -30, "amount": 6})).unwrap();
+    assert_eq!(d["shapes"], json!([{"kind": "mark", "axis": "y", "at": 6.0, "words": "The most it turns down: 6 dB"}]));
+    assert_eq!(d["words"], "How far it turns the band down at 6 kHz: up to 6 dB, while the band's peaks are over −30 dB");
+}
+
 // CARD-115: the multiband draws its split: how it turns each frequency below its thresholds,
 // measured with a click at −80 dB (the line `split`, a response the server fills in, whose curve
 // `the_multiband_split_is_measured_under_its_thresholds` checks), the crossovers as guide lines
@@ -228,6 +295,33 @@ fn the_multiband_draws_its_split() {
     let marks: Vec<f64> =
         crossed["shapes"].as_array().unwrap().iter().filter(|s| s["kind"] == "mark").map(|s| s["at"].as_f64().unwrap()).collect();
     assert_eq!(marks, [2500.0, 3000.0], "crossed, the lower splits low from mid");
+}
+
+// CARD-115, CARD-126: beside its split, the multiband shows how far each band turns down now, its
+// kernel's meters `low_reduction`, `mid_reduction` and `high_reduction`, a bar each, low to high,
+// from 0 to 24 dB: no history, since three lines in the window's two greys can't be told apart,
+// so its axis across is bare. Its split is as before its meters: `curvePicture()`'s.
+#[test]
+fn the_multiband_shows_how_far_each_band_turns_down() {
+    let down = declared("mixing", "multiband", "down");
+    assert_eq!(
+        (&down["y"]["lo"], &down["y"]["hi"], &down["y"]["unit"], &down["y"].get("bare")),
+        (&json!(0.0), &json!(24.0), &json!("db"), &None)
+    );
+    assert_eq!(down["x"]["bare"], json!(true), "nothing across: no grid, no numbers");
+    let bars = ["low_reduction", "mid_reduction", "high_reduction"].map(|name| json!({"kind": "meter", "name": name}));
+    assert_eq!(down["live"], json!(bars));
+    let split = declared("mixing", "multiband", "split");
+    assert_eq!(
+        split["live"],
+        json!([{"kind": "spectrum", "at": "in", "tone": "faint"}, {"kind": "spectrum", "at": "out"}]),
+        "split: curvePicture()'s spectrum in and out, no bars"
+    );
+    assert_eq!(descriptor("mixing", "multiband").editor.face, ["split", "down", "lowMid", "midHigh", "lowGain", "midGain", "highGain"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "mixing", "multiband", "down", json!({"lowMid": 200, "midHigh": 2500})).unwrap();
+    assert_eq!(d["shapes"], json!([]));
+    assert_eq!(d["words"], "Low, mid, high: how far each band is turned down now, a bar each, up to 24 dB (further stays at the top)");
 }
 
 // CARD-116: Pump draws one bar of its dip from its own sum: down `depth` at each step's start and
@@ -532,4 +626,49 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
         }
     }
     assert!(slow.is_empty(), "past a fifth of a draw's 20 ms: {slow:#?}");
+}
+
+// VOX-27: Tune's card draws its pitch line on its face, beside Glide and Amount: its last 3 seconds
+// across and, up, how far the voice is from its note, from a semitone flat to a semitone sharp, on
+// an axis drawn bare, its middle line named "On the note", and now at its right edge; its live
+// layers are snap's meters, how far the voice is from the note it aims at (faint) and how far Tune
+// leaves it (VOX-22). Its words say how Glide and Amount move the voice.
+#[test]
+fn tune_draws_its_pitch_line() {
+    let pitch = declared("vocals", "tune", "pitch");
+    assert_eq!((&pitch["x"]["lo"], &pitch["x"]["hi"], &pitch["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
+    assert_eq!(
+        (&pitch["y"]["lo"], &pitch["y"]["hi"], &pitch["y"]["unit"], &pitch["y"]["bare"]),
+        (&json!(-1.0), &json!(1.0), &json!("semitones"), &json!(true))
+    );
+    let mut off = history_of("off");
+    off["tone"] = json!("faint");
+    assert_eq!(pitch["live"], json!([off, history_of("left")]));
+    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": 0.1, "amount": 1})).unwrap();
+    assert_eq!(kinds(&d), ["mark", "mark", "label"]);
+    let shapes = d["shapes"].as_array().unwrap();
+    assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
+    assert_eq!((&shapes[1]["axis"], &shapes[1]["at"], &shapes[1]["words"]), (&json!("y"), &json!(0.0), &json!("On the note")));
+    let name = &shapes[2];
+    assert_eq!(name["words"], "On the note", "the middle line named on the picture");
+    let y = name["y"].as_f64().unwrap();
+    assert!(y > 0.0 && y < 0.1, "its name just over the line: {y}");
+    let words = |how: &str| {
+        format!(
+            "Faint: how far your voice is from its note. Solid: how far it is after Tune, which {how}. Up is sharp, down is flat, \
+             up to a semitone (further stays at the edge). With no voice (silence, a breath, an S), both rest on the middle line"
+        )
+    };
+    assert_eq!(d["words"], words("moves it onto the note in about 100 ms"));
+    for (glide, amount, how) in [
+        (json!(0), json!(1), "moves it onto the note at once, so the solid line stays on the middle line"),
+        (json!(0.05), json!(0.8), "moves it 80% of the way to the note in about 50 ms"),
+        (json!(0.1), json!(0), "leaves it as sung at Amount 0, so the two lines are one"),
+        (Value::Null, json!(1), "moves it as its glide and amount, set by a cable or the code, say"),
+    ] {
+        let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
+        assert_eq!(d["words"], words(how));
+    }
 }

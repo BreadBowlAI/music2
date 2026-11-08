@@ -1,6 +1,6 @@
 [package]
 name = "@m2/vocals"
-version = "1.1.0"
+version = "1.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key, and a voice's notes, found and edited"
 authors = ["music2"]
@@ -11,11 +11,12 @@ tags = ["vocals", "voice", "tune", "pitch correction", "autotune", "key"]
 wasm = "kernels/vocals.wasm"
 
 [dependencies]
-# @m2/core 2.4, which gives the song's key to sound as `time.key` (VOX-12); a change to @m2/core
-# that would break it is a 3.0.0. It plays none of std's kernels; the pack is one module, so it
-# loads only where std's modules do.
-"@m2/core" = "2.4"
-std = "0.9"
+# @m2/core 2.5: the song's key as `time.key` (VOX-12) came in 2.4, and Tune's pitch line (VOX-27)
+# draws on an axis drawn bare, which came in 2.5; a change to @m2/core that would break it is a
+# 3.0.0. It plays none of std's kernels; the pack is one module, so it loads only where std's
+# modules do. Its picture's words use std/pictures', new in std 0.10.
+"@m2/core" = "2.5"
+std = "0.10"
 
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/vocals:pitch", …)`.
@@ -31,7 +32,7 @@ outputs = ["hz: control<hz>", "clarity: control<unit01>", "level: control<gain>"
 
 [[kernel]]
 name = "snap"
-description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22)"
+description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22). Its meters, Tune's pitch line, in semitones, + sharp and - flat: off, how far the pitch it hears is from the note it aims at, and left, how far its move leaves it from that note (both 0 with no pitch)"
 inputs = [
   "hz: control<hz>",
   "clarity: control<unit01>",
@@ -40,6 +41,7 @@ inputs = [
   "amount: control<unit01> = 1",
 ]
 outputs = ["out: control<semitones>"]
+meters = ["off: control<semitones>", "left: control<semitones>"]
 
 [[kernel]]
 name = "shift"

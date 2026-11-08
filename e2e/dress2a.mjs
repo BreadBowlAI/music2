@@ -3,9 +3,16 @@
 // transient shaper, the de-esser, the multiband and Pump; FX A through the delay, the reverb, the
 // chorus, the phaser, the tremolo, drive, the bitcrusher and the widener. Device's chain draws each
 // card's picture on its face; while the song plays, the live ones move (the spectra, the levels over
-// time, Pump's playhead). Each draggable picture's dot is dragged: it writes its value, one undo
-// step, which ⌘Z takes back byte for byte. Each card is linted and shot, to compare with the
-// design's mockup (to $E2E_SHOTS when set, else the run's folder).
+// time, Pump's playhead), and the meters the gate, the de-esser and the multiband send (track
+// meters2, CARD-126): the gate's strip lights on the hits and goes dark between them, and its and
+// the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
+// side by side, low to high, and its low band's turns down. A meter in dB or of a switch is drawn
+// from the most it said since the read before (CARD-73): over 3 s of the gate's `down`, every
+// closing is drawn as deep as the others, within 1 dB, and its strip lights once for each opening.
+// Mix A's hits stop for a quarter beat between them, so its gate closes. Each draggable picture's
+// dot is dragged: it writes its value, one undo step, which ⌘Z takes back byte for byte. Each card
+// is linted and shot, to compare with the design's mockup (to $E2E_SHOTS when set, else the run's
+// folder).
 //
 //   node e2e/dress2a.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -26,6 +33,8 @@ const locked = (name) => {
 write("music2.toml", `${read("music2.toml")}"@m2/effects" = "1"\n"@m2/mixing" = "1"\n`);
 write("music2.lock", read("music2.lock") + locked("@m2/effects") + locked("@m2/mixing"));
 const HITS = `const hits = vca(osc.saw(110), range(lfo(time.beats, { period: 0.5, shape: "saw" }), 1, 0));`;
+// Mix A's: a quarter beat of saw, a quarter of silence.
+const GAPS = `const hits = vca(osc.saw(110), range(lfo(time.beats, { period: 0.5, shape: "square" }), 1, 0));`;
 write(
   "tracks/mixa.ts",
   `import { time, track } from "@m2/core";
@@ -33,9 +42,9 @@ import { lfo, range } from "std/control";
 import { osc, vca } from "std/dsp";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
 
-// A saw that hits each half beat and fades, through every mixing tool.
+// A saw that hits each half beat and stops, through every mixing tool.
 export default track("mixa", { name: "Mix A" }, () => {
-  ${HITS}
+  ${GAPS}
   return pump(multiband(deesser(transient(gate(eq(hits, { gain4: -3, freq4: 800 }), { threshold: -30 }), { attack: 6, sustain: -3 }), { threshold: -40 }), { midGain: -2 }), { depth: -8, shape: 0.5 });
 });
 `,
@@ -139,7 +148,12 @@ const gate = `${mixa} [data-node="gate"]`;
 const gatePic = `${gate} [data-face] [data-picture="levels"]`;
 await shown(gate);
 check(await until(async () => (await points(`${gatePic} polyline[data-line="threshold"]`)) === 2, 20000), "the gate's face draws where it opens, a line");
-check((await words(gatePic)) === "Opens when the sound reaches −30 dB; below that it turns it down to −80 dB. Drag the line", `its words: ${await words(gatePic)}`);
+check((await words(gatePic)) === "Opens when the sound reaches −30 dB; below that it turns it down to −80 dB. The strip at the foot lights while it is open. Drag the line", `its words: ${await words(gatePic)}`);
+const gateDown = `${gate} [data-face] [data-picture="down"]`;
+check(
+  await until(async () => (await words(gateDown)) === "How far it turns the sound down: none while it is open, up to 80 dB once it closes", 20000),
+  `beside it, how far it turns down: ${await words(gateDown)}`,
+);
 await linted(gate, "the gate's card");
 await shoot(gate, "gate");
 await drag(gatePic, 0, 0, 20, "tracks/mixa.ts", (c) => num(c, "threshold") < -30, "Gate threshold", "its dot dragged down lowers the threshold");
@@ -162,6 +176,11 @@ const dePic = `${de} [data-face] [data-picture="band"]`;
 await shown(de);
 check(await until(async () => (await page.$$(`${dePic} [data-dot]`)).length === 1, 20000), "the de-esser's face draws its band and one dot");
 check(/^Listens from 3\.71 kHz to 9\.71 kHz: when that band's peaks go over −40 dB/.test((await words(dePic)) ?? ""), `its words: ${await words(dePic)}`);
+const deDown = `${de} [data-face] [data-picture="down"]`;
+check(
+  await until(async () => (await words(deDown)) === "How far it turns the band down at 6 kHz: up to 6 dB, while the band's peaks are over −40 dB", 20000),
+  `beside it, how far it turns its band down: ${await words(deDown)}`,
+);
 await linted(de, "the de-esser's card");
 await shoot(de, "deesser");
 await drag(dePic, 0, 30, 0, "tracks/mixa.ts", (c) => num(c, "freq") > 6000, "De-esser", "its dot dragged right raises the frequency");
@@ -174,6 +193,11 @@ await shown(mb);
 check(await until(async () => (await points(`${mbPic} polyline[data-response][data-line="split"]`)) === 256, 20000), "the multiband's face draws its split, measured from its sound under its thresholds");
 const opens = await page.$$eval(`${mbPic} [data-dot]`, (els) => els.map((e) => e.dataset.opens ?? ""));
 check(JSON.stringify(opens) === JSON.stringify(["", "", "Low", "Mid", "High"]), `a dot on each crossover, and one for each band's gain that shows its tab: ${JSON.stringify(opens)}`);
+const mbDown = `${mb} [data-face] [data-picture="down"]`;
+check(
+  await until(async () => (await words(mbDown)) === "Low, mid, high: how far each band is turned down now, a bar each, up to 24 dB (further stays at the top)", 20000),
+  `beside it, how far each band turns down: ${await words(mbDown)}`,
+);
 await linted(mb, "the multiband's card");
 await shoot(mb, "multiband");
 await drag(mbPic, 3, 0, -20, "tracks/mixa.ts", (c) => num(c, "midGain") > -2, "Multiband compressor", "the mid's dot dragged up raises its gain");
@@ -214,6 +238,68 @@ await shown(dePic);
 await moving(dePic, 0, "the de-esser's spectrum, in");
 await shown(pumpPic);
 await moving(pumpPic, 1, "Pump's playhead");
+// The meters (CARD-126): what each live layer said, read again and again while the song plays.
+const reads = async (pic, layer, n = 60) => {
+  const seen = [];
+  for (let i = 0; i < n; i++) {
+    await sleep(100);
+    const l = (await said(pic))[layer];
+    if (l) seen.push(l);
+  }
+  return seen;
+};
+await shown(gatePic);
+const strip = await reads(gatePic, 3);
+const lit = strip.map((l) => l.v);
+// Its last read is drawn as a strip: the window knows the meter is a switch from its ask's answer.
+check(
+  lit.includes(1) && lit.includes(0) && strip.at(-1)?.y > 0.9,
+  `the gate's strip, along its foot, lights on the hits and goes dark between them (its meter open, a switch): ${[...new Set(lit)]} at ${strip.at(-1)?.y}`,
+);
+await shown(gateDown);
+const turned = (await reads(gateDown, 1, 40)).map((l) => l.v);
+check(turned.some((v) => v === 0) && turned.some((v) => v > 20), `its down says nothing turned down while it is open, and more once it closes: ${[...new Set(turned)].slice(0, 6)}`);
+// The gate's last 3 s, drawn: each closing as deep as the others (its meter in dB, drawn from the
+// most since the read before, never what it said at one moment of it), and the strip lit once for
+// each opening between them (one more or less at the window's edges, the two pictures' reads not
+// quite at one moment).
+const runs = (h, on) => {
+  const out = [];
+  h.forEach((v, j) => {
+    if (!on(v)) return;
+    const last = out.at(-1);
+    if (last && last[1] === j - 1) last[1] = j;
+    else out.push([j, j]);
+  });
+  return out;
+};
+const [downH, stripH] = await page.evaluate(
+  (a, b) => [a, b].map((sel, k) => JSON.parse(document.querySelector(`${sel} canvas[data-live]`)?.dataset.said ?? "[]")[k === 0 ? 0 : 3]?.h ?? []),
+  gateDown,
+  gatePic,
+);
+const closings = runs(downH, (v) => v > 1).filter(([a, b]) => a > 0 && b < downH.length - 1);
+const deepest = closings.map(([a, b]) => Math.max(...downH.slice(a, b + 1)));
+check(
+  downH.length === 90 && closings.length >= 6 && Math.max(...deepest) - Math.min(...deepest) <= 1,
+  `over the gate's last 3 s (${downH.length} reads), each closing is drawn as deep as the others, within 1 dB: ${deepest}`,
+);
+const openings = runs(downH, (v) => v < 0.5).length;
+const lighted = runs(stripH, (v) => v >= 0.5).length;
+check(stripH.length === 90 && lighted >= 6 && Math.abs(lighted - openings) <= 1, `its strip lights once for each opening: ${lighted} lit, ${openings} openings`);
+await shown(deDown);
+const deTurned = (await reads(deDown, 1, 40)).map((l) => l.v);
+check(deTurned.some((v) => v > 0) && deTurned.every((v) => v >= 0 && v <= 6), `the de-esser's down says how far it turns its band down, up to 6 dB: ${[...new Set(deTurned)].slice(0, 6)}`);
+await shown(mbDown);
+const bars = await reads(mbDown, 0, 40);
+const xs = [0, 1, 2].map((k) => said(mbDown).then((l) => l[k]?.x));
+const [lowX, midX, highX] = await Promise.all(xs);
+check(lowX < midX && midX < highX && highX > 0.9, `the multiband's down stands its bars side by side, low to high, at its right: ${[lowX, midX, highX]}`);
+check(bars.some((l) => l.v > 0), `the low band's bar turns down: ${[...new Set(bars.map((l) => l.v))].slice(0, 6)}`);
+check((await said(mbPic)).length === 2, `its split draws its spectra in and out alone, no bars: ${JSON.stringify(await said(mbPic))}`);
+await shoot(gate, "gate-playing");
+await shoot(de, "deesser-playing");
+await shoot(mb, "multiband-playing");
 await shoot(eq, "eq-playing");
 await shoot(pump, "pump-playing");
 await page.keyboard.press("Space");

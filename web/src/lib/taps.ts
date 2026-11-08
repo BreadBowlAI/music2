@@ -37,6 +37,8 @@ export interface Seen {
   /** A meter's number now, and the most since the last read, in its unit. */
   now?: number;
   most?: number;
+  /** A meter's unit (`db`, `switch`), as the answer to its ask named it (TAP-15): a read carries it once that answer has come. */
+  unit?: string;
   why?: string;
 }
 
@@ -77,6 +79,8 @@ interface Shared {
   seen: Set<(s: Seen) => void>;
   why: Set<(words: string | null) => void>;
   stop: () => void;
+  /** A meter's unit, from the answer to its ask: what a window draws a switch by (CARD-73). */
+  unit?: string;
 }
 
 const shared = new Map<string, Shared>();
@@ -92,7 +96,10 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
     const tell = (words: string | null) => one.why.forEach((w) => w(words));
     const ask = (on: boolean) =>
       graphApi.look(session, module, node, on, kind, at).then(
-        () => alive && on && tell(null),
+        (a) => {
+          if (on && a.look?.unit) one.unit = a.look.unit;
+          return alive && on && tell(null);
+        },
         (e) => alive && on && tell(said(e)),
       );
     void ask(true);
@@ -101,7 +108,8 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
       const mine = msg.looks.find((x) => x.module === module && x.node === node && x.kind === kind && x.at === at);
       if (!mine) return;
       if (mine.why) return tell(mine.why);
-      one.seen.forEach((f) => f(mine));
+      const read = one.unit ? { ...mine, unit: one.unit } : mine;
+      one.seen.forEach((f) => f(read));
     });
     one.stop = () => {
       alive = false;
