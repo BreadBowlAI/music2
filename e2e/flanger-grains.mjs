@@ -14,15 +14,16 @@
 // canvas lit its line (its pixels, by the plot's place in `data-plot`: CARD-103's `data-said` holds no
 // meter playhead's place) and an agent's look at the meter. The Flanger's line is drawn at its LFO's
 // phase; Grains' at `reads / 2.5 s` across, its buffer, each within 0.05 of the plot, read between two
-// looks that agree (no grain started between them) after the canvas drew twice. The cards are shot
-// while the song plays, in the patch and on Device's chain at Normal and Expanded: to $E2E_SHOTS when
-// set, else the run's folder, as `flanger-<patch|normal|expanded>.png` and `grains-…`. ⌘Z steps back,
-// byte for byte, a step at a time. Each card linted.
+// looks that agree (no grain started between them) after the canvas drew twice. The nodes are shot
+// while the song plays, in the graph collapsed and expanded: to $E2E_SHOTS when set, else the run's
+// folder, as `flanger-<collapsed|expanded>.png` and `grains-…`. ⌘Z steps back, byte for byte, a step
+// at a time. Each node linted.
 //
 //   node e2e/flanger-grains.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const SHOTS = process.env.E2E_SHOTS ?? ROOT;
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -64,7 +65,7 @@ const knobsOf = (card) => page.$$eval(`${card} [data-knob]`, (ks) => ks.map((k) 
 /** Focus the knob `slot` of `card` and press `keys`, one after another. */
 const keys = async (card, slot, ...pressed) => {
   await seen(`${card} [data-knob="${slot}"]`);
-  await page.$eval(`${card} [data-knob="${slot}"] svg[role=slider]`, (e) => e.focus());
+  await page.$eval(`${card} [data-knob="${slot}"] [role=slider]`, (e) => e.focus());
   for (const k of pressed) await page.keyboard.press(k);
 };
 
@@ -124,9 +125,12 @@ const gcard = '[data-module="lead"] [data-node="grains"]';
 const cloud = `${gcard} [data-picture="cloud"]`;
 check(!!(await until(() => page.$(`${cloud} svg`), 15000)), "its face draws its band");
 const gknobs = await knobsOf(gcard);
+// Collapsed, a node shows its face's first four values; +N stands for the rest of it (DV-16).
+const gmix = (await api("")).body.view.modules.find((m) => m.key === "lead").nodes.find((n) => n.label === "grains")?.knobs?.find((k) => k.slot === "mix")?.id;
+const ghides = await page.$eval(`${gcard} [data-more]`, (e) => e.dataset.hides ?? "").catch(() => "");
 check(
-  ["size", "density", "spread", "pitch", "mix"].every((k) => gknobs.includes(k)) && !gknobs.includes("freeze"),
-  `Size, Density, Spread, Pitch and Mix are on its face, and no Freeze: ${gknobs.join()}`,
+  gknobs.join() === "size,density,spread,pitch" && !!gmix && ghides.split(" ").includes(gmix) && !gknobs.includes("freeze") && !/freeze/.test(ghides),
+  `Size, Density, Spread, Pitch and Mix are on its face (Mix the +N's), and no Freeze: ${gknobs.join()}; +N hides ${ghides}`,
 );
 const tail = "The line: where the newest grain reads now. Drag the band's edge for the spread";
 check(
@@ -240,27 +244,21 @@ for (const end = Date.now() + 20000; Date.now() < end && against.length < 2; ) {
   else against.length = 0;
 }
 check(against.length === 2, `Grains' line is drawn at reads / 2.5 s across, within 0.05 (off by ${against.join(", ")})`);
-// Shot while the song plays: in the patch, then on Device's chain at Normal and Expanded.
-await shoot(`[data-testid=graph] ${fcard}`, "flanger-patch");
-await shoot(`[data-testid=graph] ${gcard}`, "grains-patch");
-await page.click("[data-device=chain]").catch(() => {});
-const chained = (c) => `[data-testid=chain] ${c}`;
-check(await until(async () => !!(await page.$(chained(fcard))) && !!(await page.$(chained(gcard))), 15000), "both are cards on Device's chain");
-for (const size of ["normal", "expanded"]) {
-  for (const [c, name] of [
-    [fcard, "flanger"],
-    [gcard, "grains"],
-  ]) {
-    await page.click(`${chained(c)} [data-size-to="${size}"]`).catch(() => {});
-    await sleep(1200);
-    await shoot(chained(c), `${name}-${size}`);
-  }
+// Shot while the song plays: in the graph, collapsed, then expanded.
+await shoot(`[data-testid=graph] ${fcard}`, "flanger-collapsed");
+await shoot(`[data-testid=graph] ${gcard}`, "grains-collapsed");
+for (const [c, name] of [
+  [fcard, "flanger"],
+  [gcard, "grains"],
+]) {
+  await expand(page, `[data-testid=graph] ${c}`);
+  await sleep(1200);
+  await shoot(`[data-testid=graph] ${c}`, `${name}-expanded`);
 }
-await linted(chained(fcard), "the Flanger's chain card, Expanded");
-await linted(chained(gcard), "Grains' chain card, Expanded");
-for (const c of [fcard, gcard]) await page.click(`${chained(c)} [data-size-to="normal"]`).catch(() => {});
-await page.click("[data-device=patch]").catch(() => {});
-await until(async () => !!(await page.$(`[data-testid=graph] ${gcard}`)), 15000);
+await linted(`[data-testid=graph] ${fcard}`, "the Flanger's node, expanded");
+await linted(`[data-testid=graph] ${gcard}`, "Grains' node, expanded");
+await page.click("[data-testid=collapse-all]").catch(() => {});
+await until(async () => !(await page.$('[data-testid=graph] [data-module="lead"] [data-size="expanded"]')), 5000);
 await seen(sweep);
 
 // Stopped: both lines stand still, the Flanger's where its sweep waits, Grains' at now once its last

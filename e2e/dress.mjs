@@ -1,16 +1,17 @@
 // Track dress1: std's own cards wear their pictures (CARD-90 to CARD-99), on the Starter beat. Its
-// hook is played through std's eq3 and lowpass: Device's chain draws the lowpass's curve and eq3's,
-// each measured from the sound itself, with their dots. Dragging eq3's middle dot up writes its mid
+// hook is played through std's eq3 and lowpass: the graph's nodes, expanded, draw the lowpass's
+// curve and eq3's, each measured from the sound itself, with their dots. Dragging eq3's middle dot up writes its mid
 // gain, one undo step, which ⌘Z takes back. The pluck's envelope, std's picture now (CARD-96), drags
 // by its attack corner, and ⌘Z takes it back. The mix's compressor draws its transfer curve and how
 // far it turns down; while the song plays, the level riding its curve and its meter move. Each card
-// linted; the chains are shot to compare with the design's mockup.
+// linted; the graphs are shot, their nodes expanded, to compare with the design's mockup.
 //
 //   node e2e/dress.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 // ---------------------------------------------------------------- the Starter beat, in place of first-song
 
@@ -42,7 +43,7 @@ export default track("hook", { name: "Hook" }, ({ lane }) => {
 `,
 );
 
-// A track whose LFO, of 3 beats, sets how loud its saw is: its card is the patch's.
+// A track whose LFO, of 3 beats, sets how loud its saw is: its node is in the graph.
 write(
   "tracks/wobble.ts",
   `import { time, track } from "@m2/core";
@@ -57,7 +58,7 @@ write(
   read("song.ts").replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport wobble from "./tracks/wobble";').replace("hook: { in: hook.out, db: db(4) },", "hook: { in: hook.out, db: db(4) },\n        wobble: { in: wobble.out, db: db(-24) },"),
 );
 
-const { page, errors, api, view, box, key } = await open(1920, 1080, { device: "chain" });
+const { page, errors, api, view, box, key } = await open(1920, 1080);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
@@ -71,8 +72,12 @@ const points = (sel) => page.$eval(sel, (e) => (e.getAttribute("points") ?? "").
 check(await until(async () => !!(await page.$('[data-module-tab="hook"]')) && !(await page.$('[data-module-tab="keys"]')), 30000), "the Starter beat is open, its hook a track");
 await page.click('[data-module-tab="hook"] [data-testid=track-label]');
 await view("graph");
-const hookChain = '[data-testid=chain] [data-module="hook"]';
-check(await until(async () => !!(await page.$(`${hookChain} [data-node="lowpass"]`)), 20000), "the hook's chain has the lowpass and eq3 cards");
+const hookChain = '[data-testid=graph] [data-module="hook"]';
+check(await until(async () => !!(await page.$(`${hookChain} [data-node="lowpass"]`)) && !!(await page.$(`${hookChain} [data-node="eq3"]`)), 20000), "the hook's graph has the lowpass and eq3 nodes");
+// Their pictures big, as a chain card's were: expanded, 132 px (DV-19).
+await expand(page, `${hookChain} [data-node="lowpass"]`);
+await expand(page, `${hookChain} [data-node="eq3"]`);
+await expand(page, `${hookChain} [data-node="synth.pluck"]`);
 
 // ---------------------------------------------------------------- the lowpass's curve (CARD-91)
 
@@ -124,7 +129,6 @@ check(await until(() => read("tracks/hook.ts") === hookCode, 8000), "⌘Z takes 
 
 const pluck = `${hookChain} [data-node="synth.pluck"]`;
 await shown(pluck);
-if (await page.$(`${pluck} [data-tab="Loudness"]`)) await page.click(`${pluck} [data-tab="Loudness"]`);
 const amp = `${pluck} [data-picture="amp"]`;
 check(await until(async () => (await page.$$(`${amp} [data-dot]`)).length === 3, 20000), "the pluck's envelope is std's picture: its three corners");
 check(await until(async () => (await points(`${amp} polyline[data-line="envelope"]`)) > 100, 8000), "its shape is drawn from std's sums");
@@ -180,8 +184,9 @@ check(await until(() => read("tracks/hook.ts") === hookCode, 8000), "⌘Z takes 
 // ---------------------------------------------------------------- the mix's compressor (CARD-93)
 
 await page.click('[data-module-tab="song"]');
-const comp = '[data-testid=chain] [data-module="song"] [data-node="compress"]';
-check(await until(async () => !!(await page.$(comp)), 20000), "the mix's chain has its compressor");
+const comp = '[data-testid=graph] [data-module="song"] [data-node="compress"]';
+check(await until(async () => !!(await page.$(comp)), 20000), "the mix's graph has its compressor");
+await expand(page, comp);
 await shown(comp);
 const transfer = `${comp} [data-picture="transfer"]`;
 const history = `${comp} [data-picture="history"]`;
@@ -251,9 +256,8 @@ await page.screenshot({ path: `${ROOT}/dress-mix.png` });
 // ---------------------------------------------------------------- the LFO's playhead (CARD-98, CARD-104)
 
 await page.click('[data-module-tab="wobble"] [data-testid=track-label]');
-if (await page.$('[data-device="patch"]')) await page.click('[data-device="patch"]');
 const lfoCard = '[data-testid=graph] [data-module="wobble"] [data-node="lfo"]';
-check(await until(async () => !!(await page.$(lfoCard)), 15000), "the Wobble's LFO has its card in the patch");
+check(await until(async () => !!(await page.$(lfoCard)), 15000), "the Wobble's LFO has its node in the graph");
 await shown(`${lfoCard} [data-picture="wave"]`);
 const wave = `${lfoCard} [data-picture="wave"]`;
 check(await until(async () => (await page.$eval(`${wave} svg`, (e) => e.dataset.xSpan).catch(() => "")) === "0,6", 15000), `an LFO of 3 beats is drawn over two whole cycles, 6 beats: ${await page.$eval(`${wave} svg`, (e) => e.dataset.xSpan).catch(() => "")}`);
@@ -273,7 +277,6 @@ await page.screenshot({ path: `${ROOT}/dress-lfo.png` });
 // Behind eq3's ±24 dB gain curve, the hook's spectrum is a level from −90 dB at the foot to 0 dB at
 // the top, so a quiet sound still shows: its loudest bin is drawn where that scale puts it.
 await page.click('[data-module-tab="hook"] [data-testid=track-label]');
-if (await page.$('[data-device="chain"]')) await page.click('[data-device="chain"]');
 await until(async () => !!(await page.$(eqPic)), 15000);
 await shown(eqPic);
 let spectra = 0, onItsScale = true, quietest = 0;

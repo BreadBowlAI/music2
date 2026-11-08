@@ -1,9 +1,9 @@
 // Tune, from @m2/vocals (VOX-20, VOX-26): on a vocal track (an audio lane playing a sung clip), the +
-// on its lane's card lists Tune under Voice, and picking it writes `tune(lane.audio("clips"), …)` in
-// the track's own code, its import, the pack's [dependencies] line and its lock in one edit. Its card
+// on its lane's node lists Tune under Voice, and picking it writes `tune(lane.audio("clips"), …)` in
+// the track's own code, its import, the pack's [dependencies] line and its lock in one edit. Its node
 // says "Every note allowed" with Set the key while the song has no key (its tooltip: "No key set:
-// every note is allowed."); Set the key opens the key field, and once a key is picked the card says
-// it ("Key: A major"). Glide, Amount and Formant (since track voice2) are knobs: dragging each writes
+// every note is allowed."); Set the key opens the key field, and once a key is picked the node says
+// it ("Key: A major"). Glide, Amount and Formant (since track voice2) are bars: dragging each up or down writes
 // its new value into the call, one undo step each. The Robot preset writes Glide 0, one undo step.
 // Its face draws its pitch line (VOX-27): while the song plays the voice (216 Hz, 56.68 as a MIDI
 // number), the faint line says how far it is from A (57), the nearest note of A major: 0.32 of a
@@ -15,6 +15,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { expand } from "./graphlib.mjs";
 
 const RATE = 48000;
 // The version of @m2/vocals music2 comes with: what + Effect asks for and locks.
@@ -57,9 +58,9 @@ const seen = async (sel) => {
   await sleep(150);
   return box(sel);
 };
-/** Drag the knob `sel` up by `px`. */
+/** Drag the bar `sel` up by `px`. */
 const turn = async (sel, px) => {
-  const g = await seen(`${sel} svg`);
+  const g = await seen(`${sel} [role=slider]`);
   await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
   await page.mouse.down();
   for (let i = 1; i <= 10; i++) await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 - (px * i) / 10);
@@ -97,10 +98,10 @@ check(read("tracks/vox.ts").includes('import { tune } from "@m2/vocals";') && re
 check(read("music2.toml").split("\n").includes(`"@m2/vocals" = "${major}.${minor}"`), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
 check(read("music2.lock").includes(`name = "@m2/vocals"\nversion = "${version}"`), `music2.lock locks it, at ${version}`);
 
-// ---------------------------------------------------------------- no key: the card says so (VOX-26)
+// ---------------------------------------------------------------- no key: the node says so (VOX-26)
 
 const card = '[data-module="vox"] [data-node="tune"]';
-check(!!(await until(() => page.$(`${card} [data-testid=card-key]`), 15000)), "Tune's card has its key line");
+check(!!(await until(() => page.$(`${card} [data-testid=card-key]`), 15000)), "Tune's node has its key line");
 const line = () => page.$eval(`${card} [data-testid=card-key]`, (e) => e.textContent).catch(() => "");
 check(await until(async () => (await line()) === "Every note allowedSet the key"), `with no key: ${await line()}`);
 const tip = await page.$eval(`${card} [data-testid=card-key]`, (e) => e.title).catch(() => "");
@@ -115,7 +116,7 @@ await page.click(`${card} [data-testid=card-set-key]`);
 check(!!(await until(() => page.$("[data-testid=key-picker]"), 3000)), "Set the key opens the key field's picker");
 await page.click('[data-testid=key-picker] [data-root="A"]');
 check(await until(() => /"key": \{"root": "A", "scale": "major"\}|"key":\s*\{\s*"root":\s*"A",\s*"scale":\s*"major"\s*\}/.test(read("data/arrangement.json"))), `the key is the song's: ${read("data/arrangement.json").match(/"key".*/)?.[0]}`);
-check(await until(async () => (await line()) === "Key: A major"), `the card says the key: ${await line()}`);
+check(await until(async () => (await line()) === "Key: A major"), `the node says the key: ${await line()}`);
 check(!(await page.$(`${card} [data-testid=card-set-key]`)), "and Set the key is gone");
 await linted(card, "Tune's card with a key");
 
@@ -123,20 +124,20 @@ await linted(card, "Tune's card with a key");
 
 const before = files();
 const glide = `${card} [data-knob="glide"]`;
-check(!!(await until(() => page.$(glide), 5000)), "Glide is a knob");
+check(!!(await until(() => page.$(`${glide} [role=slider]`), 5000)), "Glide is a bar");
 await until(async () => (await page.$eval(glide, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(glide, 30);
 check(await until(() => /tune\(lane\.audio\("clips"\), \{ glide: 0\.1[1-9]\d*, amount: 1 \}\)/.test(read("tracks/vox.ts"))), `dragging Glide up writes a longer glide: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune glide"), `one undo step: ${await undoTitle()}`);
 const amount = `${card} [data-knob="amount"]`;
-check(!!(await until(() => page.$(amount), 5000)), "Amount is a knob");
+check(!!(await until(() => page.$(`${amount} [role=slider]`), 5000)), "Amount is a bar");
 await until(async () => (await page.$eval(amount, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(amount, -30);
 check(await until(() => /amount: 0\.\d+ \}\)/.test(read("tracks/vox.ts"))), `dragging Amount down writes less: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune amount"), `one undo step: ${await undoTitle()}`);
 // VOX-20: Formant, the voice's colour, left out of the call until it is turned.
 const formant = `${card} [data-knob="formant"]`;
-check(!!(await until(() => page.$(formant), 5000)), "Formant is a knob");
+check(!!(await until(() => page.$(`${formant} [role=slider]`), 5000)), "Formant is a bar");
 await until(async () => (await page.$eval(formant, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
 await turn(formant, 30);
 check(await until(() => /amount: 0\.\d+, formant: [1-9][0-9.]* \}\)/.test(read("tracks/vox.ts"))), `dragging Formant up writes a brighter colour: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
@@ -149,6 +150,8 @@ check(await until(() => files() === before), "three ⌘Z take Formant, Amount an
 
 // ---------------------------------------------------------------- the Robot preset (review U11)
 
+// Presets is on the expanded node's header.
+check(await expand(page, `[data-testid=graph] ${card}`), "Tune's node expanded");
 await seen(`${card} [data-presets]`);
 await page.click(`${card} [data-presets]`);
 check(!!(await until(() => page.$("[data-preset-group=std] [data-preset='Robot']"), 5000)), "Presets lists Robot and Natural, music2's own");

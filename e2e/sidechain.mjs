@@ -1,4 +1,4 @@
-// Sidechain from the card (CARD-35, CARD-36, PKG-19): a Duck added from + after the bass's sound
+// Sidechain from the node (CARD-35, CARD-36, PKG-19): a Duck added from + after the bass's sound
 // where the song reads it (`bass: bass.out`) listens to nothing, says None, and plays the bass as
 // it was; Listens to lists the song's other tracks and None, and picking Kick writes `kick.env` in
 // its call, one undo step ("Bass's duck listens to Kick"). Played, the bass's meter then dips each
@@ -46,7 +46,7 @@ check(await until(() => read("song.ts").includes("bass: duck(bass.out, { depth: 
 check(read("song.ts").replace('import { duck } from "std/fx";\n', "") === added, "and nothing else changes");
 const duck = '[data-module="song"] [data-node="duck"]';
 const listening = () => page.$eval(`${duck} [data-listens]`, (e) => e.textContent).catch(() => null);
-check(await until(async () => (await listening()) === "Listens to:None"), `its card says it listens to nothing: ${await listening()}`);
+check(await until(async () => (await listening()) === "Listens to:None"), `its node says it listens to nothing: ${await listening()}`);
 
 // The server's meters messages, as the page gets them: each track's peak (linear).
 const meters = [];
