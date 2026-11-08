@@ -796,9 +796,10 @@ fn the_vocoder_draws_its_synth_in_and_out() {
     let insert: Vec<(&str, f64)> = d.editor.insert.iter().map(|i| (i.slot.as_str(), i.value.value)).collect();
     assert_eq!(insert, [("clarity", 0.5), ("smooth", 0.05), ("formant", 0.0)]);
     let runner = Runner::new();
-    let said = |formant: Value| draw(&runner, "vocals", "vocoder", "spectrum", json!({"clarity": 0.5, "smooth": 0.05, "formant": formant})).unwrap();
-    let layers =
-        "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Voice: its hills are the voice's vowels, and they move as it talks";
+    let said = |formant: Value| {
+        draw(&runner, "vocals", "vocoder", "spectrum", json!({"clarity": 0.5, "smooth": 0.05, "formant": formant})).unwrap()
+    };
+    let layers = "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Voice: its hills are the voice's vowels, and they move as it talks";
     let d = said(json!(0));
     assert_eq!(kinds(&d), Vec::<&str>::new(), "no shapes: nothing worked out from sums");
     assert_eq!(d["words"], layers);

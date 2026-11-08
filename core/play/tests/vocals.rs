@@ -326,7 +326,8 @@ fn a_changed_voice_gives_the_same_bits_on_1_to_7_threads() {
 // ---------------------------------------------------------------- the Vocoder (VOX-29)
 
 /// The imports of a track that plays the Vocoder.
-const VOCODER_IMPORTS: &str = "import { track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { vocoder } from \"@m2/vocals\";\n";
+const VOCODER_IMPORTS: &str =
+    "import { track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { vocoder } from \"@m2/vocals\";\n";
 
 // VOX-29, PKG-19: a Vocoder with no voice, as + Effect adds it, plays its input bit for bit, whatever
 // its knobs, and with a voice written as `undefined` too: it hears nothing.
