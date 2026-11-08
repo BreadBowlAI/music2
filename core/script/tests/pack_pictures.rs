@@ -1,4 +1,4 @@
-//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-126), and `@m2/vocals`' Tune's
+//! `@m2/mixing`'s and `@m2/effects`' cards' pictures (CARD-110 to CARD-127), and `@m2/vocals`' Tune's
 //! pitch line (VOX-27): each draws, from the pack's own code, with the dots, the words and the live
 //! layers its rule says, as the picture runner draws it for a window or an agent. Whether a picture
 //! drawn from a pack's own sums is the sound is checked against a render in
@@ -486,6 +486,45 @@ fn widen_draws_its_stereo_field() {
         narrow["words"],
         "Width 0.5: a stereo sound's left and right come 0.5 times as far apart, toward mono; a mono sound stays as it is. Drag the edge"
     );
+}
+
+// CARD-127: the Clipper draws CARD-143's ceiling over its last 3 seconds, on one axis in dB from
+// −36 to +12: the sound going into its cut, pushed up by its gain (faint, its kernel's meter
+// `pushed`), and what comes out (its level), the ceiling's line with a dot that moves it, and now at
+// the right edge. Its words say what its gain and its ceiling do, then what its lines are.
+#[test]
+fn the_clipper_draws_its_ceiling_over_its_levels() {
+    let level = declared("effects", "clip", "level");
+    assert_eq!((&level["x"]["lo"], &level["x"]["hi"], &level["x"]["unit"]), (&json!(0.0), &json!(3.0), &json!("seconds")));
+    assert_eq!((&level["y"]["lo"], &level["y"]["hi"], &level["y"]["unit"]), (&json!(-36.0), &json!(12.0), &json!("db")));
+    let mut pushed = history_of("pushed");
+    pushed["tone"] = json!("faint");
+    assert_eq!(level["live"], json!([pushed, {"kind": "history", "of": {"kind": "level", "at": "out"}}]));
+    let d = descriptor("effects", "clip");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Clipper", Some("Dynamics")));
+    assert_eq!(d.editor.face, ["level", "gain", "ceiling"]);
+    let runner = Runner::new();
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": 6, "ceiling": -0.3})).unwrap();
+    assert_eq!(kinds(&d), ["mark", "mark", "handle"]);
+    assert_eq!(dots(&d), ["y=ceiling"]);
+    let shapes = d["shapes"].as_array().unwrap();
+    assert_eq!((&shapes[0]["axis"], &shapes[0]["at"]), (&json!("x"), &json!(3.0)), "now, at its right edge");
+    assert_eq!((&shapes[1]["axis"], &shapes[1]["at"]), (&json!("y"), &json!(-0.3)), "the ceiling's line");
+    assert!(close(places(&d)[0], (1.5, -0.3)), "its dot on the line: {:?}", places(&d));
+    let tail = "4 times finer than the song's rate, so it adds no harsh tones";
+    assert_eq!(
+        d["words"],
+        format!("Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB, {tail}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling")
+    );
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": 0, "ceiling": -6})).unwrap();
+    assert_eq!(
+        d["words"],
+        format!("Cuts every peak over −6 dB flat, {tail}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling")
+    );
+    let d = draw(&runner, "effects", "clip", "level", json!({"gain": null, "ceiling": -1})).unwrap();
+    assert!(d["words"].as_str().unwrap().starts_with("Pushes your sound up by a gain set by a cable or the code and cuts"), "{}", d["words"]);
+    let why = draw(&runner, "effects", "clip", "level", json!({"gain": 6, "ceiling": null})).unwrap_err();
+    assert!(why.contains("its ceiling is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
 }
 
 // CARD-110: a picture whose values a cable sets greys, saying which, as std's do.

@@ -1,5 +1,5 @@
-// @m2/effects' pictures (CARD-117 to CARD-124): what each of its cards draws, in TypeScript over
-// the picture words (CARD-61), with no kernel. Each is drawn from the effect's own sums, since none
+// @m2/effects' pictures (CARD-117 to CARD-124, CARD-127): what each of its cards draws, in TypeScript
+// over the picture words (CARD-61), with no kernel. Each but the Clipper's is drawn from the effect's own sums, since none
 // can be measured with a click (CARD-82: a delay's or a reverb's click rings past 2 s, drive changes
 // with how loud it is, the moving effects change over time), and each is checked against a render
 // of the sound within 0.5 dB (CARD-99), at 44.1, 48 and 96 kHz. Each is worked out at the song's
@@ -8,7 +8,7 @@
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
 
-import { axis, knob, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
+import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
 import { dbWords, figures, known, secondsWords, type In, type Num, type Values } from "std/pictures";
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
@@ -578,4 +578,29 @@ export function fieldWords(v: Values, names: { width: string }): string {
   if (w === 1) return "Width 1: the sound as it came. Drag the edge";
   if (w < 1) return `Width ${figures(w)}: a stereo sound's left and right come ${figures(w)} times as far apart, toward mono; a mono sound stays as it is. Drag the edge`;
   return `Width ${figures(w)}: a stereo sound's left and right spread ${figures(w)} times as far apart; a mono sound gets a made-up width of ${figures(madeUp(w))} from its sound above 300 Hz (the faint fan). Drag the edge`;
+}
+
+// ---------------------------------------------------------------- clip
+
+/**
+ * The Clipper's last 3 seconds (CARD-127), CARD-143's pattern: the sound going into its cut, pushed
+ * up by its gain (faint: its kernel's meter `pushed`, which only the kernel knows, D8), and what
+ * comes out, on one axis in dB from −36 to +12, where what it cut is the faint line above the
+ * ceiling's. Its shapes are std/pictures' `ceiling`: now, the ceiling's line and its dot.
+ */
+export function levelPicture(): PictureDecl<"seconds", "db"> {
+  return view.picture({
+    x: axis.time(3),
+    y: axis.lin("db", -36, 12),
+    live: [live.history(live.meter("pushed"), { tone: "faint" }), live.history(live.level("out"))],
+  });
+}
+
+/** What the Clipper does, in words (CARD-127): its gain and its ceiling, then what its two lines are. */
+export function levelWords(v: Values, names: { gain: string; ceiling: string }): string {
+  const gain = v[names.gain], ceiling = v[names.ceiling];
+  const at = typeof ceiling === "number" ? dbWords(ceiling) : "a ceiling set by a cable or the code";
+  const pushed = typeof gain !== "number" ? "Pushes your sound up by a gain set by a cable or the code" : gain === 0 ? null : `Pushes your sound up ${dbWords(gain)}`;
+  const cuts = pushed === null ? `Cuts every peak over ${at} flat` : `${pushed} and cuts every peak flat at ${at}`;
+  return `${cuts}, 4 times finer than the song's rate, so it adds no harsh tones. Faint: your sound ${pushed === null ? "going in" : "pushed up"}; solid: what comes out. Drag the line to move the ceiling`;
 }

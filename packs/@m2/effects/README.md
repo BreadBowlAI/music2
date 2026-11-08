@@ -3,6 +3,7 @@
 **In short**
 - music2's effects that colour a sound, as a pack that ships with music2 and installs into your store when it starts.
 - Echoes and space: `delay`, `reverb`. Movement: `chorus`, `phaser`, `tremolo`. Grit: `drive`, `bitcrush`. Width: `widen`.
+- Louder without going over: `clip`, the Clipper, which cuts every peak flat at its ceiling, four times finer than the song's rate so it adds no harsh tones. It makes the song 46 samples (1 ms) later, and every other track waits for it.
 - The effects mixing needs (`eq3`, `compress`, `limit`, `duck`) are std's, in `std/fx`.
 
 ```ts

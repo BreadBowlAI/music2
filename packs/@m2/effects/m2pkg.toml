@@ -2,10 +2,10 @@
 name = "@m2/effects"
 version = "1.4.0"
 license = "MIT OR Apache-2.0"
-description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
+description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush, widen and a clipper"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
+tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "clipper", "stereo"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/effects.wasm"
