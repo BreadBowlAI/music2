@@ -9,9 +9,12 @@
 //! - **The carrier's bands.** The same bank on each channel of the carrier, its centres moved by
 //!   `formant` semitones. Each band is played as loud as the voice is in the same band, against the
 //!   voice's loudest band: `level / (loudest + KNEE)`. So the band where the voice is loudest plays
-//!   the carrier at up to its own level, every other band as much quieter as the voice is there,
-//!   and a voice quieter than [`KNEE`] (−20 dB) plays it quieter still: no band is ever louder
-//!   than the carrier is there. The bands are summed, every other one's sign turned over, so that,
+//!   the carrier at nearly its own level, and every other band as much quieter as the voice is
+//!   there: no band is ever louder than the carrier is there. [`KNEE`] (−48 dB) is soft: a voice
+//!   whose loudest band is there plays the carrier 6 dB under, and only a voice far under it falls
+//!   dB for dB, so how loud the synth comes out hangs little on how loud the voice was recorded.
+//!   It evens out the voice's loudness as a fast compressor would: a loud sound in one band turns
+//!   the others down with it. The bands are summed, every other one's sign turned over, so that,
 //!   all open, they give the carrier back within 1.6 dB.
 //! - **Words.** An S, a T and a breath have no pitch, and a synth has little that high: the voice's
 //!   own sound over [`HIGHS`] (5 kHz), each channel, is added, times `clarity`.
@@ -35,8 +38,11 @@ pub const LOWEST: f32 = 100.0;
 pub const Q: f32 = 2.77;
 /// How fast a band's follower rises, in seconds.
 pub const ATTACK: f32 = 0.002;
-/// The level, as a band's amplitude, under which a voice plays the carrier quieter than its own: −20 dB.
-pub const KNEE: f32 = 0.1;
+/// The knee, as a band's level (its follower's square root, near the band's height): the voice's
+/// loudest band at which the synth plays 6 dB under its own level, −48 dB (a talker at about −45 dBFS
+/// RMS). It is soft: every band plays a little under the carrier (a voice recorded at −18 dBFS RMS,
+/// about half a dB), and only a voice far under it falls dB for dB (VOX-29, review W1).
+pub const KNEE: f32 = 0.004;
 /// Where the voice's own highs start, in Hz: a 4th-order Butterworth high-pass.
 pub const HIGHS: f32 = 5000.0;
 /// How often the carrier's bands are placed again while `formant` moves, in frames from birth.

@@ -1723,47 +1723,53 @@ mod vocoded {
         run_active(sr, channels, frames, split, input).0
     }
 
-    // VOX-29: no band is louder than the carrier. A sine voice at band 10's centre (1 kHz), from
-    // −80 dB to +40 dB, plays a saw there at most at the saw's own level and the bank's ripple
-    // (1.6 dB); a voice under −40 dB plays it 1 dB quieter for each dB quieter (its level over the
-    // loudest's plus 0.1: under the knee, its level over 0.1); and at −20 dB, about half (the
-    // follower reads a steady sine at 0.88 of its height: −6.6 dB).
+    // VOX-29: no band is louder than the carrier, and the knee is soft, at −48 dB. A sine voice at
+    // band 10's centre (1 kHz), from −110 dB to +40 dB, plays a saw there at most at the saw's own
+    // level and the bank's ripple (1.6 dB); far under the knee (−110 to −90 dB) 1 dB quieter for each
+    // dB quieter (its level over the knee); at the knee about half (the follower reads a steady sine
+    // at 0.88 of its height: −6.6 dB); and at −18 dB, a voice at a normal level, within a dB of the
+    // saw's own level. At 44.1, 48 and 96 kHz.
     #[test]
     fn no_band_plays_louder_than_the_carrier() {
-        let sr = 48_000.0;
-        let c = saw(sr, 55.0, 20_000.0, 1.0);
-        let at = |db: f64| -> f64 {
-            let a = 10f64.powf(db / 20.0);
-            let v: Vec<f32> =
-                (0..c.len()).map(|i| (a * (std::f64::consts::TAU * centre(10) as f64 * i as f64 / sr as f64).sin()) as f32).collect();
-            band_levels(&play(sr, &c, &v, [0.0, 0.05, 0.0]), sr)[10] - band_levels(&c, sr)[10]
-        };
-        let gains: Vec<(f64, f64)> = [-80.0, -60.0, -40.0, -20.0, 0.0, 20.0, 40.0].into_iter().map(|db| (db, at(db))).collect();
-        for &(db, g) in &gains {
-            assert!(g < 1.6, "a voice at {db} dB plays the carrier {g:.2} dB louder");
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 1.0);
+            let at = |db: f64| -> f64 {
+                let a = 10f64.powf(db / 20.0);
+                let v: Vec<f32> =
+                    (0..c.len()).map(|i| (a * (std::f64::consts::TAU * centre(10) as f64 * i as f64 / sr as f64).sin()) as f32).collect();
+                band_levels(&play(sr, &c, &v, [0.0, 0.05, 0.0]), sr)[10] - band_levels(&c, sr)[10]
+            };
+            let gains: Vec<(f64, f64)> = [-110.0, -90.0, -70.0, -48.0, -18.0, 0.0, 20.0, 40.0].into_iter().map(|db| (db, at(db))).collect();
+            for &(db, g) in &gains {
+                assert!(g < 1.6, "{sr}: a voice at {db} dB plays the carrier {g:.2} dB louder");
+            }
+            let g = |db: f64| gains.iter().find(|x| x.0 == db).unwrap().1;
+            assert!((g(-90.0) - g(-110.0) - 20.0).abs() < 1.0, "{sr}: 1 dB a dB far under the knee: {gains:.2?}");
+            assert!((-8.0..-5.0).contains(&g(-48.0)), "{sr}: at the knee, about half: {gains:.2?}");
+            assert!(g(-18.0) > -1.0, "{sr}: a voice at a normal level plays the carrier near its own level: {gains:.2?}");
         }
-        let g = |db: f64| gains.iter().find(|x| x.0 == db).unwrap().1;
-        assert!(
-            (g(-60.0) - g(-80.0) - 20.0).abs() < 1.0 && (g(-40.0) - g(-60.0) - 20.0).abs() < 1.5,
-            "1 dB a dB under the knee: {gains:.2?}"
-        );
-        assert!((-8.0..-5.0).contains(&g(-20.0)), "at −20 dB, about half: {gains:.2?}");
     }
 
     // VOX-29: Smooth is how fast a band lets go: once a voice stops, what it opened falls by 1/e
-    // (8.7 dB) in each Smooth. A sine voice at −60 dB (under the knee, so the out follows it in
+    // (8.7 dB) in each Smooth. A sine voice at −90 dB (far under the knee, so the out follows it in
     // step) at band 10's centre stops at 0.5 s; under a sine carrier there, the out's height (the
     // loudest of each cycle), fitted in dB from 5 ms after the stop (the band's own ring is gone) to
-    // 20 dB under, falls by 1/e in Smooth, within 3%, for Smooth 10 ms, 50 ms and 200 ms.
+    // 20 dB under, falls by 1/e in Smooth, within 3%, for Smooth 10 ms, 50 ms and 200 ms, at 44.1, 48
+    // and 96 kHz.
     #[test]
     fn smooth_is_how_fast_a_band_lets_go() {
-        let sr = 48_000.0;
+        for sr in RATES {
+            smooth_at(sr);
+        }
+    }
+
+    fn smooth_at(sr: f32) {
         let f = centre(10) as f64;
         let stop = (0.5 * sr) as usize;
         let n = stop + (2.5 * sr) as usize;
         let sine = |a: f64, i: usize| (a * (std::f64::consts::TAU * f * i as f64 / sr as f64).sin()) as f32;
         let c: Vec<f32> = (0..n).map(|i| sine(0.5, i)).collect();
-        let v: Vec<f32> = (0..n).map(|i| if i < stop { sine(0.001, i) } else { 0.0 }).collect();
+        let v: Vec<f32> = (0..n).map(|i| if i < stop { sine(10f64.powf(-90.0 / 20.0), i) } else { 0.0 }).collect();
         let cycle = (sr as f64 / f).ceil() as usize;
         for smooth in [0.01f32, 0.05, 0.2] {
             let o = play(sr, &c, &v, [0.0, smooth, 0.0]);
@@ -1773,7 +1779,7 @@ mod vocoded {
             let points: Vec<(f64, f64)> = (from..n - cycle)
                 .step_by(cycle)
                 .map(|t| ((t - stop) as f64 / sr as f64, (height(t) / top).ln()))
-                .take_while(|p| p.1 > -(20.0f64 / 20.0 * 10f64.ln()))
+                .take_while(|p| p.1 > -(10f64.ln())) // 20 dB under: ln 10 in nepers
                 .collect();
             let (mt, my) = (
                 points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64,
@@ -1784,10 +1790,126 @@ mod vocoded {
             let fell = -1.0 / slope;
             assert!(
                 points.len() > 10 && (fell / smooth as f64 - 1.0).abs() < 0.03,
-                "Smooth {smooth}: it fell by 1/e in {:.2} ms ({} points)",
+                "{sr}: Smooth {smooth}: it fell by 1/e in {:.2} ms ({} points)",
                 fell * 1000.0,
                 points.len()
             );
+        }
+    }
+
+    /// The five vowels' first three formants (Hz), a man's (Peterson and Barney, rounded).
+    const VOWELS: [[f64; 3]; 5] =
+        [[730.0, 1090.0, 2440.0], [530.0, 1840.0, 2480.0], [270.0, 2290.0, 3010.0], [570.0, 840.0, 2410.0], [300.0, 870.0, 2240.0]];
+
+    /// A made-up talker (review W): 4 syllables a second, each a vowel that glides from the one
+    /// before, on a buzz at about `f0` Hz that rises and falls slowly (or on noise: a whisper), an
+    /// "s" after every other one; `rms_db` dBFS RMS over the whole.
+    fn talker(sr: f32, secs: f64, f0: f64, whisper: bool, rms_db: f64) -> Vec<f32> {
+        let sr64 = sr as f64;
+        let n = (secs * sr64) as usize;
+        let mut rng = Lcg(11);
+        let mut phase = 0.0f64;
+        let hp = [m2_dsp::fx::Filter::highpass(sr, 4500.0, 0.5412), m2_dsp::fx::Filter::highpass(sr, 4500.0, 1.3066)];
+        let mut hs = [[0f32; 2]; 2];
+        let mut f: Vec<Formant> = VOWELS[0].iter().map(|&x| Formant::new(sr64, x, 100.0)).collect();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f64 / sr64;
+            let syl = (t * 4.0).floor() as usize;
+            let u = t * 4.0 - syl as f64;
+            let (a, b) = (VOWELS[(syl + 4) % 5], VOWELS[syl % 5]);
+            let mix = (u / 0.3).min(1.0);
+            if i % 16 == 0 {
+                for (k, ff) in f.iter_mut().enumerate() {
+                    let y = ff.y;
+                    *ff = Formant::new(sr64, a[k] + (b[k] - a[k]) * mix, [90.0, 110.0, 170.0][k]);
+                    ff.y = y;
+                }
+            }
+            let hz = f0 * (1.0 + 0.12 * (std::f64::consts::TAU * 0.4 * t).sin());
+            phase += hz / sr64;
+            let source = if whisper {
+                rng.next() as f64 / 32_768.0 - 1.0
+            } else {
+                let mut s = 0.0;
+                let mut h = 1.0;
+                while h * hz < 0.45 * sr64 {
+                    s += (std::f64::consts::TAU * h * phase).sin() / h;
+                    h += 1.0;
+                }
+                s
+            };
+            let env = if u < 0.65 { (std::f64::consts::PI * u / 0.65).sin().powf(0.6) } else { 0.0 };
+            let v = f.iter_mut().zip([1.0, 0.6, 0.3]).map(|(ff, g)| g * ff.tick(source)).sum::<f64>() * env;
+            let w = rng.next() as f32 / 32_768.0 - 1.0;
+            let s = {
+                let a = hp[0].tick(&mut hs[0], w);
+                hp[1].tick(&mut hs[1], a)
+            };
+            let s_env = if syl % 2 == 1 && (0.72..0.95).contains(&u) { (std::f64::consts::PI * (u - 0.72) / 0.23).sin() } else { 0.0 };
+            out.push(v + 0.5 * s as f64 * s_env);
+        }
+        at_level(&out.iter().map(|&v| v as f32).collect::<Vec<f32>>(), rms_db)
+    }
+
+    /// `x` scaled to `rms_db` dBFS RMS over the whole.
+    fn at_level(x: &[f32], rms_db: f64) -> Vec<f32> {
+        let k = 10f64.powf(rms_db / 20.0) / rms_of(x);
+        x.iter().map(|&v| (v as f64 * k) as f32).collect()
+    }
+
+    fn rms_of(x: &[f32]) -> f64 {
+        (x.iter().map(|&v| v as f64 * v as f64).sum::<f64>() / x.len().max(1) as f64).sqrt()
+    }
+
+    /// A chord of three band-limited saws (A2, C3, E3) at `rms_db` dBFS RMS: the synth.
+    fn chord(sr: f32, secs: f64, rms_db: f64) -> Vec<f32> {
+        let notes = [110.0, 130.813, 164.814].map(|f| saw(sr, f, 20_000.0, secs));
+        at_level(&(0..notes[0].len()).map(|i| notes.iter().map(|n| n[i]).sum()).collect::<Vec<f32>>(), rms_db)
+    }
+
+    /// How loud the out is against the synth alone (by RMS, in dB), from a quarter of a second in.
+    fn against_dry(out: &[f32], dry: &[f32], sr: f32) -> f64 {
+        let from = (0.25 * sr) as usize;
+        20.0 * (rms_of(&out[from..]) / rms_of(&dry[from..])).log10()
+    }
+
+    // VOX-29: how loud the synth comes out doesn't hang on how loud the voice was recorded (review
+    // W1). Under a chord of three saws at −15 dBFS RMS, a made-up talker (a man at 120 Hz, a woman at
+    // 220 Hz) and a sung "ah" at 220 Hz, each at −30, −18 and −6 dBFS RMS, come out within 6 dB of
+    // themselves at the other levels and no more than 12 dB under the synth alone; a whisper at −40
+    // dBFS RMS within 12 dB of the man at −18; a room's noise at −60 dBFS RMS (a pause in the voice)
+    // at least 20 dB under him; and digital silence, silence. At 44.1, 48 and 96 kHz.
+    #[test]
+    fn the_out_is_about_as_loud_whatever_the_voices_level() {
+        for sr in RATES {
+            let secs = 4.0;
+            let dry = chord(sr, secs, -15.0);
+            let out = |voice: &[f32]| against_dry(&play(sr, &dry, voice, [0.5, 0.05, 0.0]), &dry, sr);
+            let voice = |name: &str, db: f64| match name {
+                "a man" => talker(sr, secs, 120.0, false, db),
+                "a woman" => talker(sr, secs, 220.0, false, db),
+                _ => at_level(&steady(57.0, 0.3, secs).sing(sr), db),
+            };
+            let mut man_18 = 0.0;
+            for name in ["a man", "a woman", "a sung ah"] {
+                let levels: Vec<f64> = [-30.0, -18.0, -6.0].into_iter().map(|db| out(&voice(name, db))).collect();
+                if name == "a man" {
+                    man_18 = levels[1];
+                }
+                let (lo, hi) = (levels.iter().cloned().fold(f64::MAX, f64::min), levels.iter().cloned().fold(f64::MIN, f64::max));
+                assert!(
+                    hi - lo <= 6.0 && lo >= -12.0,
+                    "{sr}: {name} at -30, -18 and -6 dBFS RMS comes out {levels:.1?} dB against the synth"
+                );
+            }
+            let whisper = out(&talker(sr, secs, 0.0, true, -40.0));
+            assert!((whisper - man_18).abs() <= 12.0, "{sr}: a whisper comes out {whisper:.1} dB, the man at -18 {man_18:.1} dB");
+            let mut rng = Lcg(29);
+            let room = at_level(&(0..(2.0 * sr) as usize).map(|_| rng.next() as f32 / 32_768.0 - 1.0).collect::<Vec<f32>>(), -60.0);
+            let paused = against_dry(&play(sr, &dry[..room.len()], &room, [0.5, 0.05, 0.0]), &dry[..room.len()], sr);
+            assert!(paused <= man_18 - 20.0, "{sr}: a room's noise comes out {paused:.1} dB, the man at -18 {man_18:.1} dB");
+            assert!(play(sr, &dry, &vec![0.0; dry.len()], [0.5, 0.05, 0.0]).iter().all(|&v| v == 0.0), "{sr}: sound from digital silence");
         }
     }
 
