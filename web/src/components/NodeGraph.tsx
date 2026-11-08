@@ -585,8 +585,8 @@ function filled(
   dock: { w: number; h: number } | null,
 ): ReadonlyMap<number, number> {
   let spread = new Map<number, number>();
-  let laid = layout(m, new Set(), room, single, spread);
   if (!dock) return spread;
+  let laid = layout(m, new Set(), room, single, spread);
   const seen = (l: typeof laid) => [...l.placed.values()].filter((p) => p.x + p.w <= dock.w && p.y + p.h <= dock.h).length;
   let best = { spread, seen: seen(laid) };
   for (let step = 0; step < 32 && laid.height > dock.h; step++) {
@@ -882,25 +882,25 @@ const ModuleSection = memo(function ModuleSection({
                     fill="none"
                   />
                 ))}
+                {/* Under the pointer, a wire shows its + (CARD-36): a wide, unseen line to hover, under the nodes so it never covers a port. */}
+                {!cable && (
+                  <g data-wire-hits aria-hidden>
+                    {drawn.map(({ e, d }) => (
+                      <path
+                        key={edgeKey(e)}
+                        d={d}
+                        data-wire-hit={edgeKey(e)}
+                        stroke="transparent"
+                        strokeWidth={14}
+                        fill="none"
+                        style={{ pointerEvents: "stroke" }}
+                        onPointerEnter={() => useWireHover.getState().set(edgeKey(e), true)}
+                        onPointerLeave={() => useWireHover.getState().set(edgeKey(e), false)}
+                      />
+                    ))}
+                  </g>
+                )}
               </svg>
-              {/* Under the pointer, a wire shows its + (CARD-36): a wide, unseen line to hover, under the nodes so it never covers a port. */}
-              {!cable && (
-                <svg className="absolute inset-0 pointer-events-none overflow-visible" width={width} height={height} aria-hidden>
-                  {drawn.map(({ e, d }) => (
-                    <path
-                      key={edgeKey(e)}
-                      d={d}
-                      data-wire-hit={edgeKey(e)}
-                      stroke="transparent"
-                      strokeWidth={14}
-                      fill="none"
-                      style={{ pointerEvents: "stroke" }}
-                      onPointerEnter={() => useWireHover.getState().set(edgeKey(e), true)}
-                      onPointerLeave={() => useWireHover.getState().set(edgeKey(e), false)}
-                    />
-                  ))}
-                </svg>
-              )}
               {ordered.map((p) => (
                 <Node
                   key={p.node.key ?? p.node.id}

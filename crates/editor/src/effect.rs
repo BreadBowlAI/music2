@@ -341,9 +341,14 @@ pub fn add_effect_on(s: &mut Session, at: u64, reader: &str, input: &str, compon
 }
 
 /// Why Remove can't take call `site` out (CARD-36), in words; else the effect or note effect it is.
+/// A call of no component is named by its callee, a hosted plugin by its own name.
 pub(crate) fn removable(s: &Session, site: &Site) -> Result<Arc<Descriptor>, String> {
     let Some(d) = component_at(s, site) else {
-        return Err(format!("{} isn't an effect: change it in code.", site.callee));
+        let plugin = match made_op(s, site) {
+            Some(Op::Plugin { plugin, .. }) => s.packages.plugin_info(&plugin).map(|i| i.found.name.clone()),
+            _ => None,
+        };
+        return Err(format!("{} isn't an effect: change it in code.", plugin.unwrap_or_else(|| site.callee.clone())));
     };
     if d.is_effect() || d.is_note_effect() {
         return Ok(d);
