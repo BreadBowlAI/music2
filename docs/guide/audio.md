@@ -29,7 +29,7 @@ Bouncing turns a track into a recording of itself ("resampling"). Then you can c
 | The new track gets the same mixer settings | its volume, pan, effects and where it goes are copied from the track |
 | The track is muted in the song | it stays, with its notes, so you can go back |
 
-- **The song sounds the same** afterwards, sample for sample, and is as long. The bounce goes on until the track falls silent, as an export does, so a long reverb tail is kept (up to 10 s past the song's end).
+- **The song sounds the same** afterwards, sample for sample, and is as long. The bounce goes on until the track falls silent, as an export does, so a long reverb tail is kept (up to 10 s past the song's end). A track that never falls silent fades out there, as an export does.
 - **While it renders**, a box says how far it is. **Stop** in it adds nothing and leaves no file. If you change the song while it renders, it stops at once, adds nothing and says so: bounce again.
 - **Undo** (⌘Z) takes it all back: the new track goes, and the track plays again. The file stays in `assets/`.
 - **Agents** do the same with `m2 bounce <song> keys-bounce --track keys --in-place`.
