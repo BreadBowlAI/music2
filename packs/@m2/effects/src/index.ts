@@ -1,5 +1,6 @@
-// @m2/effects: effects that colour a sound (PACK-15): echoes and space, modulation, drive and crush,
-// and width. The effects mixing needs (EQ, compression, limiting, ducking) are std's, in std/fx.
+// @m2/effects: effects that colour a sound (PACK-15): echoes and space, Grains (PACK-36), modulation,
+// the Flanger (PACK-35), drive and crush, the Clipper (PACK-34), and width. The effects mixing needs
+// (EQ, compression, limiting, ducking) are std's, in std/fx.
 //
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
 // `insert` when it is added. A control is `.smooth()` when its kernel reads it every sample without
@@ -8,19 +9,24 @@
 // @m2/synths does); the others play the pack's own (`@m2/effects:delay` …, built from kernels-src/,
 // PACK-21).
 //
-// Each card's face is its picture (CARD-117 to CARD-124, ./pictures), drawn from the effect's own
-// sums: the delay's echoes, the reverb's tail, a second of the chorus's, the phaser's and the
-// tremolo's motion, drive's curve, a crushed sine, the width; and beside it every knob it has, so
-// none has groups: a tab would only show the face again (CARD-110).
+// Each card's face is its picture (CARD-117 to CARD-129, ./pictures), drawn from the effect's own
+// sums: the delay's echoes, the reverb's tail, Grains' band and where its newest grain reads, a
+// second of the chorus's, the phaser's and the tremolo's motion, the Flanger's sweep and where it is
+// now, drive's curve, a crushed sine, the width; and beside it every knob it has, so none has groups:
+// a tab would only show the face again (CARD-110).
 //
-// Chorus, phaser, tremolo and bitcrush follow the song: each passes `time.playing` to its
-// kernel, so its wobble (or the bitcrusher's sample clock) moves only while the song plays.
-// Stopped, they wait; Play carries on. Played after a stop, a song sounds as its export does.
+// Chorus, the Flanger, phaser, tremolo, bitcrush and Grains follow the song: each passes
+// `time.playing` to its kernel, so its wobble (or the bitcrusher's sample clock, or Grains' clock)
+// moves only while the song plays. Stopped, they wait; Play carries on. Played after a stop, a song
+// sounds as its export does.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params, type Value } from "@m2/core";
-import { figures, hzWords } from "std/pictures";
+import { ceiling as drawCeiling, figures, hzWords } from "std/pictures";
 import {
   chorusMotion,
+  cloud,
+  cloudPicture,
+  cloudWords,
   crush,
   crushPicture,
   drive as driveCurve,
@@ -32,9 +38,14 @@ import {
   field,
   fieldPicture,
   fieldWords,
+  levelPicture,
+  levelWords,
   motionPicture,
   phaserMotion,
   shapePicture,
+  sweep,
+  sweepPicture,
+  sweepWords,
   tail,
   tailPicture,
   tailWords,
@@ -69,7 +80,7 @@ export const delay = component(
   {
     echoes: {
       draw: (v, p) => echoes(p, v, { time: "time", feedback: "feedback", mix: "mix" }),
-      words: (v) => echoesWords(v, { time: "time", feedback: "feedback", mix: "mix" }),
+      words: (v, p) => echoesWords(v, { time: "time", feedback: "feedback", mix: "mix" }, p.rate),
     },
   },
 );
@@ -101,7 +112,46 @@ export const reverb = component(
     },
   },
   (x: Audio, { size, damping, mix }: Params) => kernel("@m2/effects:reverb", { in: x, size, damping, mix }),
-  { tail: { draw: (v, p) => tail(p, v, { size: "size", damping: "damping" }), words: (v) => tailWords(v, { size: "size", damping: "damping" }) } },
+  { tail: { draw: (v, p) => tail(p, v, { size: "size", damping: "damping" }), words: (v, p) => tailWords(v, { size: "size", damping: "damping" }, p.rate) } },
+);
+
+/**
+ * Grains: `x` broken into tiny pieces, its grains, played back overlapped, to smear or stretch it
+ * (PACK-36). Each is `size` seconds long (0.01 to 0.5), `density` start a second (1 to 50), each from
+ * up to `spread` seconds back (0 to 2) in the last 2.5 s of the sound, `pitch` semitones higher or
+ * lower (−12 to 12); `mix` 0..1. No latency: its grains read only the past.
+ */
+export const grains = component(
+  {
+    id: "grains",
+    label: "Grains",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    // Not smooth: a grain takes its values as it starts, and the kernel glides its mix itself.
+    controls: {
+      size: control.secs(0.1).range(0.01, 0.5).log(),
+      density: control.hz(20).range(1, 50).log(),
+      spread: control.secs(0.3).range(0, 2),
+      pitch: control.semis(0).range(-12, 12),
+      mix: control.frac(0.5).range(0, 1),
+    },
+    output: port.audio(),
+    editor: {
+      category: "Delay & Reverb",
+      description: "Breaks the sound into tiny pieces, to smear or stretch it",
+      insert: { size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 },
+      // Where its grains start, and where the newest reads now (CARD-129).
+      views: { cloud: cloudPicture() },
+      face: ["cloud", "size", "density", "spread", "pitch", "mix"],
+    },
+  },
+  (x: Audio, { size, density, spread, pitch, mix }: Params) => kernel("@m2/effects:grains", { in: x, size, density, spread, pitch, mix, playing: time.playing }),
+  {
+    cloud: {
+      draw: (v, p) => cloud(p, v, { size: "size", spread: "spread", pitch: "pitch" }),
+      words: (v, p) => cloudWords(v, { size: "size", density: "density", spread: "spread", pitch: "pitch" }, p.rate),
+    },
+  },
 );
 
 // ---------------------------------------------------------------- modulation
@@ -136,6 +186,43 @@ export const chorus = component(
         v.rate === null || v.depth === null
           ? "Two copies drifting in time: its rate or depth is set by a cable or the code"
           : `Two copies of the sound, 8 to ${figures(8 + 6 * v.depth)} ms late, drifting apart and back ${figures(v.rate)} times a second`,
+    },
+  },
+);
+
+/**
+ * Flanger: the jet. A copy of `x` swept from 0.1 ms to 10 ms late against it, and sent round again
+ * by `feedback` (PACK-35). `rate` in Hz (0.05 to 10), `depth` 0..1 how far it sweeps, `feedback`
+ * −0.9..0.9 (up rings, down is hollow), `mix` 0..1 (0.5 cuts the deepest notches).
+ */
+export const flanger = component(
+  {
+    id: "flanger",
+    label: "Flanger",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    // Not smooth: the kernel glides them itself.
+    controls: {
+      rate: control.hz(0.25).range(0.05, 10).log(),
+      depth: control.frac(0.7).range(0, 1),
+      feedback: control.bipolar(0.5).range(-0.9, 0.9),
+      mix: control.frac(0.5).range(0, 1),
+    },
+    output: port.audio(),
+    editor: {
+      category: "Modulation",
+      description: "A jet-plane whoosh: a copy of the sound sweeps against it",
+      insert: { rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 },
+      // A cycle of its sweep, and where it is now (CARD-128).
+      views: { sweep: sweepPicture() },
+      face: ["sweep", "rate", "depth", "feedback", "mix"],
+    },
+  },
+  (x: Audio, { rate, depth, feedback, mix }: Params) => kernel("@m2/effects:flanger", { in: x, rate, depth, feedback, mix, playing: time.playing }),
+  {
+    sweep: {
+      draw: (v, p) => sweep(p, v, { depth: "depth", feedback: "feedback" }),
+      words: (v) => sweepWords(v, { rate: "rate", depth: "depth", feedback: "feedback", mix: "mix" }),
     },
   },
 );
@@ -268,6 +355,41 @@ export const bitcrush = component(
         v.bits === null || v.rate === null
           ? "A sine, crushed: its bits or rate is set by a cable or the code"
           : `A 1 kHz sine, rounded to ${figures(v.bits)} bits and held ${figures(v.rate / 1000)} thousand times a second`,
+    },
+  },
+);
+
+// ---------------------------------------------------------------- loudness
+
+/**
+ * Clipper: turns `x` up by `gain` dB and cuts every peak over `ceiling` dB flat, at four times the
+ * song's rate, twice, so it adds far fewer harsh tones than a cut at the song's rate (on a bright
+ * sound pushed hard, a few); no sample out is ever over the ceiling (PACK-34). Under the ceiling it
+ * is `x` times the gain, bit for bit, 92 frames late: the song waits for it.
+ */
+export const clip = component(
+  {
+    id: "clip",
+    label: "Clipper",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    // Not smooth: the kernel glides them itself.
+    controls: { gain: control.db(0).range(0, 24), ceiling: control.db(-0.3).range(-24, 0) },
+    output: port.audio(),
+    editor: {
+      category: "Dynamics",
+      description: "Louder without going over: push the gain, and every peak is cut flat at the ceiling",
+      insert: { gain: 6, ceiling: -0.3 },
+      // Its ceiling over what goes into its cut and what comes out (CARD-127).
+      views: { level: levelPicture() },
+      face: ["level", "gain", "ceiling"],
+    },
+  },
+  (x: Audio, { gain, ceiling }: Params) => kernel("@m2/effects:clip", { in: x, gain, ceiling }),
+  {
+    level: {
+      draw: (v, p) => drawCeiling(p, v, { ceiling: "ceiling" }),
+      words: (v) => levelWords(v, { gain: "gain", ceiling: "ceiling" }),
     },
   },
 );

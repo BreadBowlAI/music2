@@ -1,0 +1,8 @@
+{
+  "order": ["kick", "keys", "pad"],
+  "tracks": {
+    "kick": { "colour": "rose" },
+    "keys": { "colour": "blue" },
+    "pad": { "colour": "coral" }
+  }
+}

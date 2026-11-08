@@ -138,7 +138,7 @@ An example body:
 
 ### `POST /api/graph/effect/add`
 
-Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`), by its component id as the state's effects list it. It writes the song: one undo step.
+Put an effect after a call's sound, or after a track's sound where the song reads it (call `import:bass.out`); or a note effect (`notes` in the state's effects list) before a call that plays notes, around its notes; by its component id as the state's effects list it. It writes the song: one undo step.
 
 An example body:
 

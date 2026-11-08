@@ -157,6 +157,47 @@ fn a_moved_std_module_names_the_pack_to_use() {
     assert_eq!(e.code, "code.build", "{e}");
 }
 
+// PKG-17, CARD-30 (review S1): a name std took out with no pack to go to, std/pictures' drawn
+// lowpass, is refused in words saying so and what to do instead: in a song, at its import, and in a
+// pack made for std 0.10 from 0.2.0's guide, whose components are left out with those words.
+#[test]
+fn a_name_std_took_out_says_what_to_do_instead() {
+    let instead = "measure a filter's curve with p.response() in its picture, or draw the curve from your own maths";
+    for name in ["lowpass", "lowpassDb", "lowpassWords", "resonanceQ"] {
+        let song = format!(
+            "import {{ song, kernel }} from \"@m2/core\";\nimport {{ {name} }} from \"std/pictures\";\n\
+             export const drawn = {name};\nexport default song(() => kernel(\"std:saw\", {{ freq: 110 }}));\n"
+        );
+        let e = error_of(&[("song.ts", &song)]);
+        assert_eq!(e.code, "code.build", "{name}: {e}");
+        assert_eq!(e.message, format!("`{name}` was taken out of std/pictures, and no pack has it: {instead}"), "{e}");
+        assert!(e.src.as_deref().is_some_and(|s| s.starts_with("song.ts:2:")), "at its import: {e:?}");
+    }
+    // 0.2.0's guide's pack example, which drew its filter with them.
+    let dir = std::env::temp_dir().join(format!("m2-script-{}-took-out", std::process::id()));
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    let pack = "import { component, control, kernel, poly, port, type Audio, type Events } from \"@m2/core\";\n\
+                import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass, lowpassWords } from \"std/pictures\";\n\
+                const AMP = { attack: \"attack\", decay: \"decay\", sustain: \"sustain\", release: \"release\" } as const;\n\
+                const CUT = { cutoff: \"cutoff\", q: \"q\" } as const;\n\
+                export const wobble = component(\n\
+                  { id: \"wobble\", label: \"Wobble bass\", inputs: { notes: port.notes() },\n\
+                    controls: { cutoff: control.hz(800).range(40, 8000).log(), q: control.scalar(0.7),\n\
+                      attack: control.secs(0.005), decay: control.secs(0.2), sustain: control.frac(0.6), release: control.secs(0.3) },\n\
+                    output: port.audio(),\n\
+                    editor: { category: \"Bass\", views: { amp: envelopePicture(), filter: curvePicture({ live: false }) } } },\n\
+                  (notes: Events, c): Audio => poly(notes, (n) => kernel(\"@alice/wobble:voice\", { pitch: n.pitch, gate: n.gate, ...c }) as Audio),\n\
+                  { amp: { draw: (v, p) => envelope(p, v, AMP), words: (v) => envelopeWords(v, AMP) },\n\
+                    filter: { draw: (v, p) => lowpass(p, v, CUT), words: (v) => lowpassWords(v, CUT) } },\n\
+                );\n";
+    std::fs::write(dir.join("src/index.ts"), pack).unwrap();
+    let catalog = describe(&[("std".into(), std_dir()), ("@alice/wobble".into(), dir.clone())]);
+    std::fs::remove_dir_all(&dir).ok();
+    assert!(!catalog.components.contains_key("@alice/wobble:wobble"), "{:?}", catalog.components.keys());
+    let said = format!("`lowpass` was taken out of std/pictures, and no pack has it: {instead}");
+    assert!(catalog.problems.iter().any(|d| d.message.contains(&said)), "{:?}", catalog.problems);
+}
+
 // PKG-17 (review S11): one of std/fx's effects that moved, called through a namespace import
 // (`fx.reverb`), says which pack it is in, as a named import does.
 #[test]
@@ -172,8 +213,10 @@ fn a_moved_std_effect_through_a_namespace_names_the_pack_to_use() {
     build_of(&[("song.ts", fine)]).unwrap_or_else(|e| panic!("{e:?}"));
 }
 
-// PKG-17 (review S11): MOVED's effects are exactly those @m2/effects exports, and std/fx exports
-// none of them, so an effect moved later can't be left out of the words.
+// PKG-17 (review S11): MOVED's effects are exactly those @m2/effects exports that std once had (all
+// but the ones born in the pack: the Clipper, PACK-34, the Flanger, PACK-35, and Grains, PACK-36),
+// and std/fx exports none of them, so an effect moved later can't be left out of the words, and one
+// born in the pack is never said to have moved.
 #[test]
 fn moved_names_every_effect_of_m2_effects_and_std_fx_none() {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
@@ -184,8 +227,12 @@ fn moved_names_every_effect_of_m2_effects_and_std_fx_none() {
     };
     let moved: std::collections::BTreeSet<String> =
         MOVED.iter().find(|(m, ..)| *m == "fx").unwrap().1.iter().map(|n| n.to_string()).collect();
-    assert_eq!(moved, exported("@m2/effects"), "MOVED's fx names and @m2/effects' exports");
+    let born: std::collections::BTreeSet<String> = ["clip", "flanger", "grains"].map(String::from).into();
+    assert!(born.is_subset(&exported("@m2/effects")), "@m2/effects exports {born:?}");
+    assert!(moved.is_disjoint(&born), "MOVED says {born:?} left std/fx, which never had it");
+    assert_eq!(moved, &exported("@m2/effects") - &born, "MOVED's fx names and @m2/effects' exports that std had");
     assert!(exported("std/fx").is_disjoint(&moved), "std/fx keeps {:?}", exported("std/fx"));
+    assert!(exported("std/fx").is_disjoint(&born), "std/fx has {:?}", exported("std/fx"));
     assert!(!exported("std/fx").is_empty());
 }
 
@@ -1775,6 +1822,7 @@ fn descriptors_and_the_unit_table_are_emitted() {
             ("frac", "unit01", 1.0, true),
             ("bipolar", "bipolar", 1.0, true),
             ("scalar", "scalar", 1.0, true),
+            ("bpm", "bpm", 1.0, true),
         ]
     );
     for u in m2_ir::Unit::ALL {

@@ -303,4 +303,18 @@ check(await until(async () => !!(await page.$('[data-testid=graph] [data-module=
 check((await page.$eval("[data-device=chain]", (e) => e.disabled)) === true, "Chain can't be picked for it");
 check((await page.$eval("[data-testid=device-parts]", (e) => e.textContent)) === "Saw and Saw are mixed here. Showing its patch.", `in those words: ${await page.$eval("[data-testid=device-parts]", (e) => e.textContent)}`);
 
+// A sound with a note effect is no chain yet: Device shows its patch, the note effect's card in it,
+// and says why (review P5).
+const keysNow = (await api("")).body;
+const pluck = keysNow.view.modules.find((m) => m.key === "keys").nodes.find((n) => n.kind === "call" && n.audio);
+const added = await agent("/api/graph/effect/add", { session: keysNow.session, revision: keysNow.view.revision, call: pluck.id, component: "@m2/notes:arp" });
+check(added === 200 && (await until(() => read("tracks/keys.ts").includes("arp(lane.notes"), 15000)), `an agent puts an Arpeggiator before the Keys' pluck: ${added}`);
+await page.click('[data-module-tab="keys"] [data-testid=track-label]');
+const noted = async () => (await page.$eval("[data-testid=device-parts]", (e) => e.textContent).catch(() => "")) ?? "";
+check(await until(async () => !!(await page.$('[data-testid=graph] [data-module="keys"]')) && (await noted()).includes("note effect"), 15000), "a sound with a note effect shows its patch");
+check((await page.$eval("[data-device=chain]", (e) => e.disabled)) === true, "Chain can't be picked for it");
+check((await noted()) === "This sound has a note effect, which the chain can't show yet. Showing its patch.", `in those words: ${await noted()}`);
+const patched = await page.$eval('[data-testid=graph] [data-module="keys"]', (e) => e.textContent ?? "").catch(() => "");
+check(patched.includes("Arpeggiator"), "the patch shows the Arpeggiator's card");
+
 done(errors);

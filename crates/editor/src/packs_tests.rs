@@ -421,7 +421,7 @@ fn an_install_removes_a_copy_a_stopped_install_left_aside() {
 fn the_bundled_packs_pass_check() {
     let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
     let packs = m2_song::pack::bundled(&m2_song::pack::source_packs());
-    assert_eq!(packs.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable: {packs:?}");
+    assert_eq!(packs.len(), 7, "@m2/drums, @m2/effects, @m2/mixing, @m2/notes, @m2/synths, @m2/vocals and @m2/wavetable: {packs:?}");
     for dir in packs {
         assert_eq!(check(&dir, &std_dir), Vec::<String>::new(), "{}", dir.display());
         assert!(!dir.join(LISTING).exists(), "{}: checking writes nothing where it ships", dir.display());
@@ -486,6 +486,17 @@ fn a_component_with_no_category_is_named_unless_it_says_unlisted() {
     let s = song_and_store_with(&f, &[("src/index.ts", &std::fs::read_to_string(dir.join("src/index.ts")).unwrap())]).0;
     assert!(s.catalog().components.contains_key("@test/tiny:tiny-plain"), "code can play it");
     assert!(!crate::tracks::instruments(&s).iter().any(|i| i.component == "@test/tiny:tiny-plain"), "no list offers it");
+}
+
+// PACK-12, PKG-21: a note effect is no forgotten kind: the check builds it between a notes lane and
+// a plain voice, and says nothing of it.
+#[test]
+fn a_note_effect_passes_the_pack_check() {
+    let f = Fixture::new();
+    let dir = f.0.join("notes");
+    crate::testing::notes_pack(&dir, false);
+    let std_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    assert_eq!(check(&dir, &std_dir), Vec::<String>::new());
 }
 
 // PACK-19 (review S9, S13): music2's own is a pack version music2 comes with, by its files, never

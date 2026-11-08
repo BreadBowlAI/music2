@@ -967,6 +967,7 @@ fn item(origin: &Origin, rel: &str, path: &Path, m: &Measured, said: &Said) -> I
         component,
         instrument: false,
         effect: false,
+        note_effect: false,
         preview: true,
         no_preview: None,
         preset: None,

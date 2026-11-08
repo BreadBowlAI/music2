@@ -417,24 +417,29 @@ struct Sources {
     beats: &'static str,
     /// None: a cell.
     pitch: Option<&'static str>,
+    /// A notes lane, at the top level: what a note effect reads (RENDER-41).
+    notes: Option<&'static str>,
 }
 
 /// A node for every kernel in `sigs`, ids prefixed `p`: an input with a default is a cell (every
 /// other one smooth), one without is a signal from `src`, and the first output of each is summed
-/// into the returned node (a control output first scales the audio, or sets a sine's frequency).
+/// into the returned node (a control output first scales the audio, or sets a sine's frequency; a
+/// note effect's notes are played by a voice of sines).
 fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nodes: &mut Vec<Value>) -> String {
     let mut sum: Option<String> = None;
     for (i, sig) in sigs.iter().enumerate() {
         let id = format!("{p}{i}");
         let mut inputs = serde_json::Map::new();
+        // A note effect's inputs are cells, `time` and lanes alone (RENDER-41).
+        let signals = !sig.gives_notes();
         for port in &sig.inputs {
             let from = match (port.kind, port.name.as_str()) {
                 (PortKind::Audio(Some(2)), _) => src.stereo.to_string(),
                 (PortKind::Audio(_) | PortKind::Any, _) => src.audio.to_string(),
-                (PortKind::Control(_), "gate") => src.gate.to_string(),
+                (PortKind::Control(_), "gate") if signals => src.gate.to_string(),
                 (PortKind::Control(_), "beats") => src.beats.to_string(),
-                (PortKind::Control(_), "pitch") if src.pitch.is_some() => src.pitch.unwrap().to_string(),
-                (PortKind::Control(Some(Unit::Unit01)), _) if port.default.is_none() => src.unit01.to_string(),
+                (PortKind::Control(_), "pitch") if src.pitch.is_some() && signals => src.pitch.unwrap().to_string(),
+                (PortKind::Control(Some(Unit::Unit01)), _) if port.default.is_none() && signals => src.unit01.to_string(),
                 (PortKind::Control(unit), name) => {
                     let cell = format!("{id}c{name}");
                     let value = port.default.unwrap_or(match name {
@@ -452,7 +457,7 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
                     nodes.push(node);
                     cell
                 }
-                (PortKind::Events(_), _) => unreachable!("kernels take no events"),
+                (PortKind::Events(_), _) => src.notes.expect("a kernel takes notes only at the top level").to_string(),
             };
             inputs.insert(port.name.clone(), json!(from));
         }
@@ -473,6 +478,16 @@ fn every_kernel(sigs: &[&KernelSig], p: &str, src: &Sources, site: &mut u32, nod
                 nodes
                     .push(json!({"id": format!("{id}s"), "op": "kernel", "kernel": "std:scale", "inputs": {"in": src.audio, "by": first}}));
                 format!("{id}s")
+            }
+            // A note effect's notes (RENDER-41): played by a voice of sines, as an instrument plays them.
+            PortKind::Events(_) => {
+                nodes.push(json!({"id": format!("{id}v"), "op": "poly", "events": first, "voices": 2, "body": {"out": "va", "nodes": [
+                    {"id": "vp", "op": "lane", "lane": "pitch"},
+                    {"id": "vg", "op": "lane", "lane": "gate"},
+                    {"id": "vhz", "op": "kernel", "kernel": "std:mtof", "inputs": {"pitch": "vp"}},
+                    {"id": "vo", "op": "kernel", "kernel": "std:sine", "inputs": {"freq": "vhz"}},
+                    {"id": "va", "op": "kernel", "kernel": "std:scale", "inputs": {"in": "vo", "by": "vg"}}]}}));
+                format!("{id}v")
             }
             _ => first,
         };
@@ -503,7 +518,7 @@ fn every_std_kernel_keeps_its_inputs() {
         json!({"id": "t", "op": "time", "of": "beats"}),
         json!({"id": "lf", "op": "kernel", "kernel": "std:lfo", "inputs": {"beats": "t"}}),
     ];
-    let top = Sources { audio: "x", stereo: "xs", unit01: "lf", gate: "lf", beats: "t", pitch: None };
+    let top = Sources { audio: "x", stereo: "xs", unit01: "lf", gate: "lf", beats: "t", pitch: None, notes: Some("n") };
     let top_sum = every_kernel(&sigs, "k", &top, &mut site, &mut nodes);
     // In a voice, time and the lfo are captured from the top.
     let mut body = vec![
@@ -513,9 +528,10 @@ fn every_std_kernel_keeps_its_inputs() {
         json!({"id": "vo", "op": "kernel", "kernel": "std:saw", "inputs": {"freq": "vhz"}}),
         json!({"id": "vst", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "vo"}}),
     ];
-    let voice = Sources { audio: "vo", stereo: "vst", unit01: "lf", gate: "vg", beats: "t", pitch: Some("vp") };
-    // A latent kernel (Tune's shift, VOX-24) can't be in a voice (RENDER-18): every other one is.
-    let voiced: Vec<&KernelSig> = sigs.iter().copied().filter(|s| !s.late()).collect();
+    let voice = Sources { audio: "vo", stereo: "vst", unit01: "lf", gate: "vg", beats: "t", pitch: Some("vp"), notes: None };
+    // A latent kernel (Tune's shift, VOX-24; the Clipper, PACK-34) can't be in a voice (RENDER-18), nor can a note effect,
+    // which runs in the lane pass (RENDER-41): every other one is.
+    let voiced: Vec<&KernelSig> = sigs.iter().copied().filter(|s| !s.late() && !s.gives_notes()).collect();
     let voice_sum = every_kernel(&voiced, "vk", &voice, &mut site, &mut body);
     nodes.push(json!({"id": "v", "op": "poly", "events": "n", "voices": 2, "body": {"out": voice_sum, "nodes": body}}));
     nodes.push(json!({"id": "out", "op": "kernel", "kernel": "std:add", "inputs": {"a": top_sum, "b": "v"}}));
@@ -527,7 +543,11 @@ fn every_std_kernel_keeps_its_inputs() {
     };
     let all: BTreeSet<String> = sigs.iter().map(|s| s.id.clone()).collect();
     let in_voice: BTreeSet<String> = voiced.iter().map(|s| s.id.clone()).collect();
-    assert_eq!(all.difference(&in_voice).collect::<Vec<_>>(), ["@m2/vocals:shift"], "only the latent one is left out of the voice");
+    assert_eq!(
+        all.difference(&in_voice).collect::<Vec<_>>(),
+        ["@m2/effects:clip", "@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock", "@m2/vocals:shift"],
+        "only the note effects and the latent ones are left out of the voice"
+    );
     let FOp::Poly { voice, .. } = &flat.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };
     assert_eq!((kernels(&flat.nodes), kernels(&voice.nodes)), (all, in_voice), "every std kernel, both places");
     // Three overlapping notes on two voices, starting inside blocks.

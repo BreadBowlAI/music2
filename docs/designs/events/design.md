@@ -318,7 +318,7 @@ A pack's kernel may be a stranger's code. A note it starts and never ends, or a 
 **A drop is a fault.** Live, it is said once per plan, naming the sound and its pack ("Arp on Keys, from @alice/arp, gave notes music2 can't play; some were left out."). In an export it fails the render, naming the sound, as any fault that changes the sound does ([RENDER-1](../../architecture.md#offline)).
 
 **It ends every note and lets the pedal up** (the pedal at 0 before the Offs, the wheels back at rest, as RENDER-36 does for a lane), at that frame, when:
-- the song stops or jumps (a seek, a loop's wrap), as a lane does ([RENDER-9](../../architecture.md#seek-and-loop));
+- the song stops or jumps (a seek, a loop's wrap), as a lane does ([RENDER-9](../../architecture.md#seek-and-loop)): at a wrap it ends the notes and leaves the pedal down, as a lane does ([RENDER-36](../../architecture.md#events));
 - **Stop is pressed while the song is already stopped**: a stuck arpeggio is one press away from silence;
 - the kernel is reset (a panic, Stop All Sound), replaced by a new plan, or stopped for taking too long ([ABI-7](../../architecture.md#kernel-abi-reservations)).
 
@@ -433,7 +433,7 @@ It plays by §5's rules. Its card:
 
 ### 7.3 Note echo
 
-`echo(notes, { time: "1/8", repeats: 3, fall: 0.3, pitch: 0 })`: each note played again `repeats` times (up to 8, `fan` 8), `time` apart in beats, each `fall` quieter, and `pitch` semitones higher (+12 climbs by octaves). Echoes are placed from each note's start on the beat; stopped, they keep time by `time.tempo`. Stop and a seek end them. The face: the echoes drawn as fading bars.
+`echo(notes, { time: "1/8", repeats: 3, fall: 0.3, pitch: 0 })`: each note played again `repeats` times (up to 7, so a note and its echoes are 8, its `fan`; the review's P3 found 8 one too many), `time` apart in beats, each `fall` quieter, and `pitch` semitones higher (+12 climbs by octaves). Echoes are placed from each note's start on the beat; stopped, they keep time by `time.tempo`. Stop and a seek end them. The face: the echoes drawn as fading bars.
 
 ### 7.4 Scale
 

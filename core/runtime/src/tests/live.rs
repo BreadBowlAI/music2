@@ -311,6 +311,27 @@ fn stopped_lanes_and_time_hold_while_kernels_run() {
     std::fs::remove_dir_all(dir).ok();
 }
 
+// RENDER-7: `time.tempo` is the tempo map's at each frame's beat, in bpm, from the block's runs as
+// `time.beats` is: the first tempo at the start, stopped or playing; the next from the frame whose
+// beat passes the change, inside a block; stopped there, it holds. (Its node copies this, as
+// `time.beats`' copies the beats; a node nothing reads isn't run, and no std kernel takes a bpm.)
+#[test]
+fn time_tempo_follows_the_tempo_map() {
+    let ir = song(json!([{"id": "o", "op": "kernel", "kernel": "std:sine"}]), "o", json!([]));
+    // 120 bpm, then 90 from beat 2.01: 1.005 s, frame 48 240, 112 frames into the block from 48 128.
+    let arr: Arrangement = serde_json::from_value(json!({"tempo": [{"beat": 0, "bpm": 120}, {"beat": 2.01, "bpm": 90}]})).unwrap();
+    let mut r = live(&ir, &with_notes(json!({"clips": []}), arr));
+    let mut tempo = |pos: u64, playing: bool| {
+        r.set_transport(Transport::new(pos, playing));
+        r.pre(0, &mut Runner::one()).unwrap().tempo
+    };
+    assert!(tempo(0, false).iter().all(|&x| x == 120.0), "stopped at the start: the first tempo");
+    assert!(tempo(0, true).iter().all(|&x| x == 120.0), "playing from the start");
+    let change = tempo(48_128, true);
+    assert!(change[..110].iter().all(|&x| x == 120.0) && change[114..].iter().all(|&x| x == 90.0), "{change:?}");
+    assert!(tempo(48_384, false).iter().all(|&x| x == 90.0), "stopped after the change: it holds");
+}
+
 // RENDER-7, HOST-6's twin for kernels: `time.playing` is 1 on every frame where the song plays,
 // through a seek and through a loop wrap that falls mid-block, and 0 while stopped, from the block
 // line the stop lands on.
@@ -482,6 +503,29 @@ fn a_changed_constant_is_sent() {
     assert_eq!(send(&mut fresh), [P::Param { time: 0, id: 3, value: 0.5 }], "a new instance at its first call");
 }
 
+// RENDER-14: a plugin is sent a key played live by the counter's own number, without the live bit, so
+// CLAP never sees a negative note id; its held keys keep the full id, so its Off still finds it.
+#[test]
+fn a_plugin_is_sent_a_live_keys_id_without_the_live_bit() {
+    use m2_plugins::Event as P;
+    let live = 5 | crate::event::LIVE_BIT;
+    let on = |frame, id, pitch| Event::On { frame, id, pitch, velocity: 0.5, from_pitch: None };
+    let notes = [on(0, live, 60.5), Event::Off { frame: 40, id: live, velocity: 0.0 }, on(64, live + 1, 62.0)];
+    let bufs: Vec<Vec<Vec<f32>>> = vec![];
+    let mut keys: Vec<(u32, i16)> = Vec::with_capacity(16);
+    let mut out = m2_plugins::Events::with_capacity(64);
+    let mut next = 0;
+    plugin_events(&[], (&[], false), None, &notes, &mut next, &mut [], &[], &reads(&bufs), (0, BLOCK), &mut keys, &mut out);
+    let sent = [
+        P::NoteOn { time: 0, id: 5, key: 61, velocity: 0.5 },
+        P::Tuning { time: 0, id: 5, key: 61, semitones: -0.5 },
+        P::NoteOff { time: 40, id: 5, key: 61 },
+        P::NoteOn { time: 64, id: 6, key: 62, velocity: 0.5 },
+    ];
+    assert_eq!(out.iter().collect::<Vec<_>>(), sent);
+    assert_eq!(keys, [(live + 1, 62)], "held by its full id");
+}
+
 // RENDER-14, RENDER-28, HOST-6: a plugin hears the lane's notes and its sampled parameters in the
 // order a stable sort by time gave before: parameters after notes at one frame. Built without
 // allocating.
@@ -613,6 +657,7 @@ fn prewarming_keeps_kernel_memory_flat() {
         sample_rate: SR as f64,
         slots: &slots,
         caps: &[Caps::FLOOR],
+        effects: &[],
         owner: &owner,
         mode: m2_plugins::RenderMode::Offline,
         at: None,

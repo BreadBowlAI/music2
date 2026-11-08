@@ -1,14 +1,16 @@
 // @m2/mixing's pictures (CARD-110 to CARD-116): what each of its cards draws, in TypeScript over
-// the picture words (CARD-61), with no kernel. The EQ's curve is measured from its own sound
-// (`p.response()`); the transient shaper's hit and Pump's dip are drawn from the pack's own sums,
-// each checked against a render of the sound within 0.5 dB (CARD-99); the gate, the de-esser and
-// the multiband draw their values over the sound as it plays.
+// the picture words (CARD-61), with no kernel. The EQ's curve, and the multiband's split under its
+// thresholds, are measured from their own sound (`p.response()`); the transient shaper's hit and
+// Pump's dip are drawn from the pack's own sums, each checked against a render of the sound within
+// 0.5 dB (CARD-99); the gate and the de-esser draw their values over the sound as it plays. How far
+// the gate, the de-esser and the multiband turn the sound down, and whether the gate is open, are
+// their kernels' own meters, drawn as live layers (CARD-126): no draw works one out.
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
 
 import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape } from "@m2/core";
-import { dbWords, hzWords, known, type In, type Num, type Read, type Values } from "std/pictures";
+import { dbWords, hzWords, known, reduction, type In, type Num, type Read, type Values } from "std/pictures";
 
 /** One of the card's groups: the tab a dot shows (taste.md DV-18). */
 type Tab<D> = NonNullable<Moves<D>["opens"]>;
@@ -19,14 +21,15 @@ const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
 // ---------------------------------------------------------------- the levels over time
 
 /**
- * A level's last 3 seconds (CARD-112): in across, from −80 to 0 dB up, the level going in (faint)
- * and coming out, and the level going in now as a bar. The gate's: where it opens is a line on it.
+ * A gate's last 3 seconds (CARD-112): in across, from −80 to 0 dB up, the level going in (faint)
+ * and coming out, the level going in now as a bar, and whether it was open, a strip along the foot
+ * lit where its meter `open` said so (a meter of a switch, CARD-73). Where it opens is a line on it.
  */
 export function levelsPicture(): PictureDecl<"seconds", "db"> {
   return view.picture({
     x: axis.time(3),
     y: axis.lin("db", -80, 0),
-    live: [live.history(live.level("in"), { tone: "faint" }), live.history(live.level("out")), live.level("in")],
+    live: [live.history(live.level("in"), { tone: "faint" }), live.history(live.level("out")), live.level("in"), live.history(live.meter("open"))],
   });
 }
 
@@ -37,6 +40,34 @@ export function levelsPicture(): PictureDecl<"seconds", "db"> {
 export function threshold<D>(p: Painter<D, "seconds", "db">, v: Values, names: { threshold: In<D, "db"> }): Shape[] {
   const t = clamp(known(v, names.threshold, "threshold"), -80, 0);
   return [p.line([0, t, 3, t], { tone: "soft", name: "threshold" }), p.handle(2.8, t, { y: names.threshold } as Moves<D, "seconds", "db">)];
+}
+
+/** What a gate's `levels` draws, in words (CARD-112). */
+export function gateWords(v: Values, names: { threshold: string; range: string }): string {
+  const [t, r] = [v[names.threshold], v[names.range]];
+  if (typeof t !== "number") return "The last 3 seconds in and out: its threshold is set by a cable or the code. The strip at the foot lights while it is open";
+  const down = typeof r === "number" ? dbWords(r) : "a level set elsewhere";
+  return `Opens when the sound reaches ${dbWords(t)}; below that it turns it down to ${down}. The strip at the foot lights while it is open. Drag the line`;
+}
+
+/** The most a gate's `down` shows, in dB: the deepest range its card allows. */
+export const GATE_MOST = 80;
+
+/**
+ * How far a gate turns the sound down (CARD-112), on std's reduction picture: its meter as it plays
+ * (the picture's live layers), and its range, the most it turns down, as a guide line.
+ */
+export function gateDown<D>(p: Painter<D, "seconds", "db">, v: Values, names: { range: Num<D> }): Shape[] {
+  const r = v[names.range];
+  if (r === undefined) throw new Error(`names ${String(names.range)}, which this sound doesn't have`);
+  return reduction(p, { most: typeof r === "number" ? -r : null, top: GATE_MOST });
+}
+
+/** What a gate's `down` draws, in words. */
+export function gateDownWords(v: Values, names: { range: string }): string {
+  const r = v[names.range];
+  const most = typeof r === "number" ? `up to ${dbWords(Math.abs(r))}` : "as far as its range says";
+  return `How far it turns the sound down: none while it is open, ${most} once it closes`;
 }
 
 // ---------------------------------------------------------------- the transient shaper
@@ -290,51 +321,45 @@ export function bandWords(v: Values, names: { freq: string; threshold: string; a
   return `Listens from ${hzWords(lo)} to ${hzWords(hi)}: when that band's peaks go over ${dbWords(t)}, it turns the band down by as much, ${most2}`;
 }
 
+/** The most a de-esser's `down` shows, in dB: the largest amount its card allows. */
+export const BAND_MOST = 24;
+
+/**
+ * How far a de-esser turns its band down (CARD-114), on std's reduction picture: its meter as it
+ * plays, and its amount, the most it turns down, as a guide line.
+ */
+export function bandDown<D>(p: Painter<D, "seconds", "db">, v: Values, names: { amount: Num<D> }): Shape[] {
+  const a = v[names.amount];
+  if (a === undefined) throw new Error(`names ${String(names.amount)}, which this sound doesn't have`);
+  return reduction(p, { most: typeof a === "number" ? a : null, top: BAND_MOST });
+}
+
+/** What a de-esser's `down` draws, in words. */
+export function bandDownWords(v: Values, names: { freq: string; threshold: string; amount: string }): string {
+  const [f, t, a] = [v[names.freq], v[names.threshold], v[names.amount]];
+  const at = typeof f === "number" ? hzWords(f) : "its frequency";
+  const most = typeof a === "number" ? `up to ${dbWords(a)}` : "up to its amount, set elsewhere";
+  const over = typeof t === "number" ? dbWords(t) : "its threshold";
+  return `How far it turns the band down at ${at}: ${most}, while the band's peaks are over ${over}`;
+}
+
 // ---------------------------------------------------------------- the multiband compressor
 
 /** The bands' names, low to high: the card's groups. */
 const BANDS = ["Low", "Mid", "High"] as const;
 
-/** The rate the split is worked out at. */
-const SPLIT_RATE = 48_000;
-/** How many points the split's curve is drawn with: one each twenty-fourth of the 10 octaves. */
-const SPLIT_POINTS = 241;
-
 /**
- * How the multiband turns each frequency `f`, in dB, below its thresholds (its compressors
- * resting): its kernel's own sum. Its lower crossover splits the low band (a Linkwitz-Riley
- * low-pass, 24 dB per octave) from the rest (the high-pass), its upper splits the rest into the mid
- * and the high band, and the low band goes through the upper's all-pass so the three sum in step;
- * each band is turned by its gain. With every gain at 0 dB it is flat.
+ * The click the split is measured with, in dB: under the lowest threshold its card allows (−60 dB),
+ * so its compressors rest however they are set (CARD-115).
  */
-export function splitDb(f: number, lowMid: number, midHigh: number, gains: readonly [number, number, number]): number {
-  return splitOf(lowMid, midHigh, gains)(f);
-}
-
-/** `splitDb` at any frequency, for one split: what doesn't hang on the frequency worked out once. */
-export function splitOf(lowMid: number, midHigh: number, gains: readonly [number, number, number]): (f: number) => number {
-  const warp = (hz: number) => Math.tan((Math.PI * clamp(hz, 10, 0.45 * SPLIT_RATE)) / SPLIT_RATE);
-  // x⁴ at each crossover, x the frequency over the crossover's, each warped as the kernel's filters are.
-  const wlo = warp(Math.min(lowMid, midHigh)), whi = warp(Math.max(lowMid, midHigh));
-  // A crossover's Butterworth pair has the denominator B = (1 − x²) + j√2·x, so |B|² = 1 + x⁴; its
-  // Linkwitz-Riley low-pass is 1 / B², its high-pass x⁴ / B², its all-pass B̄ / B = |B|² / B². So
-  // the low band, AP(hi)·LP(lo), the mid, LP(hi)·HP(lo), and the high, HP(hi)·HP(lo), share the one
-  // phase 1 / (B_hi² B_lo²), and their sum, each turned by its gain, is a real number over it.
-  const [g0, g1, g2] = gains.map((x) => 10 ** (x / 20));
-  return (f) => {
-    const w = warp(f), lo = (w / wlo) ** 4, hi = (w / whi) ** 4;
-    const sum = g0 * (1 + hi) + g1 * lo + g2 * hi * lo;
-    return 20 * Math.log10(Math.max(1e-6, Math.abs(sum) / ((1 + hi) * (1 + lo))));
-  };
-}
-
+const UNDER = -80;
 
 /**
  * A multiband compressor's split (CARD-115), on `curvePicture()`'s axes: how it turns each
- * frequency below its thresholds, the line `split` from its own sum (`splitDb`); the two crossovers
- * as guide lines, a dot on each that moves it across; and a dot in each band, at its gain, that moves
- * the gain up and down and shows its tab. How far its compressors turn down as it plays isn't drawn:
- * its kernel sends no meter (gaps.md).
+ * frequency below its thresholds, the line `split`, measured from its own sound with a click at
+ * −80 dB (`p.response`); the two crossovers as guide lines, a dot on each that moves it across; and
+ * a dot in each band, at its gain, that moves the gain up and down and shows its tab. How far its
+ * compressors turn down as it plays is its second picture, `down` (`bandsDownPicture`).
  */
 export function split<D>(
   p: Painter<D, "hz", "db">,
@@ -344,17 +369,11 @@ export function split<D>(
   const a = known(v, names.lowMid, "low to mid crossover"), b = known(v, names.midHigh, "mid to high crossover");
   // Crossed, the lower one splits low from mid (the kernel's own rule).
   const [lm, mh] = [Math.min(a, b), Math.max(a, b)];
-  const g = names.gains.map((n, i) => known(v, n, `${BANDS[i].toLowerCase()} gain`)) as [number, number, number];
-  const curve = splitOf(lm, mh, g);
-  const points: number[] = [];
-  for (let i = 0; i < SPLIT_POINTS; i++) {
-    const f = 20 * 1000 ** (i / (SPLIT_POINTS - 1));
-    points.push(f, clamp(curve(f), -24, 24));
-  }
+  const g = names.gains.map((n, i) => known(v, n, `${BANDS[i].toLowerCase()} gain`));
   const edges = [20, lm, mh, 20000];
   const centre = (i: number) => Math.sqrt(edges[i] * edges[i + 1]);
   return [
-    p.line(points, { name: "split" }),
+    p.response({ name: "split", level: UNDER }),
     p.mark("x", lm, `Low to mid: ${hzWords(lm)}`),
     p.mark("x", mh, `Mid to high: ${hzWords(mh)}`),
     p.handle(a, 18, { x: names.lowMid } as Moves<D, "hz", "db">),
@@ -369,6 +388,28 @@ export function splitWords(v: Values, names: { lowMid: string; midHigh: string; 
   if (typeof a !== "number" || typeof b !== "number") return "Lows, mids and highs, each compressed on its own: a crossover is set by a cable or the code";
   const g = names.gains.map((n) => (typeof v[n] === "number" ? dbWords(v[n] as number) : "set elsewhere"));
   return `Lows below ${hzWords(Math.min(a, b))}, mids to ${hzWords(Math.max(a, b))}, highs above, each compressed on its own, then turned ${g[0]}, ${g[1]} and ${g[2]}: as it sounds while quieter than its thresholds`;
+}
+
+/** The most a multiband's `down` shows, in dB: a band turned down further stands at the top. */
+export const BANDS_MOST = 24;
+
+/**
+ * How far each of a multiband compressor's bands turns down now (CARD-115): its meters
+ * `low_reduction`, `mid_reduction` and `high_reduction`, a bar each, low, mid and high side by side
+ * (CARD-73), from 0 dB at the foot to 24 dB at the top. No history: three lines in the window's two
+ * greys can't be told apart at 104 px, so nothing runs across, and its axis across is drawn bare.
+ */
+export function bandsDownPicture(): PictureDecl<"seconds", "db"> {
+  return view.picture({
+    x: axis.time(3, { bare: true }),
+    y: axis.lin("db", 0, BANDS_MOST),
+    live: BANDS.map((b) => live.meter(`${b.toLowerCase()}_reduction`)),
+  });
+}
+
+/** What the multiband's `down` draws, in words. */
+export function bandsDownWords(): string {
+  return `Low, mid, high: how far each band is turned down now, a bar each, up to ${dbWords(BANDS_MOST)} (further stays at the top)`;
 }
 
 // ---------------------------------------------------------------- Pump

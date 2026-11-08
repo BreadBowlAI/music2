@@ -3,19 +3,23 @@
 //! moved here.
 
 use m2_dsp::testing::effects::{self, BLOCK, Fx, SR, db, noise, peak, rms, run, saw, torture, with};
-use m2_kernel::Host;
+use m2_dsp::testing::{play_at, spectrum};
+use m2_kernel::{Cfg, Host, Io, Kernel, db_to_gain};
 
 use super::*;
 
 /// Every effect at the settings the effect menu starts it with, and playing: the last of phaser's,
 /// tremolo's and bitcrush's is `playing`, 1. (The delay is tried below, as std tried it: its own
 /// tests, and the ABI's.)
-const ALL: [Fx; 5] = [
+const ALL: [Fx; 8] = [
     Fx { name: "reverb", run: run::<Reverb>, controls: &[0.6, 0.5, 0.25] },
     Fx { name: "phaser", run: run::<Phaser>, controls: &[0.4, 0.7, 0.5, 0.5, 1.0] },
     Fx { name: "tremolo", run: run::<Tremolo>, controls: &[5.0, 0.5, 1.0] },
     Fx { name: "bitcrush", run: run::<Bitcrush>, controls: &[8.0, 12_000.0, 1.0, 1.0] },
     Fx { name: "widen", run: run::<Widen>, controls: &[1.5] },
+    Fx { name: "clip", run: run::<Clip>, controls: &[6.0, -0.3] },
+    Fx { name: "flanger", run: run::<Flanger>, controls: &[0.25, 0.7, 0.5, 0.5, 1.0] },
+    Fx { name: "grains", run: run::<Grains>, controls: &[0.1, 20.0, 0.3, 0.0, 0.5, 1.0] },
 ];
 
 /// The effect named `name`.
@@ -23,8 +27,8 @@ fn fx(name: &str) -> &'static Fx {
     ALL.iter().find(|fx| fx.name == name).unwrap()
 }
 
-/// The effects whose last input is `playing`.
-const FOLLOW: [&str; 3] = ["phaser", "tremolo", "bitcrush"];
+/// The effects whose last input is `playing`, and that wait while it is 0.
+const FOLLOW: [&str; 4] = ["phaser", "tremolo", "bitcrush", "flanger"];
 
 // ---------------------------------------------------------------- every effect
 
@@ -130,6 +134,8 @@ fn kernels_with_lines_reset_in_place_to_where_they_started() {
     assert_reset_starts_over::<Delay>(&[0.5, 0.01, 0.5, 0.5], 5_000);
     assert_reset_starts_over::<Reverb>(&[0.5, 0.6, 0.5, 0.5], 5_000);
     assert_reset_starts_over::<Widen>(&[0.5, 1.5], 5_000);
+    assert_reset_starts_over::<Flanger>(&[0.5, 1.0, 0.7, 0.5, 0.5, 1.0], 5_000);
+    assert_reset_starts_over::<Grains>(&[0.5, 0.05, 40.0, 0.2, 7.0, 0.7, 1.0], 20_000);
 }
 
 // ---------------------------------------------------------------- each effect
@@ -338,3 +344,456 @@ fn stopped_the_bitcrusher_still_crushes() {
         }
     }
 }
+
+// ---------------------------------------------------------------- the Clipper (PACK-34)
+
+const MANIFEST: &str = include_str!("../../m2pkg.toml");
+
+/// The rates a song may have that the Clipper's tests play at.
+const RATES: [f32; 3] = [44_100.0, 48_000.0, 96_000.0];
+
+/// The Clipper without its last step, the cut of what is still over the ceiling at the song's
+/// rate: what its cut at four times the rate gives alone.
+struct Uncut(Clip);
+
+impl Kernel for Uncut {
+    const INPUTS: usize = Clip::INPUTS;
+    const OUTPUTS: usize = Clip::OUTPUTS;
+
+    fn new(cfg: &Cfg) -> Self {
+        Uncut(Clip::new(cfg))
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        self.0.run(io, false);
+    }
+}
+
+/// `K` (the Clipper, or it uncut) on `x` at `sr`, mono, at `gain` and `ceiling` (dB): its output
+/// and its meter.
+fn clipped<K: Kernel>(sr: f32, x: &dyn Fn(usize) -> f32, frames: usize, gain: f32, ceiling: f32) -> (Vec<f32>, Vec<f32>) {
+    let played = play_at::<K>(sr, 1, frames, BLOCK, &|p, _, t| match p {
+        0 => x(t),
+        1 => gain,
+        _ => ceiling,
+    });
+    (played.out[0].iter().map(|f| f[0]).collect(), played.out[1].iter().map(|f| f[0]).collect())
+}
+
+/// A cut at the song's rate: what a naive clipper plays.
+fn naive(x: &dyn Fn(usize) -> f32, frames: usize, gain: f32, ceiling: f32) -> Vec<f32> {
+    let (g, c) = (db_to_gain(gain), db_to_gain(ceiling));
+    (0..frames).map(|t| (x(t) * g).clamp(-c, c)).collect()
+}
+
+/// A sine at `hz` and `sr`, peaking at `level`.
+fn sine(hz: f64, sr: f32, level: f32) -> impl Fn(usize) -> f32 {
+    move |t| level * (std::f64::consts::TAU * hz * t as f64 / sr as f64).sin() as f32
+}
+
+/// The loudest partial from 20 Hz to 20 kHz of `x` that is no harmonic of `f0`, in dB under its
+/// fundamental: what a clip folded back.
+fn worst_alias(x: &[f32], f0: f64, sr: f32) -> f64 {
+    let spec = spectrum(x, sr);
+    // The Kaiser window's main lobe, and more.
+    let lobe = 14.0 * spec[1].0;
+    let fundamental = spec.iter().filter(|s| (s.0 - f0).abs() <= lobe).map(|s| s.1).fold(0.0, f64::max);
+    let harmonic = |f: f64| {
+        let n = (f / f0).round();
+        n >= 1.0 && (f - n * f0).abs() <= lobe
+    };
+    let worst = spec.iter().filter(|s| (20.0..=20_000.0).contains(&s.0) && !harmonic(s.0)).map(|s| s.1).fold(0.0, f64::max);
+    10.0 * (worst.max(1e-300) / fundamental).log10()
+}
+
+// PACK-34: the Clipper's manifest says what its code is: its ports, its defaults and ranges, its
+// meter, and its latency, the frames its two cuts' filters take there and back, 46 each.
+#[test]
+fn the_clippers_manifest_is_its_code() {
+    assert!(MANIFEST.contains(r#"inputs = ["in: audio<*>", "gain: control<db> = 0 in 0..24", "ceiling: control<db> = -0.3 in -24..0"]"#));
+    assert!(MANIFEST.contains(r#"meters = ["pushed: control<db>"]"#));
+    assert!(MANIFEST.contains(&format!("latency = {}\n", clipper::LATENCY)), "its manifest's latency is its code's");
+    assert_eq!((clipper::CUTS, clipper::STAGE, clipper::LATENCY), (2, 46, 92));
+}
+
+// PACK-34: its two half-bands are Kaiser-windowed sincs (β for 100 dB), 79 taps at twice the rate
+// and 27 at four times: each tap, one side of its centre, as worked out again here.
+#[test]
+fn the_clippers_filters_are_their_windowed_sincs() {
+    fn i0(x: f64) -> f64 {
+        let (mut sum, mut term) = (1.0, 1.0);
+        for k in 1..200 {
+            term *= (x / (2.0 * k as f64)).powi(2);
+            sum += term;
+            if term < 1e-17 * sum {
+                break;
+            }
+        }
+        sum
+    }
+    let beta = 0.1102 * (100.0 - 8.7);
+    let taps = |m: usize| -> Vec<f64> {
+        (0..m.div_ceil(2))
+            .map(|q| {
+                let k = (m - 2 * q) as f64;
+                let w = i0(beta * (1.0 - (k / m as f64).powi(2)).max(0.0).sqrt()) / i0(beta);
+                (std::f64::consts::PI * k / 2.0).sin() / (std::f64::consts::PI * k) * w
+            })
+            .collect()
+    };
+    for (made, h) in [(taps(39), &clipper::H0[..]), (taps(13), &clipper::H1[..])] {
+        assert_eq!(made.len(), h.len());
+        for (q, (m, h)) in made.iter().zip(h).enumerate() {
+            assert!((*m as f32 - h).abs() <= 1e-7, "tap {q}: {h}, worked out {m}");
+        }
+    }
+}
+
+// PACK-34: no sample out is ever over the ceiling: sines, a saw, noise and clicks, at 44.1, 48 and
+// 96 kHz, turned up by 0 to 24 dB, under ceilings from -24 dB to 0 dB.
+#[test]
+fn no_sample_out_is_ever_over_the_ceiling() {
+    let clicks = |t: usize| match (t.is_multiple_of(997), t.is_multiple_of(1994)) {
+        (true, true) => 1.0,
+        (true, false) => -1.0,
+        _ => 0.0,
+    };
+    type Sound<'a> = (&'a str, Box<dyn Fn(usize) -> f32>);
+    for sr in RATES {
+        let signals: [Sound; 7] = [
+            ("100 Hz", Box::new(sine(100.0, sr, 1.0))),
+            ("997 Hz", Box::new(sine(997.0, sr, 1.0))),
+            ("5 kHz", Box::new(sine(5_000.0, sr, 1.0))),
+            ("15 kHz", Box::new(sine(15_000.0, sr, 0.7))),
+            ("a saw", Box::new(|t| saw(0, t))),
+            ("noise", Box::new(|t| noise(1, t))),
+            ("clicks", Box::new(clicks)),
+        ];
+        for (name, x) in &signals {
+            for gain in [0.0, 6.0, 12.0, 18.0, 24.0] {
+                for ceiling in [-24.0, -12.0, -6.0, -0.3, 0.0] {
+                    let (out, _) = clipped::<Clip>(sr, x.as_ref(), 6_000, gain, ceiling);
+                    let c = db_to_gain(ceiling);
+                    let over = out.iter().position(|v| v.abs() > c);
+                    assert_eq!(over, None, "{name} at {sr} Hz, gain {gain} dB, ceiling {ceiling} dB: over the ceiling at {over:?}");
+                }
+            }
+        }
+    }
+}
+
+/// A band-limited saw at `hz`: its harmonics under 20 kHz, peaking near 0.92.
+fn saw_at(hz: f64, sr: f32) -> impl Fn(usize) -> f32 {
+    let top = (20_000.0 / hz).floor() as usize;
+    move |t| {
+        let at = std::f64::consts::TAU * hz * t as f64 / sr as f64;
+        let s: f64 = (1..=top).map(|n| if n % 2 == 1 { 1.0 } else { -1.0 } * (n as f64 * at).sin() / n as f64).sum();
+        (s * 2.0 / std::f64::consts::PI * 0.92) as f32
+    }
+}
+
+/// What one cut gives alone, driven directly: `x` times `gain` (dB) under `ceiling` (dB), at `sr`.
+fn one_cut(x: &dyn Fn(usize) -> f32, frames: usize, gain: f32, ceiling: f32) -> Vec<f32> {
+    let (g, c) = (db_to_gain(gain), db_to_gain(ceiling));
+    let mut cut = clipper::Cut::NEW;
+    (0..frames).map(|t| cut.frame(x(t) * g, c, clipper::QUIET).0).collect()
+}
+
+// PACK-34: its cuts, at four times the song's rate, fold far less back into hearing than a cut at the
+// song's rate (naive clipping). At 48 kHz, the worst partial that is no harmonic, under the
+// fundamental: a 5 kHz sine driven 18 dB over the ceiling, 40 dB under from one cut alone, 35 dB from
+// the Clipper (its second cut takes most of the first one's ring off, and its last step cuts what
+// still rings over the ceiling at the song's rate); a 997 Hz sine driven 18 dB, 55 dB and 60 dB; a
+// band-limited saw at 220 Hz driven 12 dB under a ceiling of -0.3 dB, 65 dB from the Clipper. The
+// Clipper 10 dB or more under naive clipping each time.
+#[test]
+fn the_clipper_folds_far_less_back_than_naive_clipping() {
+    let sr = 48_000.0;
+    let n = 1 << 16;
+    let from = 4096 + clipper::LATENCY;
+    // Each: its name, the sound, its fundamental, the gain and ceiling (dB), the most one cut alone
+    // and the Clipper fold back (dB).
+    type Case<'a> = (&'a str, Box<dyn Fn(usize) -> f32>, f64, f32, f32, Option<f64>, f64);
+    let cases: [Case; 3] = [
+        ("a 5 kHz sine, +18 dB", Box::new(sine(5_000.0, sr, 1.0)), 5_000.0, 18.0, 0.0, Some(-40.0), -35.0),
+        ("a 997 Hz sine, +18 dB", Box::new(sine(997.0, sr, 1.0)), 997.0, 18.0, 0.0, Some(-55.0), -60.0),
+        ("a band-limited saw at 220 Hz, +12 dB", Box::new(saw_at(220.0, sr)), 220.0, 12.0, -0.3, None, -65.0),
+    ];
+    for (name, x, f0, gain, ceiling, alone, most) in cases {
+        let (out, _) = clipped::<Clip>(sr, x.as_ref(), from + n, gain, ceiling);
+        let (both, _) = clipped::<Uncut>(sr, x.as_ref(), from + n, gain, ceiling);
+        let first = one_cut(x.as_ref(), from + n, gain, ceiling);
+        let plain = naive(x.as_ref(), from + n, gain, ceiling);
+        let [ours, both, first, plain] = [&out, &both, &first, &plain].map(|y| worst_alias(&y[from..], f0, sr));
+        println!(
+            "{name}: the Clipper {ours:.1} dB; its two cuts alone {both:.1} dB; one cut alone {first:.1} dB; naive clipping {plain:.1} dB"
+        );
+        if let Some(alone) = alone {
+            assert!(first <= alone, "{name}: one cut alone folds back {first:.1} dB, over {alone} dB");
+        }
+        assert!(ours <= most, "{name}: it folds back {ours:.1} dB, over {most} dB");
+        assert!(plain - ours >= 10.0, "{name}: {ours:.1} dB against naive clipping's {plain:.1} dB");
+    }
+}
+
+// PACK-34: a cut is the clipped sound's own harmonics: one cut, a 1 kHz sine driven 12 dB going in,
+// comes out with each odd harmonic up to 19 kHz within 0.1 dB of a clipped sine's (its Fourier
+// series), and its even ones gone, so the sound going round the filters and the cut brought back
+// down line up.
+#[test]
+fn the_cut_is_a_clipped_sounds_own_harmonics() {
+    let (sr, hz, drive) = (48_000.0f32, 1_000.0, 10f64.powf(12.0 / 20.0));
+    let (x, g) = (sine(hz, sr, 1.0), db_to_gain(12.0));
+    let from = 4096 + clipper::STAGE;
+    let mut cut = clipper::Cut::NEW;
+    let out: Vec<f32> = (0..from + 48_000).map(|t| cut.frame(x(t) * g, 1.0, clipper::QUIET).0).collect();
+    let out = &out[from..];
+    // Each harmonic's level as the projection on its sine and cosine over a second: whole periods.
+    let level = |n: usize| -> f64 {
+        let w = std::f64::consts::TAU * hz * n as f64 / sr as f64;
+        let (s, c) = out.iter().enumerate().fold((0.0, 0.0), |(s, c), (t, &v)| {
+            let a = w * (t + from) as f64;
+            (s + v as f64 * a.sin(), c + v as f64 * a.cos())
+        });
+        2.0 * (s * s + c * c).sqrt() / out.len() as f64
+    };
+    // A clipped sine's Fourier series: b_n = (2/π) ∫_0^π clip(A sin θ) sin(nθ) dθ.
+    let series = |n: usize| -> f64 {
+        let steps = 200_000;
+        let d = std::f64::consts::PI / steps as f64;
+        (0..steps).map(|i| (drive * ((i as f64 + 0.5) * d).sin()).min(1.0) * ((i as f64 + 0.5) * d * n as f64).sin()).sum::<f64>() * d * 2.0
+            / std::f64::consts::PI
+    };
+    for n in 1..=19 {
+        let got = level(n);
+        if n % 2 == 1 {
+            let want = series(n).abs();
+            assert!(
+                (db(got as f32) - db(want as f32)).abs() < 0.1,
+                "harmonic {n}: {:.2} dB, a clipped sine's {:.2} dB",
+                db(got as f32),
+                db(want as f32)
+            );
+        } else {
+            assert!(got < 1e-4, "harmonic {n}: {got}, where a clipped sine has none");
+        }
+    }
+}
+
+// PACK-34: under the ceiling the Clipper is its input times its gain, bit for bit, 92 frames late,
+// at every rate: noise and a sweep turned up 6 dB, under a ceiling of -0.3 dB.
+#[test]
+fn under_the_ceiling_the_clipper_is_its_input_92_frames_late() {
+    for sr in RATES {
+        let quiet = |t: usize| 0.25 * noise(0, t);
+        let sweep = move |t: usize| {
+            let s = t as f64 / sr as f64;
+            0.4 * (std::f64::consts::TAU * (50.0 * s + 2_000.0 * s * s)).sin() as f32
+        };
+        for (name, x) in [("noise", &quiet as &dyn Fn(usize) -> f32), ("a sweep", &sweep)] {
+            let frames = sr as usize;
+            let (out, _) = clipped::<Clip>(sr, x, frames, 6.0, -0.3);
+            let (g, late) = (db_to_gain(6.0), 92);
+            assert!(out[..late].iter().all(|&v| v == 0.0), "{name} at {sr} Hz: silence while it is late");
+            for t in 0..frames - late {
+                let want = x(t) * g;
+                assert!(want.abs() < db_to_gain(-0.3), "the test's sound is under the ceiling");
+                assert_eq!(out[t + late].to_bits(), want.to_bits(), "{name} at {sr} Hz, frame {t}");
+            }
+        }
+    }
+}
+
+// PACK-34, the house rules: a sample that isn't finite counts as silence and a control that isn't
+// finite as its low end, so what comes out is finite, and under the ceiling.
+#[test]
+fn nothing_finite_in_still_gives_a_finite_sound() {
+    let hostile = |t: usize| match t % 101 {
+        0 => f32::NAN,
+        1 => f32::INFINITY,
+        2 => f32::NEG_INFINITY,
+        3 => 1e30,
+        _ => noise(0, t),
+    };
+    for (gain, ceiling) in [(0.0, -0.3), (24.0, 0.0), (f32::NAN, f32::NAN), (f32::INFINITY, f32::NEG_INFINITY), (-1e9, 1e9)] {
+        let (out, pushed) = clipped::<Clip>(48_000.0, &hostile, 4_800, gain, ceiling);
+        assert!(out.iter().chain(&pushed).all(|v| v.is_finite()), "gain {gain}, ceiling {ceiling}");
+        assert!(out.iter().all(|v| v.abs() <= 1.0), "gain {gain}, ceiling {ceiling}: over 0 dB");
+    }
+}
+
+// PACK-34, ABI-13: its meter `pushed` says the loudest it heard after its gain, at four times the
+// rate, in dB, the most of each call's frames: a sine at -6 dB turned up 12 dB is pushed to +6 dB;
+// silence to -100 dB.
+#[test]
+fn the_clipper_says_how_loud_it_is_pushed() {
+    let x = sine(997.0, 48_000.0, 0.5);
+    let (_, pushed) = clipped::<Clip>(48_000.0, &x, 9_600, 12.0, -0.3);
+    for (k, block) in pushed.chunks(BLOCK).enumerate().skip(4) {
+        assert!(block.iter().all(|v| v.to_bits() == block[0].to_bits()), "one number for the call");
+        assert!((block[0] - 6.0).abs() < 0.1, "block {k}: pushed {} dB, the sine is at +6 dB", block[0]);
+    }
+    let (_, pushed) = clipped::<Clip>(48_000.0, &|_| 0.0, 1_280, 12.0, -0.3);
+    assert!(pushed.iter().all(|&v| v == -100.0), "silence: -100 dB");
+}
+
+/// The Clipper, each of its cuts keeping its filters coming down for `Q` frames once it took nothing
+/// off (`QUIET` is the Clipper's own): `usize::MAX` keeps them for good.
+struct Kept<const Q: usize>(Clip);
+
+impl<const Q: usize> Kernel for Kept<Q> {
+    const INPUTS: usize = Clip::INPUTS;
+    const OUTPUTS: usize = Clip::OUTPUTS;
+
+    fn new(cfg: &Cfg) -> Self {
+        let mut clip = Clip::new(cfg);
+        clip.quiet = Q;
+        Kept(clip)
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        self.0.run(io, true);
+    }
+}
+
+/// What `K` plays of sparse cuts: bursts of a loud sine, decaying hits, noise bursts, single samples
+/// over the ceiling, and a sine just under it with clicks; mono and stereo, in blocks of 128 and 7,
+/// at 0 dB under -0.3 dB, and with the gain moving under -3 dB.
+fn sparse_cuts<K: Kernel>() -> Vec<Vec<[f32; 2]>> {
+    use std::f64::consts::TAU;
+    type Sound = Box<dyn Fn(usize, usize) -> f32>;
+    let sounds: [Sound; 5] = [
+        Box::new(|_, t| if (t / 300) % 3 == 0 { 1.2 * (TAU * 1234.5 * t as f64 / 48_000.0).sin() as f32 } else { 0.0 }),
+        Box::new(|_, t| {
+            let k = t % 2_371;
+            (-(k as f32) / 300.0).exp() * (k as f32 * 0.37).sin() * 1.5
+        }),
+        Box::new(|c, t| if (t / 97) % 5 == 0 { 1.1 * noise(c, t) } else { 0.02 * noise(c, t) }),
+        Box::new(|_, t| if t % 523 == 0 { 1.5 } else { 0.0 }),
+        Box::new(|_, t| 0.97 * (TAU * 997.0 * t as f64 / 48_000.0).sin() as f32 + if t % 1_777 == 3 { 0.3 } else { 0.0 }),
+    ];
+    let mut all = vec![];
+    for x in &sounds {
+        for channels in [1, 2] {
+            for split in [BLOCK, 7] {
+                for moving in [false, true] {
+                    let played = play_at::<K>(48_000.0, channels, 40_000, split, &|p, c, t| match (p, moving) {
+                        (0, _) => x(c, t),
+                        (1, false) => 0.0,
+                        (1, true) => {
+                            if (t / 5_000) % 2 == 0 {
+                                6.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        (_, false) => -0.3,
+                        (_, true) => -3.0,
+                    });
+                    all.push(played.out[0].clone());
+                }
+            }
+        }
+    }
+    all
+}
+
+// PACK-34: each cut leaves out its filters coming down once it has taken nothing off for QUIET frames,
+// and that changes no bit: on sparse cuts, mono and stereo, in blocks of 128 and 7, the Clipper plays
+// what it plays with them always run. They reach back exactly as far as a cut is late: one frame
+// fewer changes the bits.
+#[test]
+fn leaving_out_the_filters_coming_down_changes_no_bit() {
+    let differ = |a: &[Vec<[f32; 2]>], b: &[Vec<[f32; 2]>]| -> usize {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| x.iter().zip(y).filter(|(p, q)| p[0].to_bits() != q[0].to_bits() || p[1].to_bits() != q[1].to_bits()).count())
+            .sum()
+    };
+    let always = sparse_cuts::<Kept<{ usize::MAX }>>();
+    let ours = sparse_cuts::<Clip>();
+    let fewer = sparse_cuts::<Kept<{ clipper::QUIET - 1 }>>();
+    assert_eq!(clipper::QUIET, clipper::STAGE);
+    assert_eq!(differ(&ours, &always), 0, "leaving the filters out at QUIET changes no bit");
+    let changed = differ(&fewer, &always);
+    println!("with QUIET one frame fewer, {changed} samples differ");
+    assert!(changed > 0, "one frame fewer would change no bit either: QUIET isn't as short as it can be");
+}
+
+// PACK-34, RENDER-6a: the Clipper says it is active for as long as anything it took in can still come
+// out. Played a frame a call, a burst of noise that ends on one sample, of 1, -1, 1e30 or the most a
+// float holds, pushed 24 dB under a ceiling of -24 dB, at 44.1, 48 and 96 kHz, mono and stereo:
+// nothing comes out after the call where it first says it is done.
+#[test]
+fn nothing_comes_out_once_the_clipper_says_it_is_done() {
+    let stop = 3_000;
+    for sr in RATES {
+        for last in [1.0f32, -1.0, 1e30, f32::MAX] {
+            for channels in [1, 2] {
+                let played = play_at::<Clip>(sr, channels, stop + 4 * clipper::LATENCY, 1, &|p, c, t| match p {
+                    0 if t < stop => 0.5 * noise(c, t),
+                    0 if t == stop => last,
+                    0 => 0.0,
+                    1 => 24.0,
+                    _ => -24.0,
+                });
+                let out = &played.out[0];
+                let done = (stop..out.len()).find(|&t| !played.active[t]).expect("it says it is done");
+                let heard = out.iter().rposition(|f| f[0] != 0.0 || f[1] != 0.0).expect("it played");
+                assert!(
+                    heard <= done,
+                    "{last} at {sr} Hz, {channels} channels: sound at frame {heard}, after it said it was done at {done}"
+                );
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- what every kernel guarantees
+
+mod counting {
+    //! A count of what this thread allocates and frees.
+    use std::alloc::{GlobalAlloc, Layout, System};
+    use std::cell::Cell;
+
+    thread_local! {
+        static HERE: Cell<u64> = const { Cell::new(0) };
+    }
+
+    pub struct Counting;
+
+    fn count() {
+        let _ = HERE.try_with(|c| c.set(c.get() + 1));
+    }
+
+    unsafe impl GlobalAlloc for Counting {
+        unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+            count();
+            unsafe { System.alloc(layout) }
+        }
+        unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+            count();
+            unsafe { System.dealloc(ptr, layout) }
+        }
+        unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, size: usize) -> *mut u8 {
+            count();
+            unsafe { System.realloc(ptr, layout, size) }
+        }
+    }
+
+    #[global_allocator]
+    static COUNTING: Counting = Counting;
+
+    /// What this thread has allocated and freed so far.
+    pub fn here() -> u64 {
+        HERE.with(Cell::get)
+    }
+}
+
+// ---------------------------------------------------------------- the Flanger (PACK-35)
+
+mod flanger;
+
+// ---------------------------------------------------------------- Grains (PACK-36)
+
+mod grains;

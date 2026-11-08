@@ -539,11 +539,15 @@ export default song(() => v.out);
         // its code uses: `"2"`, `"2.1"` once it labels a setting (CARD-34), `"2.2"` once an
         // instrument names kits (KIT-3), `"2.3"` once an input may be left out (PKG-18), what its
         // descriptors show, or `"2.4"` once its code reads the song's key (VOX-12), or its descriptors
-        // draw a picture or name a face (CARD-60, CARD-40); a pack of recordings alone may ask for none.
+        // draw a picture or name a face (CARD-60, CARD-40), or `"2.5"` once it has a note effect (PKG-21),
+        // its code reads the song's tempo (RENDER-7), or a picture measures its curve with a quiet click
+        // (CARD-80) or reads the song's rate (CARD-87); a pack of recordings alone may ask for none.
         let major = sdk.map(|v| v.0.to_string());
         // The packs whose components read `time.key`: a time node of the key in a frame of one of
         // theirs (review U5), in every-component's graph.
         let mut keyed = std::collections::BTreeSet::new();
+        // And those whose components read `time.tempo`, found the same way.
+        let mut timed = std::collections::BTreeSet::new();
         let s = crate::gate_tests::every_component().open();
         for m in &s.accepted().compiled.ir.modules {
             fn walk(nodes: &[m2_ir::Node], f: &mut dyn FnMut(&m2_ir::Node)) {
@@ -555,16 +559,24 @@ export default song(() => v.out);
                 }
             }
             walk(&m.nodes, &mut |n| {
-                if matches!(n.op, m2_ir::Op::Time { of: m2_ir::TimeOf::Key }) {
-                    let packs =
-                        m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
-                    keyed.extend(packs);
+                let packs =
+                    || m.chain(n.frame).into_iter().filter_map(|f| f.component.as_deref()?.split_once(':').map(|(p, _)| p.to_string()));
+                match n.op {
+                    m2_ir::Op::Time { of: m2_ir::TimeOf::Key } => keyed.extend(packs()),
+                    m2_ir::Op::Time { of: m2_ir::TimeOf::Tempo } => timed.extend(packs()),
+                    _ => {}
                 }
             });
         }
-        assert_eq!(keyed.iter().map(String::as_str).collect::<Vec<_>>(), ["@m2/vocals"], "the packs whose sounds read the song's key");
+        assert_eq!(
+            keyed.iter().map(String::as_str).collect::<Vec<_>>(),
+            ["@m2/notes", "@m2/vocals"],
+            "the packs whose sounds read the song's key"
+        );
+        let runner = m2_script::pictures::Runner::new();
         let uses = |name: &str, dir: &Path| -> String {
-            let catalog = m2_script::describe(&[("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())]);
+            let packages: Vec<(String, PathBuf)> = vec![("std".into(), repo.join("std")), (name.to_string(), dir.to_path_buf())];
+            let catalog = m2_script::describe(&packages);
             let mine = catalog.components.iter().filter(|(id, _)| id.starts_with(&format!("{name}:")));
             let entries = |d: &m2_script::Descriptor| {
                 d.controls.iter().filter_map(|c| c.each.as_deref()).flat_map(|e| e.settings.clone()).collect::<Vec<_>>()
@@ -579,7 +591,30 @@ export default song(() => v.out);
             // The song's key, `time.key` (2.4, VOX-12), is read in a body, which no descriptor shows:
             // the graph of every-component, which calls every component of every bundled pack, does.
             let keyed = keyed.contains(name);
+            // A note effect (2.5, PKG-21), which the descriptor shows, or the song's tempo read (2.5, RENDER-7).
+            let noted = timed.contains(name) || mine.clone().any(|(_, d)| d.is_note_effect());
+            // A curve measured with a quiet click (2.5, CARD-80), or the song's rate read (2.5,
+            // CARD-87), which only a draw shows: each picture drawn at its defaults, as `m2 pack
+            // check` draws it, and its mark read (review S4).
+            let quiet = mine.clone().any(|(_, d)| {
+                d.editor.views.iter().filter(|v| matches!(v.of, m2_script::component::ViewOf::Picture { .. })).any(|v| {
+                    let ask = m2_script::pictures::Ask {
+                        key: format!("uses {name}"),
+                        packages: packages.clone(),
+                        song: None,
+                        module: d.module.clone(),
+                        descriptor: d.clone(),
+                        view: v.name.clone(),
+                        values: m2_script::pictures::defaults(d),
+                        memo: "uses".into(),
+                        rate: m2_script::pictures::RATE,
+                    };
+                    let m2_script::pictures::Drawn::Shapes(json) = runner.draw(ask) else { return false };
+                    serde_json::from_str::<m2_script::pictures::Drawing>(&json).is_ok_and(|d| !d.uses.is_empty())
+                })
+            });
             match (major.as_deref(), optional, kits, labelled) {
+                (Some(m), ..) if noted || quiet => format!("{m}.5"),
                 (Some(m), ..) if keyed || pictured => format!("{m}.4"),
                 (Some(m), true, ..) => format!("{m}.3"),
                 (Some(m), false, true, _) => format!("{m}.2"),
@@ -646,7 +681,7 @@ export default song(() => v.out);
                 (m.package.name, m.package.version, hash)
             })
             .collect();
-        assert_eq!(bundled.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable");
+        assert_eq!(bundled.len(), 7, "@m2/drums, @m2/effects, @m2/mixing, @m2/notes, @m2/synths, @m2/vocals and @m2/wavetable");
         let (mut songs, mut wrong) = (0, vec![]);
         let mut stack: Vec<PathBuf> = ["examples", "templates", "core/session/tests/fixtures", "e2e/fixtures"].map(|r| repo.join(r)).into();
         while let Some(d) = stack.pop() {

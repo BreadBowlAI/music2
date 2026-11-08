@@ -112,8 +112,8 @@ fn the_library_route_answers_the_one_search() {
     );
     assert_eq!(
         found(&running.url, "delay effects"),
-        ["@m2/effects:delay", "@m2/effects:reverb"],
-        "a kind typed is a filter: no sounds; Reverb by its category"
+        ["@m2/effects:delay", "@m2/effects:grains", "@m2/effects:reverb"],
+        "a kind typed is a filter: no sounds; Grains and Reverb by their category (Delay & Reverb)"
     );
     let (_, _, body) = get(&running.url, "/api/library?q=synth%20pluck");
     let first = &json(&body)["items"][0];

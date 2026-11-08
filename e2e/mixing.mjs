@@ -6,8 +6,13 @@
 // more ⌘Z takes the EQ out, with its import, dependency and lock. Each state linted.
 //
 //   node e2e/mixing.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
+import fs from "node:fs";
+import path from "node:path";
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+
+// The version of @m2/mixing music2 comes with: what + Effect asks for and locks.
+const [, version, major, minor] = /^version = "(([0-9]+)\.([0-9]+)\.[0-9]+)"$/m.exec(fs.readFileSync(path.join(import.meta.dirname, "../packs/@m2/mixing/m2pkg.toml"), "utf8"));
 
 const { page, errors, show, key, box } = await open(1440, 900);
 
@@ -38,8 +43,8 @@ await page.click('[data-effect-browser] [data-effect="eq"]');
 const added = 'eq(pluck(lane.notes("chords")))';
 check(await until(() => read("tracks/keys.ts").includes(added), 15000), `the EQ wraps the pluck: ${read("tracks/keys.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/keys.ts").includes('import { eq } from "@m2/mixing";'), "and imports it from @m2/mixing");
-check(/^"@m2\/mixing" = "1\.2"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
-check(/name = "@m2\/mixing"\nversion = "1\.2\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(read("music2.toml").split("\n").includes(`"@m2/mixing" = "${major}.${minor}"`), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/mixing".*/)?.[0]}`);
+check(read("music2.lock").includes(`name = "@m2/mixing"\nversion = "${version}"`), `music2.lock locks it, at ${version}`);
 const withEq = files();
 
 // ---------------------------------------------------------------- its card: eight bands, band 8's curve

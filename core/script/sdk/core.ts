@@ -5,7 +5,7 @@
 // Rust checker, which is what actually enforces kinds and units. The types below
 // exist so editors can help.
 
-export type Unit = "hz" | "db" | "gain" | "semitones" | "seconds" | "beats" | "unit01" | "bipolar" | "scalar";
+export type Unit = "hz" | "db" | "gain" | "semitones" | "seconds" | "beats" | "unit01" | "bipolar" | "scalar" | "bpm";
 
 export type AudioKind = { readonly audio: true };
 export type ControlKind<U extends Unit = Unit> = { readonly control: U };
@@ -156,6 +156,7 @@ const UNITS = {
   frac: ["unit01", 1, true],
   bipolar: ["bipolar", 1, true],
   scalar: ["scalar", 1, true],
+  bpm: ["bpm", 1, true],
 } as const satisfies Record<string, readonly [Unit, number, boolean]>;
 
 /** A unit constructor's name, such as `hz` or `ms`. */
@@ -183,6 +184,7 @@ export const beats = unitFn("beats");
 export const frac = unitFn("frac");
 export const bipolar = unitFn("bipolar");
 export const scalar = unitFn("scalar");
+export const bpm = unitFn("bpm");
 
 /** The unit table as the build emits it (PKG-11): every spelling, its unit and scale, and the canonical one per unit. */
 function unitTable(): string {
@@ -789,7 +791,7 @@ type IrFrame = {
   parent?: number;
   options?: number;
   sidechain?: { input: string; ref: string }[];
-  /** Turned off with `bypass: true` (Next D1): the call gives its audio input on. */
+  /** Turned off with `bypass: true` (Next D1): the call gives its first input on, its audio or its notes. */
   bypass?: boolean;
 };
 
@@ -1227,7 +1229,7 @@ export class ViewDecl<V extends ViewNeeds = ViewNeeds> {
  * Declare a view in `editor.views` (CARD-16): `view.keys("regions")` (a `regions` or `keymap`
  * setting), `view.scope()`, or `view.picture(…)`, a picture the sound draws (CARD-60). An envelope
  * and a filter are std's pictures: `envelopePicture()` and `curvePicture()` in std/pictures
- * (CARD-96, CARD-30).
+ * (CARD-96, CARD-91).
  */
 export const view = {
   keys<const K extends string>(regions: K): ViewDecl<{ regions: [K, "regions"] }> {
@@ -1249,7 +1251,7 @@ export const view = {
 // Gone since 2.4.0 (CARD-100): a sound that still calls one, past the types, is told in words what to draw instead.
 for (const [gone, now] of [
   ["envelope", "an envelope is a picture of std/pictures, envelopePicture() and envelope() (CARD-96)"],
-  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() or lowpass() (CARD-30)"],
+  ["filter", "a filter is a picture of std/pictures, curvePicture() with p.response() (CARD-91)"],
 ] as const) {
   Object.defineProperty(view, gone, {
     value: () => {
@@ -1260,8 +1262,16 @@ for (const [gone, now] of [
 
 // ------------------------------------------------ pictures (CARD-60 to CARD-66)
 
-/** How a picture's axis is laid out: its scale, its unit, and where it starts and ends. */
-type AxisSpec = { scale: "lin" | "log" | "time"; unit: Unit; lo: number; hi: number };
+/** How a picture's axis is laid out: its scale, its unit, where it starts and ends, and its options. */
+type AxisSpec = { scale: "lin" | "log" | "time"; unit: Unit; lo: number; hi: number; options?: AxisOptions };
+
+/**
+ * An axis's options (CARD-60, from 2.5): `bare`, drawn with no grid and no numbers, for a picture
+ * whose shapes say their own words (a keyboard's keys, a pattern's notes).
+ */
+export type AxisOptions = { readonly bare?: boolean };
+/** An axis as the descriptor carries it: `bare` only when it is. */
+type CheckedAxis = { scale: AxisSpec["scale"]; unit: Unit; lo: number; hi: number; bare?: true };
 
 /** A picture's axis (CARD-60). `U` is its unit, for types only. */
 export class Axis<U extends Unit = Unit> {
@@ -1274,17 +1284,18 @@ export class Axis<U extends Unit = Unit> {
 
 /**
  * A picture's axes (CARD-60): music2 draws each one's grid and labels. `axis.lin("db", -24, 24)`,
- * `axis.log("hz", 20, 20000)` (it starts above 0), `axis.time(2)` (0 to 2 seconds).
+ * `axis.log("hz", 20, 20000)` (it starts above 0), `axis.time(2)` (0 to 2 seconds). Each may end
+ * with `{ bare: true }` (2.5): drawn bare, with no grid and no numbers.
  */
 export const axis = {
-  lin<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
-    return new Axis({ scale: "lin", unit, lo, hi });
+  lin<const U extends Unit>(unit: U, lo: number, hi: number, options?: AxisOptions): Axis<U> {
+    return new Axis({ scale: "lin", unit, lo, hi, options });
   },
-  log<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
-    return new Axis({ scale: "log", unit, lo, hi });
+  log<const U extends Unit>(unit: U, lo: number, hi: number, options?: AxisOptions): Axis<U> {
+    return new Axis({ scale: "log", unit, lo, hi, options });
   },
-  time(seconds: number): Axis<"seconds"> {
-    return new Axis({ scale: "time", unit: "seconds", lo: 0, hi: seconds });
+  time(seconds: number, options?: AxisOptions): Axis<"seconds"> {
+    return new Axis({ scale: "time", unit: "seconds", lo: 0, hi: seconds, options });
   },
 };
 
@@ -1389,14 +1400,24 @@ export interface Painter<D = any, X extends Unit = Unit, Y extends Unit = Unit> 
   /**
    * The curve music2 measures from this sound itself (CARD-80): a click played through a copy of
    * the call at these values, its gain at each frequency. Only on an `hz` x axis and a `db` y axis.
+   * `level` is the click's, in dB from −80 to −20 (−20 when left out): a quieter click stays under
+   * a sound's thresholds, so its compressors rest (2.5).
    */
-  response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string }) => Shape : never;
+  response: [X, Y] extends ["hz", "db"] ? (o?: { tone?: Tone; name?: string; level?: number }) => Shape : never;
   /**
    * One note's sound, as a copy of the call plays it at these values (CARD-80): `note` (60) held
    * `seconds` (the x axis's end, 1 at most). Only on an x axis in `seconds` and a `bipolar` y axis.
    */
   hit: [X, Y] extends ["seconds", "bipolar"] ? (o?: { note?: number; seconds?: number; tone?: Tone }) => Shape : never;
+  /**
+   * The song's sample rate, in Hz (CARD-87): a kernel works its sums out at it, so a picture drawn
+   * from them does too (2.5). 48000 where no song plays (`m2 pack check`). Its words get it too.
+   */
+  readonly rate: number;
 }
+
+/** What a picture's words read besides its values (CARD-87): the song's sample rate, as the draw's `p.rate`. */
+export type Heard = { readonly rate: number };
 
 /** What a control plays, for types only: a number, a choice's name, or a switch's true or false. */
 type PlayedOf<K> = [K] extends [Unit] ? number : [K] extends [ChoiceKind<infer O>] ? O[number] : [K] extends [SwitchKind] ? boolean : never;
@@ -1412,7 +1433,7 @@ export type Played<D = any> = {
 /** A picture's code (CARD-60): its draw and its words, typed by the descriptor (CARD-62). */
 export type PictureCode<D = any, X extends Unit = Unit, Y extends Unit = Unit> = {
   draw: (v: Played<D>, p: Painter<D, X, Y>) => readonly Shape[];
-  words: (v: Played<D>) => string;
+  words: (v: Played<D>, p: Heard) => string;
 };
 /** The pictures of `D`, by name. */
 type PicturesIn<D> = { [K in keyof ViewsOf<D> as ViewsOf<D>[K] extends PictureDecl<any, any> ? K : never]: ViewsOf<D>[K] };
@@ -1429,10 +1450,10 @@ export class PictureDecl<X extends Unit = Unit, Y extends Unit = Unit> extends V
 }
 
 /** A picture's declaration checked (CARD-60): its axes and live layers as the descriptor carries them, or `fail`s in words. */
-function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never): { x: AxisSpec; y: AxisSpec; live?: unknown[] } {
+function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never): { x: CheckedAxis; y: CheckedAxis; live?: unknown[] } {
   const fields = ["x", "y", "live"];
   for (const k of Object.keys(pic)) if (!fields.includes(k)) fail(`${at}: a picture has no field "${k}" (fields: ${fields.join(", ")})`);
-  const axisOf = (which: "x" | "y", a: unknown): AxisSpec => {
+  const axisOf = (which: "x" | "y", a: unknown): CheckedAxis => {
     if (!(a instanceof Axis)) fail(`${at}: its ${which} must be made with axis.lin(), axis.log() or axis.time()`);
     const s = specOf<AxisSpec>(a as object);
     if (!UNIT_NAMES.includes(s.unit)) fail(`${at}: its ${which} axis's unit is ${shown(s.unit)}, which isn't a unit (units: ${UNIT_NAMES.join(", ")})`);
@@ -1442,7 +1463,12 @@ function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never):
     if (s.scale === "time" && !(s.hi > 0)) fail(`${at}: its ${which} axis, axis.time(), lasts more than 0 seconds, not ${s.hi}`);
     if (!(s.lo < s.hi)) fail(`${at}: its ${which} axis must go from a lower number to a higher one, not from ${s.lo} to ${s.hi}`);
     if (s.scale === "log" && !(s.lo > 0)) fail(`${at}: its ${which} axis is on a log scale, so it starts above 0, not at ${s.lo}`);
-    return { scale: s.scale, unit: s.unit, lo: s.lo, hi: s.hi };
+    const o = s.options;
+    if (o !== undefined && (o === null || typeof o !== "object" || Array.isArray(o))) fail(`${at}: its ${which} axis's options are an object, as { bare: true }, not ${shown(o)}`);
+    for (const k of Object.keys(o ?? {})) if (k !== "bare") fail(`${at}: its ${which} axis has no option "${k}" (options: bare)`);
+    if (o?.bare !== undefined && typeof o.bare !== "boolean") fail(`${at}: its ${which} axis's bare is true or false, not ${shown(o.bare)}`);
+    // Carried only when bare, so every other picture's descriptor keeps its bytes.
+    return { scale: s.scale, unit: s.unit, lo: s.lo, hi: s.hi, ...(o?.bare ? { bare: true } : {}) };
   };
   const x = axisOf("x", pic.x);
   const y = axisOf("y", pic.y);
@@ -1474,14 +1500,16 @@ class PictureError extends Error {}
 
 /** Every shape `p` made: a draw gives back only these. */
 const made = new WeakSet<object>();
-/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, and what it drew. */
-const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number }>();
+/** Each part kept between draws (CARD-64), by the picture asked for and its name: what it read, what it drew, and what of 2.5 it used. */
+const kept = new Map<string, { read: Map<string, unknown>; shapes: readonly object[]; numbers: number; uses: readonly string[] }>();
 /** The parts kept at most: the oldest goes first. */
 const KEPT = 512;
 /** The numbers a draw may give in all (CARD-65). */
 const NUMBERS = 20000;
 /** The points a measured layer is filled with (CARD-80): a response's, and a hit's columns. */
 const MEASURED = { response: 256, hit: 256 };
+/** The quietest and the loudest a response's click plays, in dB (CARD-80): −20 when a draw gives none. */
+const CLICK = { quietest: -80, loudest: -20 };
 /** A control character, or a line or paragraph break: no text of a picture holds one (CARD-61). */
 const CONTROL = /[\p{Cc}\u2028\u2029]/u;
 /** Whether `t` is text of `lo` to `hi` characters (code points), with no control character (CARD-61). */
@@ -1492,14 +1520,14 @@ const fits = (t: unknown, lo: number, hi: number): t is string =>
 /**
  * Draw picture `name` of the component `cid` at `values` (the JSON of what plays, by name), for
  * the picture runner: `{shapes, words}`, or `{why}` when it can't be drawn. `memo` names the
- * picture asked for, which its parts are kept by.
+ * picture asked for, which its parts are kept by, each for the song's sample `rate` (CARD-87).
  */
-export function __picture(cid: string, name: string, values: string, memo: string): string {
+export function __picture(cid: string, name: string, values: string, memo: string, rate: number): string {
   const c = registry.get(cid);
   const pic = c?.pictures.get(name);
   if (!c || !pic) return JSON.stringify({ why: `can't be drawn: no picture "${name}" of ${cid} was loaded` });
   const draw = pic.draw as (v: Played, p: Painter) => unknown;
-  const said = pic.words as (v: Played) => unknown;
+  const said = pic.words as (v: Played, p: Heard) => unknown;
   const ax = { x: specOf<AxisSpec>(pic.x as object), y: specOf<AxisSpec>(pic.y as object) };
   const given = JSON.parse(values) as Record<string, unknown>;
   const target: Record<string, unknown> = {};
@@ -1507,6 +1535,16 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   Object.freeze(target);
   // Who reads: each part being made, which is made again only when what it read changes.
   const readers: Set<string>[] = [];
+  // What of @m2/core 2.5 the draw used (CARD-87, PACK-23): the song's rate read, a click other than
+  // −20 dB; and what the part being made used, kept with it, so one given again marks the draw too.
+  const uses = new Set<string>();
+  let making: Set<string> | undefined;
+  const use = (what: string) => {
+    uses.add(what);
+    making?.add(what);
+  };
+  // A picture with a bare axis (CARD-60) uses 2.5, at every draw.
+  if (ax.x.options?.bare || ax.y.options?.bare) use("bare");
   let missed: string | undefined;
   // Each value an accessor that says who read it; a name the sound doesn't have reaches the
   // prototype, which refuses it; nothing can be changed. Faster than a proxy over every read.
@@ -1626,33 +1664,40 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       if (!fits(partName, 1, 32)) bad(`gives p.part a name of 1 to 32 characters, as "grid", not ${shown(partName)}`);
       if (readers.length) bad(`makes a part inside a part: parts don't nest`);
       if (typeof make !== "function") bad(`gives p.part a function that makes its shapes, as () => [p.line(points)]`);
-      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}`;
+      const key = `${memo}\u0000${cid}\u0000${name}\u0000${partName}\u0000${rate}`;
       const was = kept.get(key);
       if (was && [...was.read].every(([k, x]) => Object.is(target[k], x))) {
         numbers += was.numbers;
         if (numbers > NUMBERS) bad(`draws more than 20,000 numbers: draw fewer points`);
+        for (const u of was.uses) use(u);
         return shape({ kind: "part", name: partName, shapes: was.shapes });
       }
       const read = new Set<string>();
       const before = numbers;
+      const marks = new Set<string>();
       readers.push(read);
+      making = marks;
       let shapes: readonly object[];
       try {
         shapes = shapesOf(make(), `p.part("${partName}")'s function`);
       } finally {
         readers.pop();
+        making = undefined;
       }
       kept.delete(key);
       if (kept.size >= KEPT) kept.delete(kept.keys().next().value!);
-      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before });
+      kept.set(key, { read: new Map([...read].map((k) => [k, target[k]])), shapes, numbers: numbers - before, uses: [...marks] });
       return shape({ kind: "part", name: partName, shapes });
     },
-    response: ((o?: { tone?: unknown; name?: unknown }) => {
+    response: ((o?: { tone?: unknown; name?: unknown; level?: unknown }) => {
       if (ax.x.unit !== "hz" || ax.y.unit !== "db") bad(`gives p.response an x axis in ${ax.x.unit} and a y axis in ${ax.y.unit}: a response is drawn across hz and up db`);
       if (o?.name !== undefined && !(fits(o.name, 1, 32) && NAME.test(o.name as string))) bad(`gives p.response the name ${shown(o.name)}: a line's name is a plain name of up to 32 characters`);
+      const level = o?.level;
+      if (level !== undefined && !(typeof level === "number" && level >= CLICK.quietest && level <= CLICK.loudest)) bad(`gives p.response the level ${shown(level)}: its click plays at −80 to −20 dB`);
+      if (level !== undefined && level !== CLICK.loudest) use("level");
       const t = tone("p.response", o?.tone);
       once("p.response", 2 * MEASURED.response);
-      return shape({ kind: "response", tone: t, name: o?.name });
+      return shape({ kind: "response", tone: t, name: o?.name, level });
     }) as Painter["response"],
     hit: ((o?: { note?: unknown; seconds?: unknown; tone?: unknown }) => {
       if (ax.x.unit !== "seconds" || ax.y.unit !== "bipolar") bad(`gives p.hit an x axis in ${ax.x.unit} and a y axis in ${ax.y.unit}: a hit is drawn across seconds and up bipolar`);
@@ -1666,6 +1711,10 @@ export function __picture(cid: string, name: string, values: string, memo: strin
       once("p.hit", 4 * MEASURED.hit);
       return shape({ kind: "hit", note, seconds, tone: t });
     }) as Painter["hit"],
+    get rate() {
+      use("rate");
+      return rate;
+    },
   };
   const shapesOf = (out: unknown, what: string): readonly object[] => {
     if (!Array.isArray(out)) bad(`${what} returns ${shown(out)}: it returns a list of shapes, made with p`);
@@ -1674,10 +1723,16 @@ export function __picture(cid: string, name: string, values: string, memo: strin
   };
   try {
     const shapes = shapesOf(draw(v as Played, p), "its draw");
-    const words = said(v as Played);
+    const heard: Heard = Object.freeze({
+      get rate() {
+        use("rate");
+        return rate;
+      },
+    });
+    const words = said(v as Played, heard);
     if (missed) bad(missed);
     if (!fits(words, 1, 400) || !words.trim()) bad(`its words must be one line of 1 to 400 characters, not ${shown(words)}`);
-    return JSON.stringify({ shapes, words });
+    return JSON.stringify(uses.size ? { shapes, words, uses: [...uses].sort() } : { shapes, words });
   } catch (e) {
     if (e instanceof PictureError) return JSON.stringify({ why: missed ?? e.message });
     // Out of memory, an interrupt, a stack that ran out: the runner's to say, and its runtime to make again (CARD-64).
@@ -1705,8 +1760,9 @@ export type Descriptor = {
   positional?: readonly string[];
   /**
    * What an editor offers: `category`, a free string the UI groups (PKG-7), lists it as an
-   * effect when it takes audio first, or as an instrument a new track can play when it takes
-   * notes first; `insert` is written when the effect is added, each value in its control's
+   * effect when it takes audio first, as a note effect when it takes notes first and gives notes
+   * (PKG-21), or as an instrument a new track can play when it takes notes first and gives audio;
+   * `insert` is written when an effect or a note effect is added, each value in its control's
    * spelling; `notes` names what an instrument's notes play, by MIDI note (`{ 36: "Kick" }`), for
    * the piano roll's rows: whole numbers 0 to 127, each name one line of 1 to 24 characters.
    * `views` are pictures over this sound's controls, each by a name of its own (CARD-16), and
@@ -1842,7 +1898,7 @@ type FirstArg<D> = D extends { signature: Signature<infer F extends (...args: an
   : Derived<D> extends [infer H, ...any[]] ? H : never;
 /**
  * Whether a call can be turned off with `bypass: true` (Next D1, Q25): it takes audio first and
- * gives audio, and declares no `bypass` of its own.
+ * gives audio, or notes first and gives notes (PKG-21), and declares no `bypass` of its own.
  */
 type Bypassable<D> = "bypass" extends keyof Ctls<D> | keyof Sets<D>
   ? false
@@ -1850,7 +1906,9 @@ type Bypassable<D> = "bypass" extends keyof Ctls<D> | keyof Sets<D>
     ? false
     : [FirstArg<D>] extends [Audio]
       ? [Out<D>] extends [Audio] ? true : false
-      : false;
+      : [FirstArg<D>] extends [Events]
+        ? [Out<D>] extends [Events] ? true : false
+        : false;
 
 /**
  * The type of a component's calls: its signature at each length the required slots allow, each
@@ -2089,7 +2147,8 @@ type Component = {
   params: Param[];
   /**
    * Whether a call may be turned off with `bypass: true` (Next D1, Q25): its first argument is an
-   * audio input and its output is audio, and it declares no `bypass` of its own.
+   * audio input and its output is audio, or notes and notes (PKG-21), and it declares no `bypass`
+   * of its own.
    */
   bypassable: boolean;
   /** Where `component()` was called, as `file:line:col`. */
@@ -2120,7 +2179,7 @@ function definedAt(): string | undefined {
 /** The package a module file belongs to, as the host knows it: `{ package: "std", module: "std/fx", file: "std/src/fx.ts" }`. */
 type Home = { package: string | null; module: string; file: string };
 
-const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar"];
+const UNIT_NAMES: readonly Unit[] = ["hz", "db", "gain", "semitones", "seconds", "beats", "unit01", "bipolar", "scalar", "bpm"];
 /** The words for a knob, an input or a lane of the unit `keyset`, which none can be (VOX-12). */
 const NO_KEY_KNOB = "the song's key is no knob or lane: read it with time.key";
 const NAME = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
@@ -2396,9 +2455,13 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     if (knobs.length > 6) fail(`editor.face names ${knobs.length} values (${knobs.join(", ")}): a face has six at most`);
   }
 
-  // A category on a component that takes notes and makes audio lists it as an instrument, which
-  // a new track plays as `<name>(lane.notes(…))`, so it must build from its notes alone.
-  const instrument = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
+  // A category on a component that takes notes first and gives notes lists it as a note effect
+  // (PKG-21), checked as an effect is below. One that takes notes and makes anything else is an
+  // instrument, which a new track plays as `<name>(lane.notes(…))`, so it must build from its notes
+  // alone.
+  const notesFirst = editor.category !== undefined && inputs[0]?.spec.kind === "notes";
+  const noteEffect = notesFirst && output?.kind === "notes";
+  const instrument = notesFirst && !noteEffect;
   if (instrument) {
     // Others it may take only as a call may leave them out (PKG-20): it still builds from its notes alone.
     const [first, ...rest] = inputs;
@@ -2413,19 +2476,23 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     ];
     if (required.length) fail(`an instrument (editor.category, notes first) must build from its notes alone, which leaves out "${required[0]}"`);
   } else if (editor.category !== undefined) {
-    // An effect is added after any audio as `<name>(<audio>, <insert>)`, so that must be a whole call.
+    // An effect is added after any audio as `<name>(<audio>, <insert>)`, and a note effect around
+    // the notes of what plays them as `<name>(<notes>, <insert>)` (PKG-21), so that must be a whole call.
+    const [kind, what] = noteEffect ? ["notes", "a note effect (editor.category, notes first and notes out)"] : ["audio", "an effect (editor.category)"];
     const [first, ...rest] = inputs;
-    if (!first || first.spec.kind !== "audio" || lead[0] !== first) fail("an effect (editor.category) takes audio as its first argument");
+    if (!first || first.spec.kind !== kind || lead[0] !== first) fail(`${what} takes ${kind} as its first argument`);
+    // One input of notes a call must give: what a wrap writes around, and a bypass passes on.
+    if (noteEffect && (first.spec.optional || first.spec.many)) fail("a note effect's notes are one input a call must give: not .optional() or .many()");
     // Others it may take only as a call may leave them out (PKG-18): a key it listens to.
     const must = rest.find((i) => !i.spec.many && !i.spec.optional);
-    if (must) fail(`an effect (editor.category) has one input a call must give, not "${must.name}" too: declare it .optional()`);
-    if (output?.kind !== "audio") fail("an effect (editor.category) outputs audio");
+    if (must) fail(`${what} has one input a call must give, not "${must.name}" too: declare it .optional()`);
+    if (output?.kind !== kind) fail(`${what} outputs ${kind}`);
     const required = [
       ...controls.filter((c) => c.each || (!c.spec.optional && c.spec.default === undefined)).map((c) => c.name),
       ...settings.filter((s) => s.spec.default === undefined && !s.spec.optional).map((s) => s.name),
     ];
     const needed = required.filter((n) => !insert.some((x) => x.slot === n));
-    if (needed.length) fail(`an effect (editor.category) must build from its insert alone, which leaves out "${needed[0]}"`);
+    if (needed.length) fail(`${what} must build from its insert alone, which leaves out "${needed[0]}"`);
   }
 
   // Kits (KIT-3): a drum's, each by a short name, its tracks each a short name, once in the kit,
@@ -2564,7 +2631,8 @@ function check(desc: Descriptor, home: Home, at: string, fail: (m: string) => ne
     },
   });
   const first = lead[0] === inputs[0] ? lead[0] : undefined;
-  const bypassable = first?.spec.kind === "audio" && !first.spec.many && output?.kind === "audio" && !names.has("bypass");
+  // Audio first and audio out, or notes first and notes out (PKG-21): what it takes, it gives on.
+  const bypassable = (first?.spec.kind === "audio" || first?.spec.kind === "notes") && !first.spec.many && output?.kind === first.spec.kind && !names.has("bypass");
   return { id: desc.id, cid, inputs, controls, settings, params, bypassable, at, json, groups: groups.map((g) => g.name), pictures };
 }
 
@@ -2713,7 +2781,7 @@ function instance(c: Component, body: (...args: any[]) => unknown, args: unknown
     }
     const out = produced(site, body(...c.inputs.map((i) => inputs.get(i.name)), params));
     // Turned off (Next D1, Q24): the body ran as always, so its frame and knobs are there to set,
-    // and the call gives its audio input on. Nothing reads its output, so nothing of it is made.
+    // and the call gives its first input on, its audio or its notes. Nothing reads its output, so nothing of it is made.
     return bypass ? inputs.get(c.inputs[0].name) : out;
   } finally {
     closeFrame(m, frame);
@@ -2745,7 +2813,7 @@ function parse(
   let bypass = false;
   const options = (o: Record<string, unknown>, at: number) => {
     for (const k of Object.keys(o)) {
-      // Any effect can be turned off (Next D1, Q25); a call of anything else can't.
+      // Any effect or note effect can be turned off (Next D1, Q25, PKG-21); a call of anything else can't.
       if (k === "bypass" && c.bypassable) {
         const v = o[k];
         if (v !== undefined && typeof v !== "boolean") fail(c.id, `bypass must be true or false, not ${shown(v)}`);
@@ -2753,7 +2821,7 @@ function parse(
         continue;
       }
       if (k === "bypass" && !c.controls.some((x) => x.name === k) && !c.settings.some((x) => x.name === k)) {
-        fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio can be (options: ${names()})`);
+        fail(c.id, `can't be bypassed: only a call that takes audio first and gives audio, or notes first and gives notes, can be (options: ${names()})`);
       }
       const isSlot = c.controls.some((x) => x.name === k) || c.settings.some((x) => x.name === k);
       if (!isSlot) {
@@ -3099,7 +3167,7 @@ export type LaneOptions = {
   shared?: boolean;
 };
 
-/** Song time: where the song is, whether it plays, and its key. Never the engine's own clock (RENDER-7). */
+/** Song time: where the song is, whether it plays, its key and its tempo. Never the engine's own clock (RENDER-7). */
 export type Time = {
   /** The song's position in beats. */
   readonly beats: Control<"beats">;
@@ -3109,6 +3177,8 @@ export type Time = {
   readonly playing: Control<"unit01">;
   /** The song's key, as a set of notes (VOX-12): for a kernel that follows the key, as Tune does. Every note with no key set. */
   readonly key: Keyset;
+  /** The song's tempo where it is, in beats per minute (2.5.0): for a sound that keeps time while the song is stopped. */
+  readonly tempo: Control<"bpm">;
 };
 
 /** Each component call's time nodes, by the scope they are made in, then `<frame>:<what>`. */
@@ -3120,11 +3190,11 @@ const callTimes = new WeakMap<Scope, Map<string, Signal>>();
  * being built (a voice has its own): so the node sits inside the call that reads it, in the graph
  * view and in the delta's names (WRITE-8), and adding a call beside another renames neither's.
  */
-function timeNode(of: "beats" | "seconds" | "playing" | "key"): Signal {
+function timeNode(of: "beats" | "seconds" | "playing" | "key" | "tempo"): Signal {
   const scope = need(`time.${of}`);
   const m = scope.module;
   // A keyset is no number's unit, so the checker alone knows it (VOX-12).
-  const unit: Unit | undefined = of === "playing" ? "unit01" : of === "key" ? undefined : of;
+  const unit: Unit | undefined = of === "playing" ? "unit01" : of === "key" ? undefined : of === "tempo" ? "bpm" : of;
   const open = infoOf(m).open;
   if (!open.length) {
     let s = m.time.get(of);
@@ -3141,7 +3211,7 @@ function timeNode(of: "beats" | "seconds" | "playing" | "key"): Signal {
 
 /**
  * Song time, for a component's body as for a track's: `time.beats`, `time.seconds`,
- * `time.playing` and `time.key`. The same as `ctx.time`.
+ * `time.playing`, `time.key` and `time.tempo`. The same as `ctx.time`.
  */
 export const time: Time = Object.freeze({
   get beats() {
@@ -3155,6 +3225,9 @@ export const time: Time = Object.freeze({
   },
   get key() {
     return timeNode("key") as Keyset;
+  },
+  get tempo() {
+    return timeNode("tempo") as Control<"bpm">;
   },
 });
 

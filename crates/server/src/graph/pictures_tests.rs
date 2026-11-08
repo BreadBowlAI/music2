@@ -235,6 +235,28 @@ fn an_edited_folder_pack_draws_its_new_code() {
     let _ = std::fs::remove_dir_all(&pack);
 }
 
+// CARD-87: a picture is drawn at its song's sample rate: a song at 96 kHz draws `p.rate` as 96000.
+#[test]
+fn a_picture_is_drawn_at_the_songs_rate() {
+    let fixture = Fixture::new();
+    let manifest = std::fs::read_to_string(fixture.0.join("music2.toml")).unwrap();
+    fixture.put("music2.toml", &manifest.replace("sample_rate = 48000", "sample_rate = 96000"));
+    fixture.put(
+        "lib/tone.ts",
+        &TONE.replace(
+            "broken: { draw: (v, p) => [p.handle(1, 1, { x: `cut${9}` as any })], words: () => 'x' },",
+            "broken: { draw: (v, p) => [p.label(100, 0, `at ${p.rate} Hz`)], words: () => 'x' },",
+        ),
+    );
+    fixture.put("song.ts", SONG);
+    let (p, _driver) = Player::driven(48_000);
+    let graph = Graph::with_player(p).stored();
+    graph.open(&fixture.0).unwrap();
+    let rig = Rig { fixture, graph };
+    let answer = rig.ask("w1", "broken", true);
+    assert_eq!(answer["picture"]["shapes"][0]["words"], "at 96000 Hz", "{answer}");
+}
+
 // CARD-63: every picture's words are in the view, worked out by the runner after the view is made:
 // null until then, its words, or why it can't be drawn; again for a new revision's values.
 #[test]
@@ -285,10 +307,18 @@ export const squash = component(
     inputs: { x: port.audio() },
     controls: { threshold: control.db(-30).range(-60, 0) },
     output: port.audio(),
-    editor: { views: { curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }) } },
+    editor: {
+      views: {
+        curve: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }),
+        quiet: view.picture({ x: axis.log('hz', 20, 20000), y: axis.lin('db', -24, 24) }),
+      },
+    },
   },
   (x, { threshold }) => compress(x, { threshold, ratio: 10, makeup: 0 }),
-  { curve: { draw: (v, p) => [p.response()], words: (v) => `squash at ${v.threshold} dB` } },
+  {
+    curve: { draw: (v, p) => [p.response()], words: (v) => `squash at ${v.threshold} dB` },
+    quiet: { draw: (v, p) => [p.response({ level: -80 })], words: (v) => `squash under ${v.threshold} dB` },
+  },
 );
 export const thump = component(
   {
@@ -374,6 +404,21 @@ fn a_measured_curve_follows_a_knobs_drag() {
     let curve = &now[0]["shapes"][0];
     assert!(off_textbook(curve, 500.0, 2.0) < 0.5, "drawn at the dragged value: {}", off_textbook(curve, 500.0, 2.0));
     assert!(off_textbook(curve, 2400.0, 2.0) > 6.0, "not at the code's");
+}
+
+// CARD-80, CARD-82: a response is measured at the level its draw gives: a compressor's curve, refused
+// at −20 dBFS, is flat at 0 dB at −80 dBFS, under its threshold, where it leaves the sound as it is.
+#[test]
+fn a_response_is_measured_at_its_level() {
+    let rig = measured();
+    let loud = &rig.ask_in("w1", "sq", "Squash", "curve")["picture"];
+    assert!(loud["why"].as_str().is_some_and(|w| w.contains("its sound changes with how loud it is")), "{loud}");
+    let quiet = rig.ask_in("w1", "sq", "Squash", "quiet")["picture"]["shapes"][0].clone();
+    assert_eq!((&quiet["kind"], &quiet["level"]), (&json!("response"), &json!(-80.0)));
+    let pts: Vec<f64> =
+        quiet["points"].as_array().unwrap_or_else(|| panic!("measured: {quiet}")).iter().map(|x| x.as_f64().unwrap()).collect();
+    assert_eq!(pts.len(), 512, "256 points");
+    assert!(pts.chunks(2).all(|p| p[1].abs() < 0.001), "flat at 0 dB under its threshold: {pts:?}");
 }
 
 // CARD-83, CARD-85: a hit is the call's sound from one note, filled in by the server, and drawn

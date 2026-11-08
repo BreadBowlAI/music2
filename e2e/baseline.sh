@@ -5,10 +5,15 @@
 #   e2e/baseline.sh --tree <checkout> <out-dir>     render with the checkout as it is on disk
 #   M2=<m2 binary> e2e/baseline.sh --tree <checkout> <out-dir>    ... with an m2 you already built
 #
-# Cases (fourteen): the full renders of examples/first-song, examples/resample, examples/sounds,
-# examples/sampler, templates/starter, templates/empty and core/session/tests/fixtures/sampler-regions,
-# and `--from 4 --seconds 6` of each of them. A fixture the commit doesn't have (examples/sounds before
-# the sounds merge, sampler-regions before std 0.5.0) is skipped, and the script says so.
+# Cases (twenty-six): the full renders of examples/arp, examples/first-song, examples/resample,
+# examples/sounds, examples/sampler, templates/starter, templates/empty,
+# core/session/tests/fixtures/sampler-regions, core/session/tests/fixtures/meters,
+# core/session/tests/fixtures/clip, core/session/tests/fixtures/vocoder,
+# core/session/tests/fixtures/flanger and core/session/tests/fixtures/grains, and `--from 4 --seconds 6`
+# of each of them. A fixture the commit doesn't have (examples/sounds before the sounds merge,
+# sampler-regions before std 0.5.0, examples/arp before @m2/notes, meters before track meters2, clip
+# before track voice2, vocoder before track vocoder, flanger and grains before track effects3) is
+# skipped, and the script says so.
 # Each fixture is rendered from a fresh copy, with a scratch HOME, M2_AUDIO=none and the checkout's
 # own std and packs. <out-dir>/SHA256SUMS lists the WAVs; compare two folders with
 #   diff <a>/SHA256SUMS <b>/SHA256SUMS        (or: cd <b> && shasum -a 256 -c <a>/SHA256SUMS)
@@ -19,7 +24,7 @@
 set -euo pipefail
 
 REPO=${REPO:-$(cd "$(dirname "$0")/.." && pwd)}
-usage() { sed -n '2,18p' "$0" >&2; exit 2; }
+usage() { sed -n '2,19p' "$0" >&2; exit 2; }
 [[ $# -eq 2 || $# -eq 3 ]] || usage
 if [[ $1 == --tree ]]; then
   [[ $# -eq 3 ]] || usage
@@ -54,8 +59,9 @@ if [[ -z ${M2:-} ]]; then
 fi
 
 HAVE=()
-for f in examples/first-song examples/resample examples/sounds examples/sampler templates/starter templates/empty \
-  core/session/tests/fixtures/sampler-regions; do
+for f in examples/arp examples/first-song examples/resample examples/sounds examples/sampler templates/starter templates/empty \
+  core/session/tests/fixtures/sampler-regions core/session/tests/fixtures/meters core/session/tests/fixtures/clip \
+  core/session/tests/fixtures/vocoder core/session/tests/fixtures/flanger core/session/tests/fixtures/grains; do
   if [[ ! -d $SRC/$f ]]; then echo "skipped $f: ${COMMIT:-$SRC} doesn't have it" >&2; continue; fi
   mkdir -p "$OUT/fx/$(dirname $f)"; cp -R "$SRC/$f" "$OUT/fx/$f"; HAVE+=("$f")
 done

@@ -1,14 +1,14 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and five more), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump) and `@m2/vocals` (Tune, which moves a voice onto the song's key: [Tune a voice](audio.md#tune-a-voice)).
-- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 25 effects in eight groups.
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and eight more, the Flanger, Grains and the Clipper among them), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key, the Voice changer and the Vocoder: [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice), [Make a synth talk](audio.md#make-a-synth-talk)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 30 effects in eight groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
 |---|---|
 | **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
-| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, six of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, nine of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
 
 A song that plays them lists them, as the templates do:
 
@@ -123,21 +123,28 @@ A song made before std 0.8 is told, in words, what to change: first its std line
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
-**Effects**, as the effect browser groups them. Eight are `@m2/effects`', six `@m2/mixing`'s; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
+**Effects**, as the effect browser groups them. Eleven are `@m2/effects`', six `@m2/mixing`'s, three `@m2/vocals`'; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
 
 | Group | Effects |
 |---|---|
 | Filter | `lowpass`, `highpass`, `bandpass`, `notch` (std, `std/filter`) |
 | EQ | `eq3` (std, `std/fx`), `eq` (`@m2/mixing`) |
-| Dynamics | `compress`, `limit`, `duck` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband`, `pump` (`@m2/mixing`) |
+| Dynamics | `compress`, `limit`, `duck` (std, `std/fx`), `gate`, `transient`, `deesser`, `multiband`, `pump` (`@m2/mixing`), `clip` (`@m2/effects`) |
 | Distortion | `drive`, `bitcrush` (`@m2/effects`) |
-| Delay & Reverb | `delay`, `reverb` (`@m2/effects`) |
-| Modulation | `chorus`, `phaser`, `tremolo` (`@m2/effects`) |
+| Delay & Reverb | `delay`, `reverb`, `grains` (`@m2/effects`) |
+| Modulation | `chorus`, `flanger`, `phaser`, `tremolo` (`@m2/effects`) |
 | Utility | `gain`, `pan` (std, `std/dsp`), `widen` (`@m2/effects`) |
+| Voice | `tune`, `voiceChanger`, `vocoder` (`@m2/vocals`): [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice), [Make a synth talk](audio.md#make-a-synth-talk) |
 
-Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
+Chorus, the Flanger, phaser and tremolo move only while the song plays, and Grains starts new grains only then. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
-Each effect's card shows a picture of what it does, worked out from the effect's own sums: the delay's echoes (drag the first for the time and the mix, the second for the feedback), the reverb's tail as it fades (drag the dot for the size), a second of the chorus's, the phaser's and the tremolo's movement, drive's curve (drag the dot for more), a sine wave crushed by the bitcrusher, and how wide the widener makes the sound: how far apart a stereo sound's left and right go, and, past width 1, the width it makes up for a mono sound from its highs, as a fainter fan (drag the edge).
+Each effect's card shows a picture of what it does, worked out from the effect's own sums: the delay's echoes (drag the first for the time and the mix, the second for the feedback), the reverb's tail as it fades (drag the dot for the size), a second of the chorus's, the phaser's and the tremolo's movement, the Flanger's sweep with a line where it is now, where Grains takes its grains from with a line where the newest reads now (drag the band's edge for the spread), drive's curve (drag the dot for more), a sine wave crushed by the bitcrusher, and how wide the widener makes the sound: how far apart a stereo sound's left and right go, and, past width 1, the width it makes up for a mono sound from its highs, as a fainter fan (drag the edge).
+
+**`flanger`**, the Flanger (`@m2/effects`, under Modulation), is the jet's whoosh: a copy of the sound, a tiny bit late, sweeps against it, and the two cancel each other at some frequencies (notches) and add up at others (peaks), which sweep up and down. **Rate** (0.05 to 10 Hz, 0.25 at first) is how often it sweeps: 0.25 is once each 4 s. **Depth** (0 to 1) is how far: the copy is 0.1 ms late at the top of the sweep and up to 10 ms at the bottom. **Feedback** (−0.9 to 0.9) sends the copy round again: up, a ringing, metallic jet; down, a hollow one (the copy is turned upside down, so the notches move half way); 0, the plain sweep. **Mix** is how much of the copy you hear: 0.5 cuts the deepest notches. High Feedback makes it much louder: up to about 15 dB at its peaks at the opening Mix, and up to 20 dB at Mix 1. Turn Mix or the track down; its card says how loud when it's 6 dB or more. Its card draws one sweep of its notches, with a line where they are now. It adds no delay to the song.
+
+**`grains`**, Grains (`@m2/effects`, under Delay & Reverb), breaks the sound into tiny pieces (grains) from its last 2.5 seconds and plays them back overlapped: to smear it into a cloud or stretch it. **Size** (10 to 500 ms) is how long a grain is: short buzzes, long is smooth. **Density** (1 to 50 a second) is how many start: few is a stutter, many a cloud. **Spread** (0 to 2 s) is how far back they start: at 0 just behind your sound, at 2 s anywhere in its last two seconds. **Pitch** (−12 to 12 semitones) moves each grain up or down: +12 is a shimmer an octave up. **Mix** is how much of the grains you hear. However many grains play and wherever they come from, they come out about as loud as your sound (a few far apart, with gaps between them, a little quieter). Its card draws its last 2.5 seconds, a band where its grains start (drag its edge for the spread), and a line where the newest one reads now. It adds no delay to the song: a grain only ever reads what has already played.
+
+**`clip`**, the Clipper (`@m2/effects`, under Dynamics), makes a sound louder without going over: turn **Gain** up (0 to 24 dB) and every peak over the **Ceiling** (−24 to 0 dB, −0.3 dB at first) is cut flat. It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper (aliasing: tones a cut folds back down from above what you hear); on very bright sounds pushed hard, a few. No sample ever passes the ceiling. A sound under the ceiling passes as it is. Put it on a drum bus, or on the whole mix before the master's limiter. It makes the song 92 samples later (2 ms at 48 kHz), and every other track waits for it, as for Tune. Its card shows its last 3 seconds: faint, your sound pushed up by the gain; solid, what comes out; the part of the faint line over the ceiling's line is what it cut. Drag the line to move the ceiling.
 
 **`duck`** (`std/fx`) is the sidechain: `duck(bass.out, kick.env)` turns the bass down while the kick plays, by `depth` dB. Add it from + Effect like any effect, then pick the track in its card's **Listens to** (see [Sidechain](#sidechain) below). Until you pick one it listens to nothing and plays the sound unchanged.
 
@@ -177,7 +184,8 @@ Each effect's card shows a picture of what it does, worked out from the effect's
 - **The multiband compressor** splits the sound where `lowMid` and `midHigh` say, with the crossovers most multiband compressors use (Linkwitz-Riley's); if they cross, the lower one splits the lows from the mids. At ratio 1, with every band's `gain` at 0, it changes no level at any frequency; like every crossover of its kind, it turns the phase a little.
 - **Pump** dips the sound at the start of every step, by `depth` dB (0 is no dip at all), and brings it back over the step: `shape` 0 swells back slowly, in a straight line, `shape` 1 comes back fast, most of the way in the first third. `rate` is how long a step is, by a note's length: `1/4` (every beat, the default), `1/8`, `1/16` or `1/2`. It is a menu that rebuilds the sound when you pick, so it can't be automated. It follows the song's beats, so it stays in time at any tempo, and plays the same in the export.
 - Each but Pump has a few presets on its card's **Presets** (`Tight drums`, `Punchy drums`, `Bright voice`, `Gentle glue` …).
-- **Each card shows a picture** of what the tool does, beside its main knobs, and you drag the picture's dots as you would its knobs: one undo step when you let go. The EQ shows its whole curve, measured from its sound, over the sound's frequencies as it plays: a numbered dot for each band (drag it; scroll on it for its Q; double-click it to turn the band on or off). The gate shows the sound's level over the last 3 seconds and the line where it opens (drag the line). The transient shaper shows one hit before and after. The de-esser shows the band it listens to over the sound's frequencies (drag its dot across for the frequency, up and down for the threshold, which its words say: it is how loud the band's peaks may get, not a level on the picture). The multiband shows its three bands and where they split (drag a split, or a band's dot for its gain). Pump shows one bar of its dip, with the song's playhead (drag the foot for the depth, the curve for the shape). The gate, the de-esser and the multiband don't show yet how far they turn the sound down.
+- **Each card shows a picture** of what the tool does, beside its main knobs, and you drag the picture's dots as you would its knobs: one undo step when you let go. The EQ shows its whole curve, measured from its sound, over the sound's frequencies as it plays: a numbered dot for each band (drag it; scroll on it for its Q; double-click it to turn the band on or off). The gate shows the sound's level over the last 3 seconds and the line where it opens (drag the line). The transient shaper shows one hit before and after. The de-esser shows the band it listens to over the sound's frequencies (drag its dot across for the frequency, up and down for the threshold, which its words say: it is how loud the band's peaks may get, not a level on the picture). The multiband shows its three bands and where they split, measured from its sound as it sounds while quieter than its thresholds (drag a split, or a band's dot for its gain). Pump shows one bar of its dip, with the song's playhead (drag the foot for the depth, the curve for the shape).
+- **How far a tool turns the sound down**, as it plays, comes from the tool itself, never guessed from the levels. The gate's strip along the foot of its levels lights while it is open, and its second picture shows how far it turns the sound down over the last 3 seconds, up to its range (the dashed line). The de-esser's second picture shows how far it turns its band down, up to its amount (the dashed line). The multiband's second picture stands a bar for each band, low, mid and high, for how far it is turned down now, up to 24 dB. Each shows the most it turned down between two of the picture's reads (about 30 a second), so a short dip or opening is never missed.
 
 ### Sidechain
 
@@ -197,6 +205,7 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 | `duck` | turns the sound down while the track it listens to plays |
 | `compress` | squeezes the sound while the track it listens to is loud (**No other track**: its own sound) |
 | `gate` | opens only while the track it listens to plays (**No other track**: its own sound) |
+| `vocoder` | gives the sound the shape of the track it listens to, its row called **Talks with** (**No other track**: the sound as it is), [Make a synth talk](audio.md#make-a-synth-talk) |
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.
@@ -207,6 +216,47 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 **Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how.
 
 `m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `@m2/effects:delay` or `std:eq3`) and where they can go.
+
+## Note effects
+
+**In short:** a note effect changes notes before an instrument plays them. It takes notes and gives notes. music2's four are in `@m2/notes`: the **Arpeggiator**, **Chord**, **Note echo** and **Lock to key**.
+
+| Word | Meaning |
+|---|---|
+| **Note effect** | A sound that takes notes and gives notes, before the instrument. Ableton calls these MIDI effects, Logic MIDI FX |
+| **Arpeggio** | A chord played one note at a time, in a pattern, over and over. An **arpeggiator** makes one from the keys you hold |
+| **Step** | One note of an arpeggio. The **rate** is how long a step is: `1/16` is a sixteenth note, a quarter of a beat; a T (`1/8T`) is a triplet, three in the time of two |
+| **Gate** | How long each step sounds, as a share of the step: 0.5 is short and choppy, 1 joins the steps |
+
+Notes go left to right, then sound does:
+
+```
+keys you hold → Arpeggiator → Chord → Pluck → Reverb → the mixer
+                note effects           instrument   effect
+```
+
+| Note effect | What it does | Its knobs |
+|---|---|---|
+| **Arpeggiator** (`arp`) | Plays the notes you hold (or a chord in a clip) one at a time, in a pattern, on the song's beat. Stopped, it plays from the first key you press, at the song's tempo | **Style**: up, down, up and down (`updown`), as played (`played`), random. **Rate**: how long a step is. **Octaves**: how many octaves the pattern climbs. **Gate**. **Hold**: the keys you play and let go of keep playing, while the song plays or is stopped, until you press new ones, Play or Stop. A loop plays on with them, lap after lap, while you jam over it. A chord in a clip is never held: it ends with its notes. **Swing**, under All: moves every second step later (50% is straight, 66% a shuffle) |
+| **Chord** (`chord`) | Plays a whole chord from each note you play | **Shape**: octave, fifth, triad, 7th, sus2, sus4, add9. **In key**: on, the chord is built from the song's key, so one finger on D in C major plays D minor, the chord the roll's chord stamp places; off, the shapes are fixed (a triad is major, a 7th a dominant 7th). **Inversion**: 0 to 3, the lowest notes moved up an octave |
+| **Note echo** (`echo`) | Plays each note again, later and quieter, a few times: a delay of notes, not of sound | **Time**: how far apart, on the beat. **Repeats**: 1 to 7. **Fall**: how much quieter each one is. **Pitch**: how many semitones higher each one is (12 climbs by octaves) |
+| **Lock to key** (`lockToKey`) | Moves every note you play onto the song's key, so no note is wrong, as the roll's Lock to key moves drawn notes. A note between two goes down | **Shift**: then moves each note that many notes of the key up (or down): 2 in C major turns C E G into E G B, a harmony |
+
+**Add one.** Device shows a sound with a note effect as its patch, with the note effect's card in it, since the chain can't show one yet; and its **+** doesn't list note effects. Both come with the Graph's **+** on a wire. Until then, add one in code, or with `m2`:
+
+| How | What to do |
+|---|---|
+| In the track's code | Wrap the instrument's notes: `synth.pluck(lane.notes("chords"))` becomes `synth.pluck(arp(lane.notes("chords")))`. Add `import { arp } from "@m2/notes";` at the top of the file, and `"@m2/notes" = "0.1"` under `[dependencies]` in `music2.toml` |
+| With `m2` | `m2 add-effect <song> <call> @m2/notes:arp`, where `<call>` is the instrument's call (`tracks/keys.ts#1`; `m2 controls <song>` lists them). It goes before that instrument, with its import and the dependency, as one undo step |
+
+More than one chain left to right, as they are written inside out: `synth.pluck(arp(chord(lane.notes("chords"))))` plays a chord from each note, then arpeggiates it.
+
+- **The cards.** Each card's face is a picture, drawn for C, since a picture shows the card's values, not the notes that play: the Arpeggiator's pattern for a C major chord, with a line on the step it plays now; Chord's chord on C, on a small keyboard; Note echo's echoes as fading bars; Lock to key's twelve notes, C major's lit. Chord's and Lock to key's cards say the song's key under their name, or **Set the key** when it has none: with no key, Lock to key plays notes as they are, and Chord plays its fixed shapes.
+- **Playing live.** Hold keys on a MIDI keyboard, or the computer's keys, on the track: the Arpeggiator plays them, in time with the song while it plays. A key pressed a little after a step still plays that step at once. **Stop** stops it.
+- **The same every time.** Each step comes from where the song is, never from what played before: the song plays from any bar as it exports there (a chord that started before that bar starts at its next new note, as on any instrument).
+- **Recording** keeps the keys you pressed, not the arpeggio's notes: change the rate afterwards and the take plays the new pattern.
+- **Knobs move with the song.** Every knob and menu can be drawn on the timeline as automation. An LFO or another track's sound can't move them yet.
+- **Agents:** `arp(notes, { style, rate, octaves, gate, hold, swing })`, `chord(notes, { shape, inKey, inversion })`, `echo(notes, { time, repeats, fall, pitch })` and `lockToKey(notes, { shift })` from `"@m2/notes"`; a menu takes its name (`rate: "1/16"`, `octaves: "2"`). A part the musician should see and edit in the roll is notes written into a clip (`m2 clips`), not a note effect.
 
 ## Drum kits
 

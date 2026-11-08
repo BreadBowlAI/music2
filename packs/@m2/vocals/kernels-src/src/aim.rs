@@ -8,6 +8,11 @@
 //! and the note it aimed at last is kept while it is no more than [`BIAS`] semitones further than
 //! the nearest. Unvoiced, its aim is 0. The output eases toward `amount` × the aim with a time
 //! constant of `glide` seconds (a one-pole), and at glide 0 is there at once: Robot.
+//!
+//! Its two meters (ABI-13) are Tune's pitch line (VOX-27), which nothing in a song reads, each in
+//! semitones, + sharp and − flat, as it stands at the call's end: `off`, how far the pitch it hears
+//! is from the note it aims at (−aim), and `left`, how far its move leaves it from that note (the
+//! output less the aim: 0 once it has moved all the way). Unvoiced, both are 0.
 
 use m2_dsp::fx::{clampf, flush};
 use m2_kernel::{Cfg, Io, Kernel};
@@ -72,7 +77,7 @@ impl Snap {
 
 impl Kernel for Snap {
     const INPUTS: usize = 5;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 3;
 
     fn new(cfg: &Cfg) -> Self {
         Snap { sr: cfg.sample_rate.max(1.0), key: EVERY, note: None, seen: None, aim: 0.0, coef: (0.0, 1.0), out: 0.0 }
@@ -106,5 +111,11 @@ impl Kernel for Snap {
             }
             io.output(0)[t] = self.out;
         }
+        // Its meters: the aim moves the heard pitch onto its note, so the voice is −aim from it,
+        // and the move leaves it the output less the aim. Unvoiced (no note), both are 0, though the
+        // move still eases back.
+        let voiced = self.note.is_some();
+        io.meter(1, if voiced { (0.0 - self.aim) as f32 } else { 0.0 });
+        io.meter(2, if voiced { self.out - self.aim as f32 } else { 0.0 });
     }
 }

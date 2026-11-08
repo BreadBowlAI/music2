@@ -6,13 +6,25 @@
 // own colour. `shift` is 15 ms late: the engine delays the rest of the song to match (RENDER-18).
 // With no key set, every note is allowed, and the card says so (VOX-26).
 //
-// Its card has two knobs. Glide is how long a note takes to reach its pitch: 0 is Robot, the
+// Its card has three knobs. Glide is how long a note takes to reach its pitch: 0 is Robot, the
 // stepped pop sound; 0.1 s, Natural, where it opens, keeps the singer's vibrato. Amount is how
-// much of each note's error is fixed. Its presets are Natural and Robot.
+// much of each note's error is fixed. Formant moves the voice's colour and not its notes, as it is
+// to shift's `formant`: at 0, Tune plays what it played before it had the knob. Its presets are
+// Natural and Robot. Its face draws its pitch line (VOX-27, ./pictures): how far the voice is from
+// its note, and how far Tune leaves it, from snap's meters.
+//
+// The Voice changer (VOX-28) is two of the same kernels: pitch, and shift moving every note by
+// Pitch and the colour by Formant, with no snap, so it follows no key. Its face draws its spectrum
+// as the voice comes in and goes out, live. Its presets are Deep and Chipmunk.
+//
+// The Vocoder (VOX-29) makes a synth talk: one kernel of the pack's own, `vocoder`, shapes the
+// sound it goes after with another track's voice, picked on its card's Talks with row (CARD-35).
+// With no voice it plays its sound as it is.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params } from "@m2/core";
+import { pitchLine, pitchPicture, pitchWords, vocoderWords, voicePicture, voiceWords } from "./pictures";
 
-/** Tune: each sung note of `x` moved onto the nearest note of the song's key. */
+/** Tune: each sung note of `x` moved onto the nearest note of the song's key; `formant` (semitones) moves its colour on its own. */
 export const tune = component(
   {
     id: "tune",
@@ -22,19 +34,98 @@ export const tune = component(
     controls: {
       glide: control.secs(0.1).range(0, 0.4),
       amount: control.frac(1).range(0, 1),
+      // Its colour, not its notes: down deeper and darker, up smaller and brighter (VOX-20).
+      formant: control.semis(0).range(-12, 12),
     },
     output: port.audio(),
     editor: {
       category: "Voice",
       description: "Moves each sung note onto the song's key: Glide 0 steps like a robot, more slides naturally",
       insert: { glide: 0.1, amount: 1 },
+      // Its pitch line: how far the voice is from its note, and how far Tune leaves it, as they come (VOX-27).
+      views: { pitch: pitchPicture() },
+      face: ["pitch", "glide", "amount", "formant"],
     },
   },
-  (x: Audio, { glide, amount }: Params) => {
+  (x: Audio, { glide, amount, formant }: Params) => {
     const sung = kernel("@m2/vocals:pitch", { in: x });
     const hz = sung.port("hz");
     const clarity = sung.port("clarity");
     const by = kernel("@m2/vocals:snap", { hz, clarity, key: time.key, glide, amount });
-    return kernel("@m2/vocals:shift", { in: x, semitones: by, hz, clarity });
+    return kernel("@m2/vocals:shift", { in: x, semitones: by, hz, clarity, formant });
   },
+  { pitch: { draw: (_v, p) => pitchLine(p), words: (v) => pitchWords(v, { glide: "glide", amount: "amount" }) } },
+);
+
+/**
+ * Voice changer (VOX-28): the notes of the voice `x` moved by `pitch` semitones, and its colour by
+ * `formant` semitones, each on its own: both down for a deep voice, both up for a chipmunk. It is
+ * `pitch` and `shift`, with no `snap`, so it follows no key; 15 ms late, as Tune is.
+ */
+export const voiceChanger = component(
+  {
+    id: "voice-changer",
+    label: "Voice changer",
+    signature: signature<(x: Audio) => Audio>(),
+    inputs: { in: port.audio() },
+    controls: {
+      // As far as shift reaches (VOX-23).
+      pitch: control.semis(0).range(-7, 12),
+      formant: control.semis(0).range(-12, 12),
+    },
+    output: port.audio(),
+    editor: {
+      category: "Voice",
+      description: "Pitch moves the notes, Formant the colour: both down for a deep voice, both up for a chipmunk",
+      insert: { pitch: 0, formant: 0 },
+      // Its spectrum as the voice comes in and goes out, live: nothing worked out from sums.
+      views: { voice: voicePicture() },
+      face: ["voice", "pitch", "formant"],
+    },
+  },
+  (x: Audio, { pitch, formant }: Params) => {
+    const sung = kernel("@m2/vocals:pitch", { in: x });
+    return kernel("@m2/vocals:shift", { in: x, semitones: pitch, hz: sung.port("hz"), clarity: sung.port("clarity"), formant });
+  },
+  // It draws no shapes: what moves is the sound itself, its layers.
+  { voice: { draw: () => [], words: (v) => voiceWords(v, { pitch: "pitch", formant: "formant" }) } },
+);
+
+/**
+ * Vocoder (VOX-29): the synth `x` (the carrier) shaped by `voice`, so the synth talks: 20 bands of
+ * the voice, a third of an octave each, set the same bands of the synth, against the voice's loudest.
+ * `clarity` mixes in the voice's own S and T sounds (over 5 kHz), `smooth` is how fast the bands let
+ * go, and `formant` moves the voice's hills on the synth, up brighter, down deeper. With no voice it
+ * plays `x` as it is: its card's Talks with row picks one.
+ */
+export const vocoder = component(
+  {
+    id: "vocoder",
+    label: "Vocoder",
+    signature: signature<(x: Audio, voice?: Audio) => Audio>(),
+    // `voice` only listens (PKG-13): muting the track it comes from doesn't stop the synth talking. A
+    // call may leave it out (PKG-18): its card's row, called Talks with by its label, picks it
+    // (CARD-35), and its undo step reads "Lead talks with Vox".
+    inputs: { in: port.audio(), voice: port.audio({ sidechain: true, label: "Talks with" }).optional() },
+    controls: {
+      clarity: control.frac(0.5).range(0, 1),
+      smooth: control.secs(0.05).range(0.01, 0.2).log(),
+      formant: control.semis(0).range(-12, 12),
+    },
+    output: port.audio(),
+    editor: {
+      category: "Voice",
+      description: "Makes this sound talk: it takes the shape of the voice you pick in Talks with",
+      insert: { clarity: 0.5, smooth: 0.05, formant: 0 },
+      // The synth's spectrum as it comes in and goes out, live: the Voice changer's picture.
+      views: { spectrum: voicePicture() },
+      face: ["spectrum", "clarity", "smooth", "formant"],
+    },
+  },
+  // With no voice the kernel listens to nothing (`listen` 0) and plays `x` as it is, bit for bit
+  // (PKG-19); its voice, left out, reads silence (ABI-12).
+  (x: Audio, voice: Audio | undefined, { clarity, smooth, formant }: Params) =>
+    kernel("@m2/vocals:vocoder", { in: x, voice, clarity, smooth, formant, listen: voice === undefined ? 0 : 1 }),
+  // It draws no shapes: what moves is the sound itself, its layers.
+  { spectrum: { draw: () => [], words: (v) => vocoderWords(v, { formant: "formant", clarity: "clarity", smooth: "smooth" }) } },
 );

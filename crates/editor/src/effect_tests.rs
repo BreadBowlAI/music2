@@ -180,10 +180,12 @@ fn effects_are_listed_with_their_component_and_category() {
     assert_eq!(lowpass.label, s.catalog().components["std:lowpass"].label, "named by its descriptor's label");
     let delay = effects.iter().find(|e| e.component == "@m2/effects:delay").unwrap();
     assert_eq!((delay.name.as_str(), delay.module.as_str(), delay.category.as_str()), ("delay", "@m2/effects", "Delay & Reverb"));
-    // Every effect inserts only its own controls, and is nothing but its descriptor says.
+    // Every effect inserts only its own controls, and is nothing but its descriptor says: an
+    // effect, or a note effect, which goes before a sound (PKG-21).
     for e in &effects {
         let d = &s.catalog().components[&e.component];
-        assert!(d.is_effect() && !e.category.is_empty() && e.label == d.label, "{}", e.component);
+        let kind = if e.notes { d.is_note_effect() } else { d.is_effect() };
+        assert!(kind && !e.category.is_empty() && e.label == d.label, "{}", e.component);
         assert!(d.editor.insert.iter().all(|i| d.control(&i.slot).is_some()), "{}", e.component);
     }
 }
@@ -218,10 +220,13 @@ fn an_effects_args_are_written_after_the_audio_as_knobs_and_removing_restores_th
 }
 
 // PKG-3: every effect goes after a sound, and every control it declares is a knob on it from the
-// start: the ones its insert writes, written, and the others at their defaults.
+// start: the ones its insert writes, written, and the others at their defaults. (A note effect
+// goes before a sound that plays notes: `note_effect_tests.rs`.)
 #[test]
 fn every_effect_goes_after_a_sound_and_every_control_it_declares_is_a_knob() {
-    for effect in Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects() {
+    for effect in
+        Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n")).open().effects().into_iter().filter(|e| !e.notes)
+    {
         let fixture = Fixture::new(&format!("{HEAD}export default song(() => osc.saw(hz(110)));\n"));
         let mut s = fixture.open();
         let added = s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{}: {e}", effect.component));
@@ -249,7 +254,7 @@ fn every_effect_goes_on_a_channel_the_mixer_pans() {
     let source = format!(
         "{HEAD}import {{ mixer }} from \"std/mix\";\nexport default song(() => mixer({{ a: {{ in: osc.saw(hz(110)), pan: 0.3 }} }}));\n"
     );
-    for effect in Fixture::new(&source).open().effects() {
+    for effect in Fixture::new(&source).open().effects().into_iter().filter(|e| !e.notes) {
         let fixture = Fixture::new(&source);
         let mut s = fixture.open();
         s.add_effect(rev(&s), &call(&s, "osc.saw"), &effect.component).unwrap_or_else(|e| panic!("{} before a pan: {e}", effect.component));
@@ -1143,6 +1148,46 @@ fn a_duck_added_from_the_browser_listens_to_nothing_until_picked() {
     assert_eq!(sidechain(&mut s, at, &id, Some("kick")).unwrap().after, "kick.env");
     let song = f.read("song.ts");
     assert!(song.contains("}), kick.env, { depth: -8 })"), "{song}");
+}
+
+// VOX-29, CARD-35, PKG-19: a Vocoder added from + Effect after a synth's sound where the song reads
+// it listens to no voice (it plays its sound as it was: `a_vocoder_with_no_voice_plays_its_input_bit_
+// for_bit`). Its row is called Talks with, its input's label; with the input left out it says what
+// CARD-35 says of any audio input left out, "No other track"; it may be left out, and offers the
+// song's other tracks. Picking one writes that track's sound into the call, before its options:
+// one undo step named by the tracks as a sentence, "Hook talks with Chords" (review W7). None takes
+// it out again, byte for byte.
+#[test]
+fn a_vocoder_added_from_the_browser_listens_to_no_voice_until_picked() {
+    let f = crate::testing::fixture("templates/starter");
+    let mut s = f.open();
+    let at = rev(&s);
+    let added = s.add_effect(at, "import:hook.out", "@m2/vocals:vocoder").unwrap();
+    assert_eq!(
+        (added.before.as_str(), added.after.as_str()),
+        ("hook.out", "vocoder(hook.out, { clarity: 0.5, smooth: 0.05, formant: 0 })")
+    );
+    let alone = f.read("song.ts");
+    assert!(alone.contains("hook: { in: vocoder(hook.out, { clarity: 0.5, smooth: 0.05, formant: 0 }), db: db(4) },"), "{alone}");
+    assert!(alone.contains("import { vocoder } from \"@m2/vocals\";"), "{alone}");
+    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).expect("the Vocoder's Talks with row");
+    assert_eq!(
+        (r.label.as_deref(), r.track.as_deref(), r.given, r.optional, r.heard, r.nothing.as_str(), r.of.as_deref()),
+        (Some("Talks with"), None, false, true, false, "No other track", Some("Hook")),
+        "{r:?}"
+    );
+    let names: Vec<&str> = r.choices.iter().map(|(_, n)| n.as_str()).collect();
+    assert_eq!(names, ["Bass", "Chords", "Clap", "Hats", "Kick"], "the song's other tracks, by name");
+    let (at, id) = (rev(&s), call_on(&s, "vocoder", "hook.out"));
+    let picked = sidechain(&mut s, at, &id, Some("chords")).unwrap();
+    assert_eq!((picked.before.as_str(), picked.after.as_str()), ("", "chords.out"));
+    assert_eq!(f.read("song.ts"), alone.replace("vocoder(hook.out, {", "vocoder(hook.out, chords.out, {"), "the voice, and nothing else");
+    assert_eq!(s.step_names().0.and_then(|n| n.name), Some("Hook talks with Chords".to_string()), "named by the tracks");
+    let r = row(&s, &call_on(&s, "vocoder", "hook.out")).unwrap();
+    assert_eq!((r.track.as_deref(), r.given, r.heard), (Some("chords"), true, true));
+    let (at, id) = (rev(&s), call_on(&s, "vocoder", "hook.out"));
+    sidechain(&mut s, at, &id, None).unwrap();
+    assert_eq!(f.read("song.ts"), alone, "None takes the voice out, byte for byte");
 }
 
 // CARD-36: a track's sound where the song reads it (`hook: hook.out`) takes an effect too, written

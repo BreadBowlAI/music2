@@ -1,6 +1,6 @@
 # Kernel ABI v1
 
-The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5 to ABI-11, ABI-13](architecture.md#kernel-abi-reservations); this page is the detail behind them.
+The contract between music2 and kernel code. Frozen in step 9 (track ab). The contract's rules are [ABI-1, ABI-2, ABI-3, ABI-5 to ABI-11, ABI-13, ABI-15](architecture.md#kernel-abi-reservations); this page is the detail behind them.
 
 ## In short
 
@@ -11,6 +11,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 - The only thing a kernel may import is **`m2.asset_read`**: it copies part of an audio file into the kernel's memory.
 - An **offline kernel** is run by music2 off the audio thread, to make something from a file: `std:stretch` makes a warped clip's stretch. Song code can't call one.
 - A kernel may take **notes**: an `events<note>` input gets its lane's notes and controllers each block, stamped to the sample.
+- A kernel may give **notes**: an `events<note>` output makes it a **note effect**, such as an arpeggiator, which plays before the instrument ([below](#event-outputs-abi-15)).
 - A kernel may give **meters**: numbers for the window to show (how far a compressor turns down), which nothing in the song can read ([below](#meters-abi-13)).
 - A module says its version in a small part of its file named **`m2_abi`**: **1**. music2 reads it first, before it looks at anything else. It refuses a module built for any other version, and says which.
 - v1 only ever grows at the end: new optional exports, and new fields at the end of the settings block. Anything else is v2.
@@ -24,6 +25,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | Where the sound goes in and out | [The port table](#the-port-table) |
 | Reading an audio file | [The asset import](#the-asset-import) |
 | Notes in, each block | [Event inputs](#event-inputs) |
+| Notes out, each block | [Event outputs](#event-outputs-abi-15) |
 | Numbers for the window | [Meters](#meters-abi-13) |
 | A kernel music2 runs to make a render | [Offline kernels](#offline-kernels) |
 | What every kernel must keep | [The five rules](#the-five-rules-abi-5) |
@@ -31,7 +33,7 @@ The contract between music2 and kernel code. Frozen in step 9 (track ab). The co
 | How a module is built from Rust | [Building a module](#building-a-module-abi-10) |
 | What is fixed now, built later | [Reserved shapes](#reserved-shapes) |
 
-The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. A kernel that takes notes names those inputs in `Kernel::NOTES` and reads them with `io.events(i)`. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
+The Rust kit (`std/kernels-src/kernel`) writes all of this for you. Write a `struct`, implement `Kernel`, and call `export!`. In `Kernel::new`, `cfg.values` holds your numbers and `cfg.assets` your audio files; `asset.read(channel, frame, &mut buf)` reads one. A kernel that takes notes names those inputs in `Kernel::NOTES` and reads them with `io.events(i)`; one that gives notes writes them with `io.give(o).push(event)`. `std:sampler` (`std/kernels-src/src/sampler.rs`) is a whole example.
 
 ## Words used here
 
@@ -141,11 +143,11 @@ Where the host reads from is its choice, per sandbox. The kernel can't tell, and
 
 ## Event inputs
 
-A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track events; outputs of kind `events` are still [reserved](#reserved-shapes).
+A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track events; outputs since track notes-out ([below](#event-outputs-abi-15)).
 
 | Part | Rule |
 |---|---|
-| Wiring | connected straight to a notes lane at a module's top level, never inside a `poly` voice (a voice's kernels get their note from its note fields). It must be connected |
+| Wiring | connected to a notes lane, or a note effect over one, at a module's top level, never inside a `poly` voice (a voice's kernels get their note from its note fields). It must be connected |
 | Calls | whole blocks: `from` 0, `to` 128. So an event's frame is also its index in the call's other inputs |
 | Table | one entry: the address of the header |
 | Header (16 bytes) | `count` u32 at 0: events this block; `cap` u32 at 4: how many it has room for; `events` address at 8: where they start (just after the header); 4 bytes kept at 12 |
@@ -165,11 +167,31 @@ A kernel's input of kind `events<note>` in its manifest (ABI-8). Built in track 
 | 3 | a parameter (reserved: not sent yet) | value (f32), 0, 0 |
 | 4 | a MIDI message | its 3 bytes in the low 3 bytes of the first (status at 12, data at 13 and 14, 0 at 15), 0, 0 |
 
-`id` is the note's: an On and its Off share it, and no two notes sounding at once have the same. A MIDI message's `id` is 0.
+`id` is the note's: an On and its Off share it, and no two notes sounding at once have the same. Its top bit (`1 << 31`, the live bit) says the note is a key played live ([RENDER-14](architecture.md#events)), and only while the song plays live: offline no note has it. The kit's `live(id)` reads it. A MIDI message's `id` is 0.
 
 The Rust kit reads all this for you (ABI-9): name the inputs in `Kernel::NOTES`, and `io.events(i)` gives this call's events, each as an `Event`, its frame counted from the call's first frame, so `frame` indexes the call's other inputs. A kind the kit doesn't know is skipped.
 
 **Why it keeps v1:** this shape was fixed among v1's reservations, and a module without an events input sees nothing new. So it is an addition, as an optional export is.
+
+## Event outputs (ABI-15)
+
+A kernel's output of kind `events<note>` in its manifest: `outputs = ["out: events<note>"]`. Built in track notes-out. Such a kernel is a **note effect**: music2 runs it before the song's sounds, in the lane pass, right after its source ([RENDER-41](architecture.md#events)), and what it gives reaches instruments as a lane's notes do.
+
+| Part | Rule |
+|---|---|
+| Ports | the notes output is its only output (meters may follow it); exactly one `events<note>` input, which its notes come from; no latency |
+| `fan` | in its `[[kernel]]`: how many notes it may give for each note it takes, 1 to 8 (1 when left out): a chord of four says 4, a note and seven echoes 8. Only a kernel with a notes output may say it |
+| Table | one entry: the address of the header, as an input's |
+| Header (16 bytes) | as an input's: `count` u32 at 0, `cap` u32 at 4, `events` address at 8, 4 bytes kept at 12. The host writes `cap` and `events` at birth, and sets `count` to 0 before each call |
+| What the kernel does | writes up to `cap` events at `events`, 24 bytes each as an input's, each with its frame in the block, and sets `count`. Any order: the host sorts them. It MUST set the live bit only on a note it makes from a live one, and keeps it on each note it makes from one (`(made & !LIVE) \| (id & LIVE)`), so a key played live stays one. Offline the host gives no note the bit |
+| What the host reads | `count` events, never more than its own room, from the place it put them: never the header's `cap` or `events`, which a kernel could overwrite. A `count` past the room is a fault, as a note left out is |
+| Room (`cap`) | its source's room, live notes counted in, times `fan`; never more than 8 times a lane's smallest room, or its source's when that is more |
+
+Then the host's **guard** reads them ([RENDER-42](architecture.md#events)): it puts them in order, gives each On a note id of the engine's, sends an Off only for a note this kernel started, passes the pedal and the wheels on, and leaves out what no one can play (a frame outside the block, a pitch outside 0 to 127, a velocity outside 0 to 1, a kind it doesn't send). Each one left out is a fault: an export fails. It ends every note the kernel has sounding at a Stop, a seek or a wrap, so a kernel that forgets an Off hangs nothing. At a Stop or a seek it lets the pedal up first; at a wrap the pedal stays down, as a lane's does ([RENDER-36](architecture.md#events)). An On and its Off at one frame, in that order, is a note of no length, which it leaves out, as a lane does.
+
+The Rust kit writes the bytes for you (ABI-9): name the notes output in `Kernel::NOTES` beside the notes input, by its place among all ports (`INPUTS + o`, so `&[0, 1]` for one input and one output); `io.give(o)` is a writer for output `o`, and refuses one not named there, and `push(event)` writes one, its frame counted from the call's first frame, as `io.events` reads them, and says false once `cap` are written. Pass the wheels and the pedal on in one line: `if let Event::Midi { .. } = e { give.push(e); }`.
+
+**Why it keeps v1:** this shape was fixed among v1's reservations, and a module without a notes output sees nothing new.
 
 ## Meters (ABI-13)
 
@@ -244,11 +266,10 @@ A module is built with the Rust kit from one crate, compiled for `wasm32-unknown
 
 ## Reserved shapes
 
-Fixed now, so later work can't collide with v1. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working. Offline kernels were reserved here too; they are built now ([above](#offline-kernels)), and so are event inputs ([above](#event-inputs)).
+Fixed now, so later work can't collide with v1. Each is built with the first kernel that needs it, as an optional export or a new settings field, so v1 modules keep working. Offline kernels were reserved here too; they are built now ([above](#offline-kernels)), and so are event inputs and outputs ([above](#event-inputs)).
 
 | Shape | Fixed now | Built when |
 |---|---|---|
-| Event outputs | as [event inputs](#event-inputs): one port-table entry, the address of `{count: u32, cap: u32, events: address}`, and the same 24-byte events. A kernel writes up to `cap` events to an output and sets its `count` | the first arpeggiator or kernel that makes notes |
 | `k_save`, `k_load` | `k_save(state, dst, cap) -> i32`: writes the state's bytes at `dst`, returns how many (more than `cap`: nothing written, that many needed). `k_load(state, src, len) -> i32`: 1 loaded, 0 refused. Both run off the audio thread, as a plugin's state load does. A loaded state is the one `k_reset` returns to; the settings block's `saved`/`saved_len` give it at birth | the first kernel with state worth saving |
 | `k_latency`, `k_tail` | `k_latency(state) -> i32` and `k_tail(state) -> i32`, in frames. Each depends only on the settings, so the host may ask once, after `k_new` | latency compensation; a kernel whose tail outlasts `k_active` |
 

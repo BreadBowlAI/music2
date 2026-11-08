@@ -84,8 +84,12 @@ impl Squeeze {
     }
 }
 
-/// Multiband compressor. Inputs: in, low_mid and mid_high (Hz), then for the low, mid and high bands [its split is copied: src/pictures.ts `splitDb`, CARD-115]
+/// Multiband compressor. Inputs: in, low_mid and mid_high (Hz), then for the low, mid and high bands [its card measures its split, CARD-115]
 /// each its threshold (dB), ratio, attack and release (seconds) and gain (dB).
+///
+/// Its meters (ABI-13, PACK-26): `low_reduction`, `mid_reduction` and `high_reduction`, how far each
+/// band's compressor turns it down, its gain aside, in dB, the most of the call's frames, as std's
+/// `compress` says it (ABI-14). Its card's split draws them, a bar each (CARD-115).
 pub struct Multiband {
     sr: f32,
     split: [Glide; 2],
@@ -98,7 +102,7 @@ pub struct Multiband {
 
 impl Kernel for Multiband {
     const INPUTS: usize = 18;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 4;
 
     fn new(cfg: &Cfg) -> Self {
         let sr = cfg.sample_rate.max(1.0);
@@ -117,6 +121,7 @@ impl Kernel for Multiband {
         let ins: [(usize, usize); 19] = std::array::from_fn(|i| if i < 2 { (0, i) } else { (i - 1, 0) });
         let (ins, [ol, or]) = io.ports(ins, [(0, 0), (0, 1)]);
         let mut outs = [ol, or];
+        let mut most = [0.0f32; 3];
         for i in 0..outs[0].len() {
             let nyquist = 0.45 * self.sr;
             let [a, b] = [self.split[0].next(clampf(ins[2][i], 10.0, nyquist)), self.split[1].next(clampf(ins[3][i], 10.0, nyquist))];
@@ -145,10 +150,18 @@ impl Kernel for Multiband {
                 let peak = bands[0][b].abs().max(bands[1][b].abs());
                 let controls = std::array::from_fn(|f| ins[4 + b * 5 + f][i]);
                 g[b] = band.next(self.sr, peak, controls);
+                // A compare, not f32::max: in wasm that is a few instructions more for a NaN no
+                // envelope holds, and the multiband's frames are many.
+                if band.env > most[b] {
+                    most[b] = band.env;
+                }
             }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { bands[c][0] * g[0] + bands[c][1] * g[1] + bands[c][2] * g[2] } else { 0.0 };
             }
+        }
+        for (b, &m) in most.iter().enumerate() {
+            io.meter(1 + b, m);
         }
     }
 }

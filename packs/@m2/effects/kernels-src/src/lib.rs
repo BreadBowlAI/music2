@@ -23,6 +23,14 @@ use std::f32::consts::{FRAC_PI_2, TAU};
 use m2_dsp::fx::{Filter, Glide, Line, Phase, clampf, flush, prewarp, sane};
 use m2_kernel::{Cfg, Io, Kernel, abi, export};
 
+pub mod clipper;
+pub mod cloud;
+pub mod comb;
+
+pub use clipper::Clip;
+pub use cloud::Grains;
+pub use comb::Flanger;
+
 abi!();
 
 // ---------------------------------------------------------------- delay
@@ -484,6 +492,12 @@ impl Kernel for Widen {
 }
 
 export!(widen, Widen);
+
+export!(clip, Clip);
+
+export!(flanger, Flanger);
+
+export!(grains, Grains);
 
 #[cfg(test)]
 mod tests;

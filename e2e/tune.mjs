@@ -3,16 +3,22 @@
 // the track's own code, its import, the pack's [dependencies] line and its lock in one edit. Its card
 // says "Every note allowed" with Set the key while the song has no key (its tooltip: "No key set:
 // every note is allowed."); Set the key opens the key field, and once a key is picked the card says
-// it ("Key: A major"). Glide and Amount are knobs: dragging each writes
+// it ("Key: A major"). Glide, Amount and Formant (since track voice2) are knobs: dragging each writes
 // its new value into the call, one undo step each. The Robot preset writes Glide 0, one undo step.
-// Each state linted.
+// Its face draws its pitch line (VOX-27): while the song plays the voice (216 Hz, 56.68 as a MIDI
+// number), the faint line says how far it is from A (57), the nearest note of A major: 0.32 of a
+// semitone flat, −0.32; and once eased, the solid line, how far Tune leaves it, near 0: from Tune's own
+// meters. Each state linted.
 //
 //   node e2e/tune.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
+import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const RATE = 48000;
+// The version of @m2/vocals music2 comes with: what + Effect asks for and locks.
+const [, version, major, minor] = /^version = "(([0-9]+)\.([0-9]+)\.[0-9]+)"$/m.exec(fs.readFileSync(path.join(import.meta.dirname, "../packs/@m2/vocals/m2pkg.toml"), "utf8"));
 
 /** A mono 16-bit WAV of 2 s: a buzzy voice (a few harmonics of 216 Hz, a little flat of A). */
 function wav(path) {
@@ -38,7 +44,7 @@ function wav(path) {
   fs.writeFileSync(path, b);
 }
 
-const { page, errors, show, view, key, box } = await open(1440, 900);
+const { page, errors, show, view, key, box, api } = await open(1440, 900);
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
   check(bad.length === 0, `lint: ${what}${bad.length ? `: ${bad.slice(0, 3).join(" | ")}` : ""}`);
@@ -88,8 +94,8 @@ await page.click('[data-effect-browser] [data-effect="tune"]');
 const added = 'tune(lane.audio("clips"), { glide: 0.1, amount: 1 })';
 check(await until(() => read("tracks/vox.ts").includes(added), 15000), `Tune goes around the vocal, in its track, at Natural: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/vox.ts").includes('import { tune } from "@m2/vocals";') && read("song.ts").includes("vox: vox.out,"), "imported there; the song reads the track as it did");
-check(/^"@m2\/vocals" = "1\.1"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
-check(/name = "@m2\/vocals"\nversion = "1\.1\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(read("music2.toml").split("\n").includes(`"@m2/vocals" = "${major}.${minor}"`), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
+check(read("music2.lock").includes(`name = "@m2/vocals"\nversion = "${version}"`), `music2.lock locks it, at ${version}`);
 
 // ---------------------------------------------------------------- no key: the card says so (VOX-26)
 
@@ -128,10 +134,18 @@ await until(async () => (await page.$eval(amount, (e) => e.getAttribute("aria-di
 await turn(amount, -30);
 check(await until(() => /amount: 0\.\d+ \}\)/.test(read("tracks/vox.ts"))), `dragging Amount down writes less: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune amount"), `one undo step: ${await undoTitle()}`);
+// VOX-20: Formant, the voice's colour, left out of the call until it is turned.
+const formant = `${card} [data-knob="formant"]`;
+check(!!(await until(() => page.$(formant), 5000)), "Formant is a knob");
+await until(async () => (await page.$eval(formant, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
+await turn(formant, 30);
+check(await until(() => /amount: 0\.\d+, formant: [1-9][0-9.]* \}\)/.test(read("tracks/vox.ts"))), `dragging Formant up writes a brighter colour: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
+check(await stepIs("Tune formant"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 await key("Meta+z");
-check(await until(() => files() === before), "two ⌘Z take Amount and Glide back, byte for byte");
+await key("Meta+z");
+check(await until(() => files() === before), "three ⌘Z take Formant, Amount and Glide back, byte for byte");
 
 // ---------------------------------------------------------------- the Robot preset (review U11)
 
@@ -145,5 +159,33 @@ check(await until(async () => /Undo .*Robot/.test((await undoTitle()) ?? "")), `
 await page.mouse.click(10, 10);
 await key("Meta+z");
 check(await until(() => files() === before), "⌘Z takes it back, byte for byte");
+
+// ---------------------------------------------------------------- its pitch line (VOX-27)
+
+const pic = `${card} [data-picture="pitch"]`;
+check(!!(await until(() => page.$(`${pic} svg`), 15000)), "Tune's face draws its pitch line");
+const said = () => page.$eval(`${pic} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
+check(
+  /^Faint: how far your voice is from its note\. Solid: how far it is after Tune, which moves it onto the note in about 100 ms\./.test((await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => "")) ?? ""),
+  `its words: ${await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null)}`,
+);
+await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 3, on: true }) });
+await seen(pic);
+await page.mouse.click(10, 10);
+await page.keyboard.press("Space");
+const lines = [];
+const eased = ([off, left]) => Math.abs((off?.v ?? 9) + 0.32) < 0.05 && Math.abs(left?.v ?? 9) <= 0.02;
+for (let i = 0; i < 60 && !lines.some(eased); i++) {
+  await sleep(100);
+  lines.push(await said());
+}
+const last = lines.at(-1) ?? [];
+check(
+  lines.some(eased),
+  `while the voice plays, its faint line 0.32 of a semitone flat of A (−0.32), and once eased the solid line on the note (0): ${JSON.stringify(last)}`,
+);
+await page.screenshot({ path: `${ROOT}/tune-pitch-line.png` });
+await page.keyboard.press("Space");
+await linted(card, "Tune's card with its pitch line");
 
 done(errors);

@@ -231,13 +231,17 @@ pub enum ViewOf {
     },
 }
 
-/// A picture's axis (CARD-60): `lin`, `log` or `time`, its unit, and where it starts and ends.
+/// A picture's axis (CARD-60): `lin`, `log` or `time`, its unit, where it starts and ends, and
+/// whether it is drawn bare, with no grid and no numbers (2.5): left out when not, so a picture's
+/// descriptor keeps its bytes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Axis {
     pub scale: String,
     pub unit: Unit,
     pub lo: f64,
     pub hi: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bare: bool,
 }
 
 /// A group of a card (CARD-17): its name, and the values and views in it, in order.
@@ -302,6 +306,14 @@ impl Descriptor {
         self.editor.category.is_some() && self.inputs.first().is_some_and(|i| i.kind == PortKind::Audio)
     }
 
+    /// Whether editors offer it as a note effect (PKG-21): a category, notes first that a call must
+    /// give, and notes out. It goes before what plays notes, as an effect goes after a sound.
+    pub fn is_note_effect(&self) -> bool {
+        self.editor.category.is_some()
+            && self.inputs.first().is_some_and(|i| i.kind == PortKind::Notes && !i.optional && !i.many)
+            && self.output.as_ref().is_some_and(|o| o.kind == PortKind::Notes)
+    }
+
     /// Whether a new track can play it (PKG-7): notes first, its only input but those a call may leave
     /// out (PKG-20), and audio out. The + Track list offers it only when it has a category, which
     /// groups it.
@@ -337,6 +349,11 @@ impl Catalog {
     /// The components editors offer as effects.
     pub fn effects(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
         self.components.values().filter(|d| d.is_effect())
+    }
+
+    /// The components editors offer as note effects (PKG-21).
+    pub fn note_effects(&self) -> impl Iterator<Item = &Arc<Descriptor>> {
+        self.components.values().filter(|d| d.is_note_effect())
     }
 
     /// The components a new track can play.

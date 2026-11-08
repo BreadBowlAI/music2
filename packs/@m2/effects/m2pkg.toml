@@ -1,20 +1,21 @@
 [package]
 name = "@m2/effects"
-version = "1.3.0"
+version = "1.4.0"
 license = "MIT OR Apache-2.0"
-description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush and widen"
+description = "music2's effects that colour a sound: delay, reverb, grains, chorus, a flanger, phaser, tremolo, drive, bitcrush, widen and a clipper"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "stereo"]
+tags = ["effects", "delay", "reverb", "granular", "chorus", "flanger", "phaser", "tremolo", "distortion", "clipper", "stereo"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/effects.wasm"
 
 [dependencies]
-# @m2/core 2.4, the pack contract (PACK-22) and the minor it uses (PACK-23): its cards draw
-# pictures (CARD-60, view.picture) and name their faces (CARD-40), which came in 2.4. So any 2.x
-# from 2.4 runs it, and a change to @m2/core that would break it is a 3.0.0.
-"@m2/core" = "2.4"
+# @m2/core 2.5, the pack contract (PACK-22) and the minor it uses (PACK-23): its pictures work their
+# sums out at the song's rate (p.rate, CARD-87), which came in 2.5; its cards draw pictures (CARD-60,
+# view.picture) and name their faces (CARD-40) since 2.4. So any 2.x from 2.5 runs it, and a change
+# to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.5"
 # Its pictures' words are std/pictures', new in std 0.10 (CARD-90); the std kernels its effects
 # play (chorus and drive, which @m2/synths plays too) are in std 0.7 and later; the rest are its own.
 std = "0.10"
@@ -22,9 +23,9 @@ std = "0.10"
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/effects:bitcrush", …)`.
 # Each is safe with any input or setting: no NaN, no runaway feedback, and tails that end in exact
-# silence. Phaser, tremolo and the bitcrusher follow the song through their last input, `playing`:
-# the pack connects it to `time.playing`. Left out, it is 1, as if the song always played. Delay,
-# reverb, phaser, tremolo and widen were std's until std 0.9, and play the same bits.
+# silence. Phaser, tremolo, the bitcrusher, the Flanger and Grains follow the song through their last
+# input, `playing`: the pack connects it to `time.playing`. Left out, it is 1, as if the song always
+# played. Delay, reverb, phaser, tremolo and widen were std's until std 0.9, and play the same bits.
 
 [[kernel]]
 name = "delay"
@@ -85,3 +86,40 @@ name = "widen"
 description = "Mid/side width: 0 mono, 1 unchanged, 2 twice as wide; widens mono input too, and stays mono-compatible"
 inputs = ["in: audio<2>", "width: control<scalar> = 1.5 in 0..2"]
 outputs = ["out: audio<2>"]
+
+[[kernel]]
+name = "clip"
+description = "Clipper (PACK-34): turns the sound up by gain (dB), then cuts every peak over ceiling (dB) flat, at four times the song's rate, twice, so its cuts fold almost nothing back into hearing; then cuts any sample still over the ceiling, so none ever is. Under the ceiling it is its input times its gain, 92 frames late. Its meter, pushed: the loudest it heard after its gain, at four times the rate, in dB (down to -100), the most of the call's frames"
+inputs = ["in: audio<*>", "gain: control<db> = 0 in 0..24", "ceiling: control<db> = -0.3 in -24..0"]
+outputs = ["out: audio<*>"]
+meters = ["pushed: control<db>"]
+latency = 92
+
+[[kernel]]
+name = "flanger"
+description = "Flanger (PACK-35): the sound and a copy of it 0.1 ms × 100^(depth × (0.5 − 0.5 cos 2πφ)) late, φ its LFO's phase (0 at the start; on a stereo sound the right side a quarter cycle behind), read between samples; its line takes in the sound plus the copy times feedback, and out is (1 − mix) × in + mix × the copy, turned over when feedback is below 0. Its LFO moves only while playing is 1 (left out, always). Its meter, phase: its LFO's phase at the call's last frame, 0 to 1"
+inputs = [
+  "in: audio<*>",
+  "rate: control<hz> = 0.25 in 0.05..10",
+  "depth: control<unit01> = 0.7",
+  "feedback: control<bipolar> = 0.5 in -0.9..0.9",
+  "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]
+meters = ["phase: control<unit01>"]
+
+[[kernel]]
+name = "grains"
+description = "Grains (PACK-36): the last 2.5 s of its input; a grain starts on average every 1/density seconds (each gap from half to one and a half of that, at random), size seconds long in a Hann window, reading from back + u × spread seconds before the newest sound (u at random) at 2^(pitch/12) times its speed, back keeping it behind the newest sound until it ends; at most 16 at once, the oldest let go over 5 ms; summed, and the sum turned down by sqrt(B / (W × A)) when that is under 1: A its power, B the grains' own powers summed, W their windows' powers summed, each smoothed over 50 ms. Its clock and its seeded random numbers, into which each grain mixes the newest sample as it starts, move only while playing is 1 (left out, always). Its meter, reads: how far back the newest grain that plays reads now, in seconds (0 when none plays)"
+inputs = [
+  "in: audio<*>",
+  "size: control<seconds> = 0.1 in 0.01..0.5",
+  "density: control<hz> = 20 in 1..50",
+  "spread: control<seconds> = 0.3 in 0..2",
+  "pitch: control<semitones> = 0 in -12..12",
+  "mix: control<unit01> = 0.5",
+  "playing: control<unit01> = 1",
+]
+outputs = ["out: audio<*>"]
+meters = ["reads: control<seconds>"]

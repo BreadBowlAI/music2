@@ -320,6 +320,10 @@ fn planned_call_forms_are_current() {
             if steps.is_some() && written == "wobble" {
                 continue;
             }
+            // No cable reaches a note effect's value (RENDER-41).
+            if written == "wobble" && crate::cable::cable_refused(&s, c).is_some() {
+                continue;
+            }
             let Some(edits) = c.planned(written) else { continue };
             if written == "wobble" && edits[0].0 < wobble_end {
                 continue;
@@ -327,6 +331,11 @@ fn planned_call_forms_are_current() {
             let edited = edited(&source, call, &edits);
             forms.push(format!("    // song.ts:{} `{}` leaves out {slot}: {what} written in\n    {edited},\n", call.line, call.callee));
         }
+    }
+    // No cable into a note effect's value (RENDER-41): the planners never write one.
+    for name in ["arp", "chord", "echo", "lockToKey"] {
+        let cabled = forms.iter().filter(|f| f.contains(&format!("`{name}` leaves out")) && f.contains("a cable written in")).count();
+        assert_eq!(cabled, 0, "a cable planned into {name}");
     }
     // A channel's first pan (8b.3b).
     let crate::mix::Mixing::One(m) = crate::mix::mixer(s.accepted()) else { panic!("every-component has one mixer") };
@@ -349,7 +358,14 @@ fn planned_call_forms_are_current() {
         forms.push(format!("    // song.ts:{} `mixer` writes db(…): {} written in\n    {edited},\n", call.line, c.origin.slot().unwrap()));
     }
     for e in s.effects() {
-        forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert));
+        match e.notes {
+            // A note effect goes before what plays notes (PKG-21): here, the polysynth's pluck.
+            true => forms.push(format!(
+                "    // {} added before a sound\n    synth.pluck({}(lane.notes(\"chords\"){})),\n",
+                e.component, e.name, e.insert
+            )),
+            false => forms.push(format!("    // {} added after a sound\n    {}(osc.saw(semis(60)){}),\n", e.component, e.name, e.insert)),
+        }
     }
     // An installed plugin added after a sound (gaps #32), as the probe.
     let (open, close) = crate::plugins::effect_text("clap:m2.probe", "m2-probe");

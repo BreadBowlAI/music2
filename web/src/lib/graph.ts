@@ -71,6 +71,8 @@ interface KnobCommon {
   home: Home;
   /** Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it. */
   automate_refused?: string;
+  /** Why no cable can drive it (a note effect's value, RENDER-41): a dragged cable doesn't offer it (DV-6). */
+  cable_refused?: string;
 }
 
 /** A knob of a number: dragged, typed, stepped (the server always says `number`; a knob made here may leave it out). */
@@ -179,6 +181,8 @@ export interface PictureAxis {
   unit: string;
   lo: number;
   hi: number;
+  /** Drawn bare: no grid, no numbers (CARD-60), for shapes that say their own words. */
+  bare?: boolean;
 }
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */
@@ -218,7 +222,18 @@ export interface PortEdge { from: string; from_port: string; to: string; to_port
  * what adding it writes after the audio (`, 1000` gives `lowpass(x, 1000)`). `category` is a free string
  * the browser groups by (PKG-7).
  */
-export interface Effect { component: string; label: string; name: string; module: string; description: string; category: string; insert: string; pack?: PackFrom }
+export interface Effect {
+  component: string;
+  label: string;
+  name: string;
+  module: string;
+  description: string;
+  category: string;
+  insert: string;
+  pack?: PackFrom;
+  /** A note effect (PKG-21): it goes before what plays notes, not after a sound. */
+  notes?: boolean;
+}
 
 /** The pack a browser item is from (PACK-11): none for std's and the song's own. */
 export interface PackFrom { name: string; version: string }

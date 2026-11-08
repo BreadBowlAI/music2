@@ -1,0 +1,16 @@
+{"clips": [
+  {"id": "chord001", "start": 0, "length": 16, "notes": [
+    {"pitch": "A2", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "C3", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "E3", "start": 0, "length": 4, "velocity": 0.7},
+    {"pitch": "F2", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "A2", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "C3", "start": 4, "length": 4, "velocity": 0.7},
+    {"pitch": "C3", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "E3", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G3", "start": 8, "length": 4, "velocity": 0.7},
+    {"pitch": "G2", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "B2", "start": 12, "length": 4, "velocity": 0.7},
+    {"pitch": "D3", "start": 12, "length": 4, "velocity": 0.7}
+  ]}
+]}

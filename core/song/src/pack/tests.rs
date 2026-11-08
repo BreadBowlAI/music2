@@ -593,7 +593,7 @@ fn installing_the_bundled_packs_twice_writes_nothing() {
     let bundled: Vec<String> =
         bundled(&source_packs()).iter().map(|d| PkgManifest::at(d).unwrap().package).map(|p| format!("{} {}", p.name, p.version)).collect();
     assert_eq!(names, bundled);
-    assert_eq!(names.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable");
+    assert_eq!(names.len(), 7, "@m2/drums, @m2/effects, @m2/mixing, @m2/notes, @m2/synths, @m2/vocals and @m2/wavetable");
     for (dir, _) in &first {
         let m = PkgManifest::at(dir).unwrap();
         let hash = store.check(&m.package.name, &m.package.version).unwrap();
@@ -628,7 +628,8 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
     assert_eq!(said[0], ("drums".into(), Ok("Installed".into())));
     assert_eq!(said[1], ("effects".into(), Ok("Installed".into())));
     assert_eq!(said[2], ("mixing".into(), Ok("Installed".into())));
-    let Err(why) = &said[3].1 else { panic!("{said:?}") };
+    assert_eq!(said[3], ("notes".into(), Ok("Installed".into())));
+    let Err(why) = &said[4].1 else { panic!("{said:?}") };
     assert!(why.starts_with(&format!("@m2/synths {v} is installed already with other files")), "{why}");
     assert_eq!(store.check(&PackName::new("@m2/synths").unwrap(), &v).unwrap(), theirs, "theirs is left as it was");
     remove_tree(&d).unwrap();
@@ -641,7 +642,7 @@ fn a_bundled_version_installed_with_other_files_is_refused_and_the_others_go_on(
 fn every_bundled_pack_is_the_version_its_record_names() {
     let mut wrong = vec![];
     let packs = bundled(&source_packs());
-    assert_eq!(packs.len(), 6, "@m2/drums, @m2/effects, @m2/mixing, @m2/synths, @m2/vocals and @m2/wavetable");
+    assert_eq!(packs.len(), 7, "@m2/drums, @m2/effects, @m2/mixing, @m2/notes, @m2/synths, @m2/vocals and @m2/wavetable");
     for dir in &packs {
         let m = PkgManifest::at(dir).unwrap();
         let (name, v) = (&m.package.name, m.package.version);

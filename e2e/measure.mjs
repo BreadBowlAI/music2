@@ -142,13 +142,13 @@ const asked = await agent("/api/graph/picture", { session: state.session, revisi
 const response = asked.picture?.shapes?.find((s) => s.kind === "response");
 check(response?.name === "curve" && response?.points?.length === 512, `an agent reads the measured curve: ${response?.points?.length} numbers`);
 // Each point the agent reads, placed on the picture as the window places it (a log axis across, dB
-// up, above the axis's labels), is a point the window drew (review M11).
+// up, on the plot the window clips its shapes to, right of the y axis's labels and above the x
+// axis's), is a point the window drew (review M11).
 const placed = async () => {
-  const [w, h] = (await page.$eval(`${pic} svg`, (e) => e.dataset.size)).split("x").map(Number);
-  const plot = Math.max(1, h - 12);
+  const [left, plot, span] = await page.$eval(`${pic} svg clipPath rect`, (r) => [r.x.baseVal.value, r.height.baseVal.value, r.width.baseVal.value]);
   const out = [];
   for (let i = 0; i + 1 < response.points.length; i += 2) {
-    const x = (Math.log(response.points[i] / 20) / Math.log(1000)) * w;
+    const x = left + (Math.log(response.points[i] / 20) / Math.log(1000)) * span;
     const y = (1 - (response.points[i + 1] + 24) / 48) * plot;
     out.push(`${x.toFixed(1)},${y.toFixed(1)}`);
   }

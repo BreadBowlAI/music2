@@ -307,7 +307,13 @@ fn render_song(s: &Session) -> Vec<[f32; 2]> {
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2). The
 /// other one, examples/with-plugins, hosts plugins, which need not. `sampler-regions` is std's
 /// Sampler playing regions (PKG-16): two velocity layers, two takes in turn, a release and a loop.
-const PURE: [&str; 7] = [
+/// `meters` is `@m2/mixing`'s gate, de-esser and multiband, each working, whose sound their meters
+/// must not change (PACK-26).
+/// `clip` is `@m2/effects`' Clipper played hard, 92 frames late (PACK-34). `vocoder` is
+/// `@m2/vocals`' Vocoder: a synth's chords made to talk by another track's made-up voice (VOX-29).
+/// `flanger` and `grains` are `@m2/effects`' Flanger and Grains (PACK-35, PACK-36).
+const PURE: [&str; 13] = [
+    "examples/arp",
     "examples/first-song",
     "examples/resample",
     "examples/sounds",
@@ -315,6 +321,11 @@ const PURE: [&str; 7] = [
     "templates/starter",
     "templates/empty",
     "core/session/tests/fixtures/sampler-regions",
+    "core/session/tests/fixtures/meters",
+    "core/session/tests/fixtures/clip",
+    "core/session/tests/fixtures/vocoder",
+    "core/session/tests/fixtures/flanger",
+    "core/session/tests/fixtures/grains",
 ];
 
 /// A copy of the repo's fixture `rel`, such as `examples/first-song`.

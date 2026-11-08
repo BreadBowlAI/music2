@@ -5,8 +5,8 @@
 
 import { component, control, db, hz, khz, ms, port, setting, type Audio } from "@m2/core";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
-import { curvePicture } from "std/pictures";
-import { band, bandPicture, dip, dipPicture, hit, hitPicture, levelsPicture, split, threshold } from "../../../../packs/@m2/mixing/src/pictures";
+import { curvePicture, reductionPicture } from "std/pictures";
+import { band, bandDown, bandPicture, dip, dipPicture, gateDown, hit, hitPicture, levelsPicture, split, threshold } from "../../../../packs/@m2/mixing/src/pictures";
 
 declare const x: Audio, kick: Audio, snare: Audio;
 
@@ -160,6 +160,30 @@ export const dots = [
         // @ts-expect-error Pump's depth from 0 to 1, moved up and down in dB
         draw: (v, p) => dip(p, v, { depth: "depth", shape: "shape", rate: "rate" }),
         words: () => "a dip",
+      },
+    },
+  ),
+  // How far the gate and the de-esser turn down (CARD-112, CARD-114): the value each reads for its
+  // guide line is one of the sound's own numbers.
+  component(
+    { id: "range-misnamed", inputs: { in: port.audio() }, controls: { range: control.db(-80) }, output: port.audio(), editor: { views: { down: reductionPicture({ most: 80 }) } } },
+    (x) => x,
+    {
+      down: {
+        // @ts-expect-error a range the sound doesn't have
+        draw: (v, p) => gateDown(p, v, { range: "ranges" }),
+        words: () => "how far",
+      },
+    },
+  ),
+  component(
+    { id: "amount-a-menu", inputs: { in: port.audio() }, settings: { amount: setting.choice(["little", "lots"], "little") }, output: port.audio(), editor: { views: { down: reductionPicture() } } },
+    (x) => x,
+    {
+      down: {
+        // @ts-expect-error an amount that is a menu, not a number
+        draw: (v, p) => bandDown(p, v, { amount: "amount" }),
+        words: () => "how far",
       },
     },
   ),

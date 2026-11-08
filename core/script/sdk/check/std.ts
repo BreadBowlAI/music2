@@ -224,5 +224,5 @@ lfo(beats, { bypass: true });
 // @ts-expect-error bypass is true or false
 reverb(x, { bypass: 1 });
 
-// The Wavetable, whose pictures are std's envelope and lowpass (CARD-96, CARD-30), typed by its descriptor.
+// The Wavetable, whose pictures are std's envelope and its own filter (CARD-96, CARD-133), typed by its descriptor.
 wavetable(notes, { tableA: "vowels", cutoff: hz(2400) });

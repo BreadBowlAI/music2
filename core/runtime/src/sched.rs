@@ -244,7 +244,7 @@ pub const WHEELS: usize = 3;
 pub const WHEEL_EVENTS: usize = WHEELS + 1;
 
 /// The pedal's slot among the wheels.
-const PEDAL: usize = 2;
+pub(crate) const PEDAL: usize = 2;
 
 /// Whether `bytes` is a wheel a lane keeps (D8, RENDER-35): pitch bend, CC 1, CC 64 (the sustain
 /// pedal) or CC 121, on any channel, with 7-bit data.
@@ -253,9 +253,10 @@ pub fn is_wheel([status, d1, d2]: [u8; 3]) -> bool {
 }
 
 /// A wheel as live input last set it, and the source that did: its raw value (pitch bend's 14 bits,
-/// centred at 8192; the mod wheel's and the pedal's 7, at rest at 0).
+/// centred at 8192; the mod wheel's and the pedal's 7, at rest at 0). A note effect's guard keeps
+/// the wheels its kernel passed the same way (RENDER-42).
 #[derive(Clone, Copy, Debug)]
-struct Wheel {
+pub(crate) struct Wheel {
     value: u16,
     rest: u16,
     source: u32,
@@ -264,18 +265,41 @@ struct Wheel {
 }
 
 impl Wheel {
-    const AT_REST: [Wheel; WHEELS] = [
+    pub(crate) const AT_REST: [Wheel; WHEELS] = [
         Wheel { value: 8192, rest: 8192, source: 0, send: false },
         Wheel { value: 0, rest: 0, source: 0, send: false },
         Wheel { value: 0, rest: 0, source: 0, send: false },
     ];
 
-    fn set(&mut self, source: u32, value: u16) {
-        (self.value, self.source, self.send) = (value, source, true);
+    fn set(&mut self, source: u32, value: u16, send: bool) {
+        (self.value, self.source, self.send) = (value, source, send);
     }
 
-    fn moved(&self) -> bool {
+    pub(crate) fn moved(&self) -> bool {
         self.value != self.rest
+    }
+
+    /// Sent again at the next block, when it is away from rest.
+    pub(crate) fn again(&mut self) {
+        self.send |= self.moved();
+    }
+
+    /// Back at rest, which the next block says when it was away (a reset).
+    pub(crate) fn rest_later(&mut self) {
+        (self.send, self.value) = (self.moved(), self.rest);
+    }
+
+    /// Back at rest now, when it was away: the event wheel `k` sends to say so.
+    pub(crate) fn let_go(&mut self, k: usize) -> Option<[u8; 3]> {
+        self.moved().then(|| {
+            (self.value, self.send) = (self.rest, false);
+            self.bytes(k)
+        })
+    }
+
+    /// The event wheel `k` sends at a block's first frame, when it waits to be sent.
+    pub(crate) fn take_send(&mut self, k: usize) -> Option<[u8; 3]> {
+        std::mem::take(&mut self.send).then(|| self.bytes(k))
     }
 
     /// The event wheel `k` sends: on channel 1, as a lane's notes are (D8: every channel).
@@ -285,6 +309,18 @@ impl Wheel {
             PEDAL => [0xB0, 64, self.value as u8],
             _ => [0xB0, 1, self.value as u8],
         }
+    }
+}
+
+/// Turn `wheels` as `bytes`, a wheel ([`is_wheel`]), says, for `source`; each one moved is sent at
+/// the next block when `send`.
+pub(crate) fn turn(wheels: &mut [Wheel; WHEELS], source: u32, [status, d1, d2]: [u8; 3], send: bool) {
+    match (status & 0xF0, d1) {
+        (0xE0, _) => wheels[0].set(source, u16::from(d1) | u16::from(d2) << 7, send),
+        (0xB0, 1) => wheels[1].set(source, u16::from(d2), send),
+        (0xB0, 64) => wheels[PEDAL].set(source, u16::from(d2), send),
+        (0xB0, 121) => wheels.iter_mut().for_each(|w| w.set(source, w.rest, send)),
+        _ => debug_assert!(false, "not a wheel: `Renderer::live` and the guard refuse it"),
     }
 }
 
@@ -364,9 +400,7 @@ impl NoteScheduler {
     /// The wheels away from rest are sent again at the next block: a new plan's consumers hear
     /// them, and those that kept them hear what they have.
     pub(crate) fn resend_wheels(&mut self) {
-        for w in self.wheels.iter_mut().filter(|w| w.moved()) {
-            w.send = true;
-        }
+        self.wheels.iter_mut().for_each(Wheel::again);
     }
 
     /// Take a live note's On or Off, or its source's release (MON-7), sent at the next block's
@@ -380,8 +414,8 @@ impl NoteScheduler {
                 let held = self.live.iter().flatten().filter(|n| !n.off).count();
                 match self.live.iter_mut().find(|n| n.is_none()).filter(|_| held < LIVE) {
                     Some(free) => {
-                        let id = *next;
-                        *next = next.checked_add(1).unwrap_or(1);
+                        // A key played live: its id has the live bit (RENDER-14).
+                        let id = crate::event::take_id(next) | crate::event::LIVE_BIT;
                         *free = Some(LiveNote { source, handle, id, pitch, velocity, on: true, off: false });
                     }
                     None => self.events.drop_on(),
@@ -391,20 +425,10 @@ impl NoteScheduler {
             LiveEv::Release { source } => {
                 self.end_live(|n| n.source == source);
                 for w in self.wheels.iter_mut().filter(|w| w.source == source && w.moved()) {
-                    w.set(source, w.rest);
+                    w.set(source, w.rest, true);
                 }
             }
-            LiveEv::Midi { source, bytes: [status, d1, d2] } => match (status & 0xF0, d1) {
-                (0xE0, _) => self.wheels[0].set(source, u16::from(d1) | u16::from(d2) << 7),
-                (0xB0, 1) => self.wheels[1].set(source, u16::from(d2)),
-                (0xB0, 64) => self.wheels[PEDAL].set(source, u16::from(d2)),
-                (0xB0, 121) => {
-                    for w in &mut self.wheels {
-                        w.set(source, w.rest);
-                    }
-                }
-                _ => debug_assert!(false, "not a wheel: `Renderer::live` refuses it"),
-            },
+            LiveEv::Midi { source, bytes } => turn(&mut self.wheels, source, bytes, true),
         }
     }
 
@@ -421,8 +445,8 @@ impl NoteScheduler {
     fn send_live(&mut self) {
         let Self { live, events, wheels, .. } = self;
         for (k, w) in wheels.iter_mut().enumerate() {
-            if std::mem::take(&mut w.send) {
-                events.push(Event::Midi { frame: 0, bytes: w.bytes(k) });
+            if let Some(bytes) = w.take_send(k) {
+                events.push(Event::Midi { frame: 0, bytes });
             }
         }
         for slot in live.iter_mut() {
@@ -483,9 +507,7 @@ impl NoteScheduler {
         self.cursor = 0;
         self.sounding.clear();
         *self.live = [None; LIVE_ROOM];
-        for w in &mut self.wheels {
-            (w.send, w.value) = (w.moved(), w.rest);
-        }
+        self.wheels.iter_mut().for_each(Wheel::rest_later);
         self.swapped = false;
         self.events.clear();
     }
@@ -508,10 +530,8 @@ impl NoteScheduler {
                     }
                 }
                 // RENDER-36: a seek or a Stop lets the pedal up, there, before the Offs.
-                let pedal = &mut self.wheels[PEDAL];
-                if matches!(run.jump, Jump::Seek | Jump::Stop) && pedal.moved() {
-                    (pedal.value, pedal.send) = (pedal.rest, false);
-                    self.events.push(Event::Midi { frame: run.off, bytes: pedal.bytes(PEDAL) });
+                if let Some(bytes) = matches!(run.jump, Jump::Seek | Jump::Stop).then(|| self.wheels[PEDAL].let_go(PEDAL)).flatten() {
+                    self.events.push(Event::Midi { frame: run.off, bytes });
                 }
                 self.cursor = self.data.seek(run.at);
             }
@@ -570,8 +590,7 @@ impl NoteScheduler {
                 events.drop_on();
                 continue;
             }
-            let id = *next_id;
-            *next_id = next_id.checked_add(1).unwrap_or(1);
+            let id = crate::event::take_id(next_id);
             let frame = run.off + (n.start - run.at) as u32;
             events.push(Event::On { frame, id, pitch: n.pitch, velocity: n.velocity, from_pitch: None });
             if n.end < end {

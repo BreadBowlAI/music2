@@ -129,6 +129,7 @@ impl Pack {
             view: view.into(),
             values: values.to_string(),
             memo: "song#1".into(),
+            rate: 48_000,
         }
     }
 
@@ -224,6 +225,16 @@ fn a_pictures_declaration_is_refused_in_words() {
     let b = picture(time, code).unwrap_or_else(|e| panic!("{e:?}"));
     let ViewOf::Picture { x, .. } = &b.components.iter().find(|d| d.id == "c").unwrap().editor.views[0].of else { panic!() };
     assert_eq!((x.scale.as_str(), &x.unit, x.lo, x.hi), ("time", &m2_ir::Unit::Seconds, 0.0, 2.0));
+    assert!(!x.bare, "an axis isn't bare unless it says so");
+    // CARD-60: an axis drawn bare, with no grid and no numbers, carried as such; one that isn't
+    // carries no `bare`, so its descriptor keeps its bytes.
+    let bare = "view.picture({ x: axis.lin(\"scalar\", 0, 15, { bare: true }), y: axis.time(1, { bare: false }) })";
+    let b = picture(bare, code).unwrap_or_else(|e| panic!("{e:?}"));
+    let d = b.components.iter().find(|d| d.id == "c").unwrap();
+    let ViewOf::Picture { x, y, .. } = &d.editor.views[0].of else { panic!() };
+    assert!(x.bare && !y.bare, "{x:?} {y:?}");
+    let text = serde_json::to_string(&d.editor.views[0]).unwrap();
+    assert_eq!(text.matches("bare").count(), 1, "only the bare axis says it: {text}");
     let views = "editor.views' \"curve\"";
     for (bad, code_, says, at) in [
         (
@@ -269,6 +280,18 @@ fn a_pictures_declaration_is_refused_in_words() {
             views,
         ),
         (ok.replace(" })", ", colour: \"red\" })"), code, "a picture has no field \"colour\" (fields: x, y, live)", views),
+        (
+            ok.replace("axis.lin(\"db\", -24, 24)", "axis.lin(\"db\", -24, 24, { bare: 1 } as any)"),
+            code,
+            "its y axis's bare is true or false, not 1",
+            views,
+        ),
+        (
+            ok.replace("axis.lin(\"db\", -24, 24)", "axis.lin(\"db\", -24, 24, { bars: true } as any)"),
+            code,
+            "its y axis has no option \"bars\" (options: bare)",
+            views,
+        ),
         (
             ok.into(),
             "",
@@ -384,8 +407,8 @@ fn the_runner_checks_each_draw_in_words() {
 }
 
 // CARD-80, CARD-65: the layers music2 measures are given with no points, each at most once, on the
-// axes it draws them on, and counted as the points they are filled with; each mistake greys the
-// picture in words, as the runner finds it and again in Rust.
+// axes it draws them on, and counted as the points they are filled with; a response's click from
+// −80 to −20 dB; each mistake greys the picture in words, as the runner finds it and again in Rust.
 #[test]
 fn a_measured_layer_is_checked_in_words() {
     let hz = "x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24)";
@@ -419,6 +442,11 @@ fn a_measured_layer_is_checked_in_words() {
             Err("gives p.response the name \"a b\": a line's name is a plain name of up to 32 characters"),
         ),
         (hz, "p.response(), p.line(new Array(19490).fill(1))", Err("draws more than 20,000 numbers")),
+        // A quieter click, for a sound with thresholds to rest under (measure2 §6.2).
+        (hz, "p.response({ level: -80 })", Ok(json!([{"kind": "response", "level": -80.0}]))),
+        (hz, "p.response({ level: -90 })", Err("gives p.response the level -90: its click plays at −80 to −20 dB")),
+        (hz, "p.response({ level: -10 })", Err("gives p.response the level -10: its click plays at −80 to −20 dB")),
+        (hz, "p.response({ level: \"quiet\" })", Err("gives p.response the level \"quiet\": its click plays at −80 to −20 dB")),
     ];
     let views: Vec<String> =
         draws.iter().enumerate().map(|(i, (axes, ..))| format!("        m{i}: view.picture({{ {axes} }}),\n")).collect();
@@ -452,6 +480,11 @@ fn a_measured_layer_is_checked_in_words() {
         "gives p.response twice: a picture holds one at most"
     );
     assert!(forged("m1", "[{\"kind\":\"response\"}]").unwrap_err().contains("a response is drawn across hz and up db"));
+    assert_eq!(
+        forged("m0", "[{\"kind\":\"response\",\"level\":-90}]").unwrap_err(),
+        "gives p.response the level -90: its click plays at −80 to −20 dB"
+    );
+    assert!(forged("m0", "[{\"kind\":\"response\",\"level\":-80}]").is_ok());
     assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":2}]").unwrap_err().contains("at most 1 second"));
     assert!(forged("m1", "[{\"kind\":\"hit\",\"note\":60,\"seconds\":0.75}]").unwrap_err().contains("past its x axis's end at 0.5 s"));
     assert!(
@@ -459,6 +492,93 @@ fn a_measured_layer_is_checked_in_words() {
             .unwrap_err()
             .contains("a hit is drawn across seconds and up bipolar")
     );
+}
+
+// CARD-87: a draw reads the song's sample rate, `p.rate`, as the ask gives it; a part made at one
+// rate is made again at another, never drawn from what another rate made, and kept for each.
+#[test]
+fn a_draw_reads_the_songs_rate() {
+    let index = r#"import { axis, component, control, kernel, port, view, type Audio } from "@m2/core";
+/** How many times the part was made: what shows it is made again at another rate, and kept for each. */
+let made = 0;
+export const rated = component(
+  {
+    id: "rated",
+    label: "Rated",
+    inputs: { x: port.audio() },
+    controls: { freq: control.hz(1000) },
+    output: port.audio(),
+    editor: { views: { pic: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) }) } },
+  },
+  (x, v) => kernel<Audio>("test:rated", { x, ...v }),
+  {
+    pic: {
+      draw: (v, p) => [p.label(100, 0, `at ${p.rate} Hz`), p.part("half", () => [p.mark("x", p.rate / 2, `made ${(made = (made % 9) + 1)}`)])],
+      words: (v, p) => `the song's rate, ${p.rate} Hz`,
+    },
+  },
+);
+"#;
+    let pack = Pack::new("rated", index);
+    let runner = Runner::new();
+    let draw = |rate: u32| shapes(runner.draw(Ask { rate, ..pack.ask("rated", "pic", json!({"freq": 1000})) }));
+    let low = draw(44_100);
+    assert_eq!(low["shapes"][0]["words"], "at 44100 Hz");
+    assert_eq!(low["words"], "the song's rate, 44100 Hz", "the words get it too (review S3)");
+    assert_eq!((&low["shapes"][1]["shapes"][0]["at"], &low["shapes"][1]["shapes"][0]["words"]), (&json!(22_050.0), &json!("made 1")));
+    let high = draw(96_000);
+    assert_eq!(high["shapes"][0]["words"], "at 96000 Hz");
+    assert_eq!(high["words"], "the song's rate, 96000 Hz");
+    assert_eq!(
+        (&high["shapes"][1]["shapes"][0]["at"], &high["shapes"][1]["shapes"][0]["words"]),
+        (&json!(48_000.0), &json!("made 2")),
+        "the part is made again at another rate"
+    );
+    assert_eq!(draw(44_100), low, "and kept for each");
+}
+
+// CARD-87, PACK-23 (review S4): a draw is marked by what it used that came in 2.5: `rate` when it or
+// its words read p.rate, a part given again from where it was kept marking it as when it was made
+// (so a picture's first draw, run twice, is the same both times); `level` for a response's level
+// other than −20; `bare` for a picture with a bare axis (CARD-60). One that used none has no mark.
+#[test]
+fn a_draw_is_marked_by_what_of_2_5_it_used() {
+    let index = r#"import { axis, component, control, kernel, port, view, type Audio } from "@m2/core";
+const curve = () => view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24) });
+export const marks = component(
+  {
+    id: "marks",
+    label: "Marks",
+    inputs: { x: port.audio() },
+    controls: { freq: control.hz(1000) },
+    output: port.audio(),
+    editor: { views: { plain: curve(), drawn: curve(), said: curve(), parted: curve(), quiet: curve(), loud: curve(), both: curve(), bare: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24, { bare: true }) }) } },
+  },
+  (x, v) => kernel<Audio>("test:marks", { x, ...v }),
+  {
+    plain: { draw: (v, p) => [p.response(), p.mark("x", v.freq ?? 1000, "its frequency")], words: () => "nothing of 2.5" },
+    drawn: { draw: (v, p) => [p.mark("x", p.rate / 4, "a quarter of the rate")], words: () => "the rate, drawn" },
+    said: { draw: (v, p) => [p.mark("x", v.freq ?? 1000, "its frequency")], words: (v, p) => `the rate, said: ${p.rate} Hz` },
+    parted: { draw: (v, p) => [p.part("half", () => [p.mark("x", p.rate / 2, "half the rate")])], words: () => "the rate, in a part" },
+    quiet: { draw: (v, p) => [p.response({ level: -80 })], words: () => "a quiet click" },
+    loud: { draw: (v, p) => [p.response({ level: -20 })], words: () => "a click at −20 dB, as with none" },
+    both: { draw: (v, p) => [p.response({ level: -60 }), p.mark("x", p.rate / 4, "a quarter of the rate")], words: () => "both" },
+    bare: { draw: (v, p) => [p.mark("x", v.freq ?? 1000, "its frequency")], words: () => "on a bare axis" },
+  },
+);
+"#;
+    let pack = Pack::new("marks", index);
+    let runner = Runner::new();
+    let uses = |view: &str| shapes(runner.draw(pack.ask("marks", view, json!({"freq": 1000}))))["uses"].clone();
+    assert_eq!(uses("plain"), Value::Null, "nothing of 2.5: no mark");
+    assert_eq!(uses("drawn"), json!(["rate"]));
+    assert_eq!(uses("said"), json!(["rate"]), "its words read the rate");
+    assert_eq!(uses("parted"), json!(["rate"]), "a part made, then given again on the first draw's second run");
+    assert_eq!(uses("parted"), json!(["rate"]), "and on a later draw");
+    assert_eq!(uses("quiet"), json!(["level"]));
+    assert_eq!(uses("loud"), Value::Null, "a click at −20 dB plays as one with no level");
+    assert_eq!(uses("both"), json!(["level", "rate"]));
+    assert_eq!(uses("bare"), json!(["bare"]), "a picture with a bare axis (CARD-60)");
 }
 
 // CARD-61, CARD-65: words are one line of 1 to 400 characters, counted as characters, with no
@@ -693,6 +813,7 @@ fn a_songs_own_sound_draws_from_its_code() {
         view: "curve".into(),
         values: at_defaults().to_string(),
         memo: "song#1".into(),
+        rate: 48_000,
     };
     assert_eq!(shapes(runner.draw(ask))["words"], "Band 1: 0 dB at 200 Hz; Band 2: 0 dB at 2000 Hz");
 }

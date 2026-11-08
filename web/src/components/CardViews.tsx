@@ -1,6 +1,6 @@
 // A card's views (CARD-26, taste.md DV-9 and DV-10): pictures over values that have homes, drawn in music2's look
-// (taste.md §2.8). Each holds no value of its own. An envelope and a filter are pictures std draws
-// (CARD-96, CARD-30), drawn by `PictureView`.
+// (taste.md §2.8). Each holds no value of its own. An envelope and a filter's curve are pictures
+// (CARD-96, CARD-91), drawn by `PictureView`.
 //
 // - Keys: which recording plays on which keys and how hard; a click plays the key, as hard as high.
 // - Scope: the call's sound as it plays, asked of the server only while it shows (TAP-8, TAP-16).

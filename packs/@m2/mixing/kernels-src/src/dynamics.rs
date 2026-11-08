@@ -13,6 +13,12 @@ fn db(x: f32) -> f32 {
     20.0 * x.max(FLOOR).log10()
 }
 
+/// How far a gain of `g` (1 or less) turns a sound down, in dB, as std's dynamics say it (ABI-14):
+/// 0 for 1, never −0.
+fn turned_down(g: f32) -> f32 {
+    if g >= 1.0 { 0.0 } else { -20.0 * g.max(FLOOR).log10() }
+}
+
 // ---------------------------------------------------------------- the gate
 
 /// How far under the threshold the key must go before the gate may close: its hysteresis.
@@ -27,6 +33,10 @@ const MIN_HOLD: f32 = 0.025;
 /// under it for `hold` (at least 25 ms). It opens over `attack`, a straight line in level from
 /// `range` to 0 dB, and closes over `release`, a straight line in dB down to `range`. The key is
 /// its own input when the component is given no other (`gate(x)` passes `x`).
+///
+/// Its meters (ABI-13, PACK-26), which nothing in a song reads: `reduction`, how far its gain turns
+/// the sound down, in dB, the most of the call's frames; and `open`, 1 or 0, as it is at the call's
+/// end. Its card's pictures draw them (CARD-112).
 pub struct Gate {
     sr: f32,
     open: bool,
@@ -47,7 +57,7 @@ pub struct Gate {
 
 impl Kernel for Gate {
     const INPUTS: usize = 7;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 3;
 
     fn new(cfg: &Cfg) -> Self {
         let sr = cfg.sample_rate.max(1.0);
@@ -71,6 +81,7 @@ impl Kernel for Gate {
         let ([l, r, kl, kr, threshold, attack, hold, release, range], [ol, or]) =
             io.ports([(0, 0), (0, 1), (1, 0), (1, 1), (2, 0), (3, 0), (4, 0), (5, 0), (6, 0)], [(0, 0), (0, 1)]);
         let (ins, mut outs) = ([l, r], [ol, or]);
+        let mut least = 1.0f32;
         for i in 0..outs[0].len() {
             let read = [threshold[i], attack[i], hold[i], release[i], range[i]];
             if read != self.read {
@@ -99,10 +110,15 @@ impl Kernel for Gate {
             } else if self.g > target {
                 self.g = (self.g * self.down).max(target);
             }
+            if self.g < least {
+                least = self.g;
+            }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { sane(ins[c][i]) * self.g } else { 0.0 };
             }
         }
+        io.meter(1, turned_down(least));
+        io.meter(2, if self.open { 1.0 } else { 0.0 });
     }
 }
 
@@ -236,6 +252,10 @@ const DEESS_RELEASE: f32 = 0.05;
 /// the band times (gain − 1), so at gain 1 it is the input, bit for bit; the band's gain is exact at
 /// `freq`, and falls away an octave either side. The detector hears the band through a second
 /// band-pass of its own, so a loud low note never sets it off.
+///
+/// Its meter (ABI-13, PACK-26): `reduction`, how far it turns its band down at `freq` (the bell's
+/// depth there, where the band is the sound), in dB, the most of the call's frames. Its card's
+/// picture `down` draws it (CARD-114).
 pub struct Deesser {
     sr: f32,
     freq: Glide,
@@ -252,7 +272,7 @@ pub struct Deesser {
 
 impl Kernel for Deesser {
     const INPUTS: usize = 4;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 2;
 
     fn new(cfg: &Cfg) -> Self {
         let sr = cfg.sample_rate.max(1.0);
@@ -274,6 +294,7 @@ impl Kernel for Deesser {
         let ([l, r, freq, threshold, amount], [ol, or]) = io.ports([(0, 0), (0, 1), (1, 0), (2, 0), (3, 0)], [(0, 0), (0, 1)]);
         let (ins, mut outs) = ([l, r], [ol, or]);
         let k = 1.0 / DEESS_Q;
+        let mut turned = 0.0f32;
         for i in 0..outs[0].len() {
             let f = self.freq.next(clampf(freq[i], 1000.0, 0.45 * self.sr));
             if f != self.at {
@@ -291,10 +312,15 @@ impl Kernel for Deesser {
             self.env = flush(heard + (self.env - heard) * pole);
             let threshold = self.threshold.next(clampf(threshold[i], -120.0, 0.0));
             let most = self.amount.next(clampf(amount[i], 0.0, 48.0));
-            let g = gain(-clampf(db(self.env) - threshold, 0.0, most));
+            let r = clampf(db(self.env) - threshold, 0.0, most);
+            let g = gain(-r);
+            if r > turned {
+                turned = r;
+            }
             for (c, out) in outs.iter_mut().enumerate() {
                 out[i] = if c < channels { x[c] + (g - 1.0) * band[c] } else { 0.0 };
             }
         }
+        io.meter(1, turned);
     }
 }

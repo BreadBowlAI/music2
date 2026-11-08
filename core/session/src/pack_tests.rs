@@ -138,10 +138,10 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
     for (asks, said) in [
         (
             "1",
-            "is made for @m2/core 1, and this app has @m2/core 2.4.0, whose changes may break it. Get a version of it made for \
+            "is made for @m2/core 1, and this app has @m2/core 2.5.0, whose changes may break it. Get a version of it made for \
              @m2/core 2 (its m2pkg.toml says \"@m2/core\" = \"2\")",
         ),
-        ("3", "is made for @m2/core 3, newer than this app's 2.4.0. Update music2 to use it"),
+        ("3", "is made for @m2/core 3, newer than this app's 2.5.0. Update music2 to use it"),
     ] {
         let root = scratch(&format!("core-{asks}"));
         copy(&fixtures(), &root);
@@ -161,11 +161,13 @@ fn a_pack_made_for_another_major_of_core_is_refused_in_words() {
 // 2.0, the frozen contract, builds, its descriptors as they were; one made for 2.1 may label a
 // setting (CARD-34), and the label reaches its descriptor; one made for 2.2 may name kits on a drum
 // (KIT-3), which reach its descriptor, every other byte of it as it was but its category. A descriptor that names none has
-// no `kits` at all, so a 2.1 pack's keeps its bytes. One made for 2.4 may read the song's key and name a face (CARD-40).
+// no `kits` at all, so a 2.1 pack's keeps its bytes. One made for 2.4 may read the song's key and name a face (CARD-40);
+// one made for 2.5 may declare a note effect (PKG-21), read the song's tempo (RENDER-7), and draw a curve measured with
+// a quiet click (CARD-80) at the song's rate (CARD-87).
 #[test]
 fn a_pack_made_for_an_older_minor_of_core_still_builds() {
     let mut first: Option<String> = None;
-    for asks in ["2", "2.0", "2.1", "2.2", "2.3", "2.4"] {
+    for asks in ["2", "2.0", "2.1", "2.2", "2.3", "2.4", "2.5"] {
         let root = scratch(&format!("core-minor-{asks}"));
         copy(&fixtures(), &root);
         let manifest = root.join("tiny/m2pkg.toml");
@@ -188,6 +190,14 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
                 "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\" },",
                 "editor: { category: \"Keys\", description: \"A soft pluck, built from std's blocks\", face: [\"brightness\"] },",
             ) + "\n/** The song's key, for a kernel that follows it. */\nexport const songKey = () => time.key;\n",
+            // A note effect, notes first and notes out (PKG-21), the song's tempo (RENDER-7), and a curve measured with a
+            // quiet click at the song's rate (CARD-80, CARD-87).
+            "2.5" => code.replace("import { component, control,", "import { axis, component, control, time, view,")
+                + "\n/** Notes on as they come: a note effect. */\nexport const passOn = component(\n  { id: \"pass-on\", label: \"Pass on\", inputs: { notes: port.notes() }, output: port.notes(), editor: { category: \"Notes\" } },\n  (notes: Events): Events => notes,\n);\n\
+                   /** The song's tempo, for a kernel that keeps time. */\nexport const songTempo = () => time.tempo;\n\
+                   /** A lowpass whose curve is measured with a quiet click. */\nexport const quietCurve = component(\n  { id: \"quiet-curve\", label: \"Quiet curve\", inputs: { in: port.audio() }, controls: { cutoff: control.hz(1000) }, output: port.audio(),\n    \
+                   editor: { category: \"Filter\", views: { curve: view.picture({ x: axis.log(\"hz\", 20, 20000), y: axis.lin(\"db\", -24, 24) }) } } },\n  \
+                   (x: Audio, { cutoff }: Params): Audio => svf.lowpass(x, cutoff),\n  { curve: { draw: (v: any, p: any) => [p.response({ level: -80 }), p.mark(\"x\", p.rate / 2, \"half the rate\")], words: () => \"measured quietly\" } },\n);\n",
             _ => code,
         };
         std::fs::write(&index, code).unwrap();
@@ -200,6 +210,8 @@ fn a_pack_made_for_an_older_minor_of_core_still_builds() {
         let kits: Vec<(&str, usize)> = keys.editor.kits.iter().map(|k| (k.name.as_str(), k.tracks.len())).collect();
         assert_eq!(kits, if asks == "2.2" { vec![("Pair", 2)] } else { vec![] }, "{asks}");
         assert_eq!(keys.editor.face, if asks == "2.4" { vec!["brightness".to_string()] } else { vec![] }, "{asks}");
+        assert_eq!(c.components.get("@test/tiny:pass-on").map(|d| d.is_note_effect()), (asks == "2.5").then_some(true), "{asks}");
+        assert_eq!(c.components.get("@test/tiny:quiet-curve").map(|d| d.editor.views.len()), (asks == "2.5").then_some(1), "{asks}");
         let mut without = keys.as_ref().clone();
         without.editor.kits.clear();
         without.editor.face.clear();

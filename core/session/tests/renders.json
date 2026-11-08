@@ -1,6 +1,12 @@
 {
   "renders": {
+    "core/session/tests/fixtures/clip": "894546c6bd6f34e7052b129e4057f843a2125f7e71a756d41f289ae3fa5f7ebd",
+    "core/session/tests/fixtures/flanger": "7e0dd5dd407ee6cca6a8d2715c42a4166ac9bfe97ac868a5dd4bb4c38b9e5daf",
+    "core/session/tests/fixtures/grains": "8c20f7aa8c65551469f09eafb169a07876bd9b510901ec4fbf7c1ab5252ea908",
+    "core/session/tests/fixtures/meters": "e5b5728800d41b83372ed293669d904d8a06e1d394453d48d9849984167c6a5a",
     "core/session/tests/fixtures/sampler-regions": "b850b806de5283ff77c0aacf0e807d76846841346cdc96f02c426735da1c4282",
+    "core/session/tests/fixtures/vocoder": "7b104e029ff626728e33da658091a02e0d4a38ed2634fd6779c1c3b7501733a8",
+    "examples/arp": "4706e90351e8a7afe1ece437b691636ef77985f17a4d1d34c9da09ea233483bf",
     "examples/first-song": "13efce4479917c18ae21bddaa585c02af85261010e2d94a809b040d748287ac7",
     "examples/resample": "db46e8fd17f48641709f2c184651729774d4fafb8cdaa569b9a9a603aaf02f51",
     "examples/sampler": "8b3f507f65629d60ae80e415c6335faef0f294c5d9a9873480e1aa26df4695e6",

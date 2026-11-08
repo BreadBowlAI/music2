@@ -4,11 +4,13 @@
 // the check too. `kinds_tests.rs` builds the same sound and its mistakes, and the build refuses
 // each of them again, even through `as any`.
 
-import { component, control, kernel, port, setting, time, view, type Audio, type Choice, type Control, type Ctx, type Events, type Keyset, type Switch } from "@m2/core";
+import { component, control, kernel, knob, port, setting, time, view, type Audio, type Choice, type Control, type Ctx, type Events, type Keyset, type Switch } from "@m2/core";
 import { lowpass } from "std/filter";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawLowpass, lowpassWords, transfer, transferPicture } from "std/pictures";
+import { curvePicture, envelope, envelopePicture, envelopeWords, transfer, transferPicture } from "std/pictures";
 
 const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
+/** A lowpass's curve in dB at `f`, from its cutoff `c` and q, drawn from the sound's own maths. */
+const cut = (f: number, c: number, q: number) => -10 * Math.log10((1 - (f / c) ** 2) ** 2 + (f / c / q) ** 2);
 
 /** A sound that uses every kind a descriptor declares. */
 export const every = component(
@@ -30,7 +32,7 @@ export const every = component(
     output: port.audio(),
     editor: {
       category: "Instruments",
-      // An envelope and a filter are std's pictures (CARD-96, CARD-30).
+      // An envelope is std's picture (CARD-96); its filter is drawn from its own maths, on std's curve.
       views: { amp: envelopePicture(), filter: curvePicture({ live: false }), keys: view.keys("regions"), scope: view.scope() },
       groups: { Sound: ["shape", "sub", "scope"], Filter: ["filter", "cutoff", "q"], Amp: ["amp", "attack", "decay", "sustain", "release"] },
     },
@@ -44,7 +46,14 @@ export const every = component(
   },
   {
     amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
-    filter: { draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "q" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", q: "q" }) },
+    filter: {
+      draw: (v, p) => {
+        const [c, q] = [v.cutoff ?? 800, v.q ?? 0.7];
+        const points = Array.from({ length: 61 }, (_, i) => 20 * 1000 ** (i / 60)).flatMap((f) => [f, Math.max(-24, cut(f, c, q))]);
+        return [p.line(points, { name: "curve" }), p.handle(c, 20 * Math.log10(q), { x: "cutoff", y: knob("q"), wheel: "q" })];
+      },
+      words: (v) => `Cuts the highs above ${v.cutoff} Hz`,
+    },
   },
 );
 
@@ -186,36 +195,6 @@ export const views = [
   ),
   component(
     {
-      id: "q-in-db",
-      controls: { cutoff: control.hz(800), boost: control.db(0) },
-      editor: { views: { lp: curvePicture({ live: false }) } },
-    },
-    () => x,
-    {
-      lp: {
-        // @ts-expect-error a q that is a level in dB
-        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "boost" }),
-        words: () => "a filter",
-      },
-    },
-  ),
-  component(
-    {
-      id: "resonance-in-db",
-      controls: { cutoff: control.hz(800), resonance: control.db(0) },
-      editor: { views: { lp: curvePicture({ live: false }) } },
-    },
-    () => x,
-    {
-      lp: {
-        // @ts-expect-error a resonance that is a level in dB, not one from 0 to 1
-        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }),
-        words: () => "a filter",
-      },
-    },
-  ),
-  component(
-    {
       id: "ratio-in-db",
       controls: { threshold: control.db(-18), ratio: control.db(3), makeup: control.db(0) },
       editor: { views: { tr: transferPicture() } },
@@ -226,30 +205,6 @@ export const views = [
         // @ts-expect-error a ratio that is a level in dB
         draw: (v, p) => transfer(p, v, { threshold: "threshold", ratio: "ratio", makeup: "makeup" }),
         words: () => "a compressor",
-      },
-    },
-  ),
-  component(
-    {
-      id: "resonance-ok",
-      controls: { cutoff: control.hz(800), resonance: control.frac(0.3) },
-      editor: { views: { lp: curvePicture({ live: false }) } },
-    },
-    () => x,
-    { lp: { draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", resonance: "resonance" }), words: (v) => lowpassWords(v, { cutoff: "cutoff", resonance: "resonance" }) } },
-  ),
-  component(
-    {
-      id: "cutoff-a-time",
-      controls: { cutoff: control.secs(1), q: control.scalar(1) },
-      editor: { views: { lp: curvePicture({ live: false }) } },
-    },
-    () => x,
-    {
-      lp: {
-        // @ts-expect-error a cutoff that is a time, moved across a frequency
-        draw: (v, p) => drawLowpass(p, v, { cutoff: "cutoff", q: "q" }),
-        words: () => "a filter",
       },
     },
   ),

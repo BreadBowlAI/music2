@@ -53,6 +53,9 @@ pub enum Code {
     InputLost,
     /// The OS refuses music2 the microphone during a take, which recorded silence (`input.refused`).
     InputRefused,
+    /// A note effect gave notes no one can play, or more than its room holds: some were left out
+    /// (`sound.notes-left-out`, RENDER-42).
+    NotesLeftOut,
 }
 
 impl Code {
@@ -83,6 +86,7 @@ impl Code {
             Code::InputMissing => "input.missing",
             Code::InputLost => "input.lost",
             Code::InputRefused => "input.refused",
+            Code::NotesLeftOut => "sound.notes-left-out",
         }
     }
 

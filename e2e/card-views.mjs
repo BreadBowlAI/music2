@@ -85,13 +85,14 @@ fs.mkdirSync(`${PROJ}/assets`, { recursive: true });
 wav(`${PROJ}/assets/tone.wav`);
 fs.mkdirSync(`${PROJ}/data/wobble`, { recursive: true });
 write("data/wobble/notes.json", JSON.stringify({ clips: [{ id: "w1", start: 0, length: 4, notes: [{ pitch: 57, start: 0, length: 4, velocity: 0.8 }] }] }));
-const TRACK = `import { component, control, port, setting, track, view } from "@m2/core";
+const TRACK = `import { component, control, knob, port, setting, track, view } from "@m2/core";
 import { lowpass } from "std/filter";
 import { sampler } from "std/sampler";
-import { curvePicture, envelope, envelopePicture, envelopeWords, lowpass as drawn, lowpassWords } from "std/pictures";
+import { curvePicture, envelope, envelopePicture, envelopeWords } from "std/pictures";
 
 const ENV = { attack: "attack", decay: "decay", sustain: "sustain", release: "release" } as const;
-const CUT = { cutoff: "cutoff", q: "q" } as const;
+/** A lowpass's curve in dB at \`f\`, from its cutoff \`c\` and q, drawn from the sound's own maths. */
+const cut = (f: number, c: number, q: number) => -10 * Math.log10((1 - (f / c) ** 2) ** 2 + (f / c / q) ** 2);
 
 const wobble = component(
   {
@@ -118,7 +119,14 @@ const wobble = component(
   (notes, { cutoff, q, attack, release, regions }) => lowpass(sampler(notes, { regions, attack, release, mode: "gate" }), { cutoff, q }),
   {
     amp: { draw: (v, p) => envelope(p, v, ENV), words: (v) => envelopeWords(v, ENV) },
-    filter: { draw: (v, p) => drawn(p, v, CUT), words: (v) => lowpassWords(v, CUT) },
+    filter: {
+      draw: (v, p) => {
+        const [c, q] = [v.cutoff ?? 800, v.q ?? 0.7];
+        const points = Array.from({ length: 61 }, (_, i) => 20 * 1000 ** (i / 60)).flatMap((f) => [f, Math.max(-24, cut(f, c, q))]);
+        return [p.line(points, { name: "curve" }), p.handle(c, 20 * Math.log10(q), { x: "cutoff", y: knob("q"), wheel: "q" })];
+      },
+      words: (v) => \`Cuts the highs above \${v.cutoff} Hz\`,
+    },
   },
 );
 

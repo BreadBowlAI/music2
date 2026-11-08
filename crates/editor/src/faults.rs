@@ -260,6 +260,13 @@ impl Namer {
                 "{} took too long and was stopped. It stays silent until the song is built again. {on}",
                 self.slow_sound(&flat.nodes[first].name)
             ),
+            // RENDER-42: a note effect's guard left notes out; the note effect plays on.
+            Code::NotesLeftOut => {
+                format!(
+                    "{} gave notes music2 can't play, or too many at once, so some were left out. It plays on.",
+                    self.slow_sound(&flat.nodes[first].name)
+                )
+            }
             Code::PluginCrashed | Code::PluginHung => {
                 let names: Vec<String> = nodes.iter().map(|&n| self.plugin_named(n)).collect();
                 let (it, its, stops, stays) = match names.len() {
@@ -316,12 +323,16 @@ impl Namer {
             },
             (Code::TooLong, _) => format!("{part} is too long to hold whole ({TOO_LONG}), {not}"),
             (Code::Stopped, _) => format!("{part} stopped working, {not}{detail}"),
-            (Code::TooSlow, s) => {
+            (Code::TooSlow | Code::NotesLeftOut, s) => {
                 let sound = match s {
                     Subject::Node(n) => self.song.flat().nodes.get(n as usize).map(|n| self.slow_sound(&n.name)),
                     _ => None,
                 };
-                format!("{} took too long and was stopped, {not}", sound.unwrap_or(part))
+                let what = match f.code {
+                    Code::TooSlow => "took too long and was stopped",
+                    _ => "gave notes music2 can't play, or too many at once",
+                };
+                format!("{} {what}, {not}", sound.unwrap_or(part))
             }
             // No offline render reads the sound input.
             (Code::InputMissing | Code::InputLost | Code::InputRefused, _) => format!("The sound input stopped, {not}"),
