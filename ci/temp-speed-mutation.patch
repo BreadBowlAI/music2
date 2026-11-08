@@ -1,0 +1,27 @@
+diff --git a/packs/@m2/effects/src/pictures.ts b/packs/@m2/effects/src/pictures.ts
+index b8801dcd..74b9c159 100644
+--- a/packs/@m2/effects/src/pictures.ts
++++ b/packs/@m2/effects/src/pictures.ts
+@@ -445,12 +445,16 @@ const TURNS = [1, 3, 5].map((k) => Math.tan((k * Math.PI) / 12));
+ /** A phaser's motion over a second (CARD-120): its three notches across frequency, the lines `low`, `mid` and `high`. */
+ export function phaserMotion<D>(p: Painter<D, "seconds", "hz">, v: Values, names: { rate: Num<D>; depth: Num<D> }): Shape[] {
+   const rate = known(v, names.rate, "rate"), depth = known(v, names.depth, "depth");
+-  const lines: number[][] = [[], [], []];
+-  for (const t of second()) {
+-    const [low, mid, high] = notchesAt(rate, depth, t, p.rate);
+-    lines[0].push(t, low);
+-    lines[1].push(t, mid);
+-    lines[2].push(t, high);
++  let lines: number[][] = [[], [], []];
++  // MUTATION (ci-flakes, a speed test's proof): the motion worked out twice, the first thrown away.
++  for (let pass = 0; pass < 2; pass++) {
++    lines = [[], [], []];
++    for (const t of second()) {
++      const [low, mid, high] = notchesAt(rate, depth, t, p.rate);
++      lines[0].push(t, low);
++      lines[1].push(t, mid);
++      lines[2].push(t, high);
++    }
+   }
+   return [p.line(lines[0], { name: "low", tone: "soft" }), p.line(lines[1], { name: "mid" }), p.line(lines[2], { name: "high", tone: "soft" })];
+ }
