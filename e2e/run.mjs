@@ -9,8 +9,6 @@
 //              cables  a one-file song (fixtures/)     node suite <root>
 //              fix     examples/first-song open        node suite <root> <home> <project>
 //              attn    same as fix                     node suite <root> <home> <project>
-//              chain   same as fix, with E2E_DEVICE=chain: the window's Device shows the chain
-//                      (taste.md DV-11), so a suite's checks that aren't the patch's own run on it
 //              empty   no project open                 node suite <root> empty
 //              none    no project open                 node suite <root> <home>
 //              export  examples/first-song open        node suite <root> <home> <project> <m2 cli>
@@ -111,11 +109,7 @@ export const SUITES = [
   ["ag-focus", "export", { expect: 91, s: 8 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
-  // On Device's chain (taste.md DV-11): all but the dashed cable, which the chain doesn't draw.
-  ["nx-effects", "chain", { expect: 46, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["sidechain", "fix", { expect: 17, s: 20 }],
-  // Its checks on Device's chain too (taste.md DV-11): every one holds there, and one more says the + is the Bass row's.
-  ["sidechain", "chain", { expect: 18, s: 20 }],
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
@@ -196,9 +190,6 @@ export const SUITES = [
   ["ab-sampler", "export", { expect: 23, s: 4 }],
   ["cards", "fix", { expect: 36, s: 6 }],
   ["card-views", "fix", { expect: 61, s: 12 }],
-  // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
-  ["card-views", "chain", { expect: 41, s: 12 }],
-  ["frame", "fix", { expect: 86, s: 14 }],
   // Track graph-node: the graph's nodes at two sizes, the bar, +N, selection and the keyboard (taste.md DV-12 to DV-16).
   ["nodes", "fix", { expect: 106, s: 30 }],
   ["pictures", "fix", { expect: 45, s: 10 }],
@@ -206,13 +197,11 @@ export const SUITES = [
   ["dress", "fix", { expect: 44, s: 10 }],
   ["dress2a", "fix", { expect: 93, s: 20 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
-  // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, on the chain.
+  // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, in the graph.
   ["instruments", "fix", { expect: 52, s: 12 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
   ["tune", "fix", { expect: 37, s: 16 }],
-  // Its checks on Device's chain too (taste.md DV-11): the key line is on a chain card as on the patch's.
-  ["tune", "chain", { expect: 37, s: 16 }],
   // Track voice2: the Voice changer's and the Clipper's cards, and the three new cards shot live.
   ["voice", "fix", { expect: 40, s: 30 }],
   // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
@@ -230,7 +219,7 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
 ];
-const KINDS = ["proj", "cables", "fix", "attn", "chain", "empty", "none", "export", "library"];
+const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
 function usage(msg) {
   if (msg) console.error(`run.mjs: ${msg}`);
@@ -426,7 +415,6 @@ function prepare(dir, kind) {
     cables: [dir],
     fix: [dir, home, proj],
     attn: [dir, home, proj],
-    chain: [dir, home, proj],
     empty: [dir, "empty"],
     none: [dir, home],
     export: [dir, home, proj, cli],
@@ -518,9 +506,6 @@ function envFor(home, clap, probe, kind) {
   if (clap && clapPath) env.CLAP_PATH = clapPath;
   // The probe plugin, which a debug server installs (br-plugins).
   if (probe) env.M2_PROBE = "1";
-  // The chain kind: the suite's page opens with Device showing the chain (fixlib's open).
-  delete env.E2E_DEVICE;
-  if (kind === "chain") env.E2E_DEVICE = "chain";
   return env;
 }
 

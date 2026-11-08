@@ -19,7 +19,7 @@ await page.setViewport({ width: 1600, height: 1000 });
 const consoleErrors = [];
 page.on("console", (m) => m.type() === "error" && consoleErrors.push(m.text()));
 page.on("pageerror", (e) => consoleErrors.push(String(e)));
-await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {} }, sess.page_token);
+await page.evaluateOnNewDocument((token) => { window.__M2__ = { native: false, token, platform: "macos" }; }, sess.page_token);
 const headers = { "x-m2-token": sess.page_token, "content-type": "application/json" };
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers })).json();
 const post = async (path, body) => {

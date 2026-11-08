@@ -61,7 +61,7 @@ async function pageOn(s, { pc = false } = {}) {
   page.on("pageerror", (e) => errors.push(String(e)));
   await page.evaluateOnNewDocument(
     (token, platform) => {
-      window.__M2__ = { native: false, token, platform }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+      window.__M2__ = { native: false, token, platform };
     },
     s.page_token,
     pc ? "linux" : "macos",

@@ -15,7 +15,7 @@ const errors = [];
 page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 page.on("pageerror", (e) => errors.push(String(e)));
 await page.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+  window.__M2__ = { native: false, token, platform: "macos" };
   try { localStorage.setItem("m2.graph.panel", "560"); } catch {}
 }, sess.page_token);
 const api = async (path) => (await fetch(`${sess.url}/api/${path}`, { headers: { "x-m2-token": sess.page_token } })).json();
@@ -269,7 +269,7 @@ await tab.setViewport({ width: 1440, height: 900 });
 tab.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 tab.on("pageerror", (e) => errors.push(String(e)));
 await tab.evaluateOnNewDocument((token) => {
-  window.__M2__ = { native: false, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+  window.__M2__ = { native: false, token, platform: "macos" };
   try {
     localStorage.setItem("m2.browser.open", "false");
     localStorage.setItem("m2.graph.panel", "300");

@@ -257,7 +257,7 @@ async function appPage() {
   await p.setViewport({ width: 1440, height: 900 });
   p.on("pageerror", (e) => errors.push(`app page: ${e}`));
   await p.evaluateOnNewDocument((token) => {
-    window.__M2__ = { native: true, token, platform: "macos" }; try { if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", "patch"); } catch {}
+    window.__M2__ = { native: true, token, platform: "macos" };
     const callbacks = new Map();
     const menu = [];
     let next = 1;

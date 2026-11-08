@@ -30,15 +30,14 @@ export const check = (ok, what) => {
  * and the dock, and place their clicks in the timeline's width (`browser: true` keeps it). The page
  * is a Mac's, unless `pc`: then a PC's (Linux), whatever the OS the suite runs on (pc-keys).
  *
- * `device`: what Device shows where a sound is a chain (taste.md DV-11), as the window's own choice is kept.
- * These suites drive the patch, its ports, cables and rows, unless one asks for `"chain"` (frame),
- * or runs as the `chain` kind (`E2E_DEVICE=chain`: their checks that aren't the patch's own).
+ * The dock opens on the Graph, every node collapsed (taste.md DV-12): `expand` (graphlib.mjs)
+ * expands a node whose value a suite drives.
  *
  * `late` (ms; by default `E2E_LATE_READS`, else none): the page's own reads of the song's state
  * (`GET /api/graph`) are held back that long, as on a page that hears of each change late. The
  * suite's own reads (`api`, `state`) never wait.
  */
-export async function open(width = 1440, height = 900, { browser: side = false, pc = false, device = process.env.E2E_DEVICE ?? "patch", late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
   const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
@@ -85,15 +84,14 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   page.on("request", (r) => r.method() !== "GET" && !unwritten.test(r.url()) && posts.push({ url: r.url().replace(/^.*\/api/, "/api"), body: r.postData() ?? "" }));
   // Followed from the start, for `caughtUp` (caughtup.mjs).
   const caughtUp = following(page, () => state(), check);
-  await page.evaluateOnNewDocument((token, side, platform, device) => {
+  await page.evaluateOnNewDocument((token, side, platform) => {
     window.__M2__ = { native: false, token, platform };
     try {
       if (!localStorage.getItem("m2.browser.open")) localStorage.setItem("m2.browser.open", String(side));
-      if (!localStorage.getItem("m2.dock.device")) localStorage.setItem("m2.dock.device", device);
     } catch {}
-  }, sess.page_token, side, pc ? "linux" : "macos", device);
+  }, sess.page_token, side, pc ? "linux" : "macos");
   await page.goto(sess.url, { waitUntil: "domcontentloaded" });
-  await page.waitForSelector(device === "chain" ? "[data-testid=chain] [data-module], [data-testid=graph] [data-module]" : "[data-testid=graph] [data-module]", { timeout: 10000 });
+  await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 10000 });
   const api = (path, opts = {}) =>
     page.evaluate(
       async (token, path, opts) => {

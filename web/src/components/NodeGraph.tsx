@@ -2014,9 +2014,9 @@ function KnobControl({
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, changing it writes it in";
-  const how = `Drag up or down (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click or ⌫ to reset · right-click to automate it`;
+  const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const cabling = useContext(Cabling);
-  const title = !editable ? `${why ?? "It can't be edited right now"}.` : `${label}: ${display(descriptor, value)}\n${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
+  const title = !editable ? `${why ?? "It can't be edited right now"}.` : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too (taste.md §2.2).
