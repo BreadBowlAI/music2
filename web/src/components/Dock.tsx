@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ChevronDown, ChevronUp, CodeXml, Drum, Piano, SlidersHorizontal, SlidersVertical } from "lucide-react";
+import { ChevronDown, ChevronUp, CodeXml, Drum, Piano, SlidersVertical, Workflow } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { dockView, findLane, findNoteClip, kitOf, moduleName, type GraphState } from "../lib/graph";
@@ -7,10 +7,10 @@ import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
 import BeatView from "./BeatView";
-import { Device } from "./Chain";
 import { addEffectTo, dragsEffect, EFFECT_DRAG } from "./Browser";
 import CodeView from "./CodeView";
 import Mix from "./Mix";
+import { NodeGraph } from "./NodeGraph";
 import NoteView from "./NoteView";
 import SungView from "./SungView";
 import TrackName from "./TrackName";
@@ -26,8 +26,8 @@ export function DockSlot({ at, children }: { at: "title" | "tools"; children: Re
 }
 
 const VIEW: Record<DockView, { label: string; Icon: typeof Piano; tab: string }> = {
-  // The id the graph tab had: the Device view shows the track's sound, as a chain or its patch (taste.md DV-11).
-  device: { label: "Device", Icon: SlidersHorizontal, tab: "graph" },
+  // The track's sound as a graph of nodes (taste.md §3.5, the graph note).
+  graph: { label: "Graph", Icon: Workflow, tab: "graph" },
   notes: { label: "Notes", Icon: Piano, tab: "notes" },
   beat: { label: "Beat", Icon: Drum, tab: "beat" },
   mix: { label: "Mix", Icon: SlidersVertical, tab: "mix" },
@@ -35,7 +35,7 @@ const VIEW: Record<DockView, { label: string; Icon: typeof Piano; tab: string }>
 };
 
 /** The switcher's order: Beat beside Notes (KIT-10), shown only while a drum kit's track is selected. */
-const TABS: DockView[] = ["device", "notes", "beat", "mix", "code"];
+const TABS: DockView[] = ["graph", "notes", "beat", "mix", "code"];
 
 /**
  * The dock (taste.md §3.5): a 32px header (the selection, the view switcher, the view's tools, hide)
@@ -116,15 +116,15 @@ export default function Dock({ graph, module }: { graph: GraphState; module: str
           role="tabpanel"
           className={clsx("relative flex flex-col min-h-0", !open && "hidden")}
           style={{ height }}
-          // An effect dragged from the browser onto Device goes at the end of the sound shown.
+          // An effect dragged from the browser onto the Graph goes at the end of the sound shown.
           onDragOver={(e) => {
-            if (view !== "device" || !dragsEffect(e)) return;
+            if (view !== "graph" || !dragsEffect(e)) return;
             e.preventDefault();
             e.dataTransfer.dropEffect = "copy";
           }}
           onDrop={(e) => {
             const component = e.dataTransfer.getData(EFFECT_DRAG);
-            if (view !== "device" || !component) return;
+            if (view !== "graph" || !component) return;
             e.preventDefault();
             addEffectTo(module, component);
           }}
@@ -150,7 +150,7 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
   const track = graph.timeline.tracks.find((t) => t.module === module)?.label ?? module;
   return (
     <>
-      {open && view === "device" && <Device graph={graph} module={module} />}
+      {open && view === "graph" && <NodeGraph graph={graph} module={module} />}
       {open && view === "notes" &&
         (live ? (
           <NoteView key={`${live.module}:${live.lane}:${live.id}`} graph={graph} clip={live} />

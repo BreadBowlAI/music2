@@ -1,17 +1,27 @@
+// The Graph (taste.md §3.5, DV-12 to DV-16; the graph note): a sound's code as nodes and wires. A
+// call's node is collapsed (the default) or expanded, the window's own, kept by its key (CARD-25);
+// every value is a bar (DV-14). A click on a header selects a node, Enter expands it, Delete
+// removes an effect, Esc clears the selection (DV-15).
+
 import clsx from "clsx";
 import {
-  ChevronRight,
-  ArrowLeft,
   AppWindow,
+  ArrowLeft,
   ArrowRight,
   AudioLines,
   Check,
   ChevronDown,
+  ChevronsDownUp,
   Clock,
+  Code,
+  Copy,
+  Drum,
   Ellipsis,
   Hash,
   LogIn,
   LogOut,
+  Maximize2,
+  Minimize2,
   Music2,
   Piano,
   Plus,
@@ -40,8 +50,6 @@ import {
   span,
   stepValue,
   toUnit,
-  type CardGroup,
-  type CardView,
   type Effect,
   type GraphLease,
   type GraphState,
@@ -53,61 +61,47 @@ import {
   type OutputPort,
   type PortEdge,
   type PortKind,
-  type Setting,
   type ViewNode,
 } from "../lib/graph";
 import { listenTo, moveEffect, turnEffect } from "../lib/effects";
 import { laneMade } from "../lib/events";
+import { useExpanded } from "../lib/expanded";
 import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
+import { COL_W, EXPR_H, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, SEG_H, VALUE_H, gridRows, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
+import { trackColors } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { Bar } from "./Bar";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
-import { focusNext, HomeMarker, KnobMenu, MiniKnob, useKnobDrag, useKnobGesture } from "./Knob";
+import { focusNext, HomeMarker, KnobMenu, useKnobDrag, useKnobGesture } from "./Knob";
 import { MenuRow, Popover } from "./ui";
 import { undoAction } from "./GraphCanvas";
 import PointMenu, { unautomate } from "./ClipMenu";
 import PresetPopover from "./PresetPopover";
 import { makeKit } from "./Tracks";
-import { MenuValue, Segmented, SettingRow, SwitchValue, settingHeight, shown, words } from "./Settings";
-import { VIEW_H, ViewRow } from "./CardViews";
-
-/**
- * How tall a picture is on a patch's card: small, as a Folded card's is (the design's §3.3), so a
- * card's picture never pushes the patch's cards out of its first view. The patch is for wiring;
- * Device's chain, for playing, draws it big (taste.md DV-11, DV-19).
- */
-const PATCH_PICTURE_H = 48;
-/** A view's height on a patch's card. */
-const patchViewH = (kind: keyof typeof VIEW_H) => (kind === "picture" ? PATCH_PICTURE_H : VIEW_H[kind]);
-import { useFolded } from "../lib/folded";
+import { MenuValue, Segmented, SettingRow, SwitchValue, words } from "./Settings";
+import { ViewRow } from "./CardViews";
 import { useKeyAsk } from "./KeyField";
 
 /** Why nothing here can be edited right now (the code doesn't compile, read only, offline), or null. */
 export const Locked = createContext<string | null>(null);
 /** A track's name by its key, for the controls that name one (a mixer channel's `hats.db`: Hats volume). */
 export const Tracks = createContext<(key: string) => string | undefined>(() => undefined);
-/** The Song's mixer, drawn as one compact card (MX-6): its node and how many channels it has. */
+/** The Song's mixer, drawn as one compact node (MX-6): its node and how many channels it has. */
 export const MixerCard = createContext<{ id: string; channels: number } | null>(null);
-/** Whether the cards here draw their ports: the patch's do, the chain's don't (taste.md DV-11). */
-export const Ports = createContext(true);
-/**
- * What feeds each input that no cable names, by `node<port`: in the chain, where no cable is drawn,
- * the call that drives it ("← Blend", taste.md DV-11).
- */
-export const Fed = createContext<Map<string, string>>(new Map());
-/** Whether a cable is being dragged in this graph: a value that takes no cable then says why (DV-6). */
+/** Whether a wire is being dragged in this graph: a value that takes none then says why (DV-6). */
 const Cabling = createContext(false);
 
-/** The merged input of the compact mixer card: every channel's input, as one port. */
+/** The merged input of the compact mixer node: every channel's input, as one port. */
 const CHANNELS = "channels";
 
 /**
- * The Song's own mixer as one compact card (taste.md §3.5, MX-6), "Mixer · 4 channels · Open Mix
- * ⌥3", never a row per channel: its channels' inputs drawn as one port, and no knobs, since its
+ * The Song's own mixer as one compact node (taste.md §3.5, MX-6), "4 channels · Open Mix ⌥3",
+ * never a row per channel: its channels' inputs drawn as one port, and no values, since its
  * levels and pans are the Mix view's strips. Only the mixer the Mix view shows: a track's own mixer
- * stays a box like any other. Null when `m` has no such mixer.
+ * stays a node like any other. Null when `m` has no such mixer.
  */
 function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: { id: string; channels: number } } | null {
   if (m.key !== "song" || mix.mixer !== "ok") return null;
@@ -115,8 +109,8 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
   if (mixers.length !== 1) return null;
   const node = mixers[0];
   const channels = new Set(mix.strips.flatMap((s) => (s.channel ? [s.channel] : []))).size;
-  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], settings: [], inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
-  // Each signal drawn once into the card, whichever channels it feeds.
+  const card: ViewNode = { ...node, knobs: [], readonly: [], inlets: [], settings: [], groups: [], face: [], views: [], code: undefined, inputs: [{ id: CHANNELS, label: "Channels", kind: "audio" }] };
+  // Each signal drawn once into the node, whichever channels it feeds.
   const seen = new Set<string>();
   const port_edges = m.port_edges.flatMap((e) => {
     if (e.to !== node.id) return [e];
@@ -128,14 +122,52 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
   return { module: { ...m, nodes: m.nodes.map((n) => (n === node ? card : n)), port_edges }, card: { id: node.id, channels } };
 }
 
-/** One module's code as a graph to play and tweak: knobs over its values, cables between its signals, effects after its audio. */
+/** What a node's header holds beside its label (see `HeadTools`): the room its label has (DV-12). */
+function headRoom(effects: Effect[], perNote: Set<string>) {
+  return (n: ViewNode, expanded: boolean, hidden: number): HeadRoom => {
+    const words: string[] = [];
+    if (hidden > 0) words.push(`+${hidden}`);
+    if (perNote.has(n.id)) words.push("per note");
+    if (expanded && packOf(n)) words.push(packOf(n)!);
+    if (expanded && hasPresets(n, effects)) words.push("Presets");
+    const buttons = (bypassable(n) ? 1 : 0) + (n.audio && effects.length > 0 ? 1 : 0) + (n.kind === "call" ? 2 : 0) + (n.kind !== "call" ? 1 : 0);
+    return { title: n.bypassed ? `${titleOf(n, effects)} · Off` : titleOf(n, effects), buttons, words };
+  };
+}
+
+/**
+ * The nodes that play inside an instrument's voices, once for each note (the graph note §4): what a
+ * voice's notes feed, up to the call that takes notes and plays them.
+ */
+function perNoteOf(m: ModuleView): Set<string> {
+  const byId = new Map(m.nodes.map((n) => [n.id, n]));
+  const out = new Set<string>();
+  const next = m.nodes.filter((n) => n.kind === "voice").map((n) => n.id);
+  while (next.length) {
+    const id = next.pop()!;
+    for (const e of m.port_edges) {
+      if (e.from !== id || out.has(e.to)) continue;
+      const to = byId.get(e.to);
+      if (!to || to.kind !== "call" || to.inputs.some((i) => i.kind === "notes")) continue;
+      out.add(e.to);
+      next.push(e.to);
+    }
+  }
+  return out;
+}
+
+/** One module's code as a graph to play and tweak: bars over its values, wires between its signals. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
   const found = graph.view.modules.find((m) => m.key === module);
-  // The Song's mixer is one compact card; its levels and pans are the Mix view's (MX-6).
+  // The Song's mixer is one compact node; its levels and pans are the Mix view's (MX-6).
   const compacted = useMemo(() => (found ? compactMixer(found, graph.mix) : null), [found, graph.mix]);
   const shown = compacted?.module ?? found;
-  const folded = useFolded((s) => s.ids);
-  const laid = useMemo(() => shown && layout(shown, folded), [shown, folded]);
+  const expanded = useExpanded((s) => s.keys);
+  const perNote = useMemo(() => (shown ? perNoteOf(shown) : new Set<string>()), [shown]);
+  const room = useMemo(() => headRoom(graph.effects, perNote), [graph.effects, perNote]);
+  const laid = useMemo(() => shown && layout(shown, expanded, room), [shown, expanded, room]);
+  // Fit is worked out from the graph with every node collapsed: expanding one never changes it (DV-13).
+  const collapsed = useMemo(() => shown && layout(shown, new Set(), room), [shown, room]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -144,7 +176,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
 
   // The zoom: fitted to the panel until the user picks one, per module.
   const scroller = useRef<HTMLDivElement>(null);
-  const [room, setRoom] = useState<{ w: number; h: number } | null>(null);
+  const [room0, setRoom] = useState<{ w: number; h: number } | null>(null);
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el) return;
@@ -162,7 +194,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     return () => watch.disconnect();
   }, []);
   const [zooms, setZooms] = useState<Record<string, number>>({});
-  const fit = laid && room ? fitZoom(laid, room) : 1;
+  const fit = collapsed && room0 ? fitZoom(collapsed, room0) : 1;
   const zoom = zooms[module] ?? fit;
   const setZoom = useCallback(
     (z: number | null) =>
@@ -208,24 +240,25 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   return (
     <Locked.Provider value={locked}>
       <Tracks.Provider value={tracks}>
-      <MixerCard.Provider value={compacted?.card ?? null}>
-      <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
-        {shown && laid && (
-          <ModuleSection
-            key={`${graph.session}:${shown.key}`}
-            module={shown}
-            laid={laid}
-            zoom={zoom}
-            session={graph.session}
-            revision={graph.view.revision}
-            editable={!locked}
-            effects={graph.effects}
-            leases={graph.leases}
-          />
-        )}
-      </div>
-      {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={setZoom} />}
-      </MixerCard.Provider>
+        <MixerCard.Provider value={compacted?.card ?? null}>
+          <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
+            {shown && laid && (
+              <ModuleSection
+                key={`${graph.session}:${shown.key}`}
+                module={shown}
+                laid={laid}
+                zoom={zoom}
+                session={graph.session}
+                revision={graph.view.revision}
+                editable={!locked}
+                effects={graph.effects}
+                leases={graph.leases}
+                perNote={perNote}
+              />
+            )}
+          </div>
+          {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={setZoom} />}
+        </MixerCard.Provider>
       </Tracks.Provider>
     </Locked.Provider>
   );
@@ -233,7 +266,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
 
 /** Zooms the graph can take; fitting it to the panel never shrinks it below `MIN_FIT` (it scrolls instead). */
 const clampZoom = (z: number, lo = 0.3, hi = 2) => Math.min(hi, Math.max(lo, Number.isFinite(z) ? z : 1));
-/** Fit's floor (taste.md DV-5): below it a card's 12px text would draw under the 11px the type scale allows. */
+/** Fit's floor (taste.md DV-5): below it a node's 12px text would draw under the 11px the type scale allows. */
 const MIN_FIT = 0.75;
 /** The room around a module's nodes in the scroller: its padding (16) and the section's (16), each side. */
 const CHROME_W = 64;
@@ -254,9 +287,9 @@ function scrollbarRoom() {
 
 /**
  * The zoom Fit picks (taste.md §3.5, DV-5): a sound that fits the panel's height at full size (a
- * chain, one row of cards) opens at 100% and scrolls sideways, the way signal reads; one that
- * doesn't is shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room
- * each way, so what fits never needs one.
+ * line of nodes) opens at 100% and scrolls sideways, the way signal reads; one that doesn't is
+ * shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room each way, so
+ * what fits never needs one.
  */
 function fitZoom(laid: { width: number; height: number }, room: { w: number; h: number }) {
   const tall = (room.h - CHROME_H) / laid.height;
@@ -264,9 +297,10 @@ function fitZoom(laid: { width: number; height: number }, room: { w: number; h: 
   return clampZoom(Math.min((room.w - CHROME_W) / laid.width, tall), MIN_FIT, 1);
 }
 
-/** Zoom out, the zoom (click: actual size), zoom in, fit: floating at the panel's bottom right. */
+/** Zoom out, the zoom (click: actual size), zoom in, fit, and Collapse all: floating at the panel's bottom right. */
 function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZoom: (z: number | null) => void }) {
   const button = "h-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear";
+  const any = useExpanded((s) => s.keys.size > 0);
   return (
     // It floats over the canvas: the one thing here with a shadow.
     <div className="absolute right-8 bottom-8 z-20 flex items-center gap-0.5 p-0.5 rounded-md bg-raised shadow-pop text-xs" data-zoom={zoom.toFixed(2)}>
@@ -290,15 +324,26 @@ function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZo
         <Scan size={14} />
         Fit
       </button>
+      <button
+        className={clsx(button, "w-ctl-sm disabled:text-fg-off disabled:pointer-events-none")}
+        data-testid="collapse-all"
+        disabled={!any}
+        onClick={() => useExpanded.getState().collapseAll()}
+        title={any ? "Collapse every node" : "Every node is collapsed"}
+        aria-label="Collapse all"
+      >
+        <ChevronsDownUp size={14} />
+      </button>
     </div>
   );
 }
 
-// ---------------------------------------------------------------- ports and layout
+// ---------------------------------------------------------------- inputs, outputs and the layout
 
 /**
- * What flows through a port, by shape and line, never colour (taste.md §2.8): audio a circle, control
- * a diamond, notes a rounded square, all 8px, filled when connected; cables as heavy, light or dashed.
+ * What flows through an input or an output, by shape and line, never colour (taste.md §2.8): audio
+ * a circle, control a diamond, notes a rounded square, all 8px, filled when connected; wires as
+ * heavy, light or dashed.
  */
 const SHAPE: Record<PortKind, string> = { audio: "size-2 rounded-full", control: "size-1.5 rotate-45", notes: "size-2 rounded-xs" };
 /** Where a port's mark sits so that its centre is on the node's edge: half its size out. */
@@ -317,137 +362,10 @@ const mark = (kind: PortKind, filled: boolean) =>
       : "bg-raised shadow-[inset_0_0_0_1.5px_var(--color-fg-muted),0_0_0_2px_var(--color-raised)]",
   );
 
-const NODE_W = 216;
-/** A node with only outputs (a lane, an import) or only inputs (an export). */
-const SLIM_W = 152;
 const GAP_X = 60;
 const GAP_Y = 18;
-const HEAD_H = 40;
-/** Above and below a node's rows. */
-const PAD = 6;
-/** An output, a signal coming in, or a cable. */
-const ROW_H = 28;
-const KNOB_H = 40;
-const VALUE_H = 48;
 
-const inputHeight = (p: InputPort) => (p.knob ? KNOB_H : p.readonly != null ? VALUE_H : ROW_H);
-/** The settings a card shows (taste.md DV-8), under its knobs, in its descriptor's order. */
-const settingsOf = (n: ViewNode) => (n.settings ?? []).filter(shown);
-/** An instrument's line under its name: how it plays its notes; a sound's that follows the key, the key. */
-const VOICES_H = 24;
-
-/**
- * A lane, an import or the time with its one output, or an export with its one input: the header
- * names the signal, so the card is just the header with the circle beside it.
- */
-const compact = (n: ViewNode) =>
-  n.kind !== "call" && n.inputs.length + n.outputs.length === 1 && n.inputs.every((i) => !i.knob && !i.inlet && i.readonly == null);
-
-/** A group's title row (CARD-25). */
-const GROUP_H = 24;
-
-/**
- * A card's rows, in the order drawn. With no groups: its inputs, a row for each output beyond them,
- * its settings and its views. With groups (CARD-25): its connections (inputs no group names: notes,
- * audio), then each group's title over its rows; a folded card shows its first group, and a row
- * saying how many more there are, which unfolds it.
- */
-type Item =
-  | { t: "input"; port: InputPort }
-  // "Listens to" with no input row of its own: the call leaves its key out (CARD-35).
-  | { t: "listens" }
-  | { t: "group"; name: string; first: boolean }
-  | { t: "setting"; x: Setting }
-  | { t: "view"; v: CardView }
-  | { t: "fill"; id: string }
-  | { t: "fold"; hidden: number; hides: string[] };
-
-function items(n: ViewNode, folded: boolean): Item[] {
-  const all = itemsOf(n, folded);
-  // A "Listens to" whose call leaves its input out stands alone, right after the sound it works
-  // on, where its input's row would be (CARD-35).
-  if (n.listens && !n.listens.port) {
-    const at = all.findIndex((x) => x.t === "input");
-    all.splice(at + 1, 0, { t: "listens" });
-  }
-  return all;
-}
-
-function itemsOf(n: ViewNode, folded: boolean): Item[] {
-  const settings = settingsOf(n);
-  const views = n.views ?? [];
-  if (!n.groups?.length) {
-    return [
-      ...n.inputs.map((port): Item => ({ t: "input", port })),
-      ...n.outputs.slice(n.inputs.length).map((o): Item => ({ t: "fill", id: o.id })),
-      ...settings.map((x): Item => ({ t: "setting", x })),
-      ...views.map((v): Item => ({ t: "view", v })),
-    ];
-  }
-  const grouped = new Set(n.groups.flatMap((g) => g.rows.flatMap((r) => ("input" in r ? [r.input] : []))));
-  const out: Item[] = n.inputs.filter((p) => !grouped.has(p.id)).map((port) => ({ t: "input", port }));
-  const rowsOf = (g: CardGroup): Item[] =>
-    g.rows.flatMap((r): Item[] => {
-      if ("input" in r) return n.inputs.filter((p) => p.id === r.input).map((port) => ({ t: "input", port }));
-      if ("setting" in r) return settings.filter((x) => x.id === r.setting).map((x) => ({ t: "setting", x }));
-      return views.filter((v) => v.name === r.view).map((v) => ({ t: "view", v }));
-    });
-  n.groups.forEach((g, i) => {
-    if (folded && i > 0) return;
-    out.push({ t: "group", name: g.name, first: i === 0 }, ...rowsOf(g));
-  });
-  if (folded && n.groups.length > 1) {
-    const rest = n.groups.slice(1).flatMap(rowsOf);
-    const hides = rest.flatMap((x) => (x.t === "input" && x.port.knob ? [x.port.knob] : []));
-    out.push({ t: "fold", hidden: rest.length, hides });
-  }
-  const rows = out.filter((x) => x.t === "input").length;
-  out.push(...n.outputs.slice(rows).map((o): Item => ({ t: "fill", id: o.id })));
-  return out;
-}
-
-/** How tall a row of a card is. */
-const itemHeight = (x: Item) =>
-  x.t === "input" ? inputHeight(x.port) : x.t === "listens" ? ROW_H : x.t === "group" ? GROUP_H : x.t === "setting" ? settingHeight(x.x) : x.t === "view" ? patchViewH(x.v.kind) : ROW_H;
-
-/**
- * A node's height and where its ports are, from its top. Each input is a row; output `i` sits on
- * the right of the `i`th input's row, so a chain of first inputs and outputs draws as a straight
- * line. Outputs beyond the inputs get rows of their own. An input a folded card hides has its port
- * on the row that says how many more there are.
- */
-function geometry(n: ViewNode, folded = false) {
-  const ins = new Map<string, number>();
-  const outs = new Map<string, number>();
-  if (compact(n)) {
-    for (const p of n.inputs) ins.set(p.id, HEAD_H / 2);
-    for (const p of n.outputs) outs.set(p.id, HEAD_H / 2);
-    return { w: SLIM_W, h: HEAD_H, ins, outs };
-  }
-  const rows: number[] = [];
-  // Under the header: how an instrument plays (RENDER-16), and a hosted plugin's row: its window and latches (HOST-7).
-  const top = HEAD_H + (n.voices ? VOICES_H : 0) + (n.reads_key ? VOICES_H : 0) + (n.plugin ? ROW_H : 0);
-  let y = top + PAD;
-  const all = items(n, folded);
-  for (const x of all) {
-    const h = itemHeight(x);
-    if (x.t === "input") {
-      ins.set(x.port.id, y + h / 2);
-      rows.push(y + h / 2);
-    } else if (x.t === "fill") outs.set(x.id, y + h / 2);
-    else if (x.t === "fold") for (const p of n.inputs) if (!ins.has(p.id)) ins.set(p.id, y + h / 2);
-    y += h;
-  }
-  n.outputs.forEach((o, j) => {
-    if (j < rows.length) outs.set(o.id, rows[j]);
-  });
-  const roomy = n.inputs.length || all.some((x) => x.t === "setting" || x.t === "view");
-  const w = roomy && n.outputs.length ? NODE_W : (n.views?.length ? NODE_W : SLIM_W);
-  return { w, h: all.length ? y + PAD : top, ins, outs };
-}
-
-
-interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }
+interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number>; shape: Shape }
 
 /** Room below the nodes for the edges that go back (a `feedback()` loop), and beside the last column. */
 const LOOP_ROOM = 44;
@@ -478,12 +396,17 @@ function loops(m: ModuleView, edges: PortEdge[]): Set<PortEdge> {
 /**
  * Columns by depth in the signal flow, sources left and outputs right. A source (a lane, a value)
  * sits just before what reads it. Columns are placed right to left, each node as level with what it
- * feeds as the column allows, so a chain draws as straight lines; then whatever nothing reads (an export, a signal not
- * used yet) moves level with what feeds it, into the nearest free space in its column. Edges that
- * go back round a loop are left out of that, and drawn round below everything.
+ * feeds as the column allows, so a line of nodes draws straight; then whatever nothing reads (an
+ * export, a signal not used yet) moves level with what feeds it, into the nearest free space in its
+ * column. Edges that go back round a loop are left out of that, and drawn round below everything.
+ * A pure function of the graph and each node's size (DV-13): expanding a node only changes its size.
  */
-function layout(m: ModuleView, folded: Set<string> = new Set()): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
-  const geo = new Map(m.nodes.map((n) => [n.id, geometry(n, folded.has(n.id))]));
+function layout(
+  m: ModuleView,
+  expanded: ReadonlySet<string>,
+  room: (n: ViewNode, expanded: boolean, hidden: number) => HeadRoom,
+): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
+  const geo = new Map(m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room)]));
   const known = (id: string) => geo.has(id);
   const all = m.port_edges.filter((e) => known(e.from) && known(e.to));
   const back = loops(m, all);
@@ -554,7 +477,7 @@ function layout(m: ModuleView, folded: Set<string> = new Set()): { placed: Map<s
   }
   const shift = top.size ? -Math.min(...top.values()) : 0;
   // Columns as wide as their widest node; slim sources sit at the right, by what they feed.
-  const widths = columns.map((col) => Math.max(SLIM_W, ...(col ?? []).map((n) => geo.get(n.id)!.w)));
+  const widths = columns.map((col) => Math.max(...(col ?? []).map((n) => geo.get(n.id)!.w), 0));
   const xs = widths.map((_, c) => widths.slice(0, c).reduce((a, w) => a + w + GAP_X, 0));
   const placed = new Map<string, Placed>();
   let height = 0;
@@ -563,7 +486,7 @@ function layout(m: ModuleView, folded: Set<string> = new Set()): { placed: Map<s
     const c = depth.get(n.id)!;
     const y = top.get(n.id)! + shift;
     const x = xs[c] + (n.inputs.length ? 0 : widths[c] - g.w);
-    placed.set(n.id, { node: n, x, y, ...g });
+    placed.set(n.id, { node: n, x, y, w: g.w, h: g.h, ins: g.ins, outs: g.outs, shape: g });
     height = Math.max(height, y + g.h);
   }
   const width = Math.max(0, ...[...placed.values()].map((p) => p.x + p.w));
@@ -616,40 +539,33 @@ function loopBack(x0: number, y0: number, x1: number, y1: number, yb: number) {
 
 // ---------------------------------------------------------------- the module
 
-/** A cable being dragged from an output, in the module's coordinates; `to` is the knob it would land on. */
+/** A wire being dragged from an output, in the module's coordinates; `to` is the value it would land on. */
 interface Cable { from: string; name: string; kind: PortKind; x0: number; y0: number; x: number; y: number; to: string | null }
 
 /**
- * The knob drags this window holds, by gesture: the React keys their knob and its node were
- * mounted with. Ids number the calls in a file in order, so a save that inserts a call above a
- * dragged knob in its file renumbers it, and maybe its node. The server carries the drag
- * (WRITE-22), and the view's `leases` say what the knob is called now: keyed as they were
- * mounted, the knob and its node stay mounted, where new keys would remount them, and the knob's
- * unmount would cancel the drag.
+ * The value drags this window holds, by gesture: the React key their bar was mounted with. Ids
+ * number the calls in a file in order, so a save that inserts a call above a dragged value in its
+ * file renumbers it. The server carries the drag (WRITE-22), and the view's `leases` say what the
+ * value is called now: keyed as it was mounted, the bar stays mounted, where a new key would
+ * remount it, and its unmount would cancel the drag. Its node keeps its key anyway (CARD-25).
  */
-const held = new Map<string, { knob: string; node: string }>();
+const held = new Map<string, { knob: string }>();
 
-/** React keys for a module's nodes and knobs: their ids, but a held drag's knob and node keep their keys (see `held`). */
+/** React keys for a module's values: their ids, but a held drag's value keeps its key (see `held`). */
 export function stableKeys(nodes: ViewNode[], leases: GraphLease[] | undefined) {
   const knobs = new Map<string, string>();
-  const keep = new Map<string, string>();
   for (const l of leases ?? []) {
     const h = l.gesture != null ? held.get(l.gesture) : undefined;
-    if (!h) continue;
-    // The node it was dragged on first, should one value have knobs on two.
-    const has = (n: ViewNode) => n.knobs.some((k) => k.id === l.id);
-    const node = nodes.find((n) => n.id === h.node && has(n)) ?? nodes.find(has);
-    if (!node) continue;
+    if (!h || !nodes.some((n) => n.knobs.some((k) => k.id === l.id))) continue;
     if (l.id !== h.knob) knobs.set(l.id, h.knob);
-    if (node.id !== h.node) keep.set(node.id, h.node);
   }
   // A kept key is taken from whatever has that id now.
-  const keyed = (kept: Map<string, string>) => {
-    const taken = new Set(kept.values());
-    return (id: string) => kept.get(id) ?? (taken.has(id) ? `${id}~` : id);
-  };
-  return { knob: keyed(knobs), node: keyed(keep) };
+  const taken = new Set(knobs.values());
+  return { knob: (id: string) => knobs.get(id) ?? (taken.has(id) ? `${id}~` : id) };
 }
+
+/** Where a wire was dropped on a collapsed node: that node, and where, for its menu of values (DV-6). */
+interface Dropped { node: ViewNode; at: { x: number; y: number }; from: string; name: string; session: number; revision: number }
 
 /** Memoized: the playback status re-renders the canvas five times a second. */
 const ModuleSection = memo(function ModuleSection({
@@ -661,6 +577,7 @@ const ModuleSection = memo(function ModuleSection({
   editable,
   effects,
   leases,
+  perNote,
 }: {
   module: ModuleView;
   laid: ReturnType<typeof layout>;
@@ -671,11 +588,13 @@ const ModuleSection = memo(function ModuleSection({
   editable: boolean;
   effects: Effect[];
   leases: GraphLease[] | undefined;
+  perNote: Set<string>;
 }) {
   const toast = useStore((s) => s.toast);
   const keys = useMemo(() => stableKeys(module.nodes, leases), [module, leases]);
   const area = useRef<HTMLDivElement>(null);
   const [cable, setCable] = useState<Cable | null>(null);
+  const [dropped, setDropped] = useState<Dropped | null>(null);
   // Ports with an edge, to draw them filled.
   const wired = useMemo(() => {
     const s = new Set<string>();
@@ -685,9 +604,12 @@ const ModuleSection = memo(function ModuleSection({
     }
     return s;
   }, [module]);
+  // The nodes in layout order, left to right and top to bottom: the order Tab takes (DV-15).
+  const ordered = useMemo(() => [...placed.values()].sort((a, b) => a.x - b.x || a.y - b.y), [placed]);
 
-  // Drag from a named output onto a knob: the knob's value is replaced by the signal's name.
-  // The cable is drawn in the module's own (unzoomed) coordinates.
+  // Drag from a named output onto a bar: the value is replaced by the signal's name. Dropped on a
+  // collapsed node, a menu offers its values (DV-6). The wire is drawn in the module's own
+  // (unzoomed) coordinates.
   const scale = useRef(zoom);
   scale.current = zoom;
   const startCable = useCallback(
@@ -699,16 +621,16 @@ const ModuleSection = memo(function ModuleSection({
       e.stopPropagation();
       const target = (ev: PointerEvent | React.PointerEvent) => {
         const el = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-knob-id]");
-        // A value no cable can drive is no place to drop one (a note effect's, DV-6).
+        // A value no wire can drive is no place to drop one (a note effect's, DV-6).
         return el && area.current?.contains(el) && el.dataset.noCable == null ? el : null;
       };
-      // The cable's end: the pointer, or the input it would land on.
+      // The wire's end: the pointer, or the bar it would land on, at its left end.
       const end = (ev: PointerEvent | React.PointerEvent) => {
         const b = area.current!.getBoundingClientRect();
         const knob = target(ev);
-        const dot = knob?.querySelector("[data-port-dot]")?.getBoundingClientRect();
         const z = scale.current;
-        if (knob && dot) return { x: (dot.left + dot.width / 2 - b.left) / z, y: (dot.top + dot.height / 2 - b.top) / z, to: knob.dataset.knobId! };
+        const at = knob?.querySelector("[role=slider], button, [data-bar]")?.getBoundingClientRect() ?? knob?.getBoundingClientRect();
+        if (knob && at) return { x: (at.left - b.left) / z, y: (at.top + at.height / 2 - b.top) / z, to: knob.dataset.knobId! };
         return { x: (ev.clientX - b.left) / z, y: (ev.clientY - b.top) / z, to: null };
       };
       const gesture = { session, revision, from: node.id, name: node.outlet };
@@ -722,12 +644,17 @@ const ModuleSection = memo(function ModuleSection({
         if (ev.type !== "pointerup") return;
         const knob = target(ev);
         if (!knob) {
-          // A value no cable can drive says why, in its card's words (a note effect's, RENDER-41).
-          const refused = document.elementFromPoint(ev.clientX, ev.clientY)?.closest<HTMLElement>("[data-no-cable]");
-          if (refused && area.current?.contains(refused)) toast(refused.dataset.noCable!);
+          const under = document.elementFromPoint(ev.clientX, ev.clientY);
+          // A value no wire can drive says why, in its node's words (a note effect's, RENDER-41).
+          const refused = under?.closest<HTMLElement>("[data-no-cable]");
+          if (refused && area.current?.contains(refused)) return toast(refused.dataset.noCable!);
+          // On a node, not on a value: a menu of its values (DV-6), hidden ones too.
+          const on = under?.closest<HTMLElement>("[data-node-id]");
+          const dest = on && area.current?.contains(on) ? module.nodes.find((n) => n.id === on.dataset.nodeId) : undefined;
+          if (dest && dest.id !== node.id && dest.kind === "call" && dest.knobs.length) setDropped({ node: dest, at: { x: ev.clientX, y: ev.clientY }, ...gesture });
           return;
         }
-        // The knob turns into "← name": that says it, so no toast does (taste.md §2.14).
+        // The bar turns into "← name": that says it, so no toast does (taste.md §2.14).
         graphApi
           .connect(gesture.session, gesture.revision, gesture.from, knob.dataset.knobId!, { name: `connecting ${gesture.name}` })
           .catch((error) => toast(error instanceof Error ? error.message : String(error)));
@@ -736,94 +663,164 @@ const ModuleSection = memo(function ModuleSection({
       window.addEventListener("pointerup", up);
       window.addEventListener("pointercancel", up);
     },
-    [placed, session, revision, toast],
+    [placed, session, revision, toast, module],
   );
 
+  // The selection's keys (DV-15): Delete removes the selected node where Remove is offered; Esc
+  // clears the selection. Not while a value, a field or a menu has the keyboard.
+  const moving = useExpanded((s) => s.moving);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("input, textarea, [role=slider], [role=menu], [contenteditable=true]")) return;
+    const selected = useExpanded.getState().selected;
+    if (!selected) return;
+    if (e.key === "Escape") {
+      useExpanded.getState().select(null);
+      e.stopPropagation();
+      return;
+    }
+    if (e.key !== "Delete" && e.key !== "Backspace") return;
+    const node = module.nodes.find((n) => (n.key ?? n.id) === selected);
+    e.preventDefault();
+    e.stopPropagation();
+    if (node?.effect && editable) void removeNode(node, titleOf(node, effects), session, revision);
+  };
+
   return (
-    // Flat on the dock, edge to edge: no card, no title row, no legend (taste.md DK-3). While a cable
+    // Flat on the dock, edge to edge: no card, no title row, no legend (taste.md DK-3). While a wire
     // is dragged, a value that takes none says why (DV-6).
     <Cabling.Provider value={!!cable}>
-    <section className="grow shrink-0 w-max min-w-full flex flex-col p-4" data-module={module.key}>
-      {/* The canvas fills the panel, dotted all over; the graph sits at its top left, as a chain reads (taste.md §3.5). */}
-      <div data-canvas className="relative grow grid place-items-start" style={{ minWidth: width * zoom, minHeight: height * zoom }}>
-        <Dots />
-        <div className="relative" style={{ width: width * zoom, height: height * zoom }}>
-          <div
-            ref={area}
-            className="relative origin-top-left"
-            style={{ width, height, transform: zoom === 1 ? undefined : `scale(${zoom})` }}
-            data-cabling={cable ? true : undefined}
-          >
-            <svg className="absolute inset-0 pointer-events-none overflow-visible" width={width} height={height}>
-              {module.port_edges.map((e) => {
-                const p = placed.get(e.from), q = placed.get(e.to);
-                const y0 = p?.outs.get(e.from_port), y1 = q?.ins.get(e.to_port);
-                if (!p || !q || y0 == null || y1 == null) return null;
-                const loop = back.has(e);
-                return (
+      <section className="grow shrink-0 w-max min-w-full flex flex-col p-4" data-module={module.key} data-moving={moving || undefined} onKeyDown={onKeyDown}>
+        {/* The canvas fills the panel, dotted all over; the graph sits at its top left (taste.md §3.5). A click on it clears the selection. */}
+        <div
+          data-canvas
+          className="relative grow grid place-items-start"
+          style={{ minWidth: width * zoom, minHeight: height * zoom }}
+          onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-node-id]") && useExpanded.getState().select(null)}
+        >
+          <Dots />
+          <div className="relative" style={{ width: width * zoom, height: height * zoom }}>
+            <div
+              ref={area}
+              className="relative origin-top-left"
+              style={{ width, height, transform: zoom === 1 ? undefined : `scale(${zoom})` }}
+              data-cabling={cable ? true : undefined}
+            >
+              <svg className="absolute inset-0 pointer-events-none overflow-visible" width={width} height={height}>
+                {module.port_edges.map((e) => {
+                  const p = placed.get(e.from), q = placed.get(e.to);
+                  const y0 = p?.outs.get(e.from_port), y1 = q?.ins.get(e.to_port);
+                  if (!p || !q || y0 == null || y1 == null) return null;
+                  const loop = back.has(e);
+                  return (
+                    <path
+                      key={`${e.from}>${e.from_port}>${e.to}>${e.to_port}`}
+                      d={loop ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2) : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)}
+                      data-loop={loop || undefined}
+                      // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
+                      data-bypassed={e.bypassed || undefined}
+                      strokeDasharray={loop || e.bypassed ? "6 5" : CABLE[e.kind].dash}
+                      data-from={e.from}
+                      data-from-port={e.from_port}
+                      data-to={e.to}
+                      data-to-port={e.to_port}
+                      data-kind={e.kind}
+                      stroke={e.bypassed ? "var(--color-line-strong)" : CABLE[e.kind].stroke}
+                      strokeWidth={CABLE[e.kind].width}
+                      strokeLinecap="round"
+                      fill="none"
+                    />
+                  );
+                })}
+              </svg>
+              {ordered.map((p) => (
+                <Node
+                  key={p.node.key ?? p.node.id}
+                  module={module.key}
+                  knobKey={keys.knob}
+                  node={p.node}
+                  shape={p.shape}
+                  session={session}
+                  revision={revision}
+                  editable={editable}
+                  effects={effects}
+                  wired={wired}
+                  perNote={perNote.has(p.node.id)}
+                  onCable={startCable}
+                  style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
+                />
+              ))}
+              <svg className="absolute inset-0 pointer-events-none overflow-visible z-10" width={width} height={height}>
+                {cable && (
                   <path
-                    key={`${e.from}>${e.from_port}>${e.to}>${e.to_port}`}
-                    d={loop ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2) : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)}
-                    data-loop={loop || undefined}
-                    // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
-                    data-bypassed={e.bypassed || undefined}
-                    strokeDasharray={loop || e.bypassed ? "6 5" : CABLE[e.kind].dash}
-                    data-from={e.from}
-                    data-from-port={e.from_port}
-                    data-to={e.to}
-                    data-to-port={e.to_port}
-                    data-kind={e.kind}
-                    stroke={e.bypassed ? "var(--color-line-strong)" : CABLE[e.kind].stroke}
-                    strokeWidth={CABLE[e.kind].width}
+                    data-cable={cable.to ?? ""}
+                    d={curve(cable.x0, cable.y0, cable.x, cable.y)}
+                    stroke="var(--color-accent)"
+                    strokeWidth="2"
+                    strokeDasharray={cable.to ? undefined : "6 5"}
                     strokeLinecap="round"
                     fill="none"
                   />
-                );
-              })}
-            </svg>
-            {[...placed.values()].map((p) => (
-              <NodeCard
-                key={keys.node(p.node.id)}
-                module={module.key}
-                nodeKey={keys.node(p.node.id)}
-                knobKey={keys.knob}
-                node={p.node}
-                session={session}
-                revision={revision}
-                editable={editable}
-                effects={effects}
-                wired={wired}
-                ports={p.outs}
-                onCable={startCable}
-                style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
-              />
-            ))}
-            <svg className="absolute inset-0 pointer-events-none overflow-visible z-10" width={width} height={height}>
-              {cable && (
-                <path
-                  data-cable={cable.to ?? ""}
-                  d={curve(cable.x0, cable.y0, cable.x, cable.y)}
-                  stroke="var(--color-accent)"
-                  strokeWidth="2"
-                  strokeDasharray={cable.to ? undefined : "6 5"}
-                  strokeLinecap="round"
-                  fill="none"
-                />
-              )}
-            </svg>
+                )}
+              </svg>
+            </div>
           </div>
         </div>
-      </div>
-    </section>
+        {dropped && <DropMenu dropped={dropped} onClose={() => setDropped(null)} />}
+      </section>
     </Cabling.Provider>
   );
 });
 
+/**
+ * A wire dropped on a node, not on a value (DV-6, DV-16): a menu of the node's values, hidden ones
+ * too; a value no wire can drive is dimmed, saying why. A pick connects it, as a drop on its bar does.
+ */
+function DropMenu({ dropped, onClose }: { dropped: Dropped; onClose: () => void }) {
+  const toast = useStore((s) => s.toast);
+  const tracks = useContext(Tracks);
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const { node } = dropped;
+  const values = node.inputs.flatMap((p) => {
+    const k = p.knob ? node.knobs.find((x) => x.id === p.knob) : undefined;
+    return k ? [{ p, k }] : [];
+  });
+  return (
+    <>
+      {createPortal(<span ref={setAnchor} aria-hidden className="fixed size-px pointer-events-none" style={{ left: dropped.at.x, top: dropped.at.y }} />, document.body)}
+      {anchor && (
+        <Popover anchor={anchor} onClose={onClose} role="menu" aria-label={`Connect ${dropped.name} to`} data-testid="drop-menu" className="w-[240px] max-h-[320px] overflow-y-auto">
+          <div className="h-ctl-sm px-2 flex items-center text-xs text-fg-muted">Connect {dropped.name} to</div>
+          {values.map(({ p, k }) => {
+            const off = k.cable_refused ? `${k.cable_refused}.` : null;
+            return (
+              <MenuRow
+                key={k.id}
+                data-drop-knob={k.label}
+                data-knob-id={k.id}
+                disabled={!!off}
+                title={off ?? `Its id: ${k.id}`}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onClose();
+                  graphApi.connect(dropped.session, dropped.revision, dropped.from, k.id, { name: `connecting ${dropped.name}` }).catch((error) => toast(error instanceof Error ? error.message : String(error)));
+                }}
+              >
+                {controlLabel(p, tracks)}
+              </MenuRow>
+            );
+          })}
+        </Popover>
+      )}
+    </>
+  );
+}
+
 // ---------------------------------------------------------------- nodes
 
 /**
- * The glyph for a card that isn't a call: a lane, the time, a track's signal coming in, an output, a
- * value, a voice. A call's card has none: its title says what it is, and one glyph on every effect
+ * The glyph for a node that isn't a call: a lane, the time, a track's signal coming in, an output, a
+ * value, a voice. A call's node has none: its title says what it is, and one glyph on every effect
  * would repeat the dock's or a category's (taste.md §2.12, one icon per meaning).
  */
 function NodeIcon({ node }: { node: ViewNode }) {
@@ -856,8 +853,6 @@ function importTitle(label: string) {
 
 /** An input: its kind's mark centred on a node's left edge, filled when something is connected to it. */
 function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; filled: boolean; className?: string }) {
-  // The chain draws no ports (taste.md DV-11).
-  if (!useContext(Ports)) return null;
   return (
     <span
       data-port-dot
@@ -869,104 +864,116 @@ function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; fill
   );
 }
 
-function NodeCard({
+/** The package a node's sound is from: `@m2/mixing`, `std`, or none for the song's own and a plugin. */
+export function packOf(n: ViewNode): string | null {
+  if (!n.component || n.plugin) return null;
+  const at = n.component.lastIndexOf(":");
+  return at > 0 ? n.component.slice(0, at) : null;
+}
+
+/** Whether ⏻ works on `n`: the server offers Turn off for it (a component call, sound in and sound out alike, PKG-3). */
+const bypassable = (n: ViewNode) => !!n.menu && !n.menu.bypass;
+
+/** An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8). */
+const hasPresets = (n: ViewNode, effects: Effect[]) =>
+  n.kind === "call" && (!!n.plugin || (!!n.component && (n.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === n.component))));
+
+/** Remove: the node unwrapped, `b(x(a))` to `b(a)`, keeping what it worked on (the graph note §3). */
+function removeNode(node: ViewNode, titled: string, session: number, revision: number) {
+  const toast = useStore.getState().toast;
+  return graphApi
+    .removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true })
+    .then((c) => toast(`Removed ${titled}`, undoAction(session, c.step)))
+    .catch((error) => toast(error instanceof Error ? error.message : String(error)));
+}
+
+function Node({
   module,
-  nodeKey,
   knobKey,
   node,
+  shape,
   session,
   revision,
   editable,
   effects,
   wired,
-  ports,
+  perNote,
   onCable,
   style,
 }: {
   /** Its module's key: where its scope reads and its keys play (taste.md DV-9, DV-10). */
   module: string;
-  /** Its React key, and its knobs' (see `held`). */
-  nodeKey: string;
   knobKey: (id: string) => string;
   node: ViewNode;
+  shape: Shape;
   session: number;
   revision: number;
   editable: boolean;
   effects: Effect[];
   wired: Set<string>;
-  /** Where its outputs are, from its top. */
-  ports: Map<string, number>;
+  /** It plays inside an instrument's voices, once for each note. */
+  perNote: boolean;
   onCable: (node: ViewNode, output: OutputPort, e: React.PointerEvent) => void;
   style: React.CSSProperties;
 }) {
-  // Just the header, its one circle beside it (see `compact`).
-  const small = compact(node);
-  // The Song's mixer, as one compact card (MX-6).
+  const key = node.key ?? node.id;
+  const el = useRef<HTMLDivElement>(null);
   const card = useContext(MixerCard);
   const mixing = card?.id === node.id ? card : null;
-  const where = node.file ? `${node.file}:${node.line}` : null;
   // A call by its component's label ("LFO", "Reverb"); a track's signal by the track; a lane or an
   // output by the rule controls follow (`cutoff` → Cutoff). No caption under it: the glyph and the
   // place say what kind it is (principle 4).
   const titled = titleOf(node, effects);
   // Turned off: the title says so in `fg-muted`, and the body is half seen (taste.md §3.5).
   const off = !!node.bypassed;
-  // Its settings (taste.md DV-8); a card with one recording takes a file dropped anywhere on it, as a Sampler's does.
-  const settings = mixing ? [] : settingsOf(node);
-  // Its rows as drawn: in its groups, with its first alone when folded (CARD-25).
-  const folded = useFolded((s) => s.ids.has(node.id));
-  const rows = mixing ? [] : items(node, folded);
-  const drawnInputs = rows.flatMap((x) => (x.t === "input" ? [x.port] : []));
-  const recordings = settings.filter((x) => x.kind === "recording" && !x.readonly);
-  const tracks = useContext(Tracks);
+  const selected = useExpanded((s) => s.selected === key);
+  // The others move aside over 280 ms when one expands (DV-13); an edit's new layout lands at once.
+  const moving = useExpanded((s) => s.moving);
+  const lit = useExpanded((s) => (s.lit?.node === key ? s.lit.group : null));
+  // A node with one recording takes a file dropped anywhere on it, as a Sampler's does.
+  const recordings = (node.settings ?? []).filter((x) => x.kind === "recording" && !x.readonly);
+  const pack = packOf(node);
+  // An instrument (it takes notes) wears its track's colour along its top (DV-12).
+  const instrument = node.kind === "call" && node.inputs.some((i) => i.kind === "notes");
+  const colour = useStore((s) => (instrument && s.graph ? (trackColors(s.graph.timeline, module)?.bar ?? null) : null));
   const why = useContext(Locked);
+  // Expanded, its top comes into view once the others have moved aside (DV-13).
+  const was = useRef(shape.expanded);
+  useEffect(() => {
+    if (shape.expanded && !was.current) {
+      const t = setTimeout(() => el.current?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" }), 300);
+      was.current = true;
+      return () => clearTimeout(t);
+    }
+    was.current = shape.expanded;
+  }, [shape.expanded]);
+  const value = (v: Value) => <ValueRow key={valueKey(v)} v={v} node={node} owner={titled} module={module} knobKey={knobKey} session={session} revision={revision} editable={editable} expanded={shape.expanded} />;
   return (
     <div
-      className="group/card absolute rounded-md bg-raised ring-1 ring-line flex flex-col"
+      ref={el}
+      className={clsx(
+        "group/card absolute rounded-md bg-raised flex flex-col",
+        moving && "transition-[left,top] duration-280 ease-out",
+        selected ? "ring-2 ring-accent" : "ring-1 ring-line",
+      )}
       style={style}
       data-node={node.label}
       data-node-id={node.id}
+      data-node-key={key}
+      data-size={shape.sized ? (shape.expanded ? "expanded" : "collapsed") : undefined}
+      data-selected={selected || undefined}
       data-bypassed={off || undefined}
       data-recording-call={recordings.length === 1 ? node.id : undefined}
       data-recording-setting={recordings.length === 1 ? recordings[0].slot : undefined}
       data-recording-title={recordings.length === 1 ? titled : undefined}
-      title={where ?? undefined}
     >
-      <div className={clsx("h-10 shrink-0 pl-3 pr-1.5 flex items-center gap-2 min-w-0", !small && "border-b border-line")}>
-        <NodeIcon node={node} />
-        <div className="min-w-0 flex-1">
-          {/* Its label (an effect's descriptor says it), the code's name in the tooltip; its file and line only there. */}
-          <div
-            data-node-title
-            className={clsx(
-              "text-sm truncate",
-              off ? "font-semibold text-fg-muted" : node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted",
-            )}
-            title={titled !== node.label ? node.label : undefined}
-          >
-            {off ? `${titled} · Off` : titled}
-          </div>
-        </div>
-        {(node.groups?.length ?? 0) > 1 && (
-          <button
-            className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
-            data-fold={node.id}
-            title={folded ? `Show all of ${titled}'s groups` : `Fold ${titled} to its first group, ${node.groups![0].name}`}
-            aria-label={folded ? `Unfold ${titled}` : `Fold ${titled}`}
-            aria-expanded={!folded}
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => useFolded.getState().flip(node.id)}
-          >
-            <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} className={clsx("transition-transform duration-140 ease-out", !folded && "rotate-90")} />
-          </button>
-        )}
-        <CardTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={!!mixing} />
-      </div>
-      {node.voices && !small && <VoicesLine words={node.voices} />}
-      {node.reads_key && !small && <KeyLine />}
+      {colour && <div data-colour-bar aria-hidden className="absolute inset-x-0 top-0 h-[3px] rounded-t-md" style={{ background: colour }} />}
+      <Head node={node} module={module} shape={shape} titled={titled} pack={pack} perNote={perNote} session={session} revision={revision} editable={editable} effects={effects} mixing={!!mixing} />
+      {node.voices && !shape.pill && <VoicesLine words={node.voices} />}
+      {node.reads_key && !shape.pill && <KeyLine />}
       {node.plugin && <PluginRow node={node.plugin} title={titled} session={session} />}
-      {small && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
-      {mixing && (
+      {shape.pill && node.inputs.map((i) => <Dot key={i.id} id={i.id} kind={i.kind} filled={wired.has(`${node.id}<${i.id}`)} />)}
+      {mixing ? (
         <div className="py-1.5">
           <div className="relative h-7 pl-4 pr-4 flex items-center gap-2 text-xs min-w-0" data-input={CHANNELS}>
             <Dot id={CHANNELS} kind="audio" filled={wired.has(`${node.id}<${CHANNELS}`)} />
@@ -983,49 +990,62 @@ function NodeCard({
             </button>
           </div>
         </div>
-      )}
-      {!small && !mixing && rows.length > 0 && (
-        <div data-node-body className={clsx("py-1.5", off && "opacity-50")}>
-          {rows.map((x) =>
-            x.t === "input" ? (
-              <InputRow
-                key={x.port.knob ? `knob:${knobKey(x.port.knob)}` : x.port.id}
-                nodeKey={nodeKey}
-                knobKey={knobKey}
-                node={node}
-                owner={titled}
-                input={x.port}
-                filled={wired.has(`${node.id}<${x.port.id}`)}
-                session={session}
-                revision={revision}
-                editable={editable}
-              />
-            ) : x.t === "listens" ? (
-              <ListensRow key="listens" node={node} filled={false} editable={editable} />
-            ) : x.t === "fill" ? (
-              <div key={`fill:${x.id}`} className="h-7" />
-            ) : x.t === "setting" ? (
-              <SettingRow key={x.x.id} x={x.x} owner={titled} card={titled} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} />
-            ) : x.t === "view" ? (
-              <ViewRow key={`view:${x.v.name}`} view={x.v} height={patchViewH(x.v.kind)} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={titled} />
-            ) : x.t === "group" ? (
-              <div key={`group:${x.name}`} data-group={x.name} className={clsx("h-6 px-4 flex items-end pb-1 text-xs font-semibold text-fg-muted", !x.first && "border-t border-line")}>
-                {x.name}
+      ) : (
+        !shape.pill && (
+          <div data-node-body className={clsx("flex-1 min-h-0 flex flex-col min-w-0", off && "opacity-50")}>
+            {(shape.conns.length > 0 || shape.fills.length > 0) && (
+              <div style={{ paddingTop: PAD, paddingBottom: PAD }}>
+                {shape.conns.map((c) =>
+                  c.t === "listens" ? (
+                    <ListensRow key="listens" node={node} filled={false} editable={editable} />
+                  ) : (
+                    <ConnRow key={c.port.id} node={node} input={c.port} filled={wired.has(`${node.id}<${c.port.id}`)} session={session} revision={revision} editable={editable} />
+                  ),
+                )}
+                {shape.fills.map((id) => (
+                  <div key={`fill:${id}`} style={{ height: ROW_H }} />
+                ))}
               </div>
+            )}
+            {shape.views.length > 0 && (
+              <div data-views className={clsx("grid", shape.views.length > 1 && shape.sized && "grid-cols-2")} style={{ height: shape.sized ? shape.viewH : undefined }}>
+                {shape.views.map((v) => (
+                  <ViewRow key={`view:${v.name}`} view={v} height={shape.viewH} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={titled} />
+                ))}
+              </div>
+            )}
+            {shape.expanded ? (
+              <Columns columns={shape.columns} lit={lit} render={value} />
             ) : (
-              <FoldRow key="fold" node={node} hides={x.hides} hidden={x.hidden} titled={titled} />
-            ),
-          )}
-        </div>
+              shape.values.length > 0 && (
+                <div data-values style={{ paddingTop: PAD, paddingBottom: PAD }} className="px-2">
+                  {shape.sized
+                    ? gridRows(shape.values).map((row, i) => (
+                        <div key={i} className={clsx("grid gap-2", row.length > 1 && "grid-cols-2")}>
+                          {row.map(value)}
+                        </div>
+                      ))
+                    : shape.values.map(value)}
+                </div>
+              )
+            )}
+            {shape.expanded && node.code && (
+              // The whole call, wrapped to the node's width (CARD-41).
+              <div data-code-line data-code className="px-3 border-t border-line font-mono text-xs text-fg-muted whitespace-pre-wrap break-words flex items-center" style={{ height: shape.code }} title={node.code}>
+                {node.code}
+              </div>
+            )}
+          </div>
+        )
       )}
       {node.outputs.map((o, j) => (
         <OutputPortView
           key={o.id}
           node={node}
           output={o}
-          y={ports.get(o.id) ?? 0}
-          // Only a signal's row (or an output's own) has room for its label beside it; the mixer card's has its link.
-          labelled={!small && !mixing && (j >= drawnInputs.length || (!drawnInputs[j].knob && !drawnInputs[j].inlet && drawnInputs[j].readonly == null))}
+          y={shape.outs.get(o.id) ?? 0}
+          // Only a connection's row (or an output's own) has room for its label beside it; the header's and the mixer's don't.
+          labelled={!shape.pill && !mixing && (j >= shape.conns.length ? shape.fills.includes(o.id) : shape.conns[j].t === "input" && !(shape.conns[j] as { port: InputPort }).port.inlet && node.listens?.port !== (shape.conns[j] as { port: InputPort }).port.id)}
           filled={wired.has(`${node.id}>${o.id}`)}
           editable={editable}
           onCable={onCable}
@@ -1035,15 +1055,43 @@ function NodeCard({
   );
 }
 
+const valueKey = (v: Value) => (v.t === "setting" ? `setting:${v.x.id}` : v.t === "view" ? `view:${v.v.name}` : `${v.t}:${v.port.id}`);
+
+/** An expanded node's columns (DV-12): side by side, 176 px each, wrapping after four; a lit one in the accent's wash (DV-18). */
+function Columns({ columns, lit, render }: { columns: Column[]; lit: string | null; render: (v: Value) => React.ReactNode }) {
+  return (
+    <div className="grid border-t border-line" style={{ gridTemplateColumns: `repeat(${Math.min(columns.length, 4)}, ${COL_W}px)` }}>
+      {columns.map((c, i) => (
+        <section
+          key={c.name}
+          data-column={c.name}
+          data-lit={lit === c.name || undefined}
+          aria-label={c.name}
+          className={clsx("min-w-0 flex flex-col px-2", i % 4 !== 0 && "border-l border-line", i >= 4 && "border-t border-line", lit === c.name && "bg-accent-wash")}
+          style={{ paddingBottom: PAD }}
+        >
+          <div className="shrink-0 px-1 flex items-end pb-1 text-xs font-semibold text-fg-muted truncate" style={{ height: GROUP_H }}>
+            {c.name}
+          </div>
+          <div style={{ paddingTop: PAD }}>{c.items.map(render)}</div>
+        </section>
+      ))}
+    </div>
+  );
+}
+
 /**
- * A card's tools, in its header: Presets (FMT-22), Make it a kit (KIT-24), the effect's ⋯ menu,
- * remove and + (add an effect after it), each with its popover. The patch's card and the chain's
- * frame (taste.md DV-12) share them.
+ * A node's header (DV-12): ⏻ where bypass works, its label (wrapped, never cut; its pack in its
+ * tooltip), +N when it hides values, "per note" inside a voice; expanded, its pack and Presets; then
+ * + (an effect after it), ⋯ and ⤢. A click selects the node; Enter expands it (DV-15).
  */
-export function CardTools({
+function Head({
   node,
   module,
+  shape,
   titled,
+  pack,
+  perNote,
   session,
   revision,
   editable,
@@ -1052,21 +1100,162 @@ export function CardTools({
 }: {
   node: ViewNode;
   module: string;
+  shape: Shape;
+  titled: string;
+  pack: string | null;
+  perNote: boolean;
+  session: number;
+  revision: number;
+  editable: boolean;
+  effects: Effect[];
+  mixing: boolean;
+}) {
+  const key = node.key ?? node.id;
+  const off = !!node.bypassed;
+  const where = node.file ? `${node.file}:${node.line}` : null;
+  const tip = [titled !== node.label ? node.label : null, pack, where].filter(Boolean).join(" · ");
+  const sized = shape.sized;
+  return (
+    <div
+      data-node-head
+      tabIndex={0}
+      aria-label={sized ? `${titled}, ${shape.expanded ? "expanded" : "collapsed"}` : titled}
+      aria-expanded={sized ? shape.expanded : undefined}
+      className={clsx(
+        "shrink-0 pl-3 pr-1 flex items-center gap-0.5 min-w-0 rounded-t-md outline-none focus-visible:bg-hover cursor-default",
+        !shape.pill && "border-b border-line",
+      )}
+      style={{ height: shape.head }}
+      onPointerDown={(e) => !(e.target as HTMLElement).closest("button") && useExpanded.getState().select(key)}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        if (e.key === "Enter" && sized) {
+          e.preventDefault();
+          useExpanded.getState().toggle(key);
+        } else if (e.key === " ") {
+          e.preventDefault();
+          useExpanded.getState().select(key);
+        }
+      }}
+      onFocus={(e) => e.target === e.currentTarget && useExpanded.getState().select(key)}
+    >
+      {bypassable(node) && (
+        <button
+          data-bypass={node.id}
+          aria-pressed={!off}
+          aria-label={off ? `Turn ${titled} on` : `Turn ${titled} off`}
+          title={off ? `Turn ${titled} back on` : `Turn ${titled} off (keeps its settings)`}
+          disabled={!editable}
+          className={clsx(
+            "shrink-0 size-5 -ml-1.5 mr-1 grid place-items-center rounded-sm hover:bg-hover disabled:text-fg-off cursor-pointer transition-colors duration-80 ease-linear",
+            off ? "text-fg-faint" : "text-fg-muted hover:text-fg",
+          )}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => void turnEffect(node, titled, !off)}
+        >
+          <Power size={12} absoluteStrokeWidth strokeWidth={1.5} />
+        </button>
+      )}
+      <NodeIcon node={node} />
+      <div className="min-w-0 flex-1 flex items-center gap-1.5">
+        {/* Its label (an effect's descriptor says it): wrapped, never cut (DV-12); the code's name and its pack in the tooltip. */}
+        <div
+          data-node-title
+          className={clsx(
+            "min-w-0 text-sm leading-4 break-words line-clamp-3",
+            off ? "font-semibold text-fg-muted" : node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted",
+          )}
+          title={tip || undefined}
+        >
+          {off ? `${titled} · Off` : titled}
+        </div>
+        {perNote && (
+          <span data-per-note className="shrink-0 text-xs text-fg-faint" title="It plays inside the instrument's voices, once for each note">
+            per note
+          </span>
+        )}
+      </div>
+      {shape.expanded && pack && (
+        <span data-pack className="shrink-0 px-1 text-xs text-fg-faint">
+          {pack}
+        </span>
+      )}
+      {sized && !shape.expanded && shape.hidden > 0 && <More node={node} hides={shape.hides} hidden={shape.hidden} titled={titled} />}
+      {!shape.pill && <HeadTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={mixing} expanded={shape.expanded} />}
+      {sized && (
+        <button
+          data-expand={node.id}
+          aria-label={shape.expanded ? `Collapse ${titled}` : `Expand ${titled}`}
+          aria-expanded={shape.expanded}
+          title={shape.expanded ? `Collapse ${titled}: this window only, the song is unchanged` : `Expand ${titled}: every value, its pictures and its code (this window only)`}
+          className="shrink-0 size-5 grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={() => useExpanded.getState().toggle(node.key ?? node.id)}
+        >
+          {shape.expanded ? <Minimize2 size={12} absoluteStrokeWidth strokeWidth={1.5} /> : <Maximize2 size={12} absoluteStrokeWidth strokeWidth={1.5} />}
+        </button>
+      )}
+    </div>
+  );
+}
+
+/**
+ * +N (DV-16): how many values a collapsed node hides, standing for each of them. It lights when an
+ * agent changes one (AGENT-5); an agent's pointer at one shows on it (AGENT-6); a click expands the node.
+ */
+function More({ node, hides, hidden, titled }: { node: ViewNode; hides: string[]; hidden: number; titled: string }) {
+  const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
+  return (
+    <button
+      data-more
+      data-hides={hides.join(" ") || undefined}
+      data-glow={glows || undefined}
+      className={clsx(
+        "shrink-0 h-5 px-1 rounded-sm text-xs font-medium tabular-nums cursor-pointer transition-colors duration-80 ease-linear",
+        glows ? "bg-accent-soft text-accent-strong" : "text-fg-muted hover:text-fg hover:bg-hover",
+      )}
+      title={`${hidden} more ${hidden === 1 ? "value" : "values"}: expand ${titled} to see ${hidden === 1 ? "it" : "them"}`}
+      aria-label={`Expand ${titled}: ${hidden} more ${hidden === 1 ? "value" : "values"}`}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => useExpanded.getState().expand(node.key ?? node.id)}
+    >
+      +{hidden}
+    </button>
+  );
+}
+
+/**
+ * A node's tools, in its header: Presets (FMT-22) when expanded, + (an effect after it, until + on a
+ * wire replaces it: track graph-insert), and ⋯ (Remove, Move, Make it a kit, Show in code, Copy its
+ * id), each with its popover.
+ */
+function HeadTools({
+  node,
+  module,
+  titled,
+  session,
+  revision,
+  editable,
+  effects,
+  mixing,
+  expanded,
+}: {
+  node: ViewNode;
+  module: string;
   titled: string;
   session: number;
   revision: number;
   editable: boolean;
   effects: Effect[];
-  /** The Song's compact mixer card (MX-6), which has no Presets. */
+  /** The Song's compact mixer node (MX-6), which has no Presets. */
   mixing: boolean;
+  expanded: boolean;
 }) {
   const toast = useStore((s) => s.toast);
   const [picking, setPicking] = useState<HTMLElement | null>(null);
   const closePicker = useCallback(() => setPicking(null), []);
-  // The effect card's ⋯ menu, open from this button. A card kept across an edit may show
-  // another call now: its menu closes then.
+  // The ⋯ menu, open from its button. A node kept across an edit may show another call now: its menu closes then.
   const [menu, setMenu] = useState<HTMLElement | null>(null);
-  // Its Presets popover (FMT-22), open from the header's Presets button.
   const [presets, setPresets] = useState<HTMLElement | null>(null);
   const call = `${node.id} ${node.label}`;
   useEffect(() => {
@@ -1077,133 +1266,107 @@ export function CardTools({
   /** A structural edit: said in words, with its Undo (taste.md §2.14, ST-5); a refusal says why. */
   const edited = (p: Promise<{ revision?: number; step?: number }>, words: string) =>
     p.then((c) => toast(words, undoAction(session, c.step))).catch((error) => toast(error instanceof Error ? error.message : String(error)));
-  // The drum machine's card offers Make it a kit (KIT-24), on a track that plays it.
-  const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
-  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
-  // An instrument (it takes notes) or an effect of a component has Presets, and so does a plugin (HOST-8).
-  const sound =
-    node.kind === "call" &&
-    !mixing &&
-    (!!node.plugin || (!!node.component && (node.inputs.some((i) => i.kind === "notes") || effects.some((e) => e.component === node.component))));
+  const sound = !mixing && hasPresets(node, effects);
+  const button = "shrink-0 size-5 grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear";
   return (
     <>
-          {sound && (
-            <button
-              className={clsx(
-                "shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
-                presets && "bg-accent-soft text-accent-strong",
-              )}
-              data-presets={node.id}
-              title={`Presets for ${titled}: load one, or save these settings`}
-              aria-haspopup="dialog"
-              aria-expanded={!!presets}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                const button = e.currentTarget;
-                setPresets((p) => (p ? null : button));
-              }}
-            >
-              Presets
-            </button>
+      {expanded && sound && (
+        <button
+          className={clsx(
+            "shrink-0 h-5 px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-colors duration-80 ease-linear",
+            presets && "bg-accent-soft text-accent-strong",
           )}
-          {machine && (
-            <button
-              className="shrink-0 h-ctl-sm px-1.5 rounded-sm text-xs font-medium text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
-              data-make-kit={module}
-              title={why ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
-              disabled={!editable}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={() => void makeKit(module)}
-            >
-              Make it a kit
-            </button>
-          )}
-          {node.effect && node.menu && (
-            <button
-              className={clsx(
-                "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover cursor-pointer transition-[opacity,color,background-color] duration-80 ease-linear",
-                menu ? "opacity-100 bg-accent-soft text-accent-strong" : "opacity-0 group-hover/card:opacity-100 focus-visible:opacity-100",
-              )}
-              data-effect-menu={node.id}
-              title={`More for ${titled}`}
-              aria-label={`${node.effect} menu`}
-              aria-haspopup="menu"
-              aria-expanded={!!menu}
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={(e) => {
-                const button = e.currentTarget;
-                setMenu((m) => (m ? null : button));
-              }}
-            >
-              <Ellipsis size={14} />
-            </button>
-          )}
-          {node.effect && (
-            <button
-              className="shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
-              title={why ?? `Remove ${titled}, keeping what it was applied to`}
-              aria-label={`Remove ${node.effect}`}
-              disabled={!editable}
-              onClick={() => void edited(graphApi.removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true }), `Removed ${titled}`)}
-            >
-              <Trash2 size={14} />
-            </button>
-          )}
-          {node.audio && effects.length > 0 && (
-            <button
-              className={clsx(
-                "shrink-0 size-ctl-sm grid place-items-center rounded-sm text-fg-muted hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear",
-                picking && "bg-accent-soft text-accent-strong",
-              )}
-              title={why ?? "Add an effect after this"}
-              aria-label={`Add an effect after ${node.label}`}
-              aria-haspopup="dialog"
-              aria-expanded={!!picking}
-              disabled={!editable}
-              onClick={(e) => {
-                const button = e.currentTarget;
-                setPicking((p) => (p ? null : button));
-              }}
-            >
-              <Plus size={14} />
-            </button>
-          )}
-        {presets && (
-          <PresetPopover
-            node={node.id}
-            title={titled}
-            session={session}
-            revision={revision}
-            anchor={presets}
-            locked={why ?? (editable ? null : "This song can't be edited here")}
-            onClose={() => setPresets(null)}
-          />
+          data-presets={node.id}
+          title={`Presets for ${titled}: load one, or save these settings`}
+          aria-haspopup="dialog"
+          aria-expanded={!!presets}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            const b = e.currentTarget;
+            setPresets((p) => (p ? null : b));
+          }}
+        >
+          Presets
+        </button>
+      )}
+      {node.audio && effects.length > 0 && (
+        <button
+          className={clsx(button, picking && "bg-accent-soft text-accent-strong")}
+          title={why ?? "Add an effect after this"}
+          aria-label={`Add an effect after ${node.label}`}
+          aria-haspopup="dialog"
+          aria-expanded={!!picking}
+          disabled={!editable}
+          onClick={(e) => {
+            const b = e.currentTarget;
+            setPicking((p) => (p ? null : b));
+          }}
+        >
+          <Plus size={14} />
+        </button>
+      )}
+      {node.kind === "call" && (
+        <button
+          className={clsx(button, menu && "bg-accent-soft text-accent-strong")}
+          data-node-menu={node.id}
+          data-effect-menu={node.effect ? node.id : undefined}
+          title={`More for ${titled}`}
+          aria-label={`${titled} menu`}
+          aria-haspopup="menu"
+          aria-expanded={!!menu}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={(e) => {
+            const b = e.currentTarget;
+            setMenu((m) => (m ? null : b));
+          }}
+        >
+          <Ellipsis size={14} />
+        </button>
+      )}
+      {presets && (
+        <PresetPopover
+          node={node.id}
+          title={titled}
+          session={session}
+          revision={revision}
+          anchor={presets}
+          locked={why ?? (editable ? null : "This song can't be edited here")}
+          onClose={() => setPresets(null)}
+        />
+      )}
+      {menu && (
+        <NodeMenu
+          node={node}
+          module={module}
+          title={titled}
+          anchor={menu}
+          locked={why ?? (editable ? null : "This song can't be edited here")}
+          onRemove={() => void edited(graphApi.removeEffect(session, revision, node.id, { name: `removing ${titled}`, structural: true }), `Removed ${titled}`)}
+          onClose={() => setMenu(null)}
+        />
+      )}
+      {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
+      {picking &&
+        createPortal(
+          <EffectBrowser
+            effects={effects}
+            after={node.label}
+            named={titled}
+            anchor={picking}
+            onClose={closePicker}
+            onPick={(effect) => {
+              setPicking(null);
+              void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
+            }}
+          />,
+          picking.closest("section[data-module]") ?? document.body,
         )}
-        {menu && node.menu && (
-          <EffectMenuPopover node={node} title={titled} anchor={menu} locked={why ?? (editable ? null : "This song can't be edited here")} onClose={() => setMenu(null)} />
-        )}
-        {/* In the module, outside its zoomed nodes: it keeps its size and its place by the +. */}
-        {picking &&
-          createPortal(
-            <EffectBrowser
-              effects={effects}
-              after={node.label}
-              named={titled}
-              anchor={picking}
-              onClose={closePicker}
-              onPick={(effect) => {
-                setPicking(null);
-                void edited(graphApi.addEffect(session, revision, node.id, effect), `Added ${effect.label} after ${titled}`);
-              }}
-            />,
-            picking.closest("section[data-module]") ?? document.body,
-          )}
     </>
   );
 }
 
 /**
- * What a card is called: a call by its component's label ("LFO", "Reverb"); a track's signal by the
+ * What a node is called: a call by its component's label ("LFO", "Reverb"); a track's signal by the
  * track; a lane or an output by the rule controls follow (`cutoff` → Cutoff).
  */
 export function titleOf(node: ViewNode, effects: Effect[]) {
@@ -1221,7 +1384,7 @@ export function titleOf(node: ViewNode, effects: Effect[]) {
 export function VoicesLine({ words }: { words: string }) {
   const first = words.split(/(?<=\.) /)[0];
   return (
-    <div data-testid="voices" className="h-6 shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" title={words} aria-label={words}>
+    <div data-testid="voices" className="shrink-0 px-3 flex items-center text-xs text-fg-muted min-w-0 border-b border-line" style={{ height: LINE_H }} title={words} aria-label={words}>
       <span className="truncate">{first}</span>
     </div>
   );
@@ -1236,7 +1399,8 @@ export function KeyLine() {
   return (
     <div
       data-testid="card-key"
-      className="h-6 shrink-0 px-3 flex items-center gap-2 text-xs text-fg-muted min-w-0 border-b border-line"
+      className="shrink-0 px-3 flex items-center gap-2 text-xs text-fg-muted min-w-0 border-b border-line"
+      style={{ height: LINE_H }}
       title={key ? `It follows the song's key, ${key.name}` : "No key set: every note is allowed. Set the key to choose the notes it moves to"}
     >
       <span className="truncate">{key ? `Key: ${key.name}` : "Every note allowed"}</span>
@@ -1255,9 +1419,9 @@ export function KeyLine() {
 }
 
 /**
- * A plugin's own window and its latches (HOST-7, MON-6), a row under its card's header: Open
+ * A plugin's own window and its latches (HOST-7, MON-6), a row under its node's header: Open
  * window or Close window, and what a gesture there latched, with Re-enable, which gives it back
- * to its lane or cable.
+ * to its lane or wire.
  */
 export function PluginRow({ node, title, session }: { node: string; title: string; session: number }) {
   const toast = useStore((s) => s.toast);
@@ -1267,7 +1431,7 @@ export function PluginRow({ node, title, session }: { node: string; title: strin
   const open = box?.window === "open";
   const latched = box?.latched ?? [];
   return (
-    <div className="h-7 shrink-0 pl-1 pr-3 flex items-center gap-2 border-b border-line text-xs min-w-0" data-plugin={node}>
+    <div className="shrink-0 pl-1 pr-3 flex items-center gap-2 border-b border-line text-xs min-w-0" style={{ height: PLUGIN_H }} data-plugin={node}>
       {box && box.window !== "none" ? (
         <button
           className="shrink-0 h-6 px-2 flex items-center gap-1.5 rounded-sm font-medium text-accent hover:text-accent-strong hover:bg-hover disabled:text-fg-off cursor-pointer transition-colors duration-80 ease-linear"
@@ -1292,14 +1456,14 @@ export function PluginRow({ node, title, session }: { node: string; title: strin
           <span
             className="ml-auto shrink-0 text-fg-muted"
             data-latched={latched.map((l) => l.id).join(" ")}
-            title={`${latched.map((l) => l.name).join(", ")}: set in the window, so ${latched.length === 1 ? "it doesn't" : "they don't"} follow ${latched.length === 1 ? "its" : "their"} lane or cable now. Only while this song is open, never in an export.`}
+            title={`${latched.map((l) => l.name).join(", ")}: set in the window, so ${latched.length === 1 ? "it doesn't" : "they don't"} follow ${latched.length === 1 ? "its" : "their"} lane or wire now. Only while this song is open, never in an export.`}
           >
             {latched.length === 1 ? "Latched" : `${latched.length} latched`}
           </span>
           <button
             className="shrink-0 font-medium text-accent hover:text-accent-strong cursor-pointer"
             data-reenable
-            title={`Follow the lane or cable again: ${latched.map((l) => l.name).join(", ")}`}
+            title={`Follow the lane or wire again: ${latched.map((l) => l.name).join(", ")}`}
             onClick={() => said(graphApi.pluginReenable(session, node))}
           >
             Re-enable
@@ -1311,51 +1475,115 @@ export function PluginRow({ node, title, session }: { node: string; title: strin
 }
 
 /**
- * An effect card's ⋯ menu (taste.md §3.5, next X11): Turn off or Turn on, Move left and Move
- * right. A row that can't run here is greyed, with why in its tooltip.
+ * A node's ⋯ menu (the graph note §3): Remove, Move left and Move right, Make it a kit on the drum
+ * machine (KIT-24), Show in code and Copy its id for `m2 add-effect`. A row that can't run here is
+ * greyed, with why in its tooltip.
  */
-function EffectMenuPopover({ node, title, anchor, locked, onClose }: { node: ViewNode; title: string; anchor: HTMLElement; locked: string | null; onClose: () => void }) {
-  const off = !!node.bypassed;
-  const bypass = locked ?? node.menu?.bypass ?? null;
+function NodeMenu({
+  node,
+  module,
+  title,
+  anchor,
+  locked,
+  onRemove,
+  onClose,
+}: {
+  node: ViewNode;
+  module: string;
+  title: string;
+  anchor: HTMLElement;
+  locked: string | null;
+  onRemove: () => void;
+  onClose: () => void;
+}) {
+  const toast = useStore((s) => s.toast);
+  const machine = useStore((s) => node.component === "@m2/drums:drum-kit" && !!s.graph?.drum_machines?.includes(module));
+  const keeps = useStore((s) => s.graph?.make_kit_keeps ?? "");
+  const remove = locked ?? (node.effect ? null : `${title} isn't an effect: change it in code.`);
   return (
-    <Popover anchor={anchor} onClose={onClose} align="end" role="menu" aria-label={`${title} menu`} data-testid="effect-menu" className="w-[220px]">
+    <Popover anchor={anchor} onClose={onClose} align="end" role="menu" aria-label={`${title} menu`} data-testid="effect-menu" className="w-[240px]">
       <MenuRow
-        icon={<Power size={14} />}
-        disabled={!!bypass}
-        title={bypass ?? (off ? `Turn ${title} back on` : `Turn ${title} off (keeps its settings)`)}
-        data-testid="effect-bypass"
+        icon={<Trash2 size={14} />}
+        disabled={!!remove}
+        title={remove ?? `Remove ${title}, keeping what it was applied to`}
+        aria-label={`Remove ${node.effect ?? title}`}
+        data-testid="node-remove"
         onClick={() => {
           onClose();
-          void turnEffect(node, title, !off);
+          onRemove();
         }}
       >
-        {off ? "Turn on" : "Turn off"}
+        Remove
       </MenuRow>
-      {([true, false] as const).map((earlier) => {
-        const row = earlier ? node.menu?.left : node.menu?.right;
-        const why = locked ?? row?.refused ?? null;
-        const other = row?.with;
-        return (
-          <MenuRow
-            key={String(earlier)}
-            icon={earlier ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}
-            disabled={!!why || !other}
-            title={why ?? `Move ${title} ${earlier ? "before" : "after"} ${other}`}
-            data-testid={earlier ? "effect-left" : "effect-right"}
-            onClick={() => {
-              onClose();
-              if (other) void moveEffect(node, title, other, earlier);
-            }}
-          >
-            {earlier ? "Move left" : "Move right"}
-          </MenuRow>
-        );
-      })}
+      {node.menu &&
+        ([true, false] as const).map((earlier) => {
+          const row = earlier ? node.menu?.left : node.menu?.right;
+          const why = locked ?? row?.refused ?? null;
+          const other = row?.with;
+          return (
+            <MenuRow
+              key={String(earlier)}
+              icon={earlier ? <ArrowLeft size={14} /> : <ArrowRight size={14} />}
+              disabled={!!why || !other}
+              title={why ?? `Move ${title} ${earlier ? "before" : "after"} ${other}`}
+              data-testid={earlier ? "effect-left" : "effect-right"}
+              onClick={() => {
+                onClose();
+                if (other) void moveEffect(node, title, other, earlier);
+              }}
+            >
+              {earlier ? "Move left" : "Move right"}
+            </MenuRow>
+          );
+        })}
+      {machine && (
+        <MenuRow
+          icon={<Drum size={14} />}
+          disabled={!!locked}
+          data-make-kit={module}
+          title={locked ?? `Make it a kit: each drum on a track of its own. ${keeps}`}
+          onClick={() => {
+            onClose();
+            void makeKit(module);
+          }}
+        >
+          Make it a kit
+        </MenuRow>
+      )}
+      <div role="separator" className="my-1 h-px bg-line" />
+      <MenuRow
+        icon={<Code size={14} />}
+        disabled={!node.file}
+        data-testid="node-code"
+        title={node.file ? `${node.file}, line ${node.line}` : "It isn't written in a file"}
+        onClick={() => {
+          onClose();
+          if (!node.file) return;
+          useShell.getState().set({ codeAt: { file: node.file, line: node.line ?? 1 } });
+          useShell.getState().setView("code");
+        }}
+      >
+        Show in code
+      </MenuRow>
+      <MenuRow
+        icon={<Copy size={14} />}
+        data-testid="node-copy-id"
+        title={`Its id, ${node.id}: m2 add-effect puts an effect after it`}
+        onClick={() => {
+          onClose();
+          void navigator.clipboard
+            ?.writeText(node.id)
+            .then(() => toast(`Copied ${node.id}`))
+            .catch(() => toast(`Its id: ${node.id}`));
+        }}
+      >
+        Copy its id
+      </MenuRow>
     </Popover>
   );
 }
 
-/** An output on the node's right edge, at height `y`: a cable starts at a named one. */
+/** An output on the node's right edge, at height `y`: a wire starts at a named one. */
 function OutputPortView({
   node,
   output,
@@ -1380,8 +1608,8 @@ function OutputPortView({
   const last = node.label.split(".").pop()!;
   const unnamed =
     node.kind === "call"
-      ? `To connect ${node.label} to a knob, name it in code first: const my${last[0].toUpperCase()}${last.slice(1)} = ${node.label}(…)`
-      : `To connect ${node.label} to a knob, name it with a const in code first.`;
+      ? `To connect ${node.label} to a value, name it in code first: const my${last[0].toUpperCase()}${last.slice(1)} = ${node.label}(…)`
+      : `To connect ${node.label} to a value, name it with a const in code first.`;
   return (
     <div className="absolute right-0 h-7 -mt-3.5 max-w-[55%] pr-4 flex items-center justify-end text-xs pointer-events-none" style={{ top: y }} data-output={output.label}>
       {labelled && <span className={clsx("truncate", cable ? "text-fg-muted" : "text-fg-faint")}>{output.label}</span>}
@@ -1396,11 +1624,12 @@ function OutputPortView({
           data-port-id={output.id}
           data-kind={output.kind}
           aria-label={`Connect ${node.outlet}`}
-          title={editable ? `Drag onto a knob to connect ${node.outlet}` : (why ?? "")}
+          title={editable ? `Drag onto a value to connect ${node.outlet}` : (why ?? "")}
           disabled={!editable}
+          tabIndex={-1}
           onPointerDown={(e) => onCable(node, output, e)}
         >
-          {/* Where a cable starts: filled, with a ring that says it can be dragged. */}
+          {/* Where a wire starts: filled, with a ring that says it can be dragged. */}
           <span className={clsx(SHAPE[output.kind], "bg-fg-muted shadow-[0_0_0_2px_var(--color-raised),0_0_0_3.5px_var(--color-line-strong)] transition-transform duration-80 group-hover/outlet:scale-125")} />
         </button>
       ) : (
@@ -1419,80 +1648,28 @@ function OutputPortView({
   );
 }
 
-export function InputRow({
-  nodeKey,
-  knobKey,
-  node,
-  owner,
-  input,
-  filled,
-  session,
-  revision,
-  editable,
-  cell,
-  ided,
-}: {
-  nodeKey: string;
-  knobKey: (id: string) => string;
-  node: ViewNode;
-  /** What the card is called, to name an edit of its knobs ("Reverb size"). */
-  owner: string;
-  input: InputPort;
-  filled: boolean;
-  session: number;
-  revision: number;
-  editable: boolean;
-  /** In a chain card's grid (taste.md DV-14): a knob's size there; anything else takes a row across it. */
-  cell?: number;
-  /** In All's list (taste.md DV-12): its id for `m2 set` in its tooltip. */
-  ided?: boolean;
-}) {
+/**
+ * A connection's row (DV-12), its input's shape on the node's left edge: a sound or notes coming in,
+ * a value a wire drives ("← wobble", with ✕ to disconnect), or what a "Listens to" row stands for.
+ */
+function ConnRow({ node, input, filled, session, revision, editable }: { node: ViewNode; input: InputPort; filled: boolean; session: number; revision: number; editable: boolean }) {
   const toast = useStore((s) => s.toast);
   const tracks = useContext(Tracks);
-  const why = useContext(Locked);
-  const fed = useContext(Fed).get(`${node.id}<${input.id}`);
-  /** A row across a chain card's grid, else as it is. */
-  const wide = (row: React.ReactElement) => (cell ? <div className="col-span-full min-w-0">{row}</div> : row);
-  // The menu of an input an automation lane drives (KN-2): Show lane, Remove automation.
-  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
-  const knob = input.knob ? node.knobs.find((k) => k.id === input.knob) : undefined;
-  // Keyed by the knob alone: a save that breaks the code mid-drag must not remount it, which
-  // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
-  // code compiles); nor may one that renumbers it (see `held`).
-  if (knob) {
-    const key = knobKey(knob.id);
-    // A menu or a switch (CARD-20, CARD-6): one click, one edit; never dragged.
-    if (picks(knob))
-      return <PickControl key={key} knob={knob} port={input.id} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} cell={cell} ided={ided} />;
-    return (
-      <KnobControl
-        key={key}
-        mountKey={key}
-        nodeKey={nodeKey}
-        knob={knob}
-        port={input.id}
-        label={controlLabel(input, tracks)}
-        owner={owner}
-        session={session}
-        revision={revision}
-        editable={editable}
-        cell={cell}
-        ided={ided}
-      />
-    );
-  }
-
-  const inlet = input.inlet ? node.inlets.find((i) => i.id === input.inlet) : undefined;
+  // A sound or notes coming in is a connection however it is written, a const's name too: no ✕,
+  // since rewiring a sound is for code (the graph note's G3).
+  const inlet = input.inlet && input.kind === "control" ? node.inlets.find((i) => i.id === input.inlet) : undefined;
   if (inlet) {
-    // The knob comes back in its place: that says it, so no toast does.
+    // The bar comes back in its place: that says it, so no toast does.
     const disconnect = () =>
       graphApi.disconnect(session, revision, inlet.id, { name: `disconnecting ${inlet.name}` }).catch((error) => toast(error instanceof Error ? error.message : String(error)));
-    return wide(
-      <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-inlet={inlet.label}>
+    return (
+      <div className="relative pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" style={{ height: ROW_H }} data-inlet={inlet.label}>
         <Dot id={input.id} kind={input.kind} filled />
         <span className="text-fg-muted truncate">{controlLabel(inlet, tracks)}</span>
-        {/* Its home is a cable (HOME-1): what drives it, in place of a knob. */}
-        <span className="text-fg-muted truncate" title={`Driven by ${inlet.name}.`}>← {inlet.name}</span>
+        {/* Its home is a wire (HOME-1): what drives it, in place of a bar. */}
+        <span className="text-fg truncate" title={`Driven by ${inlet.name}.`}>
+          ← {inlet.name}
+        </span>
         <button
           className="ml-auto shrink-0 size-ctl-xs grid place-items-center rounded-sm text-fg-faint hover:text-fg hover:bg-hover disabled:text-fg-off disabled:pointer-events-none cursor-pointer transition-colors duration-80 ease-linear"
           title={`Disconnect ${inlet.name} (writes the input's default)`}
@@ -1505,39 +1682,101 @@ export function InputRow({
       </div>
     );
   }
+  // An input that listens (a duck's side, a key): what it hears, and a list of the tracks it could (CARD-35).
+  if (node.listens && node.listens.port === input.id) return <ListensRow node={node} input={input} filled={filled} editable={editable} />;
+  return (
+    <div className="relative pl-4 pr-3 flex items-center gap-2 text-xs min-w-0" style={{ height: ROW_H }} data-input={input.label}>
+      <Dot id={input.id} kind={input.kind} filled={filled} />
+      <span className="text-fg-muted truncate">{controlLabel(input, tracks)}</span>
+    </div>
+  );
+}
 
-  const source = input.readonly != null ? node.readonly[input.readonly] : undefined;
-  if (source) {
-    return wide(
+/**
+ * A value (DV-14): a bar, or a menu or a switch, for one the node can set; a row naming its source
+ * for one a lane or the code drives; a setting (DV-8) or a view (DV-19).
+ */
+function ValueRow({
+  v,
+  node,
+  owner,
+  module,
+  knobKey,
+  session,
+  revision,
+  editable,
+  expanded,
+}: {
+  v: Value;
+  node: ViewNode;
+  owner: string;
+  module: string;
+  knobKey: (id: string) => string;
+  session: number;
+  revision: number;
+  editable: boolean;
+  expanded: boolean;
+}) {
+  const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  if (v.t === "setting")
+    return <SettingRow x={v.x} owner={owner} card={owner} call={node.id} session={session} revision={revision} editable={editable} locked={why} tracks={tracks} ided />;
+  if (v.t === "view") return <ViewRow view={v.v} node={node} module={module} session={session} revision={revision} editable={editable} locked={why} owner={owner} height={v.v.kind === "picture" ? 132 : undefined} />;
+  const input = v.port;
+  if (v.t === "knob") {
+    const knob = node.knobs.find((k) => k.id === input.knob);
+    if (!knob) return null;
+    // Keyed by the value alone: a save that breaks the code mid-drag must not remount it, which
+    // would cancel the drag (WRITE-22: the server keeps it, and a release then is saved once the
+    // code compiles); nor may one that renumbers it (see `held`).
+    const key = knobKey(knob.id);
+    if (picks(knob))
+      return <PickControl key={key} knob={knob} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} expanded={expanded} />;
+    return <KnobControl key={key} mountKey={key} nodeKey={node.key ?? node.id} knob={knob} label={controlLabel(input, tracks)} owner={owner} session={session} revision={revision} editable={editable} />;
+  }
+  if (v.t === "expr") {
+    const source = input.readonly != null ? node.readonly[input.readonly] : undefined;
+    if (!source) return null;
+    return (
       <div
-        className="relative h-[48px] pl-4 pr-3 py-1.5 min-w-0 flex flex-col justify-center"
+        className="relative px-1 py-1.5 min-w-0 flex flex-col justify-center"
+        style={{ height: EXPR_H }}
         data-expression={source.label}
         title={`${source.reason}${source.file ? `\n${source.file}:${source.line}` : ""}\n${source.expression}`}
       >
-        <Dot id={input.id} kind={input.kind} filled={false} />
         <div className="flex items-center justify-between gap-2 text-xs">
           <span className="text-fg-muted truncate">{controlLabel(source, tracks)}</span>
           <span className="shrink-0 text-fg-faint">edit in code</span>
         </div>
-        <div data-code className="font-mono text-xs text-fg truncate">{source.expression}</div>
+        <div data-code className="font-mono text-xs text-fg truncate">
+          {source.expression}
+        </div>
       </div>
     );
   }
+  return <LaneRow node={node} input={input} editable={editable} />;
+}
 
-  // An input that listens (a duck's side, a key): what it hears, and a list of the tracks it could (CARD-35).
-  if (node.listens && node.listens.port === input.id) return wide(<ListensRow node={node} input={input} filled={filled} editable={editable} />);
-
-  // Driven by an automation lane: its home is the lane (HOME-1), and its menu shows the lane or
-  // takes the automation out (KN-2).
+/**
+ * A value an automation lane drives (DV-14): its home is the lane (HOME-1), so it is a row naming
+ * the lane, and its menu shows the lane or takes the automation out (KN-2).
+ */
+function LaneRow({ node, input, editable }: { node: ViewNode; input: InputPort; editable: boolean }) {
+  const tracks = useContext(Tracks);
+  const why = useContext(Locked);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const driven = input.lane;
   const label = controlLabel(input, tracks);
-  const lane = driven && useStore.getState().graph ? findLane(useStore.getState().graph!.timeline, driven.module, driven.lane) : undefined;
+  const graph = useStore((s) => s.graph);
+  const lane = driven && graph ? findLane(graph.timeline, driven.module, driven.lane) : undefined;
   const laneName = lane ? laneTitle(lane) : label;
-  return wide(
+  return (
     <div
-      className="relative h-[28px] pl-4 pr-3 flex items-center gap-2 text-xs min-w-0"
+      className="relative px-1 flex items-center gap-2 text-xs min-w-0"
+      style={{ height: VALUE_H }}
       data-input={input.label}
       data-lane-input={driven ? `${driven.module}.${driven.lane}` : undefined}
+      data-node-of={node.id}
       title={driven ? `Follows the ${laneName} lane. Right-click to show it, or to take the automation out.` : undefined}
       onContextMenu={
         driven
@@ -1549,15 +1788,13 @@ export function InputRow({
           : undefined
       }
     >
-      <Dot id={input.id} kind={input.kind} filled={filled} />
       <span className="text-fg-muted truncate">{label}</span>
-      {/* No cable is drawn in the chain: what drives it says so in words (taste.md DV-11). */}
-      {fed && !driven && (
-        <span className="ml-auto text-fg-muted truncate" title={`Driven by ${fed}. Patch shows it.`}>
-          ← {fed}
+      {driven && (
+        <span className="ml-auto min-w-0 flex items-center gap-1.5 text-fg truncate">
+          <span className="truncate">← {laneName} lane</span>
+          <span aria-hidden className="shrink-0 size-[5px] rounded-full bg-accent" />
         </span>
       )}
-      {driven && <span aria-hidden className="ml-auto shrink-0 size-[5px] rounded-full bg-accent" />}
       {menu && driven && (
         <PointMenu
           at={menu}
@@ -1597,7 +1834,7 @@ export function ListensRow({ node, input, filled, editable }: { node: ViewNode; 
       ? `${what} listens to ${now}. Choose another track`
       : `${what} listens to no other track. Choose one`;
   return (
-    <div className="relative h-[28px] pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" data-input={input?.label ?? l.input} data-listens>
+    <div className="relative pl-4 pr-3 flex items-center gap-1.5 text-xs min-w-0" style={{ height: ROW_H }} data-input={input?.label ?? l.input} data-listens>
       {input && <Dot id={input.id} kind={input.kind} filled={filled} />}
       <span className="shrink-0 text-fg-muted">{l.label ?? "Listens to"}:</span>
       <button
@@ -1656,47 +1893,39 @@ export function ListensRow({ node, input, filled, editable }: { node: ViewNode; 
   );
 }
 
-// ---------------------------------------------------------------- knobs
+// ---------------------------------------------------------------- values
 
 /**
- * The knob whose own keys or menu just wrote it while it had the keyboard's focus: the first write of
- * a value the code left out gives its knob a new id, so it mounts again, and only that remount takes
- * the focus back (taste.md DV-15). Kept for the write's round trip, and dropped when the knob is left (review F1).
+ * The bar whose own keys or menu just wrote it while it had the keyboard's focus: the first write of
+ * a value the code left out gives it a new id, so it mounts again, and only that remount takes the
+ * focus back (DV-15). Kept for the write's round trip, and dropped when the bar is left (review F1).
  */
 let focused: { knob: string; el: Element; at: number } | null = null;
 /** How long a write's remount may take to take the focus back. */
 const REFOCUS_MS = 4000;
 
-/** A knob over an owned source value, as one input row: drag to hear it, release to write it. */
+/** A bar over an owned source value: drag to hear it, release to write it (DV-14). */
 function KnobControl({
   mountKey,
   nodeKey,
   knob,
-  port,
   label,
   owner,
   session,
   revision,
   editable,
-  cell,
-  ided,
 }: {
-  /** The React keys it and its node are mounted with, kept while it is dragged (see `held`). */
+  /** The React key it is mounted with, kept while it is dragged (see `held`). */
   mountKey: string;
   nodeKey: string;
   knob: KnobInfo;
-  port: string;
   /** Its name on screen ("Feedback", "Hats volume"). */
   label: string;
-  /** Its card's ("Delay"). */
+  /** Its node's ("Delay"). */
   owner: string;
   session: number;
   revision: number;
   editable: boolean;
-  /** In a chain card's grid (taste.md DV-14): the knob over its label and its value, this many px. */
-  cell?: number;
-  /** Its id for `m2 set` in its tooltip (All's list, taste.md DV-12). */
-  ided?: boolean;
 }) {
   const why = useContext(Locked);
   // Its drag and lease (Knob.tsx). A save that renumbers it mid-drag doesn't remount it (see `held`).
@@ -1705,28 +1934,28 @@ function KnobControl({
     revision,
     knob,
     editable,
-    // Its undo step's name: the card and the control ("Delay feedback"), or a channel's own ("Hats volume").
+    // Its undo step's name: the node and the control ("Delay feedback"), or a channel's own ("Hats volume").
     name: knobStep(owner, knob, label),
     label,
-    hold: (token, on) => (on ? held.set(token, { knob: mountKey, node: nodeKey }) : held.delete(token)),
+    hold: (token, on) => (on ? held.set(token, { knob: mountKey }) : held.delete(token)),
   });
   const value = g.value;
   // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
   const glows = useGlows("knobs", knob.id);
-  // The knob's menu (right-click), anchored to the knob: its left edge, below it (or above it, the room).
+  // The bar's menu (right-click), anchored to it: its left edge, below it (or above it, the room).
   const [menu, setMenu] = useState<{ x: number; y: number; above: number } | null>(null);
-  const svg = useRef<SVGSVGElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
   const readout = useRef<HTMLSpanElement>(null);
-  // A value being typed in place of the readout (taste.md §2.14): its text, the readout's width, and
+  // A value being typed in place of the number (taste.md §2.14): its text, the number's width, and
   // whether Enter found it unreadable. The ref says whether it is still open, for a late blur.
   const [typing, setTyping] = useState<{ text: string; width: number; bad: boolean } | null>(null);
   const typingOpen = useRef(false);
 
-  // Its focus kept across the remount its own first write makes (see `focused`): by its card's key,
-  // its control and where it is drawn, so no other knob, nor another copy of it, takes it (review F9).
-  const self = `${nodeKey}|${knob.slot ?? knob.label}|${cell ?? "row"}${ided ? "|all" : ""}`;
+  // Its focus kept across the remount its own first write makes (see `focused`): by its node's key
+  // and its control, so no other bar, nor another copy of it, takes it (review F9).
+  const self = `${nodeKey}|${knob.slot ?? knob.label}`;
   useEffect(() => {
-    const el = svg.current;
+    const el = bar.current;
     const was = focused;
     if (el && was?.knob === self && was.el !== el && !was.el.isConnected && Date.now() - was.at < REFOCUS_MS && (!document.activeElement || document.activeElement === document.body)) {
       focused = null;
@@ -1737,27 +1966,25 @@ function KnobControl({
     el?.addEventListener("blur", left);
     return () => el?.removeEventListener("blur", left);
   }, [self]);
-  /** This knob writes while it has the focus: its remount may take the focus back. */
+  /** This bar writes while it has the focus: its remount may take the focus back. */
   const mine = () => {
-    if (svg.current && svg.current === document.activeElement) focused = { knob: self, el: svg.current, at: Date.now() };
+    if (bar.current && bar.current === document.activeElement) focused = { knob: self, el: bar.current, at: Date.now() };
   };
-  /** A move of the knob to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
+  /** A move of the bar to `u` (0..1): heard while dragged; on its own (a double-click, the menu's reset) one whole gesture. */
   const change = (u: number) => {
     mine();
     g.change(fromUnit(g.descriptor, u));
   };
-
   const automate = () => {
     setMenu(null);
     automateKnob(session, revision, knob.id);
   };
-
   /** `n` steps from where it is (taste.md §5.2), written as one edit half a second after the last. */
   const step = (n: number) => {
     mine();
     g.step((v, k) => fromUnit(k, Math.min(1, Math.max(0, toUnit(k, stepValue(k, v, n))))));
   };
-  /** Type a value: the readout turns into a field of its size, its text selected. */
+  /** Type a value: the number turns into a field of its size, its text selected. */
   const type = () => {
     // Steps just made are written first.
     g.settle();
@@ -1781,24 +2008,22 @@ function KnobControl({
   const descriptor = g.descriptor;
   // A drag already in progress goes on when the code breaks under it; only new ones wait.
   const disabled = !editable && !g.dragging();
-  // Drawn from the middle when its span is centred on zero (a pan, a bipolar amount).
+  // Filled from the middle when its span is centred on zero (a pan, a bipolar amount).
   const range = span(descriptor);
   const bipolar = range.lo < 0 && range.hi > 0 && Math.abs(range.lo + range.hi) <= 1e-9 * range.hi;
   const shared = knob.uses > 1 ? `Shared value: changes all ${knob.uses} uses. ` : "";
   // A control the call leaves out plays its default until its first edit writes it into the call (PKG-3).
-  const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, turning it writes it in";
-  const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
+  const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, changing it writes it in";
+  const how = `Drag up or down (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click or ⌫ to reset · right-click to automate it`;
   const cabling = useContext(Cabling);
-  const title = !editable
-    ? `${why ?? "It can't be edited right now"}.`
-    : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
+  const title = !editable ? `${why ?? "It can't be edited right now"}.` : `${label}: ${display(descriptor, value)}\n${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
-  // The whole row drags it, its label and value too, not only the 28px circle (taste.md §2.2).
-  const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: () => g.start(), onEnd: g.end, onCancel: g.abandon, focus: () => svg.current?.focus({ preventScroll: true }) });
+  // The whole row drags it, its label and value too (taste.md §2.2).
+  const grip = useKnobDrag({ value: unit, reset, disabled, onChange: change, onStart: () => g.start(), onEnd: g.end, onCancel: g.abandon, focus: () => bar.current?.focus({ preventScroll: true }) });
 
   const typingField = typing && (
-    <span className="relative shrink-0">
+    <span className="relative ml-auto shrink-0">
       <input
         autoFocus
         data-testid="knob-type-in"
@@ -1815,19 +2040,16 @@ function KnobControl({
             if (!typed(typing.text)) setTyping({ ...typing, bad: true });
           } else if (e.key === "Escape") closeTyping();
           else if (e.key === "Tab") {
-            // On to the next control (or back, with ⇧), as a form's fields go.
+            // On to the next value (or back, with ⇧), as a form's fields go.
             e.preventDefault();
             if (!typed(typing.text)) return setTyping({ ...typing, bad: true });
-            focusNext(svg.current, e.shiftKey);
+            focusNext(bar.current, e.shiftKey);
           }
         }}
         // A click away writes what reads as a value, and drops what doesn't.
         onBlur={() => typingOpen.current && !typed(typing.text) && closeTyping()}
         onPointerDown={(e) => e.stopPropagation()}
-        className={clsx(
-          "h-5 -my-0.5 px-1 rounded-sm bg-raised border text-right text-xs text-fg outline-none",
-          typing.bad ? "border-danger" : "border-accent",
-        )}
+        className={clsx("h-4 px-1 rounded-sm bg-raised border text-right text-xs text-fg outline-none", typing.bad ? "border-danger" : "border-accent")}
       />
       {typing.bad && (
         <span role="alert" className="absolute right-0 top-full mt-0.5 z-10 whitespace-nowrap text-xs text-danger">
@@ -1835,35 +2057,6 @@ function KnobControl({
         </span>
       )}
     </span>
-  );
-  // Its home (HOME-1): a value the code leaves out plays its default, in muted text; written, in full.
-  const readoutText = (
-    <span
-      ref={readout}
-      className={clsx("shrink-0 text-xs tabular-nums", knob.written ? "text-fg" : "text-fg-muted")}
-      title={knob.written ? undefined : "Default. Not written in your code yet: changing it writes it in."}
-    >
-      {display(descriptor, value)}
-    </span>
-  );
-  // Inert only while it can't be edited: a save between steps mustn't take the focus from it.
-  const dial = (
-    <div inert={!editable && !g.dragging()} className={clsx("shrink-0", disabled && "pointer-events-none")}>
-      <MiniKnob
-        value={unit}
-        bipolar={bipolar}
-        disabled={disabled}
-        readout={display(descriptor, value)}
-        label={label}
-        reset={reset}
-        size={cell}
-        svg={svg}
-        pointer={grip.pointer}
-        onChange={change}
-        onStep={step}
-        onType={type}
-      />
-    </div>
   );
   const knobMenu = menu && (
     <KnobMenu
@@ -1892,56 +2085,43 @@ function KnobControl({
       data-value={value}
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
-      data-cell={cell || undefined}
       aria-disabled={disabled}
       title={cabling && knob.cable_refused ? `${knob.cable_refused}.` : title}
       data-kind="number"
       {...grip.handlers}
-      // A double-click anywhere on it types a value (taste.md §2.14), but on its input's port.
-      onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("[data-port-dot], input") && type()}
+      // A double-click anywhere on it types a value (taste.md §2.14).
+      onDoubleClick={(e) => e.currentTarget.contains(e.target as Node) && !(e.target as HTMLElement).closest("input") && type()}
       className={clsx(
-        "group/knob relative min-w-0 transition-colors duration-80",
-        // In a chain card's grid: a 64px column, the knob over its label and its value (taste.md DV-14).
-        cell ? "w-16 py-1 flex flex-col items-center gap-0.5 rounded-sm" : "h-10 pl-4 pr-4 flex items-center gap-2",
+        "group/knob relative min-w-0 flex items-center rounded-sm transition-colors duration-80",
         !disabled && "cursor-ns-resize touch-none",
-        // While a cable is dragged, the knobs it can land on: washed, and the one under it more.
+        glows && "ring-1 ring-accent",
+        // While a wire is dragged, the bars it can land on: washed, and the one under it more.
         "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
         // And one it can't: dimmed, its words on hover (DV-6).
         "[[data-cabling]_&[data-no-cable]]:opacity-40",
       )}
+      style={{ height: VALUE_H }}
     >
-      <Dot
-        id={port}
-        kind="control"
-        filled={false}
-        className="[[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:scale-[1.35] [[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
-      />
-      {cell ? (
-        <>
-          {dial}
-          <div className="w-full text-center text-xs text-fg-muted truncate">{label}</div>
-          <div className="max-w-full flex items-center justify-center gap-1">
-            {typingField || readoutText}
-            <HomeMarker home={knob.home} label={label} />
-          </div>
-        </>
-      ) : (
-        <>
-          <div className="flex-1 min-w-0">
-            <div className="text-xs text-fg-muted truncate">{label}</div>
-            {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
-          </div>
-          {typingField || readoutText}
-          <HomeMarker home={knob.home} label={label} />
-          {dial}
-        </>
-      )}
+      <Bar value={unit} bipolar={bipolar} disabled={disabled} readout={display(descriptor, value)} label={label} reset={reset} bar={bar} pointer={grip.pointer} dragging={!!grip.pointer} onChange={change} onStep={step} onType={type}>
+        <span className="min-w-0 flex-1 truncate text-fg-muted">{label}</span>
+        {knob.uses > 1 && <span className="shrink-0 text-fg-faint">×{knob.uses}</span>}
+        {typingField || (
+          <span
+            ref={readout}
+            className={clsx("shrink-0 tabular-nums", knob.written ? "text-fg-strong" : "text-fg-muted")}
+            title={knob.written ? undefined : "Default. Not written in your code yet: changing it writes it in."}
+          >
+            {display(descriptor, value)}
+          </span>
+        )}
+        <HomeMarker home={knob.home} label={label} />
+      </Bar>
       {knobMenu}
     </div>
   );
 }
 
-/** A knob's value becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
+/** A value's number becomes a new, empty control lane's fallback (HOME-2): the song sounds the same, and the timeline shows the lane to draw on. */
 function automateKnob(session: number, revision: number, id: string) {
   const toast = useStore.getState().toast;
   graphApi
@@ -1954,37 +2134,28 @@ function automateKnob(session: number, revision: number, id: string) {
 }
 
 /**
- * A knob that is a menu or a switch (CARD-20): a choice control's names, a switch's off and on, or a
- * plugin's stepped parameter (CARD-6). A pick writes its option's value, a name, true or false, or a
- * plugin's step number, into the code: one click, one edit, one undo step, never a drag. It stays a
- * knob to the rest of the app: its id for the focus and the pointer, its glow, cable drops, and its
- * menu's Automate.
+ * A value that is a menu or a switch (CARD-20): a choice control's names, a switch's off and on, or
+ * a plugin's stepped parameter (CARD-6). A pick writes its option's value, a name, true or false, or
+ * a plugin's step number, into the code: one click, one edit, one undo step, never a drag. On an
+ * expanded node a choice of five or fewer is a segmented control (DV-14). It stays a knob to the
+ * rest of the app: its id for the focus and the pointer, its glow, wire drops, and its menu's Automate.
  */
 function PickControl({
   knob,
-  port,
   label,
   owner,
   session,
   revision,
   editable,
-  cell,
-  ided,
+  expanded,
 }: {
   knob: PickKnob;
-  port: string;
   label: string;
   owner: string;
   session: number;
   revision: number;
   editable: boolean;
-  /**
-   * In a chain card's grid (taste.md DV-14), its knobs this many px: a switch is a cell, as a knob is, its
-   * switch over its label; a choice a row across the grid, a segmented control when it has five or fewer.
-   */
-  cell?: number;
-  /** Its id for `m2 set` in its tooltip (All's list, taste.md DV-12). */
-  ided?: boolean;
+  expanded: boolean;
 }) {
   const toast = useStore((s) => s.toast);
   const why = useContext(Locked);
@@ -1995,13 +2166,14 @@ function PickControl({
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, picking one writes it in";
   const how = `Click to ${knob.kind === "switch" ? "turn it on or off" : "choose"} · right-click to automate it`;
   const cabling = useContext(Cabling);
-  const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})${ided ? `\nIts id: ${knob.id}` : ""}`;
+  const title = off ?? `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
   /**
    * A pick: its option's value written into the code, one undo step named "Wobble shape". Picked
    * while the window doesn't show its own last edit yet, it goes once it does (the gate).
    */
   const pick = (v: number | string | boolean) =>
     void graphApi.setValue(session, revision, knob.id, v, { name: knobStep(owner, knob, label) }).catch((error) => toast(words(error)));
+  const segmented = expanded && knob.kind !== "switch" && (knob.options?.length ?? 0) <= 5;
   return (
     <div
       onContextMenu={(e) => {
@@ -2017,39 +2189,22 @@ function PickControl({
       data-shared={knob.uses > 1 || undefined}
       data-default={!knob.written || undefined}
       data-kind={knob.kind}
-      data-cell={(knob.kind === "switch" && cell) || undefined}
       aria-disabled={!!off}
       title={cabling && knob.cable_refused ? `${knob.cable_refused}.` : title}
       className={clsx(
-        "group/knob relative min-w-0 transition-colors duration-80",
-        !cell ? "h-10 pl-4 pr-4 flex items-center gap-2" : knob.kind === "switch" ? "w-16 py-1 flex flex-col items-center gap-0.5" : "col-span-full h-7 px-1 flex items-center gap-2",
+        "group/knob relative min-w-0 rounded-sm transition-colors duration-80",
+        segmented ? "py-1 flex flex-col justify-center gap-1" : "flex items-center gap-1.5 px-1.5",
+        glows && "ring-1 ring-accent",
         "[[data-cabling]_&[data-knob-id]:not([data-no-cable])]:bg-accent-wash [[data-cabling]_&[data-knob-id]:not([data-no-cable]):hover]:bg-accent-soft",
         // And one it can't: dimmed, its words on hover (DV-6).
         "[[data-cabling]_&[data-no-cable]]:opacity-40",
       )}
+      style={{ height: segmented ? SEG_H : VALUE_H }}
     >
-      <Dot
-        id={port}
-        kind="control"
-        filled={false}
-        className="[[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:scale-[1.35] [[data-cabling]_[data-knob-id]:not([data-no-cable])>&]:![box-shadow:inset_0_0_0_2px_var(--color-accent),0_0_0_3px_var(--color-accent-range)]"
-      />
-      {cell && knob.kind === "switch" ? (
-        <>
-          <div className="grid place-items-center" style={{ height: cell }}>
-            <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
-          </div>
-          <div className="w-full text-center text-xs text-fg-muted truncate">{label}</div>
-        </>
-      ) : (
-        <div className="flex-1 min-w-0">
-          <div className="text-xs text-fg-muted truncate">{label}</div>
-          {knob.uses > 1 && <div className="text-xs text-fg-faint">shared ×{knob.uses}</div>}
-        </div>
-      )}
-      {cell && knob.kind === "switch" ? null : knob.kind === "switch" ? (
+      <div className={clsx("min-w-0 text-xs text-fg-muted truncate", !segmented && "flex-1")}>{label}</div>
+      {knob.kind === "switch" ? (
         <SwitchValue value={knob} label={label} off={off} onFlip={pick} />
-      ) : cell && (knob.options?.length ?? 0) <= 5 ? (
+      ) : segmented ? (
         <Segmented value={knob} label={label} off={off} title={title} onPick={pick} />
       ) : (
         <MenuValue value={knob} label={label} off={off} title={title} onPick={pick} />
@@ -2071,27 +2226,5 @@ function PickControl({
         />
       )}
     </div>
-  );
-}
-
-/**
- * A folded card's last row (CARD-25): how many more rows it has, a click unfolding it. It stands for
- * the knobs it hides: an agent's pointer at one shows here (`data-hides`), and so does its glow.
- */
-function FoldRow({ node, hides, hidden, titled }: { node: ViewNode; hides: string[]; hidden: number; titled: string }) {
-  const glows = useNotice((s) => hides.some((id) => !!s.glow?.knobs.has(id)));
-  return (
-    <button
-      data-unfold
-      data-hides={hides.join(" ") || undefined}
-      data-glow={glows || undefined}
-      className="h-7 w-full px-4 flex items-center gap-1 text-xs text-fg-muted hover:text-fg cursor-pointer"
-      title={`Show ${titled}'s other groups`}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => useFolded.getState().flip(node.id)}
-    >
-      <ChevronRight size={12} absoluteStrokeWidth strokeWidth={1.5} />
-      {hidden} more
-    </button>
   );
 }

@@ -10,7 +10,7 @@ import { useEffect, useId, useRef, useState } from "react";
 import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { beatNow, playingNow } from "../lib/clock";
-import { useCards } from "../lib/folded";
+import { useExpanded } from "../lib/expanded";
 import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
 import { barAt, controlLabel, graphApi, inSentence, picks, stepValue, type CardView, type Knob, type NumberKnob } from "../lib/graph";
 import { shown as showing, showsOwn } from "../lib/history";
@@ -288,14 +288,16 @@ function Shapes({ view, shapes, hold, size, ...p }: ViewProps & { view: PictureV
   // The plot the shapes are drawn in: none spills over the axes' labels (taste.md DV-17).
   const clip = `plot${useId().replace(/[^a-zA-Z0-9]/g, "")}`;
   const drag = useViewDrag(p);
-  const tab = useCards((s) => s.tabs[p.node.id]);
+  // The group a dot lit on this node (DV-18): its column, lit and in view.
+  const nodeKey = p.node.key ?? p.node.id;
+  const tab = useExpanded((s) => (s.lit?.node === nodeKey ? s.lit.group : undefined));
   const [held, setHeld] = useState<{ i: number; x: number | null; y: number | null } | null>(null);
   const [picked, setPicked] = useState<number | null>(null);
   const flat: Shape[] = [];
   const flatten = (ss: Shape[]) => ss.forEach((s) => (s.kind === "part" ? flatten(s.shapes) : flat.push(s)));
   flatten(shapes);
   const handles = flat.filter((s): s is Handle => s.kind === "handle");
-  // A tab picked marks the dot that opens it (taste.md DV-18).
+  // A column lit marks the dot that opens it (taste.md DV-18).
   useEffect(() => {
     const i = handles.findIndex((x) => x.opens !== undefined && x.opens === tab);
     if (i >= 0) setPicked(i);
@@ -312,7 +314,13 @@ function Shapes({ view, shapes, hold, size, ...p }: ViewProps & { view: PictureV
   const pick = (i: number) => {
     setPicked(i);
     const opens = handles[i]?.opens;
-    if (opens) useCards.getState().tab(p.node.id, opens);
+    if (!opens) return;
+    useExpanded.getState().light(nodeKey, opens);
+    // Expanded, its column comes into view once the node has its new size (DV-13).
+    setTimeout(() => {
+      const col = document.querySelector<HTMLElement>(`[data-node-key="${CSS.escape(nodeKey)}"] [data-column="${CSS.escape(opens)}"]`);
+      col?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }, 320);
   };
   /** A dot's drag (CARD-70): from where its values were, by how far the pointer went, one write at release. */
   const down = (e: React.PointerEvent<SVGCircleElement>, i: number) => {
