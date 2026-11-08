@@ -22,9 +22,9 @@ const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title).
 const quiet = async (n) => refusals.length === n && !(await toasts()).some((t) => /newest|changed|Nothing was|try again/i.test(t));
 const said = async () => `toasts: ${JSON.stringify(await toasts())}, refused: ${JSON.stringify(refusals)}`;
 
-/** Drag the knob (or fader) `sel` up by `dy` pixels and let go: nothing waited for. */
+/** Drag the knob, bar (or fader) `sel` up by `dy` pixels and let go: nothing waited for. */
 const turn = async (sel, dy) => {
-  const grip = `${sel} svg, ${sel} [data-testid=fader-thumb]`;
+  const grip = `${sel} svg, ${sel} [data-bar][role=slider], ${sel} [data-testid=fader-thumb]`;
   await page.$eval(grip, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
   const b = await box(grip);
   const cx = b.x + b.width / 2, cy = b.y + b.height / 2;
@@ -58,7 +58,7 @@ await show("kick");
 await view("graph");
 const drum = '[data-module="kick"] [data-node="drums.drum"]';
 const tune = `${drum} [data-knob="tune"]`, sound = `${drum} [data-knob="sound"]`;
-await page.waitForSelector(`${tune} svg`);
+await page.waitForSelector(`${tune} [role=slider]`);
 await page.waitForSelector(sound);
 const kick0 = read("tracks/kick.ts");
 const call = () => read("tracks/kick.ts").match(/drums\.drum\([^\n]*\);/)?.[0];

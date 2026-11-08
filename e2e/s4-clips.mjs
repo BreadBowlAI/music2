@@ -16,7 +16,7 @@ check(await until(() => page.$("[data-testid=roll-grid]")), "double-clicking the
 // The roll's place is in the dock's header (taste.md §3.5): the track, then after the switcher the
 // bars; the Kick's one notes lane needs no name beside the Notes tab.
 const header = await page.$eval("[data-testid=dock-header]", (e) => e.innerText.replace(/\s+/g, " "));
-check(/^Kick Device Notes Mix Code bars 1–8/.test(header), `the roll names the clip by labels and bars: ${header.slice(0, 40)}`);
+check(/^Kick Graph Notes Mix Code bars 1–8/.test(header), `the roll names the clip by labels and bars: ${header.slice(0, 40)}`);
 check((await clipEls("kick.hits"))[0].open, "and the timeline outlines it");
 /** A point in the roll's grid at `beat`, halfway down what the scroller shows. */
 const inRoll = async (beat) => {

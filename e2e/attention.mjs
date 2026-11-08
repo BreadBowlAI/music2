@@ -216,10 +216,10 @@ check(await until(async () => !(await strip())), "the key back as it was: nothin
 await show("bass");
 await view("graph");
 const hi = '[data-module="bass"] [data-node="xrange"] [data-knob="hi"]';
-await page.waitForSelector(`${hi} svg`);
+await page.waitForSelector(`${hi} [role=slider]`);
 const bass = read("tracks/bass.ts");
-await page.$eval(`${hi} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-const box = await (await page.$(`${hi} svg`)).boundingBox();
+await page.$eval(`${hi} [role=slider]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+const box = await (await page.$(`${hi} [role=slider]`)).boundingBox();
 const [cx, cy] = [box.x + box.width / 2, box.y + box.height / 2];
 await page.mouse.move(cx, cy);
 await page.mouse.down();

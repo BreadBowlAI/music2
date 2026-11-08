@@ -237,7 +237,7 @@ await page.waitForSelector("[data-testid=knob-menu]");
 await state("the knob menu");
 await key("Escape");
 // A value typed into the knob (taste.md §2.14), one that doesn't read: the field and its message.
-const driveKnob = mid(await box('[data-knob="drive"] svg'));
+const driveKnob = mid(await box('[data-knob="drive"] [role=slider]'));
 await page.mouse.click(driveKnob.x, driveKnob.y, { count: 2 });
 await page.waitForSelector("[data-testid=knob-type-in]");
 await page.keyboard.type("loud");
