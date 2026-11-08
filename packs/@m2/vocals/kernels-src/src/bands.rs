@@ -10,8 +10,9 @@
 //!   `formant` semitones. Each band is played as loud as the voice is in the same band, against the
 //!   voice's loudest band: `level / (loudest + KNEE)`. So the band where the voice is loudest plays
 //!   the carrier at up to its own level, every other band as much quieter as the voice is there,
-//!   and a voice quieter than [`KNEE`] (−20 dB) plays it quieter still: nothing is ever louder than
-//!   the carrier was. The bands are summed.
+//!   and a voice quieter than [`KNEE`] (−20 dB) plays it quieter still: no band is ever louder
+//!   than the carrier is there. The bands are summed, every other one's sign turned over, so that,
+//!   all open, they give the carrier back within 1.6 dB.
 //! - **Words.** An S, a T and a breath have no pitch, and a synth has little that high: the voice's
 //!   own sound over [`HIGHS`] (5 kHz), each channel, is added, times `clarity`.
 //!
