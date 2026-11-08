@@ -431,3 +431,39 @@ fn each_client_keeps_its_own_most_and_level() {
     let top = peaks.iter().copied().fold(0.0, f64::max);
     assert!(b >= top - 0.02, "b's level is of all the ring holds since its last ask: {b} against {top}");
 }
+
+// TAP-14, TAP-15: a window's last read is its message before, so its ask again (every 4 s, TAP-16)
+// takes nothing from its next message: the meter's most and the level's frames since that message
+// are all in the next one, as an agent asking at the same moments gets them. An ask again that took
+// them lost a gate's deepest moment from the window's history (dress2a's closings, GitHub's Mac).
+#[test]
+fn a_windows_ask_again_takes_nothing_from_its_next_message() {
+    let mut rig = Rig::new(SWING);
+    let (token, comp) = (rig.token(), rig.id("compress"));
+    let (meter, level) = (look("bass", &comp, "meter", "reduction"), look("bass", &comp, "level", "in"));
+    for who in ["w1", "agent:t"] {
+        rig.graph.look(token, who, &meter, true).unwrap();
+        rig.graph.look(token, who, &level, true).unwrap();
+    }
+    rig.graph.transport("play").unwrap();
+    rig.read(64);
+    // The agent reads where the window's message did, at each of them.
+    let agent = |rig: &Rig| {
+        let m = rig.graph.look(token, "agent:t", &meter, true).unwrap()["look"]["most"].as_f64().unwrap();
+        let l = numbers(&rig.graph.look(token, "agent:t", &level, true).unwrap()["look"]["peak"])[0];
+        (m, l)
+    };
+    agent(&rig);
+    for k in 0..6 {
+        // A while of the LFO's swing, then the window's ask again, then its next message.
+        rig.fill(40);
+        rig.graph.look(token, "w1", &meter, true).unwrap();
+        rig.graph.look(token, "w1", &level, true).unwrap();
+        let m = rig.read(2);
+        let (most, peak) = agent(&rig);
+        let w = entry(&m, &comp, "meter", "reduction").expect("the meter")["most"].as_f64().unwrap();
+        assert!((w - most).abs() < 0.01, "read {k}: the window's most {w} is the agent's {most}, of all since its message before");
+        let w = numbers(&entry(&m, &comp, "level", "in").expect("the level")["peak"])[0];
+        assert!((w - peak).abs() < 1e-6, "read {k}: the window's level {w} is the agent's {peak}, of all since its message before");
+    }
+}

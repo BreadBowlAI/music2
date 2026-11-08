@@ -509,7 +509,9 @@ impl Answer {
     }
 }
 
-/// The answer to `client`'s ask for `a`, taking what it saw since its last ask.
+/// The answer to `client`'s ask for `a`, with what it saw: an agent's takes its level and its meter
+/// since its last ask. A window's last read of those is its looks message before (TAP-14, TAP-15),
+/// so its ask takes nothing from the next: its answer has a scope or a spectrum only.
 fn answer(a: &mut Ask, client: &str, taps: Option<(&TapSlots, u64, u32)>) -> Answer {
     let What::Box(look) = &a.what else { return Answer { head: json!({}), channels: 0, seen: None } };
     let mut head = json!({"module": look.module, "node": look.node, "kind": look.kind.name(), "at": look.at.name()});
@@ -524,9 +526,12 @@ fn answer(a: &mut Ask, client: &str, taps: Option<(&TapSlots, u64, u32)>) -> Ans
         head["why"] = json!(why);
     }
     let mut seen = None;
+    let own = matches!(look.kind, Kind::Level | Kind::Meter) && !client.starts_with("agent:");
     if let (Some(_), Some((t, plan, rate)), Some(c)) = (a.channels, taps, a.clients.iter().position(|c| c.name == client)) {
         a.fold(t);
-        seen = see(a, c, t, plan, rate);
+        if !own {
+            seen = see(a, c, t, plan, rate);
+        }
     }
     Answer { head, channels: a.channels.unwrap_or(0), seen }
 }
@@ -543,7 +548,8 @@ impl Graph {
     /// one is found in the accepted revision, on the session's actor, and pointed in what plays.
     /// Answers `{look: {module, node, kind, at, channels (a meter's unit), …}}`: `channels` null and
     /// `why` while it can't show, what it saw last when it has something (an agent's way to see
-    /// it); `{}` for a stop. What doesn't fit is refused in words.
+    /// it; a window's level and meter come in its looks message alone); `{}` for a stop. What
+    /// doesn't fit is refused in words.
     pub fn look(&self, token: u64, client: &str, look: &Look, on: bool) -> Result<Value> {
         look.check()?;
         let what = What::Box(look.clone());
