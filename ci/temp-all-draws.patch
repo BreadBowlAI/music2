@@ -1,0 +1,12 @@
+diff --git a/core/script/tests/pack_pictures.rs b/core/script/tests/pack_pictures.rs
+index 6682ea52..17f34450 100644
+--- a/core/script/tests/pack_pictures.rs
++++ b/core/script/tests/pack_pictures.rs
+@@ -664,6 +664,7 @@ fn every_pack_picture_draws_inside_a_fifth_of_its_limit() {
+                         continue;
+                     }
+                     let (drawn, took) = runner.draw_timed(ask);
++                    eprintln!("TEMP-DRAW {cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name);
+                     assert!(matches!(drawn, Drawn::Shapes(_)), "{cid}'s {}: {drawn:?}", view.name);
+                     if took > fifth {
+                         slow.push(format!("{cid}'s {} draw {i} at {rate} Hz: {took:?}", view.name));

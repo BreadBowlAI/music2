@@ -5,6 +5,8 @@
 #   mutation: the pack speed test with one picture's draw about twice the work (the phaser's
 #             motion worked out twice, ci/temp-speed-mutation.patch): it must fail;
 #   pace:     the silent player's pace test, 5 times, each saying its pace;
+#   draws:    every pack draw's time (ci/temp-all-draws.patch);
+#   sleeps:   (the Mac) the two Rust tests ci/sleeps-tests.txt leaves out there, 3 times each;
 #   burst:    (the Mac) the burst test, 20 times, each saying whether the names overflowed by the
 #             flush or only after it.
 set -u -o pipefail
@@ -30,6 +32,8 @@ case $os in
     run() {
       local f="" n
       for n in "$@"; do f="${f:+$f | }test(/(^|::)$n\$/)"; done
+      # As ci/pr.sh: the two own-harness binaries can't be listed.
+      f="not (binary(=main_thread) | binary(=app_main_thread)) & ($f)"
       env HOME="$H" cargo nextest run --locked --workspace --no-fail-fast --no-tests=fail -E "$f" \
         --success-output immediate --failure-output immediate 2>&1
     } ;;
@@ -42,7 +46,7 @@ echo "::group::six"
 # shellcheck disable=SC2086
 run $SIX | tee "$out/six.log"; st=$?
 echo "::endgroup::"
-say "six: exit $st; $(grep -c 'speed: std' "$out/six.log") ratio lines; $(grep -E '^speed: std' "$out/six.log" | head -1)"
+say "six: exit $st; $(grep -c 'speed: std' "$out/six.log") ratio lines; $(grep -E '^ *speed: std' "$out/six.log" | head -1 | sed 's/^ *//')"
 grep -hE 'panicked|past a fifth|past [0-9.]+m?s|over the|p99 .* against|, against ' "$out/six.log" | head -20 | sed 's/^/PROBE   /' | tee -a "$out/summary.txt"
 
 echo "::group::mutation"
@@ -55,7 +59,16 @@ if [ $st -ne 0 ] && grep -q "phaser's motion" "$out/mutation.log"; then
 else
   say "mutation: exit $st, NOT the failure it must be"
 fi
-say "mutation: $(grep -E '^speed: std' "$out/mutation.log" | head -1)"
+say "mutation: $(grep -E '^ *speed: std' "$out/mutation.log" | head -1 | sed 's/^ *//')"
+
+echo "::group::draws"
+# Every pack draw's time (ci/temp-all-draws.patch), to set beside the Linux server's.
+git apply ci/temp-all-draws.patch
+run every_pack_picture_draws_inside_a_fifth_of_its_limit > "$out/draws.log"; st=$?
+git checkout -- core/script/tests/pack_pictures.rs
+grep -E 'TEMP-DRAW|^ *speed: std' "$out/draws.log" | sed 's/^ *//'
+echo "::endgroup::"
+say "draws: exit $st; $(grep -c TEMP-DRAW "$out/draws.log") draws; $(grep -E '^ *speed: std' "$out/draws.log" | head -1 | sed 's/^ *//')"
 
 echo "::group::pace"
 for i in 1 2 3 4 5; do
@@ -65,6 +78,16 @@ done
 echo "::endgroup::"
 
 if [ "$os" = macos ]; then
+  # The Rust tests left out here for late sleeps (ci/sleeps-tests.txt), now the silent player
+  # keeps the wall clock's pace: 3 times each.
+  echo "::group::sleeps"
+  for t in previews_never_wait_for_a_compile a_lane_written_in_two_halves_never_plays_empty; do
+    for i in 1 2 3; do
+      run "$t" > "$out/sleeps-$t-$i.log"; st=$?
+      say "sleeps $t $i: exit $st $(grep -E 'panicked|stamp|never came' "$out/sleeps-$t-$i.log" | head -2 | tr '\n' ' ' | cut -c1-300)"
+    done
+  done
+  echo "::endgroup::"
   echo "::group::burst"
   for i in $(seq 1 20); do
     run a_burst_past_the_hint_limit_is_walked_and_never_missed > "$out/burst-$i.log"; st=$?
