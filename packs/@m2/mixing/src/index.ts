@@ -5,8 +5,11 @@
 // Each declares an `editor.category`, so the editor offers it after any audio and writes its
 // `insert` when it is added. Each card's face is its picture (CARD-110 to CARD-116, ./pictures):
 // the EQ's curve measured from its own sound with a dot for each band; the gate's levels with the
-// line where it opens; one hit through the transient shaper, before and after; the de-esser's
-// band over the spectrum; the multiband's split; Pump's dip over a bar. The first five play the pack's own kernel (`@m2/mixing:eq` …, built
+// line where it opens and a strip lit while it is open; one hit through the transient shaper, before
+// and after; the de-esser's band over the spectrum; the multiband's split, with a bar for how far
+// each band turns down; Pump's dip over a bar. The gate and the de-esser show how far they turn
+// down beside it (`down`, std's reduction picture). What their kernels alone know, they send as
+// meters (CARD-126). The first five play the pack's own kernel (`@m2/mixing:eq` …, built
 // from kernels-src/, PACK-21), which smooths its own controls where a step would click, so none is
 // `.smooth()`; they use none of std's code. Pump is std's blocks alone, in TypeScript.
 
@@ -14,8 +17,31 @@ import { component, control, kernel, knob, port, setting, signature, time, type 
 import { lfo, range } from "std/control";
 import { duck } from "std/fx";
 import { blend, scale } from "std/math";
-import { curvePicture, dbWords, hzWords } from "std/pictures";
-import { band, bandPicture, bandWords, dip, dipPicture, dipWords, hit, hitPicture, hitWords, levelsPicture, RATES, split, splitWords, threshold as thresholdLine } from "./pictures";
+import { curvePicture, dbWords, hzWords, reductionPicture } from "std/pictures";
+import {
+  band,
+  bandDown,
+  bandDownWords,
+  bandPicture,
+  BAND_MOST,
+  bandWords,
+  dip,
+  dipPicture,
+  dipWords,
+  gateDown,
+  gateDownWords,
+  GATE_MOST,
+  gateWords,
+  hit,
+  hitPicture,
+  hitWords,
+  levelsPicture,
+  RATES,
+  split,
+  splitPicture,
+  splitWords,
+  threshold as thresholdLine,
+} from "./pictures";
 
 // ---------------------------------------------------------------- the parametric EQ
 
@@ -141,21 +167,17 @@ export const gate = component(
       category: "Dynamics",
       description: "Silences a track between its sounds",
       insert: { threshold: -40 },
-      // Its levels over the last seconds, with the line where it opens (CARD-112).
-      views: { levels: levelsPicture() },
-      face: ["levels", "threshold", "attack", "hold", "release", "range"],
+      // Its levels over the last seconds, with the line where it opens and whether it is open; and
+      // how far it turns down (CARD-112), from its kernel's meters.
+      views: { levels: levelsPicture(), down: reductionPicture({ most: GATE_MOST }) },
+      face: ["levels", "down", "threshold", "attack", "hold", "release", "range"],
     },
   },
   (x: Audio, key: Audio | undefined, { threshold, attack, hold, release, range }: Params) =>
     kernel("@m2/mixing:gate", { in: x, key: key ?? x, threshold, attack, hold, release, range }),
   {
-    levels: {
-      draw: (v, p) => thresholdLine(p, v, { threshold: "threshold" }),
-      words: (v) =>
-        v.threshold === null
-          ? "The last 3 seconds in and out: its threshold is set by a cable or the code"
-          : `Opens when the sound reaches ${dbWords(v.threshold)}; below that it turns it down to ${v.range === null ? "a level set elsewhere" : dbWords(v.range)}. Drag the line`,
-    },
+    levels: { draw: (v, p) => thresholdLine(p, v, { threshold: "threshold" }), words: (v) => gateWords(v, { threshold: "threshold", range: "range" }) },
+    down: { draw: (v, p) => gateDown(p, v, { range: "range" }), words: (v) => gateDownWords(v, { range: "range" }) },
   },
 );
 
@@ -209,9 +231,10 @@ export const deesser = component(
       category: "Dynamics",
       description: "Tames harsh S sounds in a voice: turns down only the band they sit in",
       insert: { freq: 6000, threshold: -30, amount: 6 },
-      // The band it listens to over the spectrum in and out (CARD-114).
-      views: { band: bandPicture() },
-      face: ["band", "freq", "threshold", "amount"],
+      // The band it listens to over the spectrum in and out, and how far it turns it down, from its
+      // kernel's meter (CARD-114).
+      views: { band: bandPicture(), down: reductionPicture({ most: BAND_MOST }) },
+      face: ["band", "down", "freq", "threshold", "amount"],
     },
   },
   (x: Audio, { freq, threshold, amount }: Params) => kernel("@m2/mixing:deesser", { in: x, freq, threshold, amount }),
@@ -220,6 +243,7 @@ export const deesser = component(
       draw: (v, p) => band(p, v, { freq: "freq", threshold: "threshold" }),
       words: (v) => bandWords(v, { freq: "freq", threshold: "threshold", amount: "amount" }),
     },
+    down: { draw: (v, p) => bandDown(p, v, { amount: "amount" }), words: (v) => bandDownWords(v, { freq: "freq", threshold: "threshold", amount: "amount" }) },
   },
 );
 
@@ -256,8 +280,8 @@ export const multiband = component(
     editor: {
       category: "Dynamics",
       description: "Compresses the lows, mids and highs each on its own",
-      // The split over the spectrum in and out (CARD-115).
-      views: { split: curvePicture() },
+      // The split over the spectrum in and out, and how far each band turns down (CARD-115).
+      views: { split: splitPicture() },
       face: ["split", "lowMid", "midHigh", "lowGain", "midGain", "highGain"],
       groups: {
         Split: ["lowMid", "midHigh"],
