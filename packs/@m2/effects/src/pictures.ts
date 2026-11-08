@@ -612,8 +612,8 @@ export function levelWords(v: Values, names: { gain: string; ceiling: string }):
 
 /** The Flanger's copy at its shortest, in seconds, and how many times later it is at Depth 1: its kernel's `SHORTEST` and `RANGE`. */
 const FLANGER = { shortest: 0.0001, range: 100 } as const;
-/** How many points a cycle of the sweep is drawn with. */
-const SWEEP_POINTS = 240;
+/** How many steps a cycle of the sweep is drawn in: smooth, and half the time 240 took to draw (review X8). */
+const SWEEP_POINTS = 120;
 
 /** One cycle of the Flanger's sweep (CARD-128): the cycle across, bare; where its notches are up, 20 Hz to 20 kHz; and a line at its LFO's phase now. */
 export function sweepPicture(): PictureDecl<"unit01", "hz"> {

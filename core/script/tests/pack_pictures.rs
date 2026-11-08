@@ -886,7 +886,9 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
         for (k, shape) in [2usize, 1, 0].into_iter().zip(shapes) {
             let points: Vec<(f64, f64)> =
                 shape["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
-            assert!(points.len() > 100 && points[0].0 == 0.0 && points.last().unwrap().0 == 1.0, "a whole cycle");
+            assert!(points[0].0 == 0.0 && points.last().unwrap().0 == 1.0, "a whole cycle");
+            // 120 steps a cycle: smooth, and half the time 240 took to draw (review X8).
+            assert_eq!(points.len(), 121, "a cycle in 120 steps");
             for (phase, hz) in points {
                 let want = (teeth[k] / at(depth, phase)).min(20_000.0);
                 assert!((hz / want - 1.0).abs() < 1e-9, "depth {depth}, feedback {feedback}: notch {k} at {phase}: {hz} Hz, not {want}");
