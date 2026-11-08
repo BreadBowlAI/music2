@@ -56,6 +56,21 @@ inputs = [
 outputs = ["out: audio<*>"]
 latency_s = 0.015
 
+# The Vocoder (VOX-29): a sound shaped by a voice, so a synth talks.
+
+[[kernel]]
+name = "vocoder"
+description = "The Vocoder: in (the carrier, a synth) shaped by voice, in 20 bands a third of an octave apart from 100 Hz to 8 kHz. Each band of in plays as loud as voice is in that band, against voice's loudest band (its level over the loudest's plus 0.1), so no band is louder than in; voice's own sound over 5 kHz is added, times clarity; smooth is how fast the bands let go (seconds); formant moves in's bands against voice's, in semitones. A silent voice gives silence. No latency. With listen 0 it plays in as it is (voice, left out, is silence)"
+inputs = [
+  "in: audio<*>",
+  "voice: audio<*> = 0",
+  "clarity: control<unit01> = 0.5",
+  "smooth: control<seconds> = 0.05 in 0.01..0.2",
+  "formant: control<semitones> = 0 in -12..12",
+  "listen: control<switch> = 1",
+]
+outputs = ["out: audio<*>"]
+
 # ---------------------------------------------------------------- a voice's notes (VOX-40 to VOX-47)
 # Two offline kernels the host runs, never song code: `notes` measures a recorded voice's file, and
 # `voice` plays a clip's edited notes, phrase by phrase (RENDER-30b). They read the pitch line by
