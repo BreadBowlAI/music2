@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps and the mixing meters landed; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper and the Vocoder landed; the nightly's failures since 11-06 fixed but its speed tests; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -8,11 +8,37 @@ design for whatever you pick up. Older versions of this page, with each track's 
 - **0.2.0 is made, as a draft** (#97, 2026-11-07). The tag `v0.2.0` and `release.yml`'s run (42391434245) built the
   Linux and Mac files and made the draft pre-release (five files). **Publishing it is the owner's.** Its notes are
   [docs/releases/0.2.0.md](docs/releases/0.2.0.md). The server has no `file` program, which linuxdeploy's AppImage
-  tool needs: a build here puts an unpacked copy on `PATH` (`apt-get download file`); `release.yml` installs it.
+  tool needs: a build here puts an unpacked copy on `PATH` (`apt-get download file`); `release.yml` installs it, and
+  `ci/release.sh build` says at once when it is missing.
 - **The graph waits for the owner.** On 2026-11-07 the owner asked for the Device view's Chain and Patch to become one
   **Graph**, whose nodes are the cards: collapsed by default, expanded on a click. The note is
   `docs/designs/graph/design.md` on branch `graph-note` (80a5d073, worktree `~/m2-runs/wt-graph-note`, not pushed),
   with a mockup. It waits for the owner's D1 to D6. Build none of it before their yes (AGENTS.md rule 11).
+- **New sounds in packs (2026-11-08)** (#104, #105; gaps #50 and #54), the core unchanged:
+  - **Tune's Formant** knob (VOX-20) moves the voice's colour without its notes; at 0 Tune plays as before.
+  - **The Voice changer** (`@m2/vocals`, VOX-28): Pitch and Formant, presets Deep and Chipmunk, Tune's own kernels,
+    15 ms late as Tune is; its bits pinned by a hash (`CHANGED`, `core/play/tests/vocals.rs`).
+  - **The Clipper** (`@m2/effects:clip`, PACK-34, CARD-127): cuts at 4 times the song's rate, twice, then no sample
+    over the ceiling; 92 frames late, declared; the pure fixture `clip`.
+  - **The Vocoder** (`@m2/vocals:vocoder`, VOX-29): a synth that talks with a voice, picked in its card's
+    **Talks with**; Clarity, Smooth and Formant; 20 bands, no latency; the pure fixture `vocoder`, and one more
+    RENDER-33 exception while Formant moves. The guide's "Make a synth talk" (`docs/guide/audio.md`).
+  - `@m2/effects` 1.4.0 and `@m2/vocals` 1.2.0, recorded again. Left in gap #54: the Clipper's look-ahead stage and
+    the Vocoder's row saying None.
+- **The nightly's failures since 11-06 (track ci-flakes, 2026-11-08):**
+  - **GitHub's Mac** (five suite runs, every night): a meters read that heard no whole block sent zeros, read as
+    silence, and now sends nothing (the taps count each block as it begins and ends); a window's ask again took its
+    own read of a meter; `dress` read the EQ's spectrum before the song reached its hook; `instruments` counted reads
+    before they came; `sidechain`'s steady tone is a 440 Hz sine, which every block holds at its peak; `dress2a`'s
+    gate strip needs the 33 ms tick, so it joined the sleeps list. Below, Known flakes and the Mac's paragraph.
+  - **Linux:** `s8-meters`' hold tick fell between two hits of a steady kick, 0.0005 dB apart (a peak within 0.1 dB
+    under the hold now holds it again, taste.md); `dress2a`'s closings differed by the test's own saw (its hits are
+    now alike, sample for sample); the CPU-sharing draw test runs its draw at the lowest priority beside two busy
+    threads (`m2_os::thread::lowest`).
+  - **Left:** the four speed tests of pictures and the EQ's drag fail on GitHub's runners, not slower code (Known
+    flakes; the lead decides how they can hold there); one SIGABRT as a record test ended, not seen again in 2,140
+    runs (Known flakes).
+  - `ci/release.sh build` says at once when the `file` program is missing.
 - **The events plan and the small measuring steps (2026-11-07 to 11-08)** (#96, #99 to #102). Both notes were accepted
   together (#96): [docs/designs/events/design.md](docs/designs/events/design.md) and
   [docs/designs/measure2/design.md](docs/designs/measure2/design.md).
@@ -259,12 +285,16 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |
 | `a_hung_host_process_is_ended_and_said` | the plugin host's timing | once, passed on retry |
 | `m2-os`'s two `fake_sysfs` tests | they share one temp folder | run together they sometimes fail; alone they pass |
-| `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read. The next Mac nightly (`53382be`, run 40666853783) passed it with no retry |
+| `nx-piano-fix` | "the code editor gets its letters" | 2 of 2 on GitHub's Mac at `96d18e7` (run 40478186453); passes on Linux. Cause not found. Its check is now three (the editor's box, its text, no notes sent), each saying what it read. The next Mac nightly (`53382be`, run 40666853783) passed it with no retry. Back on GitHub's Mac on 11-06 and 11-08, each passed on its retry (the issue "Flaky tests"), and 1 of 2 in track ci-flakes' Mac probe (run 42481172658): the click hit the editor's lines, but after the keys the focus was in `body`, so they played notes. Not the Mac's late clocks |
 | `sx-follow` | Chrome's page closed 2 s in ("Target closed", during a `$$eval`) | once on the Mac at `a1e3c77`; passed on its retry, 22 of 22 |
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `layout-proj`, `attention-attn` | failed once on GitHub's Mac at `53382be` (run 40666853783) | passed on their retry, alone; its logs weren't kept (a passing run keeps none) |
-| `a_drag_frame_of_the_eq_stays_under_8_ms` (`crates/editor`) | p99 8.26 ms against its 8 ms | a speed test in the nightly tier; `cargo test -p m2-editor` runs it beside the crate's other tests, under load |
+| The nightly's speed tests of pictures and the EQ's drag: `every_pack_picture_draws_inside_a_fifth_of_its_limit`, `every_instrument_picture_draws_in_a_fifth_of_its_limit`, `an_eight_band_curve_draws_inside_its_budget`, `a_drag_frame_of_the_eq_stays_under_8_ms`; and, now and then, `thirty_one_spectra_fit_in_a_read_with_room` (GitHub's Linux, 23.8 ms against 16.5, run 42483302299) and `a_measure_follows_a_drag_inside_its_budget` (GitHub's Mac, the EQ's p99 at 96 kHz 40.4 ms against 40, the same run) | draws of 4 to 10 ms against 4 ms (the Mac's Wavetable 9.2 ms); the drag's p99 8.8 ms of CPU against 8 (the Mac's 10.3); the eight-band's p99 9 to 21 ms against 8 | Every nightly since they came (#90 to #94; first run 11-07). Track ci-flakes timed them on the Linux server at `c653658c` and at main, interleaved (load 4.6 to 7.2): the code isn't slower (pack draws' p99 3.08 then 2.98 ms; the drag's median 3.34 then 3.38 ms of CPU), so the runners are the cause: GitHub's Linux does the drag's work in 2.4 times the CPU time, and both runners' tails are their neighbours'. The instrument one fails on the server too, alone, 6 of 12 runs (the Wavetable's vowels table, 3.6 to 4.2 ms). How they can hold on a shared runner, unweakened, is the lead's to decide (ci-flakes' report) |
+| `an_armed_track_monitors_without_a_take` (`m2-server`, `record_tests.rs`) | passed, then its process aborted (SIGABRT, nothing on stderr) as it ended | once, in the lead's `ci/check.sh --pr` on 2026-11-08, under full load; passed on its retry. Not made to happen again: 2,140 runs of it alone (8, 16 and 24 at a time), 15 nextest stress rounds of the record tests and 6 of all `m2-server`'s lib tests, 16 at a time. An abort with nothing on stderr is `std::process::abort` with no panic (the pool's `AbortOnPanic` prints its panic first) or glibc's fatal message, which goes to the terminal, not stderr, when there is one (that check ran in tmux): `LIBC_FATAL_STDERR_=1` would keep it |
+| `dress2a-fix` | on GitHub's Mac (11-08), "the mid's dot dragged up raises its gain" wrote nothing, and the ⌘Z after it undid the suite's own setup, so Pump's checks after it failed | once; passed on its retry, and 2 of 2 in ci-flakes' Mac probe. Cause not found |
+| `io-record-fix` | failed once on GitHub's Mac (11-08) | passed on its retry alone, and 2 of 2 in ci-flakes' Mac probe |
+| `a_burst_past_the_hint_limit_is_walked_and_never_missed` (`m2-server`, `watch_tests.rs`) | "the walk was a rescan": 4,219 names, two walks, one scoped, no rescan | both tries on GitHub's Mac in run 42483302299 (ci-flakes' branch, no watcher change); it passed on the 11-07 and 11-08 Mac nightlies. FSEvents' batching, likely; not looked into |
 | `m2-server`'s registry tests, under `cargo test` | "Too many open files" | in a tmux shell, whose open-file limit is lower; they pass from a normal shell and in `ci/check.sh` |
 
 **GitHub's Mac (macos-15), the first nightly (run 40296575023, `07cd88b`):** its sleeps last about four times what
@@ -276,6 +306,15 @@ late by hand (a timer slack of 45 to 90 ms, `prctl(PR_SET_TIMERSLACK)`, on the h
 them the same way, and they pass without. Not the code's: on a real Mac a device clocks the app. The owner chose
 to leave these four out of that job alone (`M2_LATE_SLEEPS=1`: `ci/sleeps-tests.txt`, and the `sleeps` tags in
 `e2e/run.mjs`); they still run in the PR tier, the Linux nightly and a real Mac's `ci/check.sh`.
+Track ci-flakes measured those clocks there (2026-11-08, its Mac probe, run 42481172658): the silent player's 10 ms
+sleeps took 0 to 88 ms, spread nearly evenly, and the meters' 33 ms tick came every 70 to 250 ms (median 121). Five
+suite runs added since then failed there every night. The causes, now fixed: a meters read that held no block sent
+zeros, which read as silence (now it sends nothing: `sidechain`); a window's ask every 4 s took its own read of a
+meter (`dress2a`'s closings); `dress` read the EQ's spectrum before the song reached its hook, and `instruments`
+counted reads before they came. A meters message there may also hold one 10 ms buffer, so `sidechain`'s steady tone
+is a 440 Hz sine, every block of which holds its peak. `dress2a`'s gate strip counts openings read by read, which
+needs the 33 ms tick: it joined the sleeps list. The nightly on ci-flakes' branch (run 42483302299) passed the other
+four there, on their first runs.
 `a_code_save_behind_a_previewed_write_plays_both` passed there on its retry. G10's timing failed there too ("bar 64
 takes no longer than … from bar 1: 1.25 s against 1.05 s", in `the_live_engine_passes_every_gate`), timed by the
 wall clock beside other tests, as macOS doesn't say how long a thread waited for a CPU. It now times the rendering
@@ -300,7 +339,6 @@ whether it is one of these or a real failure, and fixes the real ones (most were
    - the Arpeggiator's steps picture past three held notes;
    - the multiband's bars and Tune's middle line's name, with the graph's cards;
    - wires that show their level (a note of its own: it needs a tap on a wire);
-   - `ci/release.sh` could check for the `file` program before it builds.
 4. **The owner's own items**, open:
    - **The registry, live**: the Cloudflare R2 bucket and its address (D10), then the repo
      `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
@@ -313,6 +351,8 @@ whether it is one of these or a real failure, and fixes the real ones (most were
      kit on any drum machine track, if wanted.
 5. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
    few clean nightlies.
+   The nightly's four speed tests of pictures and the EQ's drag fail on GitHub's runners (Known flakes): how they can
+   hold there unweakened is the lead's to decide, from track ci-flakes' report.
 6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
    macro knobs #57, the rest of #62: Bake to notes, note repeat in a kit, generators), each inside a pack where it
    can be; the beat grid's gaps (a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks,
