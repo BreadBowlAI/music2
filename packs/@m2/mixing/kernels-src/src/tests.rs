@@ -934,7 +934,8 @@ fn crossed_split_points_are_put_in_order() {
 // compress says it (ABI-14): `low_reduction`, `mid_reduction` and `high_reduction`, in dB, the most of
 // the block's frames. A tone in each band, one band squeezed (over its threshold, at a ratio of
 // 20, its gain up 6 dB): its meter, once settled, by as much as its tone fell under its gain; the
-// two others, at a ratio of 1, nothing.
+// two others, at a ratio of 1, nothing. And every band compressing, at a ratio of 4, but each tone
+// 10 dB under its band's threshold (under the knee too): all three say 0 in every block.
 #[test]
 fn each_multiband_band_says_how_far_it_turns_down() {
     let names = ["low", "mid", "high"];
@@ -961,6 +962,18 @@ fn each_multiband_band_says_how_far_it_turns_down() {
                 "the {name} band: its meter says {said_db:.2} dB, its tone fell by {fell:.2} dB"
             );
         }
+    }
+    let quiet = 10f32.powf((-18.0 - 10.0) / 20.0);
+    let x = tones(&probes, quiet);
+    let mut c = multiband(150.0, 3000.0, 4.0);
+    for band in 0..3 {
+        c[2 + band * 5] = -18.0;
+    }
+    let played = m2_dsp::testing::play_at::<Multiband>(SR, 2, 2 * N, BLOCK, &with(&x, &c));
+    for (band, name) in names.iter().enumerate() {
+        let m = meter_blocks(&played, 1 + band);
+        let moved = m.iter().position(|&r| r != 0.0);
+        assert_eq!(moved, None, "every band at a ratio of 4, its tone 10 dB under its threshold: the {name} band's meter moved");
     }
 }
 
