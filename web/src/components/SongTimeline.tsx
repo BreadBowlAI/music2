@@ -1990,7 +1990,7 @@ function ViewTools({ ppb, follow, onZoom }: { ppb: number; follow: boolean; onZo
       <Button
         size="sm"
         data-testid="zoom-out"
-        // Not just "Zoom out": the Device view's graph has its own.
+        // Not just "Zoom out": the Graph has its own.
         aria-label="Zoom the timeline out"
         disabled={ppb <= ZOOM.min}
         title={ppb <= ZOOM.min ? "Zoomed out all the way" : `Zoom out (${zoomOut})`}

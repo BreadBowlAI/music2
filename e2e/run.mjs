@@ -191,7 +191,7 @@ export const SUITES = [
   ["cards", "fix", { expect: 38, s: 6 }],
   ["card-views", "fix", { expect: 65, s: 12 }],
   // Track graph-node: the graph's nodes at two sizes, the bar, +N, selection and the keyboard (taste.md DV-12 to DV-16).
-  ["nodes", "fix", { expect: 106, s: 30 }],
+  ["nodes", "fix", { expect: 119, s: 30 }],
   ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 22, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],

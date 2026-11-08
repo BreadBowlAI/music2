@@ -259,7 +259,17 @@ export function PictureView({ view, ...p }: ViewProps & { view: PictureView }) {
       >
         {drawn?.shapes && !why && view.live?.length ? <Live view={shown} shapes={drawn.shapes} looking={looking} size={size} {...p} /> : null}
         {drawn?.shapes && !why && <Shapes view={shown} shapes={drawn.shapes} hold={holdX} size={size} {...p} />}
-        {why && <p className="absolute inset-0 p-2 text-xs text-fg-muted">{why}</p>}
+        {/* Small (a collapsed node's 48 px), one short line; its whole why is the tooltip (review Z9). */}
+        {why &&
+          (size.h < 100 ? (
+            <p data-why className="absolute inset-x-0 top-1/2 -translate-y-1/2 px-2 text-xs text-fg-muted truncate">
+              Can't draw this picture here
+            </p>
+          ) : (
+            <p data-why className="absolute inset-0 p-2 text-xs text-fg-muted">
+              {why}
+            </p>
+          ))}
       </div>
     </div>
   );

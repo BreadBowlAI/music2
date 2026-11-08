@@ -25,7 +25,7 @@ export interface DropFile {
   file?: File;
 }
 
-/** Where a drop lands (Q6): a lane at a bar, a track (not on one of its lanes), below the tracks, a recording on a card in Device (CARD-5), or nowhere. */
+/** Where a drop lands (Q6): a lane at a bar, a track (not on one of its lanes), below the tracks, a recording on a node in the Graph (CARD-5), or nowhere. */
 export type DropTarget =
   | { kind: "lane"; module: string; lane: string; beat: number }
   | { kind: "track"; module: string; beat: number }
@@ -74,7 +74,7 @@ export const OPENS = "music2 opens WAV, FLAC and MIDI files";
 
 /** Where a drop at (`x`, `y`) on the page lands: the bar line at or before the pointer (D32). */
 export function target(x: number, y: number): DropTarget {
-  // A recording on a card in Device, or a card with one (CARD-5; a Sampler's): the file plays there.
+  // A recording on a node in the Graph, or a node with one (CARD-5; a Sampler's): the file plays there.
   const recording = recordingAt(document.elementFromPoint(x, y));
   if (recording) return recording;
   const ruler = document.querySelector<HTMLElement>("[data-testid=ruler]");

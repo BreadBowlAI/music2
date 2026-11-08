@@ -5,8 +5,8 @@
 // (`useKnobDrag`: up and down only, ⇧ for fine steps, ⌥-click to reset); its keys are DV-15's.
 
 import clsx from "clsx";
-import { useEffect, useRef } from "react";
-import { Bubble, NOTCH } from "./Knob";
+import { useRef } from "react";
+import { Bubble } from "./Knob";
 
 /**
  * Where the fill runs, from `lo` to `hi` (0..1 of the bar): from the left for a value with one side,
@@ -50,35 +50,14 @@ export function Bar({
   /** What it says over its fill: its label and its number, or the field a value is typed in. */
   children: React.ReactNode;
   onChange: (v: number) => void;
-  /** `n` steps up (negative: down), from the wheel or the arrow keys. */
+  /** `n` steps up (negative: down), from the arrow keys. */
   onStep: (n: number) => void;
   /** Type a value in place of the number. */
   onType: () => void;
 }) {
   const own = useRef<HTMLDivElement>(null);
   const el = bar ?? own;
-  const wheel = useRef(0);
-  const step = useRef(onStep);
-  step.current = onStep;
-  const held = useRef(false);
-  held.current = !!pointer;
-  // The wheel steps it, one step a notch, as a knob's did (taste.md §5.2); only an up-and-down
-  // scroll does, so a sideways one scrolls the graph; ⌘ or ⌃ with it zooms the graph instead.
-  useEffect(() => {
-    const b = el.current;
-    if (!b || disabled) return;
-    const turn = (e: WheelEvent) => {
-      if (e.ctrlKey || e.metaKey || held.current || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
-      e.preventDefault();
-      wheel.current -= e.deltaMode === 1 ? e.deltaY * NOTCH : e.deltaY;
-      const n = Math.trunc(wheel.current / NOTCH);
-      if (n === 0) return;
-      wheel.current -= n * NOTCH;
-      step.current(n);
-    };
-    b.addEventListener("wheel", turn, { passive: false });
-    return () => b.removeEventListener("wheel", turn);
-  }, [el, disabled]);
+  // The wheel never edits a bar: it scrolls the graph, wherever the pointer is (DV-14, review Z11).
   const [lo, hi] = fillOf(value, bipolar);
   return (
     <div

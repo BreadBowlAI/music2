@@ -39,6 +39,8 @@ const CODE_LINE = 14;
 const CODE_PAD = 12;
 /** The line that names a narrow expanded node's pack. */
 export const PACK_H = 18;
+/** How many values a column of a node with no groups holds (DV-12). */
+const VALUES_PER_COLUMN = 8;
 /** How many of its face's values a collapsed node shows (DV-12). */
 const FACE_VALUES = 4;
 
@@ -248,7 +250,7 @@ export const isPill = (n: ViewNode) =>
  * straight; outputs beyond them get rows of their own; a node with no rows has its first output on
  * its header. Expanding never moves a row: what changes is below them.
  */
-export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom): Shape {
+export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom, oneSize = false): Shape {
   const ins = new Map<string, number>();
   const outs = new Map<string, number>();
   const base = { ins, outs, conns: [], fills: [], views: [], viewH: 0, values: [], columns: [], bands: [], hidden: 0, hides: [], code: 0, lines: 0 };
@@ -257,7 +259,8 @@ export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expa
     for (const p of n.outputs) outs.set(p.id, PILL_H / 2);
     return { ...base, w: SLIM_W, h: PILL_H, head: PILL_H, sized: false, expanded: false, pill: true };
   }
-  const sized = n.kind === "call";
+  // A call's node has two sizes; the Song's compact mixer one (DV-12, review Z10).
+  const sized = n.kind === "call" && !oneSize;
   const open = sized && expanded;
   // Its connections, in the order the code writes them; a "Listens to" whose input the call leaves
   // out stands right after the first, where its row would be (CARD-35).
@@ -360,7 +363,11 @@ function columnsOf(n: ViewNode, face: Value[], faceViews: CardView[]): Column[] 
       if (v.t === "setting" && (g.name === "More" || !n.groups?.length)) setup.push(v);
       else add(v);
     }
-    if (items.length) out.push({ name: g.name, items, h: 0 });
+    if (!items.length) return;
+    // A node with no groups: its values in columns of eight at most, so the four-column wrap
+    // keeps it wide rather than tall (DV-12, review Z10).
+    if (!n.groups?.length) for (let k = 0; k < items.length; k += VALUES_PER_COLUMN) out.push({ name: k ? `Values ${k / VALUES_PER_COLUMN + 1}` : "Values", items: items.slice(k, k + VALUES_PER_COLUMN), h: 0 });
+    else out.push({ name: g.name, items, h: 0 });
   });
   // A setting no group names, when the node has groups but no More (every row named).
   for (const x of (n.settings ?? []).filter(shown)) {

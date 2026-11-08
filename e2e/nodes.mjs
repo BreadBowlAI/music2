@@ -37,6 +37,29 @@ const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title).
 const stepIs = async (want) => until(async () => (await undoTitle()) === `Undo ${want} (⌘Z)`);
 /** Once the nodes stop moving aside after one expands or collapses (DV-13). */
 const still = () => until(async () => !(await page.$("[data-moving]")));
+/**
+ * The wires of module `m` that run behind a node they don't touch (taste.md DV-5): each path
+ * sampled every 4 px, a point inside another node's box (2 px in) counting.
+ */
+const behind = (m) =>
+  page.evaluate((m) => {
+    const g = document.querySelector(`[data-testid=graph] [data-module="${m}"]`);
+    const nodes = [...g.querySelectorAll("[data-node-id]")].map((n) => [n.dataset.nodeId, n.getBoundingClientRect()]);
+    const out = [];
+    for (const p of g.querySelectorAll("path[data-from]")) {
+      const len = p.getTotalLength();
+      const ctm = p.getScreenCTM();
+      for (let s = 0; s <= len; s += 4) {
+        const q = p.getPointAtLength(s).matrixTransform(ctm);
+        const hit = nodes.find(([id, r]) => id !== p.dataset.from && id !== p.dataset.to && q.x > r.left + 2 && q.x < r.right - 2 && q.y > r.top + 2 && q.y < r.bottom - 2);
+        if (hit) {
+          out.push(`${p.dataset.from} → ${p.dataset.to} behind ${hit[0]}`);
+          break;
+        }
+      }
+    }
+    return out;
+  }, m);
 const size = (sel) => page.$eval(sel, (e) => e.dataset.size).catch(() => null);
 // Sizes as laid out, before the graph's zoom scales them on screen.
 const width = (sel) => page.$eval(sel, (e) => e.offsetWidth).catch(() => null);
@@ -102,6 +125,8 @@ const knobId = (st, slot) => wobNode(st).knobs.find((k) => k.slot === slot)?.id;
 // ---------------------------------------------------------------- collapsed, the default (taste.md DV-12)
 
 check(await until(async () => (await size(wob)) === "collapsed", 15000), "the dock's tab is Graph, and Wob's node starts collapsed (DV-12)");
+// Fit is 100%: the graph, taller than the dock, scrolls rather than shrinking its words (DV-5, review Z8).
+check((await page.$eval("[data-zoom]", (e) => e.dataset.zoom)) === "1.00", `Fit is 100%: ${await page.$eval("[data-zoom]", (e) => e.dataset.zoom)}`);
 check((await page.$eval('[data-view-tab="graph"]', (e) => e.textContent?.trim()).catch(() => "")) === "Graph", "the tab is called Graph");
 check((await size(lp)) === "collapsed", "and so does the Lowpass's");
 check((await width(wob)) === 216 && (await width(lp)) === 216, `a collapsed node is 216 px wide: ${await width(wob)} ${await width(lp)}`);
@@ -156,6 +181,17 @@ let text = read("tracks/wob.ts");
 await drag(slider("cutoff"), 90, 0);
 await sleep(800);
 check(read("tracks/wob.ts") === text && Math.abs((await unit("cutoff")) - hi) < 0.005, "a sideways drag moves nothing: the bar drags up and down only");
+// The wheel never edits a bar: it scrolls the graph (DV-14, review Z11).
+{
+  const b = await box(slider("cutoff"));
+  await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2);
+  await page.mouse.wheel({ deltaY: 200 });
+  await sleep(900);
+  check(read("tracks/wob.ts") === text && Math.abs((await unit("cutoff")) - hi) < 0.005, "the wheel over a bar writes nothing");
+}
+// Its tooltip names its whole label, its value and its range, though the bar may cut the label (review Z6).
+const cutTip = await page.$eval(`${wob} [data-knob="cutoff"]`, (e) => e.title);
+check(/\nCutoff: 2\.0 kHz, from 40 Hz to 8\.0 kHz\n/.test(cutTip), `the bar's tooltip says Cutoff, its value and its range: ${cutTip.replace(/\n/g, " / ")}`);
 const u0 = await unit("cutoff");
 await drag(slider("cutoff"), 0, -30);
 check(await until(() => read("tracks/wob.ts") !== text && !read("tracks/wob.ts").includes("cutoff: 2000,")), "a drag up writes a higher cutoff");
@@ -259,6 +295,12 @@ st = await state();
 check((await agent("/api/graph/set", { session: st.session, revision: st.view.revision, id: knobId(st, "gain2"), gesture: "agent", value: 2 })) === 200 && (await until(() => read("tracks/wob.ts").includes("gain2: 2"))), "an agent writes band 2's gain, its first write");
 await sleep(600);
 check(!(await page.$eval(slider("gain2"), (e) => e === document.activeElement).catch(() => false)), "the bar doesn't take the focus back");
+{
+  const afterAgent = read("tracks/wob.ts");
+  await page.keyboard.press("ArrowUp");
+  await sleep(700);
+  check(read("tracks/wob.ts") === afterAgent, "and ↑ then writes nothing (review Z12)");
+}
 
 // Enter on the header collapses it; nothing of the sizes is written.
 await page.focus(`${wob} [data-node-head]`);
@@ -266,8 +308,11 @@ await page.keyboard.press("Enter");
 check(await until(async () => (await size(wob)) === "collapsed"), "Enter on its header collapses it");
 await page.keyboard.press("Enter");
 check(await until(async () => (await size(wob)) === "expanded"), "and Enter expands it again");
+await still();
 await page.click(`${lp} [data-expand]`);
 await until(async () => (await size(lp)) === "expanded");
+const lpCode = await page.$eval(`${lp} [data-code-line]`, (e) => e.textContent).catch(() => null);
+check(lpCode === "lowpass(w, { cutoff: 5000 })", `the Lowpass's code line names its sound as the code does (CARD-41, review Z12): ${lpCode}`);
 await page.click("[data-testid=collapse-all]");
 check(await until(async () => (await size(wob)) === "collapsed" && (await size(lp)) === "collapsed"), "Collapse all collapses every node");
 await sleep(300);
@@ -358,6 +403,9 @@ await still();
 await pull('[data-outlet="wobble"]', slider("cutoff", lp));
 check(await until(() => read("tracks/wob.ts").includes("cutoff: wobble")), "a wire dropped on the Lowpass's cutoff writes its name");
 check(await until(async () => /wobble/.test((await page.$eval(`${lp} [data-inlet]`, (e) => e.textContent).catch(() => "")) ?? "") && !(await page.$(`${lp} [data-knob="cutoff"]`))), "the cutoff is now a row naming the wire, not a bar");
+// Its picture can't be measured now: collapsed, it says so in one short line, its whole why in its tooltip (DV-12, review Z9).
+const why = await page.$eval(`${lp} [data-greyed]`, (e) => { const p = e.querySelector("[data-why]"); return [p?.textContent ?? "", p ? p.scrollHeight <= 18 && p.scrollWidth <= p.clientWidth : false, e.title]; }).catch(() => ["", false, ""]);
+check(why[1] && why[2].length > why[0].length && /can't/.test(why[2]), `the picture says why in one line, whole in its tooltip: ${JSON.stringify(why)}`);
 // Dropped on a collapsed node, a menu offers its values (DV-6).
 await still();
 await pull('[data-outlet="wobble"]', `${wob} [data-node-title]`);
@@ -399,6 +447,8 @@ check((await size(lp)) === "expanded", "the Lowpass still expanded");
 await page.click('[data-module-tab="song"]');
 const songG = '[data-testid=graph] [data-module="song"]';
 check(await until(async () => !!(await page.$(`${songG} [data-testid=open-mix]`))) && !(await page.$(`${songG} [data-node="mixer"] [data-knob]`)), "the song's mixer is one compact node, its levels in Mix (MX-6)");
+check(!(await page.$(`${songG} [data-node="mixer"] [data-expand]`)) && !(await page.$(`${songG} [data-node="mixer"][data-size]`)), "and it has one size: no ⤢ (review Z10)");
+check(JSON.stringify(await behind("song")) === "[]", `no wire of the song runs behind a node it doesn't touch (DV-5, review Z7): ${JSON.stringify(await behind("song"))}`);
 check(/Listens to:\s*Kick/.test(await page.$eval(`${songG} [data-node="duck"] [data-listens]`, (e) => e.textContent).catch(() => "")), "the collapsed Duck says it listens to Kick (CARD-35)");
 await page.click(`${songG} [data-node="duck"] [data-expand]`);
 check((await page.$eval(`${songG} [data-node="duck"] [data-code-line]`, (e) => e.textContent).catch(() => "")) === "duck(bass.out, kick.env, { depth: db(-9) })", "expanded, the Duck's code line names the track it ducks");
@@ -414,5 +464,33 @@ const added = await agent("/api/graph/effect/add", { session: st.session, revisi
 check(added === 200 && (await until(() => read("tracks/keys.ts").includes("arp(lane.notes"), 15000)), `an agent puts an Arpeggiator before the Keys' pluck: ${added}`);
 await page.click('[data-module-tab="keys"] [data-testid=track-label]');
 check(await until(async () => /Arpeggiator/.test(await page.$eval('[data-testid=graph] [data-module="keys"]', (e) => e.textContent ?? "").catch(() => "")), 15000), "the graph shows the Arpeggiator's node, on the notes wire");
+// The kick's drum reaches its output past its Follow: the wire passes through a gap (DV-5, review Z7).
+await page.click('[data-module-tab="kick"] [data-testid=track-label]');
+await until(async () => !!(await page.$('[data-testid=graph] [data-module="kick"] path[data-from]')), 15000);
+check(JSON.stringify(await behind("kick")) === "[]", `no wire of the kick runs behind a node it doesn't touch: ${JSON.stringify(await behind("kick"))}`);
+await page.click('[data-module-tab="wob"] [data-testid=track-label]');
+await until(async () => !!(await page.$(`${wob}`)), 15000);
+check(JSON.stringify(await behind("wob")) === "[]", `nor any of Wob's: ${JSON.stringify(await behind("wob"))}`);
+
+// ---------------------------------------------------------------- per note (DV-12, CARD-25, review Z3)
+
+// A voice whose noise reads no note: it plays once for each note all the same.
+write("tracks/vx.ts", `import { poly, track } from "@m2/core";
+import { adsr, noise, osc, vca } from "std/dsp";
+import { lowpass } from "std/filter";
+import { sum } from "std/math";
+
+export default track("vx", { name: "Vx" }, ({ lane }) =>
+  lowpass(poly(lane.notes("notes"), (n) => vca(lowpass(sum(osc.saw(n.pitch), noise()), { cutoff: 1200 }), adsr(n.gate))), { cutoff: 4000 }),
+);
+`);
+write("song.ts", read("song.ts").replace('import wob from "./tracks/wob";', 'import wob from "./tracks/wob";\nimport vx from "./tracks/vx";').replace("      wob: wob.out,", "      wob: wob.out,\n      vx: vx.out,"));
+await until(async () => !!(await page.$('[data-module-tab="vx"]')), 15000);
+await page.click('[data-module-tab="vx"] [data-testid=track-label]');
+const vx = '[data-testid=graph] [data-module="vx"]';
+check(await until(async () => !!(await page.$(`${vx} [data-node="noise"]`)), 15000), "Vx's graph shows its voice's noise");
+const perNote = await page.$$eval(`${vx} [data-node]`, (els) => els.map((e) => `${e.dataset.node}:${!!e.querySelector("[data-per-note]")}`).sort());
+check(perNote.includes("noise:true") && perNote.includes("osc.saw:true") && perNote.includes("adsr:true"), `the voice's parts say per note, the noise too: ${perNote.join(" ")}`);
+check(perNote.filter((x) => x.startsWith("lowpass:")).sort().join() === "lowpass:false,lowpass:true" && perNote.includes("poly:false"), "the Lowpass after the voices and the poly call don't");
 
 done(errors);

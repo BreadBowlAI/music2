@@ -9,7 +9,7 @@ import { guideDid } from "../lib/guide";
 
 // What every knob and fader shares (taste.md §5.2, KN-1, KN-2): a drag heard while it moves and
 // written once when it is let go (WRITE-22's leases), the drag itself, the small rotary knob, its
-// menu, and the value bubble over the pointer. The Device view's knob rows (NodeGraph) and the Mix
+// menu, and the value bubble over the pointer. The Graph's bars (NodeGraph, Bar) and the Mix
 // view's strips (Mix) are built from these.
 
 /**

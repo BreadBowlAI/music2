@@ -137,26 +137,8 @@ function headRoom(effects: Effect[], perNote: Set<string>) {
   };
 }
 
-/**
- * The nodes that play inside an instrument's voices, once for each note (the graph note §4): what a
- * voice's notes feed, up to the call that takes notes and plays them.
- */
-function perNoteOf(m: ModuleView): Set<string> {
-  const byId = new Map(m.nodes.map((n) => [n.id, n]));
-  const out = new Set<string>();
-  const next = m.nodes.filter((n) => n.kind === "voice").map((n) => n.id);
-  while (next.length) {
-    const id = next.pop()!;
-    for (const e of m.port_edges) {
-      if (e.from !== id || out.has(e.to)) continue;
-      const to = byId.get(e.to);
-      if (!to || to.kind !== "call" || to.inputs.some((i) => i.kind === "notes")) continue;
-      out.add(e.to);
-      next.push(e.to);
-    }
-  }
-  return out;
-}
+/** The nodes that play inside an instrument's voices, once for each note, as the view says (CARD-25). */
+const perNoteOf = (m: ModuleView) => new Set(m.nodes.filter((n) => n.per_note).map((n) => n.id));
 
 /** One module's code as a graph to play and tweak: bars over its values, wires between its signals. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
@@ -167,9 +149,10 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   const expanded = useExpanded((s) => s.keys);
   const perNote = useMemo(() => (shown ? perNoteOf(shown) : new Set<string>()), [shown]);
   const room = useMemo(() => headRoom(graph.effects, perNote), [graph.effects, perNote]);
-  const laid = useMemo(() => shown && layout(shown, expanded, room), [shown, expanded, room]);
+  const single = compacted?.card.id;
+  const laid = useMemo(() => shown && layout(shown, expanded, room, single), [shown, expanded, room, single]);
   // Fit is worked out from the graph with every node collapsed: expanding one never changes it (DV-13).
-  const collapsed = useMemo(() => shown && layout(shown, new Set(), room), [shown, room]);
+  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single), [shown, room, single]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
@@ -268,11 +251,12 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
 
 /** Zooms the graph can take; fitting it to the panel never shrinks it below `MIN_FIT` (it scrolls instead). */
 const clampZoom = (z: number, lo = 0.3, hi = 2) => Math.min(hi, Math.max(lo, Number.isFinite(z) ? z : 1));
-/** Fit's floor (taste.md DV-5): below it a node's 12px text would draw under the 11px the type scale allows. */
-const MIN_FIT = 0.75;
-/** The room around a module's nodes in the scroller: its padding (16) and the section's (16), each side. */
-const CHROME_W = 64;
-const CHROME_H = 64;
+/**
+ * Fit (taste.md DV-5): 100%, so a node's 12 px label and 11 px values draw at the type scale's
+ * sizes. Under it they wouldn't (at 75% a title drew at 9 px: review Z8); a graph bigger than the
+ * dock scrolls instead.
+ */
+const FIT = 1;
 
 /**
  * How much room a scrollbar takes from what it scrolls: none where scrollbars float over it (a Mac
@@ -293,10 +277,8 @@ function scrollbarRoom() {
  * shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room each way, so
  * what fits never needs one.
  */
-function fitZoom(laid: { width: number; height: number }, room: { w: number; h: number }) {
-  const tall = (room.h - CHROME_H) / laid.height;
-  if (tall >= 1) return 1;
-  return clampZoom(Math.min((room.w - CHROME_W) / laid.width, tall), MIN_FIT, 1);
+function fitZoom(_laid: { width: number; height: number }, _room: { w: number; h: number }) {
+  return FIT;
 }
 
 /** Zoom out, the zoom (click: actual size), zoom in, fit, and Collapse all: floating at the panel's bottom right. */
@@ -369,6 +351,11 @@ const GAP_Y = 18;
 
 interface Placed { node: ViewNode; x: number; y: number; w: number; h: number; ins: Map<string, number>; outs: Map<string, number>; shape: Shape }
 
+/** A wire's own height, as a gap a skipping wire passes through holds it (DV-5). */
+const GAP_H = 4;
+/** An edge by its ends, as the graph draws and routes it. */
+const edgeKey = (e: PortEdge) => `${e.from}>${e.from_port}>${e.to}>${e.to_port}`;
+
 /** Room below the nodes for the edges that go back (a `feedback()` loop), and beside the last column. */
 const LOOP_ROOM = 44;
 const LOOP_OUT = 22;
@@ -407,8 +394,12 @@ function layout(
   m: ModuleView,
   expanded: ReadonlySet<string>,
   room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
-): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
-  const geo = new Map(m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room)]));
+  /** A node with one size: the Song's compact mixer (MX-6). */
+  single?: string,
+): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge>; routes: Map<string, { x0: number; x1: number; y: number }[]> } {
+  const geo = new Map<string, { w: number; h: number; ins: Map<string, number>; outs: Map<string, number> }>(
+    m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room, n.id === single)]),
+  );
   const known = (id: string) => geo.has(id);
   const all = m.port_edges.filter((e) => known(e.from) && known(e.to));
   const back = loops(m, all);
@@ -437,8 +428,38 @@ function layout(
   }
   const last = Math.max(0, ...depth.values());
   for (const n of m.nodes) if (n.kind === "export") depth.set(n.id, last);
-  const columns: ViewNode[][] = [];
+  // A wire that skips a column passes through a gap there, held open by a stand-in the height of a
+  // wire, placed with the column's nodes, so it never runs behind one (DV-5, review Z7).
+  const gaps = new Map<string, string[]>();
+  const linked: PortEdge[] = [];
+  for (const e of links) {
+    const [a, b] = [depth.get(e.from)!, depth.get(e.to)!];
+    if (b - a < 2) {
+      linked.push(e);
+      continue;
+    }
+    const ids: string[] = [];
+    for (let c = a + 1; c < b; c++) {
+      const id = `gap:${edgeKey(e)}:${c}`;
+      ids.push(id);
+      depth.set(id, c);
+      geo.set(id, { w: 0, h: GAP_H, ins: new Map([["gap", GAP_H / 2]]), outs: new Map([["gap", GAP_H / 2]]) });
+    }
+    gaps.set(edgeKey(e), ids);
+    const chain = [e.from, ...ids, e.to];
+    for (let k = 0; k + 1 < chain.length; k++)
+      linked.push({ ...e, from: chain[k], from_port: k === 0 ? e.from_port : "gap", to: chain[k + 1], to_port: k + 2 === chain.length ? e.to_port : "gap" });
+  }
+  links.splice(0, links.length, ...linked);
+  into.clear();
+  from.clear();
+  for (const e of links) {
+    (from.get(e.from) ?? from.set(e.from, new Set()).get(e.from)!).add(e.to);
+    (into.get(e.to) ?? into.set(e.to, new Set()).get(e.to)!).add(e.from);
+  }
+  const columns: { id: string }[][] = [];
   for (const n of m.nodes) (columns[depth.get(n.id)!] ??= []).push(n);
+  for (const ids of gaps.values()) for (const id of ids) (columns[depth.get(id)!] ??= []).push({ id });
 
   const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : null);
   const top = new Map<string, number>();
@@ -480,6 +501,8 @@ function layout(
   const shift = top.size ? -Math.min(...top.values()) : 0;
   // Columns as wide as their widest node; slim sources sit at the right, by what they feed.
   const widths = columns.map((col) => Math.max(...(col ?? []).map((n) => geo.get(n.id)!.w), 0));
+  // A column of gaps alone still has room for its wires to pass.
+  for (let c = 0; c < widths.length; c++) if (!widths[c]) widths[c] = GAP_X;
   const xs = widths.map((_, c) => widths.slice(0, c).reduce((a, w) => a + w + GAP_X, 0));
   const placed = new Map<string, Placed>();
   let height = 0;
@@ -488,14 +511,27 @@ function layout(
     const c = depth.get(n.id)!;
     const y = top.get(n.id)! + shift;
     const x = xs[c] + (n.inputs.length ? 0 : widths[c] - g.w);
-    placed.set(n.id, { node: n, x, y, w: g.w, h: g.h, ins: g.ins, outs: g.outs, shape: g });
+    placed.set(n.id, { node: n, x, y, w: g.w, h: g.h, ins: g.ins, outs: g.outs, shape: g as Shape });
     height = Math.max(height, y + g.h);
   }
   // A loop comes back into its input from the left, LOOP_OUT before it: room for it there too.
   const left = Math.min(0, ...[...back].map((e) => (placed.get(e.to)?.x ?? LOOP_OUT) - LOOP_OUT - 4));
   if (left < 0) for (const p of placed.values()) p.x -= left;
+  // Each skipping wire's way through the columns it skips: across each, level at its gap.
+  const routes = new Map<string, { x0: number; x1: number; y: number }[]>();
+  for (const [k, ids] of gaps) {
+    routes.set(
+      k,
+      ids.map((id) => {
+        const c = depth.get(id)!;
+        const y = top.get(id)! + shift + GAP_H / 2;
+        height = Math.max(height, y + GAP_H);
+        return { x0: xs[c] - left, x1: xs[c] + widths[c] - left, y };
+      }),
+    );
+  }
   const width = Math.max(0, ...[...placed.values()].map((p) => p.x + p.w));
-  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back } : { placed, width, height, back };
+  return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back, routes } : { placed, width, height, back, routes };
 }
 
 /**
@@ -531,6 +567,27 @@ function pack(items: { want: number; h: number }[]): number[] {
 function curve(x0: number, y0: number, x1: number, y1: number) {
   const dx = Math.max(48, Math.abs(x1 - x0) * 0.45);
   return `M ${x0} ${y0} C ${x0 + dx} ${y0}, ${x1 - dx} ${y1}, ${x1} ${y1}`;
+}
+
+/**
+ * A wire through the gaps of the columns it skips (DV-5): a curve into each gap, straight across
+ * the column there, and a curve from the last one into its input.
+ */
+function routed(x0: number, y0: number, x1: number, y1: number, via: { x0: number; x1: number; y: number }[]) {
+  let d = `M ${x0} ${y0}`;
+  let [x, y] = [x0, y0];
+  const to = (bx: number, by: number) => {
+    const dx = Math.max(24, Math.abs(bx - x) * 0.45);
+    d += ` C ${x + dx} ${y}, ${bx - dx} ${by}, ${bx} ${by}`;
+    [x, y] = [bx, by];
+  };
+  for (const g of via) {
+    to(g.x0, g.y);
+    d += ` H ${g.x1}`;
+    x = g.x1;
+  }
+  to(x1, y1);
+  return d;
 }
 
 /** An edge back round a loop: out to the right, down below the nodes to `yb`, back left and up into the input. */
@@ -575,7 +632,7 @@ interface Dropped { node: ViewNode; at: { x: number; y: number }; from: string; 
 /** Memoized: the playback status re-renders the canvas five times a second. */
 const ModuleSection = memo(function ModuleSection({
   module,
-  laid: { placed, width, height, back },
+  laid: { placed, width, height, back, routes },
   zoom,
   session,
   revision,
@@ -717,10 +774,17 @@ const ModuleSection = memo(function ModuleSection({
                   const y0 = p?.outs.get(e.from_port), y1 = q?.ins.get(e.to_port);
                   if (!p || !q || y0 == null || y1 == null) return null;
                   const loop = back.has(e);
+                  const via = routes.get(edgeKey(e));
                   return (
                     <path
-                      key={`${e.from}>${e.from_port}>${e.to}>${e.to_port}`}
-                      d={loop ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2) : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)}
+                      key={edgeKey(e)}
+                      d={
+                        loop
+                          ? loopBack(p.x + p.w, p.y + y0, q.x, q.y + y1, height - LOOP_ROOM / 2)
+                          : via
+                            ? routed(p.x + p.w, p.y + y0, q.x, q.y + y1, via)
+                            : curve(p.x + p.w, p.y + y0, q.x, q.y + y1)
+                      }
                       data-loop={loop || undefined}
                       // From an effect turned off: its sound goes past it, so the line is dashed and quiet.
                       data-bypassed={e.bypassed || undefined}
@@ -940,7 +1004,7 @@ function Node({
   const was = useRef(shape.expanded);
   useEffect(() => {
     if (shape.expanded && !was.current) {
-      const t = setTimeout(() => el.current?.scrollIntoView({ block: "nearest", inline: "nearest", behavior: "smooth" }), 300);
+      const t = setTimeout(() => el.current?.scrollIntoView({ block: "nearest", inline: "nearest" }), 290);
       was.current = true;
       return () => clearTimeout(t);
     }
@@ -2024,7 +2088,9 @@ function KnobControl({
   const written = knob.written ? `written as ${knob.literal}` : "the default: not written in the code yet, changing it writes it in";
   const how = `Drag (${mod.shift} for fine) · double-click to type a value · ${mod.alt}-click to reset · right-click to automate it`;
   const cabling = useContext(Cabling);
-  const title = !editable ? `${why ?? "It can't be edited right now"}.` : `${shared}${how}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
+  // Its whole label, its value and its range, which a narrow bar may cut (review Z6).
+  const said = `${label}: ${display(descriptor, value)}, from ${display(descriptor, range.lo)} to ${display(descriptor, range.hi)}`;
+  const title = !editable ? `${why ?? "It can't be edited right now"}.` : `${shared}${how}\n${said}\nIn your code: ${knob.file}, line ${knob.line} (${written})\nIts id: ${knob.id}`;
   const unit = Math.min(1, Math.max(0, toUnit(descriptor, value)));
   const reset = descriptor.default != null ? Math.min(1, Math.max(0, toUnit(descriptor, descriptor.default))) : undefined;
   // The whole row drags it, its label and value too (taste.md §2.2).
