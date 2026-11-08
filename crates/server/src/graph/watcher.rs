@@ -487,6 +487,12 @@ impl Watch {
         }
     }
 
+    /// Tests: whether the events heard since the last tick ask for a walk of everything.
+    #[cfg(test)]
+    pub(crate) fn asks_rescan(&self) -> bool {
+        matches!(&self.source, Source::Events(s) if s.asks_rescan())
+    }
+
     /// Whether the tick that planned last should look at `layout.json`.
     pub fn look_at_layout(&self) -> bool {
         self.layout
