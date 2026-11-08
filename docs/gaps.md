@@ -278,7 +278,7 @@ Each line is one small gap, without a number.
 ### Export
 
 - **An export whose sound had NaN or infinite samples** silences them, and the app doesn't say so (`m2 render` warns).
-- **An export that stops at its 10 s tail limit stops mid-sound, with a click** (#36): a sound that never falls silent plays on to `TAIL_MAX` and is cut there. A short fade there would end it cleanly (`crates/editor/src/render.rs`).
+- **A stem, and `m2 bounce`, end 2 s past the last clip, as rendered** (#36): a tail still ringing there (a long reverb, a drone) is cut mid-sound, with a click, where the export goes on until it falls silent and fades out only at its 10 s limit ([RENDER-1](architecture.md#offline)). Stems as long as the export would keep their tails and still line up.
 
 ### Tracks, knobs and the Device view
 
