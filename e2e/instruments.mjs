@@ -224,7 +224,10 @@ for (let i = 0; i < 60 && !loud; i++) {
   const h = await said(ml);
   loud = !!h[1] && h[1].v > -48;
 }
-check(loud && (await reads(ml)) > reads0 + 5, `while the song plays, its last seconds move: what comes out, at ${(await said(ml))[1]?.v} dB`);
+// Read again and again: more than 5 reads since Play, waited for, since the first loud read may be
+// one of the first few (with the meters' tick late, 4 reads had come then).
+const moved = loud && (await until(async () => (await reads(ml)) > reads0 + 5));
+check(moved, `while the song plays, its last seconds move: what comes out, at ${(await said(ml))[1]?.v} dB, read ${(await reads(ml)) - reads0} times since Play`);
 await sleep(400);
 await shot(master, "master");
 await page.keyboard.press("Space");
