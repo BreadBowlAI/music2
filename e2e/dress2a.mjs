@@ -6,10 +6,13 @@
 // time, Pump's playhead), and the meters the gate, the de-esser and the multiband send (track
 // meters2, CARD-126): the gate's strip lights on the hits and goes dark between them, and its and
 // the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
-// side by side, low to high, and its low band's turns down. Mix A's hits stop for a quarter beat
-// between them, so its gate closes. Each draggable picture's dot is dragged: it writes its value,
-// one undo step, which ⌘Z takes back byte for byte. Each card is linted and shot, to compare with
-// the design's mockup (to $E2E_SHOTS when set, else the run's folder).
+// side by side, low to high, and its low band's turns down. A meter in dB or of a switch is drawn
+// from the most it said since the read before (CARD-73): over 3 s of the gate's `down`, every
+// closing is drawn as deep as the others, within 1 dB, and its strip lights once for each opening.
+// Mix A's hits stop for a quarter beat between them, so its gate closes. Each draggable picture's
+// dot is dragged: it writes its value, one undo step, which ⌘Z takes back byte for byte. Each card
+// is linted and shot, to compare with the design's mockup (to $E2E_SHOTS when set, else the run's
+// folder).
 //
 //   node e2e/dress2a.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -256,6 +259,34 @@ check(
 await shown(gateDown);
 const turned = (await reads(gateDown, 1, 40)).map((l) => l.v);
 check(turned.some((v) => v === 0) && turned.some((v) => v > 20), `its down says nothing turned down while it is open, and more once it closes: ${[...new Set(turned)].slice(0, 6)}`);
+// The gate's last 3 s, drawn: each closing as deep as the others (its meter in dB, drawn from the
+// most since the read before, never what it said at one moment of it), and the strip lit once for
+// each opening between them (one more or less at the window's edges, the two pictures' reads not
+// quite at one moment).
+const runs = (h, on) => {
+  const out = [];
+  h.forEach((v, j) => {
+    if (!on(v)) return;
+    const last = out.at(-1);
+    if (last && last[1] === j - 1) last[1] = j;
+    else out.push([j, j]);
+  });
+  return out;
+};
+const [downH, stripH] = await page.evaluate(
+  (a, b) => [a, b].map((sel, k) => JSON.parse(document.querySelector(`${sel} canvas[data-live]`)?.dataset.said ?? "[]")[k === 0 ? 0 : 3]?.h ?? []),
+  gateDown,
+  gatePic,
+);
+const closings = runs(downH, (v) => v > 1).filter(([a, b]) => a > 0 && b < downH.length - 1);
+const deepest = closings.map(([a, b]) => Math.max(...downH.slice(a, b + 1)));
+check(
+  downH.length === 90 && closings.length >= 6 && Math.max(...deepest) - Math.min(...deepest) <= 1,
+  `over the gate's last 3 s (${downH.length} reads), each closing is drawn as deep as the others, within 1 dB: ${deepest}`,
+);
+const openings = runs(downH, (v) => v < 0.5).length;
+const lighted = runs(stripH, (v) => v >= 0.5).length;
+check(stripH.length === 90 && lighted >= 6 && Math.abs(lighted - openings) <= 1, `its strip lights once for each opening: ${lighted} lit, ${openings} openings`);
 await shown(deDown);
 const deTurned = (await reads(deDown, 1, 40)).map((l) => l.v);
 check(deTurned.some((v) => v > 0) && deTurned.every((v) => v >= 0 && v <= 6), `the de-esser's down says how far it turns its band down, up to 6 dB: ${[...new Set(deTurned)].slice(0, 6)}`);

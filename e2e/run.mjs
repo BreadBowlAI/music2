@@ -202,7 +202,7 @@ export const SUITES = [
   ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
-  ["dress2a", "fix", { expect: 91, s: 20 }],
+  ["dress2a", "fix", { expect: 93, s: 20 }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, on the chain.
   ["instruments", "fix", { expect: 52, s: 12 }],
