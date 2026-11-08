@@ -148,6 +148,13 @@ pub(crate) fn one_cpu() -> io::Result<()> {
     Ok(())
 }
 
+/// A nice of 19, the lowest priority, for the calling thread (threads it starts after inherit it):
+/// raising nice needs no rights.
+pub(crate) fn lowest() -> io::Result<()> {
+    // SAFETY: a plain system call on the calling thread's own id.
+    unsafe { check(libc::setpriority(libc::PRIO_PROCESS, libc::gettid() as libc::id_t, 19)) }
+}
+
 /// A nice of 10 for the calling thread (on Linux nice is per thread), or the one it has when that
 /// is higher: raising nice is always allowed, lowering it needs rights.
 pub(crate) fn background() -> io::Result<()> {

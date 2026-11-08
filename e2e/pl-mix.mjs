@@ -187,6 +187,27 @@ const samples = async (loud) => {
   }
   return out;
 };
+/**
+ * How loud Hats was over `ms`, by the server's meters messages: each holds the most since the one
+ * before (TAP-15), so their loudest over a span with several hits is the hits' peak (dB). The
+ * meters on the page say a level at most 10 times a second, which lands anywhere in a 45 ms hit:
+ * their loudest of a few reads was a hit's tail as often as its peak.
+ */
+const said = [];
+const cdp = await page.createCDPSession();
+await cdp.send("Network.enable");
+cdp.on("Network.webSocketFrameReceived", ({ response }) => {
+  try {
+    const m = JSON.parse(response.payloadData);
+    if (m.t === "meters" && m.tracks && "hats" in m.tracks) said.push(m.tracks.hats);
+  } catch {}
+});
+const loudest = async (ms) => {
+  const from = said.length;
+  await sleep(ms);
+  const peaks = said.slice(from).map((v) => (Array.isArray(v) ? Math.max(...v.map(Math.abs)) : Math.abs(Number(v ?? 0))));
+  return { db: Math.round(20 * Math.log10(Math.max(...peaks, 1e-6))), n: peaks.length };
+};
 /** Reads for a check's words: how many, the first ten, and the loud ones. */
 const told = (reads, loud) => `${reads.length} reads: ${reads.slice(0, 10).map((s) => `${s.strip}/${s.head}`).join(" ")}; loud: ${reads.filter(loud).map((s) => `${s.strip}/${s.head}`).join(" ") || "none"}`;
 check(await playSong(), "first-song plays");
@@ -199,18 +220,25 @@ check(await until(async () => Number(await page.$eval(meterOf("master"), (e) => 
 const heard = (s) => s.strip > FLOOR;
 const before = await samples(heard);
 check(before.every((s) => Math.abs(s.strip - s.head) <= 1.5) && before.some(heard), `the Hats strip's meter reads as its header's, at every read (${told(before, heard)})`);
+const was = await loudest(2000);
+const unfaded = (await state()).view.revision;
 await page.click(`${strip("hats")} [data-testid=fader-level]`, { count: 2 });
 await page.waitForSelector(`${strip("hats")} [data-testid=knob-type-in]`);
 await page.keyboard.type("-30");
 await page.keyboard.press("Enter");
 check(await until(() => read("song.ts").includes("hats: { in: hats.out, db: db(-30), pan: 0.3 },")), "Hats' fader goes to −30 dB");
+// The song plays the new fader once its revision is accepted.
+await until(async () => (await state()).view.revision !== unfaded, 10000);
 await sleep(600);
 // TAP-5: both read after the fader now, so both fell by about the 24 dB it moved.
 const top = (reads) => Math.max(...reads.map((s) => s.strip));
 const after = await samples(heard);
+const now = await loudest(2000);
 check(
-  after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(heard) && top(after) <= top(before) - 18,
-  `and its strip meter still reads as the header's, after the fader: both fell (${told(after, heard)}; from ${top(before)} dB to ${top(after)})`,
+  // Messages came both times (none would read as −120 dB, a fall it never heard: review Y5), and
+  // the page fell too: every read after sits 18 dB under Hats' loudest before.
+  was.n > 0 && now.n > 0 && after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(heard) && now.db <= was.db - 18 && top(after) <= was.db - 18,
+  `and its strip meter still reads as the header's, after the fader: both fell (${told(after, heard)}; Hats' loudest over 2 s from ${was.db} dB to ${now.db}, ${was.n} and ${now.n} messages; the page's loudest after ${top(after)} dB)`,
 );
 await linted("[data-testid=mix]", "the Mix view playing");
 await page.screenshot({ path: `${ROOT}/pl-mix-playing.png` });

@@ -1,6 +1,6 @@
 [package]
 name = "@m2/wavetable"
-version = "1.2.0"
+version = "1.2.1"
 license = "MIT OR Apache-2.0"
 description = "music2's wavetable synth: two oscillators that slide through tables of waveforms, a filter, two envelopes, an LFO and unison"
 authors = ["music2"]

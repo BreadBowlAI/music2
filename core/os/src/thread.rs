@@ -31,6 +31,15 @@ pub fn one_cpu() -> io::Result<()> {
     os::one_cpu()
 }
 
+/// Gives the calling thread, and every thread it starts after, the lowest priority a thread may
+/// take without rights (Linux: a nice of 19), so a busy thread of normal priority on its CPU leaves
+/// it about 1.5% of it: for tests that make a thread wait for a CPU on purpose, with `one_cpu` (a
+/// picture's draw is limited by its own CPU time, not by its wait, CARD-64). macOS has no such
+/// priority, and says so (`Unsupported`).
+pub fn lowest() -> io::Result<()> {
+    os::lowest()
+}
+
 /// Marks the calling thread latency-sensitive, as an audio thread is: on macOS the user-interactive
 /// QoS class, which also keeps it on a performance core. Linux has no such class and changes
 /// nothing: it says so (`Unsupported`). Never fatal: the caller reports what it got (step 7's G7f

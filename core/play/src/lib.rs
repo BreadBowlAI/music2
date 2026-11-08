@@ -54,6 +54,10 @@ use crate::cells::{CELL_SEQ, Writer};
 const STALL: Duration = Duration::from_millis(500);
 /// A device that hasn't called back for this long has stopped.
 const SILENT_DEVICE: Duration = Duration::from_secs(1);
+/// The most sound the silent player renders at once after a late wake (RENDER-28a): what a sleep
+/// that overslept owes it, up to this; past it, the rest is dropped, as a device drops what it
+/// couldn't play.
+const CATCH_UP: Duration = Duration::from_millis(100);
 /// Messages the queue holds, and retired objects.
 const QUEUE: usize = 1024;
 const RETIRED: usize = 64;
@@ -1098,6 +1102,12 @@ impl Player {
     /// [`Player::silent`], named `name`, its buffers `frames` frames when given, rendering on the
     /// engine threads `live` asks for: plain threads, one unless it says more.
     fn silent_as(name: &str, frames: Option<u32>, live: LiveThreads) -> Result<Player> {
+        Player::silent_clocked(name, frames, live, Box::new(std::thread::sleep))
+    }
+
+    /// [`Player::silent_as`], its clock sleeping with `sleep` (a test's oversleeps): a buffer each
+    /// period by the wall clock, at most [`CATCH_UP`] of sound at once after a late wake.
+    fn silent_clocked(name: &str, frames: Option<u32>, live: LiveThreads, sleep: Box<dyn Fn(Duration) + Send>) -> Result<Player> {
         const SR: u32 = outputs::SILENT_RATE;
         let frames: usize = match frames {
             Some(n) => n as usize,
@@ -1119,9 +1129,15 @@ impl Player {
             while alive.strong_count() > 0 {
                 cb.fill(&mut buf, 2);
                 next += period;
-                // A callback that ran late doesn't make the next ones early.
-                next = next.max(Instant::now().checked_sub(period).unwrap_or(next));
-                std::thread::sleep(next.saturating_duration_since(Instant::now()));
+                // It keeps the wall clock's pace, as a device's clock does (RENDER-28a): after a
+                // late wake (a sleep that overslept, a fill that ran long) the buffers due are
+                // rendered at once, with no sleep between, up to CATCH_UP of them; what is due past
+                // that is dropped.
+                let now = Instant::now();
+                next = next.max(now.checked_sub(CATCH_UP).unwrap_or(next));
+                if next > now {
+                    sleep(next - now);
+                }
             }
             // The callback first, then its engine threads, each worker leaving as it ends.
             drop(cb);

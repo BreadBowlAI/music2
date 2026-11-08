@@ -163,6 +163,11 @@ pub(crate) fn one_cpu() -> io::Result<()> {
     Err(crate::unsupported("macOS keeps no thread on one CPU"))
 }
 
+/// macOS has no priority that keeps a thread waiting while a busy one wants its CPU.
+pub(crate) fn lowest() -> io::Result<()> {
+    Err(crate::unsupported("macOS has no priority that keeps a thread waiting for a CPU"))
+}
+
 /// The background QoS class: the thread runs on the efficiency cores, beside playback.
 pub(crate) fn background() -> io::Result<()> {
     // SAFETY: sets the calling thread's own QoS class.

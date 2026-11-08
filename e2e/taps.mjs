@@ -94,7 +94,8 @@ check(title === "Keys's level, after its fader.", `its tooltip says where it rea
 
 // ---------------------------------------------------------------- the master's loudness (TAP-6)
 
-const last = heard.at(-1)?.m;
+// The last with levels: a read that heard no whole block says only its load.
+const last = heard.filter((h) => h.m.tracks).at(-1)?.m;
 const lufs = await page.$eval("[data-testid=master-lufs]", (e) => e.textContent).catch(() => "");
 const peak = await page.$eval("[data-testid=master-peak]", (e) => e.textContent).catch(() => "");
 check(typeof last?.loudness?.short === "number" && typeof last?.loudness?.true_peak === "number", `the meters carry the song's loudness (${JSON.stringify(last?.loudness)})`);

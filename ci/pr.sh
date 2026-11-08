@@ -56,6 +56,9 @@
 #   With M2_LATE_SLEEPS=1 (the Mac's nightly job: GitHub's Mac's sleeps run long), rust and suites
 #   leave out the tests that need a sleep to last what it asks (ci/sleeps-tests.txt, and the runs
 #   e2e/run.mjs tags `sleeps`), and a "late sleeps" row names them. Nowhere else is it set.
+#   With M2_SHARED_CPU=1 (the Mac's nightly job too: a shared virtual machine), rust leaves out the
+#   speed tests whose CPU time it misjudges (ci/shared-cpu-tests.txt), and a "shared cpu" row names
+#   them. Nowhere else is it set.
 #
 # Each step prints a line per check, "PASS", "FAIL" or "SKIP" and why, then
 # "ci/pr.sh <step>: PASS|FAIL in <time>", and exits 0 only when every check passed. A failed
@@ -109,6 +112,9 @@ esac
 if [ -f "$HOME/.cargo/env" ]; then . "$HOME/.cargo/env"; fi
 export CARGO_HOME=${CARGO_HOME:-$HOME/.cargo} RUSTUP_HOME=${RUSTUP_HOME:-$HOME/.rustup}
 export M2_AUDIO=none M2_MIDI=none CARGO_TERM_COLOR=never CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0
+# glibc says why it aborts a process ("free(): invalid pointer") on the terminal, which a CI run
+# hasn't got; on stderr, the test's log has it (a SIGABRT in ci/check.sh --pr on 11-08 said nothing).
+export LIBC_FATAL_STDERR_=1
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}/pr
 case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
 TARGET=$CARGO_TARGET_DIR
@@ -307,6 +313,10 @@ case $STEP in
       filter="$filter and not ($(sleeps_filter))"
       late_sleeps "$(sleeps_names) (ci/sleeps-tests.txt)"
     fi
+    if [ -n "${M2_SHARED_CPU:-}" ]; then
+      filter="$filter and not ($(shared_filter))"
+      row "shared cpu" SKIP "M2_SHARED_CPU is set: this machine's CPU time misjudges these speed tests, so they are left out: $(shared_names) (ci/shared-cpu-tests.txt)"
+    fi
     if tools nextest && plugins && check "web build" web.log web &&
        check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
       ci/cache-left.sh --clear "$OUT/home"
@@ -330,6 +340,7 @@ case $STEP in
         if [ $OS = linux ]; then
           check "nightly list" nightly-list.log nightly_list "$OUT"
           check "sleeps list" sleeps-list.log sleeps_list "$OUT"
+          check "shared cpu list" shared-list.log shared_list "$OUT"
         fi
       fi
       # PLAT-7, PACK-16: no test wrote in the cache folder or the Music folder of the HOME it ran with.

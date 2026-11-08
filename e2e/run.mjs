@@ -109,7 +109,9 @@ export const SUITES = [
   ["ag-focus", "export", { expect: 91, s: 8 }],
   ["effects", "proj", { expect: 12, s: 7 }],
   ["nx-effects", "fix", { expect: 47, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
-  ["sidechain", "fix", { expect: 17, s: 20 }],
+  ["sidechain", "fix", { expect: 15, s: 13 }],
+  // sidechain's dip, apart: it needs the meters read every 33 ms.
+  ["sidechain-dip", "fix", { expect: 6, s: 18, sleeps: "the bass's meter dips while the kick's is up, message by message: the meters' 33 ms tick is a sleep, and read every 120 ms a message holds a kick and the gap after it, and reads the bass's loudest; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
   ["layout", "proj", { expect: 39, s: 8 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
@@ -195,7 +197,9 @@ export const SUITES = [
   ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 22, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
-  ["dress2a", "fix", { expect: 95, s: 20 }],
+  ["dress2a", "fix", { expect: 94, s: 20 }],
+  // dress2a's gate strip, apart: it needs the meters read every 33 ms.
+  ["dress2a-strip", "fix", { expect: 5, s: 6, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
   ["dressed", "fix", { expect: 41, s: 10 }],
   // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, in the graph.
   ["instruments", "fix", { expect: 58, s: 12 }],

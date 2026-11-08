@@ -21,12 +21,12 @@ fn packages() -> Vec<(String, PathBuf)> {
     p
 }
 
-/// Picture `view` of the component `cid`, drawn at `values` (what plays, by name, CARD-63).
-fn draw(runner: &Runner, cid: &str, view: &str, values: Value) -> Result<Value, String> {
+/// The ask for picture `view` of the component `cid` at `values` (what plays, by name, CARD-63).
+fn ask(cid: &str, view: &str, values: Value) -> Ask {
     let packages = packages();
     let catalog = m2_script::describe(&packages);
     let descriptor = catalog.components.get(cid).cloned().unwrap_or_else(|| panic!("no {cid}: {:?}", catalog.problems));
-    let ask = Ask {
+    Ask {
         key: cid.split(':').next().unwrap().into(),
         packages,
         song: None,
@@ -36,8 +36,16 @@ fn draw(runner: &Runner, cid: &str, view: &str, values: Value) -> Result<Value, 
         values: values.to_string(),
         memo: format!("{cid}\u{0}{view}"),
         rate: 48_000,
-    };
-    match runner.draw(ask) {
+    }
+}
+
+/// Picture `view` of the component `cid`, drawn at `values`.
+fn draw(runner: &Runner, cid: &str, view: &str, values: Value) -> Result<Value, String> {
+    shapes(runner.draw(ask(cid, view, values)), cid, view)
+}
+
+fn shapes(drawn: Drawn, cid: &str, view: &str) -> Result<Value, String> {
+    match drawn {
         Drawn::Shapes(json) => Ok(serde_json::from_str(&json).unwrap()),
         Drawn::Cant(why) => Err(why),
         other => panic!("{cid}'s {view}: {other:?}"),
@@ -324,16 +332,18 @@ fn each_face_is_the_one_its_rule_lists() {
 
 /// The time a picture's draw takes, its first in a fresh runtime (`warm`, a cheap picture of the same
 /// package, loads the package's code first, which has its own limit): the median of five fresh
-/// runners, each timed by the wall clock around `Runner::draw`, which also counts the trip to the
-/// runner's thread and Rust's checks (about 1.5 ms here), so it is more than the draw's own time.
+/// runners, each the CPU time of the runtime's thread for the draw and Rust's checks of its shapes
+/// (`Runner::draw_timed`, CARD-75). Not the test's own setup: the ask is made first, reading every
+/// pack's manifest (about 1.5 ms here, which the wall clock counted before), nor the wait for a CPU.
 fn first_draw(warm: (&str, &str, Value), cid: &str, view: &str, values: &Value) -> std::time::Duration {
     let mut times: Vec<std::time::Duration> = (0..5)
         .map(|_| {
             let runner = Runner::new();
             draw(&runner, warm.0, warm.1, warm.2.clone()).unwrap_or_else(|why| panic!("{}'s {}: {why}", warm.0, warm.1));
-            let t = std::time::Instant::now();
-            draw(&runner, cid, view, values.clone()).unwrap_or_else(|why| panic!("{cid}'s {view}: {why}"));
-            t.elapsed()
+            let asked = ask(cid, view, values.clone());
+            let (drawn, took) = runner.draw_timed(asked);
+            shapes(drawn, cid, view).unwrap_or_else(|why| panic!("{cid}'s {view}: {why}"));
+            took
         })
         .collect();
     times.sort();
@@ -346,7 +356,8 @@ fn first_draw(warm: (&str, &str, Value), cid: &str, view: &str, values: &Value) 
 // the nightly tier (ci/nightly-tests.txt).
 #[test]
 fn every_instrument_picture_draws_in_a_fifth_of_its_limit() {
-    let budget = std::time::Duration::from_millis(4);
+    // 4 ms on the Linux server, scaled by this machine's speed (CARD-75).
+    let budget = m2_script::speed::scaled(std::time::Duration::from_millis(4));
     let mut said = vec![];
     let mut slow = vec![];
     let envelope = json!({"attack": 0.01, "decay": 0.3, "sustain": 0.5, "release": 0.3});
@@ -388,5 +399,10 @@ fn every_instrument_picture_draws_in_a_fifth_of_its_limit() {
     time("std:limit", ("std:compress", "history", json!({})), "level", json!({"ceiling": -1}));
     time("std:master", ("std:master", "level", json!({"ceiling": -3, "db": 0})), "level", json!({"ceiling": -1, "db": 0}));
     eprintln!("{}", said.join("\n"));
-    assert!(slow.is_empty(), "past {budget:?}:\n{}", slow.join("\n"));
+    assert!(
+        slow.is_empty(),
+        "past {budget:?}, the Linux server's 4 ms × {:.2} for this machine:\n{}",
+        m2_script::speed::ratio(),
+        slow.join("\n")
+    );
 }
