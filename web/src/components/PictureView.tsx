@@ -596,6 +596,11 @@ function lookOf(l: LiveLayer): { kind: LookKind; at: string } | null {
 
 /** How many reads a history keeps: about 3 s at 30 a second. */
 const HISTORY = 90;
+/** A meter's bar's width, and the step from one bar to the next, at the canvas's twice-the-pixels scale (CARD-73). */
+const BAR = 8;
+const BAR_STEP = 12;
+/** How tall a switch's strip is along the foot, at that scale. */
+const STRIP = 6;
 /** A spectrum's and a level's dB, from the foot of the picture to its top. */
 const DB_FOOT = -90;
 
@@ -667,6 +672,10 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
     const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : ownY(db));
     /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1. */
     const said: ({ v: number; x?: number; y: number } | null)[] = layers.map(() => null);
+    // Several meters' bars stand side by side, in the order the picture lists them, the last at the
+    // right edge, so none hides another (CARD-73): where each one's bar starts.
+    const meters = layers.filter((l) => l.kind === "meter").length;
+    const meterX = (i: number) => c.width - 2 - BAR - BAR_STEP * (meters - 1 - layers.slice(0, i).filter((l) => l.kind === "meter").length);
     g.clearRect(0, 0, c.width, c.height);
     layers.forEach((l, i) => {
       const all = seen.current.get(i) ?? [];
@@ -707,11 +716,27 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
           g.fillRect(across(0), plot - 4, across((db - DB_FOOT) / -DB_FOOT) - across(0), 4);
           said[i] = { v: db, y: 1 };
         }
+      } else if (l.kind === "meter" && last?.now !== undefined && last.unit === "switch") {
+        // A switch is on or off, never a number on the axis (CARD-73): a light at the plot's top, lit while on.
+        const x = meterX(i) + BAR / 2;
+        g.beginPath();
+        g.arc(x, BAR, BAR / 2, 0, 2 * Math.PI);
+        if (last.now >= 0.5) g.fill();
+        else g.stroke();
+        said[i] = { v: last.now, x: x / c.width, y: BAR / plot };
       } else if (l.kind === "meter" && last?.now !== undefined) {
         // A bar at the right edge, from the axis's 0 to the meter's number, in the y axis's unit.
         const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(last.now, view.y)) * plot;
-        g.fillRect(c.width - 10, Math.min(y0, y1), 8, Math.abs(y1 - y0));
-        said[i] = { v: last.now, y: y1 / plot };
+        const x = meterX(i);
+        g.fillRect(x, Math.min(y0, y1), BAR, Math.abs(y1 - y0));
+        said[i] = { v: last.now, x: (x + BAR / 2) / c.width, y: y1 / plot };
+      } else if (l.kind === "history" && all.length > 1 && last?.unit === "switch") {
+        // A switch over time (CARD-73): a strip along the plot's foot, lit where it was on.
+        const at = (j: number) => across(Math.max(0, (j + HISTORY - all.length) / (HISTORY - 1)));
+        all.forEach((s, j) => {
+          if ((s.now ?? 0) >= 0.5) g.fillRect(at(j - 1), plot - STRIP, Math.max(1, at(j) - at(j - 1)), STRIP);
+        });
+        said[i] = { v: last.now ?? 0, y: (plot - STRIP / 2) / plot };
       } else if (l.kind === "history" && all.length > 1) {
         g.beginPath();
         all.forEach((s, j) => {
