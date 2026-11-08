@@ -90,7 +90,9 @@ const HOLDS: [(f32, f64); 5] = [(1.0, 0.25), (0.7, 0.5), (0.35, 0.5), (1.0, 0.5)
 // 10 ms late; at 0.1 ms, the first notch within 0.3% of 5 kHz.
 #[test]
 fn its_notches_and_peaks_lie_where_the_delay_puts_them() {
+    // The furthest any level came from its sum, in dB, and any notch's depth, at each rate.
     for sr in RATES {
+        let (mut worst, mut shallowest) = (0.0f64, f64::MIN);
         for (depth, cycles) in HOLDS {
             for feedback in [0.0f32, 0.5, -0.5, 0.9, -0.9] {
                 let (phase, h) = held(sr, 1.0, (cycles * sr as f64) as usize, depth, feedback, 0.5);
@@ -128,8 +130,10 @@ fn its_notches_and_peaks_lie_where_the_delay_puts_them() {
                     let (g, lo, hi) = (gain(hz), gain(hz * 0.999), gain(hz * 1.001));
                     assert!(g < lo && g < hi, "{what}: no notch at {hz:.1} Hz ({:.2}, {:.2}, {:.2} dB)", db(lo), db(g), db(hi));
                     if f == 0.0 {
+                        shallowest = shallowest.max(db(g));
                         assert!(db(g) < -40.0, "{what}: the notch at {hz:.1} Hz is only {:.1} dB deep", db(g));
                     } else {
+                        worst = worst.max((db(g) - db(notch)).abs());
                         assert!(
                             (db(g) - db(notch)).abs() < 0.5,
                             "{what}: the notch at {hz:.1} Hz is {:.2} dB, not {:.2}",
@@ -143,10 +147,12 @@ fn its_notches_and_peaks_lie_where_the_delay_puts_them() {
                     if f > 0.0 {
                         assert!(g > lo && g > hi, "{what}: no peak at {hz:.1} Hz ({:.2}, {:.2}, {:.2} dB)", db(lo), db(g), db(hi));
                     }
+                    worst = worst.max((db(g) - db(peak)).abs());
                     assert!((db(g) - db(peak)).abs() < 0.5, "{what}: the peak at {hz:.1} Hz is {:.2} dB, not {:.2}", db(g), db(peak));
                 }
             }
         }
+        println!("{sr} Hz: levels within {worst:.3} dB of their sums; notches at Feedback 0 at most {shallowest:.1} dB");
     }
 }
 
