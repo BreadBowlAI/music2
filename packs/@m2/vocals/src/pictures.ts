@@ -59,7 +59,8 @@ export function pitchWords(v: Values, names: { glide: string; amount: string }):
 /**
  * The Voice changer's spectrum (VOX-28): live, as the voice comes in (faint) and goes out, across 20
  * Hz to 20 kHz on a log scale, up −90 to 0 dB, the spectrum's own scale (CARD-103): its notes'
- * harmonics are the spikes that Pitch moves, its vowel's hills the colour that Formant moves.
+ * harmonics are the spikes that Pitch moves, its vowel's hills the colour that Formant moves. It
+ * draws no shapes, nothing worked out from sums: at silence it is still (CARD-73).
  */
 export function voicePicture(): PictureDecl<"hz", "db"> {
   return view.picture({
@@ -67,14 +68,6 @@ export function voicePicture(): PictureDecl<"hz", "db"> {
     y: axis.lin("db", -90, 0),
     live: [live.spectrum("in", { tone: "faint" }), live.spectrum("out")],
   });
-}
-
-/**
- * Its shapes: two names, where a voice's notes and its vowel's hills are, still at silence (CARD-73).
- * Nothing on it is worked out from sums: what moves is the sound itself.
- */
-export function voiceNames<D>(p: Painter<D, "hz", "db">): Shape[] {
-  return [p.label(110, -8, "Notes"), p.label(1400, -8, "Colour")];
 }
 
 /** A number of semitones in words: "1 semitone", "2.5 semitones". */

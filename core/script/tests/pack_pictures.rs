@@ -723,8 +723,9 @@ fn tune_draws_its_pitch_line() {
 
 // VOX-28: the Voice changer draws its live spectrum as the voice comes in (faint) and goes out,
 // across 20 Hz to 20 kHz on a log scale, up −90 to 0 dB (the spectrum's own scale), with nothing
-// worked out from sums: two names, Notes low and Colour in the middle, still at silence. Its words
-// say what Pitch and Formant did, then what the layers are.
+// worked out from sums, and no shapes at all (review V8: two names crowded the patch's picture): what
+// moves is the sound itself, and at silence the picture is still. Its words say what Pitch and
+// Formant did, then what the layers are.
 #[test]
 fn the_voice_changer_draws_its_spectrum() {
     let voice = declared("vocals", "voice-changer", "voice");
@@ -747,11 +748,7 @@ fn the_voice_changer_draws_its_spectrum() {
         draw(&runner, "vocals", "voice-changer", "voice", json!({"pitch": pitch, "formant": formant})).unwrap()
     };
     let d = said(json!(5), json!(3));
-    assert_eq!(kinds(&d), ["label", "label"], "names, and nothing worked out from sums");
-    let names: Vec<&str> = d["shapes"].as_array().unwrap().iter().map(|s| s["words"].as_str().unwrap()).collect();
-    assert_eq!(names, ["Notes", "Colour"]);
-    let x: Vec<f64> = d["shapes"].as_array().unwrap().iter().map(|s| s["x"].as_f64().unwrap()).collect();
-    assert!(x[0] < 300.0 && (700.0..3000.0).contains(&x[1]), "Notes low, Colour in the middle: {x:?}");
+    assert_eq!(kinds(&d), Vec::<&str>::new(), "no shapes: nothing worked out from sums, and no names");
     assert_eq!(d["words"], format!("Up 5 semitones, colour 3 semitones brighter. {layers}"));
     for (pitch, formant) in [(-5, -4), (0, 0), (12, 12)] {
         assert_eq!(

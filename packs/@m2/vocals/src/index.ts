@@ -18,7 +18,7 @@
 // as the voice comes in and goes out, live. Its presets are Deep and Chipmunk.
 
 import { component, control, kernel, port, signature, time, type Audio, type Params } from "@m2/core";
-import { pitchLine, pitchPicture, pitchWords, voiceNames, voicePicture, voiceWords } from "./pictures";
+import { pitchLine, pitchPicture, pitchWords, voicePicture, voiceWords } from "./pictures";
 
 /** Tune: each sung note of `x` moved onto the nearest note of the song's key; `formant` (semitones) moves its colour on its own. */
 export const tune = component(
@@ -83,5 +83,6 @@ export const voiceChanger = component(
     const sung = kernel("@m2/vocals:pitch", { in: x });
     return kernel("@m2/vocals:shift", { in: x, semitones: pitch, hz: sung.port("hz"), clarity: sung.port("clarity"), formant });
   },
-  { voice: { draw: (_v, p) => voiceNames(p), words: (v) => voiceWords(v, { pitch: "pitch", formant: "formant" }) } },
+  // It draws no shapes: what moves is the sound itself, its layers.
+  { voice: { draw: () => [], words: (v) => voiceWords(v, { pitch: "pitch", formant: "formant" }) } },
 );
