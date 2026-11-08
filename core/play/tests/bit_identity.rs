@@ -21,7 +21,7 @@ use m2_song::{DataSet, Project};
 use serde_json::{Value, json};
 
 /// The fixtures made only of kernels, which render the same bits every time (RENDER-2).
-const PURE: [&str; 8] = [
+const PURE: [&str; 9] = [
     "examples/arp",
     "examples/first-song",
     "examples/resample",
@@ -30,6 +30,7 @@ const PURE: [&str; 8] = [
     "templates/starter",
     "templates/empty",
     "core/session/tests/fixtures/sampler-regions",
+    "core/session/tests/fixtures/meters",
 ];
 
 /// `song` live through the player, from 0 for `frames`, with a no-op swap of every lane at

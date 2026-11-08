@@ -1,6 +1,6 @@
-//! VOX-20, VOX-24, RENDER-2, RENDER-18, RENDER-33: songs that play `@m2/vocals`' Tune. One with two
-//! voices tuned to its key, Robot and Natural, renders the same bits on 2, 3, 4 and 7 threads as on
-//! one, and plays live the bits it exports. Tune is 15 ms late, and the rest of the song is late with
+//! VOX-20, VOX-22, VOX-24, RENDER-2, RENDER-18, RENDER-33: songs that play `@m2/vocals`' Tune. One
+//! with two voices tuned to its key, Robot and Natural, renders the bits `@m2/vocals` 1.1.0 rendered,
+//! the same on 2, 3, 4 and 7 threads as on one, and plays live the bits it exports. Tune is 15 ms late, and the rest of the song is late with
 //! it: a voice through Tune at Amount 0 against the same voice dry, upside down, is silence.
 
 mod common;
@@ -47,6 +47,18 @@ fn vocal_song(what: &str, tracks: &[(&str, &str)]) -> Song {
     compile(dir)
 }
 
+/// The SHA-256 of a render's samples, as little-endian `f32` bits.
+fn bits(frames: &[[f32; 2]]) -> String {
+    let bytes: Vec<u8> = frames.iter().flatten().flat_map(|x| x.to_le_bytes()).collect();
+    m2_song::Sha::of(&bytes).hex()
+}
+
+/// What the tuned song below renders, its first 3 s on one thread, as `@m2/vocals` 1.1.0's module
+/// played it (main at 6658f1da, before snap gave its meters): Tune's sound, pinned (VOX-22, track
+/// meters2's review T4). A song with Tune can't be a pure fixture of `renders.json`: after the
+/// engine sat stopped it reads at other moments of the song (RENDER-33).
+const TUNED: &str = "eede586e411217d9195c1a6b2c2ad59d673279eec610bcf3946cc6ac7c0d9b21";
+
 fn offline_on(song: &Song, frames: usize, runner: Option<&mut Runner>) -> Vec<[f32; 2]> {
     let mut out = vec![[0.0; 2]; frames];
     match runner {
@@ -70,6 +82,9 @@ fn a_tuned_song_gives_the_same_bits_on_1_to_7_threads() {
     let frames = 3 * song.rate as usize;
     let one = offline_on(&song, frames, None);
     assert!(peak(&one) > 0.05, "the song sounds: {}", peak(&one));
+    // VOX-22: its sound is what it was before snap gave its meters. A change to Tune's kernels that
+    // changes it moves @m2/vocals' version (PACK-17) and this hash with it.
+    assert_eq!(bits(&one), TUNED, "Tune renders other bits than @m2/vocals 1.1.0 did");
     for n in [2, 3, 4, 7] {
         let (_pool, mut runner) = Pool::new(n, m2_runtime::threads::setup(false)).unwrap();
         runner.spread(true);
