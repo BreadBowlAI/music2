@@ -215,7 +215,7 @@ export const SUITES = [
   ["voice", "fix", { expect: 40, s: 30 }],
   // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
   ["vocoder", "fix", { expect: 28, s: 20 }],
-  ["flanger-grains", "fix", { expect: 42, s: 40 }],
+  ["flanger-grains", "fix", { expect: 43, s: 40 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],

@@ -678,8 +678,8 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
     // and for a spectrum always, from −90 dB at the foot to 0 dB at the top.
     const ownY = (db: number) => plot * (1 - Math.min(1, Math.max(0, (db - DB_FOOT) / -DB_FOOT)));
     const dbY = (db: number) => (view.y.unit === "db" ? (1 - px(db, view.y)) * plot : ownY(db));
-    /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1; a history's values too, oldest first. */
-    const said: ({ v: number; x?: number; y: number; h?: number[] } | null)[] = layers.map(() => null);
+    /** What each layer drew last, for an agent's eye and the suites: its value, and its place across and down, from 0 to 1; a history's values too, oldest first; a playhead's line what it follows (CARD-103). */
+    const said: ({ v: number; x?: number; y: number; h?: number[]; from?: string } | null)[] = layers.map(() => null);
     // Several meters' bars stand side by side, in the order the picture lists them, the last at the
     // right edge, so none hides another (CARD-73): where each one's bar starts.
     const meters = layers.filter((l) => l.kind === "meter").length;
@@ -753,8 +753,9 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
         g.stroke();
       } else if (l.kind === "playhead") {
         const graph = useStore.getState().graph;
+        const from = l.from ?? "beat";
         let t: number | null = null;
-        if ((l.from ?? "beat") === "beat" && graph) {
+        if (from === "beat" && graph) {
           const beat = Math.max(0, beatNow());
           if (view.x.unit === "beats") {
             // On an axis of beats: the song's beat, from the axis's start, round again each time it
@@ -765,8 +766,12 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
             const bar = barAt(graph.timeline.meter, beat);
             t = (beat - bar.start) / bar.length;
           }
-          if (t !== null) said[i] = { v: beat, x: t, y: 0 };
-        } else if (last?.now !== undefined) t = px(last.now, view.x); // a place: where it is now, never its most
+          if (t !== null) said[i] = { v: beat, x: t, y: 0, from };
+        } else if (last?.now !== undefined) {
+          // A meter's place: where it is now, never its most.
+          t = px(last.now, view.x);
+          said[i] = { v: last.now, x: t, y: 0, from };
+        }
         if (t !== null) g.fillRect(across(t) - 1, 0, 2, plot);
       } else if (l.kind === "scope" && last?.frames?.length) {
         const f = last.frames;
@@ -784,7 +789,7 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
     c.dataset.reads = String(reads.current);
     // Where it laid the plot out, in pixels, for the suites to hold against the shapes' (taste.md DV-17).
     c.dataset.plot = `${lay.left},${lay.span},${lay.plot}`;
-    c.dataset.said = JSON.stringify(said.map((x) => x && { v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4), ...(x.h ? { h: x.h.map((v) => +v.toFixed(2)) } : {}) }));
+    c.dataset.said = JSON.stringify(said.map((x) => x && { ...(x.from ? { from: x.from } : {}), v: +x.v.toFixed(3), ...(x.x !== undefined ? { x: +x.x.toFixed(4) } : {}), y: +x.y.toFixed(4), ...(x.h ? { h: x.h.map((v) => +v.toFixed(2)) } : {}) }));
     c.dataset.span = `${view.x.lo},${view.x.hi}`;
   };
   latest.current = draw;
