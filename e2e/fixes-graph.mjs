@@ -48,20 +48,22 @@ await page.click('[data-effect-browser] [data-effect="lowpass"]');
 check(await until(() => /lowpass\(reverb\(.*\), 1000\)/.test(read("tracks/keys.ts"))), "lowpass goes after the reverb at 1000 Hz");
 const cutoff = '[data-module="keys"] [data-node="lowpass"] [data-knob="cutoff"]';
 await page.waitForSelector(cutoff);
+// Its bar (taste.md DV-14): dragged up and down from its middle, as a knob was.
 const knob = async () => {
-  await page.$eval(`${cutoff} svg`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
-  return page.$(`${cutoff} svg`).then((e) => e.boundingBox());
+  await page.$eval(`${cutoff} [role=slider]`, (e) => e.scrollIntoView({ block: "center", inline: "center" }));
+  const b = await page.$(`${cutoff} [role=slider]`).then((e) => e.boundingBox());
+  return { x: b.x + b.width / 2, y: b.y + b.height / 2 };
 };
 let k = await knob();
-await drag({ x: k.x + 15, y: k.y + 15 }, { x: k.x + 15, y: k.y + 400 }, 20);
+await drag({ x: k.x, y: k.y }, { x: k.x, y: k.y + 400 }, 20);
 check(await until(() => /lowpass\(reverb\(.*\), 20\)/.test(read("tracks/keys.ts"))), "dragging the cutoff all the way down writes 20 Hz");
 check(
-  await until(async () => (await page.$eval(`${cutoff} svg`, (e) => Number(e.getAttribute("aria-valuenow")))) === 0),
-  "and the knob sits at the bottom of its range, not the top",
+  await until(async () => (await page.$eval(`${cutoff} [role=slider]`, (e) => Number(e.getAttribute("aria-valuenow")))) === 0),
+  "and the bar sits at the bottom of its range, not the top",
 );
 k = await knob();
 // Half its 300px throw (taste.md KN-1): half way up its log range, about 630 Hz.
-await drag({ x: k.x + 15, y: k.y + 15 }, { x: k.x + 15, y: k.y + 15 - 150 }, 12);
+await drag({ x: k.x, y: k.y }, { x: k.x, y: k.y - 150 }, 12);
 const up = () => Number(/lowpass\(reverb\(.*\), ([\d.]+)\)/.exec(read("tracks/keys.ts"))?.[1]);
 check(await until(() => up() > 200), `dragging it up turns it back up: ${up()} Hz`);
 

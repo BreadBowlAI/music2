@@ -23,9 +23,15 @@ check(await until(async () => JSON.stringify((await state()).drum_machines) === 
 
 await page.click('[data-module-tab="hats"]');
 await view("graph");
-const card = '[data-module="hats"] [data-make-kit="hats"]';
-check(await until(() => has(card), 15000), "the drum machine's card has Make it a kit");
-check((await page.$eval(card, (e) => e.title)).includes(KEEPS), "its tooltip says what it keeps");
+// On the drum machine's node it is in its ⋯ menu (the graph note §3).
+const drumKit = async () => (await state()).view.modules.find((m) => m.key === "hats")?.nodes.find((n) => n.component === "@m2/drums:drum-kit")?.id;
+await until(async () => !!(await drumKit()) && has(`[data-module="hats"] [data-node-id="${await drumKit()}"] [data-node-menu]`), 15000);
+await page.click(`[data-module="hats"] [data-node-id="${await drumKit()}"] [data-node-menu]`).catch(() => {});
+const card = '[data-testid=effect-menu] [data-make-kit="hats"]';
+check(await until(() => has(card), 15000), "the drum machine's node has Make it a kit, in its ⋯ menu");
+check((await page.$eval(card, (e) => e.title).catch(() => "")).includes(KEEPS), "its tooltip says what it keeps");
+await key("Escape");
+await until(async () => !(await has("[data-testid=effect-menu]")));
 await page.click('[data-track-menu="hats"]');
 await page.waitForSelector("[data-testid=track-menu]");
 const row = "[data-testid=track-menu] [data-testid=make-kit]";

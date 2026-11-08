@@ -54,23 +54,32 @@ const keysOriginal = read("tracks/keys.ts"), bassOriginal = read("tracks/bass.ts
 await show("bass");
 const view = (await api("graph")).view;
 const bass = view.modules.find((m) => m.key === "bass");
+// A node draws a shape for each connection, not for each input: a sound or notes coming in (filled
+// when wired, hollow when not) and each value a wire drives. A value it can set is a bar, with no
+// shape (taste.md DV-14, the graph note §4).
 const counts = [];
 let countsMatch = true;
 for (const n of bass.nodes) {
+  const wiredIn = new Set(bass.port_edges.filter((e) => e.to === n.id).map((e) => e.to_port));
+  const conns = n.inputs.filter((p) => wiredIn.has(p.id) || p.kind !== "control").length;
   const [ins, outs] = await page.$eval(`[data-node-id="${n.id}"]`, (e) => [e.querySelectorAll('[data-port="in"]').length, e.querySelectorAll('[data-port="out"]').length]);
-  counts.push(`${n.label} ${ins}/${outs}`);
-  countsMatch &&= ins === n.inputs.length && outs === n.outputs.length;
+  counts.push(`${n.label} ${ins}/${outs} of ${n.inputs.length} inputs`);
+  countsMatch &&= ins === conns && outs === n.outputs.length;
 }
-check(countsMatch, `each Bass node draws one circle per input and output (${counts.join(", ")})`);
+const onValues = await page.$$eval('[data-module="bass"] [data-knob] [data-port-dot]', (els) => els.length);
+check(countsMatch && onValues === 0, `each Bass node draws one shape per connection and output, none on a value (${counts.join(", ")}; ${onValues} on values)`);
 const ports = async (label) => page.$eval(`[data-module="bass"] [data-node="${label}"]`, (e) => [e.querySelectorAll('[data-port="in"]').length, e.querySelectorAll('[data-port="out"]').length]);
-// Since step 5 the drive the bass call leaves out is an input too, a knob at its default (PKG-3).
-check(JSON.stringify(await ports("xrange")) === "[3,1]" && JSON.stringify(await ports("blend")) === "[3,1]" && JSON.stringify(await ports("bass")) === "[3,1]", "xrange and blend have 3 inputs and 1 output, bass 3 and 1");
+// xrange's lo and hi are bars, and so is the drive the bass call leaves out (an input since step 5,
+// at its default, PKG-3): none of them draws a shape; blend's three arguments are all wires.
+const bassNode = bass.nodes.find((n) => n.label === "bass");
+const drive = bassNode.inputs.find((p) => p.label === "drive" || p.id.endsWith("drive"));
+check(JSON.stringify(await ports("xrange")) === "[1,1]" && JSON.stringify(await ports("blend")) === "[3,1]" && JSON.stringify(await ports("bass")) === "[2,1]" && bassNode.inputs.length === 3 && !!drive?.knob, `xrange has 1 connection and 1 output, blend 3 and 1, bass 2 and 1, its third input the drive it leaves out, a value (${JSON.stringify(drive ?? null)})`);
 check(JSON.stringify(await ports("notes")) === "[0,1]" && JSON.stringify(await ports("out")) === "[1,0]", "the notes lane only gives, the export only takes");
 const kindsOf = (sel) => page.$$eval(sel, (els) => els.map((e) => e.dataset.kind).join(","));
 check(
-  (await kindsOf('[data-module="bass"] [data-node="xrange"] [data-port="in"]')) === "control,control,control" &&
-    (await kindsOf('[data-module="bass"] [data-node="bass"] [data-port]')) === "notes,control,control,audio",
-  "circles carry their kind: bass takes notes and two controls and gives audio",
+  (await kindsOf('[data-module="bass"] [data-node="xrange"] [data-port="in"]')) === "control" &&
+    (await kindsOf('[data-module="bass"] [data-node="bass"] [data-port]')) === "notes,control,audio",
+  "shapes carry their kind: bass takes notes and a control wire and gives audio",
 );
 // No legend on every module (taste.md DK-3): each kind's port is its own shape.
 const shapes = await page.$$eval('[data-module="bass"] [data-port-dot]', (els) => {
@@ -157,7 +166,8 @@ const id = (label) => keys.nodes.find((n) => n.label === label)?.id;
 check(!!(await page.$(`[data-module="keys"] path[data-from="${id("pluck")}"][data-to="${id("lowpass")}"]`)) && !!(await page.$(`[data-module="keys"] path[data-from="${id("lowpass")}"][data-to="export:out"]`)), "edges run pluck → lowpass → out");
 await sleep(400);
 await page.screenshot({ path: `${S}/ports-keys.png` });
-await press('[data-module="keys"] [data-node="lowpass"] button[aria-label^="Remove "]');
+await press('[data-module="keys"] [data-node="lowpass"] [data-node-menu]');
+await press('[data-testid=node-remove][aria-label^="Remove "]');
 check(await until(() => read("tracks/keys.ts").includes('({ lane }) => pluck(lane.notes("chords"))')), "removing it unwraps pluck");
 check(await until(async () => !(await page.$('[data-module="keys"] [data-node="lowpass"]'))), "and the node is gone");
 await page.click('button[aria-label="Undo"]');
@@ -176,18 +186,18 @@ check(await until(async () => !!(await page.$(target))), "a lowpass after the ba
 // Both ends on screen: scroll the panel so the middle between them is centred.
 const box = async (sel) => (await page.$(sel)).boundingBox();
 const panel = await box("[data-testid=graph]");
-const [ra, rb] = [await box('[data-outlet="wobble"]'), await box(`${target} [data-port="in"]`)];
+const [ra, rb] = [await box('[data-outlet="wobble"]'), await box(`${target} [role=slider]`)];
 await page.$eval("[data-testid=graph]", (e, dx, dy) => { e.scrollLeft += dx; e.scrollTop += dy; },
   (ra.x + rb.x) / 2 - (panel.x + panel.width / 2), (ra.y + rb.y) / 2 - (panel.y + panel.height / 2));
 await sleep(100);
 const mid = (r) => ({ x: r.x + r.width / 2, y: r.y + r.height / 2 });
 const a = mid(await box('[data-outlet="wobble"]'));
-const b = mid(await box(`${target} [data-port="in"]`));
+const b = mid(await box(`${target} [role=slider]`));
 await page.mouse.move(a.x, a.y);
 await page.mouse.down();
 await page.mouse.move((a.x + b.x) / 2, (a.y + b.y) / 2 + 40, { steps: 5 });
-const lit = await page.$eval(`${target} [data-port="in"]`, (e) => ({ scale: getComputedStyle(e).scale, row: getComputedStyle(e.parentElement).backgroundColor }));
-check(!!(await page.$("[data-cabling]")) && lit.scale !== "none" && lit.row !== "rgba(0, 0, 0, 0)", `while dragging, knob inputs are highlighted as targets (scale ${lit.scale}, ${lit.row})`);
+const lit = await page.$eval(target, (e) => getComputedStyle(e).backgroundColor);
+check(!!(await page.$("[data-cabling]")) && lit !== "rgba(0, 0, 0, 0)", `while dragging, the bars a cable can land on are highlighted as targets (${lit})`);
 await page.mouse.move(b.x, b.y, { steps: 5 });
 const snapped = await page.$eval("[data-cabling] path[data-cable]", (p) => !p.getAttribute("stroke-dasharray") && p.dataset.cable !== "");
 await page.screenshot({ path: `${S}/ports-cable.png` });
@@ -208,7 +218,8 @@ await press('button[aria-label="Undo"]');
 check(await until(() => read("tracks/bass.ts") === wired), "undo puts the cable back");
 await press('button[aria-label="Undo"]');
 check(await until(async () => !!(await page.$(target)) && (await page.$eval(target, (e) => e.dataset.value)) === "1000"), "undoing the connection brings the cutoff knob back");
-await press('[data-module="bass"] [data-node="lowpass"] button[aria-label^="Remove "]');
+await press('[data-module="bass"] [data-node="lowpass"] [data-node-menu]');
+await press('[data-testid=node-remove][aria-label^="Remove "]');
 check(await until(() => read("tracks/bass.ts").includes('return bass(lane.notes("notes"), { cutoff: blend(cutoff, wobble, drop) });')), "removing the lowpass leaves the bass as it was");
 for (let i = 0; i < 2; i++) {
   const rev = (await api("graph")).view.revision;
@@ -238,7 +249,8 @@ check(await until(async () => Math.abs((await nodeWidth()) / w0 - 1 / 1.2) < 0.0
 // Zoomed out, a dragged cable still ends on the circle under the pointer.
 const before = read("tracks/bass.ts");
 const from = mid(await box('[data-outlet="wobble"]'));
-const period = '[data-module="bass"] [data-node="lfo"] [data-knob="period"] [data-port="in"]';
+// It lands on the bar: the cable's end is the bar's left end, at its middle.
+const period = '[data-module="bass"] [data-node="lfo"] [data-knob="period"] [role=slider]';
 const to = mid(await box(period));
 await page.mouse.move(from.x, from.y);
 await page.mouse.down();
@@ -247,9 +259,9 @@ const gap = await page.$eval("[data-cabling] path[data-cable]", (p, sel) => {
   const n = p.getAttribute("d").match(/-?[\d.]+/g).map(Number);
   const end = new DOMPoint(n[n.length - 2], n[n.length - 1]).matrixTransform(p.getScreenCTM());
   const r = document.querySelector(sel).getBoundingClientRect();
-  return Math.hypot(end.x - (r.left + r.width / 2), end.y - (r.top + r.height / 2));
+  return Math.hypot(end.x - r.left, end.y - (r.top + r.height / 2));
 }, period);
-check(gap < 1.5, `zoomed out, the cable snaps onto the input's circle (${gap.toFixed(2)}px off)`);
+check(gap < 1.5, `zoomed out, the cable snaps onto the bar under the pointer (${gap.toFixed(2)}px off)`);
 await page.mouse.move(from.x + 30, from.y - 200, { steps: 4 });
 await page.mouse.up();
 await sleep(500);

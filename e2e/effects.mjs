@@ -38,8 +38,10 @@ ok(added.replace(/\nimport \{ delay \} from "@m2\/effects";/, "").replace(delaye
 ok((await page.$$eval("[data-testid=toast]", (els) => els.map((e) => e.textContent))).includes("Added Delay after PluckUndo"), "a toast says what was added, with Undo");
 ok(!!(await page.$('[data-module="keys"] [data-node="delay"]')), "a delay node appears in Keys");
 
-// The delay node's remove button (since step 5 it names the effect by its descriptor's label).
-await page.click('[data-module="keys"] [data-node="delay"] button[aria-label^="Remove "]');
+// The delay node's Remove, in its ⋯ menu (the graph note §3; since step 5 it names the effect by its descriptor's label).
+await page.click('[data-module="keys"] [data-node="delay"] [data-node-menu]');
+await page.waitForSelector('[data-testid=node-remove][aria-label^="Remove "]');
+await page.click('[data-testid=node-remove][aria-label^="Remove "]');
 await sleep(1500);
 ok(read().includes('({ lane }) => pluck(lane.notes("chords"))'), "removing it unwraps the pluck");
 ok(!(await page.$('[data-module="keys"] [data-node="delay"]')), "the delay node is gone");

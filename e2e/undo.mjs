@@ -24,7 +24,7 @@ const disabled = (label) => page.$eval(`button[aria-label="${label}"]`, (b) => b
 const center = async (sel) => { const b = await (await page.waitForSelector(sel)).boundingBox(); return { x: b.x + b.width / 2, y: b.y + b.height / 2 }; };
 
 ok(await disabled("Undo") && await disabled("Redo"), "nothing to undo or redo at first");
-const a = await center('[data-outlet="wobble"]'), b = await center('[data-knob="cutoff"] svg');
+const a = await center('[data-outlet="wobble"]'), b = await center('[data-knob="cutoff"] [role=slider]');
 await page.mouse.move(a.x, a.y); await page.mouse.down(); await page.mouse.move(b.x, b.y, { steps: 8 }); await page.mouse.up();
 await sleep(1200);
 ok(fs.readFileSync(song, "utf8") === wired, "connected");
