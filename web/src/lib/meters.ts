@@ -4,7 +4,7 @@
 // never re-render the page.
 //
 // - A meter shows the latest peak, never eased. Its peak hold is a 1 px tick, held 1.5 s, then
-//   falling 12 dB a second.
+//   falling 12 dB a second; a new peak at the hold, or a hair under it, holds it again.
 // - The server sends one last message as the engine starts to idle, so the meters fall to the
 //   silence it ended in; then none. When the socket closes, every meter reads the floor.
 // - The scale runs from −60 to +6 dBFS. The fill is `fg-muted` below −6, `warn` from −6 to 0 and
@@ -28,6 +28,9 @@ export const TOP = 6;
 /** How long the peak hold stays before it falls, and how fast it falls. */
 const HOLD_MS = 1500;
 const FALL_DB_PER_S = 12;
+/** A new peak this far under the hold holds it again: the same hit played again rarely peaks at the
+ * same last digits (a steady kick's, 0.0005 dB apart), and its tick would fall between two hits. */
+const SAME_DB = 0.1;
 /** `aria-valuenow` changes at most this often: a screen reader can't follow 30 a second. */
 const ARIA_MS = 100;
 /** The meter of the song's output: the Song row's. A track may be called `out`, so the output has a name of its own. */
@@ -88,8 +91,9 @@ function held(l: Level, now: number) {
 function hearSide(l: Level, x: number, now: number) {
   const db = toDb(x);
   l.db = db;
-  if (db >= held(l, now)) {
-    l.peak = db;
+  const hold = held(l, now);
+  if (db >= hold - SAME_DB) {
+    l.peak = Math.max(db, hold);
     l.at = now;
   }
 }
