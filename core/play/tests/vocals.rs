@@ -322,3 +322,26 @@ fn a_changed_voice_gives_the_same_bits_on_1_to_7_threads() {
     let heard = hear(&mut d, frames + 720, &mut |_, _| {});
     assert_eq!(first_diff(&heard[720..], &one), None, "live, 15 ms late: the bits it exports");
 }
+
+// ---------------------------------------------------------------- the Vocoder (VOX-29)
+
+/// The imports of a track that plays the Vocoder.
+const VOCODER_IMPORTS: &str = "import { track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { vocoder } from \"@m2/vocals\";\n";
+
+// VOX-29, PKG-19: a Vocoder with no voice, as + Effect adds it, plays its input bit for bit, whatever
+// its knobs, and with a voice written as `undefined` too: it hears nothing.
+#[test]
+fn a_vocoder_with_no_voice_plays_its_input_bit_for_bit() {
+    let frames = 48_000;
+    let dry = offline_on(&vocal_song_with("dry", VOCODER_IMPORTS, &[("synth", "osc.saw(110)")]), frames, None);
+    assert!(peak(&dry) > 0.1, "the saw plays: {}", peak(&dry));
+    for call in [
+        "vocoder(osc.saw(110))",
+        "vocoder(osc.saw(110), { clarity: 0.5, smooth: 0.05, formant: 0 })",
+        "vocoder(osc.saw(110), { clarity: 1, smooth: 0.2, formant: 7 })",
+        "vocoder(osc.saw(110), undefined, { formant: -12 })",
+    ] {
+        let out = offline_on(&vocal_song_with("vocoded", VOCODER_IMPORTS, &[("synth", call)]), frames, None);
+        assert_eq!(first_diff(&out, &dry), None, "{call} changes its input");
+    }
+}
