@@ -125,16 +125,17 @@ impl Kernel for Vocoder {
 
     fn new(cfg: &Cfg) -> Self {
         let sr = cfg.sample_rate.max(8_000.0);
-        let pairs = |f: &dyn Fn(usize) -> f32| -> [Pair; BANDS] { std::array::from_fn(|k| [section(sr, f(k)); 2]) };
+        // The voice's bank, and the carrier's as it starts, at Formant 0: the same bands.
+        let bank: [Pair; BANDS] = std::array::from_fn(|k| [section(sr, centre(k)); 2]);
         // A 4th-order Butterworth high-pass: two sections, Q 0.54 and 1.31.
         let highs = [Filter::highpass(sr, HIGHS, 0.541_196_1), Filter::highpass(sr, HIGHS, 1.306_563)];
         Vocoder {
             sr,
             stereo: cfg.channels > 1,
-            voice: pairs(&centre),
+            voice: bank,
             heard: [[[0.0; 2]; 2]; BANDS],
             power: [0.0; BANDS],
-            carrier: pairs(&centre),
+            carrier: bank,
             played: [[[[0.0; 2]; 2]; BANDS]; 2],
             highs,
             high: [[[0.0; 2]; 2]; 2],
