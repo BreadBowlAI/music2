@@ -269,7 +269,13 @@ const EFFECTS: [(&str, &str, &str, &str, &str); 21] = [
         "{ gain: 6, ceiling: -0.3 }",
     ),
     // Offered since track effects3, as they open (PACK-35, PACK-36).
-    ("@m2/effects", "flanger", "Modulation", "A jet-plane whoosh: a copy of the sound sweeps against it", "{ rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 }"),
+    (
+        "@m2/effects",
+        "flanger",
+        "Modulation",
+        "A jet-plane whoosh: a copy of the sound sweeps against it",
+        "{ rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 }",
+    ),
     (
         "@m2/effects",
         "grains",

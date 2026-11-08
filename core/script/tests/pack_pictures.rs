@@ -877,13 +877,15 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
     let runner = Runner::new();
     let at = |depth: f64, phase: f64| 0.0001 * 100f64.powf(depth * (0.5 - 0.5 * (std::f64::consts::TAU * phase).cos()));
     for (depth, feedback, teeth) in [(0.7, 0.5, [0.5, 1.5, 2.5]), (1.0, 0.0, [0.5, 1.5, 2.5]), (0.5, -0.5, [1.0, 2.0, 3.0])] {
-        let drawn = draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": depth, "feedback": feedback, "mix": 0.5})).unwrap();
+        let drawn =
+            draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": depth, "feedback": feedback, "mix": 0.5})).unwrap();
         assert_eq!(kinds(&drawn), ["line", "line", "line"]);
         assert!(handles(&drawn).is_empty(), "no dot");
         let shapes = drawn["shapes"].as_array().unwrap();
         assert_eq!((&shapes[0]["tone"], &shapes[1]["tone"], &shapes[2]["name"]), (&json!("faint"), &json!("faint"), &json!("notch")));
         for (k, shape) in [2usize, 1, 0].into_iter().zip(shapes) {
-            let points: Vec<(f64, f64)> = shape["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
+            let points: Vec<(f64, f64)> =
+                shape["points"].as_array().unwrap().chunks(2).map(|p| (p[0].as_f64().unwrap(), p[1].as_f64().unwrap())).collect();
             assert!(points.len() > 100 && points[0].0 == 0.0 && points.last().unwrap().0 == 1.0, "a whole cycle");
             for (phase, hz) in points {
                 let want = (teeth[k] / at(depth, phase)).min(20_000.0);
@@ -895,7 +897,9 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
     let line = "The line: where they are now";
     assert_eq!(
         words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.5, "mix": 0.5})),
-        format!("Its notches sweep from 5 kHz down to 199 Hz and back, once each 4 s. Feedback 0.5 rings at the peaks between them. {line}")
+        format!(
+            "Its notches sweep from 5 kHz down to 199 Hz and back, once each 4 s. Feedback 0.5 rings at the peaks between them. {line}"
+        )
     );
     assert_eq!(
         words(json!({"rate": 2, "depth": 1, "feedback": -0.5, "mix": 0.5})),
@@ -913,7 +917,9 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
     );
     assert_eq!(
         words(json!({"rate": null, "depth": 0.7, "feedback": 0.5, "mix": 0.5})),
-        format!("Its notches sweep from 5 kHz down to 199 Hz and back, as fast as a cable or the code says. Feedback 0.5 rings at the peaks between them. {line}")
+        format!(
+            "Its notches sweep from 5 kHz down to 199 Hz and back, as fast as a cable or the code says. Feedback 0.5 rings at the peaks between them. {line}"
+        )
     );
     let why = draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": null, "feedback": 0.5, "mix": 0.5})).unwrap_err();
     assert!(why.contains("its depth is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
@@ -928,8 +934,14 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
 #[test]
 fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
     let cloud = declared("effects", "grains", "cloud");
-    assert_eq!((&cloud["x"]["lo"], &cloud["x"]["hi"], &cloud["x"]["unit"], &cloud["x"]["scale"]), (&json!(0.0), &json!(3.0), &json!("seconds"), &json!("lin")));
-    assert_eq!((&cloud["y"]["lo"], &cloud["y"]["hi"], &cloud["y"]["unit"], &cloud["y"]["bare"]), (&json!(0.0), &json!(1.0), &json!("unit01"), &json!(true)));
+    assert_eq!(
+        (&cloud["x"]["lo"], &cloud["x"]["hi"], &cloud["x"]["unit"], &cloud["x"]["scale"]),
+        (&json!(0.0), &json!(3.0), &json!("seconds"), &json!("lin"))
+    );
+    assert_eq!(
+        (&cloud["y"]["lo"], &cloud["y"]["hi"], &cloud["y"]["unit"], &cloud["y"]["bare"]),
+        (&json!(0.0), &json!(1.0), &json!("unit01"), &json!(true))
+    );
     assert_eq!(cloud["live"], json!([{"kind": "playhead", "from": "reads"}]), "a line where the newest grain reads now");
     let d = descriptor("effects", "grains");
     assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Grains", Some("Delay & Reverb")));
@@ -952,20 +964,40 @@ fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
         let near = (reach + 2.0) / rate as f64;
         let band: Vec<f64> = drawn["shapes"][0]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
         let want = [near, 0.0, near + spread, 0.0, near + spread, 1.0, near, 1.0];
-        assert!(band.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9), "at {rate} Hz, size {size}, spread {spread}, pitch {pitch}, frozen {freeze}: {band:?}, not {want:?}");
+        assert!(
+            band.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9),
+            "at {rate} Hz, size {size}, spread {spread}, pitch {pitch}, frozen {freeze}: {band:?}, not {want:?}"
+        );
         assert_eq!(dots(&drawn), ["x=spread"]);
         assert!(close(places(&drawn)[0], (near + spread, 0.5)), "its dot at the band's far edge: {:?}", places(&drawn));
     }
     let words = |v: Value| draw(&runner, "effects", "grains", "cloud", v).unwrap()["words"].as_str().unwrap().to_string();
     let tail = "The line: where the newest one reads now. Drag the band's edge for the spread";
-    assert_eq!(words(values(0.1, 0.3, 0.0, false)), format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). {tail}"));
-    assert_eq!(words(values(0.25, 1.5, 7.0, false)), format!("Pieces of 250 ms, 20 a second, each from up to 1.5 s back and 7 semitones higher (the band). {tail}"));
-    assert_eq!(words(values(0.1, 0.3, -12.0, false)), format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back and an octave lower (the band). {tail}"));
-    assert_eq!(words(values(0.1, 0.3, 1.0, false)), format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back and 1 semitone higher (the band). {tail}"));
-    assert_eq!(words(values(0.1, 0.0, 0.0, false)), format!("Pieces of 100 ms, 20 a second, each from just behind your sound (the band). {tail}"));
+    assert_eq!(
+        words(values(0.1, 0.3, 0.0, false)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.25, 1.5, 7.0, false)),
+        format!("Pieces of 250 ms, 20 a second, each from up to 1.5 s back and 7 semitones higher (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.1, 0.3, -12.0, false)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back and an octave lower (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.1, 0.3, 1.0, false)),
+        format!("Pieces of 100 ms, 20 a second, each from up to 300 ms back and 1 semitone higher (the band). {tail}")
+    );
+    assert_eq!(
+        words(values(0.1, 0.0, 0.0, false)),
+        format!("Pieces of 100 ms, 20 a second, each from just behind your sound (the band). {tail}")
+    );
     assert_eq!(
         words(values(0.1, 0.3, 0.0, true)),
-        format!("Frozen: it holds what it last heard, and plays pieces of it again and again. Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). {tail}")
+        format!(
+            "Frozen: it holds what it last heard, and plays pieces of it again and again. Pieces of 100 ms, 20 a second, each from up to 300 ms back (the band). {tail}"
+        )
     );
     assert_eq!(
         words(json!({"size": 0.1, "density": null, "spread": 0.3, "pitch": 0, "mix": 0.5, "freeze": null})),
@@ -973,6 +1005,13 @@ fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
             "Freeze is set by a cable or the code. Pieces of 100 ms, as many a second as a cable or the code says, each from up to 300 ms back (the band). {tail}"
         )
     );
-    let why = draw(&runner, "effects", "grains", "cloud", json!({"size": 0.1, "density": 20, "spread": null, "pitch": 0, "mix": 0.5, "freeze": false})).unwrap_err();
+    let why = draw(
+        &runner,
+        "effects",
+        "grains",
+        "cloud",
+        json!({"size": 0.1, "density": 20, "spread": null, "pitch": 0, "mix": 0.5, "freeze": false}),
+    )
+    .unwrap_err();
     assert!(why.contains("its spread is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
 }
