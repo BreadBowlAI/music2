@@ -115,7 +115,8 @@ export const SUITES = [
   ["nx-effects", "chain", { expect: 46, s: 18, tier: "nightly", why: "flake: a tooltip read before it changed (HANDOFF.md)" }],
   ["sidechain", "fix", { expect: 15, s: 13 }],
   // sidechain's dip, apart: it needs the meters read every 33 ms.
-  ["sidechain-dip", "fix", { expect: 6, s: 18, sleeps: "the bass's meter dips while the kick's is up, message by message: the meters' 33 ms tick is a sleep, and read every 120 ms a message holds a kick and the gap after it, and reads the bass's loudest" }],
+  ["sidechain-dip", "fix", { expect: 6, s: 18, sleeps: "the bass's meter dips while the kick's is up, message by message: the meters' 33 ms tick is a sleep, and read every 120 ms a message holds a kick and the gap after it, and reads the bass's loudest; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
+  ["sidechain-dip", "chain", { expect: 6, s: 18, sleeps: "as its fix kind: the meters' 33 ms tick is a sleep; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
   // Its checks on Device's chain too (taste.md DV-11): every one holds there, and one more says the + is the Bass row's.
   ["sidechain", "chain", { expect: 16, s: 13 }],
   ["layout", "proj", { expect: 39, s: 8 }],

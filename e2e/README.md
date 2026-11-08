@@ -167,8 +167,9 @@ for i in 1 2; do node e2e/run.mjs all --tier pr --shard $i/2 --list; done | sort
   them with correct code, every time. GitHub's Mac runner is one: its sleeps last about four times
   as long. `ci/pr.sh suites` passes it only when `M2_LATE_SLEEPS` is set, as the nightly
   workflow's Mac job sets it; everywhere else they run. The tag says nothing of the run's tier.
-  Tagged now: `st-record-fix`, `s8-meters-fix` (both nightly), `nx-click-fix`, `dress2a-strip-fix`
-  and `sidechain-dip-fix` (PR tier). The Rust tests of the same kind are in `ci/sleeps-tests.txt`.
+  Tagged now: `st-record-fix`, `s8-meters-fix` (both nightly), `nx-click-fix`, `dress2a-strip-fix`,
+  `sidechain-dip-fix` and `sidechain-dip-chain` (PR tier). The Rust tests of the same kind are in
+  `ci/sleeps-tests.txt`.
 
 The nightly runs and why:
 
@@ -233,7 +234,8 @@ or `grains`: the script skips it and says so.
 | `nx-effects` | fix | 47 | an effect card's ⋯ menu: Turn off writes `bypass: true` into the call, the card dims ("Reverb · Off") in its place with a dashed line out, no toast, Undo names it, ⌘Z and Turn on take it out; the code editor marks nothing. Move left and right: Delay added after Reverb moves before it (each keeps its settings, the cards swap, Undo "moving Delay before Reverb", ⌘Z); the first and last effects' rows are greyed with why; two effects not written one inside the other are greyed with Q26's words; the Duck's "Listens to: Kick" row lists Hats, Keys, Kick and None, picking Hats writes `follow(hats.out)` and imports `follow`, Undo "Bass's duck listens to Hats", ⌘Z puts both back; a PC page's menu |
 | `nx-effects` | chain | 46 | `nx-effects` on Device's chain (taste.md DV-11): all of the patch run's but the dashed cable out of a card turned off, which the chain doesn't draw |
 | `sidechain` | fix | 15 | sidechain from the card (CARD-35, CARD-36, PKG-19), on first-song with a steady bass and no Duck: + after `bass.out` in the song adds Duck around it (and its import, nothing else), whose row says "Listens to: None"; the menu lists Hats, Keys, Kick and None; picking Kick writes `kick.env` in the call, the row says Kick, one undo step ("Bass's duck listens to Kick"), one revision; ⌘Z takes the kick out again. What the Duck does to the bass's meter is `sidechain-dip`'s |
-| `sidechain-dip` | fix | 6 | On first-song with a steady bass, its Duck listening to nothing (its row says None): played, the bass's meter stays still (its meter's messages read by kick up and down); written to listen to the kick (`kick.env`, an outside edit), the row says Kick, and played, the bass's meter moves, lower while the kick's is up. Tagged `sleeps`: each meters message holds the most since the one before, so it needs them every 33 ms |
+| `sidechain-dip` | fix | 6 | On first-song with a steady bass, its Duck listening to nothing (its row says None): played, the bass's meter stays still (its meter's messages read by kick up and down); Kick picked in its card's Listens to writes `kick.env` in the call, the row says Kick, and played, the bass's meter moves, lower while the kick's is up. Tagged `sleeps`: each meters message holds the most since the one before, so it needs them every 33 ms (it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound) |
+| `sidechain-dip` | chain | 6 | `sidechain-dip`'s checks on Device's chain (taste.md DV-11), as sidechain's dip ran there. Tagged `sleeps` as its fix kind |
 | `sidechain` | chain | 16 | `sidechain`'s checks on Device's chain (taste.md DV-11): every one of the patch run's, and that the + after Bass's sound in the song is the Bass row's |
 | `layout` | proj | 39 | the timeline above the dock: tracks and the Song's row, automation folded under its track, clips, selection both ways, the split's resize (180px at least), ruler seeks, the playhead, knob drags, playing past the end, Stop leaving the playhead where it stopped |
 | `views` | proj | 30 | the dock's Device / Notes / Mix / Code switcher: its view is the producer's, a selection changes only what it shows, and it never moves; code follows the module; Notes shows the selected clip, a double-click opens it, Esc or a removed clip leaves its empty state |
