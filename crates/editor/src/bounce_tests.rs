@@ -143,6 +143,47 @@ fn bounces_one_after_another_keep_the_songs_length() {
     same_sound("keys, then kick", &heard, &exported(&s), keys.sounding.min(kick.sounding));
 }
 
+// RENDER-40, RENDER-1: a track still sounding 10 s past the song's last clip (Keys with a sine under
+// its chords, which never stops) is bounced to there, and its file's last 50 ms fade out, as an
+// export's do: half way down at their middle, never a step over the sine's own, into the silence
+// after the file too, and its last sample 0. The song's export after it holds the bits it held up to
+// that fade.
+#[test]
+fn bounce_in_place_fades_a_track_still_sounding_at_the_limit() {
+    let drone = "import { hz, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { add, scale } from \"std/math\";\n\
+                 import { pluck } from \"@m2/synths\";\n\n\
+                 export default track(\"keys\", { name: \"Keys\" }, ({ lane }) => add(pluck(lane.notes(\"chords\")), scale(osc.sine(hz(220.02)), 0.3)));\n";
+    let song = fixture("examples/first-song");
+    song.write("tracks/keys.ts", drone);
+    let mut s = song.open();
+    let heard = exported(&s);
+    let (placed, done) = bounce(&song, &mut s, "keys", "keys-bounce");
+    placed.unwrap();
+    // 32 beats at 124 bpm, then the limit.
+    let (rate, fade) = (48_000.0, (crate::render::FADE * 48_000.0).round() as usize);
+    let frames = ((32.0 * 60.0 / 124.0 + crate::render::TAIL_MAX) * rate).round() as usize;
+    let file: Vec<f32> = hound::WavReader::open(&done.path).unwrap().into_samples::<f32>().map(Result::unwrap).collect();
+    assert_eq!(file.len(), 2 * frames, "to 10 s past the song's last clip");
+    // Keys is mono: its file's two sides are one.
+    let keys: Vec<f32> = file.chunks(2).map(|f| f[0]).collect();
+    assert!(file.chunks(2).all(|f| f[0] == f[1]), "mono");
+    let start = frames - fade;
+    let steepest = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+    let loudest = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+    // The sine alone, its chords long gone, in the second before the fade.
+    let before = &keys[start - 48_000..start];
+    let own = steepest(before);
+    let mut faded = keys[start - 1..].to_vec();
+    faded.push(0.0);
+    assert!(steepest(&faded) <= own * 1.0001, "a step of {} as it fades and ends, over the sine's own {own}", steepest(&faded));
+    let middle = loudest(&keys[start + fade / 2 - 100..start + fade / 2 + 100]) / loudest(before);
+    assert!((0.4..0.6).contains(&middle), "half way down at its middle: {middle}");
+    assert_eq!(keys[frames - 1], 0.0, "its last sample is 0");
+    let after = exported(&s);
+    let differ = heard[..2 * start].iter().zip(&after[..2 * start]).filter(|(a, b)| a.to_bits() != b.to_bits()).count();
+    assert_eq!(differ, 0, "{differ} of {} samples of the export differ before the fade", 2 * start);
+}
+
 // RENDER-40: what can't be bounced in place is refused in words, before anything is rendered; what
 // can is let through.
 #[test]
