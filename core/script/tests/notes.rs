@@ -136,6 +136,7 @@ fn draw(runner: &Runner, component: &str, view: &str, values: Value) -> Value {
         view: view.into(),
         values: values.to_string(),
         memo: format!("{component}\u{0}{view}"),
+        rate: m2_script::pictures::RATE,
     };
     match runner.draw(ask) {
         Drawn::Shapes(json) => serde_json::from_str(&json).unwrap(),
