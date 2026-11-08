@@ -239,6 +239,10 @@ fake sleeps suites 0 "$PLUGINS_PASS" "$SLEEPS_SKIP: a-fix (e2e/run.mjs's sleeps 
 # The Mac's nightly job too: a shared machine's CPU time misjudges some speed tests.
 cp -R "$TMP/fake-full" "$TMP/fake-shared" || exit 2
 fake shared rust 0 "$PLUGINS_PASS" "shared cpu       SKIP  M2_SHARED_CPU is set: this machine's CPU time misjudges these speed tests, so they are left out: a_test (ci/shared-cpu-tests.txt)" 'rust tests       PASS  1 s'
+# Both, as the Mac's nightly job sets them: the summary names each reason (review Y7).
+cp -R "$TMP/fake-full" "$TMP/fake-both" || exit 2
+fake both rust 0 "$PLUGINS_PASS" "$SLEEPS_SKIP: a_test (ci/sleeps-tests.txt)" "shared cpu       SKIP  M2_SHARED_CPU is set: this machine's CPU time misjudges these speed tests, so they are left out: b_test (ci/shared-cpu-tests.txt)" 'rust tests       PASS  1 s'
+fake both suites 0 "$PLUGINS_PASS" "$SLEEPS_SKIP: a-fix (e2e/run.mjs's sleeps tags)" 'browser suites   PASS  1 s'
 cp -R "$TMP/fake-full" "$TMP/fake-advisory" || exit 2
 fake advisory changes 0 'full  Cargo.lock changed' 'docs_only=false' 'deps=true'
 fake advisory advisories 1 'advisories       FAIL  exit 1 after 1 s: see advisories.log'
@@ -275,6 +279,7 @@ check_case "the whole tier, with the plugins" full 0 "PASS" CLAP_PATH="$TMP/clap
 check_case "the whole tier, M2_NO_PLUGINS: not all CI runs" noplugins 1 "PART" M2_NO_PLUGINS=1
 check_case "the whole tier, M2_LATE_SLEEPS: not all CI runs" sleeps 1 "PART: no row failed, but M2_LATE_SLEEPS left out the tests that need sleeps on time (rust, suites)" CLAP_PATH="$TMP/clap" M2_LATE_SLEEPS=1
 check_case "the whole tier, M2_SHARED_CPU: not all CI runs" shared 1 "PART: no row failed, but M2_SHARED_CPU left out the speed tests a shared machine misjudges (rust)" CLAP_PATH="$TMP/clap" M2_SHARED_CPU=1
+check_case "the whole tier, M2_LATE_SLEEPS and M2_SHARED_CPU: each said" both 1 "PART: no row failed, but M2_LATE_SLEEPS left out the tests that need sleeps on time (rust, suites), and M2_SHARED_CPU left out the speed tests a shared machine misjudges (rust), so it isn't all CI runs" CLAP_PATH="$TMP/clap" M2_LATE_SLEEPS=1 M2_SHARED_CPU=1
 check_case "the whole tier, a step failed" failed 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
 check_case "a Cargo.lock changed, and RustSec has an advisory" advisory 1 "FAIL (1 of" CLAP_PATH="$TMP/clap"
 NAMED="test m2-plugins tests::airwindows_processes_audio" UNNAMED="data::tests::once" RETRIED="test m2-song data::tests::once"

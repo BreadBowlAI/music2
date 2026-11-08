@@ -291,14 +291,15 @@ summary() {
   # --pr with M2_SHARED_CPU: the steps that left out the speed tests a shared machine misjudges.
   sharedcpu=
   if [ -n "$PR" ]; then sharedcpu=$(grep -lE '^shared cpu +SKIP ' "$OUT"/pr-*.log 2> /dev/null | sed 's/.*pr-//; s/\.log$//' | tr '\n' ' ' | sed 's/ $//; s/ /, /g'); fi
+  # Every reason the tier left tests out, each said (review Y7).
+  skipped=
+  if [ -n "$noplugins" ]; then skipped="M2_NO_PLUGINS left out the tests that host plugins ($noplugins)"; fi
+  if [ -n "$latesleeps" ]; then skipped="${skipped:+$skipped, and }M2_LATE_SLEEPS left out the tests that need sleeps on time ($latesleeps)"; fi
+  if [ -n "$sharedcpu" ]; then skipped="${skipped:+$skipped, and }M2_SHARED_CPU left out the speed tests a shared machine misjudges ($sharedcpu)"; fi
   if [ "$fails" -gt 0 ]; then
     verdict="FAIL ($fails of $total checks)"
-  elif [ -n "$PR" ] && [ -n "$noplugins" ]; then
-    verdict="PART: no row failed, but M2_NO_PLUGINS left out the tests that host plugins ($noplugins), so it isn't all CI runs"
-  elif [ -n "$PR" ] && [ -n "$latesleeps" ]; then
-    verdict="PART: no row failed, but M2_LATE_SLEEPS left out the tests that need sleeps on time ($latesleeps), so it isn't all CI runs"
-  elif [ -n "$PR" ] && [ -n "$sharedcpu" ]; then
-    verdict="PART: no row failed, but M2_SHARED_CPU left out the speed tests a shared machine misjudges ($sharedcpu), so it isn't all CI runs"
+  elif [ -n "$PR" ] && [ -n "$skipped" ]; then
+    verdict="PART: no row failed, but $skipped, so it isn't all CI runs"
   elif [ -z "$PR" ] && [ -z "$TESTPLUGINS" ]; then
     verdict="FAIL: no row failed, but the test plugins weren't there, so it isn't a pass (PLAT-6)"
   elif [ -n "$partial" ]; then
