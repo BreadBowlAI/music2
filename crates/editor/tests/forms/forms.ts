@@ -77,7 +77,7 @@ export default song(({ lane, time }) => {
   const talking = vocoder(buzz, changed, { clarity: level, formant: -3 });
   const loud = clip(add(hit, pulse), { gain: 6 });
   const jet = flanger(soft, { feedback: -0.4 });
-  const cloud = grains(buzz, { pitch: 7, freeze: true });
+  const cloud = grains(buzz, { pitch: 7 });
   const planned = [
     // song.ts:20 `lfo` leaves out phase: a value written in
     lfo(time.beats, { period: 2, phase: 0 }),
@@ -1430,21 +1430,21 @@ export default song(({ lane, time }) => {
     // song.ts:78 `flanger` leaves out rate: a cable written in
     flanger(soft, { feedback: -0.4, rate: wobble }),
     // song.ts:79 `grains` leaves out density: a value written in
-    grains(buzz, { pitch: 7, freeze: true, density: 20 }),
+    grains(buzz, { pitch: 7, density: 20 }),
     // song.ts:79 `grains` leaves out density: a cable written in
-    grains(buzz, { pitch: 7, freeze: true, density: wobble }),
+    grains(buzz, { pitch: 7, density: wobble }),
     // song.ts:79 `grains` leaves out mix: a value written in
-    grains(buzz, { pitch: 7, freeze: true, mix: 0.5 }),
+    grains(buzz, { pitch: 7, mix: 0.5 }),
     // song.ts:79 `grains` leaves out mix: a cable written in
-    grains(buzz, { pitch: 7, freeze: true, mix: wobble }),
+    grains(buzz, { pitch: 7, mix: wobble }),
     // song.ts:79 `grains` leaves out size: a value written in
-    grains(buzz, { pitch: 7, freeze: true, size: 0.1 }),
+    grains(buzz, { pitch: 7, size: 0.1 }),
     // song.ts:79 `grains` leaves out size: a cable written in
-    grains(buzz, { pitch: 7, freeze: true, size: wobble }),
+    grains(buzz, { pitch: 7, size: wobble }),
     // song.ts:79 `grains` leaves out spread: a value written in
-    grains(buzz, { pitch: 7, freeze: true, spread: 0.3 }),
+    grains(buzz, { pitch: 7, spread: 0.3 }),
     // song.ts:79 `grains` leaves out spread: a cable written in
-    grains(buzz, { pitch: 7, freeze: true, spread: wobble }),
+    grains(buzz, { pitch: 7, spread: wobble }),
     // song.ts:80 `master` leaves out ceiling: a value written in
     master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }), { ceiling: -1 }),
     // song.ts:80 `master` leaves out ceiling: a cable written in

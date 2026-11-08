@@ -76,6 +76,6 @@ export default song(({ lane, time }) => {
   const talking = vocoder(buzz, changed, { clarity: level, formant: -3 });
   const loud = clip(add(hit, pulse), { gain: 6 });
   const jet = flanger(soft, { feedback: -0.4 });
-  const cloud = grains(buzz, { pitch: 7, freeze: true });
+  const cloud = grains(buzz, { pitch: 7 });
   return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }));
 });
