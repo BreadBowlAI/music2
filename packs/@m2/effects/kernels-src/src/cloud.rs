@@ -8,8 +8,11 @@
 //!   its speed; `back` keeps it behind the newest sound until it ends (`Grains::start`), so it reads
 //!   only the past. At most [`MOST`] play at once: one more lets the oldest go, fading it out in
 //!   [`LET_GO`].
-//! - **Its level.** They are summed and turned down by `1 / √(3/8 × n)`, `n = size × density` (16
-//!   at most), when that is over 1: grains read from places far apart add up in power.
+//! - **Its level.** They are summed, and their sum turned down, when it is louder, to the level of
+//!   the sound they read: by `√(B / (W × A))` when that is under 1, where `A` is the sum's power,
+//!   `B` the grains' own powers summed and `W` their windows' powers summed, each smoothed over
+//!   [`MEASURE`] (`B / W` is how loud the sound under their windows is). Grains read from one place
+//!   add up in level, from places far apart in power: this turns either down to the sound's own.
 //!
 //! Its clock and its random numbers (one 32-bit xorshift from [`SEED`]) move only while `playing` is
 //! 1, so it follows the song: no grain starts while it is stopped, and after the engine sat stopped
@@ -19,6 +22,11 @@
 //! far back the newest grain reads now, in seconds, which its card's picture draws (CARD-129).
 
 use m2_dsp::fx::{Glide, clampf, sane};
+
+/// How long its level is measured over, in seconds: the time its three powers are smoothed by.
+pub const MEASURE: f64 = 0.05;
+/// A power under this counts as none, so a smoothed power that dies away never goes denormal.
+const NONE: f64 = 1e-30;
 use m2_kernel::{Cfg, Io, Kernel};
 
 /// How much of its input it keeps, in seconds: as far back as a grain can read, one an octave up and
@@ -91,7 +99,12 @@ pub struct Grains {
     /// Frames written since the last that wasn't silence.
     since_sound: usize,
     mix: Glide,
-    level: Glide,
+    /// Its level's three powers, smoothed over `MEASURE`: its sum's (`A`), its grains' own summed
+    /// (`B`) and their windows' summed (`W`); and how far each moves a frame.
+    heard: f64,
+    parts: f64,
+    windows: f64,
+    smooth: f64,
     /// A let go grain's fade, in frames.
     let_go: u32,
 }
@@ -119,7 +132,10 @@ impl Grains {
             gap: 0.0,
             since_sound: usize::MAX,
             mix: Glide::new(0.02, sr),
-            level: Glide::new(0.05, sr),
+            heard: 0.0,
+            parts: 0.0,
+            windows: 0.0,
+            smooth: 1.0 - (-1.0 / (MEASURE * sr as f64)).exp(),
             let_go: ((LET_GO * sr) as u32).max(1),
         }
     }
@@ -224,12 +240,13 @@ impl Kernel for Grains {
                     self.gap = 0.5 + self.unit();
                 }
             }
-            let g = self.level.next(1.0 / (0.375 * (size * density).min(MOST as f32)).max(1.0).sqrt());
             let m = self.mix.next(clampf(mix[i], 0.0, 1.0));
             // Where the newest sound is in the rings. Before anything was written, a ring holds the
             // silence before the song: a frame `d` back is at `newest − d`, round the ring.
             let newest = ((self.written + self.len as u64 - 1) % self.len as u64) as usize;
             let mut wet = [0.0f32; 2];
+            // Its grains' own powers summed, and their windows'.
+            let (mut parts, mut windows) = (0.0f64, 0.0f64);
             let mut youngest: Option<(u64, f64)> = None;
             for grain in self.grains.iter_mut().filter(|g| g.on) {
                 // How far back from the newest sound it reads now, in frames.
@@ -247,6 +264,7 @@ impl Kernel for Grains {
                 }
                 let whole = back.floor();
                 let (t, j) = ((back - whole) as f32, whole as usize);
+                windows += w as f64 * w as f64;
                 for (c, ring) in self.rings.iter().enumerate().take(sides) {
                     // The sample `d` frames before the newest (`d` under the ring's length).
                     let at = |d: usize| ring[(newest + self.len - d) % self.len];
@@ -254,7 +272,9 @@ impl Kernel for Grains {
                     let c1 = 0.5 * (y2 - y0);
                     let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
                     let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
-                    wet[c] += w * (((c3 * t + c2) * t + c1) * t + y1);
+                    let v = w * (((c3 * t + c2) * t + c1) * t + y1);
+                    wet[c] += v;
+                    parts += v as f64 * v as f64;
                 }
                 grain.n += 1;
                 if grain.n >= grain.len {
@@ -262,6 +282,15 @@ impl Kernel for Grains {
                 }
             }
             reads = youngest.map_or(0.0, |(_, back)| back / self.sr as f64);
+            // Its level: the sum turned down to the level of the sound its grains read, `B / W`,
+            // when it is louder: by √(B / (W × A)) when that is under 1.
+            let whole = wet[0] as f64 * wet[0] as f64 + wet[1] as f64 * wet[1] as f64;
+            let follow = |was: f64, now: f64| {
+                let next = was + (now - was) * self.smooth;
+                if next < NONE { 0.0 } else { next }
+            };
+            (self.heard, self.parts, self.windows) = (follow(self.heard, whole), follow(self.parts, parts), follow(self.windows, windows));
+            let g = if self.heard * self.windows > self.parts { (self.parts / (self.heard * self.windows)).sqrt() as f32 } else { 1.0 };
             // At Mix 0, the input as it is, its sign of zero too.
             let out = |c: usize| if m == 0.0 { x[c] } else { x[c] * (1.0 - m) + m * g * wet[c] };
             (ol[i], or[i]) = (out(0), if self.stereo { out(1) } else { 0.0 });

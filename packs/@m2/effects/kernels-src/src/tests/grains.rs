@@ -191,6 +191,111 @@ fn its_level_follows_its_inputs() {
     }
 }
 
+// PACK-36: its level follows its input's wherever its grains read, from one place or far apart: a
+// sine at 100 Hz and at 1 kHz, a saw and noise, through its grains alone at Spread 0, 5 ms, 50 ms and
+// 0.5 s, Size and Density at their tops (500 ms, 50: 16 at once) and at those it opens at (100 ms,
+// 20), and Pitch 0 and ±12, at 48 kHz: over 4 s it comes out from 2.5 dB under the input's level to
+// 0.5 dB over it, and its loudest half second no more than 1.5 dB over. As measured: from −2.0 dB
+// (noise, few grains, the read between samples dulling its highest sounds) to +0.1 dB, and +1.2 dB
+// at the loudest half second. Turned down by 1/√(3/8 × n) alone, 16 grains read from one place added
+// up in level and came out 11.9 dB louder (review X3).
+#[test]
+fn its_level_follows_its_input_wherever_its_grains_read() {
+    const LOWEST: f64 = -2.5;
+    const LOUDEST: f64 = 0.5;
+    const LOUDEST_HALF_SECOND: f64 = 1.5;
+    let sr = 48_000.0f32;
+    let s = |x: f32| (x * sr) as usize;
+    let sine = |hz: f64| move |_: usize, t: usize| (0.5 * (TAU * hz * t as f64 / sr as f64).sin()) as f32;
+    let (low, high) = (sine(100.0), sine(1000.0));
+    let quiet_noise = |c: usize, t: usize| 0.25 * noise(c, t);
+    let half_saw = |c: usize, t: usize| 0.5 * saw(c, t);
+    let sounds: [(&str, &dyn Fn(usize, usize) -> f32); 4] =
+        [("sine 100 Hz", &low), ("sine 1 kHz", &high), ("saw 110 Hz", &half_saw), ("noise", &quiet_noise)];
+    let mut worst = (f64::MAX, f64::MIN);
+    let mut over = vec![];
+    for (sound, x) in sounds {
+        let input: Vec<f32> = (0..s(6.0)).map(|t| x(0, t)).collect();
+        let heard = rms(&input[s(2.0)..]);
+        for (size, density) in [(0.5f32, 50.0f32), (0.1, 20.0)] {
+            for spread in [0.0f32, 0.005, 0.05, 0.5] {
+                let mut row = format!("{sound:11} size {size:3} density {density:2} spread {spread:5}:");
+                for pitch in [0.0f32, 12.0, -12.0] {
+                    let set = Set { size, density, spread, pitch, mix: 1.0 };
+                    let out = grains(sr, 1, s(6.0), BLOCK, set, x, &on).left();
+                    let whole = db(rms(&out[s(2.0)..]) / heard);
+                    let loudest = db(out[s(2.0)..].chunks(s(0.5)).map(rms).fold(0.0, f64::max) / heard);
+                    row += &format!("  pitch {pitch:+3}: {whole:+6.2} dB (loudest {loudest:+6.2})");
+                    worst = (worst.0.min(whole), worst.1.max(loudest));
+                    if !(LOWEST..=LOUDEST).contains(&whole) || loudest > LOUDEST_HALF_SECOND {
+                        over.push(format!("{sound}, size {size}, density {density}, spread {spread}, pitch {pitch}: {whole:+.2} dB, loudest {loudest:+.2} dB"));
+                    }
+                }
+                println!("{row}");
+            }
+        }
+    }
+    println!("from {:+.2} dB to {:+.2} dB (its loudest half second)", worst.0, worst.1);
+    assert!(
+        over.is_empty(),
+        "outside {LOWEST} to {LOUDEST} dB of the input's level, or a half second over {LOUDEST_HALF_SECOND}:\n{}",
+        over.join("\n")
+    );
+}
+
+// PACK-36: on a stereo sound each side's grains read its own side, both from one place: a tone on the
+// left and silence on the right leaves the right exactly silent, and swapped the left; the same tone
+// on both sides comes out the same on both, bit for bit; at 44.1, 48 and 96 kHz.
+#[test]
+fn each_side_reads_its_own_sound_from_one_place() {
+    for sr in RATES {
+        let tone = move |t: usize| (0.5 * (TAU * 220.0 * t as f64 / sr as f64).sin()) as f32;
+        let set = Set { size: 0.1, density: 30.0, spread: 0.5, pitch: 5.0, mix: 1.0 };
+        let frames = (3.0 * sr) as usize;
+        for side in [0usize, 1] {
+            let played = grains(sr, 2, frames, BLOCK, set, &|c, t| if c == side { tone(t) } else { 0.0 }, &on);
+            let (heard, other) = (played.out[0].iter().map(|f| f[side]).collect::<Vec<f32>>(), played.out[0].iter().map(|f| f[1 - side]));
+            assert!(rms(&heard) > 0.1, "{sr} Hz: the side with the tone plays it: {}", rms(&heard));
+            assert!(other.into_iter().all(|v| v == 0.0), "{sr} Hz: a tone on side {side} only, and the other side sounds");
+        }
+        let both = grains(sr, 2, frames, BLOCK, set, &|_, t| tone(t), &on);
+        assert!(both.out[0].iter().all(|f| f[0].to_bits() == f[1].to_bits()), "{sr} Hz: the same sound on both sides comes out unlike");
+    }
+}
+
+// PACK-36: its knobs glide, so turning them never clicks: on a 300 Hz tone at 0.5, from places spread
+// over 0.3 s, Mix stepped from 0 to 1 and back, and Size and Density from 100 ms and 20 a second (2 at
+// once, its level as it is) to 500 ms and 50 (16 at once, its level turned down 8 dB) and back, every
+// 0.3 s: what comes out never steps from one sample to the next by more than 0.06, where the tone
+// itself steps by up to 0.02 (a Mix or a level that jumped would step by up to 0.5).
+#[test]
+fn turning_its_knobs_never_clicks() {
+    let sr = 48_000.0f32;
+    let every = 14_400;
+    for knob in ["mix", "size and density"] {
+        let played = play_at::<Grains>(sr, 1, 8 * every, BLOCK, &|p, _, t| {
+            let up = (t / every) % 2 == 1;
+            match (p, knob, up) {
+                (0, _, _) => (0.5 * (TAU * 300.0 * t as f64 / sr as f64).sin()) as f32,
+                (1, "size and density", true) => 0.5,
+                (1, _, _) => 0.1,
+                (2, "size and density", true) => 50.0,
+                (2, _, _) => 20.0,
+                (3, _, _) => 0.3,
+                (4, _, _) => 0.0,
+                (5, "mix", true) => 1.0,
+                (5, "mix", false) => 0.0,
+                (5, _, _) => 1.0,
+                _ => 1.0,
+            }
+        });
+        let x = played.left();
+        let step = max_step(&x, 1, x.len());
+        println!("{knob} stepped every 0.3 s: steps of up to {step:.4}");
+        assert!(step < 0.06, "{knob} stepped every 0.3 s: a step of {step}");
+    }
+}
+
 /// The frequency of a tone in a window, `x`, at `sr`, near `want`: where its spectrum is loudest,
 /// found to a hundred-thousandth.
 fn tone_of(x: &[f32], sr: f32, want: f64) -> f64 {
