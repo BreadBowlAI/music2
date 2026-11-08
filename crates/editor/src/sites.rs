@@ -501,6 +501,40 @@ pub struct Property {
     pub string: bool,
 }
 
+/// Every property `key` of an object literal in `source` whose value is the name `name` alone
+/// (`out: kick`, or the shorthand `out`): its value's bytes, and whether it is a shorthand. What + on
+/// the wire out of a record's property wraps (CARD-36).
+pub fn named_properties(source: &str, key: &str, name: &str) -> Vec<(u32, u32, bool)> {
+    use oxc::ast::ast::{Expression, ObjectExpression, ObjectPropertyKind, PropertyKind};
+    struct Find<'k> {
+        key: &'k str,
+        name: &'k str,
+        found: Vec<(u32, u32, bool)>,
+    }
+    impl<'a> Visit<'a> for Find<'_> {
+        fn visit_object_expression(&mut self, it: &ObjectExpression<'a>) {
+            for p in &it.properties {
+                if let ObjectPropertyKind::ObjectProperty(p) = p
+                    && p.kind == PropertyKind::Init
+                    && !p.computed
+                    && !p.method
+                    && p.key.static_name().is_some_and(|k| k == self.key)
+                    && let Expression::Identifier(id) = &p.value
+                    && id.name == self.name
+                {
+                    self.found.push((id.span.start, id.span.end, p.shorthand));
+                }
+            }
+            walk::walk_object_expression(self, it);
+        }
+    }
+    let allocator = Allocator::default();
+    let ret = Parser::new(&allocator, source, SourceType::ts()).parse();
+    let mut find = Find { key, name, found: vec![] };
+    find.visit_program(&ret.program);
+    find.found
+}
+
 /// The properties of the object literal written exactly at `span` of `source`, in order; None
 /// when there is none there, or it has a spread, a computed key or a method. A shorthand (`saws`)
 /// is a property whose value is its key's bytes.

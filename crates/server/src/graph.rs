@@ -1759,7 +1759,7 @@ impl Graph {
         let component = component.to_string();
         self.edit(token, move |s| match wire {
             Some((reader, input)) => s.add_effect_on(revision, &reader, &input, &component),
-            None => Err(m2_editor::EditError::Rejected("a wire is named by both its reader and its input".into())),
+            None => Err(m2_editor::EditError::Rejected("Name the wire by both `reader` and `input`.".into())),
         })
     }
 

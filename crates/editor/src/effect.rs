@@ -175,7 +175,9 @@ fn names_in(site: &Site) -> Vec<String> {
 
 /// The argument of call `reader` (its path) that is call `source` as written: the call itself, or
 /// the `const` it is bound to (CARD-36). Why not, in words.
-fn argument_of(s: &Session, reader: &Site, source: &Site) -> Result<Vec<String>, String> {
+/// `at` is the argument the wire ends at, when the view knows it: two wires from one source into
+/// one call (`add(p, p)`) each wrap their own.
+fn argument_of(s: &Session, reader: &Site, source: &Site, at: Option<&[String]>) -> Result<Vec<String>, String> {
     let c = &s.accepted().compiled;
     let (them, it) = (title(s, reader), title(s, source));
     for (site, named) in [(reader, &them), (source, &it)] {
@@ -203,10 +205,15 @@ fn argument_of(s: &Session, reader: &Site, source: &Site) -> Result<Vec<String>,
             };
         }
     }
-    if let (Some(name), true, true) = (&source.binding, source.constant, source.file == reader.file)
-        && let Some(path) = named_at(reader, name)
-    {
-        return Ok(path);
+    if let (Some(name), true, true) = (&source.binding, source.constant, source.file == reader.file) {
+        if let Some(at) = at
+            && matches!(reader.arg(at), Some(Arg::Name { name: n, .. }) if n == name)
+        {
+            return Ok(at.to_vec());
+        }
+        if let Some(path) = named_at(reader, name) {
+            return Ok(path);
+        }
     }
     if reader.args.iter().any(|a| spreads(text, a)) {
         return Err(spread());
@@ -217,9 +224,67 @@ fn argument_of(s: &Session, reader: &Site, source: &Site) -> Result<Vec<String>,
     }
 }
 
-/// What the **+** on a wire does (CARD-36): from `source` into call `reader` (an export's, with none),
-/// carrying `kind` (`audio`, `control` or `notes`), read a block late when `late`.
-pub(crate) fn plus(s: &Session, source: Source<'_>, reader: Option<&Site>, kind: &str, late: bool) -> Plus {
+/// Where a wire ends, for its **+** (CARD-36).
+pub(crate) enum To<'a> {
+    /// An argument of a call: its path when the view knows it.
+    Call(&'a Site, Option<&'a [String]>),
+    /// A module's export, by its name, reading `r`.
+    Export(&'a str, &'a str),
+    /// Anything else: a voice's own parts.
+    Other,
+}
+
+/// The argument of call `reader` that reads another track's sound by name, exactly
+/// `<handle>.<export>`: the one at `at` when the view knows it, else the only one written so.
+fn import_arg(s: &Session, reader: &Site, at: Option<&[String]>, track: &str, export: &str) -> Option<Vec<String>> {
+    let compiled = &s.accepted().compiled;
+    let file = compiled.ir.modules.iter().find(|t| t.key == track).and_then(file_of)?;
+    let text = text_of(s, &reader.file);
+    let handle = crate::sites::imports_of(text, &reader.file, file).into_iter().find_map(|i| i.default)?;
+    let written = format!("{handle}.{export}");
+    let is = |a: &Arg| text.get(a.span().0 as usize..a.span().1 as usize) == Some(written.as_str());
+    if let Some(at) = at
+        && reader.arg(at).is_some_and(is)
+    {
+        return Some(at.to_vec());
+    }
+    fn find(a: &Arg, is: &dyn Fn(&Arg) -> bool, path: &mut Vec<String>, out: &mut Vec<Vec<String>>) {
+        if is(a) {
+            out.push(path.clone());
+        } else if let Arg::Object { props, .. } = a {
+            for (k, v) in props {
+                path.push(k.clone());
+                find(v, is, path, out);
+                path.pop();
+            }
+        }
+    }
+    let mut out = vec![];
+    for (i, a) in reader.args.iter().enumerate() {
+        find(a, &is, &mut vec![i.to_string()], &mut out);
+    }
+    match &out[..] {
+        [one] => Some(one.clone()),
+        _ => None,
+    }
+}
+
+/// The property `<name>` of the record a module returns that is call `from`'s `const`, written once in
+/// its file: its value's bytes, and whether it is a shorthand (CARD-36).
+pub(crate) fn record_property(s: &Session, from: &Site, name: &str) -> Option<(u32, u32, bool)> {
+    let binding = from.binding.as_deref().filter(|_| from.constant)?;
+    match crate::sites::named_properties(text_of(s, &from.file), name, binding)[..] {
+        [one] => Some(one),
+        _ => None,
+    }
+}
+
+/// What notes going out of a module say (CARD-36).
+const NOTES_OUT: &str = "A note effect goes before what plays these notes: put it on their wire into it.";
+
+/// What the **+** on a wire does (CARD-36): from `source` to `to`, carrying `kind` (`audio`,
+/// `control` or `notes`), read a block late when `late`.
+pub(crate) fn plus(s: &Session, source: Source<'_>, to: To<'_>, kind: &str, late: bool) -> Plus {
     let refused = |refused: String| Plus::Refused { refused };
     if late {
         return refused("This wire closes a loop: change it in code.".into());
@@ -228,32 +293,63 @@ pub(crate) fn plus(s: &Session, source: Source<'_>, reader: Option<&Site>, kind:
         return refused(CONTROL.into());
     }
     let id = |site: &Site| format!("{}#{}", site.file, site.ordinal);
-    match (source, reader) {
-        (Source::Import(track, export), _) => match track_read(s, track, export) {
+    match (source, to) {
+        (Source::Other, _) | (_, To::Other) => refused("No effect goes on this wire: change it in code.".into()),
+        (_, To::Export(..)) if kind == "notes" => refused(NOTES_OUT.into()),
+        (Source::Import(track, export), To::Call(reader, at)) => {
+            let read = match kind {
+                // A note effect goes before the call that takes the notes (PKG-21): on the wire's own read.
+                "notes" => Err(String::new()),
+                _ => track_read(s, track, export),
+            };
+            match (read, import_arg(s, reader, at, track, export)) {
+                (Ok(_), _) => Plus::After { call: format!("import:{track}.{export}") },
+                (Err(_), Some(path)) => Plus::Wire { reader: id(reader), input: path.join(".") },
+                (Err(why), None) if !why.is_empty() => refused(sentence(&why)),
+                (Err(_), None) => refused(format!("{} doesn't read this by name: change it in code.", title(s, reader))),
+            }
+        }
+        (Source::Import(track, export), To::Export(..)) => match track_read(s, track, export) {
             Ok(_) => Plus::After { call: format!("import:{track}.{export}") },
             Err(why) => refused(sentence(&why)),
         },
-        (Source::Call(from), Some(reader)) => match argument_of(s, reader, from) {
+        (Source::Call(from), To::Call(reader, at)) => match argument_of(s, reader, from, at) {
             Ok(path) => Plus::Wire { reader: id(reader), input: path.join(".") },
             Err(why) => refused(why),
         },
-        (Source::Call(from), None) => {
+        (Source::Call(from), To::Export(name, r)) => {
             let c = &s.accepted().compiled;
             let it = title(s, from);
+            // Another output of the call than its sound: a mixer's bus.
+            let main = c.outputs.iter().find(|o| o.site == from.id).map(|o| split_ref(&o.port));
+            if main.is_some_and(|m| m != split_ref(r)) {
+                return refused(match name.strip_prefix("bus:") {
+                    Some(bus) => format!("This is the {} bus inside the {it}: change it in code.", capitalised(bus)),
+                    None => format!("{} is another output of {it}, beside its sound: change it in code.", capitalised(name)),
+                });
+            }
             match (made(c, from.id), read_count(c, from.id)) {
                 (n, _) if n > 1 => refused(format!("{it} is made {n} times, in a function or a loop: change it in code.")),
-                (_, n) if n > 1 => refused(format!(
-                    "{it} is read in {n} places, so an effect after it would change them all: put it on one of its wires, or change it in code."
-                )),
+                (_, n) if n > 1 => match record_property(s, from, name) {
+                    Some(_) => Plus::Wire { reader: format!("{}#export:{name}", from.file), input: name.to_string() },
+                    None => refused(format!(
+                        "{it} is read in {n} places, and the track's code doesn't name it in the record it returns: change it in code."
+                    )),
+                },
                 _ => Plus::After { call: id(from) },
             }
         }
-        (Source::Other, _) => refused("No effect goes on this wire: change it in code.".into()),
     }
 }
 
 /// What a control wire says (CARD-36).
 const CONTROL: &str = "This wire carries a control: an effect goes on a sound, a note effect on notes.";
+
+/// `word` with its first letter a capital: a bus's key as a name (`drums`, Drums).
+fn capitalised(word: &str) -> String {
+    let mut c = word.chars();
+    c.next().map(|f| f.to_uppercase().chain(c).collect()).unwrap_or_default()
+}
 
 /// `why` as a sentence: its first letter a capital, a full stop at its end.
 fn sentence(why: &str) -> String {
@@ -276,6 +372,9 @@ pub fn add_effect_on(s: &mut Session, at: u64, reader: &str, input: &str, compon
             (e.label, e.notes)
         }
     };
+    if let Some((file, name)) = reader.split_once("#export:") {
+        return add_on_record(s, at, file, name, input, component, &label, notes);
+    }
     let site = current_site(s, at, reader)?.clone();
     if !site.in_project {
         return Err(EditError::NotFound(reader.to_string()));
@@ -311,15 +410,83 @@ pub fn add_effect_on(s: &mut Session, at: u64, reader: &str, input: &str, compon
         };
         return Err(EditError::Rejected(why));
     };
-    match (wire.kind, notes) {
-        ("audio", true) => return Err(EditError::Rejected(format!("{label} goes on notes, and this wire carries a sound."))),
-        ("notes", false) => return Err(EditError::Rejected(format!("{label} goes on a sound, and this wire carries notes."))),
-        ("control", _) => return Err(EditError::Rejected(CONTROL.into())),
-        _ => {}
-    }
+    fits(wire.kind, &label, notes)?;
     let span = Span { file: site.file.clone(), start, end };
+    put_on(s, &site, &span, "", component, |_, _, _| Ok(()))
+}
+
+/// Whether an item, a note effect or not, fits a wire of `kind` (CARD-36); why not, in words.
+fn fits(kind: &str, label: &str, notes: bool) -> Result<(), EditError> {
+    match (kind, notes) {
+        ("audio", true) => Err(EditError::Rejected(format!("{label} goes on notes, and this wire carries a sound."))),
+        ("notes", false) => Err(EditError::Rejected(format!("{label} goes on a sound, and this wire carries notes."))),
+        ("control", _) => Err(EditError::Rejected(CONTROL.into())),
+        _ => Ok(()),
+    }
+}
+
+/// Put effect `component` on the wire out of call `from` into module `file`'s export `name`, around
+/// that property of the record it returns (CARD-36): `{ out }` becomes `{ out: x(out) }`.
+#[allow(clippy::too_many_arguments)]
+fn add_on_record(
+    s: &mut Session,
+    at: u64,
+    file: &str,
+    name: &str,
+    input: &str,
+    component: &str,
+    label: &str,
+    notes: bool,
+) -> Result<Edited, EditError> {
+    if at != s.accepted().number {
+        return Err(EditError::stale(s, at, file));
+    }
+    let reader = format!("{file}#export:{name}");
+    let v = crate::view::view(s);
+    let wire = v
+        .modules
+        .iter()
+        .flat_map(|m| &m.port_edges)
+        .find(|e| matches!(&e.plus, Plus::Wire { reader: r, input: i } if *r == reader && i == input))
+        .cloned();
+    let Some(wire) = wire else {
+        return Err(EditError::Rejected(format!("No wire into {name} there takes an effect: change it in code.")));
+    };
+    fits(wire.kind, label, notes)?;
+    let site = s.accepted().compiled.sites.iter().find(|x| format!("{}#{}", x.file, x.ordinal) == wire.from).cloned();
+    let site = site.ok_or_else(|| EditError::NotFound(wire.from.clone()))?;
+    let (start, end, shorthand) =
+        record_property(s, &site, name).ok_or_else(|| EditError::Rejected(format!("{file} doesn't name it in the record it returns.")))?;
+    let span = Span { file: file.to_string(), start, end };
+    let prefix = if shorthand { format!("{name}: ") } else { String::new() };
+    let module = s.accepted().compiled.ir.modules.iter().find(|m| file_of(m) == Some(file)).map(|m| m.key.clone());
+    let module = module.ok_or_else(|| EditError::NotFound(file.to_string()))?;
+    let export = name.to_string();
+    put_on(s, &site, &span, &prefix, component, move |_, checked, new| {
+        // The export reads the new call: it went on this wire.
+        let c = &checked.candidate().compiled;
+        let out = c.outputs.iter().find(|o| o.site == new).map(|o| split_ref(&o.port).0.to_string());
+        let m = c.ir.modules.iter().find(|m| m.key == module);
+        match (out, m.and_then(|m| m.exports.get(&export))) {
+            (Some(o), Some(r)) if split_ref(r).0 == o => Ok(()),
+            _ => Err(EditError::Rejected(format!("adding it here would change more than {export}"))),
+        }
+    })
+}
+
+/// Put `component` around `span`, `prefix` written before it (a shorthand's key), one `TextEdit` Tx
+/// checked as wrapping a call is; `check` asserts more of the candidate (CARD-36). A plugin's key is
+/// made from `site`'s.
+fn put_on(
+    s: &mut Session,
+    site: &Site,
+    span: &Span,
+    prefix: &str,
+    component: &str,
+    check: impl FnOnce(&Session, &Checked, u32) -> Result<(), EditError>,
+) -> Result<Edited, EditError> {
     if component.starts_with("clap:") {
-        return crate::plugins::add_effect_at(s, &site, &span, component);
+        return crate::plugins::add_effect_at(s, site, span, prefix, component, check);
     }
     let effect = effects(s).into_iter().find(|e| e.component == component).ok_or_else(|| EditError::NotFound(component.to_string()))?;
     let desc = s.catalog().components[component].clone();
@@ -335,23 +502,36 @@ pub fn add_effect_on(s: &mut Session, at: u64, reader: &str, input: &str, compon
         }
     }
     let also = crate::packs::needs(s, component)?;
-    let (open, close) = (format!("{}(", effect.name), format!("{args})"));
+    let (open, close) = (format!("{prefix}{}(", effect.name), format!("{args})"));
     let wrap = Wrap { open, close, imports, callee: effect.name, label: effect.label, before: effect.notes, also };
-    wrap_call(s, &span, wrap, |_, _, _| Ok(()))
+    wrap_call(s, span, wrap, check)
 }
 
-/// Why Remove can't take call `site` out (CARD-36), in words; else the effect or note effect it is.
-/// A call of no component is named by its callee, a hosted plugin by its own name.
-pub(crate) fn removable(s: &Session, site: &Site) -> Result<Arc<Descriptor>, String> {
+/// What Remove takes out: its name, and the text it leaves (the sound it works on).
+pub(crate) struct Removable {
+    pub label: String,
+    pub input: (u32, u32),
+}
+
+/// Why Remove can't take call `site` out (CARD-36), in words; else what it takes out: an effect, a
+/// note effect (its first argument stays), or a hosted plugin's effect (its `in` stays). A call of
+/// no component is named by its callee, a hosted plugin by its own name.
+pub(crate) fn removable(s: &Session, site: &Site) -> Result<Removable, String> {
     let Some(d) = component_at(s, site) else {
-        let plugin = match made_op(s, site) {
-            Some(Op::Plugin { plugin, .. }) => s.packages.plugin_info(&plugin).map(|i| i.found.name.clone()),
-            _ => None,
-        };
-        return Err(format!("{} isn't an effect: change it in code.", plugin.unwrap_or_else(|| site.callee.clone())));
+        if let Some(Op::Plugin { plugin, inputs, .. }) = made_op(s, site) {
+            let name = s.packages.plugin_info(&plugin).map_or_else(|| site.callee.clone(), |i| i.found.name.clone());
+            let input = site.args.get(1).and_then(|a| a.at(&["in".to_string()])).map(Arg::span);
+            return match input {
+                Some(input) if inputs.contains_key("in") => Ok(Removable { label: name, input }),
+                _ => Err(format!("{name} takes no sound in, so there is nothing to keep: change it in code.")),
+            };
+        }
+        return Err(format!("{} isn't an effect: change it in code.", site.callee));
     };
     if d.is_effect() || d.is_note_effect() {
-        return Ok(d);
+        let input =
+            site.args.first().map(Arg::span).ok_or_else(|| format!("{} has no sound written in it: change it in code.", d.label))?;
+        return Ok(Removable { label: d.label.clone(), input });
     }
     let label = &d.label;
     let out = d.output.as_ref().map(|o| o.kind);
@@ -763,6 +943,8 @@ pub(crate) fn wrap_call(
     // Two insertions around the call (R5): an import at the call's own start goes before the
     // wrapping text, in the same edit.
     let mut edits: Vec<(u32, u32, String)> = vec![];
+    // The new call starts where its name does in what is written before it (`out: delay(`).
+    let lead = w.open.find(&format!("{}(", w.callee)).unwrap_or(0) as u32;
     let mut opening = w.open;
     let mut ranges = vec![Range::bytes(span.start, span.end)];
     for (at, line) in &imports {
@@ -791,7 +973,7 @@ pub(crate) fn wrap_call(
         unmoved(s, checked)?;
         // The planner's assertion (WRITE-9): the new call wraps the old one, and nothing else changed.
         let candidate = &checked.candidate().compiled;
-        let new = candidate.sites.iter().find(|x| x.file == span.file && x.start == span.start + shift && x.callee == w.callee);
+        let new = candidate.sites.iter().find(|x| x.file == span.file && x.start == span.start + shift + lead && x.callee == w.callee);
         let new = new.ok_or_else(refused)?.id;
         check(s, checked, new)?;
         match wraps(candidate, &checked.baseline().compiled.ir, new) {
@@ -808,7 +990,7 @@ pub fn remove_effect(s: &mut Session, at: u64, call: &str) -> Result<Edited, Edi
     let site = current_site(s, at, call)?.clone();
     let effect = removable(s, &site).map_err(EditError::Rejected)?;
     let refused = || EditError::Rejected(format!("removing {} would change more than taking it out", effect.label));
-    let input = site.args.first().ok_or_else(refused)?.span();
+    let input = effect.input;
     let text = s.accepted().snapshot.files[Path::new(&site.file)].clone();
     let (written, inner) = (text[site.start as usize..site.end as usize].to_string(), text[input.0 as usize..input.1 as usize].to_string());
     // Two deletions around the input, so its characters stay as they are.

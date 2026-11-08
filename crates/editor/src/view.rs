@@ -1217,6 +1217,8 @@ pub fn view(session: &Session) -> GraphView {
         // The inputs an automation lane drives, by node and port (8b.5); the notes lane each node
         // reads, for a keys view's audition (taste.md DV-9).
         let mut driven: HashMap<(String, String), LaneRef> = HashMap::new();
+        // The argument each wire ends at, by its node and port: what its + wraps (CARD-36).
+        let mut wire_paths: HashMap<(String, String), Vec<String>> = HashMap::new();
         let mut rows_by_ref: HashMap<(String, String), String> = HashMap::new();
         let mut notes_of: HashMap<String, LaneRef> = HashMap::new();
         for ((to, _, r, from), cable) in reads.iter().zip(cables) {
@@ -1224,7 +1226,10 @@ pub fn view(session: &Session) -> GraphView {
             let from_port = give(from_id, r);
             let row = inputs.entry(to_id.clone()).or_default();
             let to_port = match cable {
-                Some(c) => format!("inlet:{}", c.id),
+                Some(c) => {
+                    wire_paths.insert((to_id.clone(), format!("inlet:{}", c.id)), cabled[&c.id].0.path.clone());
+                    format!("inlet:{}", c.id)
+                }
                 None => {
                     let id = format!("in:{from_port}");
                     if !row.iter().any(|(p, _)| p.id == id) {
@@ -1258,6 +1263,9 @@ pub fn view(session: &Session) -> GraphView {
                         if let Some(i) = path.as_ref().and_then(|p| p[0].parse().ok()) {
                             written_at.insert((to_id.clone(), id.clone()), i);
                         }
+                        if let Some(p) = &path {
+                            wire_paths.insert((to_id.clone(), id.clone()), p.clone());
+                        }
                         row.push((port, inside));
                     }
                     id
@@ -1278,8 +1286,11 @@ pub fn view(session: &Session) -> GraphView {
             let late = late.contains(&(to.clone(), *r));
             let bypassed = through.contains(&(to.clone(), *r));
             let plus = match to {
-                Group::Site(t) => crate::effect::plus(session, wire_source(from, &sites), Some(sites[t]), kind(r), late),
-                _ => crate::effect::plus(session, crate::effect::Source::Other, None, kind(r), late),
+                Group::Site(t) => {
+                    let at = wire_paths.get(&(to_id.clone(), to_port.clone())).map(Vec::as_slice);
+                    crate::effect::plus(session, wire_source(from, &sites), crate::effect::To::Call(sites[t], at), kind(r), late)
+                }
+                _ => crate::effect::plus(session, crate::effect::Source::Other, crate::effect::To::Other, kind(r), late),
             };
             wire(PortEdge { from: from_id.clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late, bypassed, plus });
         }
@@ -1289,7 +1300,8 @@ pub fn view(session: &Session) -> GraphView {
             inputs.entry(to_id.clone()).or_default().push((port, None));
             let bypassed = off.iter().any(|(_, out, _)| out == r);
             let to_port = "in".to_string();
-            let plus = crate::effect::plus(session, wire_source(from, &sites), None, kind(r), false);
+            let name = to_id.strip_prefix("export:").unwrap_or(to_id);
+            let plus = crate::effect::plus(session, wire_source(from, &sites), crate::effect::To::Export(name, r), kind(r), false);
             wire(PortEdge { from: ids[from].clone(), from_port, to: to_id.clone(), to_port, kind: kind(r), late: false, bypassed, plus });
         }
         // Inputs in the order they are written in the call; signals from elsewhere first.

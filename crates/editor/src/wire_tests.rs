@@ -149,13 +149,13 @@ fn a_wire_takes_what_fits_its_kind() {
 }
 
 // CARD-36: where nothing can go, the + is greyed with why, and the route refuses in the same words:
-// a source read in more places than the wire into the export, a call made more than once, an
-// argument that spreads, and a helper function's parameter.
+// a source read in more places that no record names, a call made more than once, an argument that
+// spreads, and a helper function's parameter.
 #[test]
 fn where_nothing_can_go_the_view_and_the_route_say_why_alike() {
-    // A track's drum is read by its Follow and its export: its wire into the export would change both.
+    // A track's square is read by its Follow and its export, which its record doesn't name it in.
     let track = "import { hz, track } from \"@m2/core\";\nimport { follow, osc } from \"std/dsp\";\n\n\
-                 export default track(\"k\", { name: \"K\" }, () => {\n  const out = osc.square(hz(55));\n  return { out, env: follow(out) };\n});\n";
+                 export default track(\"k\", { name: \"K\" }, () => {\n  const out = osc.square(hz(55));\n  return { out: [out][0], env: follow(out) };\n});\n";
     let text = format!(
         "{HEAD}import {{ mixer }} from \"std/mix\";\nimport k from \"./tracks/k\";\nexport default song(() => mixer({{ k: k.out }}));\n"
     );
@@ -166,7 +166,7 @@ fn where_nothing_can_go_the_view_and_the_route_say_why_alike() {
     let out = wires(k, &square, "export:out");
     assert_eq!(
         refused(&out[0].plus),
-        "Square is read in 2 places, so an effect after it would change them all: put it on one of its wires, or change it in code."
+        "Square is read in 2 places, and the track's code doesn't name it in the record it returns: change it in code."
     );
     assert_eq!(wires(k, &square, &follow)[0].plus, Plus::Wire { reader: follow.clone(), input: "0".into() });
 
@@ -267,4 +267,167 @@ fn a_wire_inside_a_voice_takes_an_effect_for_each_voice() {
     let at = rev(&s);
     s.add_effect_on(at, &lowpass, "0", "std:limit").unwrap_or_else(|e| panic!("{e}"));
     assert!(f.read("song.ts").contains("(n) => lowpass(limit(osc.saw(n.pitch), -1), 800)"), "{}", f.read("song.ts"));
+}
+
+// ---------------------------------------------------------------- review I
+
+/// A kick track's file, as `text`, in a song that mixes it.
+fn kick_song(track: &str) -> (Fixture, Session) {
+    let text = format!(
+        "{HEAD}import {{ mixer }} from \"std/mix\";\nimport kick from \"./tracks/kick\";\nexport default song(() => mixer({{ kick: kick.out }}));\n"
+    );
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write("song.ts", text);
+    f.write("tracks/kick.ts", track);
+    f.write("data/kick/hits.json", m2_song::canonical(&m2_song::LaneData::Notes(vec![])));
+    let s = f.open();
+    (f, s)
+}
+
+// I2, CARD-36: the kick's wire out, its drum read by its Follow too, wraps the record's property, so
+// the kick's sound takes the effect and the Follow still reads it dry: the starter's and
+// first-song's shorthand, written out, and examples/sounds' `out: kick`. One undo step.
+#[test]
+fn the_kicks_wire_out_wraps_its_records_property() {
+    for (from, track, wrapped) in [
+        ("templates/starter", "{ out, env:", "{ out: delay(out, { time: 0.25, feedback: 0.3, mix: 0.3 }), env:"),
+        ("examples/first-song", "{ out, env:", "{ out: delay(out, { time: 0.25, feedback: 0.3, mix: 0.3 }), env:"),
+        ("examples/sounds", "{ out: kick, env:", "{ out: delay(kick, { time: 0.25, feedback: 0.3, mix: 0.3 }), env:"),
+    ] {
+        let text = std::fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").join(from).join("tracks/kick.ts")).unwrap();
+        assert!(text.contains(track), "{from}");
+        let (f, mut s) = kick_song(&text);
+        let v = crate::view::view(&s);
+        let drum = call(&s, "drums.drum");
+        let out = wires(module(&v, "kick"), &drum, "export:out");
+        assert_eq!(out[0].plus, Plus::Wire { reader: "tracks/kick.ts#export:out".into(), input: "out".into() }, "{from}");
+        let at = rev(&s);
+        s.add_effect_on(at, "tracks/kick.ts#export:out", "out", "@m2/effects:delay").unwrap_or_else(|e| panic!("{from}: {e}"));
+        let now = f.read("tracks/kick.ts");
+        assert!(now.contains(wrapped) && now.contains("follow(") && s.accepted().compiled.problems.is_empty(), "{from}: {now}");
+        let v = crate::view::view(&s);
+        let k = module(&v, "kick");
+        let (delay, follow) = (call(&s, "delay"), call(&s, "follow"));
+        assert_eq!(wires(k, &delay, "export:out").len(), 1, "{from}: the kick's out is the Delay's");
+        assert_eq!(wires(k, &drum, &follow).len(), 1, "{from}: the Follow reads the drum dry");
+        s.undo().unwrap();
+        assert_eq!(f.read("tracks/kick.ts"), text, "{from}: one undo step");
+    }
+}
+
+// I1, CARD-36: a track's sound read twice in the song takes the wire form on each exact read, the
+// review's shape: the kick into the mixer and into a compressor's key.
+#[test]
+fn a_tracks_sound_read_twice_takes_an_effect_on_each_read() {
+    let text = format!(
+        "{HEAD}import {{ compress, limit }} from \"std/fx\";\nimport {{ mixer }} from \"std/mix\";\nimport k from \"./tracks/k\";\n\
+         export default song(() => {{\n  const mix = mixer({{ k: k.out, b: limit(k.out, -1) }});\n  return compress(mix, k.out);\n}});\n"
+    );
+    let track = "import { hz, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\n\nexport default track(\"k\", { name: \"K\" }, () => osc.square(hz(55)));\n";
+    let (f, mut s) = open(&text, &[("tracks/k.ts", track)]);
+    let (mixer, limit, compress) = (call(&s, "mixer"), call(&s, "limit"), call(&s, "compress"));
+    assert_eq!(plus(&s, "import:k.out", &mixer), Plus::Wire { reader: mixer.clone(), input: "0.k".into() });
+    assert_eq!(plus(&s, "import:k.out", &limit), Plus::Wire { reader: limit.clone(), input: "0".into() });
+    assert_eq!(plus(&s, "import:k.out", &compress), Plus::Wire { reader: compress.clone(), input: "1".into() });
+    let at = rev(&s);
+    s.add_effect_on(at, &limit, "0", "std:duck").unwrap_or_else(|e| panic!("{e}"));
+    let now = f.read("song.ts");
+    assert!(
+        now.contains("b: limit(duck(k.out, { depth: -8 }), -1)") && now.contains("{ k: k.out,") && now.contains("compress(mix, k.out)"),
+        "{now}"
+    );
+}
+
+// I4, CARD-36: two wires from one source into one call wrap the argument each ends at.
+#[test]
+fn two_wires_into_one_call_wrap_their_own_arguments() {
+    let text = format!(
+        "{HEAD}import {{ compress }} from \"std/fx\";\nimport {{ add }} from \"std/math\";\n\
+         export default song(() => {{\n  const p = osc.saw(hz(110));\n  const q = osc.sine(hz(220));\n  return add(add(p, p), compress(q, q));\n}});\n"
+    );
+    let (f, mut s) = open(&text, &[]);
+    let v = crate::view::view(&s);
+    let song = module(&v, "song");
+    let saw = call(&s, "osc.saw");
+    let into: Vec<&Plus> = song.port_edges.iter().filter(|e| e.from == saw).map(|e| &e.plus).collect();
+    let mut inputs: Vec<String> = into
+        .iter()
+        .map(|p| match p {
+            Plus::Wire { input, .. } => input.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    inputs.sort();
+    assert_eq!(inputs, ["0", "1"], "add(p, p): a wire into each argument");
+    let sine = call(&s, "osc.sine");
+    let mut keyed: Vec<String> = song
+        .port_edges
+        .iter()
+        .filter(|e| e.from == sine)
+        .map(|e| match &e.plus {
+            Plus::Wire { input, .. } => input.clone(),
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    keyed.sort();
+    assert_eq!(keyed, ["0", "1"], "compress(q, q)");
+    let inner = match into[0] {
+        Plus::Wire { reader, .. } => reader.clone(),
+        _ => unreachable!(),
+    };
+    let at = rev(&s);
+    s.add_effect_on(at, &inner, "1", "std:limit").unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("song.ts").contains("add(add(p, limit(p, -1)),"), "{}", f.read("song.ts"));
+}
+
+// I3, CARD-36: notes going out of a module take no note effect: it goes before what plays them.
+#[test]
+fn notes_into_an_export_take_none() {
+    let track = "import { track } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\n\
+                 export default track(\"k\", { name: \"K\" }, ({ lane }) => ({ out: synth.pluck(lane.notes(\"a\")), notes: lane.notes(\"b\") }));\n";
+    let text = format!(
+        "{HEAD}import {{ mixer }} from \"std/mix\";\nimport k from \"./tracks/k\";\nexport default song(() => mixer({{ k: k.out }}));\n"
+    );
+    let (_f, s) = open(&text, &[("tracks/k.ts", track)]);
+    let v = crate::view::view(&s);
+    let k = module(&v, "k");
+    let e = k.port_edges.iter().find(|e| e.to == "export:notes").expect("the notes go out");
+    assert_eq!(refused(&e.plus), "A note effect goes before what plays these notes: put it on their wire into it.");
+}
+
+// I8, CARD-36: the Mixer's Drums bus, which examples/sounds' Song sends its drums to, says what it is.
+#[test]
+fn a_bus_says_it_is_one() {
+    let f = crate::testing::fixture("examples/sounds");
+    let s = f.open();
+    let v = crate::view::view(&s);
+    let song = module(&v, "song");
+    let bus = song.port_edges.iter().find(|e| e.to.starts_with("export:bus")).unwrap_or_else(|| panic!("{:?}", song.port_edges));
+    assert_eq!(refused(&bus.plus), "This is the Drums bus inside the Mixer: change it in code.");
+}
+
+// I9, CARD-36: a plugin goes on a wire as an effect does, two on two wires of one reader with keys of
+// their own; and Remove takes a plugin's effect out.
+#[test]
+fn plugins_go_on_wires_and_come_out_again() {
+    m2_plugins::test_main_thread();
+    m2_plugins::probe::install();
+    let text = format!("{HEAD}import {{ add }} from \"std/math\";\nexport default song(() => add(osc.saw(hz(110)), osc.sine(hz(220))));\n");
+    let (f, mut s) = open(&text, &[]);
+    let add = call(&s, "add");
+    let at = rev(&s);
+    s.add_effect_on(at, &add, "0", "clap:m2.probe").unwrap_or_else(|e| panic!("{e}"));
+    let at = rev(&s);
+    s.add_effect_on(at, &add, "1", "clap:m2.probe").unwrap_or_else(|e| panic!("{e}"));
+    let now = f.read("song.ts");
+    assert!(now.contains("add(plugin(\"clap:m2.probe\", { in: osc.saw(hz(110)), key: \"m2-probe\" }), plugin(\"clap:m2.probe\", { in: osc.sine(hz(220)), key: \"m2-probe-2\" }))"), "{now}");
+    let v = crate::view::view(&s);
+    let first = s.accepted().compiled.sites.iter().find(|x| x.in_project && x.callee == "plugin").unwrap();
+    let id = format!("{}#{}", first.file, first.ordinal);
+    let node = module(&v, "song").nodes.iter().find(|n| n.id == id).unwrap();
+    assert_eq!(node.remove, None, "Remove takes a plugin's effect out");
+    let at = rev(&s);
+    s.remove_effect(at, &id).unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("song.ts").contains("add(osc.saw(hz(110)), plugin("), "{}", f.read("song.ts"));
 }

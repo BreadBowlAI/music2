@@ -165,7 +165,7 @@ pub(crate) fn add_effect(s: &mut Session, at: u64, call: &str, component: &str) 
     if !site.in_project {
         return Err(EditError::NotFound(call.to_string()));
     }
-    add_effect_at(s, &site, &crate::effect::Span::of(&site), component)
+    add_effect_at(s, &site, &crate::effect::Span::of(&site), "", component, |_, _, _| Ok(()))
 }
 
 /// Whether installed plugin `component` is an effect (it takes a sound in), or why not; and its name.
@@ -183,7 +183,14 @@ pub(crate) fn effect_name(s: &mut Session, component: &str) -> Result<String, Ed
 
 /// Put installed plugin `component` around the text at `span`, a call or one argument of call `site`
 /// (CARD-36): its key is made from `site`'s.
-pub(crate) fn add_effect_at(s: &mut Session, site: &Site, span: &crate::effect::Span, component: &str) -> Result<Edited, EditError> {
+pub(crate) fn add_effect_at(
+    s: &mut Session,
+    site: &Site,
+    span: &crate::effect::Span,
+    prefix: &str,
+    component: &str,
+    check: impl FnOnce(&Session, &Checked, u32) -> Result<(), EditError>,
+) -> Result<Edited, EditError> {
     let info = described(s, component)?;
     let name = info.name;
     if !info.audio_in || info.instrument_only {
@@ -196,9 +203,11 @@ pub(crate) fn add_effect_at(s: &mut Session, site: &Site, span: &crate::effect::
     let text = s.accepted().snapshot.files.get(Path::new(&span.file)).ok_or_else(|| EditError::NotFound(span.file.clone()))?;
     let imports = import_insertion(text, "@m2/core", "plugin").into_iter().collect();
     let (open, close) = effect_text(component, &key);
+    let open = format!("{prefix}{open}");
     let wrap = Wrap { open, close, imports, callee: "plugin".into(), label: name.clone(), before: false, also: Default::default() };
-    wrap_call(s, span, wrap, |_, checked, new| {
+    wrap_call(s, span, wrap, |s, checked, new| {
         installed_in(checked, component)?;
+        check(s, checked, new)?;
         match one_plugin(&checked.candidate().compiled, new, component, &key) {
             true => Ok(()),
             false => Err(EditError::Rejected(format!("adding {name} here would change more than putting it after this sound"))),
