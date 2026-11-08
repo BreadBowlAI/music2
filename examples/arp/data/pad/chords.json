@@ -1,0 +1,28 @@
+{"clips": [
+  {"id": "padchords", "start": 0, "length": 32, "notes": [
+    {"pitch": "C3", "start": 0, "length": 4, "velocity": 0.6},
+    {"pitch": "E3", "start": 0, "length": 4, "velocity": 0.6},
+    {"pitch": "G3", "start": 0, "length": 4, "velocity": 0.6},
+    {"pitch": "B2", "start": 4, "length": 4, "velocity": 0.6},
+    {"pitch": "D3", "start": 4, "length": 4, "velocity": 0.6},
+    {"pitch": "G3", "start": 4, "length": 4, "velocity": 0.6},
+    {"pitch": "A2", "start": 8, "length": 4, "velocity": 0.6},
+    {"pitch": "C3", "start": 8, "length": 4, "velocity": 0.6},
+    {"pitch": "E3", "start": 8, "length": 4, "velocity": 0.6},
+    {"pitch": "A2", "start": 12, "length": 4, "velocity": 0.6},
+    {"pitch": "C3", "start": 12, "length": 4, "velocity": 0.6},
+    {"pitch": "F3", "start": 12, "length": 4, "velocity": 0.6},
+    {"pitch": "C3", "start": 16, "length": 4, "velocity": 0.6},
+    {"pitch": "E3", "start": 16, "length": 4, "velocity": 0.6},
+    {"pitch": "G3", "start": 16, "length": 4, "velocity": 0.6},
+    {"pitch": "B2", "start": 20, "length": 4, "velocity": 0.6},
+    {"pitch": "D3", "start": 20, "length": 4, "velocity": 0.6},
+    {"pitch": "G3", "start": 20, "length": 4, "velocity": 0.6},
+    {"pitch": "A2", "start": 24, "length": 4, "velocity": 0.6},
+    {"pitch": "C3", "start": 24, "length": 4, "velocity": 0.6},
+    {"pitch": "E3", "start": 24, "length": 4, "velocity": 0.6},
+    {"pitch": "A2", "start": 28, "length": 4, "velocity": 0.6},
+    {"pitch": "C3", "start": 28, "length": 4, "velocity": 0.6},
+    {"pitch": "F3", "start": 28, "length": 4, "velocity": 0.6}
+  ]}
+]}

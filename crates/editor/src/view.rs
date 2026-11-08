@@ -305,6 +305,10 @@ pub struct Knob {
     /// Why it can't be automated (HOME-2), when it can't: its menu says so instead of offering it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub automate_refused: Option<String>,
+    /// Why no cable can drive it, when none can (a note effect's value, RENDER-41): the patch
+    /// doesn't offer it to a dragged cable (DV-6).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cable_refused: Option<String>,
     /// What it is (CARD-2): a number, a choice or a switch control (CARD-20), whose menu writes its
     /// option's name or `true` or `false`, or a plugin's stepped parameter as a choice or a switch
     /// (CARD-6), whose menu writes its option's number.
@@ -745,6 +749,7 @@ pub fn view(session: &Session) -> GraphView {
                 uses: c.uses,
                 home: c.home,
                 automate_refused: automate_refused(c, &value_key(&c.origin).expect("keyed")),
+                cable_refused: crate::cable::cable_refused(session, c),
                 kind,
                 options,
             });

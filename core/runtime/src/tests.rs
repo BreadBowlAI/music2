@@ -15,6 +15,7 @@ mod kinds;
 mod latency;
 mod limits;
 mod live;
+mod notes;
 mod overlay;
 mod parts;
 mod poly;

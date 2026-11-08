@@ -104,7 +104,7 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // Rust tests of this kind: ci/sleeps-tests.txt). It says nothing of the run's tier.
 export const SUITES = [
   ["graph", "proj", { expect: 19, s: 3 }],
-  ["cables", "cables", { expect: 12, s: 5 }],
+  ["cables", "cables", { expect: 15, s: 5 }],
   ["undo", "cables", { expect: 10, s: 6 }],
   ["nx-undo", "fix", { expect: 18, s: 2 }],
   ["ag-notice", "fix", { expect: 53, s: 22 }],
@@ -198,8 +198,8 @@ export const SUITES = [
   ["card-views", "fix", { expect: 61, s: 12 }],
   // On Device's chain (taste.md DV-11): the pictures by their tabs, the switch, the scope and the lane of names.
   ["card-views", "chain", { expect: 41, s: 12 }],
-  ["frame", "fix", { expect: 81, s: 14 }],
-  ["pictures", "fix", { expect: 42, s: 10 }],
+  ["frame", "fix", { expect: 86, s: 14 }],
+  ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
   ["dress2a", "fix", { expect: 82, s: 18 }],

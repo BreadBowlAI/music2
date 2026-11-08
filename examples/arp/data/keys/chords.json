@@ -1,0 +1,28 @@
+{"clips": [
+  {"id": "arpchords", "start": 0, "length": 32, "notes": [
+    {"pitch": "C4", "start": 0, "length": 4, "velocity": 0.8},
+    {"pitch": "E4", "start": 0, "length": 4, "velocity": 0.8},
+    {"pitch": "G4", "start": 0, "length": 4, "velocity": 0.8},
+    {"pitch": "B3", "start": 4, "length": 4, "velocity": 0.8},
+    {"pitch": "D4", "start": 4, "length": 4, "velocity": 0.8},
+    {"pitch": "G4", "start": 4, "length": 4, "velocity": 0.8},
+    {"pitch": "A3", "start": 8, "length": 4, "velocity": 0.8},
+    {"pitch": "C4", "start": 8, "length": 4, "velocity": 0.8},
+    {"pitch": "E4", "start": 8, "length": 4, "velocity": 0.8},
+    {"pitch": "A3", "start": 12, "length": 4, "velocity": 0.8},
+    {"pitch": "C4", "start": 12, "length": 4, "velocity": 0.8},
+    {"pitch": "F4", "start": 12, "length": 4, "velocity": 0.8},
+    {"pitch": "C4", "start": 16, "length": 4, "velocity": 0.8},
+    {"pitch": "E4", "start": 16, "length": 4, "velocity": 0.8},
+    {"pitch": "G4", "start": 16, "length": 4, "velocity": 0.8},
+    {"pitch": "B3", "start": 20, "length": 4, "velocity": 0.8},
+    {"pitch": "D4", "start": 20, "length": 4, "velocity": 0.8},
+    {"pitch": "G4", "start": 20, "length": 4, "velocity": 0.8},
+    {"pitch": "A3", "start": 24, "length": 4, "velocity": 0.8},
+    {"pitch": "C4", "start": 24, "length": 4, "velocity": 0.8},
+    {"pitch": "E4", "start": 24, "length": 4, "velocity": 0.8},
+    {"pitch": "A3", "start": 28, "length": 4, "velocity": 0.8},
+    {"pitch": "C4", "start": 28, "length": 4, "velocity": 0.8},
+    {"pitch": "F4", "start": 28, "length": 4, "velocity": 0.8}
+  ]}
+]}

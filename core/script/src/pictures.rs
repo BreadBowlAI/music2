@@ -574,6 +574,8 @@ pub enum Use {
     Rate,
     /// A response's click at a level other than −20 dB (CARD-80).
     Level,
+    /// A bare axis: the picture's grid and numbers left off (CARD-60).
+    Bare,
 }
 
 /// Whether `t` is text of `lo` to `hi` characters (code points), with no control character, nor a

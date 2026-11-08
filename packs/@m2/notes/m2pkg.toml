@@ -1,0 +1,85 @@
+[package]
+name = "@m2/notes"
+version = "0.1.0"
+license = "MIT OR Apache-2.0"
+description = "music2's note effects, which go before an instrument: the Arpeggiator, Chord, Note echo and Lock to key"
+authors = ["music2"]
+repository = "https://github.com/BreadBowlAI/music2"
+tags = ["arpeggiator", "arp", "chords", "note echo", "lock to key", "scale", "notes", "midi effects"]
+# Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
+# part of the pack (PACK-20).
+wasm = "kernels/notes.wasm"
+
+[dependencies]
+# @m2/core 2.5, the pack contract (PACK-22) and the minor it uses (PACK-23): note effects (PKG-21)
+# and the song's tempo, `time.tempo` (RENDER-7), came in 2.5. So any 2.x from 2.5 runs it, and a
+# change to @m2/core that would break it is a 3.0.0.
+"@m2/core" = "2.5"
+# Its pictures read their values as std/pictures' do (CARD-90), new in std 0.10. It plays none of
+# std's kernels.
+std = "0.10"
+
+# ---------------------------------------------------------------- its own kernels
+# Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/notes:arp", …)`.
+# Each is a note effect (ABI-15, RENDER-41): it takes notes and gives notes, run in the lane pass
+# behind the guard (RENDER-42). Each gives only notes the guard plays (a pitch from 0 to 127, a
+# velocity from 0 to 1), ends every note it starts, and passes the wheels and the pedal on as they
+# come (PACK-29). A value past its range plays as its nearest end; one that isn't a number, as its
+# default. A whole number (an inversion, the repeats, a shift) is the nearest one.
+
+[[kernel]]
+name = "arp"
+description = "The Arpeggiator (PACK-30): the notes held, one at a time, in a pattern, on the song's grid while it plays and at time.tempo from the first key while it is stopped. style: up, down, up and down, as played, random (from values[0], the seed); rate: a step of 1, 1/2, 1/3, 1/4, 1/6 or 1/8 of a beat; octaves 1 to 4; gate times each step; hold latches the keys played live (ids with the kit's LIVE bit) once let go, playing or stopped, until a new key, Play or a Stop (a seek or a loop's wrap keeps them); swing moves the second step of each pair. Its meter step is where its picture draws the step playing, in beats, -1 while no note is held"
+inputs = [
+  "notes: events<note>",
+  "beats: control<beats>",
+  "playing: control<unit01> = 1",
+  "tempo: control<bpm> = 120",
+  "style: control<choice<up|down|updown|played|random>> = 0",
+  "rate: control<choice<1/4|1/8|1/8T|1/16|1/16T|1/32>> = 3",
+  "octaves: control<choice<1|2|3|4>> = 0",
+  "gate: control<scalar> = 0.8 in 0.1..2",
+  "hold: control<switch> = 0",
+  "swing: control<unit01> = 0.5 in 0.5..0.71",
+]
+outputs = ["out: events<note>"]
+meters = ["step: control<beats>"]
+
+[[kernel]]
+name = "chord"
+description = "Chord (PACK-31): each note plays a chord, at once, as hard as it, ended with it. In key (and the song has a key): the note goes to the key's nearest note, then the chord stacks the key's notes from it, as the roll's chord stamps do. Else the shape's fixed notes. shape: octave, fifth, triad, 7th, sus2, sus4, add9; inversion 0 to 3: that many times the lowest note goes up an octave. 4 notes at most"
+inputs = [
+  "notes: events<note>",
+  "key: control<keyset> = 4095",
+  "shape: control<choice<octave|fifth|triad|7th|sus2|sus4|add9>> = 2",
+  "in_key: control<switch> = 1",
+  "inversion: control<scalar> = 0 in 0..3",
+]
+outputs = ["out: events<note>"]
+fan = 4
+
+[[kernel]]
+name = "echo"
+description = "Note echo (PACK-32): each note, then repeats echoes, time apart on the song's beat (at time.tempo while it is stopped), each fall quieter than the last and pitch semitones higher, each as long as the note. time: 1, 1/2, 1/3, 1/4, 1/6 or 1/8 of a beat; repeats 1 to 7, so a note and its echoes are its fan of 8. Play, a Stop, a seek and a loop's wrap end the echoes"
+inputs = [
+  "notes: events<note>",
+  "beats: control<beats>",
+  "playing: control<unit01> = 1",
+  "tempo: control<bpm> = 120",
+  "time: control<choice<1/4|1/8|1/8T|1/16|1/16T|1/32>> = 1",
+  "repeats: control<scalar> = 3 in 1..7",
+  "fall: control<unit01> = 0.3",
+  "pitch: control<semitones> = 0 in -12..12",
+]
+outputs = ["out: events<note>"]
+fan = 8
+
+[[kernel]]
+name = "lock"
+description = "Lock to key (PACK-33): each note moved to the key's nearest note, a tie going down, then shift notes of the key up (down below 0), -7 to 7. With no key (key 4095) every note plays as it is"
+inputs = [
+  "notes: events<note>",
+  "key: control<keyset> = 4095",
+  "shift: control<scalar> = 0 in -7..7",
+]
+outputs = ["out: events<note>"]

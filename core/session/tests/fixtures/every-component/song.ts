@@ -8,6 +8,7 @@ import { drums } from "@m2/drums";
 import { bass, fm, pad, pluck, synth } from "@m2/synths";
 import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
+import { arp, chord, echo, lockToKey } from "@m2/notes";
 import { compress, duck, eq3, limit } from "std/fx";
 import { add, blend, mtof, range, scale, sum, xrange } from "std/math";
 import { master, mixer } from "std/mix";
@@ -70,5 +71,6 @@ export default song(({ lane, time }) => {
   );
   const tables = wavetable(lane.notes("tables"), { tableA: "vowels", positionA: level, filter: "bandpass", unison: 3 });
   const voice = tune(lowpass(buzz, 1500), { glide: 0, amount: 0.8 });
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice }));
+  const noted = synth.pluck(echo(arp(chord(lockToKey(lane.notes("noted"), { shift: 1 }), { shape: "7th", inversion: 1 }), { rate: "1/8", octaves: "2", gate: 0.5 }), { repeats: 2 }));
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted }));
 });

@@ -192,3 +192,82 @@ fn a_note_effect_is_bypassed_moved_and_removed_as_an_effect_is() {
     s.undo().unwrap();
     assert_eq!(f.read("song.ts"), text);
 }
+
+// PKG-21, PACK-29, PKG-3: each of `@m2/notes`' four goes before an instrument as its notes' wrap,
+// one undo step, and every control it declares is a knob on it from the start, at its default.
+#[test]
+fn music2s_own_note_effects_go_before_an_instrument_each_value_a_knob() {
+    let text = "import { song } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\n\
+                export default song(({ lane }) => synth.pluck(lane.notes(\"chords\")));\n";
+    let ours = |s: &Session| -> Vec<crate::effect::EffectInfo> {
+        s.effects().into_iter().filter(|e| e.component.starts_with("@m2/notes:")).collect()
+    };
+    let f = Fixture::new();
+    f.write("music2.toml", format!("{}\"@m2/notes\" = \"0.1\"\n", crate::testing::MANIFEST));
+    f.write("song.ts", text);
+    let listed = ours(&f.open());
+    let ids: Vec<&str> = listed.iter().map(|e| e.component.as_str()).collect();
+    assert_eq!(ids, ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock-to-key"]);
+    for e in &listed {
+        assert!(e.notes, "{}: a note effect", e.component);
+        let mut s = f.open();
+        let added = s.add_effect(rev(&s), &call(&s, "synth.pluck"), &e.component).unwrap_or_else(|x| panic!("{}: {x}", e.component));
+        assert_eq!(added.after, format!("{}(lane.notes(\"chords\"))", e.name), "{}", e.component);
+        assert!(f.read("song.ts").contains(&format!("import {{ {} }} from \"@m2/notes\";", e.name)), "{}", f.read("song.ts"));
+        let d = s.catalog().components[&e.component].clone();
+        let node = s.view().modules[0].nodes.iter().find(|n| n.component.as_deref() == Some(&e.component)).cloned().expect("its card");
+        let mut knobs: Vec<&str> = node.knobs.iter().map(|k| k.slot.as_deref().unwrap()).collect();
+        knobs.sort();
+        let mut declared: Vec<&str> = d.controls.iter().map(|c| c.name.as_str()).collect();
+        declared.sort();
+        assert_eq!(knobs, declared, "{}: every value a knob", e.component);
+        assert!(node.knobs.iter().all(|k| !k.written), "{}: each at its default", e.component);
+        s.undo().unwrap();
+        assert_eq!(f.read("song.ts"), text, "{}: one undo step", e.component);
+    }
+}
+
+// PACK-10, PACK-18: adding the Arpeggiator to a song that doesn't list `@m2/notes` lists it, at the
+// line for the version music2 comes with, and locks it, in the same undo step.
+#[test]
+fn adding_music2s_arpeggiator_lists_and_locks_its_pack() {
+    let f = Fixture::new();
+    f.write("music2.toml", crate::testing::MANIFEST);
+    f.write("song.ts", "import { song } from \"@m2/core\";\nimport { synth } from \"@m2/synths\";\nexport default song(({ lane }) => synth.pluck(lane.notes(\"chords\")));\n");
+    let mut s = f.open();
+    s.add_effect(rev(&s), &call(&s, "synth.pluck"), "@m2/notes:arp").unwrap_or_else(|e| panic!("{e}"));
+    assert!(f.read("music2.toml").contains("\"@m2/notes\" = \"0.1\""), "{}", f.read("music2.toml"));
+    assert!(f.read("music2.lock").contains("name = \"@m2/notes\"\nversion = \"0.1.0\""), "{}", f.read("music2.lock"));
+    assert!(f.read("song.ts").contains("synth.pluck(arp(lane.notes(\"chords\")))"));
+    s.undo().unwrap();
+    assert!(!f.read("music2.toml").contains("@m2/notes"));
+}
+
+// RENDER-41, DV-6: a cable into a note effect's value is refused before anything is written, in the
+// card's own words, and the view says so on each of the note effects' knobs, so the patch never
+// offers one to a dragged cable; any other knob takes a cable as before.
+#[test]
+fn a_cable_into_a_note_effects_value_is_refused_in_words() {
+    let f = crate::gate5_tests::every_component();
+    let mut s = f.open();
+    let wobble = s.outlets().into_iter().find(|o| o.name == "wobble").expect("every-component names `wobble`");
+    let of = |s: &Session, component: &str, slot: &str| {
+        s.controls().into_iter().find(|c| c.declared.iter().any(|d| d.component == component && d.slot == slot)).unwrap()
+    };
+    let gate = of(&s, "@m2/notes:arp", "gate");
+    let before = f.read("song.ts");
+    let said = s.connect(wobble.revision, &wobble.id, &gate.id).unwrap_err();
+    let want = "The Arpeggiator's Gate can't take a cable: a note effect plays before the song's sounds. Draw it on the timeline instead (Automate)";
+    assert!(matches!(&said, EditError::Rejected(m) if m == want), "{said:?}");
+    assert_eq!(f.read("song.ts"), before, "nothing written");
+    let shift = of(&s, "@m2/notes:lock-to-key", "shift");
+    let said = s.connect(wobble.revision, &wobble.id, &shift.id).unwrap_err();
+    assert!(matches!(&said, EditError::Rejected(m) if m.starts_with("The Lock to key's Shift can't take a cable")), "{said:?}");
+    let knobs: Vec<crate::Knob> = s.view().modules.into_iter().flat_map(|m| m.nodes).flat_map(|n| n.knobs).collect();
+    let note_effect = |k: &crate::Knob| k.component.as_deref().is_some_and(|c| c.starts_with("@m2/notes:"));
+    assert!(knobs.iter().filter(|k| note_effect(k)).count() >= 10, "the four's knobs");
+    for k in &knobs {
+        assert_eq!(k.cable_refused.is_some(), note_effect(k), "{} ({:?}): {:?}", k.label, k.component, k.cable_refused);
+    }
+    assert_eq!(knobs.iter().find(|k| k.id == gate.id).and_then(|k| k.cable_refused.as_deref()), Some(want));
+}

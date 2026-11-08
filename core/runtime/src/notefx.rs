@@ -219,7 +219,7 @@ impl NoteEffect {
         // header's own address; past the room, a drop (RENDER-42).
         let count = u32::from_le_bytes(p.data[out..out + 4].try_into().expect("4 bytes")) as usize;
         let given = &p.data[out + NOTES_HEAD..out + NOTES_HEAD + count.min(guard.room) * EVENT_BYTES];
-        let dropped = guard.take(given, &b.runs, hush, next) | (count > guard.room);
+        let dropped = guard.take(given, &b.runs, hush, next, b.live) | (count > guard.room);
         // Its meters, for the window (ABI-13).
         for m in 0..self.meters {
             if let (Some(&at), Some(buf)) = (p.outs.get(1 + m), graph.bufs[self.node].get_mut(1 + m)) {
@@ -495,9 +495,10 @@ impl Guard {
     }
 
     /// Read what the kernel gave this block, `given` (24 bytes an event), into its events: in
-    /// RENDER-14's order, checked, numbered from `next`; ending every note at a seek, a Stop or a
-    /// wrap in `runs`, and at frame 0 when `hush`. Whether it left any out. Never allocates.
-    fn take(&mut self, given: &[u8], runs: &Runs, hush: bool, next: &mut u32) -> bool {
+    /// RENDER-14's order, checked, numbered from `next`, with the live bit of the kernel's id only
+    /// while it plays `live`; ending every note at a seek, a Stop or a wrap in `runs`, and at frame 0
+    /// when `hush`. Whether it left any out. Never allocates.
+    fn take(&mut self, given: &[u8], runs: &Runs, hush: bool, next: &mut u32, live: bool) -> bool {
         let n = given.len() / EVENT_BYTES;
         let raw = |i: usize| &given[i * EVENT_BYTES..(i + 1) * EVENT_BYTES];
         // A counting sort by frame and kind: one pass to count, one to place. Stable, so a frame's
@@ -552,8 +553,10 @@ impl Guard {
                     if self.len == self.notes.len() {
                         self.end_one(self.first, frame, 0.0);
                     }
-                    if self.start(e, *next) {
-                        *next = next.checked_add(1).unwrap_or(1);
+                    // The engine's next id, with the live bit of the kernel's while it plays live, and
+                    // none offline: an export has no live keys (RENDER-14).
+                    if self.start(e, *next | if live { id & crate::event::LIVE_BIT } else { 0 }) {
+                        crate::event::take_id(next);
                     } else {
                         dropped = true;
                     }

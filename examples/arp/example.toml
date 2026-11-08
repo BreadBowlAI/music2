@@ -1,0 +1,4 @@
+# How the start screen lists this example. Not copied into the song.
+name = "Arpeggiator"
+description = "Held chords played one note at a time by music2's Arpeggiator, into a pluck, over a pad and a kick"
+order = 6

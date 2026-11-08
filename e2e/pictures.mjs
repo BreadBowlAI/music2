@@ -6,7 +6,8 @@
 // one edit, one undo step, which ⌘Z takes back byte for byte. Picking a dot shows its band's tab
 // (taste.md DV-18); a double-click turns its band off (one write). An agent asking for the picture reads
 // the same shapes the window drew, as numbers, and each dot's knob ids (CARD-67). Each state linted.
-// No axis label covers the curve, at each height a picture is drawn (taste.md DV-17, DV-19).
+// No axis label covers the curve, at each height a picture is drawn (taste.md DV-17, DV-19). A
+// keyboard picture, on bare axes, shows no numbers and no grid (CARD-60).
 //
 //   node e2e/pictures.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -321,5 +322,20 @@ await (await page.$(patchPic))?.screenshot({ path: `${ROOT}/pictures-live-zoomed
 await api("/transport", { method: "POST", body: JSON.stringify({ action: "stop" }) });
 check(laid.reads >= r0 + 3 && laid.live === laid.shapes, `zoomed to ${(await onScreen()).toFixed(2)} px tall on screen (laid out at ${laid.size}), the live layers' plot is the curve's: ${laid.live} against ${laid.shapes} (left, width, height; ${laid.reads - r0} reads)`);
 await page.click('button[aria-label="Fit to panel"]');
+
+// A keyboard's numbers would mean nothing: its axes are bare, with no grid and no numbers (CARD-60,
+// review P8). An agent puts a Chord before the Keys' Pluck; its keyboard shows its keys and names alone.
+const keysNow = (await api("")).body;
+const pluck = keysNow.view.modules.find((m) => m.key === "keys").nodes.find((n) => n.kind === "call" && n.audio);
+const added = await agent("/api/graph/effect/add", { session: keysNow.session, revision: keysNow.view.revision, call: pluck.id, component: "@m2/notes:chord" });
+check(await until(() => read("tracks/keys.ts").includes("chord(lane.notes"), 15000), `an agent puts a Chord before the Keys' pluck: ${JSON.stringify(added).slice(0, 160)}`);
+await page.click('[data-module-tab="keys"] [data-testid=track-label]');
+const keyboard = '[data-testid=graph] [data-module="keys"] [data-picture="keyboard"] svg';
+check(await until(async () => Number(await page.$eval(keyboard, (e) => e.dataset.shapes).catch(() => "0")) > 0, 15000), "Chord's keyboard is drawn");
+const numbers = await page.$eval(keyboard, (svg) => ({
+  ticks: [...svg.querySelectorAll("text[data-tick]")].map((t) => t.textContent),
+  grid: [...svg.querySelectorAll("line")].filter((l) => l.getAttribute("stroke") === "var(--color-line)").length,
+}));
+check(numbers.ticks.length === 0 && numbers.grid === 0, `a keyboard picture shows no numbers and no grid: ${JSON.stringify(numbers)}`);
 
 done(errors);

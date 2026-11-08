@@ -670,7 +670,7 @@ mod tests {
             .map(|p| format!("{} {}", p.name, p.version))
             .collect();
         assert_eq!(installed, bundled);
-        assert_eq!(installed.len(), 6, "music2's six own packs");
+        assert_eq!(installed.len(), 7, "music2's seven own packs");
         // A new song from the starter template, locked to them (PACK-18), builds from this store
         // alone: no registry, no network.
         let song = project::create(&home, "Song", &resources::templates_dir().join("starter")).unwrap();

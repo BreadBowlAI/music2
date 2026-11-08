@@ -225,6 +225,16 @@ fn a_pictures_declaration_is_refused_in_words() {
     let b = picture(time, code).unwrap_or_else(|e| panic!("{e:?}"));
     let ViewOf::Picture { x, .. } = &b.components.iter().find(|d| d.id == "c").unwrap().editor.views[0].of else { panic!() };
     assert_eq!((x.scale.as_str(), &x.unit, x.lo, x.hi), ("time", &m2_ir::Unit::Seconds, 0.0, 2.0));
+    assert!(!x.bare, "an axis isn't bare unless it says so");
+    // CARD-60: an axis drawn bare, with no grid and no numbers, carried as such; one that isn't
+    // carries no `bare`, so its descriptor keeps its bytes.
+    let bare = "view.picture({ x: axis.lin(\"scalar\", 0, 15, { bare: true }), y: axis.time(1, { bare: false }) })";
+    let b = picture(bare, code).unwrap_or_else(|e| panic!("{e:?}"));
+    let d = b.components.iter().find(|d| d.id == "c").unwrap();
+    let ViewOf::Picture { x, y, .. } = &d.editor.views[0].of else { panic!() };
+    assert!(x.bare && !y.bare, "{x:?} {y:?}");
+    let text = serde_json::to_string(&d.editor.views[0]).unwrap();
+    assert_eq!(text.matches("bare").count(), 1, "only the bare axis says it: {text}");
     let views = "editor.views' \"curve\"";
     for (bad, code_, says, at) in [
         (
@@ -270,6 +280,18 @@ fn a_pictures_declaration_is_refused_in_words() {
             views,
         ),
         (ok.replace(" })", ", colour: \"red\" })"), code, "a picture has no field \"colour\" (fields: x, y, live)", views),
+        (
+            ok.replace("axis.lin(\"db\", -24, 24)", "axis.lin(\"db\", -24, 24, { bare: 1 } as any)"),
+            code,
+            "its y axis's bare is true or false, not 1",
+            views,
+        ),
+        (
+            ok.replace("axis.lin(\"db\", -24, 24)", "axis.lin(\"db\", -24, 24, { bars: true } as any)"),
+            code,
+            "its y axis has no option \"bars\" (options: bare)",
+            views,
+        ),
         (
             ok.into(),
             "",
@@ -518,7 +540,7 @@ export const rated = component(
 // CARD-87, PACK-23 (review S4): a draw is marked by what it used that came in 2.5: `rate` when it or
 // its words read p.rate, a part given again from where it was kept marking it as when it was made
 // (so a picture's first draw, run twice, is the same both times); `level` for a response's level
-// other than −20. One that used neither has no mark.
+// other than −20; `bare` for a picture with a bare axis (CARD-60). One that used none has no mark.
 #[test]
 fn a_draw_is_marked_by_what_of_2_5_it_used() {
     let index = r#"import { axis, component, control, kernel, port, view, type Audio } from "@m2/core";
@@ -530,7 +552,7 @@ export const marks = component(
     inputs: { x: port.audio() },
     controls: { freq: control.hz(1000) },
     output: port.audio(),
-    editor: { views: { plain: curve(), drawn: curve(), said: curve(), parted: curve(), quiet: curve(), loud: curve(), both: curve() } },
+    editor: { views: { plain: curve(), drawn: curve(), said: curve(), parted: curve(), quiet: curve(), loud: curve(), both: curve(), bare: view.picture({ x: axis.log("hz", 20, 20000), y: axis.lin("db", -24, 24, { bare: true }) }) } },
   },
   (x, v) => kernel<Audio>("test:marks", { x, ...v }),
   {
@@ -541,6 +563,7 @@ export const marks = component(
     quiet: { draw: (v, p) => [p.response({ level: -80 })], words: () => "a quiet click" },
     loud: { draw: (v, p) => [p.response({ level: -20 })], words: () => "a click at −20 dB, as with none" },
     both: { draw: (v, p) => [p.response({ level: -60 }), p.mark("x", p.rate / 4, "a quarter of the rate")], words: () => "both" },
+    bare: { draw: (v, p) => [p.mark("x", v.freq ?? 1000, "its frequency")], words: () => "on a bare axis" },
   },
 );
 "#;
@@ -555,6 +578,7 @@ export const marks = component(
     assert_eq!(uses("quiet"), json!(["level"]));
     assert_eq!(uses("loud"), Value::Null, "a click at −20 dB plays as one with no level");
     assert_eq!(uses("both"), json!(["level", "rate"]));
+    assert_eq!(uses("bare"), json!(["bare"]), "a picture with a bare axis (CARD-60)");
 }
 
 // CARD-61, CARD-65: words are one line of 1 to 400 characters, counted as characters, with no

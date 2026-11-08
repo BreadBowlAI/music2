@@ -201,7 +201,7 @@ carries() {
     [ -x "$f" ] || fail "no program $f"
   done
   for f in std/m2pkg.toml std/kernels/std.wasm std/src std/samples.toml std/samples/kit/kick.wav packs/@m2/synths/m2pkg.toml \
-    packs/@m2/drums/m2pkg.toml packs/@m2/effects/m2pkg.toml packs/@m2/synths/presets ${app:+web/index.html}; do
+    packs/@m2/drums/m2pkg.toml packs/@m2/effects/m2pkg.toml packs/@m2/notes/m2pkg.toml packs/@m2/synths/presets ${app:+web/index.html}; do
     [ -e "$res/$f" ] || fail "nothing at $res/$f"
   done
   n=$(ls "$ROOT/templates" | grep -cv '\.md$' || true)

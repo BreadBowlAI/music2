@@ -1,0 +1,6 @@
+# The exact version of each pack this song uses, made by music2 (PACK-8). Don't edit it by hand.
+
+[[pack]]
+name = "@m2/notes"
+version = "0.1.0"
+hash = "sha256:be0127ee1e02a7fb4b4b0056ef5930266cd36fd135c3445cae251823364aadbe"
