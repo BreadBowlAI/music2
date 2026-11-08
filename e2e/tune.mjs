@@ -3,7 +3,7 @@
 // the track's own code, its import, the pack's [dependencies] line and its lock in one edit. Its card
 // says "Every note allowed" with Set the key while the song has no key (its tooltip: "No key set:
 // every note is allowed."); Set the key opens the key field, and once a key is picked the card says
-// it ("Key: A major"). Glide and Amount are knobs: dragging each writes
+// it ("Key: A major"). Glide, Amount and Formant (since track voice2) are knobs: dragging each writes
 // its new value into the call, one undo step each. The Robot preset writes Glide 0, one undo step.
 // Its face draws its pitch line (VOX-27): while the song plays the voice (216 Hz, 56.68 as a MIDI
 // number), the faint line says how far it is from A (57), the nearest note of A major: 0.32 of a
@@ -134,10 +134,18 @@ await until(async () => (await page.$eval(amount, (e) => e.getAttribute("aria-di
 await turn(amount, -30);
 check(await until(() => /amount: 0\.\d+ \}\)/.test(read("tracks/vox.ts"))), `dragging Amount down writes less: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(await stepIs("Tune amount"), `one undo step: ${await undoTitle()}`);
+// VOX-20: Formant, the voice's colour, left out of the call until it is turned.
+const formant = `${card} [data-knob="formant"]`;
+check(!!(await until(() => page.$(formant), 5000)), "Formant is a knob");
+await until(async () => (await page.$eval(formant, (e) => e.getAttribute("aria-disabled")).catch(() => "true")) !== "true");
+await turn(formant, 30);
+check(await until(() => /amount: 0\.\d+, formant: [1-9][0-9.]* \}\)/.test(read("tracks/vox.ts"))), `dragging Formant up writes a brighter colour: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
+check(await stepIs("Tune formant"), `one undo step: ${await undoTitle()}`);
 await page.mouse.click(10, 10);
 await key("Meta+z");
 await key("Meta+z");
-check(await until(() => files() === before), "two ⌘Z take Amount and Glide back, byte for byte");
+await key("Meta+z");
+check(await until(() => files() === before), "three ⌘Z take Formant, Amount and Glide back, byte for byte");
 
 // ---------------------------------------------------------------- the Robot preset (review U11)
 

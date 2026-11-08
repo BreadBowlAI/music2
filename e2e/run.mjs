@@ -208,9 +208,11 @@ export const SUITES = [
   ["instruments", "fix", { expect: 52, s: 12 }],
   ["upgrade", "fix", { expect: 26, s: 5 }],
   ["mixing", "fix", { expect: 25, s: 5 }],
-  ["tune", "fix", { expect: 34, s: 16 }],
+  ["tune", "fix", { expect: 37, s: 16 }],
   // Its checks on Device's chain too (taste.md DV-11): the key line is on a chain card as on the patch's.
-  ["tune", "chain", { expect: 34, s: 16 }],
+  ["tune", "chain", { expect: 37, s: 16 }],
+  // Track voice2: the Voice changer's and the Clipper's cards, and the three new cards shot live.
+  ["voice", "fix", { expect: 40, s: 30 }],
   ["wavetable", "fix", { expect: 32, s: 6 }],
   ["sx-follow", "fix", { expect: 22, s: 2 }],
   ["br-plugins", "fix", { probe: true, expect: 28, s: 3 }],
