@@ -1551,7 +1551,12 @@ mod vocoded {
     /// each harmonic of the carrier, a 27.5 Hz saw (the FFT's power within 3 bins), drawn straight
     /// between them on a log scale of frequency.
     fn gain_curve(out: &[f32], carrier: &[f32], sr: f32) -> Vec<f64> {
-        let (so, sc) = (spectrum(settled(out, sr), sr), spectrum(settled(carrier, sr), sr));
+        gain_curve_of(settled(out, sr), settled(carrier, sr), sr)
+    }
+
+    /// [`gain_curve`] of two windows of the same frames, `out` against `carrier`, as they are.
+    fn gain_curve_of(out: &[f32], carrier: &[f32], sr: f32) -> Vec<f64> {
+        let (so, sc) = (spectrum(out, sr), spectrum(carrier, sr));
         let bin = so[1].0;
         let points: Vec<(f64, f64)> = (1..)
             .map(|h| h as f64 * 27.5)
@@ -1643,6 +1648,82 @@ mod vocoded {
                 let by = moved(&still, &at(formant));
                 assert!((by - formant as f64).abs() < 0.1, "{sr}: Formant {formant} moves the hills {by:.3} semitones");
             }
+        }
+    }
+
+    // VOX-29: Formant moved while the song plays moves the hills (review W3): stepped from 0 to 7
+    // half way through, under a 27.5 Hz saw, the out's gain curve from 150 ms after the step (its
+    // glide, 20 ms, has landed within 0.004 semitone) lies 7 semitones up from the one before it,
+    // within 0.1, at every rate. The carrier's bands are placed again as Formant moves, every 16
+    // frames; placed once only (review W3's M2), the hills don't move.
+    #[test]
+    fn formant_moved_while_playing_moves_the_hills() {
+        for sr in RATES {
+            let secs = 3.0;
+            let c = saw(sr, 27.5, 20_000.0, secs);
+            let v = vowel(sr, 105.0, [525.0, 2100.0], secs, 0.5);
+            let step = (1.5 * sr) as usize;
+            let o = run(sr, 1, c.len(), BLOCK, &|p, _, t| match p {
+                0 => c[t],
+                1 => v[t],
+                3 => 0.05,
+                4 if t >= step => 7.0,
+                LISTEN => 1.0,
+                _ => 0.0,
+            });
+            let out: Vec<f32> = o.iter().map(|f| f[0]).collect();
+            // About 0.7 s at every rate, so its harmonics stand apart in the spectrum.
+            let window = ((0.6 * sr) as usize).next_power_of_two();
+            let curve = |from: usize| gain_curve_of(&out[from..from + window], &c[from..from + window], sr);
+            let by = moved(&curve((0.5 * sr) as usize), &curve(step + (0.15 * sr) as usize));
+            assert!((by - 7.0).abs() < 0.1, "{sr}: Formant stepped to 7 while playing moves the hills {by:.3} semitones");
+        }
+    }
+
+    // VOX-29: a band's follower rises in 2 ms (review W3): a voice that starts at once at band 10's
+    // centre, under a steady carrier there, brings that band's out within 1 dB of its steady level
+    // in under 10 ms, the band's own filters' rise included. The voice is at −90 dB, far under the
+    // knee, so the out follows the follower in step (at a normal level the knee brings it there
+    // sooner). At every rate.
+    #[test]
+    fn a_band_opens_within_10_ms() {
+        for sr in RATES {
+            let f = centre(10) as f64;
+            let start = (0.25 * sr) as usize;
+            let n = start + (0.5 * sr) as usize;
+            let sine = |a: f64, i: usize| (a * (std::f64::consts::TAU * f * i as f64 / sr as f64).sin()) as f32;
+            let c: Vec<f32> = (0..n).map(|i| sine(0.5, i)).collect();
+            let v: Vec<f32> = (0..n).map(|i| if i < start { 0.0 } else { sine(10f64.powf(-90.0 / 20.0), i) }).collect();
+            let o = play(sr, &c, &v, [0.0, 0.05, 0.0]);
+            let cycle = (sr as f64 / f).ceil() as usize;
+            let height = |at: usize| o[at..at + cycle].iter().fold(0f32, |m, x| m.max(x.abs())) as f64;
+            let steady = height(start + (0.3 * sr) as usize);
+            let open = (start..n).find(|&t| height(t) >= steady * 10f64.powf(-1.0 / 20.0)).unwrap();
+            let ms = (open - start) as f64 / sr as f64 * 1000.0;
+            assert!(ms < 10.0, "{sr}: the band came within 1 dB of its steady level {ms:.1} ms after the voice started");
+        }
+    }
+
+    // VOX-29: the bands hear the mono sum of the voice (review W3): in stereo, a vowel on the right
+    // channel alone shapes the out as the same vowel on the left alone does, bit for bit, at
+    // Clarity 0 (each channel's own highs left out), and shapes it; at every rate.
+    #[test]
+    fn a_voice_on_either_channel_shapes_the_out_alike() {
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 1.0);
+            let v = vowel(sr, 105.0, [525.0, 2100.0], 1.0, 0.5);
+            let on = |side: usize| {
+                run(sr, 2, c.len(), BLOCK, &|p, ch, t| match p {
+                    0 => c[t],
+                    1 if ch == side => v[t],
+                    3 => 0.05,
+                    LISTEN => 1.0,
+                    _ => 0.0,
+                })
+            };
+            let (left, right) = (on(0), on(1));
+            assert!(left == right, "{sr}: a vowel on the right shapes the out otherwise than on the left");
+            assert!(left.iter().skip((0.5 * sr) as usize).any(|f| f[0].abs() > 1e-3), "{sr}: the vowel opens no band");
         }
     }
 
