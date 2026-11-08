@@ -117,10 +117,7 @@ fn carry(was: &Revision, now: &Revision, keys: &HashMap<String, String>) -> Hash
             was.compiled.sites.iter().find(|s| s.file == file && s.ordinal == ordinal).map(|s| (key.as_str(), s.callee.as_str()))
         })
         .collect();
-    let lost_files: HashMap<&str, &str> = keys
-        .iter()
-        .filter_map(|(id, key)| Some((key.as_str(), id.rsplit_once('#')?.0)))
-        .collect();
+    let lost_files: HashMap<&str, &str> = keys.iter().filter_map(|(id, key)| Some((key.as_str(), id.rsplit_once('#')?.0))).collect();
     for (key, callee) in &lost {
         let file = lost_files[key];
         let went = lost.iter().filter(|(k, c)| c == callee && lost_files[k] == file).count();

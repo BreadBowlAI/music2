@@ -375,7 +375,10 @@ fn a_look_past_the_rings_is_refused_in_words() {
         cp.asks.add("w1", What::Box(look("t0", &format!("x#{k}"), "meter", "reduction")), now).unwrap();
     }
     let no = cp.asks.add("w1", What::Box(look("t0", "x#x", "meter", "reduction")), now).err().unwrap();
-    assert_eq!(format!("{no:#}"), "No room to show this: 256 meters are shown already. Collapse a node or scroll one away, then try again.");
+    assert_eq!(
+        format!("{no:#}"),
+        "No room to show this: 256 meters are shown already. Collapse a node or scroll one away, then try again."
+    );
     drop(cp);
     for (kind, at, says) in [
         ("meter", "out", "A meter look names the meter it shows, such as at: \"reduction\"."),

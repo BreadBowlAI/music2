@@ -329,7 +329,9 @@ impl Asks {
                 match shown {
                     Some(a) => a.place,
                     None if look.kind == Kind::Meter => (0..METERS).map(Place::Meter).find(|&p| !taken(p)).with_context(|| {
-                        format!("No room to show this: {METERS} meters are shown already. Collapse a node or scroll one away, then try again.")
+                        format!(
+                            "No room to show this: {METERS} meters are shown already. Collapse a node or scroll one away, then try again."
+                        )
                     })?,
                     None => (meters::LOUD + 1..RINGS).map(Place::Ring).find(|&p| !taken(p)).with_context(|| {
                         format!(

@@ -580,8 +580,12 @@ pub fn view(session: &Session) -> GraphView {
         // The calls made inside a `poly` voice's body, which play once for each note (CARD-25):
         // never the `poly` call itself, whose group a voice's own note may be part of.
         let polys: HashSet<Group> = all.iter().filter(|n| matches!(n.op, Op::Poly { .. })).filter_map(|n| call_group(n)).collect();
-        let per_note: HashSet<Group> =
-            all.iter().filter(|n| voice_of.contains_key(n.id.as_str())).filter_map(|n| call_group(n)).filter(|g| matches!(g, Group::Site(_)) && !polys.contains(g)).collect();
+        let per_note: HashSet<Group> = all
+            .iter()
+            .filter(|n| voice_of.contains_key(n.id.as_str()))
+            .filter_map(|n| call_group(n))
+            .filter(|g| matches!(g, Group::Site(_)) && !polys.contains(g))
+            .collect();
 
         // The declared control written at an argument path of a group's call (CARD-25), and what it
         // is called (CARD-34).
