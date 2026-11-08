@@ -105,3 +105,44 @@ fn a_new_call_gets_a_key_no_node_had() {
     let unique: HashSet<&String> = keys.iter().collect();
     assert_eq!(unique.len(), keys.len(), "no two calls share a key: {keys:?}");
 }
+
+/// Two filters written around a saw, the Lowpass outside.
+const FILTERS: &str = "import { song, track } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { highpass, lowpass } from 'std/filter';\n\
+                       import { mixer } from 'std/mix';\n\
+                       const bass = track('bass', () => lowpass(highpass(osc.saw(110), { cutoff: 80 }), { cutoff: 900 }));\n\
+                       export default song(() => mixer({ bass: bass.out }));\n";
+
+impl Rig {
+    fn revision(&self) -> u64 {
+        self.graph.state().unwrap()["view"]["revision"].as_u64().unwrap()
+    }
+}
+
+// CARD-25 (review Z4): ⋯ ▸ Move swaps two calls, `inner(outer(x))` for `outer(inner(x))`; each
+// keeps its key, though its `(` doesn't survive the diff.
+#[test]
+fn a_moved_effect_keeps_its_key() {
+    let rig = Rig::new(FILTERS);
+    let (lp, lp_key) = rig.node("lowpass");
+    let (_, hp_key) = rig.node("highpass");
+    rig.graph.move_effect(rig.token(), rig.revision(), &lp, true).unwrap();
+    let text = std::fs::read_to_string(rig._fixture.0.join("song.ts")).unwrap();
+    assert!(text.contains("highpass(lowpass(osc.saw(110)"), "moved: {text}");
+    assert_eq!(rig.node("lowpass").1, lp_key, "the Lowpass keeps its key");
+    assert_eq!(rig.node("highpass").1, hp_key, "and the Highpass its own");
+}
+
+// CARD-25 (review Z4): Remove, then undo, brings the call back as the code it was: its key comes
+// back with it; and redo, then undo again, the same.
+#[test]
+fn an_undone_remove_brings_the_key_back() {
+    let rig = Rig::new(FILTERS);
+    let (lp, lp_key) = rig.node("lowpass");
+    rig.graph.remove_effect(rig.token(), rig.revision(), &lp).unwrap();
+    assert!(rig.nodes().iter().all(|n| n["label"] != "lowpass"), "removed");
+    rig.graph.undo(rig.token()).unwrap();
+    assert_eq!(rig.node("lowpass").1, lp_key, "undone, the Lowpass has its key again");
+    rig.graph.redo(rig.token()).unwrap();
+    rig.graph.undo(rig.token()).unwrap();
+    assert_eq!(rig.node("lowpass").1, lp_key, "after a redo and an undo too");
+}

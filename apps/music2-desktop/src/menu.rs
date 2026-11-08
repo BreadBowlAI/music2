@@ -93,7 +93,7 @@ const ITEMS: &[(&str, &str, Option<&str>)] = &[
     // In the track's code: one undo step.
     ("mute_in_song", "Mute in Song", None),
     // ⌥1 to ⌥5, X, A, E: the page's keys. Beat (⌥5) shows while a drum kit's track is selected.
-    ("view_device", "Device", None),
+    ("view_graph", "Graph", None),
     ("view_notes", "Notes", None),
     ("view_beat", "Beat", None),
     ("view_mix", "Mix", None),
@@ -252,7 +252,7 @@ fn layout(mac: bool) -> Vec<(&'static str, Vec<Row>)> {
         Item("taller"),
         Item("shorter"),
         Line,
-        Item("view_device"),
+        Item("view_graph"),
         Item("view_notes"),
         Item("view_beat"),
         Item("view_mix"),
@@ -444,6 +444,20 @@ mod tests {
             let parts: Vec<&str> = a.split('+').collect();
             assert!(parts.iter().any(|p| matches!(*p, "CmdOrCtrl" | "Cmd" | "Ctrl" | "Control")), "{a} is not a ⌘ or ⌃ chord");
             assert_eq!(parts.len(), parts.iter().collect::<std::collections::BTreeSet<_>>().len(), "{a}");
+        }
+    }
+
+    /// Review Z2: View's items are the dock's views, by the names the page knows them by
+    /// (`VIEWS` in `web/src/lib/shell.ts`): an item for a view the page lost does nothing.
+    #[test]
+    fn every_view_item_is_a_view_the_page_has() {
+        let shell = include_str!("../../../web/src/lib/shell.ts");
+        let line = shell.lines().find(|l| l.starts_with("export const VIEWS = [")).expect("VIEWS in shell.ts");
+        let views: Vec<&str> = line.split('"').skip(1).step_by(2).collect();
+        let items: Vec<&str> = ITEMS.iter().map(|i| i.0).filter(|id| id.starts_with("view_")).collect();
+        assert_eq!(items.len(), views.len(), "an item for each view: {items:?} {views:?}");
+        for id in items {
+            assert!(views.contains(&&id["view_".len()..]), "{id} is no view of the page's: {views:?}");
         }
     }
 

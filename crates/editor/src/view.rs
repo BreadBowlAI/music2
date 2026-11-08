@@ -141,6 +141,10 @@ pub struct ViewNode {
     /// What a window keeps its own state by (which nodes are expanded, CARD-25): a key that edits
     /// keep. Its id here; the server gives a call's node the key its call had in the view before.
     pub key: String,
+    /// It plays inside an instrument's voices, once for each note: a call made in a `poly`
+    /// voice's body (CARD-25). Never the `poly` call itself.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub per_note: bool,
     pub label: String,
     /// `call`, `lane`, `time`, `import`, `value` or `export`.
     pub kind: &'static str,
@@ -573,6 +577,12 @@ pub fn view(session: &Session) -> GraphView {
             }
         };
 
+        // The calls made inside a `poly` voice's body, which play once for each note (CARD-25):
+        // never the `poly` call itself, whose group a voice's own note may be part of.
+        let polys: HashSet<Group> = all.iter().filter(|n| matches!(n.op, Op::Poly { .. })).filter_map(|n| call_group(n)).collect();
+        let per_note: HashSet<Group> =
+            all.iter().filter(|n| voice_of.contains_key(n.id.as_str())).filter_map(|n| call_group(n)).filter(|g| matches!(g, Group::Site(_)) && !polys.contains(g)).collect();
+
         // The declared control written at an argument path of a group's call (CARD-25), and what it
         // is called (CARD-34).
         let declared_at = |g: &Group, path: &[String]| -> Option<(String, kind::Name)> {
@@ -912,6 +922,7 @@ pub fn view(session: &Session) -> GraphView {
             };
             nodes.push(ViewNode {
                 key: id.clone(),
+                per_note: per_note.contains(g),
                 id: id.clone(),
                 label,
                 kind,
@@ -1027,6 +1038,7 @@ pub fn view(session: &Session) -> GraphView {
             let id = format!("export:{name}");
             nodes.push(ViewNode {
                 key: id.clone(),
+                per_note: false,
                 id: id.clone(),
                 label: name.clone(),
                 kind: "export",
