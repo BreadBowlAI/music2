@@ -5,7 +5,10 @@
 // time the kick's meter rises, as it didn't before; ⌘Z puts the call back as it was added.
 //
 // On first-song (the `fix` kind), its bass made a steady tone first (its lanes kept, unplayed), so
-// its meter shows only what the Duck does, and its Duck taken out of song.ts.
+// its meter shows only what the Duck does, and its Duck taken out of song.ts. The tone is a 440 Hz
+// sine: a meters message holds the sound since the one before, which on a clock that runs late
+// (GitHub's Mac) may be one 10 ms buffer, under a 55 Hz saw's 18 ms cycle, which read up to 5 dB
+// under its peak there; every block of the sine holds its peak.
 //
 // As the `chain` kind (E2E_DEVICE=chain) it runs on Device's chain (taste.md DV-11) whole: the + after a
 // track's sound in the song is its row's there, and every check holds.
@@ -20,10 +23,12 @@ write(
 import { osc } from "std/dsp";
 import { scale } from "std/math";
 
-// A steady tone (its lanes kept, unplayed), so its meter shows only what a Duck does to it.
+// A steady tone (its lanes kept, unplayed), so its meter shows only what a Duck does to it: a
+// 440 Hz sine, whose peak every block of 128 frames holds, so each meters message reads its level
+// however little sound it holds.
 export default track("bass", { name: "Bass" }, ({ lane }) => {
   void [lane.notes("notes"), lane.control("cutoff", "hz", 500), lane.mask("drop")];
-  return scale(osc.saw(55), 0.25);
+  return scale(osc.sine(440), 0.25);
 });
 `,
 );
