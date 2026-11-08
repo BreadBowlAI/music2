@@ -224,9 +224,11 @@ fn every_std_control_is_found_by_its_slot() {
     assert_eq!(bass.range_for("drive", Some(Unit::Db)), Some(((0.0, 36.0), false)), "the second control's range");
 }
 
-/// The effects `m2pkg.toml` listed before step 5, as `[[effect]]` entries: module, name,
-/// category, description, and the `args` written after the audio when one is added.
-const OLD_EFFECTS: [(&str, &str, &str, &str, &str); 19] = [
+/// Every effect std and these packs offer, each as module, name, category, description, and what is
+/// written after the audio when one is added: the effects `m2pkg.toml` listed before step 5, as
+/// `[[effect]]` entries (their `args`), and those offered since, each marked where it is: Duck
+/// (track sidechain) and the Clipper (track voice2, `ADDED_EFFECTS`).
+const EFFECTS: [(&str, &str, &str, &str, &str); 19] = [
     ("std/filter", "lowpass", "Filter", "Darker: removes the highs above the cutoff", "1000"),
     ("std/filter", "highpass", "Filter", "Thinner: removes the lows below the cutoff", "200"),
     ("std/filter", "bandpass", "Filter", "Keeps only a band around the cutoff, like a telephone", "1000"),
@@ -279,11 +281,11 @@ fn insert_text(d: &Descriptor) -> String {
     }
 }
 
-// PKG-2, PKG-7, D11: the descriptors offer exactly the effects the manifest listed, in the same
-// categories, with the same words, writing the same text when one is added; and each builds
-// from that text, and from no options at all.
+// PKG-2, PKG-7, D11: the descriptors offer exactly the effects the manifest listed before step 5
+// and those offered since, in the same categories, with the same words, writing the same text when
+// one is added; and each builds from that text, and from no options at all.
 #[test]
-fn std_effects_are_the_manifests_old_effects() {
+fn std_offers_the_effects_of_step_5_and_those_added_since() {
     let catalog = describe(&packages());
     let now: BTreeSet<(String, String, String, String, String)> = catalog
         .effects()
@@ -292,10 +294,10 @@ fn std_effects_are_the_manifests_old_effects() {
             (e.module.clone(), e.name.clone(), d.editor.category.clone().unwrap(), d.editor.description.clone(), insert_text(d))
         })
         .collect();
-    let old: BTreeSet<(String, String, String, String, String)> =
-        OLD_EFFECTS.iter().map(|(m, n, c, d, a)| (m.to_string(), n.to_string(), c.to_string(), d.to_string(), a.to_string())).collect();
-    assert!(now == old, "offered now but not before: {:?}\nbefore but not now: {:?}", now.difference(&old), old.difference(&now));
-    for (module, name, _, _, args) in OLD_EFFECTS {
+    let listed: BTreeSet<(String, String, String, String, String)> =
+        EFFECTS.iter().map(|(m, n, c, d, a)| (m.to_string(), n.to_string(), c.to_string(), d.to_string(), a.to_string())).collect();
+    assert!(now == listed, "offered but not listed: {:?}\nlisted but not offered: {:?}", now.difference(&listed), listed.difference(&now));
+    for (module, name, _, _, args) in EFFECTS {
         for call in [format!("{name}(x, {args})"), format!("{name}(x)")] {
             build(&format!(
                 "import {{ kernel, song }} from \"@m2/core\";\nimport {{ {name} }} from \"{module}\";\n\
