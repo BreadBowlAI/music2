@@ -1,19 +1,48 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-07 (the vocals and cards plans, and 0.2.0 made ready). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps and the mixing meters landed; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
-- **0.2.0 is ready to release** (branch `rel-0.2.0`): version 0.2.0 in the workspace, `tauri.conf.json` and
-  `web/package.json` (`Cargo.lock`: only our own crates' version lines); the notes in
-  [docs/releases/0.2.0.md](docs/releases/0.2.0.md) (what's new since 0.1.0, upgrading songs from 0.1.0, the known
-  gaps by number); README, SECURITY and the install page name 0.2.0. The Linux files were built and checked here as
-  `release.yml` does (`ci/release.sh build`, `check` with the test plugins, `app` on Xvfb: start screen, a new song,
-  with-plugins). Every 0.1.0 template and example upgrades with the 0.2.0 `m2` (`m2 upgrade`), then checks and
-  renders. The server has no `file` program, which linuxdeploy's AppImage tool needs: the build here put an unpacked
-  copy on `PATH` (`apt-get download file`); `release.yml` installs it. The tag, the workflow's run and publishing the
-  draft are the lead's and the owner's.
+- **0.2.0 is made, as a draft** (#97, 2026-11-07). The tag `v0.2.0` and `release.yml`'s run (42391434245) built the
+  Linux and Mac files and made the draft pre-release (five files). **Publishing it is the owner's.** Its notes are
+  [docs/releases/0.2.0.md](docs/releases/0.2.0.md). The server has no `file` program, which linuxdeploy's AppImage
+  tool needs: a build here puts an unpacked copy on `PATH` (`apt-get download file`); `release.yml` installs it.
+- **The graph waits for the owner.** On 2026-11-07 the owner asked for the Device view's Chain and Patch to become one
+  **Graph**, whose nodes are the cards: collapsed by default, expanded on a click. The note is
+  `docs/designs/graph/design.md` on branch `graph-note` (80a5d073, worktree `~/m2-runs/wt-graph-note`, not pushed),
+  with a mockup. It waits for the owner's D1 to D6. Build none of it before their yes (AGENTS.md rule 11).
+- **The events plan and the small measuring steps (2026-11-07 to 11-08)** (#96, #99 to #102). Both notes were accepted
+  together (#96): [docs/designs/events/design.md](docs/designs/events/design.md) and
+  [docs/designs/measure2/design.md](docs/designs/measure2/design.md).
+  - **Note effects in the engine** (#99, ABI-15, RENDER-41, RENDER-42, PKG-21):
+    - a pack's kernel can give notes (`out: events<note>`, and `fan` in its manifest);
+    - a note effect plays in a lane pass before the song's sounds, so its values take no cable: the editor,
+      `m2 connect` and the Patch view refuse one (`cable_refused`);
+    - `@m2/core` 2.5.0;
+    - `m2 add-effect` puts a note effect before an instrument.
+  - **`@m2/notes` 0.1.0** (#101, PACK-29 to PACK-33, gap #62):
+    - the Arpeggiator, Chord, Note echo and Lock to key, each a kernel of the pack's own, and `examples/arp`;
+    - a key played live carries a bit (`LIVE_BIT`), so Hold latches only keys played live, never a clip's notes;
+      plugins get the id without it;
+    - a song saves the keys you played, never the arpeggio.
+  - **The measuring steps** (#100, CARD-80, CARD-87, CARD-97, CARD-99):
+    - `p.response({ level })`, so the multiband's split is measured under its thresholds;
+    - std's drawn lowpass is gone, and importing it says what to use instead (`MOVED`'s `Went::Out`);
+    - a picture reads the song's sample rate, `p.rate`, and each picture drawn from sums is checked at 44.1, 48 and
+      96 kHz;
+    - axis labels never cover a picture's line (taste.md DV-17).
+  - **The mixing meters** (#102, PACK-26, VOX-22, VOX-27, CARD-73):
+    - the gate, the de-esser and the multiband show how far they turn down, live, and the gate shows whether it is
+      open;
+    - Tune draws how far the voice is from its note, and how far Tune leaves it;
+    - the window draws a meter in dB, or a switch, from the most it said since the last read (TAP-15's `most`);
+    - a pure fixture, `core/session/tests/fixtures/meters`, pins the mixing tools' sound, and a hash in
+      `core/play/tests/vocals.rs` pins Tune's.
+  - **Versions since 0.2.0:** `@m2/core` 2.5.0, `@m2/effects` 1.4.0, `@m2/mixing` 1.3.0, `@m2/synths` 2.3.0,
+    `@m2/vocals` 1.2.0 and `@m2/notes` 0.1.0; std stays 0.10.0. None has shipped yet, so a change to one of these
+    packs before the next release keeps its version, recorded again (PACK-18).
 - **The cards plan (2026-11-06 to 11-07) gave every sound a card that draws its sound** (#85, #87, #90, #92, #93,
   #94, #95). Design: [docs/designs/cards2/design.md](docs/designs/cards2/design.md), accepted (#85).
   - **The frame** (#87, CARD-40 to CARD-47): the Device view's **Chain**, a card for each sound in the order it
@@ -235,6 +264,8 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `a_slow_disk_misses_but_never_waits` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `s8-mute-export` | failed once on the Mac at `e7518f4` | passed on its retry |
 | `layout-proj`, `attention-attn` | failed once on GitHub's Mac at `53382be` (run 40666853783) | passed on their retry, alone; its logs weren't kept (a passing run keeps none) |
+| `a_drag_frame_of_the_eq_stays_under_8_ms` (`crates/editor`) | p99 8.26 ms against its 8 ms | a speed test in the nightly tier; `cargo test -p m2-editor` runs it beside the crate's other tests, under load |
+| `m2-server`'s registry tests, under `cargo test` | "Too many open files" | in a tmux shell, whose open-file limit is lower; they pass from a normal shell and in `ci/check.sh` |
 
 **GitHub's Mac (macos-15), the first nightly (run 40296575023, `07cd88b`):** its sleeps last about four times what
 they ask, as its logs show: the meters' 33 ms tick came 8 or 9 times a second, and the capture's 10.7 ms clock
@@ -257,16 +288,19 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **Release 0.2.0**: land `rel-0.2.0`, push the tag `v0.2.0`, let `release.yml` build both platforms and make the
-   draft pre-release, then the owner publishes it. The Mac file is proved only by that run (mac-run steps 137 to
-   141, with the 0.2.0 file).
-2. **Sounds that make notes** (gap #62): an arpeggiator, chords, note repeat, a scale and generators, each a pack
-   put before an instrument; a pack's kernel needs event outputs (ABI-2). The design note, `docs/designs/events/`,
-   is accepted (#96, 2026-11-07); tracks `notes-out` and `notes-sdk` are being built, then `notes-pack` and
-   `notes-chain` (its §8).
-3. **The small measuring steps** (gap #63): `docs/designs/measure2/`, accepted (#96), keeps the copied sums and takes
-   three small steps (track `measure2-small`, its §8), with the keyed compressor's dot (M2-21) and the cards'
-   overlapping axis labels.
+1. **Publish 0.2.0** (the owner's): the draft is made.
+2. **The graph** (the owner's D1 to D6 first): then the tracks `graph-node` (the node, collapsed and expanded, in
+   place of Chain and Patch) and `graph-insert` (**+** on a wire, which also gives a note effect its way in from the
+   window, gap #62).
+3. **Small, left by the last tracks** (each in gaps.md):
+   - the keyed compressor's dot rides its own input, not what it listens to (M2-21: it needs a look at the sidechain,
+     a core change);
+   - the reverb's tail at 44.1 kHz;
+   - std/math's blocks take notes in the code editor with no type error;
+   - the Arpeggiator's steps picture past three held notes;
+   - the multiband's bars and Tune's middle line's name, with the graph's cards;
+   - wires that show their level (a note of its own: it needs a tap on a wire);
+   - `ci/release.sh` could check for the `file` program before it builds.
 4. **The owner's own items**, open:
    - **The registry, live**: the Cloudflare R2 bucket and its address (D10), then the repo
      `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
@@ -280,8 +314,9 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 5. **Tiers**: `st-midi` and `s8-clips` can come back to the PR tier (their flakes' cause was fixed in #72), after a
    few clean nightlies.
 6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
-   macro knobs #57), each inside a pack where it can be; the beat grid's gaps (a sound when a step is clicked,
-   copying a pattern, cut groups across a kit's tracks, D3).
+   macro knobs #57, the rest of #62: Bake to notes, note repeat in a kit, generators), each inside a pack where it
+   can be; the beat grid's gaps (a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks,
+   D3).
 7. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
 8. **Open owner decisions** (below).
 
