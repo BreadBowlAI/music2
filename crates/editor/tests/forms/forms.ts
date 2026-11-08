@@ -7,7 +7,7 @@ import { adsr, follow, gain, mono, noise, osc, pan, svf, vca } from "std/dsp";
 import { bandpass, highpass, lowpass, notch } from "std/filter";
 import { drums } from "@m2/drums";
 import { bass, fm, pad, pluck, synth } from "@m2/synths";
-import { bitcrush, chorus, clip, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
+import { bitcrush, chorus, clip, delay, drive, flanger, grains, phaser, reverb, tremolo, widen } from "@m2/effects";
 import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
 import { arp, chord, echo, lockToKey } from "@m2/notes";
 import { compress, duck, eq3, limit } from "std/fx";
@@ -76,6 +76,8 @@ export default song(({ lane, time }) => {
   const changed = voiceChanger(lowpass(pulse, 900), { pitch: -5 });
   const talking = vocoder(buzz, changed, { clarity: level, formant: -3 });
   const loud = clip(add(hit, pulse), { gain: 6 });
+  const jet = flanger(soft, { feedback: -0.4 });
+  const cloud = grains(buzz, { pitch: 7, freeze: true });
   const planned = [
     // song.ts:20 `lfo` leaves out phase: a value written in
     lfo(time.beats, { period: 2, phase: 0 }),
@@ -1415,134 +1417,178 @@ export default song(({ lane, time }) => {
     clip(add(hit, pulse), { gain: 6, ceiling: -0.3 }),
     // song.ts:77 `clip` leaves out ceiling: a cable written in
     clip(add(hit, pulse), { gain: 6, ceiling: wobble }),
-    // song.ts:78 `master` leaves out ceiling: a value written in
-    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }), { ceiling: -1 }),
-    // song.ts:78 `master` leaves out ceiling: a cable written in
-    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }), { ceiling: wobble }),
-    // song.ts:78 `master` leaves out db: a value written in
-    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }), { db: 0 }),
-    // song.ts:78 `master` leaves out db: a cable written in
-    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }), { db: wobble }),
-    // song.ts:78 `mixer` leaves out channels.changed.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: 0 }, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.changed.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: wobble }, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.chops.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: 0 }, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.chops.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: wobble }, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.drums.db: a value written in
-    mixer({ drums: { in: beat, db: 0 }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.drums.db: a cable written in
-    mixer({ drums: { in: beat, db: wobble }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.keys.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: 0 }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.keys.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: wobble }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.kit.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: 0 }, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.kit.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: wobble }, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.lines.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: 0 }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.lines.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: wobble }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.loud.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: 0 } }),
-    // song.ts:78 `mixer` leaves out channels.loud.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: wobble } }),
-    // song.ts:78 `mixer` leaves out channels.metal.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: 0 }, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.metal.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: wobble }, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.mixed.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: 0 }, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.mixed.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: wobble }, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.noted.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: 0 }, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.noted.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: wobble }, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.saws.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: 0 }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.saws.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: wobble }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.synth.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3, db: 0 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.synth.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3, db: wobble }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.tables.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: 0 }, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.tables.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: wobble }, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.talking.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: 0 }, loud }),
-    // song.ts:78 `mixer` leaves out channels.talking.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: wobble }, loud }),
-    // song.ts:78 `mixer` leaves out channels.voice.db: a value written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: 0 }, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` leaves out channels.voice.db: a cable written in
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: wobble }, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel drums
-    mixer({ drums: { in: beat, pan: 0 }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel fx
-    mixer({ drums: beat, fx: { in: fx, db: -4, pan: 0 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel saws
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, pan: 0 }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel lines
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, pan: 0 }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel keys
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, pan: 0 }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel metal
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, pan: 0 }, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel kit
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, pan: 0 }, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel chops
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, pan: 0 }, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel mixed
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, pan: 0 }, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel tables
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, pan: 0 }, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel voice
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, pan: 0 }, noted, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel noted
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, pan: 0 }, changed, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel changed
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, pan: 0 }, talking, loud }),
-    // song.ts:78 `mixer`: the first pan of channel talking
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, pan: 0 }, loud }),
-    // song.ts:78 `mixer`: the first pan of channel loud
-    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, pan: 0 } }),
-    // song.ts:78 `mixer` writes db(…): channels.changed.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: db(0) }, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.chops.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: db(0) }, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.drums.db written in
-    mixer({ drums: { in: beat, db: db(0) }, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.keys.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: db(0) }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.kit.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: db(0) }, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.lines.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: db(0) }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.loud.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: db(0) } }),
-    // song.ts:78 `mixer` writes db(…): channels.metal.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: db(0) }, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.mixed.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: db(0) }, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.noted.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: db(0) }, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.saws.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: db(0) }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.synth.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3, db: db(0) }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.tables.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: db(0) }, voice, noted, changed, talking, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.talking.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: db(0) }, loud }),
-    // song.ts:78 `mixer` writes db(…): channels.voice.db written in
-    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: db(0) }, noted, changed, talking, loud }),
+    // song.ts:78 `flanger` leaves out depth: a value written in
+    flanger(soft, { feedback: -0.4, depth: 0.7 }),
+    // song.ts:78 `flanger` leaves out depth: a cable written in
+    flanger(soft, { feedback: -0.4, depth: wobble }),
+    // song.ts:78 `flanger` leaves out mix: a value written in
+    flanger(soft, { feedback: -0.4, mix: 0.5 }),
+    // song.ts:78 `flanger` leaves out mix: a cable written in
+    flanger(soft, { feedback: -0.4, mix: wobble }),
+    // song.ts:78 `flanger` leaves out rate: a value written in
+    flanger(soft, { feedback: -0.4, rate: 0.25 }),
+    // song.ts:78 `flanger` leaves out rate: a cable written in
+    flanger(soft, { feedback: -0.4, rate: wobble }),
+    // song.ts:79 `grains` leaves out density: a value written in
+    grains(buzz, { pitch: 7, freeze: true, density: 20 }),
+    // song.ts:79 `grains` leaves out density: a cable written in
+    grains(buzz, { pitch: 7, freeze: true, density: wobble }),
+    // song.ts:79 `grains` leaves out mix: a value written in
+    grains(buzz, { pitch: 7, freeze: true, mix: 0.5 }),
+    // song.ts:79 `grains` leaves out mix: a cable written in
+    grains(buzz, { pitch: 7, freeze: true, mix: wobble }),
+    // song.ts:79 `grains` leaves out size: a value written in
+    grains(buzz, { pitch: 7, freeze: true, size: 0.1 }),
+    // song.ts:79 `grains` leaves out size: a cable written in
+    grains(buzz, { pitch: 7, freeze: true, size: wobble }),
+    // song.ts:79 `grains` leaves out spread: a value written in
+    grains(buzz, { pitch: 7, freeze: true, spread: 0.3 }),
+    // song.ts:79 `grains` leaves out spread: a cable written in
+    grains(buzz, { pitch: 7, freeze: true, spread: wobble }),
+    // song.ts:80 `master` leaves out ceiling: a value written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }), { ceiling: -1 }),
+    // song.ts:80 `master` leaves out ceiling: a cable written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }), { ceiling: wobble }),
+    // song.ts:80 `master` leaves out db: a value written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }), { db: 0 }),
+    // song.ts:80 `master` leaves out db: a cable written in
+    master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }), { db: wobble }),
+    // song.ts:80 `mixer` leaves out channels.changed.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: 0 }, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.changed.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: wobble }, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.chops.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: 0 }, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.chops.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: wobble }, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.cloud.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud: { in: cloud, db: 0 } }),
+    // song.ts:80 `mixer` leaves out channels.cloud.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud: { in: cloud, db: wobble } }),
+    // song.ts:80 `mixer` leaves out channels.drums.db: a value written in
+    mixer({ drums: { in: beat, db: 0 }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.drums.db: a cable written in
+    mixer({ drums: { in: beat, db: wobble }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.jet.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet: { in: jet, db: 0 }, cloud }),
+    // song.ts:80 `mixer` leaves out channels.jet.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet: { in: jet, db: wobble }, cloud }),
+    // song.ts:80 `mixer` leaves out channels.keys.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: 0 }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.keys.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: wobble }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.kit.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: 0 }, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.kit.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: wobble }, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.lines.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: 0 }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.lines.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: wobble }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.loud.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: 0 }, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.loud.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: wobble }, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.metal.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: 0 }, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.metal.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: wobble }, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.mixed.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: 0 }, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.mixed.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: wobble }, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.noted.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: 0 }, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.noted.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: wobble }, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.saws.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: 0 }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.saws.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: wobble }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.synth.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3, db: 0 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.synth.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3, db: wobble }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.tables.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: 0 }, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.tables.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: wobble }, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.talking.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: 0 }, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.talking.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: wobble }, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.voice.db: a value written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: 0 }, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` leaves out channels.voice.db: a cable written in
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: wobble }, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel drums
+    mixer({ drums: { in: beat, pan: 0 }, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel fx
+    mixer({ drums: beat, fx: { in: fx, db: -4, pan: 0 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel saws
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, pan: 0 }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel lines
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, pan: 0 }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel keys
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, pan: 0 }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel metal
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, pan: 0 }, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel kit
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, pan: 0 }, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel chops
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, pan: 0 }, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel mixed
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, pan: 0 }, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel tables
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, pan: 0 }, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel voice
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, pan: 0 }, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel noted
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, pan: 0 }, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel changed
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, pan: 0 }, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel talking
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, pan: 0 }, loud, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel loud
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, pan: 0 }, jet, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel jet
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet: { in: jet, pan: 0 }, cloud }),
+    // song.ts:80 `mixer`: the first pan of channel cloud
+    mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud: { in: cloud, pan: 0 } }),
+    // song.ts:80 `mixer` writes db(…): channels.changed.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed: { in: changed, db: db(0) }, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.chops.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops: { in: chops, db: db(0) }, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.cloud.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud: { in: cloud, db: db(0) } }),
+    // song.ts:80 `mixer` writes db(…): channels.drums.db written in
+    mixer({ drums: { in: beat, db: db(0) }, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.jet.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet: { in: jet, db: db(0) }, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.keys.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys: { in: keys, db: db(0) }, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.kit.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit: { in: kit, db: db(0) }, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.lines.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines: { in: lines, db: db(0) }, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.loud.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud: { in: loud, db: db(0) }, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.metal.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal: { in: metal, db: db(0) }, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.mixed.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed: { in: mixed, db: db(0) }, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.noted.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted: { in: noted, db: db(0) }, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.saws.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws: { in: saws, db: db(0) }, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.synth.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3, db: db(0) }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.tables.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables: { in: tables, db: db(0) }, voice, noted, changed, talking, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.talking.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking: { in: talking, db: db(0) }, loud, jet, cloud }),
+    // song.ts:80 `mixer` writes db(…): channels.voice.db written in
+    mixer({ drums: beat, fx: { in: fx, db: db(-4) }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice: { in: voice, db: db(0) }, noted, changed, talking, loud, jet, cloud }),
     // std:gain added after a sound
     gain(osc.saw(semis(60)), 0),
     // std:pan added after a sound
@@ -1567,8 +1613,12 @@ export default song(({ lane, time }) => {
     delay(osc.saw(semis(60)), { time: 0.25, feedback: 0.3, mix: 0.3 }),
     // @m2/effects:reverb added after a sound
     reverb(osc.saw(semis(60)), { size: 0.6, damping: 0.5, mix: 0.25 }),
+    // @m2/effects:grains added after a sound
+    grains(osc.saw(semis(60)), { size: 0.1, density: 20, spread: 0.3, pitch: 0, mix: 0.5 }),
     // @m2/effects:chorus added after a sound
     chorus(osc.saw(semis(60)), { rate: 0.8, depth: 0.5, mix: 0.5 }),
+    // @m2/effects:flanger added after a sound
+    flanger(osc.saw(semis(60)), { rate: 0.25, depth: 0.7, feedback: 0.5, mix: 0.5 }),
     // @m2/effects:phaser added after a sound
     phaser(osc.saw(semis(60)), { rate: 0.4, depth: 0.7, feedback: 0.5, mix: 0.5 }),
     // @m2/effects:tremolo added after a sound
@@ -1695,5 +1745,5 @@ export default song(({ lane, time }) => {
     bus("bus", { name: "Group" }, ({ input }) => gain(input)),
   ];
   void planned;
-  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud }));
+  return master(mixer({ drums: beat, fx: { in: fx, db: -4 }, synth: { in: tones, pan: -0.3 }, saws, lines, keys, metal, kit, chops, mixed, tables, voice, noted, changed, talking, loud, jet, cloud }));
 });
