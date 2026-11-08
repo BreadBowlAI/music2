@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed, for the owner's yes (AGENTS.md rule 11). Revised after the skeptic's review (G1 to G22, answered in §14). Nothing here is built. |
+| **Status** | Accepted by the owner on 2026-11-08: yes to D1 to D6, with the bar as §2 says (up and down only). Revised after the skeptic's review (G1 to G22, answered in §14). |
 | **Written** | 2026-11-07, from `main` at `841ea608`. The owner asked for it in these words: "when I say card I mean each node in the graph", "rename it graph from patch", "show the collapsed card in the graph, only when the user clicks expand will it expand", "just have collapsed and expand", and "the design and architecture needs to be simple yet elegant". |
 | **Replaces** | Device's Chain view and its three card sizes: [Cards you play with](../cards2/design.md) §3 and its D1, D4 and D10, and [taste.md](../step8/taste.md) §3.5 and DV-1, DV-11 to DV-16 and DV-18. §9 maps every rule. |
 | **Mockup** | [a picture](images/mockup.png): Keys, in the dock's real height, with Pluck and Lowpass collapsed and Reverb expanded. The clickable page it was taken from is kept outside the repo, on the maintainer's server (`$SCRATCH/graph-note/mockup.html`, [paths](../README.md#paths-in-these-notes)). |
@@ -19,7 +19,11 @@
   - a **wire** (one call reading another);
   - a **value** (a number, a choice or a switch written in the call);
   - a **picture** (the pack's drawing).
-- **One value control at both sizes: the bar.** It shows the label, the number and how far along its range the value is. It drags up and down, as today's knobs do.
+- **One value control at both sizes: the bar.** It shows the label, the number and how far along its range the value is.
+  - **It drags up and down only**, as today's knobs do and as other DAWs' controls do: the owner's choice. A drag isn't read sideways too, so a value never jumps from a crooked drag, and a sideways drag stays free for moving nodes.
+  - Shift drags in fine steps, a double-click types a number, and ⌥-click or ⌫ resets it.
+  - **Its fill follows the knob's own curve:** a frequency fills on a log scale, as its knob turns today.
+  - **A value with two sides** (Pan, Formant, Feedback) fills from the middle, left or right, so 0 reads as empty.
 - **The edits are today's, plus one.**
   - Today's: set a value; connect and disconnect a value (today's cables); remove, move and bypass an effect.
   - New: **+ on a wire** puts an effect or a note effect there, and offers only what fits that wire. It replaces + Effect.
@@ -69,7 +73,7 @@ Each edit is one undo step and one change to the code.
 
 | Edit | Gesture | The code | Today? |
 |---|---|---|---|
-| Set a value | Drag a bar up or down, type into it, press ⌫ to reset it, or drag a picture's dot | The written value changes | Yes |
+| Set a value | Drag a bar up or down (Shift for fine steps), double-click to type into it, ⌥-click or press ⌫ to reset it, or drag a picture's dot | The written value changes | Yes |
 | Connect a value | Drag from a control output onto a bar. On a collapsed node, drop onto the node: a menu lists its values that fit, and dims the rest, saying why (DV-6). A note effect's values take no wire, since it plays before the song's sounds ([RENDER-41](../../architecture.md#events)): they dim, with its words. | The value becomes the name of a `const`, as today's cables: from the same file, declared above the value; else "name it in code first" | Yes |
 | Disconnect | ✕ at the wire's end | The value goes back to its input's declared default, as today | Yes |
 | Insert on a wire | **+** on the wire, then pick from a list of what fits it: effects on audio, note effects on notes (today's EffectBrowser, filtered) | See below | New |
@@ -264,12 +268,12 @@ The events note's track 4 (`notes-chain`) folds into these, since a note effect 
 
 | # | Question | Recommended |
 |---|---|---|
-| D1 | Chain goes. The dock shows one view, the Graph, and its tab is called Graph. All right? | **Yes.** It is the owner's own ask. |
-| D2 | Two sizes, collapsed (the default) and expanded, by ⤢. All right? | **Yes.** It is the owner's own ask. |
-| D3 | Expanding a node pushes the others aside, and the zoom stays as it is. All right? | **Yes.** The wires stay true, and nothing jumps in size. |
-| D4 | + on a wire replaces + Effect. It offers only what fits the wire, and it is greyed, saying why, where it can't work. All right? | **Yes.** It is one gesture, and it is honest. |
-| D5 | One value control in the graph, the bar, in place of knobs. It shows the label, the number and how far along the value is, and drags up and down. All right? | **Yes.** It is one control, it takes half the room, and it shows the exact number. A knob shows none of that at a glance. |
-| D6 | The words become Graph, node, input, output, wire, Expand and Collapse. All right? | **Yes.** They are the program's own words, and Expand is the owner's. |
+| D1 | Chain goes. The dock shows one view, the Graph, and its tab is called Graph. All right? | **Yes.** It is the owner's own ask. **Owner: yes** (2026-11-08). |
+| D2 | Two sizes, collapsed (the default) and expanded, by ⤢. All right? | **Yes.** It is the owner's own ask. **Owner: yes** (2026-11-08). |
+| D3 | Expanding a node pushes the others aside, and the zoom stays as it is. All right? | **Yes.** The wires stay true, and nothing jumps in size. **Owner: yes** (2026-11-08). |
+| D4 | + on a wire replaces + Effect. It offers only what fits the wire, and it is greyed, saying why, where it can't work. All right? | **Yes.** It is one gesture, and it is honest. **Owner: yes** (2026-11-08). |
+| D5 | One value control in the graph, the bar, in place of knobs. It shows the label, the number and how far along the value is, and drags up and down. All right? | **Yes.** It is one control, it takes half the room, and it shows the exact number. A knob shows none of that at a glance. **Owner: yes** (2026-11-08). |
+| D6 | The words become Graph, node, input, output, wire, Expand and Collapse. All right? | **Yes.** They are the program's own words, and Expand is the owner's. **Owner: yes** (2026-11-08). |
 
 ## 14. The review, answered
 
