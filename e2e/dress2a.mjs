@@ -32,9 +32,14 @@ const locked = (name) => {
 };
 write("music2.toml", `${read("music2.toml")}"@m2/effects" = "1"\n"@m2/mixing" = "1"\n`);
 write("music2.lock", read("music2.lock") + locked("@m2/effects") + locked("@m2/mixing"));
+// At 125 bpm a half beat is 11,520 frames (90 blocks, 27 cycles of a 112.5 Hz saw), so each of Mix A's
+// hits is the one before, sample for sample, and so is each of its gate's closings: the check that
+// draws them as deep as each other measures the drawing alone (at 124 bpm and 110 Hz each began at
+// another place in the saw and the block grid, and their depths differed by up to 1.15 dB).
+write("data/arrangement.json", read("data/arrangement.json").replace('"bpm": 124', '"bpm": 125'));
 const HITS = `const hits = vca(osc.saw(110), range(lfo(time.beats, { period: 0.5, shape: "saw" }), 1, 0));`;
 // Mix A's: a quarter beat of saw, a quarter of silence.
-const GAPS = `const hits = vca(osc.saw(110), range(lfo(time.beats, { period: 0.5, shape: "square" }), 1, 0));`;
+const GAPS = `const hits = vca(osc.saw(112.5), range(lfo(time.beats, { period: 0.5, shape: "square" }), 1, 0));`;
 write(
   "tracks/mixa.ts",
   `import { time, track } from "@m2/core";
