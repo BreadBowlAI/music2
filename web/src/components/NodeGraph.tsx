@@ -490,6 +490,9 @@ function layout(
     placed.set(n.id, { node: n, x, y, w: g.w, h: g.h, ins: g.ins, outs: g.outs, shape: g });
     height = Math.max(height, y + g.h);
   }
+  // A loop comes back into its input from the left, LOOP_OUT before it: room for it there too.
+  const left = Math.min(0, ...[...back].map((e) => (placed.get(e.to)?.x ?? LOOP_OUT) - LOOP_OUT - 4));
+  if (left < 0) for (const p of placed.values()) p.x -= left;
   const width = Math.max(0, ...[...placed.values()].map((p) => p.x + p.w));
   return back.size ? { placed, width: width + LOOP_OUT + 4, height: height + LOOP_ROOM, back } : { placed, width, height, back };
 }
