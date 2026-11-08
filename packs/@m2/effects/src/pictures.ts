@@ -1,15 +1,16 @@
-// @m2/effects' pictures (CARD-117 to CARD-124, CARD-127): what each of its cards draws, in TypeScript
+// @m2/effects' pictures (CARD-117 to CARD-124, CARD-127 to CARD-129): what each of its cards draws, in TypeScript
 // over the picture words (CARD-61), with no kernel. Each but the Clipper's is drawn from the effect's own sums, since none
 // can be measured with a click (CARD-82: a delay's or a reverb's click rings past 2 s, drive changes
 // with how loud it is, the moving effects change over time), and each is checked against a render
 // of the sound within 0.5 dB (CARD-99), at 44.1, 48 and 96 kHz. Each is worked out at the song's
-// sample rate (`p.rate`, CARD-87), as its kernel works, its words too.
+// sample rate (`p.rate`, CARD-87), as its kernel works, its words too. The Flanger's and Grains' carry
+// a live line too, where their own kernels say they are now (their meters `phase` and `reads`).
 //
 // Each shape function takes the card's `p`, so TypeScript checks the names of the values each dot
 // moves against the sound's own descriptor, in the axis's unit (CARD-62).
 
 import { axis, knob, live, view, type Moves, type Painter, type PictureDecl, type Shape, type Unit } from "@m2/core";
-import { dbWords, figures, known, secondsWords, type In, type Num, type Values } from "std/pictures";
+import { dbWords, figures, hzWords, known, secondsWords, type In, type Num, type Read, type Values } from "std/pictures";
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x));
 const db = (x: number) => 20 * Math.log10(Math.max(1e-6, x));
@@ -605,4 +606,116 @@ export function levelWords(v: Values, names: { gain: string; ceiling: string }):
   // True of a bright sound pushed hard too (PACK-34's last step).
   const works = "It works at 4 times the song's rate, so it adds far fewer harsh tones than a plain clipper; on very bright sounds pushed hard, a few";
   return `${cuts}. ${works}. Faint: your sound ${pushed === null ? "going in" : "pushed up"}; solid: what comes out. Drag the line to move the ceiling`;
+}
+
+// ---------------------------------------------------------------- flanger
+
+/** The Flanger's copy at its shortest, in seconds, and how many times later it is at Depth 1: its kernel's `SHORTEST` and `RANGE`. */
+const FLANGER = { shortest: 0.0001, range: 100 } as const;
+/** How many points a cycle of the sweep is drawn with. */
+const SWEEP_POINTS = 240;
+
+/** One cycle of the Flanger's sweep (CARD-128): the cycle across, bare; where its notches are up, 20 Hz to 20 kHz; and a line at its LFO's phase now. */
+export function sweepPicture(): PictureDecl<"unit01", "hz"> {
+  return view.picture({ x: axis.lin("unit01", 0, 1, { bare: true }), y: axis.log("hz", 20, 20000), live: [live.playhead("phase")] });
+}
+
+/**
+ * Where the Flanger's lowest notch is at `phase` (0 to 1) of its sweep, in Hz (`@m2/effects:flanger`'s
+ * own sum): its copy `0.1 ms × 100^(depth × (0.5 − 0.5 cos 2πφ))` late cuts the sound at `1 / (2 × delay)`
+ * and its odd multiples, or, with Feedback below 0 (the copy turned over), at `1 / delay` and its
+ * multiples. In seconds, so the same at every rate.
+ */
+export function notchAt(depth: number, feedback: number, phase: number): number {
+  const late = FLANGER.shortest * FLANGER.range ** (clamp(depth, 0, 1) * (0.5 - 0.5 * Math.cos(2 * Math.PI * phase)));
+  return (feedback < 0 ? 1 : 0.5) / late;
+}
+
+/**
+ * The Flanger's sweep (CARD-128), from its own sum (`notchAt`): its lowest notch over one cycle, the
+ * line `notch`, and the next two over it, faint (three and five times it, or two and three times it
+ * below 0), each kept under 20 kHz.
+ */
+export function sweep<D>(p: Painter<D, "unit01", "hz">, v: Values, names: { depth: Num<D>; feedback: Num<D> }): Shape[] {
+  const depth = known(v, names.depth, "depth"), feedback = known(v, names.feedback, "feedback");
+  const teeth = feedback < 0 ? [3, 2, 1] : [5, 3, 1];
+  const lines = teeth.map(() => [] as number[]);
+  for (let i = 0; i <= SWEEP_POINTS; i++) {
+    const phase = i / SWEEP_POINTS, notch = notchAt(depth, feedback, phase);
+    teeth.forEach((k, j) => lines[j].push(phase, Math.min(20000, k * notch)));
+  }
+  return [p.line(lines[0], { name: "third", tone: "faint" }), p.line(lines[1], { name: "second", tone: "faint" }), p.line(lines[2], { name: "notch" })];
+}
+
+/** What `sweep` draws, in words: how far and how fast its notches sweep, what its feedback does, then the line. */
+export function sweepWords(v: Values, names: { rate: string; depth: string; feedback: string }): string {
+  const [rate, depth, feedback] = [v[names.rate], v[names.depth], v[names.feedback]];
+  const line = "The line: where they are now";
+  const fb =
+    typeof feedback !== "number"
+      ? "Its feedback is set by a cable or the code"
+      : feedback === 0
+        ? "No feedback: the plain sweep"
+        : feedback > 0
+          ? `Feedback ${figures(feedback)} rings at the peaks between them`
+          : `Feedback ${figures(feedback)} turns the copy over: its notches move half way, and its peaks ring where they were, a hollow sound`;
+  if (typeof depth !== "number") return `Its notches sweep as far as a cable or the code says. ${fb}. ${line}`;
+  const turned = typeof feedback === "number" ? feedback : 0;
+  const top = notchAt(depth, turned, 0), bottom = notchAt(depth, turned, 0.5);
+  if (depth <= 0) return `Its notches stand still at ${hzWords(top)} and over. ${fb}. ${line}`;
+  const how =
+    typeof rate !== "number" ? "as fast as a cable or the code says" : rate > 1 ? `${figures(rate)} times a second` : rate === 1 ? "once a second" : `once each ${secondsWords(1 / rate)}`;
+  return `Its notches sweep from ${hzWords(top)} down to ${hzWords(bottom)} and back, ${how}. ${fb}. ${line}`;
+}
+
+// ---------------------------------------------------------------- grains
+
+/** Grains' buffer, in seconds, how far its grains stay behind the newest sound, in frames, and its values' ranges: its kernel's. */
+const GRAINS = { buffer: 3, margin: 2, sizes: [0.01, 0.5], spread: 2, pitch: 12 } as const;
+
+/** Grains' buffer (CARD-129): from now, 0 s, to 3 s back, across; its window's level up, bare; and a line where its newest grain reads now. */
+export function cloudPicture(): PictureDecl<"seconds", "unit01"> {
+  return view.picture({ x: axis.lin("seconds", 0, GRAINS.buffer), y: axis.lin("unit01", 0, 1, { bare: true }), live: [live.playhead("reads")] });
+}
+
+/**
+ * Where Grains' grains start, in seconds back from the newest sound, at the song's rate `sr`
+ * (`@m2/effects:grains`' own sum): from `back` to `back + spread`, where `back` keeps a grain behind
+ * the newest sound until it ends: `(ratio − 1) × size` when that is over 0, `ratio × size` frozen,
+ * and 2 frames, a grain `round(size × sr)` frames long at `2^(pitch / 12)` its speed.
+ */
+export function zone(size: number, spread: number, pitch: number, frozen: boolean, sr: number): [number, number] {
+  const len = Math.max(2, Math.round(f32(clamp(size, GRAINS.sizes[0], GRAINS.sizes[1]) * sr)));
+  const ratio = 2 ** (clamp(pitch, -GRAINS.pitch, GRAINS.pitch) / 12);
+  const reach = frozen ? ratio * len : Math.max(0, (ratio - 1) * len);
+  const back = (reach + GRAINS.margin) / sr;
+  return [back, back + clamp(spread, 0, GRAINS.spread)];
+}
+
+/**
+ * Grains' buffer (CARD-129), from its own sum (`zone`): a faint band where its grains start, and a dot
+ * at its far edge that moves the spread across. Its live line, where the newest grain reads now, is
+ * its kernel's.
+ */
+export function cloud<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { size: Num<D>; spread: In<D, "seconds">; pitch: Num<D>; freeze: Read<D> }): Shape[] {
+  const size = known(v, names.size, "size"), spread = known(v, names.spread, "spread"), pitch = known(v, names.pitch, "pitch");
+  const [near, far] = zone(size, spread, pitch, v[names.freeze] === true, p.rate);
+  return [p.fill([near, 0, far, 0, far, 1, near, 1], { tone: "faint" }), p.handle(far, 0.5, { x: names.spread } as Moves<D, "seconds", "unit01">)];
+}
+
+/** What `cloud` draws, in words: its grains, where from and at what pitch, then its line and its dot. */
+export function cloudWords(v: Values, names: { size: string; density: string; spread: string; pitch: string; freeze: string }): string {
+  const [size, density, spread, pitch, freeze] = [v[names.size], v[names.density], v[names.spread], v[names.pitch], v[names.freeze]];
+  const frozen = freeze === true ? "Frozen: it holds what it last heard, and plays pieces of it again and again. " : freeze === null ? "Freeze is set by a cable or the code. " : "";
+  const pieces = typeof size === "number" ? `Pieces of ${secondsWords(size)}` : "Pieces as long as a cable or the code says";
+  const many = typeof density === "number" ? `${figures(density)} a second` : "as many a second as a cable or the code says";
+  const from = typeof spread !== "number" ? "each from as far back as a cable or the code says" : spread <= 0 ? "each from just behind your sound" : `each from up to ${secondsWords(spread)} back`;
+  const semitones = typeof pitch === "number" ? Math.abs(pitch) : 0;
+  const pitched =
+    typeof pitch !== "number"
+      ? " at a pitch a cable or the code sets"
+      : pitch === 0
+        ? ""
+        : ` and ${semitones === 12 ? "an octave" : `${figures(semitones)} semitone${semitones === 1 ? "" : "s"}`} ${pitch > 0 ? "higher" : "lower"}`;
+  return `${frozen}${pieces}, ${many}, ${from}${pitched} (the band). The line: where the newest one reads now. Drag the band's edge for the spread`;
 }

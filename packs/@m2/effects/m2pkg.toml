@@ -2,10 +2,10 @@
 name = "@m2/effects"
 version = "1.4.0"
 license = "MIT OR Apache-2.0"
-description = "music2's effects that colour a sound: delay, reverb, chorus, phaser, tremolo, drive, bitcrush, widen and a clipper"
+description = "music2's effects that colour a sound: delay, reverb, grains, chorus, a flanger, phaser, tremolo, drive, bitcrush, widen and a clipper"
 authors = ["music2"]
 repository = "https://github.com/BreadBowlAI/music2"
-tags = ["effects", "delay", "reverb", "chorus", "phaser", "tremolo", "distortion", "clipper", "stereo"]
+tags = ["effects", "delay", "reverb", "granular", "chorus", "flanger", "phaser", "tremolo", "distortion", "clipper", "stereo"]
 # Its own kernels (PACK-21), built from kernels-src/ by std/build.sh (ABI-10). kernels-src/ is no
 # part of the pack (PACK-20).
 wasm = "kernels/effects.wasm"
@@ -23,9 +23,9 @@ std = "0.10"
 # ---------------------------------------------------------------- its own kernels
 # Port syntax as std's m2pkg.toml says. Each is called by the pack's id: `kernel("@m2/effects:bitcrush", …)`.
 # Each is safe with any input or setting: no NaN, no runaway feedback, and tails that end in exact
-# silence. Phaser, tremolo and the bitcrusher follow the song through their last input, `playing`:
-# the pack connects it to `time.playing`. Left out, it is 1, as if the song always played. Delay,
-# reverb, phaser, tremolo and widen were std's until std 0.9, and play the same bits.
+# silence. Phaser, tremolo, the bitcrusher, the Flanger and Grains follow the song through their last
+# input, `playing`: the pack connects it to `time.playing`. Left out, it is 1, as if the song always
+# played. Delay, reverb, phaser, tremolo and widen were std's until std 0.9, and play the same bits.
 
 [[kernel]]
 name = "delay"
