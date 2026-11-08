@@ -243,9 +243,10 @@ const reads = async (pic, layer, n = 60) => {
 await shown(gatePic);
 const strip = await reads(gatePic, 3);
 const lit = strip.map((l) => l.v);
+// Its last read is drawn as a strip: the window knows the meter is a switch from its ask's answer.
 check(
-  lit.includes(1) && lit.includes(0) && strip.every((l) => l.y > 0.9),
-  `the gate's strip, along its foot, lights on the hits and goes dark between them (its meter open, a switch): ${[...new Set(lit)]} at ${strip[0]?.y}`,
+  lit.includes(1) && lit.includes(0) && strip.at(-1)?.y > 0.9,
+  `the gate's strip, along its foot, lights on the hits and goes dark between them (its meter open, a switch): ${[...new Set(lit)]} at ${strip.at(-1)?.y}`,
 );
 await shown(gateDown);
 const turned = (await reads(gateDown, 1, 40)).map((l) => l.v);

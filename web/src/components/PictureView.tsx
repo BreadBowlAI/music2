@@ -716,14 +716,6 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
           g.fillRect(across(0), plot - 4, across((db - DB_FOOT) / -DB_FOOT) - across(0), 4);
           said[i] = { v: db, y: 1 };
         }
-      } else if (l.kind === "meter" && last?.now !== undefined && last.unit === "switch") {
-        // A switch is on or off, never a number on the axis (CARD-73): a light at the plot's top, lit while on.
-        const x = meterX(i) + BAR / 2;
-        g.beginPath();
-        g.arc(x, BAR, BAR / 2, 0, 2 * Math.PI);
-        if (last.now >= 0.5) g.fill();
-        else g.stroke();
-        said[i] = { v: last.now, x: x / c.width, y: BAR / plot };
       } else if (l.kind === "meter" && last?.now !== undefined) {
         // A bar at the right edge, from the axis's 0 to the meter's number, in the y axis's unit.
         const y0 = (1 - px(Math.min(Math.max(0, view.y.lo), view.y.hi), view.y)) * plot, y1 = (1 - px(last.now, view.y)) * plot;
