@@ -134,22 +134,24 @@ fn a_look_keeps_its_lows_between_their_reads() {
 }
 
 // TAP-13 (review T1): 31 spectra, each working out its lows too, take under half the meters' 33 ms
-// read. It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
+// read, in the CPU time of the thread that works them out, scaled by this machine's speed against
+// the Linux server's (CARD-75). It judges speed, so it runs in the nightly tier (ci/nightly-tests.txt).
 #[test]
 fn thirty_one_spectra_fit_in_a_read_with_room() {
     let x = sine(440.0, 0.5, LOW_FRAMES);
     let mut looks: Vec<Spectrum> = (0..31).map(|_| Spectrum::default()).collect();
     looks.iter_mut().for_each(|l| drop(l.bands(&x, 2, 48_000)));
+    let bound = m2_script::speed::scaled(std::time::Duration::from_micros(16_500));
     let best = (0..5)
         .map(|_| {
-            let t = std::time::Instant::now();
+            let t = m2_os::thread::cpu_time();
             for l in &mut looks {
                 *l = Spectrum::default();
                 std::hint::black_box(l.bands(&x, 2, 48_000));
             }
-            t.elapsed()
+            m2_os::thread::cpu_time() - t
         })
         .min()
         .unwrap();
-    assert!(best < std::time::Duration::from_micros(16_500), "31 spectra took {best:?}");
+    assert!(best < bound, "31 spectra took {best:?}: over 16.5 ms, {bound:?} on this machine (× {:.2})", m2_script::speed::ratio());
 }

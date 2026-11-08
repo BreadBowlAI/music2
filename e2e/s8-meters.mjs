@@ -117,7 +117,8 @@ let from = heard.length;
 check(await playSong(), "Space plays the song");
 await sleep(2000);
 const second = heard.slice(from).filter((h) => h.at >= Date.now() - 1000);
-const last = heard.at(-1)?.m;
+// The last with levels: a read that heard no whole block says only its load.
+const last = heard.filter((h) => h.m.tracks).at(-1)?.m;
 check(second.length >= 20 && second.length <= 40, `20 to 40 meters messages a second while playing (${second.length} in the last second)`);
 check(!!last && TRACKS.every((k) => Array.isArray(last.tracks[k])) && last.out?.length === 2 && typeof last.dsp?.load === "number", `each with every track's peaks, the output's and the load (${JSON.stringify(last)})`);
 const status = (await api("/status")).body;
@@ -170,7 +171,8 @@ const kickRows = async () => {
   return { tick: r.indexOf(COLOURS.tick), fill: r.filter((c) => c === COLOURS.fill || c === COLOURS.warn || c === COLOURS.danger).length };
 };
 await playSong();
-await until(async () => (await levels()).kick > -6, 4000);
+// Kick peaks at −6.39 dB, which reads −6.
+await until(async () => (await levels()).kick >= -6, 4000);
 await stopSong();
 await sleep(500);
 const held = await kickRows();
@@ -179,7 +181,7 @@ const still = await kickRows();
 await sleep(2700);
 const falling = await kickRows();
 check(held.tick >= 0 && held.tick < 10 && held.fill === 0, `half a second after the stop the level is gone and the hold tick stays near the top (row ${held.tick} of 28, ${held.fill} rows filled)`);
-check(held.tick >= 0 && still.tick === held.tick, `it holds for 1.5 s (row ${still.tick} a moment later)`);
+check(held.tick >= 0 && still.tick === held.tick, `it holds for 1.5 s (row ${held.tick}, and row ${still.tick} a moment later)`);
 check(held.tick >= 0 && (falling.tick > held.tick + 6 || falling.tick < 0), `then falls at 12 dB a second (row ${falling.tick} 3.5 s after the stop)`);
 
 // ---------------------------------------------------------------- the socket closes

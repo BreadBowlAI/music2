@@ -428,6 +428,17 @@ fn a_burst_past_the_hint_limit_is_walked_and_never_missed() {
         std::fs::write(fixture.0.join(format!("burst/f{i:04}.ts")), format!("export const f = {i};\n")).unwrap();
     }
     flush(&graph);
+    // They overflow before the first tick takes them. FSEvents' daemon can get a change a moment
+    // after its write, and a flush right after may return first (m2_os::watch's `flush`): on
+    // GitHub's Mac a first tick once took part of the burst, under the limit, and the rest came
+    // after, so no tick held more than 4,096 names, and no walk was a rescan.
+    let overflowed = |g: &Graph| g.inner.watch.lock().as_ref().unwrap().asks_rescan();
+    let (t, at_flush) = (std::time::Instant::now(), overflowed(&graph));
+    while !overflowed(&graph) && t.elapsed() < Duration::from_secs(20) {
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    eprintln!("the burst's {n} names: overflowed at the flush {at_flush}; {} {:?} after it", overflowed(&graph), t.elapsed());
+    assert!(overflowed(&graph), "the burst's {n} names never overflowed: {:?}", stats(&graph));
     let all = |g: &Graph| {
         g.inspect(|a| a.open.as_ref().unwrap().session.accepted().snapshot.files.keys().filter(|p| p.starts_with("burst")).count())
     };

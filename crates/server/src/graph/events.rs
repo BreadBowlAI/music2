@@ -130,4 +130,10 @@ impl Stream {
     pub fn events(&self) -> u64 {
         self.shared.hints.lock().events
     }
+
+    /// Tests: whether what was said since the last take asks for a walk of everything.
+    #[cfg(test)]
+    pub fn asks_rescan(&self) -> bool {
+        self.shared.hints.lock().rescan
+    }
 }

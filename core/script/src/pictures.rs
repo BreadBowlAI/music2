@@ -96,7 +96,8 @@ pub enum Drawn {
 
 struct Job {
     ask: Ask,
-    reply: mpsc::SyncSender<Drawn>,
+    /// What it drew, and the CPU time its thread spent drawing it.
+    reply: mpsc::SyncSender<(Drawn, Duration)>,
 }
 
 /// A runtime's thread, and when it was last asked.
@@ -125,7 +126,17 @@ impl Runner {
     /// Draw `ask`, waiting `most` at most: past it, [`Drawn::Busy`] (the draw goes on, and a next
     /// ask finds the runtime free again, or still refusing).
     pub fn draw_within(&self, ask: Ask, most: Option<Duration>) -> Drawn {
-        let gone = || Drawn::Cant("can't be drawn: the picture runner stopped".into());
+        self.ask(ask, most).0
+    }
+
+    /// Draw `ask` and wait for it, with the CPU time its runtime's thread spent on it: the work, not
+    /// the wait for a CPU (the speed tests, CARD-75).
+    pub fn draw_timed(&self, ask: Ask) -> (Drawn, Duration) {
+        self.ask(ask, None)
+    }
+
+    fn ask(&self, ask: Ask, most: Option<Duration>) -> (Drawn, Duration) {
+        let gone = || (Drawn::Cant("can't be drawn: the picture runner stopped".into()), Duration::ZERO);
         let (reply, answer) = mpsc::sync_channel(1);
         let mut job = Job { ask, reply };
         for _ in 0..2 {
@@ -134,7 +145,7 @@ impl Runner {
                 Ok(()) => {
                     return match most {
                         Some(d) => answer.recv_timeout(d).unwrap_or_else(|e| match e {
-                            mpsc::RecvTimeoutError::Timeout => Drawn::Busy,
+                            mpsc::RecvTimeoutError::Timeout => (Drawn::Busy, Duration::ZERO),
                             mpsc::RecvTimeoutError::Disconnected => gone(),
                         }),
                         None => answer.recv().unwrap_or_else(|_| gone()),
@@ -172,7 +183,9 @@ impl Runner {
                 m2_os::thread::c_numbers();
                 let mut kept = Kept::default();
                 for job in rx {
-                    let _ = job.reply.send(kept.draw(&job.ask));
+                    let t = m2_os::thread::cpu_time();
+                    let drawn = kept.draw(&job.ask);
+                    let _ = job.reply.send((drawn, m2_os::thread::cpu_time().saturating_sub(t)));
                 }
             })
             .expect("a thread for pictures");

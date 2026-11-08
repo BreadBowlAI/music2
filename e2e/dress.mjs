@@ -230,8 +230,10 @@ const out = (l) => {
   return l - down + 3;
 };
 const clamp = (v) => Math.min(1, Math.max(0, v));
-// Bars 5 and 6, where the hook plays too.
+// Bars 5 and 6, where the hook plays too, played from their start: from the song's, a clock that
+// ran late (GitHub's Mac) was still in bar 4 when the EQ's spectrum below was read.
 await post("/loop", { start: 16, end: 24, on: true });
+await post("/seek", { beat: 16 });
 await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
 let rides = false, turned = 0, placed = true, seenHistory = false;
@@ -279,7 +281,7 @@ await page.screenshot({ path: `${ROOT}/dress-lfo.png` });
 await page.click('[data-module-tab="hook"] [data-testid=track-label]');
 await until(async () => !!(await page.$(eqPic)), 15000);
 await shown(eqPic);
-let spectra = 0, onItsScale = true, quietest = 0;
+let spectra = 0, onItsScale = true, quietest = 0, off = null;
 for (let i = 0; i < 60 && spectra < 5; i++) {
   await sleep(150);
   const layers = await said(eqPic);
@@ -288,10 +290,13 @@ for (let i = 0; i < 60 && spectra < 5; i++) {
     if (!l || l.v <= -90) continue;
     spectra += 1;
     quietest = Math.min(quietest, l.v);
-    if (Math.abs(l.y - Math.min(1, Math.max(0, -l.v / 90))) > 0.005 || l.y >= 1) onItsScale = false;
+    if (Math.abs(l.y - Math.min(1, Math.max(0, -l.v / 90))) > 0.005 || l.y >= 1) [onItsScale, off] = [false, off ?? l];
   }
 }
-check(spectra >= 5 && onItsScale, `the hook's spectrum shows behind eq3's curve, on its own −90..0 dB scale (loudest bins down to ${quietest.toFixed(1)} dB)`);
+check(
+  spectra >= 5 && onItsScale,
+  `the hook's spectrum shows behind eq3's curve, on its own −90..0 dB scale (${spectra} reads, loudest bins down to ${quietest.toFixed(1)} dB${off ? `; one off it: ${JSON.stringify(off)}` : ""})`,
+);
 check(quietest < -24, `including bins quieter than the curve's foot (−24 dB): ${quietest.toFixed(1)} dB`);
 await page.keyboard.press("Space");
 

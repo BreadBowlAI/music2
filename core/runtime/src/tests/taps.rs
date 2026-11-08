@@ -157,6 +157,54 @@ fn unwatched_taps_read_nothing() {
     assert!(taps.take().meters.iter().all(|m| m[0] > 0.0), "watched again, from the next block");
 }
 
+// The meters message (architecture.md, "A live plan's taps"): the taps say whether they raised a
+// whole block since they were last taken, so a read that heard none sends nothing: none before the
+// first block, nor after a take until the next block, nor while unwatched.
+#[test]
+fn the_taps_say_whether_a_whole_block_was_raised_since_the_last_take() {
+    let (mut r, taps) = metered(&two(false, None));
+    assert!(!taps.heard(), "no block yet");
+    blocks(&mut r, 1);
+    assert!(taps.heard(), "a block");
+    taps.take();
+    assert!(!taps.heard(), "taken: none since");
+    taps.watch(false);
+    blocks(&mut r, 3);
+    assert!(!taps.heard(), "unwatched: none raised");
+    taps.watch(true);
+    blocks(&mut r, 1);
+    assert!(taps.heard(), "watched again, the next block");
+}
+
+// The same, while the audio thread raises blocks meanwhile: a take after the taps said they heard
+// a whole block holds every meter's peak, never a block half taken by the take before (both
+// tracks are steady sines, so every block has a peak over 0 in each meter).
+#[test]
+fn a_take_that_heard_a_whole_block_holds_its_peaks_while_blocks_go_on() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let (mut r, taps) = metered(&two(false, None));
+    let done = Arc::new(AtomicBool::new(false));
+    let audio = {
+        let done = done.clone();
+        std::thread::spawn(move || {
+            while !done.load(Ordering::Relaxed) {
+                blocks(&mut r, 1);
+            }
+        })
+    };
+    let (mut heard, t) = (0, std::time::Instant::now());
+    while heard < 20_000 && t.elapsed() < std::time::Duration::from_secs(5) {
+        if taps.heard() {
+            let p = taps.take();
+            heard += 1;
+            assert!(p.out[0] > 0.0 && p.meters.iter().all(|m| m[0] > 0.0), "take {heard}: {p:?}");
+        }
+    }
+    done.store(true, Ordering::Relaxed);
+    audio.join().unwrap();
+    assert!(heard > 100, "it read while blocks went on: {heard} takes");
+}
+
 /// `kick` (a 110 Hz sine) into a fader, `std:gain` reading a cell written at site 2 at `db`.
 fn faded(db: f64) -> Ir {
     serde_json::from_value(json!({"ir": m2_ir::IR_VERSION, "root": {"module": "song", "export": "out"}, "modules": [

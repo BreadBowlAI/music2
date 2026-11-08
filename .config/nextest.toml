@@ -58,6 +58,12 @@ test-group = 'play-churn'
 [[profile.default.overrides]]
 filter = 'binary_id(m2::listen)'
 test-group = 'listens'
+# The speed tests (CARD-75): each says this machine's speed against the Linux server's, which
+# scales its bound (m2_script::speed); kept in the log when they pass too.
+[[profile.default.overrides]]
+filter = 'test(=every_pack_picture_draws_inside_a_fifth_of_its_limit) | test(=every_instrument_picture_draws_in_a_fifth_of_its_limit) | test(=pictures_tests::an_eight_band_curve_draws_inside_its_budget) | test(=measure::tests::a_drag_frame_of_the_eq_stays_under_8_ms) | test(=measure::tests::a_measure_follows_a_drag_inside_its_budget) | test(=spectrum::tests::thirty_one_spectra_fit_in_a_read_with_room)'
+success-output = "final"
+
 
 # The tests that take over a minute on correct code, measured: each was seen past 60 s
 # (a SLOW line, or cargo test's "running for over 60 seconds") on some machine, so 3 minutes

@@ -126,6 +126,12 @@ jobs:
       # ci/sleeps-tests.txt and e2e/run.mjs's sleeps tags name, and its "late sleeps" row says
       # which. They run everywhere else, on a real Mac too.
       M2_LATE_SLEEPS: 1
+      # A shared virtual machine: a few speed tests' CPU time there runs up to 2 to 4 times what
+      # this machine's measured speed says (ci-flakes' runs 42494489844, 42503673490 and
+      # 42518316050), so ci/pr.sh leaves out those ci/shared-cpu-tests.txt names, and its "shared
+      # cpu" row says which. They run on Linux's nightly and in every ci/check.sh (a real Mac
+      # should pass them: not yet run).
+      M2_SHARED_CPU: 1
       M2_PR_JOBS: 1
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

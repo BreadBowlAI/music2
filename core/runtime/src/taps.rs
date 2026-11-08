@@ -6,7 +6,9 @@
 //! - **Peaks**: each channel's largest `|x|` since the server last took them, raised with
 //!   `fetch_max` into an atomic slot (a non-negative `f32` orders as its bits do). The meters: the
 //!   song's output, and each meter the server lays out ([`crate::Renderer::tap`], TAP-5), the
-//!   louder of its points channel by channel. Raised only while watched ([`TapSlots::watch`]).
+//!   louder of its points channel by channel. Raised only while watched ([`TapSlots::watch`]),
+//!   each block counted as it begins and ends, so a read knows whether it holds a whole block
+//!   ([`TapSlots::heard`]).
 //! - **Frames**: a ring of the last frames a point gave, two channels, for a scope or the master's
 //!   loudness. A plan has [`RINGS`] of them, made while it is prepared; each copies only while
 //!   the server points it somewhere ([`TapSlots::point`]), and the audio thread takes a new point
@@ -70,6 +72,12 @@ pub struct TapSlots {
     watched: AtomicBool,
     /// The output's two channels, then each meter's.
     peaks: Box<[AtomicU32]>,
+    /// The watched blocks the audio thread began raising the peaks of, and ended raising; and how
+    /// many had begun when the peaks were last taken: a take holds whole each block that began
+    /// after the last take and ended before it ([`TapSlots::heard`]).
+    begun: AtomicU64,
+    ended: AtomicU64,
+    taken: AtomicU64,
     /// Each meter: its first slot and its channels.
     meters: Vec<(usize, usize)>,
     rings: Box<[Ring]>,
@@ -228,6 +236,9 @@ impl TapSlots {
         TapSlots {
             watched: AtomicBool::new(false),
             peaks: (0..2).map(|_| AtomicU32::new(0)).collect(),
+            begun: AtomicU64::new(0),
+            ended: AtomicU64::new(0),
+            taken: AtomicU64::new(0),
             meters: vec![],
             rings: (0..RINGS).map(|_| Ring::new()).collect(),
             ports,
@@ -307,7 +318,19 @@ impl TapSlots {
     /// The peaks since the last take, each slot set back to 0.
     pub fn take(&self) -> Peaks {
         let take = |i: usize| f32::from_bits(self.peaks[i].swap(0, Ordering::Relaxed));
-        Peaks { out: [take(0), take(1)], meters: self.meters.iter().map(|&(at, n)| (at..at + n).map(take).collect()).collect() }
+        let p = Peaks { out: [take(0), take(1)], meters: self.meters.iter().map(|&(at, n)| (at..at + n).map(take).collect()).collect() };
+        // A block whose raise this take saw had begun before `begun` reads it here: the audio
+        // thread's release fence after counting it, before its raises, pairs with this one.
+        fence(Ordering::Acquire);
+        self.taken.store(self.begun.load(Ordering::Relaxed), Ordering::Relaxed);
+        p
+    }
+
+    /// Whether the audio thread raised a whole block's peaks since they were last taken: a block
+    /// that began after that take and has ended, so the next take holds all of it. A meters read
+    /// that heard none sends nothing, never a silence it didn't hear (the engine's clock ran late).
+    pub fn heard(&self) -> bool {
+        self.ended.load(Ordering::Acquire) > self.taken.load(Ordering::Relaxed)
     }
 
     fn raise(&self, slot: usize, peak: f32) {
@@ -449,6 +472,10 @@ impl Taps {
     pub(crate) fn write(&mut self, bufs: &[Vec<Vec<f32>>], out: &[[f32; 2]; BLOCK]) {
         let s = &*self.slots;
         if s.watched.load(Ordering::Relaxed) {
+            // Counted as it begins and as it ends, so a take knows the blocks it holds whole
+            // ([`TapSlots::heard`]): the fence keeps the count before the raises.
+            s.begun.fetch_add(1, Ordering::Relaxed);
+            fence(Ordering::Release);
             for c in 0..2 {
                 s.raise(c, peak(out.iter().map(|f| f[c])));
             }
@@ -458,6 +485,7 @@ impl Taps {
                     s.raise(at + c, peak(side(b, c).iter().copied()));
                 }
             }
+            s.ended.fetch_add(1, Ordering::Release);
         }
         for (r, took) in s.rings.iter().zip(&mut self.took) {
             r.write(took, bufs, out);
