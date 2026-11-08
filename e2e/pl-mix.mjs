@@ -231,11 +231,14 @@ check(await until(() => read("song.ts").includes("hats: { in: hats.out, db: db(-
 await until(async () => (await state()).view.revision !== unfaded, 10000);
 await sleep(600);
 // TAP-5: both read after the fader now, so both fell by about the 24 dB it moved.
+const top = (reads) => Math.max(...reads.map((s) => s.strip));
 const after = await samples(heard);
 const now = await loudest(2000);
 check(
-  after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(heard) && now.db <= was.db - 18,
-  `and its strip meter still reads as the header's, after the fader: both fell (${told(after, heard)}; Hats' loudest over 2 s from ${was.db} dB to ${now.db}, ${was.n} and ${now.n} messages)`,
+  // Messages came both times (none would read as −120 dB, a fall it never heard: review Y5), and
+  // the page fell too: every read after sits 18 dB under Hats' loudest before.
+  was.n > 0 && now.n > 0 && after.every((s) => Math.abs(s.strip - s.head) <= 1.5) && after.some(heard) && now.db <= was.db - 18 && top(after) <= was.db - 18,
+  `and its strip meter still reads as the header's, after the fader: both fell (${told(after, heard)}; Hats' loudest over 2 s from ${was.db} dB to ${now.db}, ${was.n} and ${now.n} messages; the page's loudest after ${top(after)} dB)`,
 );
 await linted("[data-testid=mix]", "the Mix view playing");
 await page.screenshot({ path: `${ROOT}/pl-mix-playing.png` });
