@@ -156,6 +156,48 @@ fn its_notches_and_peaks_lie_where_the_delay_puts_them() {
     }
 }
 
+// PACK-35, CARD-128: it has no make-up gain, so its loudest peak is `(1 − mix) + mix / (1 − |f|)` as
+// loud as the sound, what its card's words say: +14.8 dB at Mix 0.5 and +20 dB at Mix 1 at Feedback
+// ±0.9. Held still with the copy 0.5 to 10 ms late, at Feedback ±0.9 and ±0.5 and Mix 0.5 and 1, its
+// first peak (0 Hz with Feedback 0 and up, 1/(2D) below) is within 0.3 dB of that, and none of its
+// peaks up to 5 kHz is louder by more than 0.01 dB; at 44.1, 48 and 96 kHz.
+#[test]
+fn its_loudest_peak_is_as_loud_as_its_card_says() {
+    for sr in RATES {
+        let mut worst = 0.0f64;
+        for (depth, cycles) in HOLDS {
+            for feedback in [0.9f32, -0.9, 0.5, -0.5] {
+                for mix in [0.5f32, 1.0] {
+                    let (phase, h) = held(sr, 1.0, (cycles * sr as f64) as usize, depth, feedback, mix);
+                    let d = late(depth as f64, phase);
+                    if d < 0.0004 {
+                        continue;
+                    }
+                    let f = feedback.abs() as f64;
+                    let sum = (1.0 - mix as f64) + mix as f64 / (1.0 - f);
+                    let gain = |hz: f64| gain_at(&h, hz, sr as f64);
+                    let what = format!("{sr} Hz, the copy {:.3} ms late, feedback {feedback}, mix {mix}", d * 1000.0);
+                    // Its peaks, k/D or (k + ½)/D, each the loudest within 0.2% of its place.
+                    let off = if feedback < 0.0 { 0.5 } else { 0.0 };
+                    let peak = |k: usize| {
+                        let at = (k as f64 + off) / d;
+                        if at == 0.0 { gain(0.0) } else { (0..=40).map(|i| gain(at * (0.998 + 0.0001 * i as f64))).fold(0.0, f64::max) }
+                    };
+                    let first = peak(0);
+                    worst = worst.max((db(first) - db(sum)).abs());
+                    assert!((db(first) - db(sum)).abs() < 0.3, "{what}: its first peak is {:+.2} dB, not {:+.2}", db(first), db(sum));
+                    let last = ((5000.0 * d) - off).floor() as usize;
+                    for k in [1, 2, last] {
+                        let g = peak(k);
+                        assert!(db(g) <= db(sum) + 0.01, "{what}: its peak {k} is {:+.2} dB, over {:+.2}", db(g), db(sum));
+                    }
+                }
+            }
+        }
+        println!("{sr} Hz: its first peaks within {worst:.3} dB of (1 − mix) + mix / (1 − |f|)");
+    }
+}
+
 /// How late the copy is at each frame, on each side, at `sr`: the Flanger, its copy alone and no
 /// feedback, on a 50 Hz tone (sine and cosine, both sides), read from the tone's phase going out.
 fn delays(sr: f32, rate: f32, depth: f32, frames: usize) -> Vec<[f64; 2]> {

@@ -647,9 +647,14 @@ export function sweep<D>(p: Painter<D, "unit01", "hz">, v: Values, names: { dept
   return [p.line(lines[0], { name: "third", tone: "faint" }), p.line(lines[1], { name: "second", tone: "faint" }), p.line(lines[2], { name: "notch" })];
 }
 
-/** What `sweep` draws, in words: how far and how fast its notches sweep, what its feedback does, then the line. */
-export function sweepWords(v: Values, names: { rate: string; depth: string; feedback: string }): string {
-  const [rate, depth, feedback] = [v[names.rate], v[names.depth], v[names.feedback]];
+/**
+ * What `sweep` draws, in words: how far its notches sweep and how often, what its feedback does,
+ * and, with its loudest peak 6 dB or more over the sound, how loud it comes out (PACK-35: the comb
+ * has no make-up gain, its loudest peak `(1 − mix) + mix / (1 − |feedback|)`, Mix set by a cable or
+ * the code counted at 1, the most it can be).
+ */
+export function sweepWords(v: Values, names: { rate: string; depth: string; feedback: string; mix: string }): string {
+  const [rate, depth, feedback, mix] = [v[names.rate], v[names.depth], v[names.feedback], v[names.mix]];
   const line = "The line: where they are now";
   const fb =
     typeof feedback !== "number"
@@ -659,13 +664,19 @@ export function sweepWords(v: Values, names: { rate: string; depth: string; feed
         : feedback > 0
           ? `Feedback ${figures(feedback)} rings at the peaks between them`
           : `Feedback ${figures(feedback)} turns the copy over: its notches move half way, and its peaks ring where they were, a hollow sound`;
-  if (typeof depth !== "number") return `Its notches sweep as far as a cable or the code says. ${fb}. ${line}`;
+  let loud = "";
+  if (typeof feedback === "number") {
+    const m = typeof mix === "number" ? Math.min(Math.max(mix, 0), 1) : 1;
+    const peak = 20 * Math.log10(1 - m + m / (1 - Math.min(Math.abs(feedback), 0.9)));
+    if (peak >= 6) loud = `. It comes out up to ${dbWords(peak)} louder at its peaks: turn Mix or the track down`;
+  }
+  if (typeof depth !== "number") return `Its notches sweep as far as a cable or the code says. ${fb}. ${line}${loud}`;
   const turned = typeof feedback === "number" ? feedback : 0;
   const top = notchAt(depth, turned, 0), bottom = notchAt(depth, turned, 0.5);
-  if (depth <= 0) return `Its notches stand still at ${hzWords(top)} and over. ${fb}. ${line}`;
+  if (depth <= 0) return `Its notches stand still at ${hzWords(top)} and over. ${fb}. ${line}${loud}`;
   const how =
     typeof rate !== "number" ? "as fast as a cable or the code says" : rate > 1 ? `${figures(rate)} times a second` : rate === 1 ? "once a second" : `once each ${secondsWords(1 / rate)}`;
-  return `Its notches sweep from ${hzWords(top)} down to ${hzWords(bottom)} and back, ${how}. ${fb}. ${line}`;
+  return `Its notches sweep from ${hzWords(top)} down to ${hzWords(bottom)} and back, ${how}. ${fb}. ${line}${loud}`;
 }
 
 // ---------------------------------------------------------------- grains

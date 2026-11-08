@@ -222,7 +222,7 @@ export const flanger = component(
   {
     sweep: {
       draw: (v, p) => sweep(p, v, { depth: "depth", feedback: "feedback" }),
-      words: (v) => sweepWords(v, { rate: "rate", depth: "depth", feedback: "feedback" }),
+      words: (v) => sweepWords(v, { rate: "rate", depth: "depth", feedback: "feedback", mix: "mix" }),
     },
   },
 );

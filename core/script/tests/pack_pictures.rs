@@ -921,6 +921,24 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
             "Its notches sweep from 5 kHz down to 199 Hz and back, as fast as a cable or the code says. Feedback 0.5 rings at the peaks between them. {line}"
         )
     );
+    // PACK-35, review X2: with its loudest peak 6 dB or more over the sound, (1 − mix) + mix / (1 − |f|),
+    // they say how loud, and what to do; with Mix set by a cable or the code, at the most it can be.
+    let loud = |db: &str| format!("{line}. It comes out up to {db} louder at its peaks: turn Mix or the track down");
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.9, "mix": 0.5})),
+        format!("Its notches sweep from 5 kHz down to 199 Hz and back, once each 4 s. Feedback 0.9 rings at the peaks between them. {}", loud("14.8 dB"))
+    );
+    assert_eq!(
+        words(json!({"rate": 0.25, "depth": 0.7, "feedback": -0.9, "mix": 1})),
+        format!(
+            "Its notches sweep from 10 kHz down to 398 Hz and back, once each 4 s. Feedback −0.9 turns the copy over: its notches move half way, and its peaks ring where they were, a hollow sound. {}",
+            loud("20 dB")
+        )
+    );
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.7, "mix": 0.5})).ends_with(&loud("6.72 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.5, "mix": 1})).ends_with(&loud("6.02 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.9, "mix": null})).ends_with(&loud("20 dB")));
+    assert!(words(json!({"rate": 0.25, "depth": 0.7, "feedback": 0.6, "mix": 0.5})).ends_with(line), "4.9 dB: no word of it");
     let why = draw(&runner, "effects", "flanger", "sweep", json!({"rate": 0.25, "depth": null, "feedback": 0.5, "mix": 0.5})).unwrap_err();
     assert!(why.contains("its depth is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
 }
