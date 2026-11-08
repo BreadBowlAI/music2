@@ -24,7 +24,9 @@
 //!   listens (TAP-4: the taps are off; a window's always listens, an agent's when it asks), while no
 //!   project plays, nor while the engine idles (RENDER-6a), but one last message as it starts to,
 //!   so the meters fall to the silence it ended in. Nothing either while a new plan waits to be
-//!   taken: its taps read nothing yet.
+//!   taken: its taps read nothing yet; nor when the taps raised no whole block since the last
+//!   message ([`m2_runtime::TapSlots::heard`]), as when the engine's clock ran late: a message never
+//!   says a silence it didn't hear.
 //! - **The load:** the longest callback of the last second (the last 30 reads), as a share of the
 //!   device's period (Q3). `dropouts` are the device's xruns and the late callbacks since the
 //!   player started: a window lights its warning when the count grows. The meters thread is the
@@ -335,6 +337,12 @@ impl Graph {
             }
             let plays = current?;
             let taps = plays.info.taps.as_ref()?;
+            // A read that heard no whole block since the last message (the engine's clock ran
+            // late) sends nothing, never a silence it didn't hear; the one last message as it
+            // starts to idle goes, the silence it idled in.
+            if !idle && !taps.heard() {
+                return None;
+            }
             let loudness = asks.loudness().then(|| meters.loudness());
             let input = record.input().map(|(ring, ch)| meters.input_level(ring, ch));
             let dropouts = player.device_errors().xruns + meters.late;

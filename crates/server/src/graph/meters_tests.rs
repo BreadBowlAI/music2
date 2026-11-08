@@ -238,6 +238,23 @@ fn unwatched_meters_send_nothing() {
     assert!(peak(&m, "kick") > 0.1, "{m}");
 }
 
+// The meters message (architecture.md, "A live plan's taps"): a read whose window holds no whole
+// block, as when the engine's clock ran late (GitHub's Mac runner, where the sidechain suite read a
+// steady bass as silent), sends nothing, never a silence it didn't hear. A block later, the next
+// read says what that block held.
+#[test]
+fn a_read_that_heard_no_whole_block_sends_nothing() {
+    let mut rig = Rig::new(&kick_and_bass("export default song(() => mixer({ kick: kick.out, bass: bass.out }));\n"), &[]);
+    rig.graph.transport("play").unwrap();
+    rig.fill(8);
+    let m = rig.meters().expect("playing");
+    assert!(peak(&m, "bass") > 0.1, "{m}");
+    assert_eq!(rig.meters(), None, "no block since the last read: nothing, not silence");
+    rig.fill(1);
+    let m = rig.meters().expect("a block since the last read");
+    assert!(peak(&m, "bass") > 0.1 && peak(&m, "kick") > 0.1, "what the block held: {m}");
+}
+
 /// A 1 kHz sine at −20 dBFS, the whole song.
 const SINE: &str = "import { hz, song } from '@m2/core';\nimport { osc } from 'std/dsp';\nimport { scale } from 'std/math';\n\
                     export default song(() => scale(osc.sine(hz(1000)), 0.1));\n";
