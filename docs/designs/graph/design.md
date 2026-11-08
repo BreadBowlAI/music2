@@ -70,7 +70,7 @@ Each edit is one undo step and one change to the code.
 | Edit | Gesture | The code | Today? |
 |---|---|---|---|
 | Set a value | Drag a bar up or down, type into it, press ⌫ to reset it, or drag a picture's dot | The written value changes | Yes |
-| Connect a value | Drag from a control output onto a bar. On a collapsed node, drop onto the node: a menu lists its values that fit, and dims the rest, saying why (DV-6). | The value becomes the name of a `const`, as today's cables: from the same file, declared above the value; else "name it in code first" | Yes |
+| Connect a value | Drag from a control output onto a bar. On a collapsed node, drop onto the node: a menu lists its values that fit, and dims the rest, saying why (DV-6). A note effect's values take no wire, since it plays before the song's sounds ([RENDER-41](../../architecture.md#events)): they dim, with its words. | The value becomes the name of a `const`, as today's cables: from the same file, declared above the value; else "name it in code first" | Yes |
 | Disconnect | ✕ at the wire's end | The value goes back to its input's declared default, as today | Yes |
 | Insert on a wire | **+** on the wire, then pick from a list of what fits it: effects on audio, note effects on notes (today's EffectBrowser, filtered) | See below | New |
 | Remove | ⋯ ▸ Remove, or Delete on the selected node | Unwraps it, `b(x(a))` to `b(a)`. Never deletes anything upstream. | Yes (effects, and note effects on notes-sdk) |
@@ -97,7 +97,7 @@ On any other wire the + is greyed, with why. That covers a helper function's par
 From top to bottom:
 
 1. **Its header**, 24 px tall:
-   - ⏻ where bypass works, then its label;
+   - ⏻ where bypass works, then its label, never shortened: a label too long for the line wraps to a second one (today's Patch node cuts "Arpeggiator" to "Arpeggia…");
    - **+N** when N values are hidden;
    - ⋯ (Remove, Move, Show in code, Copy its id for `m2 add-effect`), and ⤢;
    - an instrument has its track's colour along its top;
@@ -183,7 +183,7 @@ The contract changes first, in track 1's first commit.
 
 | Rule | Becomes |
 |---|---|
-| taste.md §3.5, DV-1 (the chain is Device's default), DV-11 (when Chain shows) | **Removed:** one view |
+| taste.md §3.5, DV-1 (the chain is Device's default), DV-11 (when Chain shows; since notes-pack, a sound with a note effect shows its patch, with words) | **Removed:** one view |
 | DV-5 (port shapes, cables, Fit 75–100%), DV-6 (a drag offers only what fits), DV-9 (keys view), DV-10 (scope), DV-17 (pictures in music2's style), §2.8 | **Kept.** DV-6 also covers a collapsed node's value menu. |
 | DV-7 (+ after a node; delete) | **Rewritten:** + on wires (§3); Remove in ⋯ and with Delete |
 | DV-8 (settings after the values) | **Kept**, in an expanded node's Setup column |
