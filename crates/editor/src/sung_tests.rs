@@ -148,7 +148,7 @@ fn find_notes_adds_the_pack_the_song_lacks() {
     assert!(wrong("@m2/vocals:notes", "@m2/vocals:notes").contains("doesn't play edited notes"));
     assert!(wrong("@nobody/none:notes", "@m2/vocals:voice").contains("isn't installed"));
     edit(&mut s, &find(measured(&RUNS))).unwrap();
-    assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.1\""), "{}", f.read("music2.toml"));
+    assert!(f.read("music2.toml").contains("\"@m2/vocals\" = \"1.2\""), "{}", f.read("music2.toml"));
     assert!(f.read("music2.lock").contains("@m2/vocals"));
     assert!(s.problems().iter().all(|d| d.code == "asset.unpinned"), "{:?}", s.problems());
     s.undo().unwrap();

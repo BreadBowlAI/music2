@@ -9,10 +9,13 @@
 //
 //   node e2e/tune.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
+import path from "node:path";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const RATE = 48000;
+// The version of @m2/vocals music2 comes with: what + Effect asks for and locks.
+const [, version, major, minor] = /^version = "(([0-9]+)\.([0-9]+)\.[0-9]+)"$/m.exec(fs.readFileSync(path.join(import.meta.dirname, "../packs/@m2/vocals/m2pkg.toml"), "utf8"));
 
 /** A mono 16-bit WAV of 2 s: a buzzy voice (a few harmonics of 216 Hz, a little flat of A). */
 function wav(path) {
@@ -88,8 +91,8 @@ await page.click('[data-effect-browser] [data-effect="tune"]');
 const added = 'tune(lane.audio("clips"), { glide: 0.1, amount: 1 })';
 check(await until(() => read("tracks/vox.ts").includes(added), 15000), `Tune goes around the vocal, in its track, at Natural: ${read("tracks/vox.ts").match(/=> .*/)?.[0]}`);
 check(read("tracks/vox.ts").includes('import { tune } from "@m2/vocals";') && read("song.ts").includes("vox: vox.out,"), "imported there; the song reads the track as it did");
-check(/^"@m2\/vocals" = "1\.1"$/m.test(read("music2.toml")), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
-check(/name = "@m2\/vocals"\nversion = "1\.1\.0"/.test(read("music2.lock")), "music2.lock locks it");
+check(read("music2.toml").split("\n").includes(`"@m2/vocals" = "${major}.${minor}"`), `music2.toml lists the pack: ${read("music2.toml").match(/"@m2\/vocals".*/)?.[0]}`);
+check(read("music2.lock").includes(`name = "@m2/vocals"\nversion = "${version}"`), `music2.lock locks it, at ${version}`);
 
 // ---------------------------------------------------------------- no key: the card says so (VOX-26)
 

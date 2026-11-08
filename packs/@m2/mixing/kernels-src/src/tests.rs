@@ -588,6 +588,75 @@ fn a_key_opens_the_gate() {
     assert!((0..s(1.0)).all(|t| (out[t] - dry[t] * 1e-4).abs() <= 1e-9), "a key under the threshold opened it");
 }
 
+// ---------------------------------------------------------------- meters (ABI-13)
+
+/// Meter `o` of what a tool played (its output `o`, after its sound), block by block: each block's
+/// one number, checked to fill every frame of the block.
+fn meter_blocks(played: &m2_dsp::testing::Played, o: usize) -> Vec<f32> {
+    played.out[o]
+        .chunks(BLOCK)
+        .map(|b| {
+            assert!(b.iter().all(|f| f[0].to_bits() == b[0][0].to_bits()), "a meter holds one number for the block: {:?}", &b[..2]);
+            b[0][0]
+        })
+        .collect()
+}
+
+/// How far `out` fell from `x` at its most over the frames of block `k`, in dB: the frames where `x`
+/// is no silence, so the ratio is a gain.
+fn fell(out: &[[f32; 2]], x: &dyn Fn(usize) -> f32, k: usize) -> f32 {
+    (k * BLOCK..((k + 1) * BLOCK).min(out.len()))
+        .filter(|&t| x(t).abs() > 1e-5)
+        .map(|t| -20.0 * (out[t][0] / x(t)).abs().log10())
+        .fold(0.0, f32::max)
+}
+
+/// A tone of `hz` whose peak is `level` dBFS, starting at its peak (a cosine), so a block's first
+/// frame is never silence.
+fn peak_at(hz: f64, level: f64) -> impl Fn(usize) -> f32 {
+    let amp = 10f64.powf(level / 20.0);
+    move |t| (amp * (2.0 * PI * hz * t as f64 / SR as f64).cos()) as f32
+}
+
+// PACK-26, ABI-13: the gate says whether it is open, `open` (1 or 0, as it is at the block's end),
+// and how far it turns the sound down, `reduction` (in dB, the most of the block's frames, as std's
+// dynamics say it, ABI-14). On silence it is closed, at its range. A tone over its threshold opens
+// it, and once its attack is over it turns nothing down; a tone under its threshold after it closes
+// it, after its hold, down to its range over its release, each block as far as the sound fell at one
+// of its frames. At a range of 0 dB it opens and closes, and turns nothing down.
+#[test]
+fn the_gate_says_whether_it_is_open_and_how_far_it_turns_down() {
+    let play = |x: &dyn Fn(usize) -> f32, c: [f32; 5], frames: usize| {
+        m2_dsp::testing::play_at::<Gate>(SR, 1, frames, BLOCK, &|p, _, t| match p {
+            0 | 1 => x(t),
+            p => c[p - 2],
+        })
+    };
+    let quiet = play(&|_| 0.0, gate(-40.0, 0.001, 0.05, 0.1, -80.0), s(0.5));
+    assert!(meter_blocks(&quiet, 2).iter().all(|&o| o == 0.0), "silence: closed");
+    assert!(meter_blocks(&quiet, 1).iter().all(|&r| (r - 80.0).abs() < 1e-3), "silence: turned down by its range, 80 dB");
+    let (loud, soft) = (peak_at(1000.0, -20.0), peak_at(1000.0, -70.0));
+    let x = |t: usize| if t < s(0.5) { loud(t) } else { soft(t) };
+    let block = |t: usize| t / BLOCK;
+    let played = play(&x, gate(-40.0, 0.001, 0.1, 0.2, -60.0), s(1.0));
+    let (open, down) = (meter_blocks(&played, 2), meter_blocks(&played, 1));
+    assert!(open[..block(s(0.5))].iter().all(|&o| o == 1.0), "open while the tone is over its threshold");
+    assert!(down[1..block(s(0.5))].iter().all(|&r| r == 0.0), "and nothing turned down once its attack is over: {:?}", &down[..3]);
+    assert!(down[0] > 20.0, "its attack's first frames are turned down: {}", down[0]);
+    assert!(open[block(s(0.61))..].iter().all(|&o| o == 0.0), "closed once the tone is under it, after its hold");
+    assert!((down[down.len() - 1] - 60.0).abs() < 1e-3, "down to its range once its release is over: {}", down[down.len() - 1]);
+    let halfway = down[block(s(0.7))];
+    assert!((25.0..35.0).contains(&halfway), "halfway through its release, about 30 dB: {halfway}");
+    for (k, &r) in down.iter().enumerate() {
+        let f = fell(played.main(), &x, k);
+        assert!((r - f).abs() < 0.02, "block {k}: the meter says {r} dB, the sound fell by {f} dB");
+    }
+    let at_zero = play(&x, gate(-40.0, 0.001, 0.1, 0.2, 0.0), s(1.0));
+    let (open, down) = (meter_blocks(&at_zero, 2), meter_blocks(&at_zero, 1));
+    assert!(open[0] == 1.0 && open[open.len() - 1] == 0.0, "at a range of 0 dB it still opens and closes");
+    assert!(down.iter().all(|&r| r == 0.0), "and turns nothing down");
+}
+
 // ---------------------------------------------------------------- the transient shaper
 
 /// How often a hit comes.
@@ -734,6 +803,31 @@ fn the_deessers_bell_spares_what_is_far_from_it() {
     }
 }
 
+// PACK-26, ABI-13: the de-esser says how far it turns its band down at its frequency, `reduction`
+// (in dB, the most of the block's frames): a low tone, at full level, nothing; a hiss, by up to its
+// amount; and a tone at its frequency, by as much as that tone fell, each block once its filters
+// have settled (at its frequency the band is the sound, so the sound falls by the band's gain).
+#[test]
+fn the_deesser_says_how_far_it_turns_its_band_down() {
+    let play = |x: &dyn Fn(usize) -> f32, amount: f32| {
+        m2_dsp::testing::play_at::<Deesser>(SR, 1, 2 * N, BLOCK, &|p, _, t| [x(t), 6000.0, -30.0, amount][p])
+    };
+    // A sine, from 0: a tone that starts at its peak is a click at its start, which the band hears.
+    let low = tone_at(200.0, -0.1);
+    assert!(meter_blocks(&play(&low, 24.0), 1).iter().all(|&r| r == 0.0), "a 200 Hz tone at full level: nothing turned down");
+    let hiss = |t: usize| 0.3 * noise(0, t);
+    let m = meter_blocks(&play(&hiss, 6.0), 1);
+    let most = m.iter().copied().fold(0.0, f32::max);
+    assert!(most > 3.0 && most <= 6.0 + 1e-4, "a hiss: turned down, by its amount of 6 dB at most: {most}");
+    let tone = peak_at(6000.0, -10.0);
+    let played = play(&tone, 24.0);
+    let m = meter_blocks(&played, 1);
+    for (k, &r) in m.iter().enumerate().skip(N / BLOCK) {
+        let f = fell(played.main(), &tone, k);
+        assert!((r - f).abs() < 0.25 && r > 15.0, "block {k}: the meter says {r} dB, the 6 kHz tone fell by {f} dB");
+    }
+}
+
 // ---------------------------------------------------------------- the multiband compressor
 
 /// The multiband's controls with every band at `ratio` (and its other values at their defaults).
@@ -834,6 +928,40 @@ fn crossed_split_points_are_put_in_order() {
     assert!(ordered.iter().zip(&crossed).all(|(a, b)| a.to_bits() == b.to_bits()), "crossed split points play otherwise than ordered ones");
     let level = db(amplitude(&crossed[N..], probe[0]) / 0.3);
     assert!(level < -10.0, "split at 2000 and 500 Hz, the mid band squeezed: a 1 kHz tone by {level:.2} dB");
+}
+
+// PACK-26, ABI-13: each band says how far its compressor turns it down, its gain aside, as std's
+// compress says it (ABI-14): `low_reduction`, `mid_reduction` and `high_reduction`, in dB, the most of
+// the block's frames. A tone in each band, one band squeezed (over its threshold, at a ratio of
+// 20, its gain up 6 dB): its meter, once settled, by as much as its tone fell under its gain; the
+// two others, at a ratio of 1, nothing.
+#[test]
+fn each_multiband_band_says_how_far_it_turns_down() {
+    let names = ["low", "mid", "high"];
+    let probes = [bin_of(40.0), bin_of(670.0), bin_of(12_000.0)];
+    let amp = 0.3;
+    let x = tones(&probes, amp);
+    for (band, name) in names.iter().enumerate() {
+        let mut c = multiband(150.0, 3000.0, 1.0);
+        c[2 + band * 5] = -40.0;
+        c[2 + band * 5 + 1] = 20.0;
+        c[2 + band * 5 + 4] = 6.0;
+        let played = m2_dsp::testing::play_at::<Multiband>(SR, 2, 2 * N, BLOCK, &with(&x, &c));
+        for (other, said) in names.iter().enumerate() {
+            let m = meter_blocks(&played, 1 + other);
+            if other != band {
+                assert!(m.iter().all(|&r| r == 0.0), "the {name} band squeezed: the {said} band's meter moved");
+                continue;
+            }
+            let fell = 6.0 - db(amplitude(&left(&played.main()[N..]), probes[band]) / amp as f64);
+            let settled = &m[N / BLOCK..];
+            let said_db = settled.iter().map(|&r| r as f64).sum::<f64>() / settled.len() as f64;
+            assert!(
+                said_db > 10.0 && (said_db - fell).abs() < 0.5,
+                "the {name} band: its meter says {said_db:.2} dB, its tone fell by {fell:.2} dB"
+            );
+        }
+    }
 }
 
 // ---------------------------------------------------------------- real time

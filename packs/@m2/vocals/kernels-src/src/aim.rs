@@ -8,6 +8,10 @@
 //! and the note it aimed at last is kept while it is no more than [`BIAS`] semitones further than
 //! the nearest. Unvoiced, its aim is 0. The output eases toward `amount` × the aim with a time
 //! constant of `glide` seconds (a one-pole), and at glide 0 is there at once: Robot.
+//!
+//! Its two meters (ABI-13) are Tune's pitch line (VOX-27), which nothing in a song reads: `heard`,
+//! the pitch it hears, and `note`, the note of the key it moves it to, each a MIDI note number as
+//! it stands at the call's end, and 0 with no pitch.
 
 use m2_dsp::fx::{clampf, flush};
 use m2_kernel::{Cfg, Io, Kernel};
@@ -40,6 +44,8 @@ pub struct Snap {
     /// The glide's coefficient, by the glide it was made for.
     coef: (f32, f32),
     out: f32,
+    /// What its meters say: the pitch heard and the note it aims at, MIDI numbers; 0 with no pitch.
+    line: [f32; 2],
 }
 
 /// `x` wrapped into a pitch class's distance: −6 to 6 semitones.
@@ -72,10 +78,10 @@ impl Snap {
 
 impl Kernel for Snap {
     const INPUTS: usize = 5;
-    const OUTPUTS: usize = 1;
+    const OUTPUTS: usize = 3;
 
     fn new(cfg: &Cfg) -> Self {
-        Snap { sr: cfg.sample_rate.max(1.0), key: EVERY, note: None, seen: None, aim: 0.0, coef: (0.0, 1.0), out: 0.0 }
+        Snap { sr: cfg.sample_rate.max(1.0), key: EVERY, note: None, seen: None, aim: 0.0, coef: (0.0, 1.0), out: 0.0, line: [0.0; 2] }
     }
 
     fn process(&mut self, io: &mut Io) {
@@ -94,6 +100,14 @@ impl Kernel for Snap {
                 if !voiced {
                     self.note = None;
                 }
+                // The pitch it hears, and the note it aims at: the aim moves the heard pitch onto
+                // a pitch class of the key, so the two make a whole number.
+                self.line = if voiced {
+                    let midi = 69.0 + 12.0 * (hz as f64 / 440.0).log2();
+                    [midi as f32, (midi + self.aim).round() as f32]
+                } else {
+                    [0.0; 2]
+                };
             }
             let glide = clampf(io.input(GLIDE)[t], 0.0, LONGEST);
             if glide.to_bits() != self.coef.0.to_bits() {
@@ -106,5 +120,7 @@ impl Kernel for Snap {
             }
             io.output(0)[t] = self.out;
         }
+        io.meter(1, self.line[0]);
+        io.meter(2, self.line[1]);
     }
 }

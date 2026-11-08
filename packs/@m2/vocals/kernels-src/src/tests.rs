@@ -437,6 +437,57 @@ fn no_pitch_eases_back_and_a_bad_key_keeps_the_last() {
     }
 }
 
+/// C minor: C, D, E♭, F, G, A♭ and B♭.
+const C_MINOR: f32 = (1 | 1 << 2 | 1 << 3 | 1 << 5 | 1 << 7 | 1 << 8 | 1 << 10) as f32;
+
+/// What snap's two meters say at the end of each block, pitch then snap playing `voice` in `key`
+/// (VOX-22): the pitch it hears and the note it moves it to. Each is one number for the block.
+fn pitch_line(sr: f32, voice: &[f32], key: f32) -> (Vec<f32>, Vec<f32>) {
+    let (mut pitch, mut snap) = (Host::<Pitch>::of(cfg(sr, 1)), Host::<Snap>::of(cfg(sr, 1)));
+    let (mut heard, mut note) = (vec![], vec![]);
+    for chunk in voice.chunks(BLOCK) {
+        let n = chunk.len();
+        pitch.port_mut(0)[..n].copy_from_slice(chunk);
+        pitch.process(n as u32);
+        let (hz, clarity) = (pitch.port_mut(1)[..n].to_vec(), pitch.port_mut(2)[..n].to_vec());
+        snap.port_mut(0)[..n].copy_from_slice(&hz);
+        snap.port_mut(1)[..n].copy_from_slice(&clarity);
+        for (port, v) in [(2, key), (3, 0.1), (4, 1.0)] {
+            snap.port_mut(port)[..n].fill(v);
+        }
+        snap.process(n as u32);
+        for (o, said) in [(6, &mut heard), (7, &mut note)] {
+            let m = &snap.port_mut(o)[..n];
+            assert!(m.iter().all(|x| x.to_bits() == m[0].to_bits()), "a meter holds one number for the block: {:?}", &m[..2]);
+            said.push(m[0]);
+        }
+    }
+    (heard, note)
+}
+
+// VOX-22, ABI-13: snap says the pitch it hears and the note of the key it moves it to, as MIDI note
+// numbers, for Tune's pitch line (VOX-27). A voice sung 30 cents over A: heard within 3 cents of it
+// (pitch's own reading, VOX-21), and moved to A in C major, to B♭ in C minor (nearer than A♭).
+// Silence and an "s" have no pitch: both 0.
+#[test]
+fn snap_says_the_pitch_it_hears_and_the_note_it_moves_it_to() {
+    let sr = 48_000.0;
+    let sung = steady(69.3, 0.0, 1.0).sing(sr);
+    let settled = |v: &[f32]| v[v.len() / 2..].to_vec();
+    let (heard, note) = pitch_line(sr, &sung, C_MAJOR);
+    let heard = settled(&heard);
+    assert!(heard.iter().all(|&h| (h as f64 - 69.3).abs() < 0.03), "heard within 3 cents of 69.3: {:?}", &heard[..4]);
+    assert!(settled(&note).iter().all(|&m| m == 69.0), "A, in C major: {:?}", &settled(&note)[..4]);
+    let (_, note) = pitch_line(sr, &sung, C_MINOR);
+    assert!(settled(&note).iter().all(|&m| m == 70.0), "B♭, in C minor: {:?}", &settled(&note)[..4]);
+    let silence = vec![0.0; 24_000];
+    let s = Song { secs: 0.5, midi: &|_| 60.0, vibrato: 0.0, formants: AH, s: Some((-1.0, 2.0)) }.sing(sr);
+    for (what, x) in [("silence", &silence), ("an s", &s)] {
+        let (heard, note) = pitch_line(sr, x, C_MAJOR);
+        assert!(heard.iter().chain(&note).all(|&v| v == 0.0), "{what}: no pitch, 0 and 0");
+    }
+}
+
 // ---------------------------------------------------------------- shift
 
 // VOX-23, VOX-24: with no move, shift gives the voice back exactly as it came, as late as its

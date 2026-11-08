@@ -1,6 +1,6 @@
 [package]
 name = "@m2/vocals"
-version = "1.1.0"
+version = "1.2.0"
 license = "MIT OR Apache-2.0"
 description = "music2's tools for a sung voice: Tune, which moves each sung note onto the song's key, and a voice's notes, found and edited"
 authors = ["music2"]
@@ -31,7 +31,7 @@ outputs = ["hz: control<hz>", "clarity: control<unit01>", "level: control<gain>"
 
 [[kernel]]
 name = "snap"
-description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22)"
+description = "How many semitones to move a sung pitch: to the nearest note of the key, keeping the current note within 0.2 semitones, eased over glide seconds (0 jumps at once), times amount. With no clear pitch it eases back to 0 (VOX-22). Its meters, Tune's pitch line: heard, the pitch it hears, and note, the note of the key it moves it to, each a MIDI note number (0 with no pitch)"
 inputs = [
   "hz: control<hz>",
   "clarity: control<unit01>",
@@ -40,6 +40,7 @@ inputs = [
   "amount: control<unit01> = 1",
 ]
 outputs = ["out: control<semitones>"]
+meters = ["heard: control<semitones>", "note: control<semitones>"]
 
 [[kernel]]
 name = "shift"
