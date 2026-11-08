@@ -758,6 +758,8 @@ const ModuleSection = memo(function ModuleSection({
   // A wire's + shows under the pointer (`useWireHover`, so a hover draws only its +), on the selected
   // node's wires, and while its browser is open.
   const [picking, setPicking] = useState<{ edge: PortEdge; anchor: HTMLElement } | null>(null);
+  // A hover ends with its module: another module's (or song's) wire may have the same key.
+  useEffect(() => () => useWireHover.setState({ hovered: null }), []);
   const keyOf = useMemo(() => new Map(module.nodes.map((n) => [n.id, n.key ?? n.id])), [module]);
 
   // Drag from a named output onto a bar: the value is replaced by the signal's name. Dropped on a
