@@ -805,20 +805,47 @@ fn the_vocoder_draws_its_synth_in_and_out() {
     assert_eq!(kinds(&d), Vec::<&str>::new(), "no shapes: nothing worked out from sums");
     assert_eq!(d["words"], format!("Half of the voice's S and T sounds come through, and each sound lets go in 50 ms. {layers}"));
     for formant in [json!(3), json!(-12), Value::Null] {
-        assert_eq!(said(json!(0.5), json!(0.05), formant.clone())["shapes"], d["shapes"], "its shapes don't move with Formant: at {formant}");
+        assert_eq!(
+            said(json!(0.5), json!(0.05), formant.clone())["shapes"],
+            d["shapes"],
+            "its shapes don't move with Formant: at {formant}"
+        );
     }
     let words = |clarity: Value, smooth: Value, formant: Value| said(clarity, smooth, formant)["words"].as_str().unwrap().to_string();
     let half = "Half of the voice's S and T sounds come through, and each sound lets go in 50 ms";
-    assert_eq!(words(json!(0.5), json!(0.05), json!(3)), format!("Its hills 3 semitones higher than the voice's: a brighter robot. {half}. {layers}"));
-    assert_eq!(words(json!(0.5), json!(0.05), json!(-5)), format!("Its hills 5 semitones lower than the voice's: a deeper robot. {half}. {layers}"));
-    assert_eq!(words(json!(0.5), json!(0.05), json!(1)), format!("Its hills 1 semitone higher than the voice's: a brighter robot. {half}. {layers}"));
-    assert_eq!(words(json!(0.5), json!(0.05), json!(-2.5)), format!("Its hills 2.5 semitones lower than the voice's: a deeper robot. {half}. {layers}"));
+    assert_eq!(
+        words(json!(0.5), json!(0.05), json!(3)),
+        format!("Its hills 3 semitones higher than the voice's: a brighter robot. {half}. {layers}")
+    );
+    assert_eq!(
+        words(json!(0.5), json!(0.05), json!(-5)),
+        format!("Its hills 5 semitones lower than the voice's: a deeper robot. {half}. {layers}")
+    );
+    assert_eq!(
+        words(json!(0.5), json!(0.05), json!(1)),
+        format!("Its hills 1 semitone higher than the voice's: a brighter robot. {half}. {layers}")
+    );
+    assert_eq!(
+        words(json!(0.5), json!(0.05), json!(-2.5)),
+        format!("Its hills 2.5 semitones lower than the voice's: a deeper robot. {half}. {layers}")
+    );
     assert_eq!(words(json!(0.5), json!(0.05), Value::Null), format!("Its hills moved by a cable or the code. {half}. {layers}"));
-    assert_eq!(words(json!(0), json!(0.2), json!(0)), format!("None of the voice's S and T sounds come through, and each sound lets go in 200 ms. {layers}"));
-    assert_eq!(words(json!(1), json!(0.01), json!(0)), format!("All of the voice's S and T sounds come through, and each sound lets go in 10 ms. {layers}"));
-    assert_eq!(words(json!(0.3), json!(0.0125), json!(0)), format!("30% of the voice's S and T sounds come through, and each sound lets go in 12.5 ms. {layers}"));
+    assert_eq!(
+        words(json!(0), json!(0.2), json!(0)),
+        format!("None of the voice's S and T sounds come through, and each sound lets go in 200 ms. {layers}")
+    );
+    assert_eq!(
+        words(json!(1), json!(0.01), json!(0)),
+        format!("All of the voice's S and T sounds come through, and each sound lets go in 10 ms. {layers}")
+    );
+    assert_eq!(
+        words(json!(0.3), json!(0.0125), json!(0)),
+        format!("30% of the voice's S and T sounds come through, and each sound lets go in 12.5 ms. {layers}")
+    );
     assert_eq!(
         words(Value::Null, Value::Null, json!(0)),
-        format!("The voice's S and T sounds come through as a cable or the code says, and each sound lets go as a cable or the code says. {layers}")
+        format!(
+            "The voice's S and T sounds come through as a cable or the code says, and each sound lets go as a cable or the code says. {layers}"
+        )
     );
 }
