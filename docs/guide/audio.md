@@ -150,9 +150,10 @@ The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and 
 - **The synth sounds only while the voice does.** A held chord under a silent voice is silent.
 - **Clarity's S and T sounds are the voice's own**, so they come through even where the synth is silent. Turn Clarity down if they stand out.
 - **To hear only the robot**, mute the vocal track in the song: the Vocoder still hears it (a sidechain hears its track, muted or not).
-- **It is about 4 to 11 dB quieter than the synth alone** with a voice recorded at a normal level: only the bands where the voice is loud play. Turn its track up. A quiet voice and a loud one come out about as loud; a whisper about 14 dB under the synth, more than the fader's +12 dB can give back, so add a **Gain** after it. No band is ever louder than the synth.
+- **It listens to how loud the voice has been over the last quarter second or so.** Its loudest sounds play the synth at nearly its own level, quieter ones quieter, and the gaps between words stay quiet. So a quiet voice and a loud one come out about as loud.
+- **While the voice sounds, it is about 6 to 11 dB quieter than the synth alone** with a voice recorded at a normal level: only the bands where the voice is loud play. Turn its track up. A whisper comes out about 16 dB under the synth, more than the fader's +12 dB can give back, so add a **Gain** after it. No band is ever louder than the synth.
 - **It adds no delay.**
-- **Any track can be the voice**: a drum loop makes the synth pulse with the drums. The loudest drum at each moment sets the level, so the kick turns the hats down while it rings.
+- **Any track can be the voice**: a drum loop makes the synth pulse with the drums. The kick sets the level, so the hats play steadily under it.
 - **Agents:** `vocoder(x, voice, { clarity, smooth, formant })` from `"@m2/vocals"`; `vocoder(x)`, with no voice, plays `x` as it is.
 
 ## Edit a voice's notes
