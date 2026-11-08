@@ -129,6 +129,8 @@ appimage_tools() {
 build() {
   local out=$1 v bundle extra stage runtime
   v=$(version)
+  # linuxdeploy, which makes the AppImage, needs the file program: said now, not after the build.
+  [ $OS = mac ] || command -v file > /dev/null || fail "no file command (apt install file)"
   mkdir -p "$out"
   out=$(cd "$out" && pwd)
   [ ! -e "$SCR" ] || chmod -R u+w "$SCR"
