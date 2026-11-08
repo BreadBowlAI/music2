@@ -132,7 +132,8 @@ function headRoom(effects: Effect[], perNote: Set<string>) {
     if (expanded && packOf(n) && wide) words.push(packOf(n)!);
     if (expanded && hasPresets(n, effects)) words.push("Presets");
     const buttons = (bypassable(n) ? 1 : 0) + (n.audio && effects.length > 0 ? 1 : 0) + (n.kind === "call" ? 2 : 0) + (n.kind !== "call" ? 1 : 0);
-    return { title: n.bypassed ? `${titleOf(n, effects)} · Off` : titleOf(n, effects), buttons, words };
+    // Room for "· Off" whether it is off or on, so turning it off never moves the node (taste.md §3.5).
+    return { title: bypassable(n) || n.bypassed ? `${titleOf(n, effects)} · Off` : titleOf(n, effects), buttons, words };
   };
 }
 
