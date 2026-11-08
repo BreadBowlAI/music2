@@ -1,11 +1,12 @@
-// @m2/vocals' picture (VOX-27): Tune's pitch line, in TypeScript over the picture words (CARD-61).
+// @m2/vocals' pictures: Tune's pitch line (VOX-27) and the Voice changer's spectrum (VOX-28), in
+// TypeScript over the picture words (CARD-61).
 // The lines are no sums of the pack's: they are what Tune's own kernel hears and does, its meters
 // (`@m2/vocals:snap`'s `off` and `left`, VOX-22), which the window draws as they come. A picture
 // never reads the song's key: the card says it under its name (VOX-26), and the meters are what
 // `snap` aimed at in it.
 
 import { axis, live, view, type Painter, type PictureDecl, type Shape } from "@m2/core";
-import { secondsWords, type Values } from "std/pictures";
+import { figures, secondsWords, type Values } from "std/pictures";
 
 /** How far from its note the picture holds, each way, in semitones: further stays at the edge. */
 const EDGE = 1;
@@ -51,4 +52,41 @@ export function pitchWords(v: Values, names: { glide: string; amount: string }):
     `Faint: how far your voice is from its note. Solid: how far it is after Tune, which ${how}. ` +
     "Up is sharp, down is flat, up to a semitone (further stays at the edge). With no voice (silence, a breath, an S), both rest on the middle line"
   );
+}
+
+// ---------------------------------------------------------------- the Voice changer
+
+/**
+ * The Voice changer's spectrum (VOX-28): live, as the voice comes in (faint) and goes out, across 20
+ * Hz to 20 kHz on a log scale, up −90 to 0 dB, the spectrum's own scale (CARD-103): its notes'
+ * harmonics are the spikes that Pitch moves, its vowel's hills the colour that Formant moves.
+ */
+export function voicePicture(): PictureDecl<"hz", "db"> {
+  return view.picture({
+    x: axis.log("hz", 20, 20000),
+    y: axis.lin("db", -90, 0),
+    live: [live.spectrum("in", { tone: "faint" }), live.spectrum("out")],
+  });
+}
+
+/**
+ * Its shapes: two names, where a voice's notes and its vowel's hills are, still at silence (CARD-73).
+ * Nothing on it is worked out from sums: what moves is the sound itself.
+ */
+export function voiceNames<D>(p: Painter<D, "hz", "db">): Shape[] {
+  return [p.label(110, -8, "Notes"), p.label(1400, -8, "Colour")];
+}
+
+/** A number of semitones in words: "1 semitone", "2.5 semitones". */
+const semitones = (n: number) => `${figures(Math.abs(n))} semitone${Math.abs(n) === 1 ? "" : "s"}`;
+
+/** What the Voice changer's knobs did, in words, then what its two layers are (VOX-28). */
+export function voiceWords(v: Values, names: { pitch: string; formant: string }): string {
+  const [pitch, formant] = [v[names.pitch], v[names.formant]];
+  const layers = "Faint: your voice as it comes in; solid: as it goes out. The spikes are its notes, the hills its colour";
+  if (pitch === 0 && formant === 0) return `As sung: Pitch moves the notes, Formant the colour (both down for a deep voice, both up for a chipmunk). ${layers}`;
+  const notes = typeof pitch !== "number" ? "Notes moved by a cable or the code" : pitch === 0 ? "Notes as sung" : `${pitch > 0 ? "Up" : "Down"} ${semitones(pitch)}`;
+  const colour =
+    typeof formant !== "number" ? "colour moved by a cable or the code" : formant === 0 ? "colour as sung" : `colour ${semitones(formant)} ${formant > 0 ? "brighter" : "darker"}`;
+  return `${notes}, ${colour}. ${layers}`;
 }

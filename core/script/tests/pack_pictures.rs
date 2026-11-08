@@ -683,7 +683,8 @@ fn tune_draws_its_pitch_line() {
     let mut off = history_of("off");
     off["tone"] = json!("faint");
     assert_eq!(pitch["live"], json!([off, history_of("left")]));
-    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount"]);
+    // VOX-20: Formant beside Glide and Amount, since track voice2.
+    assert_eq!(descriptor("vocals", "tune").editor.face, ["pitch", "glide", "amount", "formant"]);
     let runner = Runner::new();
     let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": 0.1, "amount": 1})).unwrap();
     assert_eq!(kinds(&d), ["mark", "mark", "label"]);
@@ -710,4 +711,46 @@ fn tune_draws_its_pitch_line() {
         let d = draw(&runner, "vocals", "tune", "pitch", json!({"glide": glide, "amount": amount})).unwrap();
         assert_eq!(d["words"], words(how));
     }
+}
+
+// VOX-28: the Voice changer draws its live spectrum as the voice comes in (faint) and goes out,
+// across 20 Hz to 20 kHz on a log scale, up −90 to 0 dB (the spectrum's own scale), with nothing
+// worked out from sums: two names, Notes low and Colour in the middle, still at silence. Its words
+// say what Pitch and Formant did, then what the layers are.
+#[test]
+fn the_voice_changer_draws_its_spectrum() {
+    let voice = declared("vocals", "voice-changer", "voice");
+    assert_eq!(
+        (&voice["x"]["lo"], &voice["x"]["hi"], &voice["x"]["unit"], &voice["x"]["scale"]),
+        (&json!(20.0), &json!(20000.0), &json!("hz"), &json!("log"))
+    );
+    assert_eq!((&voice["y"]["lo"], &voice["y"]["hi"], &voice["y"]["unit"]), (&json!(-90.0), &json!(0.0), &json!("db")));
+    assert_eq!(
+        voice["live"],
+        json!([{"kind": "spectrum", "at": "in", "tone": "faint"}, {"kind": "spectrum", "at": "out"}]),
+        "the spectrum in, faint, and out"
+    );
+    let d = descriptor("vocals", "voice-changer");
+    assert_eq!((d.label.as_str(), d.editor.category.as_deref()), ("Voice changer", Some("Voice")));
+    assert_eq!(d.editor.face, ["voice", "pitch", "formant"]);
+    let runner = Runner::new();
+    let layers = "Faint: your voice as it comes in; solid: as it goes out. The spikes are its notes, the hills its colour";
+    let said = |pitch: Value, formant: Value| draw(&runner, "vocals", "voice-changer", "voice", json!({"pitch": pitch, "formant": formant})).unwrap();
+    let d = said(json!(5), json!(3));
+    assert_eq!(kinds(&d), ["label", "label"], "names, and nothing worked out from sums");
+    let names: Vec<&str> = d["shapes"].as_array().unwrap().iter().map(|s| s["words"].as_str().unwrap()).collect();
+    assert_eq!(names, ["Notes", "Colour"]);
+    let x: Vec<f64> = d["shapes"].as_array().unwrap().iter().map(|s| s["x"].as_f64().unwrap()).collect();
+    assert!(x[0] < 300.0 && (700.0..3000.0).contains(&x[1]), "Notes low, Colour in the middle: {x:?}");
+    assert_eq!(d["words"], format!("Up 5 semitones, colour 3 semitones brighter. {layers}"));
+    assert_eq!(said(json!(5), json!(3))["shapes"], d["shapes"], "its shapes don't move with its values");
+    assert_eq!(said(json!(-5), json!(-4))["words"], format!("Down 5 semitones, colour 4 semitones darker. {layers}"));
+    assert_eq!(said(json!(1), json!(-1))["words"], format!("Up 1 semitone, colour 1 semitone darker. {layers}"));
+    assert_eq!(said(json!(7), json!(0))["words"], format!("Up 7 semitones, colour as sung. {layers}"));
+    assert_eq!(said(json!(0), json!(2.5))["words"], format!("Notes as sung, colour 2.5 semitones brighter. {layers}"));
+    assert_eq!(
+        said(json!(0), json!(0))["words"],
+        format!("As sung: Pitch moves the notes, Formant the colour (both down for a deep voice, both up for a chipmunk). {layers}")
+    );
+    assert_eq!(said(Value::Null, json!(3))["words"], format!("Notes moved by a cable or the code, colour 3 semitones brighter. {layers}"));
 }
