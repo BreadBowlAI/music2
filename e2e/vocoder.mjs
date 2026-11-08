@@ -4,12 +4,12 @@
 // with the pack's line and lock; its face draws its picture beside Clarity, Smooth and Formant, and its
 // Voice row says "No other track". Voice ▸ Vox writes `vox.out` into the call and the import of Vox,
 // nothing else, one undo step ("Lead voice Vox"). Then its picture moves with the song, the voice
-// singing the first second of each 3 s round of the loop: while it sings, what goes out is the saw in
-// the voice's shape, far louder against what comes in about the voice's first formant than at the
-// saw's own note; while it is silent, nothing goes out, though the saw comes in (each read from an
-// agent's look, two looks in a row agreeing). Its card is shot live, in the patch and on Device's
-// chain at Normal and Expanded (to $E2E_SHOTS when set, else the run's folder). ⌘Z takes the voice
-// out, byte for byte. Each state linted.
+// singing the first 2 beats of each 6-beat round of the loop (about 1 s of 3 s at first-song's 124
+// bpm): while it sings, what goes out is the saw in the voice's shape, far louder against what comes
+// in about the voice's first formant than at the saw's own note; while it is silent, nothing goes
+// out, though the saw comes in (each read from an agent's look, two looks in a row agreeing). Its
+// card is shot live, in the patch and on Device's chain at Normal and Expanded (to $E2E_SHOTS when
+// set, else the run's folder). ⌘Z takes the voice out, byte for byte. Each state linted.
 //
 //   node e2e/vocoder.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -54,7 +54,7 @@ fs.mkdirSync(`${PROJ}/assets`, { recursive: true });
 wav(`${PROJ}/assets/vox.wav`);
 write("tracks/vox.ts", 'import { track } from "@m2/core";\n\nexport default track("vox", { name: "Vox" }, ({ lane }) => lane.audio("clips"));\n');
 fs.mkdirSync(`${PROJ}/data/vox`, { recursive: true });
-// The voice sings the first 2 beats (1 s) of each round of the loop, 6 beats (3 s): then it is silent.
+// The voice sings the first 2 beats (about 1 s at 124 bpm) of each round of the loop, 6 beats: then it is silent.
 write("data/vox/clips.json", JSON.stringify({ clips: [{ id: "voxclip1", start: 0, length: 2, asset: "vox.wav", offset: 0 }] }, null, 2));
 write("tracks/lead.ts", 'import { track } from "@m2/core";\nimport { osc } from "std/dsp";\n\nexport default track("lead", { name: "Lead" }, () => osc.saw(110));\n');
 write(
