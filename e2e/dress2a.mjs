@@ -8,7 +8,8 @@
 // the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
 // side by side, low to high, and its low band's turns down. A meter in dB or of a switch is drawn
 // from the most it said since the read before (CARD-73): over 3 s of the gate's `down`, every
-// closing is drawn as deep as the others, within 1 dB, and its strip lights once for each opening.
+// closing is drawn as deep as the others, within 1 dB (its strip lights once for each opening in
+// dress2a-strip.mjs, which needs the meters' 33 ms tick).
 // Mix A's hits stop for a quarter beat between them, so its gate closes. Each draggable picture's
 // dot is dragged: it writes its value, one undo step, which ⌘Z takes back byte for byte. Each card
 // is linted and shot, to compare with the design's mockup (to $E2E_SHOTS when set, else the run's
@@ -19,61 +20,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 import { lint } from "./lintlib.mjs";
+import { dress2aSong } from "./dress2a-song.mjs";
 
 // ---------------------------------------------------------------- the song: two tracks of the packs' effects
 
-const versions = fs.readFileSync(path.join(import.meta.dirname, "../packs/versions.toml"), "utf8");
-// A pack's lock at the version music2 comes with, its m2pkg.toml's (the record keeps older ones too).
-const locked = (name) => {
-  const pkg = fs.readFileSync(path.join(import.meta.dirname, `../packs/${name}/m2pkg.toml`), "utf8");
-  const [, version] = /^version = "([0-9.]+)"$/m.exec(pkg);
-  const [, hash] = new RegExp(`^"${name} ${version.replaceAll(".", "\\.")}" = "([^"]+)"$`, "m").exec(versions);
-  return `\n[[pack]]\nname = "${name}"\nversion = "${version}"\nhash = "${hash}"\n`;
-};
-write("music2.toml", `${read("music2.toml")}"@m2/effects" = "1"\n"@m2/mixing" = "1"\n`);
-write("music2.lock", read("music2.lock") + locked("@m2/effects") + locked("@m2/mixing"));
-// At 125 bpm a half beat is 11,520 frames (90 blocks, 27 cycles of a 112.5 Hz saw), so each of Mix A's
-// hits is the one before, sample for sample, and so is each of its gate's closings: the check that
-// draws them as deep as each other measures the drawing alone (at 124 bpm and 110 Hz each began at
-// another place in the saw and the block grid, and their depths differed by up to 1.15 dB).
-write("data/arrangement.json", read("data/arrangement.json").replace('"bpm": 124', '"bpm": 125'));
-const HITS = `const hits = vca(osc.saw(110), range(lfo(time.beats, { period: 0.5, shape: "saw" }), 1, 0));`;
-// Mix A's: a quarter beat of saw, a quarter of silence.
-const GAPS = `const hits = vca(osc.saw(112.5), range(lfo(time.beats, { period: 0.5, shape: "square" }), 1, 0));`;
-write(
-  "tracks/mixa.ts",
-  `import { time, track } from "@m2/core";
-import { lfo, range } from "std/control";
-import { osc, vca } from "std/dsp";
-import { deesser, eq, gate, multiband, pump, transient } from "@m2/mixing";
-
-// A saw that hits each half beat and stops, through every mixing tool.
-export default track("mixa", { name: "Mix A" }, () => {
-  ${GAPS}
-  return pump(multiband(deesser(transient(gate(eq(hits, { gain4: -3, freq4: 800 }), { threshold: -30 }), { attack: 6, sustain: -3 }), { threshold: -40 }), { midGain: -2 }), { depth: -8, shape: 0.5 });
-});
-`,
-);
-write(
-  "tracks/fxa.ts",
-  `import { time, track } from "@m2/core";
-import { lfo, range } from "std/control";
-import { osc, vca } from "std/dsp";
-import { bitcrush, chorus, delay, drive, phaser, reverb, tremolo, widen } from "@m2/effects";
-
-// The same hits, through every effect that colours a sound.
-export default track("fxa", { name: "FX A" }, () => {
-  ${HITS}
-  return widen(bitcrush(drive(tremolo(phaser(chorus(reverb(delay(hits, { time: 0.25, feedback: 0.4, mix: 0.3 }), { size: 0.6, mix: 0.2 })))), { amount: 9 }), { bits: 6 }), { width: 1.5 });
-});
-`,
-);
-write(
-  "song.ts",
-  read("song.ts")
-    .replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport mixa from "./tracks/mixa";\nimport fxa from "./tracks/fxa";')
-    .replace("keys: { in: keys.out, db: db(-5), pan: -0.25 },", "keys: { in: keys.out, db: db(-5), pan: -0.25 },\n      mixa: { in: mixa.out, db: db(-12) },\n      fxa: { in: fxa.out, db: db(-12) },"),
-);
+dress2aSong();
 
 const SHOTS = process.env.E2E_SHOTS ?? ROOT;
 fs.mkdirSync(SHOTS, { recursive: true });
@@ -265,9 +216,8 @@ await shown(gateDown);
 const turned = (await reads(gateDown, 1, 40)).map((l) => l.v);
 check(turned.some((v) => v === 0) && turned.some((v) => v > 20), `its down says nothing turned down while it is open, and more once it closes: ${[...new Set(turned)].slice(0, 6)}`);
 // The gate's last 3 s, drawn: each closing as deep as the others (its meter in dB, drawn from the
-// most since the read before, never what it said at one moment of it), and the strip lit once for
-// each opening between them (one more or less at the window's edges, the two pictures' reads not
-// quite at one moment).
+// most since the read before, never what it said at one moment of it). Its strip, lit once for each
+// opening, is dress2a-strip's: that needs the meters read every 33 ms.
 const runs = (h, on) => {
   const out = [];
   h.forEach((v, j) => {
@@ -278,20 +228,13 @@ const runs = (h, on) => {
   });
   return out;
 };
-const [downH, stripH] = await page.evaluate(
-  (a, b) => [a, b].map((sel, k) => JSON.parse(document.querySelector(`${sel} canvas[data-live]`)?.dataset.said ?? "[]")[k === 0 ? 0 : 3]?.h ?? []),
-  gateDown,
-  gatePic,
-);
+const downH = await page.$eval(`${gateDown} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")[0]?.h ?? []).catch(() => []);
 const closings = runs(downH, (v) => v > 1).filter(([a, b]) => a > 0 && b < downH.length - 1);
 const deepest = closings.map(([a, b]) => Math.max(...downH.slice(a, b + 1)));
 check(
   downH.length === 90 && closings.length >= 6 && Math.max(...deepest) - Math.min(...deepest) <= 1,
   `over the gate's last 3 s (${downH.length} reads), each closing is drawn as deep as the others, within 1 dB: ${deepest}`,
 );
-const openings = runs(downH, (v) => v < 0.5).length;
-const lighted = runs(stripH, (v) => v >= 0.5).length;
-check(stripH.length === 90 && lighted >= 6 && Math.abs(lighted - openings) <= 1, `its strip lights once for each opening: ${lighted} lit, ${openings} openings`);
 await shown(deDown);
 const deTurned = (await reads(deDown, 1, 40)).map((l) => l.v);
 check(deTurned.some((v) => v > 0) && deTurned.every((v) => v >= 0 && v <= 6), `the de-esser's down says how far it turns its band down, up to 6 dB: ${[...new Set(deTurned)].slice(0, 6)}`);

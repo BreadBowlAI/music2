@@ -202,7 +202,9 @@ export const SUITES = [
   ["pictures", "fix", { expect: 45, s: 10 }],
   ["measure", "fix", { expect: 20, s: 8 }],
   ["dress", "fix", { expect: 44, s: 10 }],
-  ["dress2a", "fix", { expect: 93, s: 20, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
+  ["dress2a", "fix", { expect: 92, s: 20 }],
+  // dress2a's gate strip, apart: it needs the meters read every 33 ms.
+  ["dress2a-strip", "fix", { expect: 4, s: 6, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
   ["dressed", "fix", { expect: 38, s: 10 }],
   // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, on the chain.
   ["instruments", "fix", { expect: 52, s: 12 }],
