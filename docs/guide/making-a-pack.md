@@ -150,7 +150,7 @@ A sound's code says what each of its values is. It never says how to draw it: th
 | `view.scope()` | the sound as it plays | (no names) |
 | `view.picture({ x, y, live })` | a picture of your own ([Pictures](#pictures)) | (its code names them) |
 
-**Groups** put the card in order. Each group names some of the sound's values and views, each once. Values in no group go last, under More.
+**Groups** put the node's values in order: on an expanded node, each group is a column. Each group names some of the sound's values and views, each once. Values in no group go last, under More.
 
 ```ts
 import { component, control, kernel, knob, poly, port, type Audio, type Events } from "@m2/core";
@@ -197,9 +197,9 @@ export const wobble = component(
 );
 ```
 
-A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the card a choice is a menu (buttons side by side, in Device's chain, when it has five options or fewer) and a switch a switch, the views are pictures whose corners move their knobs, and the groups are the card's tabs in the chain, and titles over their rows in Patch (see [The window](window.md)).
+A song writes `wobble(lane.notes("bass"), { shape: "square" })`, and the code editor offers `"saw"`, `"square"` and `"sine"` as you type. A view or a group that names a value the sound doesn't have, or a view over a value of the wrong kind (a cutoff in seconds), is a red line under that view, or under `groups`, and the build refuses it in words. Until it is fixed, the code editor can't tell the types of the sound's code, so a parameter there with no type written may be marked too. On the node a choice is a menu (buttons side by side, on an expanded node, when it has five options or fewer) and a switch a switch, the views are pictures whose corners move their values, and the groups are the columns of an expanded node (see [The window](window.md)).
 
-**The face** is what the card draws big, above its tabs: the few values and pictures a beginner needs first. Name them in `editor.face`, each once, two pictures and six values at most:
+**The face** is what a collapsed node shows: the few values and pictures a beginner needs first (its first picture and up to four values; expanded, its pictures go across the top). Name them in `editor.face`, each once, two pictures and six values at most:
 
 ```ts
 editor: {
@@ -290,7 +290,7 @@ music2 draws a response only where it is exact. It checks that when no knob is b
 
 For an EQ or a filter, use it: `draw: (v, p) => [p.response(), p.handle(v.freq, v.gain, { x: "freq", y: "gain" })]`. Its curve can't be wrong about the sound.
 
-**A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the tab it shows when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. The wheel and the arrow keys step a value as its knob's do, and a run of steps is one undo step. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
+**A dot** names the values it moves: `x` (dragged across), `y` (up and down), `wheel` (scroll, or ⌥↑ ⌥↓), `toggles` (a switch: double-click, Enter or Space), `opens` (the group whose column it lights and brings into view when picked), `mark` (1 to 3 characters on it) and `off` (drawn hollow). `x` and `y` name a control in the axis's unit (a frequency on an `hz` axis). `knob("ratio")` in their place moves the value as its knob's drag does. The wheel and the arrow keys step a value as its knob's do, and a run of steps is one undo step. A dot the card can't move (a cable or a lane drives it) is drawn hollow, and says why. Its drag is one undo step.
 
 ```ts
 import { axis, component, control, live, port, view } from "@m2/core";
