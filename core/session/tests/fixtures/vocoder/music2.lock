@@ -1,0 +1,6 @@
+# The exact version of each pack this song uses, made by music2 (PACK-8). Don't edit it by hand.
+
+[[pack]]
+name = "@m2/vocals"
+version = "1.2.0"
+hash = "sha256:440540ac4db1f1ea551d2a4603d5a3bf9fa5654beedb6010cb3d563660f39f35"
