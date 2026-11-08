@@ -167,8 +167,8 @@ for i in 1 2; do node e2e/run.mjs all --tier pr --shard $i/2 --list; done | sort
   them with correct code, every time. GitHub's Mac runner is one: its sleeps last about four times
   as long. `ci/pr.sh suites` passes it only when `M2_LATE_SLEEPS` is set, as the nightly
   workflow's Mac job sets it; everywhere else they run. The tag says nothing of the run's tier.
-  Tagged now: `st-record-fix`, `s8-meters-fix` (both nightly) and `nx-click-fix` (PR tier). The
-  Rust tests of the same kind are in `ci/sleeps-tests.txt`.
+  Tagged now: `st-record-fix`, `s8-meters-fix` (both nightly), `nx-click-fix` and `dress2a-fix` (PR
+  tier). The Rust tests of the same kind are in `ci/sleeps-tests.txt`.
 
 The nightly runs and why:
 
