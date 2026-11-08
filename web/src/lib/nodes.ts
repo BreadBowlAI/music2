@@ -37,6 +37,8 @@ export const EXPANDED_PICTURE_H = 132;
 /** The code line's text and its room. */
 const CODE_LINE = 14;
 const CODE_PAD = 12;
+/** The line that names a narrow expanded node's pack. */
+export const PACK_H = 18;
 /** How many of its face's values a collapsed node shows (DV-12). */
 const FACE_VALUES = 4;
 
@@ -246,7 +248,7 @@ export const isPill = (n: ViewNode) =>
  * straight; outputs beyond them get rows of their own; a node with no rows has its first output on
  * its header. Expanding never moves a row: what changes is below them.
  */
-export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expanded: boolean, hidden: number) => HeadRoom): Shape {
+export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom): Shape {
   const ins = new Map<string, number>();
   const outs = new Map<string, number>();
   const base = { ins, outs, conns: [], fills: [], views: [], viewH: 0, values: [], columns: [], bands: [], hidden: 0, hides: [], code: 0, lines: 0 };
@@ -286,8 +288,8 @@ export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expa
   const w = open ? Math.max(NODE_W, cols * COL_W) : NODE_W;
   // As tall at both sizes, so expanding never moves the end of a wire on it (DV-12).
   const head = sized
-    ? Math.max(headHeight(NODE_W, room(n, false, hiddenOnes.length)), headHeight(w, room(n, true, 0)))
-    : headHeight(w, room(n, false, 0));
+    ? Math.max(headHeight(NODE_W, room(n, false, hiddenOnes.length, NODE_W)), headHeight(w, room(n, true, 0, w)))
+    : headHeight(w, room(n, false, 0, w));
   const lines = (n.voices ? LINE_H : 0) + (n.reads_key ? LINE_H : 0) + (n.plugin ? PLUGIN_H : 0);
   let y = head + lines;
   const rows: number[] = [];
@@ -324,7 +326,10 @@ export function shapeOf(n: ViewNode, expanded: boolean, room: (n: ViewNode, expa
     if (!sized) for (const v of values) y += valueHeight(n, v, false);
     y += PAD;
   }
-  const code = open && n.code ? CODE_PAD + CODE_LINE * linesOf(n.code, w - 24, "400 11px ui-monospace, SFMono-Regular, Menlo, monospace") : 0;
+  const code =
+    (open && n.code ? CODE_PAD + CODE_LINE * linesOf(n.code, w - 24, "400 11px ui-monospace, SFMono-Regular, Menlo, monospace") : 0) +
+    // A one-column node names its pack under its code, not in its header, so its label keeps its room.
+    (open && w <= NODE_W && packOf(n) ? PACK_H : 0);
   y += code;
   if (!sized) bands = [];
   return { ...base, w, h: Math.max(y, head), sized, expanded: open, pill: false, head, lines, conns, fills, views, viewH, values, columns, bands, hidden, hides, code };
@@ -365,4 +370,11 @@ function columnsOf(n: ViewNode, face: Value[], faceViews: CardView[]): Column[] 
   if (setup.length) out.push({ name: "Setup", items: setup, h: 0 });
   for (const c of out) c.h = GROUP_H + PAD + c.items.reduce((a, v) => a + valueHeight(n, v, true), 0) + PAD;
   return out;
+}
+
+/** The package a node's sound is from: `@m2/mixing`, `std`, or none for the song's own and a plugin. */
+export function packOf(n: ViewNode): string | null {
+  if (!n.component || n.plugin) return null;
+  const at = n.component.lastIndexOf(":");
+  return at > 0 ? n.component.slice(0, at) : null;
 }

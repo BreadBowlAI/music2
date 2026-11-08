@@ -68,7 +68,7 @@ import { laneMade } from "../lib/events";
 import { useExpanded } from "../lib/expanded";
 import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
-import { COL_W, EXPR_H, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, VALUE_H, gridRows, segHeight, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
+import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, VALUE_H, gridRows, segHeight, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
 import { trackColors } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
@@ -124,11 +124,12 @@ function compactMixer(m: ModuleView, mix: MixView): { module: ModuleView; card: 
 
 /** What a node's header holds beside its label (see `HeadTools`): the room its label has (DV-12). */
 function headRoom(effects: Effect[], perNote: Set<string>) {
-  return (n: ViewNode, expanded: boolean, hidden: number): HeadRoom => {
+  return (n: ViewNode, expanded: boolean, hidden: number, w: number): HeadRoom => {
+    const wide = w > NODE_W;
     const words: string[] = [];
     if (hidden > 0) words.push(`+${hidden}`);
     if (perNote.has(n.id)) words.push("per note");
-    if (expanded && packOf(n)) words.push(packOf(n)!);
+    if (expanded && packOf(n) && wide) words.push(packOf(n)!);
     if (expanded && hasPresets(n, effects)) words.push("Presets");
     const buttons = (bypassable(n) ? 1 : 0) + (n.audio && effects.length > 0 ? 1 : 0) + (n.kind === "call" ? 2 : 0) + (n.kind !== "call" ? 1 : 0);
     return { title: n.bypassed ? `${titleOf(n, effects)} · Off` : titleOf(n, effects), buttons, words };
@@ -404,7 +405,7 @@ function loops(m: ModuleView, edges: PortEdge[]): Set<PortEdge> {
 function layout(
   m: ModuleView,
   expanded: ReadonlySet<string>,
-  room: (n: ViewNode, expanded: boolean, hidden: number) => HeadRoom,
+  room: (n: ViewNode, expanded: boolean, hidden: number, w: number) => HeadRoom,
 ): { placed: Map<string, Placed>; width: number; height: number; back: Set<PortEdge> } {
   const geo = new Map(m.nodes.map((n) => [n.id, shapeOf(n, expanded.has(n.key ?? n.id), room)]));
   const known = (id: string) => geo.has(id);
@@ -864,12 +865,6 @@ function Dot({ id, kind, filled, className }: { id: string; kind: PortKind; fill
   );
 }
 
-/** The package a node's sound is from: `@m2/mixing`, `std`, or none for the song's own and a plugin. */
-export function packOf(n: ViewNode): string | null {
-  if (!n.component || n.plugin) return null;
-  const at = n.component.lastIndexOf(":");
-  return at > 0 ? n.component.slice(0, at) : null;
-}
 
 /** Whether ⏻ works on `n`: the server offers Turn off for it (a component call, sound in and sound out alike, PKG-3). */
 const bypassable = (n: ViewNode) => !!n.menu && !n.menu.bypass;
@@ -1031,8 +1026,13 @@ function Node({
             )}
             {shape.expanded && node.code && (
               // The whole call, wrapped to the node's width (CARD-41).
-              <div data-code-line data-code className="px-3 border-t border-line font-mono text-xs text-fg-muted whitespace-pre-wrap break-words flex items-center" style={{ height: shape.code }} title={node.code}>
+              <div data-code-line data-code className="px-3 border-t border-line font-mono text-xs text-fg-muted whitespace-pre-wrap break-words flex items-center" style={{ height: shape.code - (shape.expanded && !!pack && shape.w <= NODE_W ? PACK_H : 0) }} title={node.code}>
                 {node.code}
+              </div>
+            )}
+            {shape.expanded && !!pack && shape.w <= NODE_W && (
+              <div data-pack className="px-3 flex items-center text-xs text-fg-faint" style={{ height: PACK_H }}>
+                {pack}
               </div>
             )}
           </div>
@@ -1165,7 +1165,7 @@ function Head({
         <div
           data-node-title
           className={clsx(
-            "min-w-0 text-sm leading-4 break-words line-clamp-3",
+            "min-w-[64px] text-sm leading-4 break-words line-clamp-3",
             off ? "font-semibold text-fg-muted" : node.kind === "call" || node.kind === "lane" || node.kind === "voice" ? "font-semibold text-fg" : "font-medium text-fg-muted",
           )}
           title={tip || undefined}
@@ -1178,13 +1178,14 @@ function Head({
           </span>
         )}
       </div>
-      {shape.expanded && pack && (
+      {/* Its pack, when the node is wide enough to keep the label's room; it is in the label's tooltip anyway. */}
+      {shape.expanded && pack && shape.w > NODE_W && (
         <span data-pack className="shrink-0 px-1 text-xs text-fg-faint">
           {pack}
         </span>
       )}
       {sized && !shape.expanded && shape.hidden > 0 && <More node={node} hides={shape.hides} hidden={shape.hidden} titled={titled} />}
-      {!shape.pill && <HeadTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={mixing} expanded={shape.expanded} />}
+      {!mixing && <HeadTools node={node} module={module} titled={titled} session={session} revision={revision} editable={editable} effects={effects} mixing={mixing} expanded={shape.expanded} />}
       {sized && (
         <button
           data-expand={node.id}
