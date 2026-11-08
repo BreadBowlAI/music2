@@ -1262,8 +1262,16 @@ for (const [gone, now] of [
 
 // ------------------------------------------------ pictures (CARD-60 to CARD-66)
 
-/** How a picture's axis is laid out: its scale, its unit, and where it starts and ends. */
-type AxisSpec = { scale: "lin" | "log" | "time"; unit: Unit; lo: number; hi: number };
+/** How a picture's axis is laid out: its scale, its unit, where it starts and ends, and its options. */
+type AxisSpec = { scale: "lin" | "log" | "time"; unit: Unit; lo: number; hi: number; options?: AxisOptions };
+
+/**
+ * An axis's options (CARD-60, from 2.5): `bare`, drawn with no grid and no numbers, for a picture
+ * whose shapes say their own words (a keyboard's keys, a pattern's notes).
+ */
+export type AxisOptions = { readonly bare?: boolean };
+/** An axis as the descriptor carries it: `bare` only when it is. */
+type CheckedAxis = { scale: AxisSpec["scale"]; unit: Unit; lo: number; hi: number; bare?: true };
 
 /** A picture's axis (CARD-60). `U` is its unit, for types only. */
 export class Axis<U extends Unit = Unit> {
@@ -1276,17 +1284,18 @@ export class Axis<U extends Unit = Unit> {
 
 /**
  * A picture's axes (CARD-60): music2 draws each one's grid and labels. `axis.lin("db", -24, 24)`,
- * `axis.log("hz", 20, 20000)` (it starts above 0), `axis.time(2)` (0 to 2 seconds).
+ * `axis.log("hz", 20, 20000)` (it starts above 0), `axis.time(2)` (0 to 2 seconds). Each may end
+ * with `{ bare: true }` (2.5): drawn bare, with no grid and no numbers.
  */
 export const axis = {
-  lin<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
-    return new Axis({ scale: "lin", unit, lo, hi });
+  lin<const U extends Unit>(unit: U, lo: number, hi: number, options?: AxisOptions): Axis<U> {
+    return new Axis({ scale: "lin", unit, lo, hi, options });
   },
-  log<const U extends Unit>(unit: U, lo: number, hi: number): Axis<U> {
-    return new Axis({ scale: "log", unit, lo, hi });
+  log<const U extends Unit>(unit: U, lo: number, hi: number, options?: AxisOptions): Axis<U> {
+    return new Axis({ scale: "log", unit, lo, hi, options });
   },
-  time(seconds: number): Axis<"seconds"> {
-    return new Axis({ scale: "time", unit: "seconds", lo: 0, hi: seconds });
+  time(seconds: number, options?: AxisOptions): Axis<"seconds"> {
+    return new Axis({ scale: "time", unit: "seconds", lo: 0, hi: seconds, options });
   },
 };
 
@@ -1441,10 +1450,10 @@ export class PictureDecl<X extends Unit = Unit, Y extends Unit = Unit> extends V
 }
 
 /** A picture's declaration checked (CARD-60): its axes and live layers as the descriptor carries them, or `fail`s in words. */
-function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never): { x: AxisSpec; y: AxisSpec; live?: unknown[] } {
+function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never): { x: CheckedAxis; y: CheckedAxis; live?: unknown[] } {
   const fields = ["x", "y", "live"];
   for (const k of Object.keys(pic)) if (!fields.includes(k)) fail(`${at}: a picture has no field "${k}" (fields: ${fields.join(", ")})`);
-  const axisOf = (which: "x" | "y", a: unknown): AxisSpec => {
+  const axisOf = (which: "x" | "y", a: unknown): CheckedAxis => {
     if (!(a instanceof Axis)) fail(`${at}: its ${which} must be made with axis.lin(), axis.log() or axis.time()`);
     const s = specOf<AxisSpec>(a as object);
     if (!UNIT_NAMES.includes(s.unit)) fail(`${at}: its ${which} axis's unit is ${shown(s.unit)}, which isn't a unit (units: ${UNIT_NAMES.join(", ")})`);
@@ -1454,7 +1463,12 @@ function checkPicture(at: string, pic: PictureSpec, fail: (m: string) => never):
     if (s.scale === "time" && !(s.hi > 0)) fail(`${at}: its ${which} axis, axis.time(), lasts more than 0 seconds, not ${s.hi}`);
     if (!(s.lo < s.hi)) fail(`${at}: its ${which} axis must go from a lower number to a higher one, not from ${s.lo} to ${s.hi}`);
     if (s.scale === "log" && !(s.lo > 0)) fail(`${at}: its ${which} axis is on a log scale, so it starts above 0, not at ${s.lo}`);
-    return { scale: s.scale, unit: s.unit, lo: s.lo, hi: s.hi };
+    const o = s.options;
+    if (o !== undefined && (o === null || typeof o !== "object" || Array.isArray(o))) fail(`${at}: its ${which} axis's options are an object, as { bare: true }, not ${shown(o)}`);
+    for (const k of Object.keys(o ?? {})) if (k !== "bare") fail(`${at}: its ${which} axis has no option "${k}" (options: bare)`);
+    if (o?.bare !== undefined && typeof o.bare !== "boolean") fail(`${at}: its ${which} axis's bare is true or false, not ${shown(o.bare)}`);
+    // Carried only when bare, so every other picture's descriptor keeps its bytes.
+    return { scale: s.scale, unit: s.unit, lo: s.lo, hi: s.hi, ...(o?.bare ? { bare: true } : {}) };
   };
   const x = axisOf("x", pic.x);
   const y = axisOf("y", pic.y);
@@ -1529,6 +1543,8 @@ export function __picture(cid: string, name: string, values: string, memo: strin
     uses.add(what);
     making?.add(what);
   };
+  // A picture with a bare axis (CARD-60) uses 2.5, at every draw.
+  if (ax.x.options?.bare || ax.y.options?.bare) use("bare");
   let missed: string | undefined;
   // Each value an accessor that says who read it; a name the sound doesn't have reaches the
   // prototype, which refuses it; nothing can be changed. Faster than a proxy over every read.

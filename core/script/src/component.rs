@@ -231,13 +231,17 @@ pub enum ViewOf {
     },
 }
 
-/// A picture's axis (CARD-60): `lin`, `log` or `time`, its unit, and where it starts and ends.
+/// A picture's axis (CARD-60): `lin`, `log` or `time`, its unit, where it starts and ends, and
+/// whether it is drawn bare, with no grid and no numbers (2.5): left out when not, so a picture's
+/// descriptor keeps its bytes.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Axis {
     pub scale: String,
     pub unit: Unit,
     pub lo: f64,
     pub hi: f64,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub bare: bool,
 }
 
 /// A group of a card (CARD-17): its name, and the values and views in it, in order.

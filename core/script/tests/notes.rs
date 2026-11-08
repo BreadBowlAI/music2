@@ -377,3 +377,23 @@ fn lock_to_keys_keyboard_names_where_each_note_goes() {
         "Moves each note to the nearest note of the key, a tie going down, then 2 notes of the key up. Drawn in C major: the card says your song's key"
     );
 }
+
+// CARD-60, PACK-30, PACK-31, PACK-33 (review P8): the keyboards and the steps are drawn on bare axes,
+// with no grid and no numbers, their own names saying the notes; the echoes keep theirs, beats
+// across and how hard up. A draw of a bare one is marked as using 2.5 (CARD-87).
+#[test]
+fn the_keyboards_and_the_steps_are_drawn_on_bare_axes() {
+    let catalog = describe(&packages());
+    let bare = |id: &str| {
+        let ViewOf::Picture { x, y, .. } = &catalog.components[&format!("@m2/notes:{id}")].editor.views[0].of else {
+            panic!("{id}: a picture")
+        };
+        (x.bare, y.bare)
+    };
+    assert_eq!([bare("arp"), bare("chord"), bare("lock-to-key"), bare("echo")], [(true, true), (true, true), (true, true), (false, false)]);
+    let runner = Runner::new();
+    let chord = draw(&runner, "chord", "keyboard", json!({"shape": "triad", "inKey": true, "inversion": 0}));
+    assert_eq!(chord["uses"], json!(["bare"]), "a bare picture's draw is marked");
+    let echoes = draw(&runner, "echo", "echoes", json!({"time": "1/8", "repeats": 3, "fall": 0.3, "pitch": 0}));
+    assert_eq!(echoes["uses"], Value::Null, "the echoes use nothing of 2.5 to draw");
+}

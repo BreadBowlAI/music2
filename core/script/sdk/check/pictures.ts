@@ -157,3 +157,11 @@ export const measured = component(
     },
   },
 );
+
+// An axis drawn bare (CARD-60, 2.5): with no grid and no numbers, for a picture whose shapes say
+// their own words, as a keyboard's keys do.
+export const bare = view.picture({ x: axis.lin("scalar", 0, 15, { bare: true }), y: axis.time(1, { bare: false }) });
+// @ts-expect-error an axis's only option is bare
+export const typo = axis.log("hz", 20, 20000, { bars: true });
+// @ts-expect-error bare is true or false
+export const one = axis.lin("db", -24, 24, { bare: 1 });

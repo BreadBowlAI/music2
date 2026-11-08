@@ -181,6 +181,8 @@ export interface PictureAxis {
   unit: string;
   lo: number;
   hi: number;
+  /** Drawn bare: no grid, no numbers (CARD-60), for shapes that say their own words. */
+  bare?: boolean;
 }
 
 /** A plugin's box (HOST-7, MON-6): its own window, the parameters a gesture in it latched, and whether its window changed its sound, not saved yet (AGENT-3). */

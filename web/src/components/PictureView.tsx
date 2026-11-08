@@ -105,6 +105,8 @@ export function fitted(a: Axis, shapes: Shape[]): Axis {
  */
 function ticks(a: Axis): { v: number; label?: string; first?: boolean }[] {
   const out: { v: number; label?: string; first?: boolean }[] = [];
+  // A bare axis has no grid and no numbers (CARD-60): its shapes say their own words.
+  if (a.bare) return out;
   if (a.scale === "log") {
     for (let d = Math.floor(Math.log10(a.lo)); d <= Math.ceil(Math.log10(a.hi)); d++) {
       for (const m of [1, 2, 5]) {
@@ -139,7 +141,8 @@ function yLabels(a: Axis, plot: number): { v: number; label: string }[] {
  * the y axis's, which have room of their own, so no label ever sits on a line (taste.md DV-17).
  */
 function layout(view: PictureView, w: number, h: number) {
-  const plot = Math.max(1, h - FOOT);
+  // No room for labels under a bare x axis: the plot runs to the foot (taste.md DV-17).
+  const plot = Math.max(1, h - (view.x.bare ? 0 : FOOT));
   const labels = yLabels(view.y, plot);
   const left = labels.length ? Math.ceil(2 * GAP + CHAR * Math.max(...labels.map((t) => [...t.label].length))) : 0;
   const span = Math.max(1, w - left);

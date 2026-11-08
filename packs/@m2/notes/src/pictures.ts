@@ -66,10 +66,12 @@ const C_CHORD = [60, 64, 67];
 /**
  * The steps picture (PACK-30): one turn of the pattern, across in beats from its start (an axis of
  * beats, so the window fits it to the turn, CARD-102), each note's place up, from the lowest to the
- * highest; and the step playing now, a line from the kernel's meter `step`.
+ * highest; and the step playing now, a line from the kernel's meter `step`. Both axes bare
+ * (CARD-60): the notes' names say the pitch and the two guide lines the turn, where numbers of
+ * beats, at round steps that aren't the pattern's, would say nothing to read by.
  */
 export function stepsPicture(): PictureDecl<"beats", "scalar"> {
-  return view.picture({ x: axis.lin("beats", 0, 24), y: axis.lin("scalar", 0, 1), live: [live.playhead("step")] });
+  return view.picture({ x: axis.lin("beats", 0, 24, { bare: true }), y: axis.lin("scalar", 0, 1, { bare: true }), live: [live.playhead("step")] });
 }
 
 /**
@@ -183,9 +185,9 @@ function keyboard<D>(p: Painter<D, "scalar", "unit01">, whites: number, lit: (se
   return shapes;
 }
 
-/** A keyboard picture of `whites` white keys from C (PACK-31, PACK-33): across in white keys. */
+/** A keyboard picture of `whites` white keys from C (PACK-31, PACK-33): across in white keys, on bare axes (CARD-60): its keys say what they are. */
 function keyboardPicture(whites: number): PictureDecl<"scalar", "unit01"> {
-  return view.picture({ x: axis.lin("scalar", 0, whites), y: axis.lin("unit01", 0, 1) });
+  return view.picture({ x: axis.lin("scalar", 0, whites, { bare: true }), y: axis.lin("unit01", 0, 1, { bare: true }) });
 }
 
 /** C major's notes, from C: the key Chord and Lock to key draw in. */
