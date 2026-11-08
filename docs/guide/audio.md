@@ -7,6 +7,7 @@
 - Comp: build one take from the best parts of several, by swiping across the take you like.
 - Tune a voice: move each sung note onto the song's key, gently or as the hard "robot" pop sound.
 - Change a voice: make it deeper, or chipmunk-like, by moving its notes and its colour, each on its own.
+- Make a synth talk: the synth plays the notes, and a voice gives them its words (a vocoder).
 - Bounce a track to audio, to chop it, play it backwards or change its pitch: the song sounds the same.
 
 - **Bring in audio:** File → Import Audio… (⇧⌘I), or drag WAV or FLAC files onto the window: onto an audio track (at the bar under the pointer), onto another track (a new audio track right after it), or below the tracks (a new audio track for each file, named after it). An outline and a few words say where they go. + Track → Audio track adds an empty one. Each file is copied into the song's `assets/` folder (the same file twice is kept once). A FLAC (the same sound as a WAV, about half the size) comes in as a WAV of the very same sound, `kick.flac` as `kick.wav`, with a note beside it (`kick.wav.json`) saying which FLAC it was made from: a song's clips play WAV files. Files up to 3 hours long play from the disk, never whole in memory.
@@ -126,6 +127,34 @@ The **Voice changer** makes a voice deeper or higher, or sound like another sing
 - **The whole song plays 15 ms later** while it is on any track, as with Tune.
 - **One voice at a time**, from about D2 (73 Hz) to D6 (1,200 Hz), as with Tune.
 - **Agents:** `voiceChanger(x, { pitch, formant })` from `"@m2/vocals"`.
+
+## Make a synth talk
+
+The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and the voice gives them its words. It comes with music2, in the pack `@m2/vocals`.
+
+| Word | Meaning |
+|---|---|
+| **Vocoder** | an effect that gives one sound (a synth) the shape of another (a voice), band by band: the "robot voice" of pop and dance songs |
+| **Band** | a slice of the sound, from low to high: the Vocoder has 20, from 100 Hz to 8 kHz |
+
+| To do this | Do this | What happens |
+|---|---|---|
+| Add it to a synth | Select the synth's track, and in its Device view click **+** after its sound, then **Vocoder** (under Voice) | `vocoder(…, { clarity: 0.5, smooth: 0.05, formant: 0 })` is written into the track's own file. Until you pick a voice, the synth sounds as it did. |
+| Pick the voice | On its card, click **Talks with: No other track**, and pick the vocal track in Talks with (Vox) | `vox.out` is written into the call, and Vox is imported at the top of the file. One undo step: "Lead talks with Vox". |
+| Make it talk | Play the synth's chords while the voice speaks or sings | Each band of the synth plays as loud as the voice is there: the synth takes the shape of the voice, its words on the synth's notes. |
+| Clearer words | Turn **Clarity** up (0 to 1) | More of the voice's own S, T and breath sounds come through. A synth has little that high, so without them the words mumble. |
+| Smoother or crisper | Turn **Smooth** (10 to 200 ms) | How fast the bands let go once the voice moves on: short is crisp, long is smooth. Very short makes the low notes buzz. |
+| A deeper or brighter robot | Turn **Formant** (−12 to 12 semitones) | Down moves the voice's colour on the synth lower: a bigger, deeper robot. Up: smaller and brighter. The notes stay the synth's. |
+| See what it does | Play the song and look at its card | Its picture is the synth's spectrum: faint as it comes in, solid as it goes out, in the voice's shape. |
+
+- **The synth sounds only while the voice does.** A held chord under a silent voice is silent.
+- **Clarity's S and T sounds are the voice's own**, so they come through even where the synth is silent. Turn Clarity down if they stand out.
+- **To hear only the robot**, mute the vocal track in the song: the Vocoder still hears it (a sidechain hears its track, muted or not).
+- **It listens to how loud the voice has been over the last quarter second or so.** Its loudest sounds play the synth at nearly its own level, quieter ones quieter, and the gaps between words stay quiet. So a quiet voice and a loud one come out about as loud.
+- **While the voice sounds, it is about 6 to 11 dB quieter than the synth alone** with a voice recorded at a normal level: only the bands where the voice is loud play. Turn its track up. A whisper comes out about 16 dB under the synth, more than the fader's +12 dB can give back, so add a **Gain** after it. No band is ever louder than the synth.
+- **It adds no delay.**
+- **Any track can be the voice**: a drum loop makes the synth pulse with the drums. The kick sets the level, so the hats play steadily under it.
+- **Agents:** `vocoder(x, voice, { clarity, smooth, formant })` from `"@m2/vocals"`; `vocoder(x)`, with no voice, plays `x` as it is.
 
 ## Edit a voice's notes
 

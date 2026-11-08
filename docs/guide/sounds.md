@@ -1,8 +1,8 @@
 # Sounds and effects
 
 **In short**
-- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and six more, the Clipper among them), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key, and the Voice changer: [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
-- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 27 effects in eight groups.
+- music2's sounds come as packs that ship with it: `@m2/synths` (synths and FM sounds), `@m2/wavetable` (a wavetable synth), `@m2/drums` (drums, and drum kits of them), `@m2/effects` (delay, reverb, chorus and six more, the Clipper among them), `@m2/mixing` (an EQ, a gate, a transient shaper, a de-esser, a multiband compressor and Pump), `@m2/vocals` (Tune, which moves a voice onto the song's key, the Voice changer and the Vocoder: [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice), [Make a synth talk](audio.md#make-a-synth-talk)) and `@m2/notes` (note effects, which go before an instrument: an arpeggiator, chords, a note echo and Lock to key, [Note effects](#note-effects)).
+- std is the toolbox they are built from: oscillators, filters, envelopes, the Sampler, the mixer, and the four effects every mix starts with (`eq3`, `compress`, `limit`, `duck`). With the packs' effects that is 28 effects in eight groups.
 - The packs install into your packs folder when music2 starts, and a song uses them as it uses any pack: listed in `music2.toml`, locked in `music2.lock`.
 
 | Word | Meaning |
@@ -123,7 +123,7 @@ A song made before std 0.8 is told, in words, what to change: first its std line
 
 [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) plays every synth and drum, and the FM keys, bell and metal, in a short pop song, mastered near -11.5 LUFS.
 
-**Effects**, as the effect browser groups them. Nine are `@m2/effects`', six `@m2/mixing`'s, two `@m2/vocals`'; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
+**Effects**, as the effect browser groups them. Nine are `@m2/effects`', six `@m2/mixing`'s, three `@m2/vocals`'; the filters, `eq3`, `compress`, `limit`, `duck`, `gain` and `pan` are std's, since every mix needs them:
 
 | Group | Effects |
 |---|---|
@@ -134,7 +134,7 @@ A song made before std 0.8 is told, in words, what to change: first its std line
 | Delay & Reverb | `delay`, `reverb` (`@m2/effects`) |
 | Modulation | `chorus`, `phaser`, `tremolo` (`@m2/effects`) |
 | Utility | `gain`, `pan` (std, `std/dsp`), `widen` (`@m2/effects`) |
-| Voice | `tune`, `voiceChanger` (`@m2/vocals`): [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice) |
+| Voice | `tune`, `voiceChanger`, `vocoder` (`@m2/vocals`): [Tune a voice](audio.md#tune-a-voice), [Change a voice](audio.md#change-a-voice), [Make a synth talk](audio.md#make-a-synth-talk) |
 
 Chorus, phaser and tremolo move only while the song plays. Stopped, they wait, and Play carries them on from there. The bitcrusher keeps crushing a tail after Stop, and at Play it picks up where it stopped. So these effects, and the drums, sound as in the export when you press Play, however long the song sat first. Going back to bar 1 after playing is a jump: the wobble carries on from where it stopped, so that play may differ a little from the export. An oscillator or `noise` written straight into a track's code, outside a voice, runs on while the song is stopped, so it may start from another place than in the export. A plugin may run on too.
 
@@ -201,6 +201,7 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 | `duck` | turns the sound down while the track it listens to plays |
 | `compress` | squeezes the sound while the track it listens to is loud (**No other track**: its own sound) |
 | `gate` | opens only while the track it listens to plays (**No other track**: its own sound) |
+| `vocoder` | gives the sound the shape of the track it listens to, its row called **Talks with** (**No other track**: the sound as it is), [Make a synth talk](audio.md#make-a-synth-talk) |
 
 - Muting the track it listens to doesn't stop it: a sidechain always hears the track, muted or not. For a **ghost kick** (one you don't hear, only for the ducking), mute the kick in the song.
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.

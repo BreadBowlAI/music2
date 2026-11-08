@@ -1344,3 +1344,917 @@ mod sung {
         assert!(MANIFEST.contains(&format!("hop = {HOP}")), "notes' hop is {HOP}");
     }
 }
+
+// ---------------------------------------------------------------- the Vocoder (VOX-29)
+
+mod vocoded {
+    use m2_dsp::testing::effects::{self, Fx};
+    use m2_dsp::testing::{defaults_in, manifest_in, spectrum};
+    use m2_kernel::{Host, Kernel, PORT_CHANNELS};
+
+    use super::*;
+    use crate::bands::{BANDS, centre};
+
+    const CLARITY: usize = 2;
+    const LISTEN: usize = 5;
+
+    /// A band-limited saw at `f0`: its harmonics up to `top` Hz, each `1/n`, peaking at 0.5.
+    fn saw(sr: f32, f0: f64, top: f64, secs: f64) -> Vec<f32> {
+        let n = (secs * sr as f64) as usize;
+        let mut out = vec![0f64; n];
+        let mut h = 1;
+        while h as f64 * f0 <= top.min(0.49 * sr as f64) {
+            let w = std::f64::consts::TAU * h as f64 * f0 / sr as f64;
+            for (i, o) in out.iter_mut().enumerate() {
+                *o += (w * i as f64).sin() / h as f64;
+            }
+            h += 1;
+        }
+        let most = out.iter().fold(0f64, |m, v| m.max(v.abs()));
+        out.iter().map(|v| (0.5 * v / most) as f32).collect()
+    }
+
+    /// A voice-like sound: a pulse at `f0` (every harmonic alike, up to 0.45 of the rate) through
+    /// two formant band-passes side by side, peaking at `level`.
+    fn vowel(sr: f32, f0: f64, formants: [f64; 2], secs: f64, level: f64) -> Vec<f32> {
+        let n = (secs * sr as f64) as usize;
+        let mut pulse = vec![0f64; n];
+        let mut h = 1;
+        while h as f64 * f0 <= 0.45 * sr as f64 {
+            let w = std::f64::consts::TAU * h as f64 * f0 / sr as f64;
+            for (i, o) in pulse.iter_mut().enumerate() {
+                *o += (w * i as f64).cos();
+            }
+            h += 1;
+        }
+        let mut f = formants.map(|f| Formant::new(sr as f64, f, 0.1 * f + 50.0));
+        let out: Vec<f64> = pulse.iter().map(|&p| f[0].tick(p) + f[1].tick(p)).collect();
+        let most = out[n / 2..].iter().fold(0f64, |m, v| m.max(v.abs()));
+        out.iter().map(|v| (v * level / most) as f32).collect()
+    }
+
+    /// White noise over `hz` (a 4th-order high-pass), peaking near `level`: an S.
+    fn hiss(sr: f32, hz: f32, secs: f64, level: f32) -> Vec<f32> {
+        let mut rng = Lcg(3);
+        let f = [m2_dsp::fx::Filter::highpass(sr, hz, 0.5412), m2_dsp::fx::Filter::highpass(sr, hz, 1.3066)];
+        let mut s = [[0f32; 2]; 2];
+        let raw: Vec<f32> = (0..(secs * sr as f64) as usize)
+            .map(|_| {
+                let a = f[0].tick(&mut s[0], rng.next() as f32 / 32_768.0 - 1.0);
+                f[1].tick(&mut s[1], a)
+            })
+            .collect();
+        let most = raw.iter().fold(0f32, |m, v| m.max(v.abs()));
+        raw.iter().map(|v| v * level / most).collect()
+    }
+
+    /// The Vocoder, mono, on `carrier` with `voice`, its controls held at `[clarity, smooth,
+    /// formant]`, listening, `split` frames a call.
+    fn played(sr: f32, carrier: &[f32], voice: &[f32], controls: [f32; 3], split: usize) -> Vec<f32> {
+        let mut h = Host::<Vocoder>::of(cfg(sr, 1));
+        let mut out = Vec::with_capacity(carrier.len());
+        let mut at = 0;
+        while at < carrier.len() {
+            let n = split.min(carrier.len() - at);
+            h.port_mut(0)[..n].copy_from_slice(&carrier[at..at + n]);
+            h.port_mut(1)[..n].copy_from_slice(&voice[at..at + n]);
+            for (p, v) in controls.iter().enumerate() {
+                h.port_mut(CLARITY + p)[..n].fill(*v);
+            }
+            h.port_mut(LISTEN)[..n].fill(1.0);
+            h.process(n as u32);
+            out.extend_from_slice(&h.port_mut(Vocoder::INPUTS)[..n]);
+            at += n;
+        }
+        out
+    }
+
+    fn play(sr: f32, carrier: &[f32], voice: &[f32], controls: [f32; 3]) -> Vec<f32> {
+        played(sr, carrier, voice, controls, BLOCK)
+    }
+
+    /// From half a second in: the followers have long settled.
+    fn settled(x: &[f32], sr: f32) -> &[f32] {
+        &x[(0.5 * sr) as usize..]
+    }
+
+    /// The power in dB, by an FFT (m2-dsp's, Kaiser's window), of each of the Vocoder's bands:
+    /// from a sixth of an octave under its centre to a sixth over.
+    fn band_levels(x: &[f32], sr: f32) -> [f64; BANDS] {
+        let spec = spectrum(settled(x, sr), sr);
+        std::array::from_fn(|k| {
+            let (lo, hi) = (centre(k) as f64 * 2f64.powf(-1.0 / 6.0), centre(k) as f64 * 2f64.powf(1.0 / 6.0));
+            10.0 * spec.iter().filter(|(f, _)| *f >= lo && *f < hi).map(|(_, p)| p).sum::<f64>().max(1e-30).log10()
+        })
+    }
+
+    /// The power in dB from `lo` Hz to `hi`, by the same FFT.
+    fn level_between(x: &[f32], sr: f32, lo: f64, hi: f64) -> f64 {
+        let spec = spectrum(settled(x, sr), sr);
+        10.0 * spec.iter().filter(|(f, _)| *f >= lo && *f < hi).map(|(_, p)| p).sum::<f64>().max(1e-30).log10()
+    }
+
+    /// Each band's level against the loudest band's, in dB.
+    fn shape(levels: &[f64]) -> Vec<f64> {
+        let most = levels.iter().cloned().fold(f64::MIN, f64::max);
+        levels.iter().map(|l| l - most).collect()
+    }
+
+    /// Pearson's correlation of `a` and `b`.
+    fn correlation(a: &[f64], b: &[f64]) -> f64 {
+        let n = a.len() as f64;
+        let (ma, mb) = (a.iter().sum::<f64>() / n, b.iter().sum::<f64>() / n);
+        let (mut ab, mut aa, mut bb) = (0.0, 0.0, 0.0);
+        for (x, y) in a.iter().zip(b) {
+            ab += (x - ma) * (y - mb);
+            aa += (x - ma) * (x - ma);
+            bb += (y - mb) * (y - mb);
+        }
+        ab / (aa * bb).sqrt()
+    }
+
+    /// The band from 315 Hz up: every band there holds a harmonic of a 105 Hz voice.
+    const FROM: usize = 5;
+
+    /// What the Vocoder did to the carrier in each band (the out's level less the carrier's, in
+    /// dB, against its loudest band), and the voice's band levels against its loudest.
+    fn gains_and_voice(sr: f32, formants: [f64; 2]) -> (Vec<f64>, Vec<f64>) {
+        let secs = 1.5;
+        let c = saw(sr, 55.0, 20_000.0, secs);
+        let v = vowel(sr, 105.0, formants, secs, 0.5);
+        let o = play(sr, &c, &v, [0.0, 0.05, 0.0]);
+        let (cb, ob) = (band_levels(&c, sr), band_levels(&o, sr));
+        let g: Vec<f64> = (0..BANDS).map(|k| ob[k] - cb[k]).collect();
+        (shape(&g), shape(&band_levels(&v, sr)))
+    }
+
+    /// Of the bands within two of `band`, the one the out plays loudest.
+    fn hill(g: &[f64], band: usize) -> usize {
+        (band - 2..=band + 2).max_by(|&a, &b| g[a].total_cmp(&g[b])).unwrap()
+    }
+
+    // VOX-29: the voice's shape is the out's. A buzzy carrier (a band-limited saw at 55 Hz) under a
+    // voice-like sound (a pulse at 105 Hz through two formants, at 525 Hz and 2.1 kHz, each on a
+    // harmonic, in the bands 7 and 13) gives an out whose band levels over the carrier's follow the
+    // voice's, at 44.1, 48 and 96 kHz: its two hills in the formants' bands, the dip between them at
+    // least 8 dB deep (21 dB in the voice), the two rising and falling together (a correlation over
+    // 0.9 across the bands from 315 Hz up), and each band within 9 dB of the voice's there, where
+    // the voice is within 20 dB of its loudest. The tolerance: each band of each bank hears its
+    // neighbours' centres 8.5 dB down, so where the voice falls faster than that from one band to
+    // the next, the out's band reads its neighbour's leak, up to about 8.5 dB over the voice's.
+    // Measured, 7.5 dB at worst, a correlation of 0.95 and a dip of 10.3 dB.
+    #[test]
+    fn the_out_takes_the_shape_of_the_voice() {
+        for sr in RATES {
+            let (g, v) = gains_and_voice(sr, [525.0, 2100.0]);
+            assert_eq!((hill(&g, 7), hill(&g, 13)), (7, 13), "{sr}: the out's hills are the voice's formants' bands: {g:.1?}");
+            let dip = (8..13).map(|k| g[k]).fold(f64::MAX, f64::min);
+            assert!(g[7].min(g[13]) - dip >= 8.0, "{sr}: the dip between the hills is {:.1} dB deep: {g:.1?}", g[7].min(g[13]) - dip);
+            let r = correlation(&g[FROM..], &v[FROM..]);
+            assert!(r > 0.9, "{sr}: the out's band levels follow the voice's by {r:.3}");
+            for k in (FROM..BANDS).filter(|&k| v[k] > -20.0) {
+                assert!(
+                    (g[k] - v[k]).abs() < 9.0,
+                    "{sr}: band {k} ({} Hz) plays {:.1} dB where the voice is {:.1} dB",
+                    centre(k),
+                    g[k],
+                    v[k]
+                );
+            }
+        }
+    }
+
+    // VOX-29: moving the voice's formants moves the out's. The voice's formants moved from 525 Hz
+    // and 2.1 kHz (an "ah") to 315 Hz and 3.15 kHz (an "ee"), each two bands, the out's hills move
+    // with them, and each out follows its own voice better than the other.
+    #[test]
+    fn moving_the_voices_formants_moves_the_outs() {
+        let sr = 48_000.0;
+        let (ga, va) = gains_and_voice(sr, [525.0, 2100.0]);
+        let (ge, ve) = gains_and_voice(sr, [315.0, 3150.0]);
+        assert_eq!((hill(&ga, 7), hill(&ga, 13)), (7, 13), "ah: {ga:.1?}");
+        assert_eq!((hill(&ge, 5), hill(&ge, 15)), (5, 15), "ee: {ge:.1?}");
+        let dip = (6..15).map(|k| ge[k]).fold(f64::MAX, f64::min);
+        assert!(ge[5].min(ge[15]) - dip >= 8.0, "ee's dip: {ge:.1?}");
+        let r = |g: &[f64], v: &[f64]| correlation(&g[FROM..], &v[FROM..]);
+        assert!(
+            r(&ga, &va) > r(&ga, &ve) + 0.2 && r(&ge, &ve) > r(&ge, &va) + 0.2,
+            "each out follows its own voice: {:.3} {:.3} {:.3} {:.3}",
+            r(&ga, &va),
+            r(&ga, &ve),
+            r(&ge, &ve),
+            r(&ge, &va)
+        );
+    }
+
+    /// The out's gain over the carrier, in dB, from 250 Hz to 4 kHz on a grid of 1/48 octave: at
+    /// each harmonic of the carrier, a 27.5 Hz saw (the FFT's power within 3 bins), drawn straight
+    /// between them on a log scale of frequency.
+    fn gain_curve(out: &[f32], carrier: &[f32], sr: f32) -> Vec<f64> {
+        gain_curve_of(settled(out, sr), settled(carrier, sr), sr)
+    }
+
+    /// [`gain_curve`] of two windows of the same frames, `out` against `carrier`, as they are.
+    fn gain_curve_of(out: &[f32], carrier: &[f32], sr: f32) -> Vec<f64> {
+        let (so, sc) = (spectrum(out, sr), spectrum(carrier, sr));
+        let bin = so[1].0;
+        let points: Vec<(f64, f64)> = (1..)
+            .map(|h| h as f64 * 27.5)
+            .take_while(|f| *f < 4_400.0)
+            .filter(|f| *f > 225.0)
+            .map(|f| {
+                let k = (f / bin).round() as usize;
+                let power = |s: &[(f64, f64)]| s[k - 3..=k + 3].iter().map(|x| x.1).sum::<f64>();
+                (f.log2(), 10.0 * (power(&so) / power(&sc)).log10())
+            })
+            .collect();
+        (0..=(16.0f64.log2() * 48.0) as usize)
+            .map(|i| {
+                let x = 250f64.log2() + i as f64 / 48.0;
+                let j = points.iter().position(|p| p.0 >= x).unwrap().max(1);
+                let (a, b) = (points[j - 1], points[j]);
+                a.1 + (b.1 - a.1) * (x - a.0) / (b.0 - a.0)
+            })
+            .collect()
+    }
+
+    /// How many semitones up `b` lies from `a`: the shift that lays it on `a` best (least squares),
+    /// to a 48th of an octave, then a parabola through the three best.
+    fn moved(a: &[f64], b: &[f64]) -> f64 {
+        let fit = |l: i64| -> f64 {
+            let pairs = (0..a.len() as i64).filter(|i| (0..b.len() as i64).contains(&(i + l)));
+            let (sum, n) = pairs.fold((0.0, 0.0), |(s, n), i| (s + (a[i as usize] - b[(i + l) as usize]).powi(2), n + 1.0));
+            -sum / n
+        };
+        let best = (-60..=60).max_by(|&x, &y| fit(x).total_cmp(&fit(y))).unwrap();
+        let (y0, y1, y2) = (fit(best - 1), fit(best), fit(best + 1));
+        (best as f64 + 0.5 * (y0 - y2) / (y0 - 2.0 * y1 + y2)) / 4.0
+    }
+
+    /// The carrier's bank, every band open, summed by `sign`: its gain in dB from 125 Hz to 6.4 kHz
+    /// at 400 points a log step apart, by a plain DFT of its answer to a click (half a second), at
+    /// least and at most.
+    fn bank(sr: f32, sign: &dyn Fn(usize) -> f32) -> (f64, f64) {
+        let bands: Vec<[m2_dsp::fx::Filter; 2]> = (0..BANDS).map(|k| [crate::bands::section(sr, centre(k)); 2]).collect();
+        let mut states = vec![[[0f32; 2]; 2]; BANDS];
+        let answer: Vec<f32> = (0..(0.5 * sr) as usize)
+            .map(|i| {
+                let x = if i == 0 { 1.0 } else { 0.0 };
+                (0..BANDS)
+                    .map(|k| {
+                        let a = bands[k][0].tick(&mut states[k][0], x);
+                        sign(k) * bands[k][1].tick(&mut states[k][1], a)
+                    })
+                    .sum()
+            })
+            .collect();
+        (0..400).fold((f64::MAX, f64::MIN), |(lo, hi), j| {
+            let f = 125.0 * (6400.0f64 / 125.0).powf(j as f64 / 399.0);
+            let w = std::f64::consts::TAU * f / sr as f64;
+            let (re, im) = answer
+                .iter()
+                .enumerate()
+                .fold((0.0, 0.0), |(re, im), (i, &v)| (re + v as f64 * (w * i as f64).cos(), im - v as f64 * (w * i as f64).sin()));
+            let db = 10.0 * (re * re + im * im).log10();
+            (lo.min(db), hi.max(db))
+        })
+    }
+
+    // VOX-29: the carrier's bands, all open, give it back within 1.6 dB, every other band's sign
+    // turned over as the kernel sums them (`bands::sign`), at 44.1, 48 and 96 kHz; summed as they
+    // are, two bands' phases cancel where they meet (130° apart), in notches over 20 dB deep.
+    #[test]
+    fn the_carriers_bands_all_open_give_it_back_within_1_6_db() {
+        for sr in RATES {
+            let (lo, hi) = bank(sr, &crate::bands::sign);
+            assert!(lo > -0.5 && hi < 1.6, "{sr}: all open, from {lo:.2} to {hi:.2} dB");
+            let (lo, _) = bank(sr, &|_| 1.0);
+            assert!(lo < -20.0, "{sr}: as they are, notches only {lo:.2} dB deep");
+        }
+    }
+
+    // VOX-29: Formant moves the out's hills by the semitones asked, both ways, at every rate: the
+    // out's gain curve over a 27.5 Hz saw, from 250 Hz to 4 kHz, at Formant −12, −7, 5 and 12 lies
+    // that many semitones from the one at 0, within a tenth of a semitone (measured within 0.04).
+    #[test]
+    fn formant_moves_the_outs_hills_by_its_semitones() {
+        for sr in RATES {
+            let secs = 1.5;
+            let c = saw(sr, 27.5, 20_000.0, secs);
+            let v = vowel(sr, 105.0, [525.0, 2100.0], secs, 0.5);
+            let at = |formant: f32| gain_curve(&play(sr, &c, &v, [0.0, 0.05, formant]), &c, sr);
+            let still = at(0.0);
+            for formant in [-12.0, -7.0, 5.0, 12.0] {
+                let by = moved(&still, &at(formant));
+                assert!((by - formant as f64).abs() < 0.1, "{sr}: Formant {formant} moves the hills {by:.3} semitones");
+            }
+        }
+    }
+
+    // VOX-29: Formant moved while the song plays moves the hills (review W3): stepped from 0 to 7
+    // half way through, under a 27.5 Hz saw, the out's gain curve over the 0.7 s from 40 ms after
+    // the step (Formant glides there in 20 ms, a time constant) lies 7 semitones up from the one
+    // before it, within 0.1, at every rate. The carrier's bands are placed again as Formant moves,
+    // every 16 frames; placed once only (review W3's M2), the hills don't move.
+    #[test]
+    fn formant_moved_while_playing_moves_the_hills() {
+        for sr in RATES {
+            let secs = 3.0;
+            let c = saw(sr, 27.5, 20_000.0, secs);
+            let v = vowel(sr, 105.0, [525.0, 2100.0], secs, 0.5);
+            let step = (1.5 * sr) as usize;
+            let o = run(sr, 1, c.len(), BLOCK, &|p, _, t| match p {
+                0 => c[t],
+                1 => v[t],
+                3 => 0.05,
+                4 if t >= step => 7.0,
+                LISTEN => 1.0,
+                _ => 0.0,
+            });
+            let out: Vec<f32> = o.iter().map(|f| f[0]).collect();
+            // About 0.7 s at every rate, so its harmonics stand apart in the spectrum.
+            let window = ((0.6 * sr) as usize).next_power_of_two();
+            let curve = |from: usize| gain_curve_of(&out[from..from + window], &c[from..from + window], sr);
+            let by = moved(&curve((0.5 * sr) as usize), &curve(step + (0.04 * sr) as usize));
+            assert!((by - 7.0).abs() < 0.1, "{sr}: Formant stepped to 7 while playing moves the hills {by:.3} semitones");
+        }
+    }
+
+    // VOX-29: a band's follower rises in 2 ms (review W3): a voice that starts at once at band 10's
+    // centre, under a steady carrier there, brings that band's out within 1 dB of its steady level
+    // in under 10 ms, the band's own filters' rise included. The voice is at −90 dB, far under the
+    // knee, so the out follows the follower in step (at a normal level the knee brings it there
+    // sooner). At every rate.
+    #[test]
+    fn a_band_opens_within_10_ms() {
+        for sr in RATES {
+            let f = centre(10) as f64;
+            let start = (0.25 * sr) as usize;
+            let n = start + (0.5 * sr) as usize;
+            let sine = |a: f64, i: usize| (a * (std::f64::consts::TAU * f * i as f64 / sr as f64).sin()) as f32;
+            let c: Vec<f32> = (0..n).map(|i| sine(0.5, i)).collect();
+            let v: Vec<f32> = (0..n).map(|i| if i < start { 0.0 } else { sine(10f64.powf(-90.0 / 20.0), i) }).collect();
+            let o = play(sr, &c, &v, [0.0, 0.05, 0.0]);
+            let cycle = (sr as f64 / f).ceil() as usize;
+            let height = |at: usize| o[at..at + cycle].iter().fold(0f32, |m, x| m.max(x.abs())) as f64;
+            let steady = height(start + (0.3 * sr) as usize);
+            let open = (start..n).find(|&t| height(t) >= steady * 10f64.powf(-1.0 / 20.0)).unwrap();
+            let ms = (open - start) as f64 / sr as f64 * 1000.0;
+            assert!(ms < 10.0, "{sr}: the band came within 1 dB of its steady level {ms:.1} ms after the voice started");
+        }
+    }
+
+    // VOX-29: the bands hear the mono sum of the voice (review W3): in stereo, a vowel on the right
+    // channel alone shapes the out as the same vowel on the left alone does, bit for bit, at
+    // Clarity 0 (each channel's own highs left out), and shapes it; at every rate.
+    #[test]
+    fn a_voice_on_either_channel_shapes_the_out_alike() {
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 1.0);
+            let v = vowel(sr, 105.0, [525.0, 2100.0], 1.0, 0.5);
+            let on = |side: usize| {
+                run(sr, 2, c.len(), BLOCK, &|p, ch, t| match p {
+                    0 => c[t],
+                    1 if ch == side => v[t],
+                    3 => 0.05,
+                    LISTEN => 1.0,
+                    _ => 0.0,
+                })
+            };
+            let (left, right) = (on(0), on(1));
+            assert!(left == right, "{sr}: a vowel on the right shapes the out otherwise than on the left");
+            assert!(left.iter().skip((0.5 * sr) as usize).any(|f| f[0].abs() > 1e-3), "{sr}: the vowel opens no band");
+        }
+    }
+
+    // VOX-29: Clarity is the voice's own highs. Under a dull synth (nothing over 4 kHz), a voice of
+    // a vowel and a hiss over 6 kHz: with Clarity 0 the out over 6 kHz is at least 50 dB under the
+    // hiss (measured 74 dB), so it doesn't come through; at 1 it is the hiss's level within half a
+    // dB (measured 0.01 dB under), at 0.5 6 dB under it; at 44.1, 48 and 96 kHz.
+    #[test]
+    fn clarity_lets_the_voices_own_highs_through() {
+        for sr in RATES {
+            let secs = 1.5;
+            let c = saw(sr, 55.0, 4_000.0, secs);
+            let s = hiss(sr, 6_000.0, secs, 0.2);
+            let v: Vec<f32> = vowel(sr, 105.0, [525.0, 2100.0], secs, 0.4).iter().zip(&s).map(|(a, b)| a + b).collect();
+            let top = 0.49 * sr as f64;
+            let hissed = level_between(&s, sr, 6_000.0, top);
+            let through = |clarity: f32| level_between(&play(sr, &c, &v, [clarity, 0.05, 0.0]), sr, 6_000.0, top) - hissed;
+            let (none, half, all) = (through(0.0), through(0.5), through(1.0));
+            assert!(none < -50.0, "{sr}: at Clarity 0 the hiss comes through {none:.1} dB under");
+            assert!(all.abs() < 0.5, "{sr}: at Clarity 1 it comes through at {all:.2} dB");
+            assert!((half + 6.02).abs() < 0.5, "{sr}: at Clarity 0.5, {half:.2} dB");
+        }
+    }
+
+    // VOX-29: a silent voice gives silence out, every band shut: under a saw, at any Clarity,
+    // Smooth and Formant, mono and stereo, at every rate, every sample is 0.
+    #[test]
+    fn a_silent_voice_shuts_every_band() {
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 0.5);
+            let quiet = vec![0.0; c.len()];
+            for controls in [[0.5, 0.05, 0.0], [1.0, 0.01, 12.0], [1.0, 0.2, -12.0]] {
+                assert!(play(sr, &c, &quiet, controls).iter().all(|&v| v == 0.0), "{sr} {controls:?}: sound from a silent voice");
+            }
+            let stereo = run(sr, 2, c.len(), BLOCK, &|p, ch, t| match p {
+                0 => c[t] * if ch == 0 { 1.0 } else { -0.5 },
+                CLARITY => 1.0,
+                3 => 0.05,
+                LISTEN => 1.0,
+                _ => 0.0,
+            });
+            assert!(stereo.iter().all(|f| f[0] == 0.0 && f[1] == 0.0), "{sr}: sound in stereo from a silent voice");
+        }
+    }
+
+    /// The Vocoder on `channels` channels, its every input `input(port, channel, frame)`, `split`
+    /// frames a call: what came out, both channels, and whether it said it was active after each.
+    fn run_active(
+        sr: f32,
+        channels: usize,
+        frames: usize,
+        split: usize,
+        input: &dyn Fn(usize, usize, usize) -> f32,
+    ) -> (Vec<[f32; 2]>, Vec<bool>) {
+        let mut h = Host::<Vocoder>::of(cfg(sr, channels));
+        let (mut out, mut active) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+        let mut t = 0;
+        while t < frames {
+            let n = split.clamp(1, BLOCK).min(frames - t);
+            for p in 0..Vocoder::INPUTS {
+                for c in 0..PORT_CHANNELS {
+                    for k in 0..n {
+                        h.port_mut(p)[c * BLOCK + k] = input(p, c, t + k);
+                    }
+                }
+            }
+            h.process(n as u32);
+            let o = h.port_mut(Vocoder::INPUTS);
+            out.extend((0..n).map(|k| [o[k], o[BLOCK + k]]));
+            let a = h.active();
+            active.extend((0..n).map(|_| a));
+            t += n;
+        }
+        (out, active)
+    }
+
+    fn run(sr: f32, channels: usize, frames: usize, split: usize, input: &dyn Fn(usize, usize, usize) -> f32) -> Vec<[f32; 2]> {
+        run_active(sr, channels, frames, split, input).0
+    }
+
+    // VOX-29: no band is louder than the carrier, and the knee is soft, at −48 dB. A sine voice at
+    // band 10's centre (1 kHz), from −110 dB to +40 dB, plays a saw there at most at the saw's own
+    // level and the bank's ripple (1.6 dB); far under the knee (−110 to −90 dB) 1 dB quieter for each
+    // dB quieter (its level over the knee); at the knee about half (the follower reads a steady sine
+    // at 0.88 of its height: −6.6 dB); and at −18 dB, a voice at a normal level, within a dB of the
+    // saw's own level. At 44.1, 48 and 96 kHz.
+    #[test]
+    fn no_band_plays_louder_than_the_carrier() {
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 1.0);
+            let at = |db: f64| -> f64 {
+                let a = 10f64.powf(db / 20.0);
+                let v: Vec<f32> =
+                    (0..c.len()).map(|i| (a * (std::f64::consts::TAU * centre(10) as f64 * i as f64 / sr as f64).sin()) as f32).collect();
+                band_levels(&play(sr, &c, &v, [0.0, 0.05, 0.0]), sr)[10] - band_levels(&c, sr)[10]
+            };
+            let gains: Vec<(f64, f64)> = [-110.0, -90.0, -70.0, -48.0, -18.0, 0.0, 20.0, 40.0].into_iter().map(|db| (db, at(db))).collect();
+            for &(db, g) in &gains {
+                assert!(g < 1.6, "{sr}: a voice at {db} dB plays the carrier {g:.2} dB louder");
+            }
+            let g = |db: f64| gains.iter().find(|x| x.0 == db).unwrap().1;
+            assert!((g(-90.0) - g(-110.0) - 20.0).abs() < 1.0, "{sr}: 1 dB a dB far under the knee: {gains:.2?}");
+            assert!((-8.0..-5.0).contains(&g(-48.0)), "{sr}: at the knee, about half: {gains:.2?}");
+            assert!(g(-18.0) > -1.0, "{sr}: a voice at a normal level plays the carrier near its own level: {gains:.2?}");
+        }
+    }
+
+    // VOX-29: Smooth is how fast a band lets go: once a voice stops, what it opened falls by 1/e
+    // (8.7 dB) in each Smooth. A sine voice at −90 dB (far under the knee, so the out follows it in
+    // step) at band 10's centre stops at 0.5 s; under a sine carrier there, the out's height (the
+    // loudest of each cycle), fitted in dB from 5 ms after the stop (the band's own ring is gone) to
+    // 20 dB under, falls by 1/e in Smooth, within 3%, for Smooth 10 ms, 50 ms and 200 ms, at 44.1, 48
+    // and 96 kHz.
+    #[test]
+    fn smooth_is_how_fast_a_band_lets_go() {
+        for sr in RATES {
+            smooth_at(sr);
+        }
+    }
+
+    fn smooth_at(sr: f32) {
+        let f = centre(10) as f64;
+        let stop = (0.5 * sr) as usize;
+        let n = stop + (2.5 * sr) as usize;
+        let sine = |a: f64, i: usize| (a * (std::f64::consts::TAU * f * i as f64 / sr as f64).sin()) as f32;
+        let c: Vec<f32> = (0..n).map(|i| sine(0.5, i)).collect();
+        let v: Vec<f32> = (0..n).map(|i| if i < stop { sine(10f64.powf(-90.0 / 20.0), i) } else { 0.0 }).collect();
+        let cycle = (sr as f64 / f).ceil() as usize;
+        for smooth in [0.01f32, 0.05, 0.2] {
+            let o = play(sr, &c, &v, [0.0, smooth, 0.0]);
+            let height = |at: usize| o[at..at + cycle].iter().fold(0f32, |m, x| m.max(x.abs())) as f64;
+            let from = stop + (0.005 * sr) as usize;
+            let top = height(from);
+            let points: Vec<(f64, f64)> = (from..n - cycle)
+                .step_by(cycle)
+                .map(|t| ((t - stop) as f64 / sr as f64, (height(t) / top).ln()))
+                .take_while(|p| p.1 > -(10f64.ln())) // 20 dB under: ln 10 in nepers
+                .collect();
+            let (mt, my) = (
+                points.iter().map(|p| p.0).sum::<f64>() / points.len() as f64,
+                points.iter().map(|p| p.1).sum::<f64>() / points.len() as f64,
+            );
+            let slope =
+                points.iter().map(|p| (p.0 - mt) * (p.1 - my)).sum::<f64>() / points.iter().map(|p| (p.0 - mt).powi(2)).sum::<f64>();
+            let fell = -1.0 / slope;
+            assert!(
+                points.len() > 10 && (fell / smooth as f64 - 1.0).abs() < 0.03,
+                "{sr}: Smooth {smooth}: it fell by 1/e in {:.2} ms ({} points)",
+                fell * 1000.0,
+                points.len()
+            );
+        }
+    }
+
+    /// The five vowels' first three formants (Hz), a man's (Peterson and Barney, rounded).
+    const VOWELS: [[f64; 3]; 5] =
+        [[730.0, 1090.0, 2440.0], [530.0, 1840.0, 2480.0], [270.0, 2290.0, 3010.0], [570.0, 840.0, 2410.0], [300.0, 870.0, 2240.0]];
+
+    /// A made-up talker (review W): 4 syllables a second, each a vowel that glides from the one
+    /// before, on a buzz at about `f0` Hz that rises and falls slowly (or on noise: a whisper), an
+    /// "s" after every other one; `rms_db` dBFS RMS over the whole.
+    fn talker(sr: f32, secs: f64, f0: f64, whisper: bool, rms_db: f64) -> Vec<f32> {
+        let sr64 = sr as f64;
+        let n = (secs * sr64) as usize;
+        let mut rng = Lcg(11);
+        let mut phase = 0.0f64;
+        let hp = [m2_dsp::fx::Filter::highpass(sr, 4500.0, 0.5412), m2_dsp::fx::Filter::highpass(sr, 4500.0, 1.3066)];
+        let mut hs = [[0f32; 2]; 2];
+        let mut f: Vec<Formant> = VOWELS[0].iter().map(|&x| Formant::new(sr64, x, 100.0)).collect();
+        let mut out = Vec::with_capacity(n);
+        for i in 0..n {
+            let t = i as f64 / sr64;
+            let syl = (t * 4.0).floor() as usize;
+            let u = t * 4.0 - syl as f64;
+            let (a, b) = (VOWELS[(syl + 4) % 5], VOWELS[syl % 5]);
+            let mix = (u / 0.3).min(1.0);
+            if i % 16 == 0 {
+                for (k, ff) in f.iter_mut().enumerate() {
+                    let y = ff.y;
+                    *ff = Formant::new(sr64, a[k] + (b[k] - a[k]) * mix, [90.0, 110.0, 170.0][k]);
+                    ff.y = y;
+                }
+            }
+            let hz = f0 * (1.0 + 0.12 * (std::f64::consts::TAU * 0.4 * t).sin());
+            phase += hz / sr64;
+            let source = if whisper {
+                rng.next() as f64 / 32_768.0 - 1.0
+            } else {
+                let mut s = 0.0;
+                let mut h = 1.0;
+                while h * hz < 0.45 * sr64 {
+                    s += (std::f64::consts::TAU * h * phase).sin() / h;
+                    h += 1.0;
+                }
+                s
+            };
+            let env = if u < 0.65 { (std::f64::consts::PI * u / 0.65).sin().powf(0.6) } else { 0.0 };
+            let v = f.iter_mut().zip([1.0, 0.6, 0.3]).map(|(ff, g)| g * ff.tick(source)).sum::<f64>() * env;
+            let w = rng.next() as f32 / 32_768.0 - 1.0;
+            let s = {
+                let a = hp[0].tick(&mut hs[0], w);
+                hp[1].tick(&mut hs[1], a)
+            };
+            let s_env = if syl % 2 == 1 && (0.72..0.95).contains(&u) { (std::f64::consts::PI * (u - 0.72) / 0.23).sin() } else { 0.0 };
+            out.push(v + 0.5 * s as f64 * s_env);
+        }
+        at_level(&out.iter().map(|&v| v as f32).collect::<Vec<f32>>(), rms_db)
+    }
+
+    /// `x` scaled to `rms_db` dBFS RMS over the whole.
+    /// Whether the made-up talker sounds at frame `i`, as [`talker`] makes it: in a syllable's vowel
+    /// (its first 0.65), or in the "s" after every other one (from 0.72 to 0.95 of it).
+    fn sounds(sr: f32, i: usize) -> bool {
+        let t = i as f64 / sr as f64 * 4.0;
+        let (syl, u) = (t.floor() as usize, t - t.floor());
+        u < 0.65 || (syl % 2 == 1 && (0.72..0.95).contains(&u))
+    }
+
+    fn at_level(x: &[f32], rms_db: f64) -> Vec<f32> {
+        let k = 10f64.powf(rms_db / 20.0) / rms_of(x);
+        x.iter().map(|&v| (v as f64 * k) as f32).collect()
+    }
+
+    fn rms_of(x: &[f32]) -> f64 {
+        (x.iter().map(|&v| v as f64 * v as f64).sum::<f64>() / x.len().max(1) as f64).sqrt()
+    }
+
+    /// A chord of three band-limited saws (A2, C3, E3) at `rms_db` dBFS RMS: the synth.
+    fn chord(sr: f32, secs: f64, rms_db: f64) -> Vec<f32> {
+        let notes = [110.0, 130.813, 164.814].map(|f| saw(sr, f, 20_000.0, secs));
+        at_level(&(0..notes[0].len()).map(|i| notes.iter().map(|n| n[i]).sum()).collect::<Vec<f32>>(), rms_db)
+    }
+
+    /// How loud the out is against the synth alone (by RMS, in dB), from a quarter of a second in.
+    fn against_dry(out: &[f32], dry: &[f32], sr: f32) -> f64 {
+        against_dry_while(out, dry, sr, &|_| true)
+    }
+
+    /// [`against_dry`] over the frames where `sounding` says the voice sounds, the out and the synth
+    /// alike.
+    fn against_dry_while(out: &[f32], dry: &[f32], sr: f32, sounding: &dyn Fn(usize) -> bool) -> f64 {
+        let from = (0.25 * sr) as usize;
+        let kept = |x: &[f32]| (from..x.len()).filter(|&i| sounding(i)).map(|i| x[i]).collect::<Vec<f32>>();
+        20.0 * (rms_of(&kept(out)) / rms_of(&kept(dry))).log10()
+    }
+
+    // VOX-29: how loud the synth comes out while the voice sounds doesn't hang on how loud the voice
+    // was recorded (review W1). Under a chord of three saws at −15 dBFS RMS, a made-up talker (a man
+    // at 120 Hz, a woman at 220 Hz) and a sung "ah" at 220 Hz, each at −30, −18 and −6 dBFS RMS, come
+    // out within 6 dB of themselves at the other levels and no more than 12 dB under the synth alone;
+    // a whisper at −40 dBFS RMS within 12 dB of the man at −18; a room's noise at −60 dBFS RMS (a
+    // pause in the voice) at least 20 dB under him; and digital silence, silence. At 44.1, 48 and
+    // 96 kHz. Each is measured, the out and the synth alike, over the frames where the voice sounds,
+    // known from how it is made: the talkers' syllables, their vowels and "s" ([`sounds`]), not the
+    // gaps between them, where the out falls as the voice does (review W round 3); the sung "ah" and
+    // the noise sound throughout.
+    #[test]
+    fn the_out_is_about_as_loud_whatever_the_voices_level() {
+        for sr in RATES {
+            let secs = 4.0;
+            let dry = chord(sr, secs, -15.0);
+            let talking = |i: usize| sounds(sr, i);
+            let out = |voice: &[f32], sounding: &dyn Fn(usize) -> bool| {
+                against_dry_while(&play(sr, &dry, voice, [0.5, 0.05, 0.0]), &dry, sr, sounding)
+            };
+            let voice = |name: &str, db: f64| match name {
+                "a man" => talker(sr, secs, 120.0, false, db),
+                "a woman" => talker(sr, secs, 220.0, false, db),
+                _ => at_level(&steady(57.0, 0.3, secs).sing(sr), db),
+            };
+            let mut man_18 = 0.0;
+            for name in ["a man", "a woman", "a sung ah"] {
+                let sounding: &dyn Fn(usize) -> bool = if name == "a sung ah" { &|_| true } else { &talking };
+                let levels: Vec<f64> = [-30.0, -18.0, -6.0].into_iter().map(|db| out(&voice(name, db), sounding)).collect();
+                if name == "a man" {
+                    man_18 = levels[1];
+                }
+                let (lo, hi) = (levels.iter().cloned().fold(f64::MAX, f64::min), levels.iter().cloned().fold(f64::MIN, f64::max));
+                assert!(
+                    hi - lo <= 6.0 && lo >= -12.0,
+                    "{sr}: {name} at -30, -18 and -6 dBFS RMS comes out {levels:.1?} dB against the synth"
+                );
+            }
+            let whisper = out(&talker(sr, secs, 0.0, true, -40.0), &talking);
+            assert!((whisper - man_18).abs() <= 12.0, "{sr}: a whisper comes out {whisper:.1} dB, the man at -18 {man_18:.1} dB");
+            let mut rng = Lcg(29);
+            let room = at_level(&(0..(2.0 * sr) as usize).map(|_| rng.next() as f32 / 32_768.0 - 1.0).collect::<Vec<f32>>(), -60.0);
+            let paused = against_dry(&play(sr, &dry[..room.len()], &room, [0.5, 0.05, 0.0]), &dry[..room.len()], sr);
+            assert!(paused <= man_18 - 20.0, "{sr}: a room's noise comes out {paused:.1} dB, the man at -18 {man_18:.1} dB");
+            assert!(play(sr, &dry, &vec![0.0; dry.len()], [0.5, 0.05, 0.0]).iter().all(|&v| v == 0.0), "{sr}: sound from digital silence");
+        }
+    }
+
+    // VOX-29: the gaps between syllables come through (review W round 3): the held level stays while
+    // the bands fall as the voice does. Under a chord of saws, the made-up man and woman at −18 dBFS
+    // RMS, Smooth 50 ms, Clarity 0: over their even syllables (no "s"), the out's loudest 10 ms in the
+    // vowel stands at least 20 dB (the man) and 18 dB (the woman) over its quietest in the gap after
+    // it, the median over syllables, at every rate. Against the voice's loudest band as it was, not
+    // held, they came out 10.2 and 6.3 dB; with the knee at −20 dB, 19.1 and 14.7.
+    #[test]
+    fn the_gaps_between_syllables_come_through() {
+        for sr in RATES {
+            let secs = 4.0;
+            let dry = chord(sr, secs, -15.0);
+            let win = (0.01 * sr) as usize;
+            for (name, f0, bound) in [("the man", 120.0, 20.0), ("the woman", 220.0, 18.0)] {
+                let o = play(sr, &dry, &talker(sr, secs, f0, false, -18.0), [0.0, 0.05, 0.0]);
+                let mut dips: Vec<f64> = (2..16)
+                    .step_by(2)
+                    .map(|syl| {
+                        let start = (syl as f64 * 0.25 * sr as f64) as usize;
+                        let levels = |a: f64, b: f64| {
+                            let (a, b) = (start + (a * 0.25 * sr as f64) as usize, start + (b * 0.25 * sr as f64) as usize);
+                            o[a..b].chunks(win).map(|c| 20.0 * rms_of(c).max(1e-12).log10()).collect::<Vec<f64>>()
+                        };
+                        levels(0.1, 0.6).into_iter().fold(f64::MIN, f64::max) - levels(0.7, 1.0).into_iter().fold(f64::MAX, f64::min)
+                    })
+                    .collect();
+                dips.sort_by(f64::total_cmp);
+                let dip = dips[dips.len() / 2];
+                assert!(dip >= bound, "{sr}: {name}'s gaps between syllables come out {dip:.1} dB deep, under {bound}: {dips:.1?}");
+            }
+        }
+    }
+
+    // VOX-29, RENDER-6a: the held level is forgotten once every band has fallen silent, so a vocoder
+    // that says it is done starts again as one that heard only silence would. At Smooth 10 ms (its
+    // bands fall silent soonest), the made-up man at −6 dBFS RMS for a second, then silence until it
+    // says it is done, then at once the man at −30: over his syllables he comes out within 0.1 dB of
+    // how he does after silence alone, at every rate. Held on, the loud voice's level would turn him
+    // down.
+    #[test]
+    fn a_vocoder_that_is_done_forgets_how_loud_the_voice_was() {
+        for sr in RATES {
+            let loud = talker(sr, 1.0, 120.0, false, -6.0);
+            let quiet = talker(sr, 1.0, 120.0, false, -30.0);
+            let c = chord(sr, 4.0, -15.0);
+            // The voice: the loud man first if `after_loud`, then silence, then the quiet one from `from`.
+            let input = |after_loud: bool, from: usize, p: usize, t: usize| match p {
+                0 => c[t],
+                1 if t >= from => quiet[t - from],
+                1 if after_loud && t < loud.len() => loud[t],
+                CLARITY => 0.5,
+                3 => 0.01,
+                LISTEN => 1.0,
+                _ => 0.0,
+            };
+            let (_, active) = run_active(sr, 1, (3.0 * sr) as usize, 1, &|p, _, t| input(true, usize::MAX, p, t));
+            let done = active.iter().skip(loud.len()).position(|a| !a).map(|i| loud.len() + i).expect("done within 2 s of silence");
+            let from = done + 1;
+            let then = |after_loud: bool| -> Vec<f32> {
+                run(sr, 1, from + quiet.len(), BLOCK, &|p, _, t| input(after_loud, from, p, t))[from..].iter().map(|f| f[0]).collect()
+            };
+            let (after, alone) = (then(true), then(false));
+            let talking = |i: usize| sounds(sr, i);
+            let by = 20.0 * (rms_of(&kept(&after, &talking)) / rms_of(&kept(&alone, &talking))).log10();
+            assert!(
+                by.abs() < 0.1,
+                "{sr}: after the loud voice and silence, the quiet one comes out {by:.2} dB against after silence alone"
+            );
+        }
+    }
+
+    /// The frames of `x` where `sounding` says the voice sounds.
+    fn kept(x: &[f32], sounding: &dyn Fn(usize) -> bool) -> Vec<f32> {
+        (0..x.len()).filter(|&i| sounding(i)).map(|i| x[i]).collect()
+    }
+
+    // VOX-29, RENDER-6a: it says it is active while any band is open, and once it says it is done,
+    // nothing more comes out. A voice burst ending on a huge sample, then silence, under a saw that
+    // plays on, a frame a call, at every rate and Smooth 200 ms: after the first call where it says
+    // it is done, every sample out is 0; and it said so within 6 s (a follower falls to 0 below
+    // m2-dsp's floor).
+    #[test]
+    fn nothing_comes_out_once_the_vocoder_says_it_is_done() {
+        for sr in RATES {
+            let c = saw(sr, 55.0, 20_000.0, 8.0);
+            let burst = (0.2 * sr) as usize;
+            let v = vowel(sr, 105.0, [525.0, 2100.0], 0.2, 0.5);
+            let (out, active) = run_active(sr, 1, c.len(), 1, &|p, _, t| match p {
+                0 => c[t],
+                1 if t + 1 == burst => 1e30,
+                1 if t < burst => v[t],
+                CLARITY => 1.0,
+                3 => 0.2,
+                LISTEN => 1.0,
+                _ => 0.0,
+            });
+            assert!(active[burst] && out[burst..].iter().any(|f| f[0] != 0.0), "{sr}: active, and heard, after the voice stops");
+            let done =
+                active.iter().skip(burst).position(|a| !a).map(|i| burst + i).unwrap_or_else(|| panic!("{sr}: still active after 8 s"));
+            assert!(done < burst + 6 * sr as usize, "{sr}: active for {} s after the voice stopped", (done - burst) as f32 / sr);
+            assert!(out[done + 1..].iter().all(|f| f[0] == 0.0), "{sr}: sound after it said it was done at {done}");
+        }
+    }
+
+    // VOX-29, PKG-19: with nothing to listen to (`listen` 0, as `vocoder(x)` sets it) it plays its
+    // input bit for bit: mono and stereo, any controls, whatever the voice, and samples no effect
+    // should see kept as they are.
+    #[test]
+    fn with_nothing_to_listen_to_it_plays_its_input_bit_for_bit() {
+        let odd = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.0, 1e30, -1e-40, 0.25];
+        for channels in [1, 2] {
+            for listen in [0.0, f32::NAN, -1.0, 0.49] {
+                let x = |c: usize, t: usize| if t.is_multiple_of(97) { odd[(t / 97) % odd.len()] } else { effects::saw(c, t) };
+                let out = run(48_000.0, channels, 9_000, 100, &|p, c, t| match p {
+                    0 => x(c, t),
+                    1 => effects::noise(c, t),
+                    LISTEN => listen,
+                    _ => EXTREMES[(t / 1000 + p) % EXTREMES.len()],
+                });
+                for (t, f) in out.iter().enumerate() {
+                    assert_eq!(f[0].to_bits(), x(0, t).to_bits(), "{channels} ch, listen {listen}: frame {t}");
+                    if channels == 2 {
+                        assert_eq!(f[1].to_bits(), x(1, t).to_bits(), "{channels} ch, listen {listen}: frame {t}, right");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The Vocoder as the effects' harness runs an effect: its sound on `in` and on `voice` alike (a
+    /// sound vocoded by itself), its controls Clarity, Smooth and Formant, listening.
+    fn harnessed(channels: usize, frames: usize, split: usize, input: effects::Input<'_>) -> Vec<[f32; 2]> {
+        run(effects::SR, channels, frames, split, &|p, c, t| match p {
+            0 | 1 => input(0, c, t),
+            LISTEN => 1.0,
+            p => input(p - 1, c, t),
+        })
+    }
+
+    const VOCODER: Fx = Fx { name: "vocoder", run: harnessed, controls: &[0.5, 0.05, 0.0] };
+
+    // VOX-29: it holds to what every effect guarantees (m2-dsp's harness): silence in, silence out;
+    // a tail that ends in exact silence; no setting or input makes a NaN or an infinity; a
+    // full-scale sound stays near full scale; the same bits however its blocks split; a mono sound
+    // stays mono; and it changes a saw.
+    #[test]
+    fn the_vocoder_holds_to_what_every_effect_guarantees() {
+        effects::silence_in_silence_out([&VOCODER]);
+        effects::tails_end_in_exact_silence([&VOCODER]);
+        effects::extreme_settings_and_broken_input_never_make_nan([&VOCODER]);
+        effects::output_stays_bounded([&VOCODER]);
+        effects::deterministic_whatever_the_block_size([&VOCODER]);
+        effects::mono_stays_mono([&VOCODER]);
+        effects::every_effect_changes_the_sound([&VOCODER]);
+    }
+
+    // VOX-29: NaN and infinity in either input give a finite sound out, the voice's own included, at
+    // every rate, mono and stereo, whatever the controls.
+    #[test]
+    fn nothing_finite_in_still_gives_a_finite_sound() {
+        let odd = [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 1e30, -1e30, f32::MAX];
+        for sr in RATES {
+            for channels in [1, 2] {
+                let out = run(sr, channels, 20_000, BLOCK, &|p, c, t| match p {
+                    0 | 1 if t % (37 + 11 * p) == 0 => odd[(t + p) % odd.len()],
+                    0 => effects::saw(c, t),
+                    1 => effects::noise(c, t),
+                    LISTEN => 1.0,
+                    _ => EXTREMES[(t / 777 + p) % EXTREMES.len()],
+                });
+                assert!(out.iter().all(|f| f[0].is_finite() && f[1].is_finite()), "{sr}, {channels} ch");
+            }
+        }
+    }
+
+    // VOX-29: its manifest is its code: its ports in the kit's order, with their defaults (Clarity
+    // 0.5, Smooth 50 ms, Formant 0, listening; the voice silence when left out, ABI-12), one
+    // output, and no latency.
+    #[test]
+    fn the_vocoders_manifest_is_its_code() {
+        let defaults = defaults_in(MANIFEST, "vocoder", &["in", "voice", "clarity", "smooth", "formant", "listen"]);
+        assert_eq!(defaults, [0.0, 0.0, 0.5, 0.05, 0.0, 1.0]);
+        assert_eq!(manifest_in(MANIFEST, "vocoder").1, ["out"]);
+        assert_eq!((Vocoder::INPUTS, Vocoder::OUTPUTS), (6, 1));
+        let entry = &MANIFEST[MANIFEST.find("name = \"vocoder\"").unwrap()..];
+        let entry = &entry[..entry.find("[[kernel]]").unwrap_or(entry.len())];
+        assert!(entry.contains("\"voice: audio<*> = 0\"") && !entry.lines().any(|l| l.starts_with("latency")), "{entry}");
+    }
+
+    // RENDER-28, VOX-29: once born, it allocates nothing while it plays, at 44.1, 48 and 96 kHz, in
+    // stereo: a voice and a saw, Formant moving (its bands placed again), Smooth and Clarity moving.
+    #[test]
+    fn the_vocoder_allocates_nothing_while_it_plays_at_every_rate() {
+        for sr in RATES {
+            let mut h = Host::<Vocoder>::of(cfg(sr, 2));
+            let v = vowel(sr, 105.0, [525.0, 2100.0], 1.0, 0.5);
+            let before = counting::here();
+            for b in 0..v.len() / BLOCK {
+                for k in 0..BLOCK {
+                    let t = b * BLOCK + k;
+                    h.port_mut(0)[k] = effects::saw(0, t);
+                    h.port_mut(0)[BLOCK + k] = effects::saw(1, t);
+                    h.port_mut(1)[k] = v[t];
+                    h.port_mut(1)[BLOCK + k] = -v[t];
+                    h.port_mut(4)[k] = 12.0 * (t as f32 / 9_000.0).sin();
+                }
+                h.port_mut(CLARITY)[..BLOCK].fill((b % 7) as f32 / 6.0);
+                h.port_mut(3)[..BLOCK].fill(0.01 + (b % 5) as f32 * 0.04);
+                h.port_mut(LISTEN)[..BLOCK].fill(1.0);
+                h.process(BLOCK as u32);
+            }
+            assert_eq!(counting::here() - before, 0, "{sr} Hz: allocated while it played");
+        }
+    }
+
+    // RENDER-2, VOX-29: a reset starts over, bit for bit, with no memory taken.
+    #[test]
+    fn a_reset_vocoder_starts_over() {
+        let sr = 48_000.0;
+        let c = saw(sr, 55.0, 20_000.0, 0.5);
+        let v = vowel(sr, 105.0, [525.0, 2100.0], 0.5, 0.5);
+        let mut h = Host::<Vocoder>::of(cfg(sr, 1));
+        let take = |h: &mut Host<Vocoder>| -> Vec<f32> {
+            let mut out = vec![];
+            for b in 0..c.len() / BLOCK {
+                h.port_mut(0)[..BLOCK].copy_from_slice(&c[b * BLOCK..(b + 1) * BLOCK]);
+                h.port_mut(1)[..BLOCK].copy_from_slice(&v[b * BLOCK..(b + 1) * BLOCK]);
+                for (p, x) in [(CLARITY, 0.7), (3, 0.03), (4, 3.0), (LISTEN, 1.0)] {
+                    h.port_mut(p)[..BLOCK].fill(x);
+                }
+                h.process(BLOCK as u32);
+                out.extend_from_slice(&h.port_mut(Vocoder::INPUTS)[..BLOCK]);
+            }
+            out
+        };
+        let first = take(&mut h);
+        let before = counting::here();
+        h.reset();
+        assert_eq!(counting::here(), before, "a reset took memory");
+        assert!(take(&mut h) == first && first.iter().any(|&x| x != 0.0), "a reset doesn't start over");
+    }
+}
