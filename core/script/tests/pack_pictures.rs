@@ -514,15 +514,23 @@ fn the_clipper_draws_its_ceiling_over_its_levels() {
     let tail = "4 times finer than the song's rate, so it adds no harsh tones";
     assert_eq!(
         d["words"],
-        format!("Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB, {tail}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling")
+        format!(
+            "Pushes your sound up 6 dB and cuts every peak flat at −0.3 dB, {tail}. Faint: your sound pushed up; solid: what comes out. Drag the line to move the ceiling"
+        )
     );
     let d = draw(&runner, "effects", "clip", "level", json!({"gain": 0, "ceiling": -6})).unwrap();
     assert_eq!(
         d["words"],
-        format!("Cuts every peak over −6 dB flat, {tail}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling")
+        format!(
+            "Cuts every peak over −6 dB flat, {tail}. Faint: your sound going in; solid: what comes out. Drag the line to move the ceiling"
+        )
     );
     let d = draw(&runner, "effects", "clip", "level", json!({"gain": null, "ceiling": -1})).unwrap();
-    assert!(d["words"].as_str().unwrap().starts_with("Pushes your sound up by a gain set by a cable or the code and cuts"), "{}", d["words"]);
+    assert!(
+        d["words"].as_str().unwrap().starts_with("Pushes your sound up by a gain set by a cable or the code and cuts"),
+        "{}",
+        d["words"]
+    );
     let why = draw(&runner, "effects", "clip", "level", json!({"gain": 6, "ceiling": null})).unwrap_err();
     assert!(why.contains("its ceiling is set by a cable or worked out by the code, so it can't be drawn"), "{why}");
 }
@@ -735,7 +743,9 @@ fn the_voice_changer_draws_its_spectrum() {
     assert_eq!(d.editor.face, ["voice", "pitch", "formant"]);
     let runner = Runner::new();
     let layers = "Faint: your voice as it comes in; solid: as it goes out. The spikes are its notes, the hills its colour";
-    let said = |pitch: Value, formant: Value| draw(&runner, "vocals", "voice-changer", "voice", json!({"pitch": pitch, "formant": formant})).unwrap();
+    let said = |pitch: Value, formant: Value| {
+        draw(&runner, "vocals", "voice-changer", "voice", json!({"pitch": pitch, "formant": formant})).unwrap()
+    };
     let d = said(json!(5), json!(3));
     assert_eq!(kinds(&d), ["label", "label"], "names, and nothing worked out from sums");
     let names: Vec<&str> = d["shapes"].as_array().unwrap().iter().map(|s| s["words"].as_str().unwrap()).collect();

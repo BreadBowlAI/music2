@@ -9,7 +9,8 @@ use common::*;
 use m2_runtime::{Pool, Runner};
 
 /// The imports of each track of [`vocal_song`].
-const TRACK_IMPORTS: &str = "import { kernel, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { tune } from \"@m2/vocals\";\n";
+const TRACK_IMPORTS: &str =
+    "import { kernel, track } from \"@m2/core\";\nimport { osc } from \"std/dsp\";\nimport { tune } from \"@m2/vocals\";\n";
 
 /// A song asking for `@m2/vocals`, at 48 kHz, its key C major, with `tracks` (key, code).
 fn vocal_song(what: &str, tracks: &[(&str, &str)]) -> Song {
@@ -256,7 +257,10 @@ fn preset(name: &str) -> (f64, f64) {
 #[test]
 fn the_voice_changer_moves_the_notes_and_the_colour_on_their_own() {
     let heard = |pitch: f64, formant: f64| {
-        let (x, late) = sung(&format!("changed{pitch}-{formant}"), &format!("voiceChanger({}, {{ pitch: {pitch}, formant: {formant} }})", vowel(220.0)));
+        let (x, late) = sung(
+            &format!("changed{pitch}-{formant}"),
+            &format!("voiceChanger({}, {{ pitch: {pitch}, formant: {formant} }})", vowel(220.0)),
+        );
         assert_eq!(late, 720, "15 ms late at 48 kHz, as Tune is");
         let want = 220.0 * 2f64.powf(pitch / 12.0);
         (note_of(&x, want / 1.06, want * 1.06), colour_of(&x))
@@ -265,13 +269,23 @@ fn the_voice_changer_moves_the_notes_and_the_colour_on_their_own() {
     assert!(cents(note, 220.0).abs() < 5.0, "at 0 and 0 the voice as it came: {note:.2} Hz");
     let (deep, chipmunk) = (preset("Deep"), preset("Chipmunk"));
     assert!(deep.0 < 0.0 && deep.1 < 0.0 && chipmunk.0 > 0.0 && chipmunk.1 > 0.0, "Deep moves both down, Chipmunk both up");
-    for (pitch, formant, what) in [(5.0, 0.0, "up 5"), (-5.0, 0.0, "down 5"), (0.0, 4.0, "colour up 4"), (deep.0, deep.1, "Deep"), (chipmunk.0, chipmunk.1, "Chipmunk")] {
+    for (pitch, formant, what) in [
+        (5.0, 0.0, "up 5"),
+        (-5.0, 0.0, "down 5"),
+        (0.0, 4.0, "colour up 4"),
+        (deep.0, deep.1, "Deep"),
+        (chipmunk.0, chipmunk.1, "Chipmunk"),
+    ] {
         let (n, c) = heard(pitch, formant);
         let (want_note, want_colour) = (220.0 * 2f64.powf(pitch / 12.0), 2f64.powf(formant / 12.0));
         println!("{what}: note {n:.2} Hz ({want_note:.2} asked), colour {:.3} of as sung ({want_colour:.3} asked)", c / plain);
         assert!(cents(n, want_note).abs() < 5.0, "{what}: the note at {n:.2} Hz, not {want_note:.2}");
         let tolerance = if formant == 0.0 { 0.05 } else { 0.1 };
-        assert!((c / plain / want_colour - 1.0).abs() < tolerance, "{what}: the colour moved by {:.3}, not about {want_colour:.3}", c / plain);
+        assert!(
+            (c / plain / want_colour - 1.0).abs() < tolerance,
+            "{what}: the colour moved by {:.3}, not about {want_colour:.3}",
+            c / plain
+        );
     }
 }
 
