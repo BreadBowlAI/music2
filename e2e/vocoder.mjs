@@ -1,15 +1,18 @@
 // The Vocoder (VOX-29), on first-song with a Lead track (a saw) and a vocal track, Vox (an audio lane
 // playing a sung "ah" at 216 Hz). The + after the saw lists the Vocoder under Voice, and picking it
 // writes `vocoder(osc.saw(110), { clarity: 0.5, smooth: 0.05, formant: 0 })` in the Lead's own code,
-// with the pack's line and lock; its face draws its picture beside Clarity, Smooth and Formant, and its
-// Voice row says "No other track". Voice ▸ Vox writes `vox.out` into the call and the import of Vox,
-// nothing else, one undo step ("Lead voice Vox"). Then its picture moves with the song, the voice
-// singing the first 2 beats of each 6-beat round of the loop (about 1 s of 3 s at first-song's 124
-// bpm): while it sings, what goes out is the saw in the voice's shape, far louder against what comes
-// in about the voice's first formant than at the saw's own note; while it is silent, nothing goes
-// out, though the saw comes in (each read from an agent's look, two looks in a row agreeing). Its
-// card is shot live, in the patch and on Device's chain at Normal and Expanded (to $E2E_SHOTS when
-// set, else the run's folder). ⌘Z takes the voice out, byte for byte. Each state linted.
+// with the pack's line and lock; its face draws its picture beside Clarity, Smooth and Formant, its
+// words give each knob's meaning, and its Talks with row says "No other track". Talks with ▸ Vox
+// writes `vox.out` into the call and the import of Vox, nothing else, one undo step ("Lead talks with
+// Vox"). Then its picture moves with the song, the voice singing the first 2 beats of each 6-beat
+// round of the loop (about 1 s of 3 s at first-song's 124 bpm): while it sings, what goes out is the
+// saw in the voice's shape, far louder against what comes in about the voice's first formant than at
+// the saw's own note; while it rests, nothing goes out, though the saw comes in (each read from an
+// agent's look, two looks in a row agreeing). In the patch and on Device's chain at Normal and
+// Expanded, the card's own picture draws its out layer at the voice's level while it sings and at
+// nothing while it rests, two reads in a row, and is shot then (review W5): to $E2E_SHOTS when set,
+// else the run's folder, as `vocoder-<patch|normal|expanded>-<sings|rests>.png`. ⌘Z takes the voice
+// out, byte for byte. Each state linted.
 //
 //   node e2e/vocoder.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -120,27 +123,27 @@ const knobs = await page.$$eval(`${card} [data-knob]`, (ks) => ks.map((k) => k.d
 check(["clarity", "smooth", "formant"].every((k) => knobs.includes(k)), `Clarity, Smooth and Formant are knobs on its face: ${knobs.join()}`);
 check(
   (await words(pic)) ===
-    "Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Voice: its hills are the voice's vowels, and they move as it talks",
-  `its words: ${await words(pic)}`,
+    "Half of the voice's S and T sounds come through, and each sound lets go in 50 ms. Faint: your synth as it comes in. Solid: as it goes out, in the shape of the voice you pick in Talks with: its hills are the voice's vowels, and they move as it talks",
+  `its words give each knob's meaning: ${await words(pic)}`,
 );
 const row = () => page.$eval(`${card} [data-listens]`, (e) => e.textContent).catch(() => null);
-check(await until(async () => (await row()) === "Voice:No other track"), `its Voice row says it hears no other track yet: ${await row()}`);
+check(await until(async () => (await row()) === "Talks with:No other track"), `its Talks with row says it hears no other track yet: ${await row()}`);
 await linted(card, "the Vocoder's card");
 
-// ---------------------------------------------------------------- Voice ▸ Vox (CARD-35)
+// ---------------------------------------------------------------- Talks with ▸ Vox (CARD-35)
 
 await seen(`${card} [data-testid=listens-to]`);
 await page.click(`${card} [data-testid=listens-to]`).catch(() => {});
 await until(async () => !!(await page.$("[data-testid=listens-menu]")), 3000);
 const choices = await page.$$eval("[data-testid=listens-menu] [role=menuitem]", (r) => r.map((x) => x.textContent)).catch(() => []);
-check(choices.join() === "Bass,Hats,Keys,Kick,Vox,No other track", `Voice lists the song's other tracks, then No other track: ${choices.join()}`);
-await linted(`${card} [data-listens], [data-testid=listens-menu]`, "the Voice row and its menu");
+check(choices.join() === "Bass,Hats,Keys,Kick,Vox,No other track", `Talks with lists the song's other tracks, then No other track: ${choices.join()}`);
+await linted(`${card} [data-listens], [data-testid=listens-menu]`, "the Talks with row and its menu");
 const before = await revision();
 await page.click('[data-testid=listens-menu] [data-track="vox"]').catch(() => {});
 const voiced = alone.replace(added, "vocoder(osc.saw(110), vox.out, { clarity: 0.5, smooth: 0.05, formant: 0 })").replace('import { vocoder } from "@m2/vocals";', 'import { vocoder } from "@m2/vocals";\nimport vox from "./vox";');
 check(await until(() => lead() === voiced), `picking Vox writes vox.out in the call and its import, and nothing else: ${lead()}`);
-check(await until(async () => (await row()) === "Voice:Vox"), `the row says Vox: ${await row()}`);
-check(await until(async () => (await undoTitle()) === "Undo Lead voice Vox (⌘Z)"), `one undo step, named by the tracks: ${await undoTitle()}`);
+check(await until(async () => (await row()) === "Talks with:Vox"), `the row says Vox: ${await row()}`);
+check(await until(async () => (await undoTitle()) === "Undo Lead talks with Vox (⌘Z)"), `one undo step, named by the tracks as a sentence: ${await undoTitle()}`);
 check((await revision()) === before + 1, "one revision");
 
 // ---------------------------------------------------------------- its picture moves with the song
@@ -189,32 +192,60 @@ check(
   `while the voice sings, the saw goes out in its shape: ${last.sings ? `${(gain(last.sings, 58, 74) - gain(last.sings, 28, 31)).toFixed(1)} dB louder about the formant than at the saw's note; ` : ""}${told(last.sings)}`,
 );
 check(runs.silent >= 2, `while the voice is silent, nothing goes out though the saw comes in: ${told(last.silent)}`);
-// The window's own picture draws both layers as they come: two reads in a row.
-let layers = [];
-let drawn = 0;
-for (let i = 0; i < 40 && drawn < 2; i++) {
-  await sleep(150);
-  layers = await said(pic);
-  drawn = layers.length === 2 && layers.every((l) => l && typeof l.v === "number") ? drawn + 1 : 0;
-}
-check(drawn >= 2, `its picture draws the synth in and out as they come: ${JSON.stringify(layers)}`);
-await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "in", on: false });
-await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "out", on: false });
 
-// ---------------------------------------------------------------- its card, live
+// ---------------------------------------------------------------- its card, live (review W5)
 
-await sleep(1500);
-await shoot(card, "patch");
-await page.click("[data-device=chain]").catch(() => {});
-const chained = `[data-testid=chain] [data-module="lead"] [data-node="vocoder"]`;
-check(await until(async () => !!(await page.$(chained)), 15000), "a card on Device's chain");
-for (const size of ["normal", "expanded"]) {
-  await page.click(`${chained} [data-size-to="${size}"]`).catch(() => {});
-  await sleep(1500);
-  await shoot(chained, size);
+// In the patch, then on Device's chain at Normal and at Expanded, the card's own picture: what the
+// window drew last (CARD-103's `data-said`, a spectrum's loudest bin). While the voice sings, its out
+// layer is at the voice's level, over SINGS dB; while it rests, at nothing, at or under RESTS dB. A
+// state counts once two reads in a row say it, the agent's looks agreeing; the card is shot then, and
+// the shot stands once the read after it says the same (else it is taken again).
+const SINGS = -40;
+const RESTS = -90;
+const chained = `[data-testid=chain] ${card}`;
+for (const place of ["patch", "normal", "expanded"]) {
+  const at = place === "patch" ? `[data-testid=graph] ${card}` : chained;
+  if (place === "normal") {
+    await page.click("[data-device=chain]").catch(() => {});
+    check(await until(async () => !!(await page.$(chained)), 15000), "a card on Device's chain");
+  }
+  if (place !== "patch") await page.click(`${chained} [data-size-to="${place}"]`).catch(() => {});
+  await seen(at);
+  await page.mouse.move(1, 1);
+  const drawn = `${at} [data-picture="spectrum"]`;
+  const runs = { sings: 0, rests: 0 };
+  const taken = { sings: null, rests: null };
+  const stands = { sings: null, rests: null };
+  // What the picture drew the out at, the last time the looks said each state.
+  const heard = { sings: "no read", rests: "no read" };
+  for (let i = 0; i < 150 && (stands.sings === null || stands.rests === null); i++) {
+    await sleep(100);
+    const l = await both();
+    const out = (await said(drawn))[1];
+    const v = typeof out?.v === "number" ? out.v : null;
+    const looks = { sings: !!l && sings(l), rests: !!l && silent(l) };
+    const now = { sings: looks.sings && v !== null && v > SINGS, rests: looks.rests && v !== null && v <= RESTS };
+    for (const state of ["sings", "rests"]) {
+      if (looks[state]) heard[state] = v === null ? "nothing" : `${v} dB`;
+      runs[state] = now[state] ? runs[state] + 1 : 0;
+      if (stands[state] !== null) continue;
+      if (taken[state] !== null) {
+        if (now[state]) stands[state] = taken[state];
+        taken[state] = null;
+      } else if (runs[state] >= 2) {
+        await shoot(at, `${place}-${state}`);
+        taken[state] = v;
+      }
+    }
+  }
+  check(stands.sings !== null, `${place}: while the voice sings, its picture draws the out over ${SINGS} dB, and is shot: ${stands.sings ?? heard.sings}`);
+  check(stands.rests !== null, `${place}: while it rests, its picture draws the out at or under ${RESTS} dB, and is shot: ${stands.rests ?? heard.rests}`);
 }
 await linted(chained, "its chain card, Expanded");
 await page.click(`${chained} [data-size-to="normal"]`).catch(() => {});
+await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "in", on: false });
+await post("/look", { session: g.session, client: "agent:vocoder", module: "lead", node, kind: "spectrum", at: "out", on: false });
+await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
 
 // ---------------------------------------------------------------- ⌘Z
