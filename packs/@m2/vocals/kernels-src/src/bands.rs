@@ -7,15 +7,19 @@
 //!   its power rises in [`ATTACK`] and falls in half of `smooth`, so its level falls by 1/e in
 //!   `smooth` once the voice stops there.
 //! - **The carrier's bands.** The same bank on each channel of the carrier, its centres moved by
-//!   `formant` semitones. Each band is played as loud as the voice is in the same band, against the
-//!   voice's loudest band: `level / (loudest + KNEE)`. So the band where the voice is loudest plays
-//!   the carrier at nearly its own level, and every other band as much quieter as the voice is
-//!   there: no band is ever louder than the carrier is there. [`KNEE`] (−48 dB) is soft: a voice
-//!   whose loudest band is there plays the carrier 6 dB under, and only a voice far under it falls
-//!   dB for dB, so how loud the synth comes out hangs little on how loud the voice was recorded.
-//!   It evens out the voice's loudness as a fast compressor would: a loud sound in one band turns
-//!   the others down with it. The bands are summed, every other one's sign turned over, so that,
-//!   all open, they give the carrier back within 1.6 dB.
+//!   `formant` semitones. Each band is played as loud as the voice is in the same band, against how
+//!   loud the voice has been: `level / (held + KNEE)`, where `held` is the loudest band's level,
+//!   held: it rises with the loudest band at once and lets go by 1/e in [`HOLD`] (a quarter of a
+//!   second), and it is forgotten once every band has fallen silent. So the voice's loudest band
+//!   plays the carrier at nearly its own level, quieter bands and syllables play quieter, and in a
+//!   gap between syllables the bands fall as the voice does while the held level stays. No band is
+//!   ever louder than the carrier is there: the held level is never under any band's. [`KNEE`]
+//!   (−48 dB) is soft: a voice whose loudest band is there plays the carrier 6 dB under, and only a
+//!   voice far under it falls dB for dB, so how loud the synth comes out hangs little on how loud
+//!   the voice was recorded. It evens out the voice's loudness as a slow compressor would: a loud
+//!   sound in one band turns the others down, and they come back as the held level lets go. The
+//!   bands are summed, every other one's sign turned over, so that, all open, they give the
+//!   carrier back within 1.6 dB.
 //! - **Words.** An S, a T and a breath have no pitch, and a synth has little that high: the voice's
 //!   own sound over [`HIGHS`] (5 kHz), each channel, is added, times `clarity`.
 //!
@@ -43,6 +47,11 @@ pub const ATTACK: f32 = 0.002;
 /// RMS). It is soft: every band plays a little under the carrier (a voice recorded at −18 dBFS RMS,
 /// about half a dB), and only a voice far under it falls dB for dB (VOX-29, review W1).
 pub const KNEE: f32 = 0.004;
+/// How slowly the voice's level, its loudest band held, lets go, in seconds: it falls by 1/e in
+/// `HOLD` once the voice gets quieter, so in a gap between syllables the bands fall as the voice
+/// does while it stays (VOX-29, review W round 3). It rises with the loudest band at once, so no
+/// band's gain is ever over 1, and every onset keeps its shape.
+pub const HOLD: f32 = 0.25;
 /// Where the voice's own highs start, in Hz: a 4th-order Butterworth high-pass.
 pub const HIGHS: f32 = 5000.0;
 /// How often the carrier's bands are placed again while `formant` moves, in frames from birth.
@@ -91,6 +100,9 @@ pub struct Vocoder {
     heard: [States; BANDS],
     /// Each band's power, as its follower has it.
     power: [f32; BANDS],
+    /// The loudest band's power, held: up with it at once, down by `hold` a frame.
+    held: f32,
+    hold: f32,
     /// The carrier's bands, moved by `formant`, and their states, each channel.
     carrier: [Pair; BANDS],
     played: [[States; BANDS]; 2],
@@ -135,6 +147,8 @@ impl Kernel for Vocoder {
             voice: bank,
             heard: [[[0.0; 2]; 2]; BANDS],
             power: [0.0; BANDS],
+            held: 0.0,
+            hold: (-1.0 / (0.5 * HOLD * sr)).exp(),
             carrier: bank,
             played: [[[[0.0; 2]; 2]; BANDS]; 2],
             highs,
@@ -177,8 +191,11 @@ impl Kernel for Vocoder {
                 *power = flush(p + (*power - p) * c);
                 loudest = loudest.max(*power);
             }
-            // Each band's level over the loudest's plus the knee, by its sign.
-            let by = 1.0 / (loudest.sqrt() + KNEE);
+            // The loudest band's power, held: up with it at once, letting go in HOLD, and forgotten
+            // once every band has fallen silent, so nothing of it outlives them (RENDER-6a).
+            self.held = if loudest >= self.held || loudest == 0.0 { loudest } else { flush(loudest + (self.held - loudest) * self.hold) };
+            // Each band's level over the held level plus the knee, by its sign.
+            let by = 1.0 / (self.held.sqrt() + KNEE);
             let gains: [f32; BANDS] = std::array::from_fn(|k| sign(k) * by * self.power[k].sqrt());
             let clear = self.clarity.next(clampf(clarity[i], 0.0, 1.0));
             let x = [sane(l[i]), if stereo { sane(r[i]) } else { 0.0 }];

@@ -1934,6 +1934,14 @@ mod vocoded {
     }
 
     /// `x` scaled to `rms_db` dBFS RMS over the whole.
+    /// Whether the made-up talker sounds at frame `i`, as [`talker`] makes it: in a syllable's vowel
+    /// (its first 0.65), or in the "s" after every other one (from 0.72 to 0.95 of it).
+    fn sounds(sr: f32, i: usize) -> bool {
+        let t = i as f64 / sr as f64 * 4.0;
+        let (syl, u) = (t.floor() as usize, t - t.floor());
+        u < 0.65 || (syl % 2 == 1 && (0.72..0.95).contains(&u))
+    }
+
     fn at_level(x: &[f32], rms_db: f64) -> Vec<f32> {
         let k = 10f64.powf(rms_db / 20.0) / rms_of(x);
         x.iter().map(|&v| (v as f64 * k) as f32).collect()
@@ -1951,22 +1959,36 @@ mod vocoded {
 
     /// How loud the out is against the synth alone (by RMS, in dB), from a quarter of a second in.
     fn against_dry(out: &[f32], dry: &[f32], sr: f32) -> f64 {
-        let from = (0.25 * sr) as usize;
-        20.0 * (rms_of(&out[from..]) / rms_of(&dry[from..])).log10()
+        against_dry_while(out, dry, sr, &|_| true)
     }
 
-    // VOX-29: how loud the synth comes out doesn't hang on how loud the voice was recorded (review
-    // W1). Under a chord of three saws at −15 dBFS RMS, a made-up talker (a man at 120 Hz, a woman at
-    // 220 Hz) and a sung "ah" at 220 Hz, each at −30, −18 and −6 dBFS RMS, come out within 6 dB of
-    // themselves at the other levels and no more than 12 dB under the synth alone; a whisper at −40
-    // dBFS RMS within 12 dB of the man at −18; a room's noise at −60 dBFS RMS (a pause in the voice)
-    // at least 20 dB under him; and digital silence, silence. At 44.1, 48 and 96 kHz.
+    /// [`against_dry`] over the frames where `sounding` says the voice sounds, the out and the synth
+    /// alike.
+    fn against_dry_while(out: &[f32], dry: &[f32], sr: f32, sounding: &dyn Fn(usize) -> bool) -> f64 {
+        let from = (0.25 * sr) as usize;
+        let kept = |x: &[f32]| (from..x.len()).filter(|&i| sounding(i)).map(|i| x[i]).collect::<Vec<f32>>();
+        20.0 * (rms_of(&kept(out)) / rms_of(&kept(dry))).log10()
+    }
+
+    // VOX-29: how loud the synth comes out while the voice sounds doesn't hang on how loud the voice
+    // was recorded (review W1). Under a chord of three saws at −15 dBFS RMS, a made-up talker (a man
+    // at 120 Hz, a woman at 220 Hz) and a sung "ah" at 220 Hz, each at −30, −18 and −6 dBFS RMS, come
+    // out within 6 dB of themselves at the other levels and no more than 12 dB under the synth alone;
+    // a whisper at −40 dBFS RMS within 12 dB of the man at −18; a room's noise at −60 dBFS RMS (a
+    // pause in the voice) at least 20 dB under him; and digital silence, silence. At 44.1, 48 and
+    // 96 kHz. Each is measured, the out and the synth alike, over the frames where the voice sounds,
+    // known from how it is made: the talkers' syllables, their vowels and "s" ([`sounds`]), not the
+    // gaps between them, where the out falls as the voice does (review W round 3); the sung "ah" and
+    // the noise sound throughout.
     #[test]
     fn the_out_is_about_as_loud_whatever_the_voices_level() {
         for sr in RATES {
             let secs = 4.0;
             let dry = chord(sr, secs, -15.0);
-            let out = |voice: &[f32]| against_dry(&play(sr, &dry, voice, [0.5, 0.05, 0.0]), &dry, sr);
+            let talking = |i: usize| sounds(sr, i);
+            let out = |voice: &[f32], sounding: &dyn Fn(usize) -> bool| {
+                against_dry_while(&play(sr, &dry, voice, [0.5, 0.05, 0.0]), &dry, sr, sounding)
+            };
             let voice = |name: &str, db: f64| match name {
                 "a man" => talker(sr, secs, 120.0, false, db),
                 "a woman" => talker(sr, secs, 220.0, false, db),
@@ -1974,7 +1996,8 @@ mod vocoded {
             };
             let mut man_18 = 0.0;
             for name in ["a man", "a woman", "a sung ah"] {
-                let levels: Vec<f64> = [-30.0, -18.0, -6.0].into_iter().map(|db| out(&voice(name, db))).collect();
+                let sounding: &dyn Fn(usize) -> bool = if name == "a sung ah" { &|_| true } else { &talking };
+                let levels: Vec<f64> = [-30.0, -18.0, -6.0].into_iter().map(|db| out(&voice(name, db), sounding)).collect();
                 if name == "a man" {
                     man_18 = levels[1];
                 }
@@ -1984,7 +2007,7 @@ mod vocoded {
                     "{sr}: {name} at -30, -18 and -6 dBFS RMS comes out {levels:.1?} dB against the synth"
                 );
             }
-            let whisper = out(&talker(sr, secs, 0.0, true, -40.0));
+            let whisper = out(&talker(sr, secs, 0.0, true, -40.0), &talking);
             assert!((whisper - man_18).abs() <= 12.0, "{sr}: a whisper comes out {whisper:.1} dB, the man at -18 {man_18:.1} dB");
             let mut rng = Lcg(29);
             let room = at_level(&(0..(2.0 * sr) as usize).map(|_| rng.next() as f32 / 32_768.0 - 1.0).collect::<Vec<f32>>(), -60.0);
@@ -1992,6 +2015,81 @@ mod vocoded {
             assert!(paused <= man_18 - 20.0, "{sr}: a room's noise comes out {paused:.1} dB, the man at -18 {man_18:.1} dB");
             assert!(play(sr, &dry, &vec![0.0; dry.len()], [0.5, 0.05, 0.0]).iter().all(|&v| v == 0.0), "{sr}: sound from digital silence");
         }
+    }
+
+    // VOX-29: the gaps between syllables come through (review W round 3): the held level stays while
+    // the bands fall as the voice does. Under a chord of saws, the made-up man and woman at −18 dBFS
+    // RMS, Smooth 50 ms, Clarity 0: over their even syllables (no "s"), the out's loudest 10 ms in the
+    // vowel stands at least 20 dB (the man) and 18 dB (the woman) over its quietest in the gap after
+    // it, the median over syllables, at every rate. Against the voice's loudest band as it was, not
+    // held, they came out 10.2 and 6.3 dB; with the knee at −20 dB, 19.1 and 14.7.
+    #[test]
+    fn the_gaps_between_syllables_come_through() {
+        for sr in RATES {
+            let secs = 4.0;
+            let dry = chord(sr, secs, -15.0);
+            let win = (0.01 * sr) as usize;
+            for (name, f0, bound) in [("the man", 120.0, 20.0), ("the woman", 220.0, 18.0)] {
+                let o = play(sr, &dry, &talker(sr, secs, f0, false, -18.0), [0.0, 0.05, 0.0]);
+                let mut dips: Vec<f64> = (2..16)
+                    .step_by(2)
+                    .map(|syl| {
+                        let start = (syl as f64 * 0.25 * sr as f64) as usize;
+                        let levels = |a: f64, b: f64| {
+                            let (a, b) = (start + (a * 0.25 * sr as f64) as usize, start + (b * 0.25 * sr as f64) as usize);
+                            o[a..b].chunks(win).map(|c| 20.0 * rms_of(c).max(1e-12).log10()).collect::<Vec<f64>>()
+                        };
+                        levels(0.1, 0.6).into_iter().fold(f64::MIN, f64::max) - levels(0.7, 1.0).into_iter().fold(f64::MAX, f64::min)
+                    })
+                    .collect();
+                dips.sort_by(f64::total_cmp);
+                let dip = dips[dips.len() / 2];
+                assert!(dip >= bound, "{sr}: {name}'s gaps between syllables come out {dip:.1} dB deep, under {bound}: {dips:.1?}");
+            }
+        }
+    }
+
+    // VOX-29, RENDER-6a: the held level is forgotten once every band has fallen silent, so a vocoder
+    // that says it is done starts again as one that heard only silence would. At Smooth 10 ms (its
+    // bands fall silent soonest), the made-up man at −6 dBFS RMS for a second, then silence until it
+    // says it is done, then at once the man at −30: over his syllables he comes out within 0.1 dB of
+    // how he does after silence alone, at every rate. Held on, the loud voice's level would turn him
+    // down.
+    #[test]
+    fn a_vocoder_that_is_done_forgets_how_loud_the_voice_was() {
+        for sr in RATES {
+            let loud = talker(sr, 1.0, 120.0, false, -6.0);
+            let quiet = talker(sr, 1.0, 120.0, false, -30.0);
+            let c = chord(sr, 4.0, -15.0);
+            // The voice: the loud man first if `after_loud`, then silence, then the quiet one from `from`.
+            let input = |after_loud: bool, from: usize, p: usize, t: usize| match p {
+                0 => c[t],
+                1 if t >= from => quiet[t - from],
+                1 if after_loud && t < loud.len() => loud[t],
+                CLARITY => 0.5,
+                3 => 0.01,
+                LISTEN => 1.0,
+                _ => 0.0,
+            };
+            let (_, active) = run_active(sr, 1, (3.0 * sr) as usize, 1, &|p, _, t| input(true, usize::MAX, p, t));
+            let done = active.iter().skip(loud.len()).position(|a| !a).map(|i| loud.len() + i).expect("done within 2 s of silence");
+            let from = done + 1;
+            let then = |after_loud: bool| -> Vec<f32> {
+                run(sr, 1, from + quiet.len(), BLOCK, &|p, _, t| input(after_loud, from, p, t))[from..].iter().map(|f| f[0]).collect()
+            };
+            let (after, alone) = (then(true), then(false));
+            let talking = |i: usize| sounds(sr, i);
+            let by = 20.0 * (rms_of(&kept(&after, &talking)) / rms_of(&kept(&alone, &talking))).log10();
+            assert!(
+                by.abs() < 0.1,
+                "{sr}: after the loud voice and silence, the quiet one comes out {by:.2} dB against after silence alone"
+            );
+        }
+    }
+
+    /// The frames of `x` where `sounding` says the voice sounds.
+    fn kept(x: &[f32], sounding: &dyn Fn(usize) -> bool) -> Vec<f32> {
+        (0..x.len()).filter(|&i| sounding(i)).map(|i| x[i]).collect()
     }
 
     // VOX-29, RENDER-6a: it says it is active while any band is open, and once it says it is done,
