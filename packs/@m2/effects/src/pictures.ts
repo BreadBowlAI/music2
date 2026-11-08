@@ -693,14 +693,19 @@ export function zone(size: number, spread: number, pitch: number, frozen: boolea
 }
 
 /**
- * Grains' buffer (CARD-129), from its own sum (`zone`): a faint band where its grains start, and a dot
- * at its far edge that moves the spread across. Its live line, where the newest grain reads now, is
- * its kernel's.
+ * Grains' buffer (CARD-129), from its own sum (`zone`): a guide line at 3 s, the oldest sound it holds
+ * (an axis of seconds is drawn to its furthest shape, CARD-102, so the line keeps the whole buffer in
+ * view), a faint band where its grains start, and a dot at its far edge that moves the spread across.
+ * Its live line, where the newest grain reads now, is its kernel's.
  */
 export function cloud<D>(p: Painter<D, "seconds", "unit01">, v: Values, names: { size: Num<D>; spread: In<D, "seconds">; pitch: Num<D>; freeze: Read<D> }): Shape[] {
   const size = known(v, names.size, "size"), spread = known(v, names.spread, "spread"), pitch = known(v, names.pitch, "pitch");
   const [near, far] = zone(size, spread, pitch, v[names.freeze] === true, p.rate);
-  return [p.fill([near, 0, far, 0, far, 1, near, 1], { tone: "faint" }), p.handle(far, 0.5, { x: names.spread } as Moves<D, "seconds", "unit01">)];
+  return [
+    p.mark("x", GRAINS.buffer, `The oldest sound it holds: ${GRAINS.buffer} s back`),
+    p.fill([near, 0, far, 0, far, 1, near, 1], { tone: "faint" }),
+    p.handle(far, 0.5, { x: names.spread } as Moves<D, "seconds", "unit01">),
+  ];
 }
 
 /** What `cloud` draws, in words: its grains, where from and at what pitch, then its line and its dot. */

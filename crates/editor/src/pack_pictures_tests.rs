@@ -518,7 +518,7 @@ fn grains_band_is_where_its_grains_come_from() {
     for (sr, spread) in RATES.into_iter().flat_map(|r| [0.3, 1.0].map(|s| (r, s))) {
         let values = json!({"size": 0.5, "density": 50, "spread": spread, "pitch": 0, "mix": 1, "freeze": false});
         let d = drawn(sr, "effects", "grains", "cloud", values);
-        let band = pairs(&d["shapes"][0]["points"]);
+        let band = pairs(&d["shapes"].as_array().unwrap().iter().find(|s| s["kind"] == "fill").expect("its band")["points"]);
         let (near, far) = (band[0].0, band[1].0);
         assert!((far - near - spread).abs() < 1e-9, "the band is the spread wide: {band:?}");
         // On for 2 s (4 beats at 120 bpm), off for 2 s.

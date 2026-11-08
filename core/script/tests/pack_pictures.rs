@@ -928,9 +928,10 @@ fn the_flanger_draws_its_sweep_and_where_it_is_now() {
 // CARD-129, PACK-36: Grains' card. Size, Density, Spread, Pitch, Mix and Freeze are on its face
 // beside its picture, `cloud`: its buffer from now (0 s, at its left) to 3 s back, its window's level
 // up on an axis drawn bare, from its own sum at the song's rate: a faint band where its grains start,
-// from `back` (2 frames, plus (ratio − 1) × size up, or ratio × size frozen) to `back + spread`, and a
-// dot at its far edge that moves the spread across. Its live line is its kernel's meter `reads`. Its
-// words say the grains, where from and at what pitch, then the line and the dot.
+// from `back` (2 frames, plus (ratio − 1) × size up, or ratio × size frozen) to `back + spread`, a dot
+// at its far edge that moves the spread across, and a guide line at 3 s, the oldest sound it holds,
+// so its axis of seconds keeps the whole buffer (CARD-102). Its live line is its kernel's meter
+// `reads`. Its words say the grains, where from and at what pitch, then the line and the dot.
 #[test]
 fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
     let cloud = declared("effects", "grains", "cloud");
@@ -959,10 +960,15 @@ fn grains_draw_where_their_grains_start_and_where_the_newest_reads() {
         (48_000, 0.1, 0.0, -12.0, false, 0.0),
     ] {
         let drawn = draw_at(&runner, rate, "effects", "grains", "cloud", values(size, spread, pitch, freeze)).unwrap();
-        assert_eq!(kinds(&drawn), ["fill", "handle"]);
-        assert_eq!(drawn["shapes"][0]["tone"], "faint");
+        assert_eq!(kinds(&drawn), ["mark", "fill", "handle"]);
+        let oldest = &drawn["shapes"][0];
+        assert_eq!(
+            (&oldest["axis"], &oldest["at"], &oldest["words"]),
+            (&json!("x"), &json!(3.0), &json!("The oldest sound it holds: 3 s back"))
+        );
+        assert_eq!(drawn["shapes"][1]["tone"], "faint");
         let near = (reach + 2.0) / rate as f64;
-        let band: Vec<f64> = drawn["shapes"][0]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
+        let band: Vec<f64> = drawn["shapes"][1]["points"].as_array().unwrap().iter().map(|x| x.as_f64().unwrap()).collect();
         let want = [near, 0.0, near + spread, 0.0, near + spread, 1.0, near, 1.0];
         assert!(
             band.iter().zip(want).all(|(a, b)| (a - b).abs() < 1e-9),
