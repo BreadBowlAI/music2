@@ -403,13 +403,13 @@ fn worst_alias(x: &[f32], f0: f64, sr: f32) -> f64 {
 }
 
 // PACK-34: the Clipper's manifest says what its code is: its ports, its defaults and ranges, its
-// meter, and its latency, the frames its filters take there and back.
+// meter, and its latency, the frames its two cuts' filters take there and back, 46 each.
 #[test]
 fn the_clippers_manifest_is_its_code() {
     assert!(MANIFEST.contains(r#"inputs = ["in: audio<*>", "gain: control<db> = 0 in 0..24", "ceiling: control<db> = -0.3 in -24..0"]"#));
     assert!(MANIFEST.contains(r#"meters = ["pushed: control<db>"]"#));
     assert!(MANIFEST.contains(&format!("latency = {}\n", clipper::LATENCY)), "its manifest's latency is its code's");
-    assert_eq!(clipper::LATENCY, 46);
+    assert_eq!((clipper::CUTS, clipper::STAGE, clipper::LATENCY), (2, 46, 92));
 }
 
 // PACK-34: its two half-bands are Kaiser-windowed sincs (β for 100 dB), 79 taps at twice the rate
@@ -478,39 +478,71 @@ fn no_sample_out_is_ever_over_the_ceiling() {
     }
 }
 
-// PACK-34: its cut, at four times the song's rate, folds far less back into hearing than a cut at
-// the song's rate (naive clipping). A 5 kHz sine at 48 kHz driven 18 dB over the ceiling: what the
-// cut alone folds back stays 40 dB under the fundamental; with the last step, which cuts what still
-// rings over the ceiling at the song's rate, 25 dB under and 10 dB under naive clipping's. A 997 Hz
-// sine driven 18 dB: 55 dB under, and 10 dB under naive clipping's.
+/// A band-limited saw at `hz`: its harmonics under 20 kHz, peaking near 0.92.
+fn saw_at(hz: f64, sr: f32) -> impl Fn(usize) -> f32 {
+    let top = (20_000.0 / hz).floor() as usize;
+    move |t| {
+        let at = std::f64::consts::TAU * hz * t as f64 / sr as f64;
+        let s: f64 = (1..=top).map(|n| if n % 2 == 1 { 1.0 } else { -1.0 } * (n as f64 * at).sin() / n as f64).sum();
+        (s * 2.0 / std::f64::consts::PI * 0.92) as f32
+    }
+}
+
+/// What one cut gives alone, driven directly: `x` times `gain` (dB) under `ceiling` (dB), at `sr`.
+fn one_cut(x: &dyn Fn(usize) -> f32, frames: usize, gain: f32, ceiling: f32) -> Vec<f32> {
+    let (g, c) = (db_to_gain(gain), db_to_gain(ceiling));
+    let mut cut = clipper::Cut::NEW;
+    (0..frames).map(|t| cut.frame(x(t) * g, c, clipper::QUIET).0).collect()
+}
+
+// PACK-34: its cuts, at four times the song's rate, fold far less back into hearing than a cut at the
+// song's rate (naive clipping). At 48 kHz, the worst partial that is no harmonic, under the
+// fundamental: a 5 kHz sine driven 18 dB over the ceiling, 40 dB under from one cut alone, 35 dB from
+// the Clipper (its second cut takes most of the first one's ring off, and its last step cuts what
+// still rings over the ceiling at the song's rate); a 997 Hz sine driven 18 dB, 55 dB and 60 dB; a
+// band-limited saw at 220 Hz driven 12 dB under a ceiling of -0.3 dB, 65 dB from the Clipper. The
+// Clipper 10 dB or more under naive clipping each time.
 #[test]
 fn the_clipper_folds_far_less_back_than_naive_clipping() {
     let sr = 48_000.0;
     let n = 1 << 16;
     let from = 4096 + clipper::LATENCY;
-    for (hz, alone, cut) in [(5_000.0, -40.0, -25.0), (997.0, -55.0, -55.0)] {
-        let x = sine(hz, sr, 1.0);
-        let (out, _) = clipped::<Clip>(sr, &x, from + n, 18.0, 0.0);
-        let (uncut, _) = clipped::<Uncut>(sr, &x, from + n, 18.0, 0.0);
-        let plain = naive(&x, from + n, 18.0, 0.0);
-        let (ours, uncut, plain) =
-            (worst_alias(&out[from..], hz, sr), worst_alias(&uncut[from..], hz, sr), worst_alias(&plain[from..], hz, sr));
-        println!("{hz} Hz driven 18 dB: its worst alias {ours:.1} dB; its cut alone {uncut:.1} dB; naive clipping {plain:.1} dB");
-        assert!(uncut <= alone, "{hz} Hz: the cut alone folds back {uncut:.1} dB, over {alone} dB");
-        assert!(ours <= cut, "{hz} Hz: it folds back {ours:.1} dB, over {cut} dB");
-        assert!(plain - ours >= 10.0, "{hz} Hz: {ours:.1} dB against naive clipping's {plain:.1} dB");
+    // Each: its name, the sound, its fundamental, the gain and ceiling (dB), the most one cut alone
+    // and the Clipper fold back (dB).
+    type Case<'a> = (&'a str, Box<dyn Fn(usize) -> f32>, f64, f32, f32, Option<f64>, f64);
+    let cases: [Case; 3] = [
+        ("a 5 kHz sine, +18 dB", Box::new(sine(5_000.0, sr, 1.0)), 5_000.0, 18.0, 0.0, Some(-40.0), -35.0),
+        ("a 997 Hz sine, +18 dB", Box::new(sine(997.0, sr, 1.0)), 997.0, 18.0, 0.0, Some(-55.0), -60.0),
+        ("a band-limited saw at 220 Hz, +12 dB", Box::new(saw_at(220.0, sr)), 220.0, 12.0, -0.3, None, -65.0),
+    ];
+    for (name, x, f0, gain, ceiling, alone, most) in cases {
+        let (out, _) = clipped::<Clip>(sr, x.as_ref(), from + n, gain, ceiling);
+        let (both, _) = clipped::<Uncut>(sr, x.as_ref(), from + n, gain, ceiling);
+        let first = one_cut(x.as_ref(), from + n, gain, ceiling);
+        let plain = naive(x.as_ref(), from + n, gain, ceiling);
+        let [ours, both, first, plain] = [&out, &both, &first, &plain].map(|y| worst_alias(&y[from..], f0, sr));
+        println!(
+            "{name}: the Clipper {ours:.1} dB; its two cuts alone {both:.1} dB; one cut alone {first:.1} dB; naive clipping {plain:.1} dB"
+        );
+        if let Some(alone) = alone {
+            assert!(first <= alone, "{name}: one cut alone folds back {first:.1} dB, over {alone} dB");
+        }
+        assert!(ours <= most, "{name}: it folds back {ours:.1} dB, over {most} dB");
+        assert!(plain - ours >= 10.0, "{name}: {ours:.1} dB against naive clipping's {plain:.1} dB");
     }
 }
 
-// PACK-34: the cut is the clipped sound's own harmonics: a 1 kHz sine driven 12 dB comes out with
-// each odd harmonic up to 19 kHz within 0.1 dB of a clipped sine's (its Fourier series), and its
-// even ones gone, so the sound going round the filters and the cut brought back down line up.
+// PACK-34: a cut is the clipped sound's own harmonics: one cut, a 1 kHz sine driven 12 dB going in,
+// comes out with each odd harmonic up to 19 kHz within 0.1 dB of a clipped sine's (its Fourier
+// series), and its even ones gone, so the sound going round the filters and the cut brought back
+// down line up.
 #[test]
 fn the_cut_is_a_clipped_sounds_own_harmonics() {
     let (sr, hz, drive) = (48_000.0f32, 1_000.0, 10f64.powf(12.0 / 20.0));
-    let x = sine(hz, sr, 1.0);
-    let from = 4096 + clipper::LATENCY;
-    let (out, _) = clipped::<Uncut>(sr, &x, from + 48_000, 12.0, 0.0);
+    let (x, g) = (sine(hz, sr, 1.0), db_to_gain(12.0));
+    let from = 4096 + clipper::STAGE;
+    let mut cut = clipper::Cut::NEW;
+    let out: Vec<f32> = (0..from + 48_000).map(|t| cut.frame(x(t) * g, 1.0, clipper::QUIET).0).collect();
     let out = &out[from..];
     // Each harmonic's level as the projection on its sine and cosine over a second: whole periods.
     let level = |n: usize| -> f64 {
@@ -544,10 +576,10 @@ fn the_cut_is_a_clipped_sounds_own_harmonics() {
     }
 }
 
-// PACK-34: under the ceiling the Clipper is its input times its gain, bit for bit, 46 frames late,
+// PACK-34: under the ceiling the Clipper is its input times its gain, bit for bit, 92 frames late,
 // at every rate: noise and a sweep turned up 6 dB, under a ceiling of -0.3 dB.
 #[test]
-fn under_the_ceiling_the_clipper_is_its_input_46_frames_late() {
+fn under_the_ceiling_the_clipper_is_its_input_92_frames_late() {
     for sr in RATES {
         let quiet = |t: usize| 0.25 * noise(0, t);
         let sweep = move |t: usize| {
@@ -557,12 +589,12 @@ fn under_the_ceiling_the_clipper_is_its_input_46_frames_late() {
         for (name, x) in [("noise", &quiet as &dyn Fn(usize) -> f32), ("a sweep", &sweep)] {
             let frames = sr as usize;
             let (out, _) = clipped::<Clip>(sr, x, frames, 6.0, -0.3);
-            let g = db_to_gain(6.0);
-            assert!(out[..clipper::LATENCY].iter().all(|&v| v == 0.0), "{name} at {sr} Hz: silence while it is late");
-            for t in 0..frames - clipper::LATENCY {
+            let (g, late) = (db_to_gain(6.0), 92);
+            assert!(out[..late].iter().all(|&v| v == 0.0), "{name} at {sr} Hz: silence while it is late");
+            for t in 0..frames - late {
                 let want = x(t) * g;
                 assert!(want.abs() < db_to_gain(-0.3), "the test's sound is under the ceiling");
-                assert_eq!(out[t + clipper::LATENCY].to_bits(), want.to_bits(), "{name} at {sr} Hz, frame {t}");
+                assert_eq!(out[t + late].to_bits(), want.to_bits(), "{name} at {sr} Hz, frame {t}");
             }
         }
     }
@@ -599,4 +631,116 @@ fn the_clipper_says_how_loud_it_is_pushed() {
     }
     let (_, pushed) = clipped::<Clip>(48_000.0, &|_| 0.0, 1_280, 12.0, -0.3);
     assert!(pushed.iter().all(|&v| v == -100.0), "silence: -100 dB");
+}
+
+/// The Clipper, each of its cuts keeping its filters coming down for `Q` frames once it took nothing
+/// off (`QUIET` is the Clipper's own): `usize::MAX` keeps them for good.
+struct Kept<const Q: usize>(Clip);
+
+impl<const Q: usize> Kernel for Kept<Q> {
+    const INPUTS: usize = Clip::INPUTS;
+    const OUTPUTS: usize = Clip::OUTPUTS;
+
+    fn new(cfg: &Cfg) -> Self {
+        let mut clip = Clip::new(cfg);
+        clip.quiet = Q;
+        Kept(clip)
+    }
+
+    fn process(&mut self, io: &mut Io) {
+        self.0.run(io, true);
+    }
+}
+
+/// What `K` plays of sparse cuts: bursts of a loud sine, decaying hits, noise bursts, single samples
+/// over the ceiling, and a sine just under it with clicks; mono and stereo, in blocks of 128 and 7,
+/// at 0 dB under -0.3 dB, and with the gain moving under -3 dB.
+fn sparse_cuts<K: Kernel>() -> Vec<Vec<[f32; 2]>> {
+    use std::f64::consts::TAU;
+    type Sound = Box<dyn Fn(usize, usize) -> f32>;
+    let sounds: [Sound; 5] = [
+        Box::new(|_, t| if (t / 300) % 3 == 0 { 1.2 * (TAU * 1234.5 * t as f64 / 48_000.0).sin() as f32 } else { 0.0 }),
+        Box::new(|_, t| {
+            let k = t % 2_371;
+            (-(k as f32) / 300.0).exp() * (k as f32 * 0.37).sin() * 1.5
+        }),
+        Box::new(|c, t| if (t / 97) % 5 == 0 { 1.1 * noise(c, t) } else { 0.02 * noise(c, t) }),
+        Box::new(|_, t| if t % 523 == 0 { 1.5 } else { 0.0 }),
+        Box::new(|_, t| 0.97 * (TAU * 997.0 * t as f64 / 48_000.0).sin() as f32 + if t % 1_777 == 3 { 0.3 } else { 0.0 }),
+    ];
+    let mut all = vec![];
+    for x in &sounds {
+        for channels in [1, 2] {
+            for split in [BLOCK, 7] {
+                for moving in [false, true] {
+                    let played = play_at::<K>(48_000.0, channels, 40_000, split, &|p, c, t| match (p, moving) {
+                        (0, _) => x(c, t),
+                        (1, false) => 0.0,
+                        (1, true) => {
+                            if (t / 5_000) % 2 == 0 {
+                                6.0
+                            } else {
+                                0.0
+                            }
+                        }
+                        (_, false) => -0.3,
+                        (_, true) => -3.0,
+                    });
+                    all.push(played.out[0].clone());
+                }
+            }
+        }
+    }
+    all
+}
+
+// PACK-34: each cut leaves out its filters coming down once it has taken nothing off for QUIET frames,
+// and that changes no bit: on sparse cuts, mono and stereo, in blocks of 128 and 7, the Clipper plays
+// what it plays with them always run. They reach back exactly as far as a cut is late: one frame
+// fewer changes the bits.
+#[test]
+fn leaving_out_the_filters_coming_down_changes_no_bit() {
+    let differ = |a: &[Vec<[f32; 2]>], b: &[Vec<[f32; 2]>]| -> usize {
+        a.iter()
+            .zip(b)
+            .map(|(x, y)| x.iter().zip(y).filter(|(p, q)| p[0].to_bits() != q[0].to_bits() || p[1].to_bits() != q[1].to_bits()).count())
+            .sum()
+    };
+    let always = sparse_cuts::<Kept<{ usize::MAX }>>();
+    let ours = sparse_cuts::<Clip>();
+    let fewer = sparse_cuts::<Kept<{ clipper::QUIET - 1 }>>();
+    assert_eq!(clipper::QUIET, clipper::STAGE);
+    assert_eq!(differ(&ours, &always), 0, "leaving the filters out at QUIET changes no bit");
+    let changed = differ(&fewer, &always);
+    println!("with QUIET one frame fewer, {changed} samples differ");
+    assert!(changed > 0, "one frame fewer would change no bit either: QUIET isn't as short as it can be");
+}
+
+// PACK-34, RENDER-6a: the Clipper says it is active for as long as anything it took in can still come
+// out. Played a frame a call, a burst of noise that ends on one sample, of 1, -1, 1e30 or the most a
+// float holds, pushed 24 dB under a ceiling of -24 dB, at 44.1, 48 and 96 kHz, mono and stereo:
+// nothing comes out after the call where it first says it is done.
+#[test]
+fn nothing_comes_out_once_the_clipper_says_it_is_done() {
+    let stop = 3_000;
+    for sr in RATES {
+        for last in [1.0f32, -1.0, 1e30, f32::MAX] {
+            for channels in [1, 2] {
+                let played = play_at::<Clip>(sr, channels, stop + 4 * clipper::LATENCY, 1, &|p, c, t| match p {
+                    0 if t < stop => 0.5 * noise(c, t),
+                    0 if t == stop => last,
+                    0 => 0.0,
+                    1 => 24.0,
+                    _ => -24.0,
+                });
+                let out = &played.out[0];
+                let done = (stop..out.len()).find(|&t| !played.active[t]).expect("it says it is done");
+                let heard = out.iter().rposition(|f| f[0] != 0.0 || f[1] != 0.0).expect("it played");
+                assert!(
+                    heard <= done,
+                    "{last} at {sr} Hz, {channels} channels: sound at frame {heard}, after it said it was done at {done}"
+                );
+            }
+        }
+    }
 }

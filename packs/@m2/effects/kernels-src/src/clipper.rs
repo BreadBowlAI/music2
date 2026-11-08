@@ -1,6 +1,6 @@
 //! The Clipper (PACK-34): turns the sound up by `gain`, then cuts every peak over `ceiling` flat,
-//! at four times the song's rate, so its cut folds nothing back into hearing; then cuts any sample
-//! still over the ceiling, so none ever is.
+//! at four times the song's rate, twice, so its cuts fold almost nothing back into hearing; then
+//! cuts any sample still over the ceiling, so none ever is.
 //!
 //! A cut at the song's rate makes harmonics far above half the rate, which fold back as harsh,
 //! out-of-tune tones (aliases). So the sound is brought up to four times the rate by two half-band
@@ -11,18 +11,25 @@
 //! The filters are windowed sincs, linear in phase, so they turn no part of a sound against
 //! another, and a sound under the ceiling keeps its shape (all-pass half-bands, which add no
 //! latency, lifted a bright sound's peaks by up to 2 dB: PACK-34's why). Brought back down, a cut
-//! rings a little past the ceiling (the sound is band-limited again), so the last step cuts each
-//! sample still over it, at the song's rate.
+//! rings a little past the ceiling (the sound is band-limited again), so the same cut runs again on
+//! what the first gives, which takes most of that ring off; and the last step cuts each sample still
+//! over it, at the song's rate.
 //!
 //! Every buffer is a fixed array of the state: nothing is taken while it plays (RENDER-28).
 
 use m2_dsp::fx::{Glide, clampf, sane};
 use m2_kernel::{Cfg, Io, Kernel, db_to_gain};
 
-/// How late the Clipper is, in frames at every rate (its manifest's `latency`): the first
-/// half-band there and back (39 frames), the second (13 samples at twice the rate), and two
-/// samples at four times the rate, so the whole is frames.
-pub const LATENCY: usize = 46;
+/// How many times the cut runs, one after the other, before the last step (PACK-34's why).
+pub const CUTS: usize = 2;
+
+/// How late one cut is, in frames at every rate: the first half-band there and back (39 frames),
+/// the second (13 samples at twice the rate), and two samples at four times the rate, so the whole
+/// is frames.
+pub const STAGE: usize = 46;
+
+/// How late the Clipper is, in frames at every rate (its manifest's `latency`): each cut's.
+pub const LATENCY: usize = CUTS * STAGE;
 
 /// The first half-band, at twice the song's rate: a sinc under Kaiser's window (β 10.06, for 100
 /// dB), 79 taps: those one side of its centre at odd offsets, from the outermost (39) in. Its
@@ -56,9 +63,10 @@ pub const H1: [f32; 7] = [8.204954e-6, -3.6553154e-4, 2.5431921e-3, -1.0198165e-
 /// What the meter says for silence, in dB, and the least it says.
 const FLOOR: f32 = -100.0;
 
-/// Once the cut has taken nothing off for this many frames, every sample the filters that bring it
-/// down still read is 0 (the two reach back under 30 frames), so they give exactly nothing: left out.
-const QUIET: usize = LATENCY;
+/// Once a cut has taken nothing off for this many frames, every sample its filters coming down
+/// still read is 0, so they give exactly nothing, and are left out: they reach back exactly as far
+/// as one cut is late (the same filters up and down); one frame fewer changes the bits.
+pub const QUIET: usize = STAGE;
 
 /// The last `N` samples of a stream (`N` a power of two), the newest at `back(0)`.
 #[derive(Clone, Copy)]
@@ -107,10 +115,10 @@ fn down<const N: usize, const C: usize>(a: &mut Ring<N>, b: &mut Ring<C>, taps: 
     acc
 }
 
-/// One channel's state.
+/// One cut at four times the rate, of one channel.
 #[derive(Clone, Copy)]
-struct Side {
-    /// The sound times the gain as it came in: what comes out where nothing is cut.
+pub(crate) struct Cut {
+    /// The sound as it came in: what comes out where nothing is cut.
     dry: Ring<64>,
     /// What each half-band up has heard: at the song's rate, and at twice it.
     up0: Ring<64>,
@@ -122,21 +130,25 @@ struct Side {
     /// The last two samples the cut took off, at four times the rate: the two that make the whole
     /// whole frames late.
     held: [f32; 2],
+    /// Frames since the cut last took anything off.
+    since: usize,
 }
 
-impl Side {
-    const NEW: Self = Side {
+impl Cut {
+    pub(crate) const NEW: Self = Cut {
         dry: Ring::NEW,
         up0: Ring::NEW,
         up1: Ring::NEW,
         down1: (Ring::NEW, Ring::NEW),
         down0: (Ring::NEW, Ring::NEW),
         held: [0.0; 2],
+        since: usize::MAX,
     };
 
-    /// One frame of `v`, the sound times the gain, under `c`: what comes out, the last step left
-    /// out; whether the cut took anything off; and the loudest of the frame at four times the rate.
-    fn frame(&mut self, v: f32, c: f32, cutting: bool) -> (f32, bool, f32) {
+    /// One frame of `v` under `c`: what comes out, `STAGE` frames late, and the loudest of the frame
+    /// at four times the rate. Its filters coming down are left out once it has taken nothing off
+    /// for `quiet` frames (`QUIET`).
+    pub(crate) fn frame(&mut self, v: f32, c: f32, quiet: usize) -> (f32, f32) {
         self.dry.push(v);
         let [a, b] = up(&mut self.up0, &H0, v);
         let [u0, u1] = up(&mut self.up1, &H1, a);
@@ -145,8 +157,8 @@ impl Side {
         let r = u.map(|u| clampf(u, -c, c) - u);
         let loudest = u.iter().fold(0.0f32, |m, u| m.max(u.abs()));
         let cut = r.iter().any(|&r| r != 0.0);
-        let mut y = self.dry.back(LATENCY);
-        if cut || cutting {
+        let mut y = self.dry.back(STAGE);
+        if cut || self.since < quiet {
             let p = [self.held[0], self.held[1], r[0], r[1]];
             self.held = [r[2], r[3]];
             let w0 = down(&mut self.down1.0, &mut self.down1.1, &H1, p[0], p[1]);
@@ -157,15 +169,26 @@ impl Side {
                 y += off;
             }
         }
-        (y, cut, loudest)
+        self.since = if cut { 0 } else { self.since.saturating_add(1) };
+        (y, loudest)
     }
+}
+
+/// One channel's cuts, one after the other: the first hears the sound times the gain, each next one
+/// what the one before gives, at 0 dB. The loudest is what the first heard: the sound pushed up.
+fn cuts(side: &mut [Cut; CUTS], v: f32, c: f32, quiet: usize) -> (f32, f32) {
+    let (mut y, loudest) = side[0].frame(v, c, quiet);
+    for cut in &mut side[1..] {
+        y = cut.frame(y, c, quiet).0;
+    }
+    (y, loudest)
 }
 
 /// Clipper. Inputs: in, gain (dB, 0 to 24), ceiling (dB, −24 to 0). Outputs: out, and its meter
 /// `pushed`: the loudest it heard after its gain, at four times the rate, in dB, the most of the
 /// call's frames.
 pub struct Clip {
-    sides: [Side; 2],
+    sides: [[Cut; CUTS]; 2],
     stereo: bool,
     gain: Glide,
     ceiling: Glide,
@@ -173,8 +196,8 @@ pub struct Clip {
     /// when they move.
     asked: [f32; 2],
     gains: [f32; 2],
-    /// Frames since the cut last took anything off.
-    since_cut: usize,
+    /// How long a cut that took nothing off keeps its filters coming down: `QUIET`, but in tests.
+    pub(crate) quiet: usize,
     /// Frames since anything but silence came in.
     since_sound: usize,
 }
@@ -192,11 +215,9 @@ impl Clip {
                 }
             }
             let (g, c) = (self.gain.next(self.gains[0]), self.ceiling.next(self.gains[1]));
-            let cutting = self.since_cut < QUIET;
             let (vl, vr) = (sane(l[i]) * g, if self.stereo { sane(r[i]) * g } else { 0.0 });
-            let (yl, took_l, most_l) = self.sides[0].frame(vl, c, cutting);
-            let (yr, took_r, most_r) = if self.stereo { self.sides[1].frame(vr, c, cutting) } else { (0.0, false, 0.0) };
-            self.since_cut = if took_l || took_r { 0 } else { self.since_cut.saturating_add(1) };
+            let (yl, most_l) = cuts(&mut self.sides[0], vl, c, self.quiet);
+            let (yr, most_r) = if self.stereo { cuts(&mut self.sides[1], vr, c, self.quiet) } else { (0.0, 0.0) };
             self.since_sound = if vl != 0.0 || vr != 0.0 { 0 } else { self.since_sound.saturating_add(1) };
             loudest = loudest.max(most_l).max(most_r);
             (ol[i], or[i]) = if cut { (clampf(yl, -c, c), clampf(yr, -c, c)) } else { (yl, yr) };
@@ -212,13 +233,13 @@ impl Kernel for Clip {
     fn new(cfg: &Cfg) -> Self {
         let sr = cfg.sample_rate.max(1.0);
         Clip {
-            sides: [Side::NEW; 2],
+            sides: [[Cut::NEW; CUTS]; 2],
             stereo: cfg.channels > 1,
             gain: Glide::new(0.02, sr),
             ceiling: Glide::new(0.02, sr),
             asked: [f32::NAN; 2],
             gains: [1.0; 2],
-            since_cut: QUIET,
+            quiet: QUIET,
             since_sound: usize::MAX,
         }
     }
@@ -227,7 +248,7 @@ impl Kernel for Clip {
         self.run(io, true);
     }
 
-    /// What came in comes out `LATENCY` frames later, and what the cut took off over as long again.
+    /// What came in comes out `LATENCY` frames later, and what a cut took off over as long again.
     fn active(&self) -> bool {
         self.since_sound < 2 * LATENCY
     }
