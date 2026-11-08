@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper and the Vocoder landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three still failing on GitHub's Mac; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three still failing on GitHub's Mac; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -14,7 +14,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
   **Graph**, whose nodes are the cards: collapsed by default, expanded on a click. The note is
   `docs/designs/graph/design.md` on branch `graph-note` (80a5d073, worktree `~/m2-runs/wt-graph-note`, not pushed),
   with a mockup. It waits for the owner's D1 to D6. Build none of it before their yes (AGENTS.md rule 11).
-- **New sounds in packs (2026-11-08)** (#104, #105; gaps #50 and #54), the core unchanged:
+- **New sounds in packs (2026-11-08)** (#104, #105, #106; gaps #50, #54 and #55), the core unchanged:
   - **Tune's Formant** knob (VOX-20) moves the voice's colour without its notes; at 0 Tune plays as before.
   - **The Voice changer** (`@m2/vocals`, VOX-28): Pitch and Formant, presets Deep and Chipmunk, Tune's own kernels,
     15 ms late as Tune is; its bits pinned by a hash (`CHANGED`, `core/play/tests/vocals.rs`).
@@ -23,8 +23,17 @@ design for whatever you pick up. Older versions of this page, with each track's 
   - **The Vocoder** (`@m2/vocals:vocoder`, VOX-29): a synth that talks with a voice, picked in its card's
     **Talks with**; Clarity, Smooth and Formant; 20 bands, no latency; the pure fixture `vocoder`, and one more
     RENDER-33 exception while Formant moves. The guide's "Make a synth talk" (`docs/guide/audio.md`).
+  - **The Flanger** (`@m2/effects:flanger`, PACK-35, CARD-128, under Modulation): a copy swept from 0.1 to 10 ms,
+    Feedback −0.9 to 0.9 (below 0 the hollow comb), no delay; no make-up gain, and its card says when high Feedback
+    makes it 6 dB or more louder. Its picture: a cycle of where its notches are, a live line where the sweep is now.
+  - **Grains** (`@m2/effects:grains`, PACK-36, CARD-129, under Delay & Reverb): short pieces of the last 2.5 s played
+    back, at most 16 at once, reading only the past (no delay), seeded so the export plays the same bits; its level
+    is measured from its grains. Its picture: its buffer, the band where grains start (a dot drags its far edge), a
+    live line where the newest grain reads. Freeze came out for now (gap #55 says why).
+  - Each has a pure fixture (`flanger`, `grains`) and both are in the browser suite `flanger-grains` and in
+    `every_pack_picture_draws_inside_a_fifth_of_its_limit`.
   - `@m2/effects` 1.4.0 and `@m2/vocals` 1.2.0, recorded again. Left in gap #54: the Clipper's look-ahead stage and
-    the Vocoder's row saying None.
+    the Vocoder's row saying None; in gap #55, the convolution reverb and Grains' Freeze.
 - **The nightly's failures since 11-06 (track ci-flakes, 2026-11-08):**
   - **GitHub's Mac** (five suite runs, every night): a meters read that heard no whole block sent zeros, read as
     silence, and now sends nothing (the taps count each block as it begins and ends); a window's ask again took its
@@ -306,6 +315,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `dress2a-fix` | on GitHub's Mac (11-08), "the mid's dot dragged up raises its gain" wrote nothing, and the ⌘Z after it undid the suite's own setup, so Pump's checks after it failed | once; passed on its retry, and 2 of 2 in ci-flakes' Mac probe. Cause not found |
 | `io-record-fix` | failed once on GitHub's Mac (11-08) | passed on its retry alone, and 2 of 2 in ci-flakes' Mac probe |
 | `a_burst_past_the_hint_limit_is_walked_and_never_missed` (`m2-server`, `watch_tests.rs`) | "the walk was a rescan": 4,219 names, two walks, one scoped, no rescan | both tries on GitHub's Mac in run 42483302299; it passed on the 11-07 and 11-08 Mac nightlies. The cause: FSEvents' daemon can get a change a moment after its write, and a flush right after it may return first (`m2_os::watch`'s `flush` says so), so the first tick took part of the burst, under the 4,096 names, and the rest came after: no tick overflowed, and the watcher did as WRITE-19 says. Since ci-flakes' round 2 the test waits (at most 20 s) till the names overflow before its first tick, and says whether they had by the flush. Passed on the Mac in run 42494489844 |
+| `activations_keep_the_plugin_instances_and_closing_destroys_them` (`m2-server`, `graph/tests.rs`) | `Teardown { destroyed: 0, left: 0 }`: closing destroyed no plugin instance it counted | once, in ci-flakes' run of six crates' tests at once after merging #106 (2026-11-08, load 10 to 17); passed on its retry. Not looked into |
 | `m2-server`'s registry tests, under `cargo test` | "Too many open files" | in a tmux shell, whose open-file limit is lower; they pass from a normal shell and in `ci/check.sh` |
 
 **GitHub's Mac (macos-15), the first nightly (run 40296575023, `07cd88b`):** its sleeps last about four times what
