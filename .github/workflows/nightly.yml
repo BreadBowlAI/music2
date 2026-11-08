@@ -21,6 +21,11 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    # TEMP (track ci-flakes): `probe` runs the probe job alone; empty, the nightly. Taken out before the PR.
+    inputs:
+      probe:
+        description: "TEMP: a probe of the Mac's failing suites (non-empty), or the nightly (empty)"
+        default: ""
 
 permissions:
   contents: read
@@ -38,7 +43,7 @@ env:
 # would be true then: GitHub compares null and false as the number 0).
 jobs:
   linux:
-    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-flakes') && inputs.probe == '' && github.event.repository.visibility == 'public'
     runs-on: ubuntu-24.04
     timeout-minutes: 180
     outputs:
@@ -112,7 +117,7 @@ jobs:
           retention-days: 14
 
   macos:
-    if: github.ref == 'refs/heads/main' && github.event.repository.visibility == 'public'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/ci-flakes') && inputs.probe == '' && github.event.repository.visibility == 'public'
     runs-on: macos-15
     timeout-minutes: 150
     outputs:
@@ -174,6 +179,61 @@ jobs:
             target/nextest/default/junit.xml
           retention-days: 14
 
+  # TEMP (track ci-flakes): the Mac's failing browser suites alone, twice each, with the clocks'
+  # diagnostics (ci/diag-probe.patch), every folder kept. Taken out before the pull request.
+  probe:
+    if: inputs.probe != '' && github.ref == 'refs/heads/ci-flakes'
+    runs-on: macos-15
+    timeout-minutes: 90
+    env:
+      M2_NO_PLUGINS: 1
+      M2_LATE_SLEEPS: 1
+      M2_AUDIO: none
+      M2_MIDI: none
+      M2_DIAG_CLOCKS: 1
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            e2e/package-lock.json
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/puppeteer
+          key: chrome-headless-shell-133.0.6943.141-${{ runner.os }}
+      - run: ci/pr.sh toolchain
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          workspaces: . -> target/pr
+          shared-key: nightly-macos
+          save-if: false
+      - run: git apply ci/diag-probe.patch
+      - run: (cd web && npm ci --no-audit --no-fund && npm run build)
+      - run: (cd e2e && npm ci --no-audit --no-fund && { [ -x "$HOME/.cache/puppeteer/chrome-headless-shell/mac_arm-133.0.6943.141/chrome-headless-shell-mac-arm64/chrome-headless-shell" ] || node_modules/.bin/browsers install chrome-headless-shell@133.0.6943.141 --path "$HOME/.cache/puppeteer"; })
+      - run: CARGO_TARGET_DIR=target/pr cargo build --locked -p m2-server --example headless -p m2 -p m2-plugins --bin m2 --bin m2-plugin-host
+      - if: ${{ !cancelled() }}
+        run: |
+          mkdir -p ~/probe
+          for i in 1 2; do
+            for s in "sidechain fix" "sidechain chain" "dress fix" "dress2a fix" "instruments fix" "voice fix" "nx-piano fix" "io-record fix"; do
+              set -- $s
+              M2_HEADLESS=target/pr/debug/examples/headless node e2e/run.mjs $1 $2 --keep --out ~/probe/e2e-$i/$1-$2 2>&1 | tail -3 | tee -a ~/probe/summary.txt
+            done
+          done
+      - if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mac-probe
+          path: ~/probe/
+          retention-days: 3
+
   # One issue for every failed night, "Nightly failed", and one for every night something passed
   # only on a retry, "Flaky tests": each opened once, commented on after. A job past its timeout
   # (a hang) ends "cancelled", not "failure", so both count; this workflow never cancels itself
@@ -182,7 +242,7 @@ jobs:
   # "Nightly failed" still opens then, and the job's logs are kept.
   report:
     needs: [linux, macos]
-    if: ${{ always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
+    if: ${{ always() && github.ref == 'refs/heads/main' && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || needs.linux.outputs.flaky != '' || needs.macos.outputs.flaky != '') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     # A job's own permissions replace the top-level ones: contents: read again, for the checkout.
