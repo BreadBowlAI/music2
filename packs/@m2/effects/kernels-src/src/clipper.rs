@@ -57,7 +57,7 @@ pub const H1: [f32; 7] = [8.204954e-6, -3.6553154e-4, 2.5431921e-3, -1.0198165e-
 const FLOOR: f32 = -100.0;
 
 /// Once the cut has taken nothing off for this many frames, every sample the filters that bring it
-/// down still read is 0 (they reach back 21 frames), so they give exactly nothing, and are left out.
+/// down still read is 0 (the two reach back under 30 frames), so they give exactly nothing: left out.
 const QUIET: usize = LATENCY;
 
 /// The last `N` samples of a stream (`N` a power of two), the newest at `back(0)`.
