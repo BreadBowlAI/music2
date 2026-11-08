@@ -1,0 +1,6 @@
+# The exact version of each pack this song uses, made by music2 (PACK-8). Don't edit it by hand.
+
+[[pack]]
+name = "@m2/effects"
+version = "1.4.0"
+hash = "sha256:c07b8a9a739ee51567f494808888b478aa8786fb5210ad66df6b00f37796363f"

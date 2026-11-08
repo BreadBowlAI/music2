@@ -529,7 +529,7 @@ fn every_std_kernel_keeps_its_inputs() {
         json!({"id": "vst", "op": "kernel", "kernel": "std:pan", "inputs": {"in": "vo"}}),
     ];
     let voice = Sources { audio: "vo", stereo: "vst", unit01: "lf", gate: "vg", beats: "t", pitch: Some("vp"), notes: None };
-    // A latent kernel (Tune's shift, VOX-24) can't be in a voice (RENDER-18), nor can a note effect,
+    // A latent kernel (Tune's shift, VOX-24; the Clipper, PACK-34) can't be in a voice (RENDER-18), nor can a note effect,
     // which runs in the lane pass (RENDER-41): every other one is.
     let voiced: Vec<&KernelSig> = sigs.iter().copied().filter(|s| !s.late() && !s.gives_notes()).collect();
     let voice_sum = every_kernel(&voiced, "vk", &voice, &mut site, &mut body);
@@ -545,8 +545,8 @@ fn every_std_kernel_keeps_its_inputs() {
     let in_voice: BTreeSet<String> = voiced.iter().map(|s| s.id.clone()).collect();
     assert_eq!(
         all.difference(&in_voice).collect::<Vec<_>>(),
-        ["@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock", "@m2/vocals:shift"],
-        "only the note effects and the latent one are left out of the voice"
+        ["@m2/effects:clip", "@m2/notes:arp", "@m2/notes:chord", "@m2/notes:echo", "@m2/notes:lock", "@m2/vocals:shift"],
+        "only the note effects and the latent ones are left out of the voice"
     );
     let FOp::Poly { voice, .. } = &flat.nodes.iter().find(|n| n.name == "song/v").unwrap().op else { panic!("the poly") };
     assert_eq!((kernels(&flat.nodes), kernels(&voice.nodes)), (all, in_voice), "every std kernel, both places");
