@@ -325,6 +325,7 @@ Each line is one small gap, without a number.
 
 ### Problems and help
 
+- **The command palette (⇧⌘P) holds only Show frame rate and the Swipe probe** (taste.md VIEW-10): the menus' commands aren't in it yet, and View ▸ Command Palette isn't in the menu bar (taste.md §5.3 lists it), which is the desktop shell's (`menu.rs`).
 - **A problem from a sound or plugin that stopped can't be dismissed**: it stays in the status popover until the part plays again.
 - **A sound that stops in the moment between Stop All Sound and its reset** stays listed, though the reset starts it again (ex-1).
 - **Two sounds with the same words** ("The delay on Bass", twice on one track) share one toast; each is listed (ex-1).

@@ -182,3 +182,15 @@ In short: the beat grid writes a drum beat by clicking boxes, one row for each d
 - **Help → Make Your First Song** opens a guide at the top of the browser: seven steps that tick themselves as you do them.
 - Hold the mouse over any button, knob or fader: its tooltip says what it does, in plain words, with its key.
 - A mistake in the code is said in plain words with a fix, pointing at your own line: "Cutoff wants a frequency (Hz), but gets a level (dB). Write it in Hz, such as hz(800)." The original message is under **Details**.
+
+## How smooth the window runs
+
+The command palette (⇧⌘P on a Mac, Ctrl+Shift+P on Linux) holds two tools that measure how smoothly the timeline and the Graph move. Type a word of the tool's name, then press Return. Neither changes anything in your song.
+
+| Tool | What it does |
+|---|---|
+| **Show frame rate** | A small box at the right, under the ruler. It shows how many times a second the window is drawn (frames a second: 60, or 120 on some Macs), the slowest frame of the last second in milliseconds (ms), and how many times each view was redrawn in that second. A frame under 17 ms is smooth at 60 frames a second; under 8.3 ms at 120. Choose it again (**Hide frame rate**) to hide the box. |
+| **Swipe probe** | A panel at the lower right. It asks you to swipe, flick and pinch over the timeline and then the Graph, in two rounds: first as the app scrolls today, then with music2 moving the view itself. In the second round it asks whether a scrollbar showed. **Copy report** copies what it heard, as text, to paste back to whoever asked you to run it. It listens only while its steps show, and stops when you close it. |
+
+- A big song shows best what is slow. To make one, type `node e2e/big-song.mjs ~/Music/big-song` in a terminal, in the music2 folder: a song of 24 tracks with 64 clips each. Then open that folder (⌘O).
+- Stop the song before the probe, so the timeline doesn't follow the playhead while you swipe.

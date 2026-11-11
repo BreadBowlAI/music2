@@ -60,5 +60,6 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘F | Ctrl+F | Find instruments, sounds and effects ([Finding sounds](finding-sounds.md)) |
 | ⌥⌘B | Ctrl+Alt+B | Show or hide the browser |
 | ⌥K | Alt+K | Keyboard shortcuts |
+| ⇧⌘P | Ctrl+Shift+P | The command palette: Show frame rate and the Swipe probe ([How smooth the window runs](window.md#how-smooth-the-window-runs)) |
 | ⇧-drag, ⌥-click, double-click | Shift-drag, Alt-click, double-click | On a knob: fine-tune, reset to its default, type a value |
 | ↑ ↓, Return, Delete | ↑ ↓, Enter, Backspace | On a focused knob: step it (⇧ or Shift: ten steps), type a value, reset it |
