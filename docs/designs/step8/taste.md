@@ -1006,6 +1006,58 @@ tools after Hear notes, 24 px like every Notes tool):
   says "(not connected)". While an export runs both lists are grey: "Wait for the export to finish."
 - One primary button, Done, in a `chrome` footer. Esc closes; Tab goes round.
 
+### 3.10 Moving the view
+
+[The camera](../camera/design.md) moves the arrangement, the Graph, Notes and the beat grid as the
+hand does. Its rules are VIEW-1 to VIEW-10. VIEW-1 to VIEW-9 come with track `camera-core`; VIEW-10
+comes first, to measure today's views on the owner's Mac before anything changes.
+
+**VIEW-10.** The command palette (⇧⌘P, §5.1) MUST offer **Show frame rate** and **Swipe probe**.
+- **Show frame rate** turns on a small meter over the window, at the right under the ruler, clear of
+  the top bar's controls and taking no clicks (the palette then offers Hide frame rate). It shows
+  the frames a second, from `requestAnimationFrame`'s intervals over the last second; the slowest
+  frame of the last second, in ms; and the redraws of the last second for each view (the
+  arrangement and its tracks' rows, the Graph and its nodes, Notes and its keys, the beat grid and
+  its rows), counted by one `useRenderCount` line at the top of each. Its numbers change four times
+  a second, written straight into its own text: it redraws no view. Suites read the same numbers
+  from `canvas.frames()`, which the page gives them as `window.m2canvas`.
+- **Swipe probe** opens a panel at the window's lower right that leads the musician, in plain steps,
+  through two rounds: over the arrangement and then the Graph, a swipe across, a swipe down, a
+  diagonal one, a flick let go, a flick held, and a pinch.
+  - **Round A, "Let the app scroll as it does today":** its listeners only listen.
+  - **Round B, "Cancel the swipe":** it cancels each wheel event over the arrangement's and the
+    Graph's scroll boxes (`preventDefault`), so the browser doesn't scroll them, and moves the box
+    itself by the event's deltas, once a frame, as the camera will (the note's §4: it writes whole
+    pixels and takes in a move it didn't make). An event a control already took (a picture's dot, a
+    knob, ⌘ or Ctrl's zoom) is left alone. After each swipe it asks whether a scrollbar showed while
+    the view moved (Yes, No).
+  - It records each wheel event (its time, `deltaX`, `deltaY`, `deltaMode`, whether it could be
+    cancelled and was, its gap from the last, how late the page heard it, the view under it, the
+    modifier keys), each `gesturestart`, `gesturechange` and `gestureend` (time, `scale`,
+    `clientX`), each `scroll` of the four views' boxes (time, `scrollLeft`, `scrollTop`, and whether
+    it was the probe's own write), and the frames' intervals.
+  - **Copy report** copies a plain-text report to paste back: first a summary (the platform and the
+    screen, the frames' median and 95th-percentile interval, a histogram of the gaps between wheel
+    events and the swipes each step holds at several gap lengths, what came after each flick, the
+    events that couldn't be cancelled, round B's scrolls that weren't the probe's, the events with
+    both deltas and with fractions, the gesture events, the scrollbar answers), then the last 4000
+    events. Where the clipboard refuses, the report shows in a field, selected for ⌘C.
+  - It writes nothing to the song. Closing it removes every listener it added; what it heard stays
+    until **Start again** or the window reloads.
+- *Why:* the camera's numbers (G, the glide, 120 Hz, our own scrollbars: the note's D4 and D5) are
+  measured on the owner's Mac first, and "moving the view redraws nothing" is checked by a count,
+  not by eye (the note's §8, C11 and C20). Round B moves the view the camera's way so the scrollbar
+  question has an answer: whether the Mac shows its scrollbars for a move the page makes.
+- *Today:* since track `camera-probe`: `useRenderCount` and the meter's numbers in
+  `web/src/lib/frames.ts`, the meter in `FrameMeter.tsx`, the probe in `web/src/lib/probe.ts` and
+  `SwipeProbe.tsx`, the palette in `CommandPalette.tsx`, which holds only these two commands so far
+  (gaps.md). `node e2e/big-song.mjs <folder>` makes a song of 24 tracks of 64 clips each to measure
+  on. Tested by `camera-probe` (the palette's two rows; the meter's numbers and `canvas.frames()`'s,
+  and no view redrawn by its updates; a zoom redrawing the arrangement and no other view; round A's
+  wheel scrolling the arrangement, heard with its scrolls; round B's cancelled and moved by the
+  probe alone, over the arrangement and the Graph; gesture events heard; the report's every part,
+  copied and in the field; nothing heard after closing; the song's files unchanged).
+
 ---
 
 ## 4. Change list, screen by screen
