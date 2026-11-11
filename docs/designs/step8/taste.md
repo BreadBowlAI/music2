@@ -978,6 +978,11 @@ view at first launch.
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
 - Nothing scrolls horizontally except the arrangement, the roll, the Graph and the Mix
   strips.
+- A view that scrolls both ways (the arrangement, the roll, the beat grid, the Graph) moves both
+  ways at once under a diagonal two-finger swipe, as Logic's tracks do. WebKit on the Mac holds a
+  swipe to the way it mostly goes, so such a view scrolls itself by a wheel that moves both ways
+  (`web/src/lib/freeScroll.ts`); a swipe straight across or straight down is the web view's, with
+  its own feel at the edges. Tested by `scroll`.
 
 ### 3.9 The keyboard piano and Settings (as `next` built them)
 

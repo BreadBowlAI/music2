@@ -113,6 +113,7 @@ export const SUITES = [
   // sidechain's dip, apart: it needs the meters read every 33 ms.
   ["sidechain-dip", "fix", { expect: 6, s: 18, sleeps: "the bass's meter dips while the kick's is up, message by message: the meters' 33 ms tick is a sleep, and read every 120 ms a message holds a kick and the gap after it, and reads the bass's loudest; it passed on GitHub's Mac until RENDER-28a made each message hold the wall clock's worth of sound" }],
   ["layout", "proj", { expect: 39, s: 8 }],
+  ["scroll", "fix", { expect: 8, s: 6 }],
   ["views", "proj", { expect: 30, s: 2 }],
   ["code", "proj", { expect: 58, s: 7 }],
   ["notes", "proj", { expect: 69, s: 11 }],
