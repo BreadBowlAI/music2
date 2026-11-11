@@ -28,6 +28,7 @@
 | `vocals/` | vocals: Tune (pitch correction as an effect), editing a recorded voice's notes, comping the best take from a loop's passes (accepted) |
 | `events/` | sounds that make notes: note effects (an arpeggiator, chords, note echo, scale) before the instrument, a kernel that gives notes, and Bake to notes (accepted, with a mockup) |
 | `graph/` | the graph: one view of a sound, each node collapsed until you expand it, five primitives, one value control (the bar), and + on a wire to put a sound there (proposed, revised after review, with a mockup) |
+| `camera/` | the camera: the arrangement, the Graph, Notes and the beat grid move as the hand does, every swipe in any direction, drawn by the box's scroll position; with an inventory of what depends on the scroll boxes today (proposed) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 
