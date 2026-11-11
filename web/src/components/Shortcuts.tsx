@@ -88,6 +88,7 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["Find instruments, sounds and effects", chord("F")],
       ["Show / hide the browser", chord("B", { alt: true })],
       ["Keyboard shortcuts", opt("K")],
+      ["Command palette: the frame rate, the swipe probe", chord("P", { shift: true })],
       ["Zoom in / out", `${chord("=")} / ${chord("−")}`],
       ["Zoom around the pointer", `${mod.cmd}-scroll, or pinch`],
       ["Zoom to the selected clips or the song; again: back", "Z"],

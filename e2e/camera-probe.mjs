@@ -84,7 +84,7 @@ check(
     `canvas.frames() gives the meter's numbers: ${JSON.stringify(f)} against ${JSON.stringify(m)}`,
   );
   check(
-    /Tracks/.test(m.text) && /Graph/.test(m.text) && /Notes/.test(m.text) && /Beat/.test(m.text) && f && "arrangement" in f.total && "arrangement.rows" in f.total && "graph" in f.total && "graph.nodes" in f.total,
+    /Timeline/.test(m.text) && /Graph/.test(m.text) && /Notes/.test(m.text) && /Beat/.test(m.text) && f && "arrangement" in f.total && "arrangement.rows" in f.total && "graph" in f.total && "graph.nodes" in f.total,
     `it names each view's redraws, and frames() counts the arrangement, its rows, the Graph and its nodes: ${m.text} / ${JSON.stringify(f?.total)}`,
   );
 }
@@ -231,7 +231,7 @@ const parts = {
   "the events with both deltas": /both deltas/,
   "the deltas' fractions": /fractions/,
   "the gesture events": /Gesture events: 3 \(1 start, 1 change, 1 end\)/,
-  "the scrollbar answers": /Scrollbar[\s\S]*?tracks, swipe straight across: No/,
+  "the scrollbar answers": /Scrollbar[\s\S]*?B1 timeline, swipe straight across: No/,
   "the raw events": /Raw events[\s\S]*\nw [\d.]+ A1 [\s\S]*\ng [\d.]+ A1 change 1\.25 700[\s\S]*\nw [\d.]+ B1 /,
 };
 const missing = Object.entries(parts).filter(([, re]) => !re.test(copied)).map(([what]) => what);
