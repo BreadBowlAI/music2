@@ -85,6 +85,7 @@ import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
 import { useGlows } from "../lib/notice";
 import { loadRecordOptions, useRecordOptions } from "../lib/record";
+import { scrollFreely } from "../lib/freeScroll";
 
 /** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
 const CLIP_INSET = 4;
@@ -608,7 +609,10 @@ export default function SongTimeline({
     };
     el.addEventListener("wheel", wheel, { passive: false });
     for (const t of ["gesturestart", "gesturechange", "gestureend"]) el.addEventListener(t, gesture);
+    // A diagonal swipe scrolls both ways at once (taste.md §3.8).
+    const free = scrollFreely(el);
     return () => {
+      free();
       el.removeEventListener("wheel", wheel);
       for (const t of ["gesturestart", "gesturechange", "gestureend"]) el.removeEventListener(t, gesture);
     };

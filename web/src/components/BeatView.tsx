@@ -10,6 +10,7 @@ import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { editing, goesFrom, lanesOf } from "../lib/history";
+import { scrollFreely } from "../lib/freeScroll";
 import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
@@ -196,7 +197,10 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
       });
     };
     el.addEventListener("wheel", wheel, { passive: false });
+    // A diagonal swipe scrolls both ways at once (taste.md §3.8).
+    const free = scrollFreely(el);
     return () => {
+      free();
       observer.disconnect();
       el.removeEventListener("wheel", wheel);
     };

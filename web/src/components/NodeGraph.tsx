@@ -73,6 +73,7 @@ import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, 
 import { trackColors } from "../lib/palette";
 import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
+import { scrollFreely } from "../lib/freeScroll";
 import { Bar } from "./Bar";
 import { Dots } from "./draw";
 import EffectBrowser from "./EffectBrowser";
@@ -216,7 +217,10 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("gesturestart", pinchStart);
     el.addEventListener("gesturechange", pinch);
+    // A diagonal swipe scrolls both ways at once (taste.md §3.8).
+    const free = scrollFreely(el);
     return () => {
+      free();
       el.removeEventListener("wheel", wheel);
       el.removeEventListener("gesturestart", pinchStart);
       el.removeEventListener("gesturechange", pinch);

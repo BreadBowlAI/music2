@@ -45,6 +45,7 @@ import { editing, goesFrom, lanesOf, showsOwn } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
+import { scrollFreely } from "../lib/freeScroll";
 
 // The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px. The key column is 56 px,
 // or 88 where its keys say drum names (`keysWidth`, polish A4). A row is 14 px unless the view
@@ -279,7 +280,10 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       });
     };
     el.addEventListener("wheel", wheel, { passive: false });
+    // A diagonal swipe scrolls both ways at once (taste.md §3.8).
+    const free = scrollFreely(el);
     return () => {
+      free();
       observer.disconnect();
       el.removeEventListener("wheel", wheel);
     };
