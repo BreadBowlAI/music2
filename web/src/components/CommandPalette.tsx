@@ -76,7 +76,8 @@ function Palette() {
           onKeyDown={(e) => {
             if (e.key === "ArrowDown" || e.key === "ArrowUp") setActive((a) => (Math.min(a, shown.length - 1) + (e.key === "ArrowDown" ? 1 : -1) + shown.length) % Math.max(1, shown.length));
             else if (e.key === "Enter") run(current);
-            else if (e.key === "Escape") close();
+            // Esc, or ⇧⌘P again, closes it.
+            else if (e.key === "Escape" || ((e.metaKey || e.ctrlKey) && e.shiftKey && e.key.toLowerCase() === "p")) close();
             else return;
             e.preventDefault();
             e.stopPropagation();

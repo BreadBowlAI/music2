@@ -66,6 +66,10 @@ await page.type("[data-testid=palette] input", "swipe");
 check(await until(async () => (await rows()).join() === (await rows()).filter((r) => r.startsWith("probe:")).join() && (await rows()).length === 1), `typing "swipe" leaves Swipe probe alone: ${(await rows()).join(" | ")}`);
 await key("Escape");
 check(await until(async () => !(await has("[data-testid=palette]"))), "Esc closes it");
+await key("Meta+Shift+KeyP");
+await page.waitForSelector("[data-testid=palette] input");
+await key("Meta+Shift+KeyP");
+check(await until(async () => !(await has("[data-testid=palette]"))), "and so does ⇧⌘P again");
 
 // ---------------------------------------------------------------- the frame meter
 
