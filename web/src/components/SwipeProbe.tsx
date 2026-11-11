@@ -65,7 +65,8 @@ export default function SwipeProbe() {
       field.current?.select();
     }
   }, [copied]);
-  useEffect(() => setCopied("no"), [open]);
+  // A report shown for ⌘C goes when the step changes: it would say less than the probe has heard.
+  useEffect(() => setCopied("no"), [open, page, round, step]);
 
   if (!open) return null;
   const s = STEPS[step];
