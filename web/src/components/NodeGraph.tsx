@@ -72,6 +72,7 @@ import { useGlows, useNotice } from "../lib/notice";
 import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, VALUE_H, gridRows, segHeight, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
 import { trackColors } from "../lib/palette";
 import { useShell } from "../lib/shell";
+import { useRenderCount } from "../lib/frames";
 import { useStore } from "../lib/store";
 import { Bar } from "./Bar";
 import { Dots } from "./draw";
@@ -143,6 +144,7 @@ const perNoteOf = (m: ModuleView) => new Set(m.nodes.filter((n) => n.per_note).m
 
 /** One module's code as a graph to play and tweak: bars over its values, wires between its signals. */
 export function NodeGraph({ graph, module }: { graph: GraphState; module: string }) {
+  useRenderCount("graph");
   const found = graph.view.modules.find((m) => m.key === module);
   // The Song's mixer is one compact node; its levels and pans are the Mix view's (MX-6).
   const compacted = useMemo(() => (found ? compactMixer(found, graph.mix) : null), [found, graph.mix]);
@@ -227,7 +229,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     <Locked.Provider value={locked}>
       <Tracks.Provider value={tracks}>
         <MixerCard.Provider value={compacted?.card ?? null}>
-          <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph">
+          <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph" data-view-box="graph">
             {shown && laid && (
               <ModuleSection
                 key={`${graph.session}:${shown.key}`}
@@ -1213,6 +1215,7 @@ function Node({
   onCable: (node: ViewNode, output: OutputPort, e: React.PointerEvent) => void;
   style: React.CSSProperties;
 }) {
+  useRenderCount("graph.nodes");
   const key = node.key ?? node.id;
   const el = useRef<HTMLDivElement>(null);
   const card = useContext(MixerCard);

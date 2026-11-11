@@ -9,6 +9,7 @@
 import { create } from "zustand";
 import { DOCK_H, DOCK_MIN, WIDE, dockMax } from "./layout";
 import type { ClipRef } from "./graph";
+import type { Frames } from "./frames";
 
 /**
  * The dock's views, in the order of ⌥1 to ⌥5. Beat, the beat grid (KIT-10), is ⌥5, and the switcher
@@ -58,6 +59,8 @@ interface Shell {
   open: ReadonlySet<string>;
   /** The keyboard shortcuts sheet (⌥K). */
   sheet: boolean;
+  /** The command palette (⇧⌘P). */
+  palette: boolean;
   /** A rename asked for (⌘R, a menu's Rename): the track whose name turns into a field, in its header or its Mix strip. */
   renaming: { module: string; at: "header" | "strip" } | null;
   /** The roll's Draw mode (B): a click adds a note and a drag paints; else a click selects (D4). */
@@ -110,6 +113,7 @@ export const useShell = create<Shell>((set, get) => ({
   clips: {},
   open: new Set(),
   sheet: false,
+  palette: false,
   renaming: null,
   draw: false,
   chord: null,
@@ -226,4 +230,14 @@ export const canvas: {
   lanesBox?: () => DOMRect | null;
   /** A pointer's Show: beats `start` to `end` in view. */
   reveal?: (start: number, end: number) => void;
+  /** The frame meter's numbers (taste.md VIEW-10), from `lib/frames.ts`, with or without a song. */
+  frames?: () => Frames;
 } = {};
+
+declare global {
+  interface Window {
+    /** The canvas, for the browser suites: they read `m2canvas.frames()` (VIEW-10). */
+    m2canvas?: typeof canvas;
+  }
+}
+window.m2canvas = canvas;

@@ -8,6 +8,7 @@ import { ROLL_RULER_H } from "../lib/layout";
 import { chord, mod } from "../lib/native";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { useShell } from "../lib/shell";
+import { useRenderCount } from "../lib/frames";
 import { useStore } from "../lib/store";
 import { editing, goesFrom, lanesOf } from "../lib/history";
 import { DockSlot } from "./Dock";
@@ -136,6 +137,7 @@ function drumSounds(graph: GraphState): string[] {
 
 /** The beat grid of `kit`, with `module` (a row's track, or the bus) selected. */
 export default function BeatView({ graph, kit, module }: { graph: GraphState; kit: DrumKit; module: string }) {
+  useRenderCount("beat");
   const toast = useStore((s) => s.toast);
   const { timeline } = graph;
   const { meter } = timeline;
@@ -349,6 +351,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
         <div
           ref={scroller}
           data-testid="beat-scroller"
+          data-view-box="beat"
           className="absolute inset-0 overflow-auto"
           onScroll={(e) => {
             if (strip.current) strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`;
@@ -510,6 +513,7 @@ function Cells({
   onMove: (e: React.PointerEvent<HTMLDivElement>) => void;
   onUp: (e: React.PointerEvent<HTMLDivElement>, cancelled?: boolean) => void;
 }) {
+  useRenderCount("beat.rows");
   return (
     <div
       data-testid="beat-row"

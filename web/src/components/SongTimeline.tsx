@@ -38,6 +38,7 @@ import { heightsNow, laneHeight, setHeights, snapHeight, stepHeight, LANE_HS, TR
 import { LANE_H, ROW_H, RULER_H } from "../lib/layout";
 import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { canvas, useShell } from "../lib/shell";
+import { useRenderCount } from "../lib/frames";
 import {
   copiedOf,
   isPicked,
@@ -405,6 +406,7 @@ export default function SongTimeline({
   onOpenClip: (clip: ClipRef) => void;
   onSeek: (beat: number) => void;
 }) {
+  useRenderCount("arrangement");
   const scroller = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(0);
   useEffect(() => {
@@ -1813,6 +1815,7 @@ export default function SongTimeline({
     <div
       ref={scroller}
       data-testid="timeline"
+      data-view-box="arrangement"
       data-grid-view="song"
       tabIndex={-1}
       onKeyDown={onKeyDown}
@@ -2464,6 +2467,7 @@ const TrackRows = memo(function TrackRows({
   last?: boolean;
   onOpenClip: (clip: ClipRef) => void;
 }) {
+  useRenderCount("arrangement.rows");
   const module = track.module;
   const ppb = useZoom();
   const selected = useShell((s) => s.selected === module);
