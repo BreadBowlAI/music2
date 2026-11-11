@@ -44,9 +44,10 @@ for (let i = 0; i < 4; i++) {
 await until(async () => (await at(timeline)).h > 40 && (await at(timeline)).w > 60).catch(() => {});
 await swipes("timeline", timeline);
 const z = await at(timeline);
-await wheel(timeline, 30, -100, { ctrlKey: true });
+// Zoomed in as far as it goes above, so this zooms out.
+await wheel(timeline, 30, 100, { ctrlKey: true });
 const z2 = await at(timeline);
-check(z2.w > z.w && z2.top === z.top, `timeline zoom: ⌘ wheel zooms (${z.w} → ${z2.w} wide) and doesn't scroll down`);
+check(z2.w < z.w && z2.top === z.top, `timeline zoom: ⌘ wheel zooms (${z.w} → ${z2.w} wide) and doesn't scroll down`);
 
 // ---------------------------------------------------------------- the Graph
 await view("graph");
