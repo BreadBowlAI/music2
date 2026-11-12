@@ -558,6 +558,36 @@ const beatAt = async (x) =>
   check(!!want && json(said) === json(want), `agents' seen follows the camera: ${json(said)} (${json(want)})`);
 }
 
+// ---------------------------------------------------------------- an agent's pointer moves with the view, rendering nothing
+{
+  await setScroll(tl, 0, 0);
+  await frames();
+  await setScroll(tl, 1500, 0);
+  await frames();
+  await sleep(300);
+  const t = await box(tl);
+  const id = await page.$$eval(`${tl} [data-track="kick-1"] [data-clip]`, (els, x) => els.find((e) => { const r = e.getBoundingClientRect(); return r.left > x + 300 && r.right < x + 700; })?.dataset.clip ?? null, t.x + 240);
+  const { session } = await state();
+  const said = await (await fetch(`${sess.url}/api/point`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: json({ session, target: `clip:kick-1/hits:${id}`, words: "this one" }) })).json().catch(() => null);
+  await until(() => has("[data-testid=pointer-mark]"), 3000);
+  await sleep(300);
+  const at = await lanes();
+  const r0 = await renders();
+  // 8 ms apart in time too: the view moves over many frames.
+  await feed(at.x, at.y, swipe(120, 1, 0, 8), 8);
+  await frames(6);
+  await sleep(400);
+  const r = since(r0, await renders());
+  const mark = await box("[data-testid=pointer-mark]");
+  const clip = await box(`${tl} [data-clip="${id}"]`);
+  const counted = await page.evaluate(() => "pointer.note" in (window.m2canvas?.frames?.().total ?? {}));
+  check(
+    !!id && !!mark && !!clip && counted && !r["pointer.note"] && near(mark.x, clip.x, 1) && near(mark.width, clip.width, 1),
+    `with an agent's pointer at a clip, 120 events of a swipe render its note 0 times (${r["pointer.note"] ?? "uncounted"}), and its mark still sits on the clip: ${json({ said: !!said, mark, clip })}`,
+  );
+  await page.click("[data-testid=pointer-ok]").catch(() => {});
+}
+
 // ---------------------------------------------------------------- Follow pauses on any move not the app's
 const status = async () => (await api("/status")).body;
 const post = (p, body) => api(p, { method: "POST", body: json(body) });
@@ -605,6 +635,25 @@ const post = (p, body) => api(p, { method: "POST", body: json(body) });
     await post("/seek", { beat: (beatTo += 40) });
     await sleep(900);
     check(Math.abs((await scroll(tl)).x - kept) < 2, `${what} while playing pauses Follow: the view stays at ${kept} (${(await scroll(tl)).x})`);
+  }
+  // A hand's scroll with the playhead still in view keeps Follow paused (Q11: until the playhead
+  // comes back into view after being out of it): its next page never takes the view back.
+  await key("Space");
+  await until(async () => !(await status()).playing);
+  await key("Space");
+  await until(async () => (await status()).playing);
+  await pages((beatTo += 20));
+  {
+    await feed(at.x, at.y, swipe(10, -20, 0));
+    await frames();
+    await sleep(100);
+    const c = await arr();
+    const kept = (await scroll(tl)).x;
+    // The playhead to 90% of the view: past Follow's 85%, still in view.
+    const w = c.view.w - c.margins.left;
+    await post("/seek", { beat: (c.x + w * 0.9) / c.zoom });
+    await sleep(600);
+    check(Math.abs((await scroll(tl)).x - kept) < 2, `a swipe of 200 px with the playhead in view keeps Follow paused: past 85% it doesn't page (${kept} → ${(await scroll(tl)).x})`);
   }
   // A drag holds the camera: a swipe and Follow move nothing until it is let go.
   await key("Space");

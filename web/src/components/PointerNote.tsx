@@ -1,6 +1,7 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
 import { useEffect, useState, type CSSProperties } from "react";
 import { behindFold, dismissPointer, elsewhere, reveal, seenIn, targetBox, usePointer, type Pointer } from "../lib/pointer";
+import { useRenderCount } from "../lib/frames";
 import { canvas } from "../lib/shell";
 import { keepFocus } from "./ui";
 
@@ -86,6 +87,7 @@ const ARROWS = { left: ArrowLeft, right: ArrowRight, up: ArrowUp, down: ArrowDow
  * click moves the view.
  */
 export default function PointerNote({ session }: { session: number }) {
+  useRenderCount("pointer.note");
   const pointer = usePointer((s) => s.pointer);
   const p = pointer?.session === session ? pointer : null;
   const [place, setPlace] = useState<Place | null>(null);
