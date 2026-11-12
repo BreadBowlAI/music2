@@ -499,16 +499,19 @@ const clipsShown = () =>
   await frames();
   await sleep(300);
   const at = await lanes();
-  for (const [what, dy] of [["in", -3], ["out", 3]]) {
+  for (const [what, dy] of [["in", -6], ["out", 6]]) {
     await page.$$eval(`${tl} [data-clip]`, (els) => void (window.__clips = new Set(els)));
     const r0 = await renders();
     await zoomFrames(at.x, at.y, 15, dy);
+    // The window's new render is a transition: done once the page is idle.
+    await sleep(500);
     const entered = await page.$$eval(`${tl} [data-clip]`, (els) => els.filter((e) => !window.__clips.has(e)).length);
     const r = since(r0, await renders());
-    const counted = await page.evaluate(() => "arrangement.clips" in (window.m2canvas?.frames?.().total ?? {}));
+    const counted = await page.evaluate(() => "arrangement.clips.new" in (window.m2canvas?.frames?.().total ?? {}));
+    // A clip entering the window is drawn for the first time (`.new`); a clip box already drawn never again.
     check(
-      counted && (r["arrangement.clips"] ?? 0) <= entered && (r.arrangement ?? 0) >= 1 && (r.arrangement ?? 0) <= 18,
-      `30 ⌘-scroll events zooming ${what} render ${r["arrangement.clips"] ?? 0} clip boxes, no more than the ${entered} entering the window (each counted), and the arrangement ${r.arrangement ?? 0} times in 18 frames: ${json(r)}`,
+      counted && !r["arrangement.clips"] && (r["arrangement.clips.new"] ?? 0) === entered && (r.arrangement ?? 0) >= 1 && (r.arrangement ?? 0) <= 18,
+      `30 ⌘-scroll events zooming ${what} render no clip box drawn before (${r["arrangement.clips"] ?? 0}), only the ${entered} entering the window (each counted), and the arrangement ${r.arrangement ?? 0} times in 18 frames: ${json(r)}`,
     );
   }
 }

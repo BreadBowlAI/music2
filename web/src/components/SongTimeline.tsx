@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
   barAt,
@@ -65,7 +65,7 @@ import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { ARRANGEMENT, followNow, keepZoom, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { onCamera, useCamera, useCameraState, useCull, useNear, within, type CameraState, type Window } from "../camera";
+import { onCamera, useCamera, useCameraState, useCull, useNear, useSpan, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -1755,6 +1755,8 @@ export default function SongTimeline({
     e.stopPropagation();
   };
 
+  // The Song row's grid, the same while the meter is: a zoom renders the grid, not the row.
+  const songGrid = useMemo(() => <Grid meter={timeline.meter} />, [timeline.meter]);
   const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
@@ -1836,7 +1838,6 @@ export default function SongTimeline({
         <Tracks
           timeline={timeline}
           rows={rows}
-          width={width}
           visible={visible}
           headerW={headerW}
           drag={drag}
@@ -1887,9 +1888,8 @@ export default function SongTimeline({
           <TrackRows
             track={song}
             color={GRAPHITE}
-            width={width}
             headerW={headerW}
-            grid={<Grid meter={timeline.meter} width={width} />}
+            grid={songGrid}
             drag={drag && involves(drag, song.module) ? drag : null}
             lit={lit?.startsWith(`${song.module}.`) ? lit.slice(song.module.length + 1) : null}
             issues={issues.get(song.module)}
@@ -1977,20 +1977,21 @@ function PlayCap({ headerW }: { headerW: number }) {
 }
 
 /**
- * Bar and beat lines from beat 0 to `width`: one stretch per time signature, each with its own bar
+ * Bar and beat lines from beat 0 to the lanes' end: one stretch per time signature, each with its own bar
  * length. Under them the snap grid's own lines, where it is finer than a beat, its lines are at
  * least 12px apart and they meet every bar line (a triplet grid in 3/4 doesn't: none then).
  */
-const Grid = memo(function Grid({ meter, width }: { meter: Meter[]; width: number }) {
+const Grid = memo(function Grid({ meter }: { meter: Meter[] }) {
   const grid = useGrid((s) => s.song);
+  // Its lines are a pattern a span, spaced in px by the zoom: it renders on a zoom, a few elements a row.
   const ppb = useZoom();
-  return meterSpans(meter, 0, width / ppb).map((s) => {
+  return meterSpans(meter, 0, Infinity).map((s) => {
     const step = fineStep(grid, s.bar, ppb);
     return (
       <VLines
         key={s.start}
         className="inset-y-0"
-        style={{ left: s.start * ppb, width: (s.end - s.start) * ppb }}
+        style={s.end === Infinity ? { left: s.start * ppb, right: 0 } : { left: s.start * ppb, width: (s.end - s.start) * ppb }}
         layers={[
           ...(step ? [{ every: step * ppb, color: "var(--color-hover)" }] : []),
           // Zoomed far out, beats are too close to draw: bars only.
@@ -2262,7 +2263,6 @@ function SectionBand({ meter, ppb }: { meter: Meter[]; ppb: number }) {
 const Tracks = memo(function Tracks({
   timeline,
   rows,
-  width,
   visible,
   headerW,
   drag,
@@ -2275,7 +2275,6 @@ const Tracks = memo(function Tracks({
 }: {
   timeline: TimelineView;
   rows: TimelineTrack[];
-  width: number;
   /** The lanes' width on screen, to centre a line in. */
   visible: number;
   headerW: number;
@@ -2288,7 +2287,7 @@ const Tracks = memo(function Tracks({
   waiting: boolean;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const grid = <Grid meter={timeline.meter} width={width} />;
+  const grid = useMemo(() => <Grid meter={timeline.meter} />, [timeline.meter]);
   const said = waiting || rows.length === 0;
   return (
     <div role="tablist" aria-label="Tracks" aria-orientation="vertical" className="contents">
@@ -2297,7 +2296,6 @@ const Tracks = memo(function Tracks({
           key={t.module}
           track={t}
           color={trackColors(timeline, t.module) ?? GRAPHITE}
-          width={width}
           headerW={headerW}
           grid={grid}
           drag={drag && involves(drag, t.module) ? drag : null}
@@ -2327,7 +2325,7 @@ const Tracks = memo(function Tracks({
       >
         <DropLine before={END} />
         <div className="sticky left-0 z-20 shrink-0 bg-chrome border-r border-line" style={{ width: headerW }} />
-        <div className="relative" style={{ width }}>
+        <div className="relative flex-1 min-w-0">
           {grid}
           {/* Under the last track, in the lanes' visible middle: a line here never pushes a row down (principle 8). */}
           {said && (
@@ -2385,7 +2383,6 @@ function BusWords({ module }: { module: string }) {
 const TrackRows = memo(function TrackRows({
   track,
   color,
-  width,
   headerW,
   grid,
   drag,
@@ -2399,7 +2396,6 @@ const TrackRows = memo(function TrackRows({
 }: {
   track: TimelineTrack;
   color: TrackColor;
-  width: number;
   headerW: number;
   grid: ReactNode;
   /** Clips being dragged from or onto this track's lanes. */
@@ -2417,7 +2413,6 @@ const TrackRows = memo(function TrackRows({
 }) {
   useRenderCount("arrangement.rows");
   const module = track.module;
-  const ppb = useZoom();
   // Only what is near the view is drawn (VIEW-12): the clips in the window across, which moves in
   // steps; and none at all while the track is more than a view above or below, its rows kept.
   const cull = useCull(ARRANGEMENT, "x").x;
@@ -2499,23 +2494,22 @@ const TrackRows = memo(function TrackRows({
       </div>
       <div
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
-        className={clsx("relative overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
-        style={{ width }}
+        className={clsx("relative flex-1 min-w-0 overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         title={!lane || locked ? undefined : lane.kind === "audio" ? `Drop WAV or FLAC files here, or use File ▸ Import Audio (${chord("I", { shift: true })})` : "Double-click to add a one-bar clip"}
         onPointerDown={(e) => {
           const empty = !(e.target as HTMLElement).closest("[data-clip]");
           if (empty) edits.unpick(module);
           edits.press(empty ? e : null);
         }}
-        onPointerUp={(e) => edits.place(e, (e.clientX - e.currentTarget.getBoundingClientRect().left) / ppb)}
+        onPointerUp={(e) => edits.place(e, (e.clientX - e.currentTarget.getBoundingClientRect().left) / zoomNow())}
         onDoubleClick={(e) => {
           if (!lane || lane.kind === "audio" || (e.target as HTMLElement).closest("[data-clip]")) return;
-          edits.create(module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / ppb);
+          edits.create(module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / zoomNow());
         }}
         // A right-click on a clip opens the clip's menu (its own handler); on empty space, the lane's.
         onContextMenu={(e) => {
           if (!lane || waiting || (e.target as HTMLElement).closest("[data-clip]")) return;
-          edits.menu(e, module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / ppb);
+          edits.menu(e, module, lane.key, (e.clientX - e.currentTarget.getBoundingClientRect().left) / zoomNow());
         }}
       >
         {grid}
@@ -2543,7 +2537,7 @@ const TrackRows = memo(function TrackRows({
                   requestAnimationFrame(() => document.querySelector<HTMLElement>("[data-testid=notes]:not([data-empty])")?.focus({ preventScroll: true }));
                 }}
                 onDown={(ref, e) => edits.down(ref, e)}
-                onMenu={(ref, e) => !waiting && edits.menu(e, module, lane.key, (e.clientX - e.currentTarget.parentElement!.getBoundingClientRect().left) / ppb, ref)}
+                onMenu={(ref, e) => !waiting && edits.menu(e, module, lane.key, (e.clientX - e.currentTarget.parentElement!.getBoundingClientRect().left) / zoomNow(), ref)}
               />
             </Hatched.Provider>
           </div>
@@ -2556,7 +2550,7 @@ const TrackRows = memo(function TrackRows({
   const takesOpen = useTakesOpen((s) => s.open.has(module)) && !last;
   const takes = (lane: TimelineLane) =>
     lane.kind === "audio" && (
-      <TakeRows key={`takes:${lane.key}`} module={module} lane={lane} color={color} selected={selected} headerW={headerW} width={width} height={h} editable={!locked && !waiting} />
+      <TakeRows key={`takes:${lane.key}`} module={module} lane={lane} color={color} selected={selected} headerW={headerW} height={h} editable={!locked && !waiting} />
     );
 
   // Dragged to a new place: it follows the pointer, lifted (taste.md §3.4).
@@ -2602,7 +2596,7 @@ const TrackRows = memo(function TrackRows({
         controls
           .filter((l) => !hidden.has(l.key))
           .map((l) => row(l, <LaneLabel lane={l} height={laneH(l)} />, { height: laneH(l), edge: last ? undefined : `${module}.${l.key}` }))}
-      {open && hiddenHere.length > 0 && <HiddenRow module={module} lanes={hiddenHere} color={color} selected={selected} headerW={headerW} width={width} />}
+      {open && hiddenHere.length > 0 && <HiddenRow module={module} lanes={hiddenHere} color={color} selected={selected} headerW={headerW} />}
     </div>
   );
 });
@@ -2917,6 +2911,9 @@ function LaneClips({
   const id = (i: number) => (hasOwnId(lane.clips, i) ? lane.clips[i].id! : "");
   const key = (i: number) => id(i) || `#${i}`;
   const here = (a: LaneAddr) => a.module === module && a.lane === lane.key;
+  // The clips' handlers call through these, the latest: a clip's box kept across renders calls them anew.
+  const handlers = useRef({ onOpen, onDown, onMenu });
+  handlers.current = { onOpen, onDown, onMenu };
 
   // What a clip of this lane's kind draws inside it.
   // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
@@ -2978,9 +2975,9 @@ function LaneClips({
         editable={editable}
         painting={painting}
         glow={glows}
-        onDoubleClick={lane.kind === "notes" ? () => onOpen(i) : undefined}
-        onPointerDown={(e) => onDown(ref, e)}
-        onContextMenu={(e) => onMenu(ref, e)}
+        onDoubleClick={lane.kind === "notes" ? () => handlers.current.onOpen(i) : undefined}
+        onPointerDown={(e) => handlers.current.onDown(ref, e)}
+        onContextMenu={(e) => handlers.current.onMenu(ref, e)}
       >
         {inside(
           drawn,
@@ -3024,7 +3021,30 @@ function LaneClips({
   );
 }
 
-function Clip({
+/** Two props the same for a clip's box: equal, or plain objects (and theirs) of equal values. */
+const sameValue = (a: unknown, b: unknown, depth = 2): boolean => {
+  if (a === b) return true;
+  if (depth === 0 || !a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) || Object.getPrototypeOf(a) !== Object.prototype) return false;
+  const ka = Object.keys(a), kb = Object.keys(b);
+  return ka.length === kb.length && ka.every((k) => sameValue((a as Record<string, unknown>)[k], (b as Record<string, unknown>)[k], depth - 1));
+};
+
+/**
+ * A clip's box is drawn again only when what it shows changed: its handlers call through the lane's
+ * latest ones, so a new closure is the same handler; its drawing is the same element when its props
+ * are (VIEW-12). A zoom places it without a render (`useSpan`).
+ */
+const sameClipBox = (a: Record<string, unknown>, b: Record<string, unknown>) => {
+  for (const k of new Set([...Object.keys(a), ...Object.keys(b)])) {
+    const x = a[k], y = b[k];
+    if (x === y || (typeof x === "function" && typeof y === "function")) continue;
+    if (k === "children" && isValidElement(x) && isValidElement(y) && x.type === y.type && x.key === y.key && sameValue(x.props, y.props, 3)) continue;
+    return false;
+  }
+  return true;
+};
+
+const Clip = memo(function Clip({
   id,
   ghost,
   hidden,
@@ -3067,11 +3087,16 @@ function Clip({
   onContextMenu?: (e: React.MouseEvent<HTMLElement>) => void;
   children: ReactNode;
 }) {
+  // Its first redraw (a clip entering the window), apart from its redraws again (VIEW-12).
+  useRenderCount("arrangement.clips", "arrangement.clips.new");
   const hatched = useContext(Hatched);
-  const ppb = useZoom();
   const handles = !!onPointerDown && editable;
+  // Placed in beats by the camera's zoom, straight into its style: a zoom renders no clip (VIEW-12).
+  const box = useRef<HTMLDivElement>(null);
+  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4 });
   return (
     <div
+      ref={box}
       data-clip={ghost ? undefined : id}
       data-ghost={ghost || undefined}
       data-start={clip.start}
@@ -3096,8 +3121,6 @@ function Clip({
         {
           top: CLIP_INSET,
           bottom: CLIP_INSET,
-          left: clip.start * ppb + 1,
-          width: Math.max(clip.length * ppb - 2, 4),
           background: picked ? `color-mix(in oklab, ${color.bar} 35%, ${color.tint})` : color.tint,
           "--clip-bar": color.bar,
           "--clip-ink": color.ink,
@@ -3115,7 +3138,7 @@ function Clip({
       )}
     </div>
   );
-}
+}, sameClipBox);
 
 /** The clip's own drawing area: beats across, 0..100 down. `curve`: an automation clip's, where a press edits points. */
 function Body({ length, curve, children }: { length: number; curve?: boolean; children: ReactNode }) {
@@ -3260,7 +3283,6 @@ const Steps = memo(function Steps({ clip, options, color, picked }: { clip: Step
 
 /** A lane of names' fallback where no clip is (CARD-23): its name, faint, at the start of each gap. */
 function NamesFallback({ clips, name }: { clips: StepClip[]; name: string }) {
-  const ppb = useZoom();
   const gaps: number[] = [];
   let at = 0;
   for (const c of [...clips].sort((a, b) => a.start - b.start)) {
@@ -3268,20 +3290,22 @@ function NamesFallback({ clips, name }: { clips: StepClip[]; name: string }) {
     at = Math.max(at, c.start + c.length);
   }
   gaps.push(at);
+  return gaps.map((a) => <FallbackName key={a} at={a} name={name} />);
+}
+
+/** A fallback's name at beat `at`, placed by the camera's zoom (VIEW-12). */
+function FallbackName({ at, name }: { at: number; name: string }) {
+  const el = useRef<HTMLSpanElement>(null);
+  useSpan(ARRANGEMENT, el, at, null);
   return (
-    <>
-      {gaps.map((a) => (
-        <span key={a} aria-hidden data-fallback={name} className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-xs text-fg-faint pointer-events-none" style={{ left: a * ppb }}>
-          {name}
-        </span>
-      ))}
-    </>
+    <span ref={el} aria-hidden data-fallback={name} className="absolute top-1/2 -translate-y-1/2 pl-1.5 text-xs text-fg-faint pointer-events-none">
+      {name}
+    </span>
   );
 }
 
 /** A control lane's value outside its clips: a dashed line where no clip is, at `y` in the lane. */
 function Fallback({ clips, y }: { clips: ControlClip[]; y: number }) {
-  const ppb = useZoom();
   const gaps: [number, number][] = [];
   let at = 0;
   for (const c of [...clips].sort((a, b) => a.start - b.start)) {
@@ -3290,11 +3314,18 @@ function Fallback({ clips, y }: { clips: ControlClip[]; y: number }) {
   }
   gaps.push([at, Infinity]);
   const top = Math.round(y) + 0.5;
+  return gaps.map(([a, b]) => <FallbackLine key={a} from={a} to={b} y={top} />);
+}
+
+/** One gap's dashed line, from beat `from` to `to` (the lane's end: Infinity), placed by the camera's zoom (VIEW-12). */
+function FallbackLine({ from, to, y }: { from: number; to: number; y: number }) {
+  const el = useRef<HTMLDivElement>(null);
+  useSpan(ARRANGEMENT, el, from, to === Infinity ? null : to);
   return (
-    <svg aria-hidden className="absolute inset-0 pointer-events-none" width="100%" height="100%">
-      {gaps.map(([a, b]) => (
-        <line key={a} x1={a * ppb} x2={b === Infinity ? "100%" : b * ppb} y1={top} y2={top} stroke="var(--color-line-strong)" strokeDasharray="4 4" />
-      ))}
-    </svg>
+    <div ref={el} aria-hidden className="absolute inset-y-0 pointer-events-none" style={to === Infinity ? { right: 0 } : undefined}>
+      <svg className="absolute inset-0" width="100%" height="100%">
+        <line x1={0} x2="100%" y1={y} y2={y} stroke="var(--color-line-strong)" strokeDasharray="4 4" />
+      </svg>
+    </div>
   );
 }
