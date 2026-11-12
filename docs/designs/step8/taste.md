@@ -1009,8 +1009,19 @@ tools after Hear notes, 24 px like every Notes tool):
 ### 3.10 Moving the view
 
 [The camera](../camera/design.md) moves the arrangement, the Graph, Notes and the beat grid as the
-hand does. Its rules are VIEW-1 to VIEW-10. VIEW-1 to VIEW-9 come with track `camera-core`; VIEW-10
-comes first, to measure today's views on the owner's Mac before anything changes.
+hand does. Its rules are VIEW-1 to VIEW-11. VIEW-10 came first, to measure today's views on the
+owner's Mac before anything changes; VIEW-5 (as today's views can) and VIEW-11 came with track
+`mac-feel`; the rest come with track `camera-core`.
+
+**VIEW-5.** ⌘-scroll (Ctrl-scroll) MUST zoom around the pointer in all four views: the point under
+it stays under it. So MUST a pinch on a Mac, and the Graph's zoom bar's Zoom in, Zoom out and actual
+size, around the view's middle. Fit fits, from the graph's top left.
+- *Today:* since track `mac-feel` for the Graph: `NodeGraph.tsx` holds the graph's point under the
+  pointer in its own units and scrolls it back after the zoom's render. The arrangement's
+  `zoomTo` does the same across (its tracks don't scale); Notes and the beat grid take ⌘-scroll
+  around the pointer but no pinch yet. Tested by `graph-zoom` (⌘-scroll in and out and a pinch in
+  and out, each within a pixel and a half of the point, the zoom bar's buttons around the middle,
+  Fit) and `pl-zoom` (the arrangement).
 
 **VIEW-10.** The command palette (⇧⌘P, §5.1) MUST offer **Show frame rate** and **Swipe probe**.
 - **Show frame rate** turns on a small meter over the window, at the right under the ruler, clear of
@@ -1093,6 +1104,16 @@ comes first, to measure today's views on the owner's Mac before anything changes
   the Graph; a pinch's scrolls apart from round B's count; known swipes, gaps, a diagonal flick and
   a swipe WebKit took over, read back from the summary; a step's cut raw events; the report copied
   and in the field; nothing heard and no frame loop after closing; the song's files unchanged).
+
+**VIEW-11.** On a Mac the page MUST draw at the screen's own rate, 120 frames a second on a 120 Hz
+screen. WebKit holds a page in an app near 60 on macOS 13 to 15 by a setting on by default,
+`PreferPageRenderingUpdatesNear60FPSEnabled`, which Safari turns off; the app's shell turns it off
+when it makes the window, through WebKit's private list of its settings, asking first whether each
+private call is there. Where it isn't, the shell says so in one line and the page keeps its rate.
+- *Today:* since track `mac-feel`: `apps/music2-desktop/src/frame_rate.rs`, called from `main.rs`
+  on the window's web view. Tested on a Mac by the desktop app's `frame_rate` test (the shell's
+  switch turns the setting off in a `WKPreferences`; a WebKit without it is said so), and by the
+  frame meter (VIEW-10), which shows 120 frames a second on such a screen.
 
 ---
 

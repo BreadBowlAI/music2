@@ -211,13 +211,40 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     };
     return () => void delete canvas.graphZoom;
   }, [setZoom]);
+  // A zoom keeps the graph's point under the pointer where it is (VIEW-5): the pinch's, ⌘-scroll's,
+  // or the view's middle for the zoom bar. That point, in the graph's own units, waits here for the
+  // zoom's render, which then scrolls it back under the pointer.
+  const anchor = useRef<{ x: number; y: number; gx: number; gy: number } | null>(null);
+  const zoomAround = useCallback(
+    (z: number, x: number, y: number) => {
+      const o = scroller.current?.querySelector("[data-canvas]")?.getBoundingClientRect();
+      anchor.current = o ? { x, y, gx: (x - o.left) / zoomRef.current, gy: (y - o.top) / zoomRef.current } : null;
+      setZoom(z);
+    },
+    [setZoom],
+  );
+  // After every render, so one whose zoom was clamped to the same still lets go of the point.
+  useLayoutEffect(() => {
+    const a = anchor.current, el = scroller.current;
+    anchor.current = null;
+    const o = a && el?.querySelector("[data-canvas]")?.getBoundingClientRect();
+    if (!a || !el || !o) return;
+    el.scrollLeft += o.left + a.gx * zoom - a.x;
+    el.scrollTop += o.top + a.gy * zoom - a.y;
+  });
+  /** The zoom bar's: around the view's middle, and Fit (`null`) as it fits. */
+  const zoomBar = (z: number | null) => {
+    const b = scroller.current?.getBoundingClientRect();
+    if (z == null || !b) return setZoom(z);
+    zoomAround(z, b.left + b.width / 2, b.top + b.height / 2);
+  };
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
     const wheel = (e: WheelEvent) => {
       if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      setZoom(zoomRef.current * Math.exp(-e.deltaY / 240));
+      zoomAround(zoomRef.current * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
     };
     let pinched = 1;
     const pinchStart = (e: Event) => {
@@ -226,7 +253,8 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     };
     const pinch = (e: Event) => {
       e.preventDefault();
-      setZoom(pinched * (e as Event & { scale: number }).scale);
+      const g = e as Event & { scale: number; clientX: number; clientY: number };
+      zoomAround(pinched * g.scale, g.clientX, g.clientY);
     };
     el.addEventListener("wheel", wheel, { passive: false });
     el.addEventListener("gesturestart", pinchStart);
@@ -236,7 +264,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
       el.removeEventListener("gesturestart", pinchStart);
       el.removeEventListener("gesturechange", pinch);
     };
-  }, [setZoom]);
+  }, [zoomAround]);
 
   return (
     <Locked.Provider value={locked}>
@@ -258,7 +286,7 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
               />
             )}
           </div>
-          {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={setZoom} />}
+          {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={zoomBar} />}
         </MixerCard.Provider>
       </Tracks.Provider>
     </Locked.Provider>

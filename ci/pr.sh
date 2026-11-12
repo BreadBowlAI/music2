@@ -45,8 +45,8 @@
 #   ci/pr.sh clippy             clippy on every target, every warning an error
 #   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
-#                               part 1 also runs the two tests that own their main thread
-#                               (main_thread, app_main_thread), which nextest can't list
+#                               part 1 also runs the three tests that own their main thread
+#                               (main_thread, app_main_thread, frame_rate), which nextest can't list
 #   ci/pr.sh suites [<i>/<n>]   the browser suites of the PR tier (e2e/run.mjs all --tier pr --shard),
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
 #                               alone, as in ci/check.sh, and is named if it passes then; a run
@@ -307,7 +307,7 @@ case $STEP in
       check clippy clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings ;;
 
   rust)
-    filter="not (binary(=main_thread) | binary(=app_main_thread))"
+    filter="not (binary(=main_thread) | binary(=app_main_thread) | binary(=frame_rate))"
     if [ -z "$ALL" ]; then filter="$filter and not ($(nightly_filter))"; fi
     if [ -n "${M2_LATE_SLEEPS:-}" ]; then
       filter="$filter and not ($(sleeps_filter))"
@@ -334,7 +334,7 @@ case $STEP in
         grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */::warning title=Passed only on a retry::/'
       fi
       if [ "${PART%/*}" = 1 ]; then
-        check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread
+        check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread --test frame_rate
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
         if [ $OS = linux ]; then

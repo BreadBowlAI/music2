@@ -34,3 +34,8 @@ m2-os.workspace = true
 [[test]]
 name = "app_main_thread"
 harness = false
+
+# VIEW-11: WebKit's objects want the process's main thread, which libtest owns.
+[[test]]
+name = "frame_rate"
+harness = false
