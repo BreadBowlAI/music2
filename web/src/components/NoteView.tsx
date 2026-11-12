@@ -33,6 +33,7 @@ import { GRAPHITE, trackColors, type TrackColor } from "../lib/palette";
 import { pickName, useGrid } from "../lib/grid";
 import { keysWidth, namesOf, pitchName, rowName } from "../lib/rowNames";
 import { useShell } from "../lib/shell";
+import { useRenderCount } from "../lib/frames";
 import { useStore } from "../lib/store";
 import AuditionTools from "./AuditionTools";
 import { DockSlot } from "./Dock";
@@ -124,6 +125,7 @@ function fill(tone: TrackColor, velocity: number) {
  * lane write, one undo step.
  */
 export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip: ClipRef }) {
+  useRenderCount("notes");
   const toast = useStore((s) => s.toast);
   const { timeline } = graph;
   const { module, lane } = ref;
@@ -1235,6 +1237,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         <div
           ref={scroller}
           data-testid="roll-scroller"
+          data-view-box="notes"
           className="absolute inset-0 overflow-auto"
           onScroll={(e) => strip.current && (strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`)}
         >
@@ -1687,6 +1690,7 @@ const Keys = memo(
     rows: number[] | null;
     rowH: number;
   }) {
+    useRenderCount("notes.keys");
     const drums = Object.keys(names).length > 0;
     const held = useAudition((s) => s.held);
     const sounding = new Set([...held.values()].filter((n) => n.module === module && n.lane === lane).map((n) => n.pitch));

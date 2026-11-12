@@ -58,6 +58,8 @@ interface Shell {
   open: ReadonlySet<string>;
   /** The keyboard shortcuts sheet (⌥K). */
   sheet: boolean;
+  /** The command palette (⇧⌘P). */
+  palette: boolean;
   /** A rename asked for (⌘R, a menu's Rename): the track whose name turns into a field, in its header or its Mix strip. */
   renaming: { module: string; at: "header" | "strip" } | null;
   /** The roll's Draw mode (B): a click adds a note and a drag paints; else a click selects (D4). */
@@ -110,6 +112,7 @@ export const useShell = create<Shell>((set, get) => ({
   clips: {},
   open: new Set(),
   sheet: false,
+  palette: false,
   renaming: null,
   draw: false,
   chord: null,
@@ -226,4 +229,9 @@ export const canvas: {
   lanesBox?: () => DOMRect | null;
   /** A pointer's Show: beats `start` to `end` in view. */
   reveal?: (start: number, end: number) => void;
+  /**
+   * The Graph's zoom for the module it shows, whether it is at Fit, and that module; with `to`,
+   * set it as its zoom bar does (null: Fit). The swipe probe makes room with it (taste.md VIEW-10).
+   */
+  graphZoom?: (to?: number | null) => { zoom: number; fitted: boolean; module: string };
 } = {};

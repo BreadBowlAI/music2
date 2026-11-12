@@ -35,6 +35,9 @@ import { stopThen, toggleRecord } from "./lib/record";
 import ExportDialog from "./components/ExportDialog";
 import { openGuide } from "./lib/guide";
 import Spotlight, { toggleFinding } from "./components/Spotlight";
+import CommandPalette from "./components/CommandPalette";
+import FrameMeter from "./components/FrameMeter";
+import SwipeProbe from "./components/SwipeProbe";
 import { useFinding } from "./lib/library";
 
 /** Fetch the open project. An error means none is open: the start screen shows. */
@@ -125,6 +128,8 @@ function chord(e: KeyboardEvent): { id: string; always?: boolean; page?: boolean
   if (k === "f" && e.shiftKey && !e.altKey) return { id: "follow" };
   // View ▸ Find Sounds (⌘F): the library's one search (LIB-1).
   if (k === "f" && !e.altKey) return { id: "find" };
+  // The command palette (⇧⌘P, taste.md §5.1): the page's, as no menu row has it yet.
+  if (k === "p" && e.shiftKey && !e.altKey) return { id: "palette", page: true };
   // Settings (⌘, and Ctrl+,), from anywhere: the start screen, a field, the code editor.
   if (e.key === "," && !e.shiftKey && !e.altKey) return { id: "settings", always: true };
   return null;
@@ -254,6 +259,9 @@ export default function App() {
         <ExportDialog />
         <MidiTempoAsk />
         <Shortcuts />
+        <CommandPalette />
+        <FrameMeter />
+        <SwipeProbe />
         <SettingsDialog />
         <Toasts />
         {graph && <PointerNote session={graph.session} />}
@@ -321,6 +329,7 @@ export function appCommand(id: string) {
   // With a song open or not: making one opens it in place of the open one.
   if (id === "new_song") return openNewSong();
   if (id === "shortcuts") return shell.set({ sheet: !shell.sheet });
+  if (id === "palette") return shell.set({ palette: !shell.palette });
   if (id === "settings") return openSettings();
   const graph = st.graph;
   if (!graph) return;

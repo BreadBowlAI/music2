@@ -1006,6 +1006,94 @@ tools after Hear notes, 24 px like every Notes tool):
   says "(not connected)". While an export runs both lists are grey: "Wait for the export to finish."
 - One primary button, Done, in a `chrome` footer. Esc closes; Tab goes round.
 
+### 3.10 Moving the view
+
+[The camera](../camera/design.md) moves the arrangement, the Graph, Notes and the beat grid as the
+hand does. Its rules are VIEW-1 to VIEW-10. VIEW-1 to VIEW-9 come with track `camera-core`; VIEW-10
+comes first, to measure today's views on the owner's Mac before anything changes.
+
+**VIEW-10.** The command palette (⇧⌘P, §5.1) MUST offer **Show frame rate** and **Swipe probe**.
+- **Show frame rate** turns on a small meter over the window, at the right under the ruler, clear of
+  the top bar's controls and taking no clicks (the palette then offers Hide frame rate). It shows
+  the frames a second, from `requestAnimationFrame`'s intervals over the last second; the slowest
+  frame of the last second, in ms; and the redraws of the last second for each view (the
+  arrangement and its tracks' rows, the Graph and its nodes, Notes and its keys, the beat grid and
+  its rows), counted by one `useRenderCount` line at the top of each. Its numbers change four times
+  a second, written straight into its own text: it redraws no view. Suites read the same numbers,
+  and how many frames have been measured since the page loaded, from `window.m2canvas.frames()`:
+  the only part of the window the page gives them.
+- **Swipe probe** opens a panel at the window's lower right, above the Graph's zoom bar, that leads
+  the musician in plain steps.
+  - First, **about your Mac**: its model (a few choices, and a field), its macOS version (a field)
+    and its screen's refresh rate (choices). The page can't see them: the web view's user agent
+    always names macOS 10.15, and the web view may hold the page at 60 frames a second on a 120 Hz
+    screen.
+  - Then two rounds of 14 steps. Over the timeline (the tracks at the top) and then over the Graph
+    (in the panel at the bottom, over its dotted background, not over a box): three swipes across,
+    three down and three diagonal, lifting the fingers between them; two flicks across and two
+    diagonal, let go; two flicks held; and, last in the round, a pinch over each. Once per swipe
+    and flick step, in both rounds, it asks whether the scrollbar (the thin bar at the right or
+    bottom edge that shows where you are) showed while the view moved (Yes, No).
+  - At each step's start it checks that the view has room to move both ways, and makes room where
+    it has none: it shows the Song's graph and zooms the Graph in until it overflows both ways, or
+    zooms the timeline in. It puts a view's zoom back after each pinch, and when it closes puts
+    back every zoom, the selection and the dock's view it changed.
+  - **Round A, "Let the app scroll as it does today":** its listeners only listen.
+  - **Round B, "Cancel the swipe":** a listener in the capture phase cancels and stops each wheel
+    event over the timeline's and the Graph's scroll boxes (`preventDefault`, `stopPropagation`),
+    so neither the web view nor any control under the pointer sees it, and moves the box itself
+    by the event's deltas, once a frame, as the camera will (the note's §4: it writes whole pixels
+    and takes in a move it didn't make). A ⌘ or Ctrl wheel event is left to the app's zoom.
+  - It records, each with its round and step: each wheel event (its time, `deltaX`, `deltaY`,
+    `deltaMode`, whether it could be cancelled and was, how late the page heard it, the view under
+    it, the modifier keys); each `gesturestart`, `gesturechange` and `gestureend` (time, `scale`,
+    `clientX`); each `scroll` of the four views' boxes (time, `scrollLeft`, `scrollTop`, and
+    whether it was the probe's own write, the probe making room, or the app's zoom); and the
+    frames' intervals.
+  - **Copy report** copies a plain-text report to paste back. Its summary comes first:
+    - the Mac, as the musician said; whether it ran in the app; the platform, the screen, and
+      whether the scrollbars are overlay ones (the Mac's Show scroll bars: when scrolling) or always
+      shown; the page's frame rate, said to be perhaps held at 60;
+    - for each step: the swipes found at G = 30, 50, 80 and 120 ms against the count it asked for,
+      and a histogram of the gaps, both leaving out ⌘ and Ctrl events; the view's room at the
+      step's start, what the wheel asked and how far the view moved; its frames a second, slowest
+      frame and frames over 16.7 and 8.3 ms; how late the page heard its events; the scrollbar
+      answer;
+    - for each flick: the direction of the flick and of the glide after it, and the glide's share
+      of movement on each axis;
+    - for each step, at G = 50 ms: the swipes whose first event could be cancelled and a later one
+      couldn't (WebKit took the swipe over), and those with none cancelable, with a line saying
+      that in round A this is WebKit's normal way;
+    - round B's scrolls in swipe and flick steps that weren't the probe's (0 when cancelling
+      works), and the pinches' scrolls apart, as the app's zoom;
+    - the gesture events, and the deltas with both axes and with fractions.
+
+    Then the raw events: for each step its first 90 wheel events and 40 gesture events, and round
+    B's scrolls that weren't the probe's, saying what each step cut, so the report stays near 60 KB.
+    Where the clipboard refuses, the report shows in a field, selected for ⌘C.
+  - It writes nothing to the song. Closing it removes every listener it added and stops its frame
+    loop; what it heard stays until **Start again** or the window reloads.
+- *Why:* the camera's numbers (G, the glide, 120 Hz, our own scrollbars: the note's D4 and D5) are
+  measured on the owner's Mac first, and "moving the view redraws nothing" is checked by a count,
+  not by eye (the note's §8, C11 and C20). Round B moves the view the camera's way so the scrollbar
+  question has an answer: whether the Mac shows its scrollbars for a move the page makes; round A's
+  answers are its baseline.
+- *Today:* since track `camera-probe`: `useRenderCount` and the meter's numbers in
+  `web/src/lib/frames.ts`, the meter in `FrameMeter.tsx`, the probe in `web/src/lib/probe.ts` and
+  `SwipeProbe.tsx`, the palette in `CommandPalette.tsx`, which holds only these two commands so far
+  (gaps.md). The meter shows the last second's redraws: the note's §8 meter, with the redraws of
+  the last swipe and a count of the swipes WebKit took over, comes with track `camera-core`'s
+  recognizer; the probe's report gives both for each step now. `node e2e/big-song.mjs <folder>`
+  makes a song of 24 tracks of 64 clips each to measure on. Tested by `camera-probe` (the
+  palette's two rows; the meter's numbers and `frames()`'s, and no view redrawn by its updates; a
+  zoom redrawing the arrangement and no other view; the Mac's answers first in the report; room
+  made in the timeline and the Graph, the zoom put back after a pinch and on closing; round A's
+  wheel scrolling the arrangement, heard with its scrolls, and a control under it seeing it; round
+  B's cancelled, stopped before any control, and moved by the probe alone, over the arrangement and
+  the Graph; a pinch's scrolls apart from round B's count; known swipes, gaps, a diagonal flick and
+  a swipe WebKit took over, read back from the summary; a step's cut raw events; the report copied
+  and in the field; nothing heard and no frame loop after closing; the song's files unchanged).
+
 ---
 
 ## 4. Change list, screen by screen

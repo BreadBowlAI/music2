@@ -182,3 +182,15 @@ In short: the beat grid writes a drum beat by clicking boxes, one row for each d
 - **Help → Make Your First Song** opens a guide at the top of the browser: seven steps that tick themselves as you do them.
 - Hold the mouse over any button, knob or fader: its tooltip says what it does, in plain words, with its key.
 - A mistake in the code is said in plain words with a fix, pointing at your own line: "Cutoff wants a frequency (Hz), but gets a level (dB). Write it in Hz, such as hz(800)." The original message is under **Details**.
+
+## How smooth the window runs
+
+The command palette (⇧⌘P on a Mac, Ctrl+Shift+P on Linux) holds two tools that measure how smoothly the timeline and the Graph move. Type a word of the tool's name, then press Return. Neither changes anything in your song.
+
+| Tool | What it does |
+|---|---|
+| **Show frame rate** | A small box at the right, under the ruler. It shows how many times a second the window is drawn (frames a second: 60, or 120 on some Macs), the slowest frame of the last second in milliseconds (ms), and how many times each view was redrawn in that second. A frame under 17 ms is smooth at 60 frames a second; under 8.3 ms at 120. Choose it again (**Hide frame rate**) to hide the box. |
+| **Swipe probe** | A panel at the lower right. First it asks which Mac you have, its macOS version and its screen's refresh rate: the app can't see them. Then it asks you to swipe, flick and pinch over the timeline (the tracks at the top) and over the Graph (the panel at the bottom), in two rounds: first as the app scrolls today, then with music2 moving the view itself. After each swipe and flick it asks whether the scrollbar (the thin bar at the right or bottom edge that shows where you are) showed. It zooms in by itself where a view has no room to move, and puts the zoom back when you close it. **Copy report** copies what it heard, as text, to paste back to whoever asked you to run it. It takes about ten minutes, and listens only while its steps show. |
+
+- Stop the song before the probe, so the timeline doesn't follow the playhead while you swipe.
+- Any song works; a big one shows more. If you build music2 from its code, you can make a big test song: type `node e2e/big-song.mjs ~/Music/big-song` in a terminal, in the music2 folder, for 24 tracks with 64 clips each, then open that folder (⌘O). Otherwise use your biggest song.
