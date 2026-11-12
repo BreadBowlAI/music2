@@ -102,6 +102,10 @@ function Clip({ clip }) {
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.
 - **A control that keeps its wheel** (a picture's dot): mark it `data-wheel`. It takes a swipe that
   starts on it, unless a camera just carried it under a still pointer.
+- **Say the content's size** as you render it, where you know it: `camera.content({ w, h })`. When
+  it gets smaller (Fold, shorter rows), the camera stops at the box's new edge in that render, and
+  what the view culls by it is drawn before the frame. Without it, a ResizeObserver tells, a frame
+  later.
 - **Who moved it:** `onCamera(camera, (now, was) => …)` with `now.by`: `"hand"`, `"app"`,
   `"browser"`, `"zoom"` or `"clamp"` (the box's edge came in). Follow pauses on a move across by
   `"hand"` or `"browser"`, and waits while `camera.swiping()`; its page is `camera.to(x, y, zoom,

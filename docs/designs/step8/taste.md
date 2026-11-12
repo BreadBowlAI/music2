@@ -1140,8 +1140,10 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
 (DV-13), a lit column (DV-18), Notes' opening, its rows' height and Fold (the drum in its middle
 stays there). Content that gets smaller than where the camera looks (or a box that gets bigger)
 stops the camera at the new edge, as the browser stops the box, though it may send no `scroll`:
-heard by ResizeObservers on the box and what is in it, after layout, never by reading the page after
-every render; that move is the box's edge's (`clamp`), no one's. A move the browser makes to a box
+in the render that made it smaller, where the view says its content's size (`camera.content`, so
+Fold's rows are drawn in that frame), else heard by ResizeObservers on the box and what is in it,
+after layout; never by reading the page after every render. That move is the box's edge's
+(`clamp`), no one's. A move the browser makes to a box
 itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
 taken in: on the box's `scroll`, a position more than 1 px from what the camera last wrote is the
 browser's. Follow pauses on a move across that isn't the app's own (the hand's or the browser's; a
