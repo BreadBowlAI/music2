@@ -177,6 +177,8 @@ export default function EffectBrowser({
       role="dialog"
       aria-label={label}
       data-effect-browser
+      // Its list scrolls by the wheel: a swipe that starts on it is its own, not the Graph's camera's (VIEW-2).
+      data-wheel
       className="fixed z-50 flex flex-col rounded-md bg-raised shadow-pop overflow-hidden animate-rise cursor-default"
       style={{ ...pos, width: WIDTH }}
       onPointerDown={(e) => e.stopPropagation()}

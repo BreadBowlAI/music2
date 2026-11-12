@@ -7,6 +7,7 @@
 
 import clsx from "clsx";
 import { useEffect, useId, useRef, useState } from "react";
+import { controlsAt } from "../camera";
 import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { beatNow, playingNow } from "../lib/clock";
@@ -329,7 +330,7 @@ function Shapes({ view, shapes, hold, size, ...p }: ViewProps & { view: PictureV
     // Expanded, its column comes into view once the node has its new size (DV-13).
     setTimeout(() => {
       const col = document.querySelector<HTMLElement>(`[data-node-key="${CSS.escape(nodeKey)}"] [data-column="${CSS.escape(opens)}"]`);
-      col?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      if (col) controlsAt(col)?.reveal(col);
     }, 320);
   };
   /** A dot's drag (CARD-70): from where its values were, by how far the pointer went, one write at release. */
@@ -575,6 +576,8 @@ function Dot({ i, handle, cx, cy, marked, knobOf, onDown, onPick, ...p }: ViewPr
       )}
       <circle
         ref={el}
+        // It keeps its wheel: a swipe that starts on it is its own, not the Graph's camera's (VIEW-2, DV-17).
+        data-wheel
         data-dot={i}
         data-opens={handle.opens}
         data-marked={marked || undefined}

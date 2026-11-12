@@ -130,8 +130,24 @@ export default function PointerNote({ session }: { session: number }) {
       frame = requestAnimationFrame(follow);
     };
     follow();
+    // While the Graph's nodes move aside (DV-13, 280 ms), every frame of it: they ease, no view moves.
+    let easing = 0;
+    const ease = () => {
+      follow();
+      easing = useExpanded.getState().moving ? requestAnimationFrame(ease) : 0;
+    };
     // The song, the shell (the dock, a track unfolded), the view's settings (track heights), a node expanded.
-    const offs = [onViewMoved(follow), useStore.subscribe(soon), useShell.subscribe(soon), useLocalStore.subscribe(soon), useExpanded.subscribe(soon)];
+    const offs = [
+      onViewMoved(follow),
+      useStore.subscribe(soon),
+      useShell.subscribe(soon),
+      useLocalStore.subscribe(soon),
+      useExpanded.subscribe((now) => {
+        if (now.moving && !easing) easing = requestAnimationFrame(ease);
+        soon();
+      }),
+      () => cancelAnimationFrame(easing),
+    ];
     // A box the camera doesn't move (Mix's strips), the window's size, and the end of a move that
     // eases (the Graph's nodes moving aside).
     document.addEventListener("scroll", follow, { capture: true, passive: true });

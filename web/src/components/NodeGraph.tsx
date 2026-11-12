@@ -33,7 +33,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { create } from "zustand";
 import {
@@ -73,6 +73,7 @@ import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, 
 import { trackColors } from "../lib/palette";
 import { canvas, useShell } from "../lib/shell";
 import { useRenderCount } from "../lib/frames";
+import { controlsAt, forgetCameras, movingNow, onCamera, useCamera, useZoomOf } from "../camera";
 import { useStore } from "../lib/store";
 import { Bar } from "./Bar";
 import { Dots } from "./draw";
@@ -154,123 +155,61 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   const room = useMemo(() => headRoom(graph.effects, perNote), [graph.effects, perNote]);
   const single = compacted?.card.id;
   const laid = useMemo(() => shown && layout(shown, expanded, room, single), [shown, expanded, room, single]);
-  // Fit is worked out from the graph with every node collapsed: expanding one never changes it (DV-13).
-  const collapsed = useMemo(() => shown && layout(shown, new Set(), room, single), [shown, room, single]);
   const locked = useStore((s) => lockReason(graph, s.connected));
   const tracks = useMemo(() => {
     const by = new Map(graph.view.modules.filter((m) => m.track).map((m) => [m.key, moduleName(m)]));
     return (key: string) => by.get(key);
   }, [graph.view.modules]);
 
-  // The zoom: fitted to the panel until the user picks one, per module.
+  // The Graph's camera (taste.md VIEW-1): one for each module while the Graph shows, its zoom the
+  // graph's scale, stretching both ways from the graph's corner (the box's and the section's 16 px
+  // of padding in). A module's zoom and place are kept while the Graph shows; Fit until the user picks one.
   const scroller = useRef<HTMLDivElement>(null);
-  const [room0, setRoom] = useState<{ w: number; h: number } | null>(null);
-  useLayoutEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    // The panel's whole box, less a scrollbar each way: never the room the scrollbars showing now
-    // leave. Those come and go with the zoom, so a fit to them flickers: a scrollbar shows, the fit
-    // shrinks the graph, the scrollbar goes, the fit grows it, every frame (DV-5).
-    const measure = () => {
-      const bar = scrollbarRoom();
-      const w = el.offsetWidth - bar, h = el.offsetHeight - bar;
-      setRoom((r) => (r && r.w === w && r.h === h ? r : { w, h }));
-    };
-    measure();
-    const watch = new ResizeObserver(measure);
-    watch.observe(el);
-    return () => watch.disconnect();
-  }, []);
-  const [zooms, setZooms] = useState<Record<string, number>>({});
-  const fit = collapsed && room0 ? fitZoom(collapsed, room0) : 1;
-  const zoom = zooms[module] ?? fit;
-  const setZoom = useCallback(
-    (z: number | null) =>
-      setZooms((zs) => {
-        const next = { ...zs };
-        if (z == null) delete next[module];
-        else next[module] = clampZoom(z);
-        return next;
-      }),
-    [module],
+  const name = `graph:${module}`;
+  const camera = useCamera(name, scroller, {
+    origin: { x: GRAPH_IN, y: GRAPH_IN },
+    stretch: { x: true, y: true },
+    zoom: { min: 0.3, max: 2 },
+    start: () => FIT,
+    keep: true,
+  });
+  useEffect(() => () => forgetCameras("graph:"), []);
+  const zoom = useZoomOf(name);
+  // The modules whose zoom the user picked: the zoom bar's Fit is pressed for the others.
+  const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set());
+  const fitted = !chosen.has(module);
+  const choose = useCallback((m: string, on: boolean) => setChosen((c) => (c.has(m) === on ? c : on ? new Set([...c, m]) : new Set([...c].filter((x) => x !== m)))), []);
+  // A zoom by the hand (⌘-scroll, a pinch) is a zoom picked too.
+  useEffect(() => onCamera(name, (now, was) => now.zoom !== was.zoom && now.by === "zoom" && choose(module, true)), [name, module, choose]);
+  const latest = useRef({ module, fitted, zoom });
+  latest.current = { module, fitted, zoom };
+  /** The zoom bar's: around the view's middle (VIEW-5), and Fit (`null`): 100%, from the graph's top left. */
+  const zoomBar = useCallback(
+    (z: number | null) => {
+      if (z == null) {
+        choose(latest.current.module, false);
+        return camera.to(0, 0, FIT);
+      }
+      choose(latest.current.module, true);
+      camera.zoomAround(z);
+    },
+    [camera, choose],
   );
-  // ⌘/Ctrl + wheel zooms, and so does a trackpad pinch (Chrome sends it as Ctrl + wheel,
-  // WebKit, the desktop app's web view, as gesture events).
-  const zoomRef = useRef(zoom);
-  zoomRef.current = zoom;
-  const fittedRef = useRef(true);
-  fittedRef.current = zooms[module] == null;
-  const moduleRef = useRef(module);
-  moduleRef.current = module;
   // The zoom, read and set from outside as the zoom bar does: the swipe probe makes room (VIEW-10).
   useEffect(() => {
     canvas.graphZoom = (to) => {
-      const now = { zoom: zoomRef.current, fitted: fittedRef.current, module: moduleRef.current };
-      if (to !== undefined) setZoom(to);
+      const now = { zoom: latest.current.zoom, fitted: latest.current.fitted, module: latest.current.module };
+      if (to !== undefined) zoomBar(to);
       return now;
     };
     return () => void delete canvas.graphZoom;
-  }, [setZoom]);
-  // A zoom keeps the graph's point under the pointer where it is (VIEW-5): the pinch's, ⌘-scroll's,
-  // or the view's middle for the zoom bar. That point, in the graph's own units, waits here for the
-  // zoom's render, which then scrolls it back under the pointer.
-  const anchor = useRef<{ x: number; y: number; gx: number; gy: number } | null>(null);
-  const zoomAround = useCallback(
-    (z: number, x: number, y: number) => {
-      const o = scroller.current?.querySelector("[data-canvas]")?.getBoundingClientRect();
-      anchor.current = o ? { x, y, gx: (x - o.left) / zoomRef.current, gy: (y - o.top) / zoomRef.current } : null;
-      setZoom(z);
-    },
-    [setZoom],
-  );
-  // After every render, so one whose zoom was clamped to the same still lets go of the point.
-  useLayoutEffect(() => {
-    const a = anchor.current, el = scroller.current;
-    anchor.current = null;
-    const o = a && el?.querySelector("[data-canvas]")?.getBoundingClientRect();
-    if (!a || !el || !o) return;
-    el.scrollLeft += o.left + a.gx * zoom - a.x;
-    el.scrollTop += o.top + a.gy * zoom - a.y;
-  });
-  /** The zoom bar's: around the view's middle, and Fit (`null`) as it fits. */
-  const zoomBar = (z: number | null) => {
-    const b = scroller.current?.getBoundingClientRect();
-    if (z == null || !b) return setZoom(z);
-    zoomAround(z, b.left + b.width / 2, b.top + b.height / 2);
-  };
-  useEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    const wheel = (e: WheelEvent) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.preventDefault();
-      zoomAround(zoomRef.current * Math.exp(-e.deltaY / 240), e.clientX, e.clientY);
-    };
-    let pinched = 1;
-    const pinchStart = (e: Event) => {
-      e.preventDefault();
-      pinched = zoomRef.current;
-    };
-    const pinch = (e: Event) => {
-      e.preventDefault();
-      const g = e as Event & { scale: number; clientX: number; clientY: number };
-      zoomAround(pinched * g.scale, g.clientX, g.clientY);
-    };
-    el.addEventListener("wheel", wheel, { passive: false });
-    el.addEventListener("gesturestart", pinchStart);
-    el.addEventListener("gesturechange", pinch);
-    return () => {
-      el.removeEventListener("wheel", wheel);
-      el.removeEventListener("gesturestart", pinchStart);
-      el.removeEventListener("gesturechange", pinch);
-    };
-  }, [zoomAround]);
+  }, [zoomBar]);
 
   return (
     <Locked.Provider value={locked}>
       <Tracks.Provider value={tracks}>
         <MixerCard.Provider value={compacted?.card ?? null}>
-          <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col" data-testid="graph" data-view-box="graph">
+          <div ref={scroller} className="flex-1 min-h-0 overflow-auto p-4 flex flex-col [overflow-anchor:none] overscroll-none" data-testid="graph" data-view-box="graph">
             {shown && laid && (
               <ModuleSection
                 key={`${graph.session}:${shown.key}`}
@@ -286,44 +225,21 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
               />
             )}
           </div>
-          {shown && <ZoomBar zoom={zoom} fitted={zooms[module] == null} onZoom={zoomBar} />}
+          {shown && <ZoomBar zoom={zoom} fitted={fitted} onZoom={zoomBar} />}
         </MixerCard.Provider>
       </Tracks.Provider>
     </Locked.Provider>
   );
 }
 
-/** Zooms the graph can take; fitting it to the panel never shrinks it below `MIN_FIT` (it scrolls instead). */
-const clampZoom = (z: number, lo = 0.3, hi = 2) => Math.min(hi, Math.max(lo, Number.isFinite(z) ? z : 1));
+/** Where the graph starts in the Graph's box: its padding, and its section's, in px. */
+const GRAPH_IN = 32;
 /**
  * Fit (taste.md DV-5): 100%, so a node's 12 px label and 11 px values draw at the type scale's
  * sizes. Under it they wouldn't (at 75% a title drew at 9 px: review Z8); a graph bigger than the
  * dock scrolls instead.
  */
 const FIT = 1;
-
-/**
- * How much room a scrollbar takes from what it scrolls: none where scrollbars float over it (a Mac
- * with a trackpad), else its width (a mouse, or "Show scroll bars: Always").
- */
-function scrollbarRoom() {
-  const probe = document.createElement("div");
-  probe.style.cssText = "position:absolute;visibility:hidden;overflow:scroll;width:40px;height:40px";
-  document.body.append(probe);
-  const room = probe.offsetWidth - probe.clientWidth;
-  probe.remove();
-  return room;
-}
-
-/**
- * The zoom Fit picks (taste.md §3.5, DV-5): a sound that fits the panel's height at full size (a
- * line of nodes) opens at 100% and scrolls sideways, the way signal reads; one that doesn't is
- * shrunk to fit, down to 75%, and scrolls past that. `room` leaves a scrollbar's room each way, so
- * what fits never needs one.
- */
-function fitZoom(_laid: { width: number; height: number }, _room: { w: number; h: number }) {
-  return FIT;
-}
 
 /** Zoom out, the zoom (click: actual size), zoom in, fit, and Collapse all: floating at the panel's bottom right. */
 function ZoomBar({ zoom, fitted, onZoom }: { zoom: number; fitted: boolean; onZoom: (z: number | null) => void }) {
@@ -873,7 +789,7 @@ const ModuleSection = memo(function ModuleSection({
           style={{ minWidth: width * zoom, minHeight: height * zoom }}
           onPointerDown={(e) => !(e.target as HTMLElement).closest("[data-node-id]") && useExpanded.getState().select(null)}
         >
-          <Dots />
+          <Dots zoom={zoom} />
           <div className="relative" style={{ width: width * zoom, height: height * zoom }}>
             <div
               ref={area}
@@ -913,7 +829,8 @@ const ModuleSection = memo(function ModuleSection({
                         strokeWidth={14}
                         fill="none"
                         style={{ pointerEvents: "stroke" }}
-                        onPointerEnter={() => useWireHover.getState().set(edgeKey(e), true)}
+                        // While the view moves the hover waits (VIEW-8): the page's own mouse move after a scroll draws nothing.
+                        onPointerEnter={() => !movingNow() && useWireHover.getState().set(edgeKey(e), true)}
                         onPointerLeave={() => useWireHover.getState().set(edgeKey(e), false)}
                       />
                     ))}
@@ -1054,7 +971,7 @@ function WirePlus({
       aria-expanded={open}
       title={why ?? `Add ${takes} on this wire: after ${titleOf(from, effects)}, before ${titleOf(to, effects)}`}
       tabIndex={shown ? 0 : -1}
-      onPointerEnter={() => useWireHover.getState().set(k, true)}
+      onPointerEnter={() => !movingNow() && useWireHover.getState().set(k, true)}
       onPointerLeave={() => useWireHover.getState().set(k, false)}
       onMouseDown={(e) => e.preventDefault()}
       onClick={(e) => (why ? toast(why) : onOpen(e.currentTarget))}
@@ -1282,7 +1199,8 @@ function Node({
   const was = useRef(shape.expanded);
   useEffect(() => {
     if (shape.expanded && !was.current) {
-      const t = setTimeout(() => el.current?.scrollIntoView({ block: "nearest", inline: "nearest" }), 290);
+      // Through the Graph's camera (VIEW-9): the least move that shows it.
+      const t = setTimeout(() => el.current && controlsAt(el.current)?.reveal(el.current), 290);
       was.current = true;
       return () => clearTimeout(t);
     }
