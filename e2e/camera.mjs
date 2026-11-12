@@ -792,12 +792,25 @@ await frames();
   check(notes > 0 && notes < 256, `Notes draws only the notes in view and a margin of the 256: ${notes}${c ? ` (${c.view.w} × ${c.view.h} px)` : ""}`);
   const r = await box(roll);
   const at = { x: r.x + r.width * 0.6, y: r.y + r.height * 0.6 };
+  // Zoomed in, so it has room across: the clip opens fitted to the view.
+  await feed(r.x + 100, at.y, [{ t: 0, dy: -100, ctrl: true }]);
+  await frames();
+  await sleep(120);
+  await feed(r.x + 100, at.y, [{ t: 0, dy: -100, ctrl: true }]);
+  await frames();
+  await sleep(120);
   const s0 = await scroll(roll);
   await feed(at.x, at.y, swipe(20, 6, 4));
   await frames();
   const s1 = await scroll(roll);
-  check(s1.x - s0.x === 120 && s1.y - s0.y === 80, `Notes: a diagonal swipe moves it 1:1 both ways (${s1.x - s0.x} × ${s1.y - s0.y})`);
-  // Over a note: 120 events render nothing.
+  check(s0.room.x - s0.x >= 120 && s1.x - s0.x === 120 && s1.y - s0.y === 80, `Notes: a diagonal swipe moves it 1:1 both ways (${s1.x - s0.x} × ${s1.y - s0.y}; room ${s0.room.x - s0.x} across)`);
+  // Over a note: 120 events render nothing. First a jump far from where it was (more than half a
+  // view): a new window, around where it lands.
+  await setScroll(roll, (await scroll(roll)).room.x, null);
+  await frames();
+  await setScroll(roll, 10, null);
+  await frames();
+  await sleep(300);
   const note = await page.$$eval(`${roll} [data-note]`, (els, r) => {
     for (const e of els) {
       const b = e.getBoundingClientRect();
@@ -806,11 +819,6 @@ await frames();
     return null;
   }, r);
   if (note) await page.mouse.move(note.x, note.y);
-  await sleep(300);
-  const c1 = await cam("notes");
-  const stepX = c1 ? (c1.view.w - c1.margins.left) / 2 : 400;
-  await setScroll(roll, Math.round(stepX + 10), null);
-  await frames();
   await sleep(300);
   const r0 = await renders();
   await feed(note?.x ?? at.x, note?.y ?? at.y, swipe(120, 0.5, 0, 8));
