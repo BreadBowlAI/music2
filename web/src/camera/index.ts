@@ -4,9 +4,9 @@
 export * from "./numbers";
 export { NO_EDGES, cull, fit, move, reveal, room, to, toBox, toContent, within, zoomAround } from "./math";
 export type { Align, Camera, CullBy, Edges, Shape, Size, Span, Window } from "./math";
-export { cameraNames, cameraOf, forgetCameras, hasCamera, onCamera, useCull, useZoomOf } from "./store";
+export { cameraNames, cameraOf, forgetCameras, hasCamera, onCamera, useCameraState, useCull, useZoomOf } from "./store";
 export type { CameraState, MovedBy, Ways } from "./store";
-export { controlsOf, useCamera, useNear } from "./useCamera";
+export { controlsAt, controlsOf, useCamera, useNear } from "./useCamera";
 export type { CameraOptions } from "./useCamera";
 export type { CameraControls } from "./rig";
 export { movingNow, pauseSwipes, setPlatform } from "./state";

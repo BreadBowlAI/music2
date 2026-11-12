@@ -2,6 +2,7 @@ import clsx from "clsx";
 import { Download, Metronome, PanelLeft, Play, Redo2, Repeat, SkipBack, Square, Undo2 } from "lucide-react";
 import { useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import { barAt, barsToBeats, lockReason, position, type GraphState, type GraphStatus, type Loop, type Meter, type Problem } from "../lib/graph";
+import { useStatus } from "../lib/status";
 import { exportSong, useExport } from "../lib/exporting";
 import { ended, next, said } from "../lib/history";
 import { useMetronome, toggleMetronome } from "../lib/metronome";
@@ -75,18 +76,18 @@ const BarButton = (props: React.ComponentProps<typeof Button>) => <Button onMous
  */
 export default function TopBar({
   graph,
-  status,
   onSeek,
   onLoop,
   onShowCode,
 }: {
   graph: GraphState;
-  status: GraphStatus;
   onSeek: (beat: number) => void;
   onLoop: (req: { start?: number; end?: number; on?: boolean }) => void;
   onShowCode: (p: Problem) => void;
 }) {
   const { meter } = graph.timeline;
+  // The poll's status: the top bar shows it, so it renders by it (VIEW-8).
+  const status = useStatus();
   const browser = useShell((s) => s.browser);
   const bar = useRef<HTMLElement>(null);
   const gap = useRef<HTMLDivElement>(null);

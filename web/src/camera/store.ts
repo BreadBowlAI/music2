@@ -12,6 +12,11 @@ export type MovedBy = "hand" | "app" | "browser" | "zoom";
 /** A camera, and what of its view's shape it keeps: its box's size, margins, origin and which ways it stretches. */
 export interface CameraState extends Camera, Omit<Shape, "content"> {
   by: MovedBy;
+  /**
+   * The content's px the last zoom looked at, its view's width and height on: a view that keeps its
+   * content at least this big keeps what a zoom held in place there, at its far end too.
+   */
+  asked: Size;
 }
 
 const ZERO: Size = { w: 0, h: 0 };
@@ -30,6 +35,7 @@ export function cameraOf(name: string, init?: () => number): StoreApi<CameraStat
       origin: { x: 0, y: 0 },
       stretch: { x: true, y: true },
       by: "app",
+      asked: ZERO,
     }));
     made.set(name, cam);
   }
@@ -59,6 +65,9 @@ export function onCamera(name: string, f: (now: CameraState, was: CameraState) =
 
 /** The camera's zoom, for a view that draws by it: it renders when the zoom changes, never when the view only moves. */
 export const useZoomOf = (name: string, init?: () => number) => useStore(cameraOf(name, init), (s) => s.zoom);
+
+/** Any coarse part of the camera (its box's size, say), for a view that draws by it. Never `x` or `y`: those change every frame. */
+export const useCameraState = <T,>(name: string, select: (s: CameraState) => T) => useStore(cameraOf(name), select);
 
 /** Which ways a culling window is wanted. */
 export type Ways = "x" | "y" | "xy";

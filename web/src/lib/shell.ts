@@ -229,6 +229,8 @@ export const canvas: {
   lanesBox?: () => DOMRect | null;
   /** A pointer's Show: beats `start` to `end` in view. */
   reveal?: (start: number, end: number) => void;
+  /** A pointer's Show for a clip, drawn now or not (VIEW-12): beats `start` to `end` of the lane `row`, in the view's middle. */
+  revealClip?: (row: HTMLElement, start: number, end: number) => void;
   /**
    * The Graph's zoom for the module it shows, whether it is at Fit, and that module; with `to`,
    * set it as its zoom bar does (null: Fit). The swipe probe makes room with it (taste.md VIEW-10).

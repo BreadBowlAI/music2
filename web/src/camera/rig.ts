@@ -23,16 +23,16 @@ export interface Fixed {
 
 /** The app's moves of a view (VIEW-9). Points are in the box, px from its top-left corner. */
 export interface CameraControls {
-  /** The camera now, and the view's shape as its box is laid out now. */
-  now(): Camera & { shape: Shape };
-  /** Look at (x, y) (either left out: as it is). */
-  to(x?: number, y?: number): void;
+  /** The camera now, and what it keeps of its view: its box's size, margins, origin. Reads nothing of the page. */
+  now(): CameraState;
+  /** Look at (x, y) (either left out: as it is), at `zoom` if given. */
+  to(x?: number, y?: number, zoom?: number): void;
   /** Zoom to `zoom` around `at` (the clear view's middle if left out), what is there staying there. */
   zoomAround(zoom: number, at?: { x: number; y: number }): void;
   /** The units [from, to] across fill the view, `pad` px each side. */
   fit(span: [number, number], pad?: number): void;
-  /** The least move that shows an element, or spans of the content's px, clear of the margins. */
-  reveal(what: Element | { x?: Span; y?: Span }, opts?: { pad?: number; align?: Align }): void;
+  /** The least move that shows an element, or spans of the content's px, clear of the margins; `ways` it may move (both by default). */
+  reveal(what: Element | { x?: Span; y?: Span }, opts?: { pad?: number; align?: Align; ways?: "x" | "y" | "xy" }): void;
   /** A point on screen as the box's point, and as the content's units. */
   boxPoint(clientX: number, clientY: number): { x: number; y: number };
   toContent(clientX: number, clientY: number): { x: number; y: number };
@@ -65,8 +65,13 @@ export class Rig {
       () => this.cam.getState().zoom,
     );
     this.controls = {
-      now: () => ({ ...this.camera(), shape: this.shape() }),
-      to: (x, y) => this.app((c, s) => to(c, x ?? c.x, y ?? c.y, s)),
+      now: () => ({ ...this.cam.getState() }),
+      to: (x, y, zoom) =>
+        this.app((c, s) => {
+          if (zoom === undefined || zoom === c.zoom) return to(c, x ?? c.x, y ?? c.y, s);
+          // A new zoom: the render that draws it writes the position, where the box then has room.
+          return { x: Math.max(0, x ?? c.x), y: Math.max(0, y ?? c.y), zoom: this.clampZoom(zoom) };
+        }),
       zoomAround: (zoom, at) => this.zoomTo(zoom, at ?? this.middle(), "app"),
       fit: (span, pad = 0) => {
         const s = this.shape();
@@ -81,7 +86,8 @@ export class Rig {
           const x = r.left - b.left + box.scrollLeft, y = r.top - b.top + box.scrollTop;
           spans = { x: [x, x + r.width], y: [y, y + r.height] };
         } else spans = what;
-        this.app((c, s) => reveal(c, spans, s, opts));
+        const ways = opts?.ways ?? "xy";
+        this.app((c, s) => reveal(c, { x: ways.includes("x") ? spans.x : undefined, y: ways.includes("y") ? spans.y : undefined }, s, opts));
       },
       boxPoint: (cx, cy) => {
         const b = this.boxRect();
@@ -130,6 +136,11 @@ export class Rig {
     if (rigs.get(this.name) === this) rigs.delete(this.name);
     this.el = null;
     this.writer = null;
+  }
+
+  /** Whether `el` is in this view's box. */
+  holds(el: Element) {
+    return !!this.el && this.el !== el && this.el.contains(el);
   }
 
   private boxRect() {
@@ -194,8 +205,11 @@ export class Rig {
   private set(c: Camera, by: MovedBy) {
     const s = this.cam.getState();
     if (c.x === s.x && c.y === s.y && c.zoom === s.zoom) return;
-    if (c.zoom !== s.zoom) this.zoomed = true;
-    this.cam.setState({ x: c.x, y: c.y, zoom: c.zoom, by });
+    const zoom = c.zoom !== s.zoom;
+    if (zoom) this.zoomed = true;
+    // A zoom asks for room to look where it put the camera: the view sizes its content by it.
+    const asked = zoom ? { w: c.x + s.view.w, h: c.y + s.view.h } : s.asked;
+    this.cam.setState({ x: c.x, y: c.y, zoom: c.zoom, by, asked });
     if (!this.zoomed) this.write();
     else this.schedule();
   }

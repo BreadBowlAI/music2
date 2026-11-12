@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   attention,
   barAt,
@@ -18,6 +18,7 @@ import {
   type TimelineView,
 } from "../lib/graph";
 import { setClock } from "../lib/clock";
+import { statusNow, useStatus } from "../lib/status";
 import { pickedIn, useClipSelection } from "../lib/clips";
 import { useSection } from "../lib/sections";
 import { madeHere, madeSince, onTheirWay, said, tookBack, type StepName } from "../lib/history";
@@ -54,12 +55,13 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const toast = useStore((s) => s.toast);
   const connected = useStore((s) => s.connected);
 
-  const [status, setStatus] = useState<GraphStatus>({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat, bpm: graph.bpm, loop: graph.loop });
+  // The poll's status goes into its store: what shows it renders by it, not this (VIEW-8).
+  useLayoutEffect(() => useStatus.setState({ playing: graph.playing, seconds: graph.seconds, beat: graph.beat, bpm: graph.bpm, loop: graph.loop }, true), []);
   const tempo = useRef(timeline.tempo);
   tempo.current = timeline.tempo;
   const show = useCallback((s: GraphStatus) => {
     setClock(s, tempo.current);
-    setStatus(s);
+    useStatus.setState(s, true);
   }, []);
   const poll = useCallback(() => graphApi.status().then(show).catch(() => {}), [show]);
   useEffect(() => {
@@ -77,11 +79,11 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
     [show, toast],
   );
   const loopRange = useCallback((start: number, end: number) => setLoop({ start, end }), [setLoop]);
-  const latest = useRef({ status, graph });
-  latest.current = { status, graph };
+  const latest = useRef({ graph });
+  latest.current = { graph };
   useEffect(() => {
-    canvas.loop = () => toggleLoop(latest.current.graph.timeline.meter, latest.current.status, setLoop);
-    canvas.loopSelection = () => loopSelection(latest.current.graph.timeline, latest.current.status.beat, setLoop);
+    canvas.loop = () => toggleLoop(latest.current.graph.timeline.meter, statusNow(), setLoop);
+    canvas.loopSelection = () => loopSelection(latest.current.graph.timeline, statusNow().beat, setLoop);
     // Space and Play: stop leaves the playhead where it stopped, and play carries on from there
     // (GarageBand, taste.md §5.1).
     canvas.play = () => {
@@ -210,7 +212,7 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
   const locked = lockReason(graph, connected);
   return (
     <div className="h-full flex flex-col">
-      <TopBar graph={graph} status={status} onSeek={seek} onLoop={setLoop} onShowCode={showCode} />
+      <TopBar graph={graph} onSeek={seek} onLoop={setLoop} onShowCode={showCode} />
       <div className="flex-1 min-h-0 flex">
         {browser && <Browser graph={graph} module={module} />}
         <div className="flex-1 min-w-0 flex flex-col">
@@ -221,11 +223,6 @@ export default function GraphCanvas({ graph }: { graph: GraphState }) {
               rows={rows}
               song={song}
               revision={graph.view.revision}
-              beat={status.beat}
-              playing={status.playing}
-              loopStart={status.loop?.start ?? null}
-              loopEnd={status.loop?.end ?? null}
-              looping={!!status.loop?.on}
               onLoop={loopRange}
               issues={issues}
               locked={locked}

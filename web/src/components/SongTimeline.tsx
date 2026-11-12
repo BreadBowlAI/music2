@@ -64,7 +64,9 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
-import { followNow, roundZoom, setFollow, setZoom, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
+import { ARRANGEMENT, followNow, keepZoom, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
+import { onCamera, useCamera, useCameraState, type CameraState } from "../camera";
+import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
 import { look } from "../lib/focus";
@@ -367,11 +369,6 @@ export default function SongTimeline({
   rows,
   song,
   revision,
-  beat,
-  playing,
-  loopStart,
-  loopEnd,
-  looping,
   onLoop,
   issues,
   locked,
@@ -387,12 +384,6 @@ export default function SongTimeline({
   song: TimelineTrack;
   /** The revision `timeline` is from: what a lane write rewritten from it is based on. */
   revision: number;
-  beat: number;
-  playing: boolean;
-  /** The loop's range in beats (null: none set), and whether playback loops there. */
-  loopStart: number | null;
-  loopEnd: number | null;
-  looping: boolean;
   /** A range dragged across the ruler, in whole beats: loop there. */
   onLoop: (start: number, end: number) => void;
   /** What needs attention, by module key: marked on the track. */
@@ -408,115 +399,99 @@ export default function SongTimeline({
 }) {
   useRenderCount("arrangement");
   const scroller = useRef<HTMLDivElement>(null);
-  const [visible, setVisible] = useState(0);
-  useEffect(() => {
-    const el = scroller.current!;
-    const observer = new ResizeObserver(() => setVisible(Math.floor(el.clientWidth - headerW)));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, [headerW]);
+  // Where playback is, as the poll says: each renders the arrangement only when it changes (VIEW-8).
+  const playing = useStatus((s) => s.playing);
+  const loopStart = useStatus((s) => s.loop?.start ?? null);
+  const loopEnd = useStatus((s) => s.loop?.end ?? null);
+  const looping = useStatus((s) => !!s.loop?.on);
+  // The Song's row at the foot (D4): its automation lanes, less those hidden, and the line that says so.
+  const open = useShell((s) => s.open);
+  const songRows = rowsOf(song);
+  const songHidden = useHidden(song.module);
+  const songShown = songRows.controls.filter((l) => !songHidden.has(l.key)).length;
+  const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
+  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
+  // The arrangement's camera (VIEW-1): the names at its left, the ruler at its top and the Song row
+  // at its foot stay as it moves; the zoom stretches time across. Its zoom is view.json's (FMT-20).
+  const ppb = useZoom();
+  const camera = useCamera(ARRANGEMENT, scroller, {
+    margins: { left: headerW, top: RULER_H, bottom: songH },
+    origin: { x: headerW },
+    zoom: { min: ZOOM.min, max: ZOOM.max, round: roundZoom },
+  });
+  useEffect(() => keepZoom(), []);
+  const visible = Math.max(0, useCameraState(ARRANGEMENT, (s) => s.view.w) - headerW);
+  // What a zoom looked at keeps its room: the beat it held in place stays there (VIEW-5).
+  const asked = useCameraState(ARRANGEMENT, (s) => s.asked.w) - headerW;
   // A bar of room after the last clip and after the playhead, which plays on past the
   // song's end; never narrower than the window. Grown a bar at a time, the rows redraw
   // once a bar rather than on every poll. While it follows the playhead, a view's width more,
   // so a page can always put the playhead at its left.
-  const ppb = useZoom();
   const follow = useFollow();
-  const reach = playing && follow ? beat + visible / ppb : beat;
-  // What a zoom scrolled to keeps its room: the beat it kept in place stays there.
-  const [spare, setSpare] = useState(0);
+  const reach = useStatus((s) => {
+    const b = barAt(timeline.meter, s.playing && follow ? s.beat + visible / ppb : s.beat);
+    return b.start + b.length;
+  });
   // The ruler's tools sit over its end: the song's room has their width more, so its last bar
   // number scrolls clear of them (next D4b).
-  const width = Math.max(room(timeline.meter, timeline.end, reach) * ppb + TOOLS_W, visible, spare);
-
-  // Where the timeline scrolled itself last (a page, a zoom): any other scroll across is by hand.
-  const ours = useRef<number | null>(null);
+  const width = Math.max(room(timeline.meter, timeline.end, reach) * ppb + TOOLS_W, visible, asked);
   // The Song row's height at the foot, as last drawn: the lanes on screen end above it.
   const songRow = useRef(0);
-  const scrollTo = (left: number) => {
-    const el = scroller.current;
-    if (!el) return;
-    el.scrollLeft = Math.max(0, left);
-    ours.current = el.scrollLeft;
-  };
+  songRow.current = songH;
 
   // Follow the playhead while playing (Q11, taste.md §5.1): when it passes 85% of the view, or is
-  // out of it, the view pages so it sits at 15%. Scrolling across by hand pauses it until play
-  // starts again or the playhead is back in view.
+  // out of it, the view pages so it sits at 15%. Any move that isn't the app's own (a swipe, a key's
+  // scroll, a scrollbar, a click's: VIEW-9) pauses it until play starts again or the playhead is
+  // back in view. A drag holds the view still: Follow catches up after (VIEW-8).
   const paused = useRef(false);
   useEffect(() => {
     paused.current = false;
     if (!playing || !follow) return;
-    return onFrame((b) => {
-      const el = scroller.current;
-      if (!el) return;
-      const view = el.clientWidth - latest.current.headerW;
-      const at = b * zoomNow() - el.scrollLeft;
+    const off = onCamera(ARRANGEMENT, (now, was) => {
+      if ((now.x !== was.x || now.y !== was.y) && (now.by === "hand" || now.by === "browser")) paused.current = true;
+    });
+    const offFrame = onFrame((b) => {
+      if (camera.held()) return;
+      const { x, zoom, view } = camera.now();
+      const w = view.w - latest.current.headerW;
+      const at = b * zoom - x;
       if (paused.current) {
-        if (at < 0 || at > view) return;
+        if (at < 0 || at > w) return;
         paused.current = false;
       }
-      if (at < 0 || at > view * 0.85) scrollTo(b * zoomNow() - view * 0.15);
+      if (at < 0 || at > w * 0.85) camera.to(b * zoom - w * 0.15);
     });
-  }, [playing, follow]);
-  const across = useRef(0);
-  const onScroll = () => {
-    const el = scroller.current;
-    if (!el || el.scrollLeft === across.current) return;
-    across.current = el.scrollLeft;
-    if (ours.current !== null && Math.abs(el.scrollLeft - ours.current) <= 1) return;
-    ours.current = null;
-    if (latest.current.playing) paused.current = true;
-  };
+    return () => {
+      off();
+      offFrame();
+    };
+  }, [playing, follow, camera]);
 
-  // Zoom (Q8, Q9): `next` px a beat, the beat `at` px into the lanes' visible width staying put.
+  // Zoom (Q8, Q9), through the camera: around a point, what is there staying (VIEW-5).
   // Z's way back, while the zoom is still the one it set.
-  const fitted = useRef<{ zoom: number; scroll: number; to: number } | null>(null);
-  /** Zoom to `z` px a beat and scroll to `left`, the lanes wide enough to. */
-  const zoomScroll = (z: number, left: number) => {
-    const el = scroller.current;
-    if (!el) return;
-    const view = el.clientWidth - latest.current.headerW;
-    flushSync(() => {
-      setZoom(z);
-      setSpare(Math.max(0, left) + view);
-    });
-    scrollTo(left);
-  };
-  const zoomTo = (next: number, at: number) => {
-    const el = scroller.current;
-    const z0 = zoomNow(), z1 = roundZoom(next);
-    if (!el || z1 === z0) return;
-    const beat = (el.scrollLeft + at) / z0;
-    fitted.current = null;
-    zoomScroll(z1, beat * z1 - at);
-  };
+  const fitted = useRef<{ zoom: number; x: number; to: number } | null>(null);
   /** ⌘= and ⌘−: around the playhead while it is in view, else the view's middle. */
   const zoomStep = (dir: 1 | -1) => {
-    const el = scroller.current;
-    if (!el) return;
-    const view = el.clientWidth - latest.current.headerW;
-    const at = beatNow() * zoomNow() - el.scrollLeft;
-    zoomTo(stepped(zoomNow(), dir), at >= 0 && at <= view ? at : view / 2);
+    const { x, zoom, view } = camera.now();
+    const w = view.w - latest.current.headerW;
+    const at = beatNow() * zoom - x;
+    camera.zoomAround(stepped(zoom, dir), { x: latest.current.headerW + (at >= 0 && at <= w ? at : w / 2), y: 0 });
   };
   /** Z: the selected clips (a marquee's bars) fill the view, or with none the whole song; again, back. */
   const zoomFit = () => {
-    const el = scroller.current;
-    if (!el) return;
     const back = fitted.current;
     if (back && zoomNow() === back.to) {
       fitted.current = null;
-      return zoomScroll(back.zoom, back.scroll);
+      return camera.to(back.x, undefined, back.zoom);
     }
     const { timeline } = latest.current;
     const sel = useClipSelection.getState();
     const picked = pickedIn(timeline, sel.picked).map((p) => p.clip);
     const [a, b] =
       sel.range ?? (picked.length ? [Math.min(...picked.map((c) => c.start)), Math.max(...picked.map((c) => c.start + c.length))] : [0, timeline.end]);
-    const view = el.clientWidth - latest.current.headerW;
-    const was = { zoom: zoomNow(), scroll: el.scrollLeft };
-    const to = roundZoom((view - 2 * FIT_PAD) / Math.max(b - a, 1 / 64));
-    zoomScroll(to, a * to - FIT_PAD);
-    fitted.current = { ...was, to };
+    const was = camera.now();
+    camera.fit([a, Math.max(b, a + 1 / 64)], FIT_PAD);
+    fitted.current = { zoom: was.zoom, x: was.x, to: zoomNow() };
   };
   /** ⌘↓ (1) and ⌘↑ (-1): the selected track a step taller or shorter, or every track with none selected. */
   const height = (dir: 1 | -1) => {
@@ -546,18 +521,17 @@ export default function SongTimeline({
     const bar = barAt(timeline.meter, now);
     if (markerAt(list, bar.start)) return useStore.getState().toast(`A marker is at bar ${bar.bar + 1} already`);
     // Its field opens at the bar: in view.
-    const el = scroller.current;
-    if (el) {
-      const view = el.clientWidth - latest.current.headerW;
-      const x = bar.start * zoomNow() - el.scrollLeft;
-      if (x < 0 || x > view - 200) scrollTo(bar.start * zoomNow() - view * 0.15);
-    }
+    const { x: left, zoom, view } = camera.now();
+    const w = view.w - latest.current.headerW;
+    const x = bar.start * zoom - left;
+    if (x < 0 || x > w - 200) camera.to(bar.start * zoom - w * 0.15);
     useMarkerEdit.setState({ editing: { beat: bar.start, from: null } });
   };
   /** Where beat `b` is on screen, as a client x: where a pointer at bars goes (AGENT-6). */
   const beatX = (b: number) => {
     const el = scroller.current;
-    return el ? el.getBoundingClientRect().left + latest.current.headerW + b * zoomNow() - el.scrollLeft : null;
+    const { x, zoom } = camera.now();
+    return el ? el.getBoundingClientRect().left + latest.current.headerW + b * zoom - Math.round(x) : null;
   };
   /** The lanes' part of the timeline on screen: right of the headers, under the ruler, above the Song row. */
   const lanesBox = () => {
@@ -569,52 +543,32 @@ export default function SongTimeline({
   };
   /** A pointer's Show (AGENT-6): beats `start` to `end` in view, from 15% in when they fit. The only way a pointer moves the view. */
   const showBeats = (start: number, end: number) => {
-    const el = scroller.current;
-    if (!el) return;
-    const view = el.clientWidth - latest.current.headerW;
-    const fits = (end - start) * zoomNow() <= view * 0.85;
-    scrollTo(start * zoomNow() - (fits ? view * 0.15 : 0));
+    const { zoom, view } = camera.now();
+    const w = view.w - latest.current.headerW;
+    const fits = (end - start) * zoom <= w * 0.85;
+    camera.to(start * zoom - (fits ? w * 0.15 : 0));
+  };
+  /** A pointer's Show for a clip the arrangement may not draw now (VIEW-12): its beats across, its lane's row down, in the middle. */
+  const showClip = (row: HTMLElement, start: number, end: number) => {
+    const { zoom } = camera.now();
+    const lane = row.lastElementChild ?? row;
+    const r = lane.getBoundingClientRect(), box = scroller.current!.getBoundingClientRect();
+    const y = r.top - box.top + scroller.current!.scrollTop;
+    const x = latest.current.headerW + start * zoom;
+    camera.reveal({ x: [x, latest.current.headerW + end * zoom], y: [y, y + r.height] }, { align: "center" });
   };
   useEffect(() => {
-    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height, marker, beatX, lanesBox, reveal: showBeats });
+    Object.assign(canvas, { zoom: zoomStep, zoomFit, follow: () => setFollow(!followNow()), height, marker, beatX, lanesBox, reveal: showBeats, revealClip: showClip });
     return () => {
-      for (const k of ["zoom", "zoomFit", "follow", "height", "marker", "beatX", "lanesBox", "reveal"] as const) delete canvas[k];
+      for (const k of ["zoom", "zoomFit", "follow", "height", "marker", "beatX", "lanesBox", "reveal", "revealClip"] as const) delete canvas[k];
     };
   });
-  // What the timeline shows, for agents beside the musician (AGENT-6): the beats in view.
+  // What the timeline shows, for agents beside the musician (AGENT-6): the beats in view, from the camera.
   useEffect(() => {
-    const el = scroller.current;
-    if (!el) return;
-    const say = () => look({ seen: [el.scrollLeft / zoomNow(), (el.scrollLeft + Math.max(0, el.clientWidth - latest.current.headerW)) / zoomNow()] });
-    say();
-    el.addEventListener("scroll", say, { passive: true });
-    return () => el.removeEventListener("scroll", say);
-  }, [ppb, visible]);
-  // A pinch, or ⌘-scroll (Ctrl-scroll): around the pointer. Chrome and WebKitGTK send a pinch as a
-  // wheel with Ctrl held; WebKit on the Mac as gesture events, which must never zoom the page.
-  useEffect(() => {
-    const el = scroller.current!;
-    const at = (x: number) => Math.max(0, x - el.getBoundingClientRect().left - latest.current.headerW);
-    const wheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const dy = Math.max(-100, Math.min(100, e.deltaMode === 1 ? e.deltaY * 33 : e.deltaY));
-      zoomTo(zoomNow() * ZOOM.step ** (-dy / 100), at(e.clientX));
-    };
-    let z0 = zoomNow();
-    const gesture = (e: Event) => {
-      e.preventDefault();
-      const g = e as Event & { scale: number; clientX: number };
-      if (e.type === "gesturestart") z0 = zoomNow();
-      else if (e.type === "gesturechange") zoomTo(z0 * g.scale, at(g.clientX));
-    };
-    el.addEventListener("wheel", wheel, { passive: false });
-    for (const t of ["gesturestart", "gesturechange", "gestureend"]) el.addEventListener(t, gesture);
-    return () => {
-      el.removeEventListener("wheel", wheel);
-      for (const t of ["gesturestart", "gesturechange", "gestureend"]) el.removeEventListener(t, gesture);
-    };
-  }, []);
+    const say = (s: CameraState) => look({ seen: [s.x / s.zoom, (s.x + Math.max(0, s.view.w - s.margins.left)) / s.zoom] });
+    say(camera.now());
+    return onCamera(ARRANGEMENT, say);
+  }, [camera]);
 
   // Clips being dragged (moved, copied or resized), drawn where they go until the timeline shows
   // the edit. Named by id, so an edit that reorders a lane (a move, an undo, an edit elsewhere)
@@ -1736,7 +1690,6 @@ export default function SongTimeline({
 
   // A lane just made from the canvas (automate): its track unfolds, and the lane is scrolled to
   // and lit once the timeline shows it.
-  const open = useShell((s) => s.open);
   const [lit, setLit] = useState<string | null>(null);
   const wanted = useRef<string | null>(null);
   const reveal = () => {
@@ -1744,8 +1697,8 @@ export default function SongTimeline({
     const row = id && scroller.current?.querySelector<HTMLElement>(`[data-lane="${CSS.escape(id)}"]`);
     if (!id || !row) return;
     wanted.current = null;
-    // `nearest`, inside the scroll padding the ruler and the Song row take: nothing lands under them (D12).
-    row.scrollIntoView({ block: "nearest" });
+    // The least move down, clear of the ruler and the Song row: nothing lands under them (TL-16, D12).
+    camera.reveal(row, { ways: "y" });
     setLit(id);
     setTimeout(() => setLit((l) => (l === id ? null : l)), 1800);
   };
@@ -1802,13 +1755,6 @@ export default function SongTimeline({
     e.stopPropagation();
   };
 
-  const songRows = rowsOf(song);
-  // The Song's automation lanes, less those hidden, and the line that says so (D4).
-  const songHidden = useHidden(song.module);
-  const songShown = songRows.controls.filter((l) => !songHidden.has(l.key)).length;
-  const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
-  const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
-  songRow.current = songH;
   const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
@@ -1819,9 +1765,9 @@ export default function SongTimeline({
       data-grid-view="song"
       tabIndex={-1}
       onKeyDown={onKeyDown}
-      onScroll={onScroll}
-      className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none"
-      // Revealing a row never tucks it under the ruler, the headers or the Song row (TL-16).
+      className="flex-1 min-h-0 overflow-auto relative bg-canvas outline-none [overflow-anchor:none] overscroll-none"
+      // The browser's own reveals (Tab, autofocus, a click) never tuck a row under the ruler, the
+      // headers or the Song row (TL-16); the app's go through the camera, with the same margins.
       style={{ scrollPaddingTop: RULER_H, scrollPaddingLeft: headerW, scrollPaddingBottom: songH }}
     >
       <div ref={content} className="relative flex flex-col" style={{ width: headerW + width, minHeight: "100%" }}>
