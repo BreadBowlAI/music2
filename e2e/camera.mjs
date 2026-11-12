@@ -137,7 +137,7 @@ const lib = await page.evaluate(() => {
   const gr = { view: { w: 800, h: 400 }, content: { w: 2000, h: 1000 }, margins: { left: 0, top: 0, right: 0, bottom: 0 }, origin: { x: 16, y: 16 }, stretch: { x: true, y: true } };
   const at = { x: 100, y: 50, zoom: 24 };
   const out = {};
-  out.numbers = [n.SWIPE_GAP, n.RAIL_ANGLE, n.RAIL_AFTER, n.GLIDE_RATE, n.SCROLLBARS, n.EDGES, n.CULL_MARGIN, n.CULL_STEP, n.SYSTEM_GLIDE.mac, n.SYSTEM_GLIDE.other];
+  out.numbers = [n.SWIPE_GAP, n.RAIL_ANGLE, n.RAIL_AFTER, n.RAIL_BREAK, n.GLIDE_RATE, n.SCROLLBARS, n.EDGES, n.CULL_MARGIN, n.CULL_STEP, n.SYSTEM_GLIDE.mac, n.SYSTEM_GLIDE.other];
   out.move = [c.move(at, 30, -20, arr), c.move(at, -500, -500, arr), c.move(at, 9000, 9000, arr), c.to(at, 10.25, 20.5, arr)];
   // 300 px into the lanes at beat (100 + 300) / 24; at 48 px a beat it stays under the pointer.
   out.zoom = [c.zoomAround(at, { x: 540, y: 300 }, 48, arr), c.zoomAround(at, { x: 100, y: 300 }, 48, arr), c.zoomAround({ x: 0, y: 0, zoom: 1 }, { x: 216, y: 116 }, 2, gr)];
@@ -192,8 +192,8 @@ const lib = await page.evaluate(() => {
   return out;
 });
 check(
-  json(lib?.numbers) === json([50, 20, 8, 0.998, "browser", "stop", 1, 0.5, true, false]),
-  `its numbers, until the probe's report: G 50 ms, rails 20° after 8 px, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
+  json(lib?.numbers) === json([50, 10, 8, 24, 0.998, "browser", "stop", 1, 0.5, true, false]),
+  `its numbers, until the probe's report: G 50 ms, rails within 10° after 8 px, broken 24 px off, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
 );
 check(
   json(lib?.move) === json([{ x: 130, y: 30, zoom: 24 }, { x: 0, y: 0, zoom: 24 }, { x: 3760, y: 1400, zoom: 24 }, { x: 10.25, y: 20.5, zoom: 24 }]),
@@ -254,6 +254,13 @@ const graphCam = async () => {
     s0.room.x > 150 && s0.room.y > 100 && s1.x - s0.x === 120 && s1.y - s0.y === 80 && !!c && near(c.x, s1.x, 0.5) && near(c.y, s1.y, 0.5),
     `the Graph: a diagonal swipe moves it 1:1 both ways (120 × 80): ${json({ s0, s1, cam: c })}`,
   );
+  // A canvas has no rails (Figma, Freeform, tldraw): 5° off straight is 5° off.
+  await sleep(120);
+  await feed(at.x, at.y, swipe(20, 10, 0.8749));
+  await frames();
+  const s2 = await scroll(graph);
+  const c2 = await graphCam();
+  check(s2.x - s1.x === 200 && !!c2 && near(c2.y - c.y, 17.498, 0.01), `the Graph has no rails: a swipe 5° off straight moves it 1:1 both ways (${s2.x - s1.x} × ${(c2?.y ?? 0) - (c?.y ?? 0)})`);
 }
 // 120 events of a swipe with the pointer over a wire: no view renders (VIEW-8), its hover muted.
 {
@@ -418,20 +425,33 @@ await frames();
   const c = await arr();
   check(s1.x - s0.x === 120 && s1.y - s0.y === 80 && !!c && near(c.x, s1.x, 0.5) && near(c.y, s1.y, 0.5), `the arrangement: a diagonal swipe moves it 1:1 both ways (120 × 80): ${json({ s0, s1, cam: c && { x: c.x, y: c.y } })}`);
   await sleep(120);
-  await feed(at.x, at.y, swipe(20, 10, 1.763));
+  // 5° off: 17.5 px off its rail in all, under the 24 that break it.
+  await feed(at.x, at.y, swipe(20, 10, 0.8749));
   await frames();
   const s2 = await scroll(tl);
-  check(s2.x - s1.x === 200 && s2.y === s1.y, `a swipe 10° off straight keeps to its rail: 200 across, none down (${s2.x - s1.x} × ${s2.y - s1.y})`);
+  check(s2.x - s1.x === 200 && s2.y === s1.y, `a swipe 5° off straight keeps to its rail: 200 across, none down (${s2.x - s1.x} × ${s2.y - s1.y})`);
   await sleep(120);
   await feed(at.x, at.y, swipe(20, -5, -5));
   await frames();
   const s3 = await scroll(tl);
   check(s3.x - s2.x === -100 && s3.y - s2.y === -100, `a 45° one moves both ways (${s3.x - s2.x} × ${s3.y - s2.y})`);
   await sleep(120);
+  await feed(at.x, at.y, swipe(20, 10, 5.7735));
+  await frames();
+  const s3b = await scroll(tl);
+  check(s3b.x - s3.x === 200 && near(s3b.y - s3.y, 115.47, 0.5), `a 30° one never rails: 1:1 both ways (${s3b.x - s3.x} × ${s3b.y - s3.y})`);
+  await sleep(120);
+  // Straight across, then turning to 45°: on its rail until it has gone 24 px off it (the 4th turned
+  // event: 28), then free both ways from there; the 21 px held back before aren't moved.
+  await feed(at.x, at.y, [...swipe(10, 10, 0), ...swipe(20, 7, 7).map((w) => ({ ...w, t: w.t + 160 }))]);
+  await frames();
+  const s3c = await scroll(tl);
+  check(s3c.x - s3b.x === 240 && s3c.y - s3b.y === 119, `one that starts straight and turns 45° breaks free 24 px off its rail, both ways from there: 240 × 119 (${s3c.x - s3b.x} × ${s3c.y - s3b.y})`);
+  await sleep(120);
   await feed(at.x, at.y, swipe(10, 0, 5, 16, { shift: true }));
   await frames();
   const s4 = await scroll(tl);
-  check(s4.x === s3.x && s4.y - s3.y === 50, `⇧ + wheel isn't turned by the camera: the Mac and WebKitGTK turn it already (${s4.x - s3.x} × ${s4.y - s3.y})`);
+  check(s4.x === s3c.x && s4.y - s3c.y === 50, `⇧ + wheel isn't turned by the camera: the Mac and WebKitGTK turn it already (${s4.x - s3c.x} × ${s4.y - s3c.y})`);
   await sleep(120);
   await feed(at.x, at.y, swipe(30, -100, -100));
   await frames();
