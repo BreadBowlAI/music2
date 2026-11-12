@@ -181,6 +181,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   while (end * ppb < visible) end += barAt(meter, end).length;
   const steps = stepsTo(meter, end, step);
   const width = end * ppb;
+  camera.content({ w: NAMES_W + width, h: ROLL_RULER_H + kit.rows.length * ROW_H });
   // What shows, a bar's room either side: the steps drawn, and the hits.
   const near = (start: number, length = 0) => start + length > cull.from && start < cull.to;
   const shown = steps.filter((s) => near(s.start, s.end - s.start));

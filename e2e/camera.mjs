@@ -862,12 +862,12 @@ const clipsShown = () =>
       const clips = [...document.querySelectorAll("[data-testid=timeline] [data-clip]")].filter((e) => e.querySelector("svg rect"));
       const wrong = clips.filter((e) => {
         const shortest = Math.min(...[...e.querySelectorAll("svg rect")].map((r) => Number(r.getAttribute("width"))));
-        const line = e.querySelector("svg line[data-mark]");
+        const line = e.querySelector("svg line[data-note-mark]");
         const shown = !!line && getComputedStyle(line).display !== "none";
         return shown !== shortest * zoom < 2;
       });
       const marked = clips.filter((e) => {
-        const line = e.querySelector("svg line[data-mark]");
+        const line = e.querySelector("svg line[data-note-mark]");
         return !!line && getComputedStyle(line).display !== "none";
       }).length;
       return { zoom, clips: clips.length, layers: document.querySelectorAll("[data-testid=timeline] [data-clip] svg [opacity]").length, wrong: wrong.length, marked };

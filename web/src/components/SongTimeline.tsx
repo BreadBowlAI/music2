@@ -437,6 +437,8 @@ export default function SongTimeline({
   // The ruler's tools sit over its end: the song's room has their width more, so its last bar
   // number scrolls clear of them (next D4b).
   const width = Math.max(room(timeline.meter, timeline.end, reach) * ppb + TOOLS_W, visible, asked);
+  // Its height is its rows': a ResizeObserver tells the camera when that gets smaller.
+  camera.content({ w: headerW + width });
   // The Song row's height at the foot, as last drawn: the lanes on screen end above it.
   const songRow = useRef(0);
   songRow.current = songH;
@@ -3222,7 +3224,7 @@ export const Notes = memo(function Notes({ notes, length, color }: { notes: Note
             <Fragment key={i}>
               <rect x={n.start} width={n.length} y={y} height={h * 0.8} stroke="none" fillOpacity={o} />
               {/* At least 2 px wide at any zoom: a mark the drawing's stretch doesn't scale. */}
-              <line data-mark x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} strokeOpacity={o} vectorEffect="non-scaling-stroke" />
+              <line data-note-mark x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} strokeOpacity={o} vectorEffect="non-scaling-stroke" />
             </Fragment>
           );
         })}

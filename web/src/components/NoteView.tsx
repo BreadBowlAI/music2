@@ -1092,6 +1092,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const end = Math.max(clip.length, ...clip.notes.map((n) => n.start + n.length));
   const width = Math.max(visible, Math.ceil((end + bpb) / bpb) * bpb * ppb);
   const height = nRows * rowH;
+  // Fold or shorter rows: the camera stops at the new edge in this render, the notes there drawn.
+  camera.content({ w: keysW + width, h: ROLL_RULER_H + height });
   const shown = new Set(picked);
   const track = graph.view.modules.find((m) => m.key === module);
   const title = track ? moduleName(track) : module;

@@ -49,6 +49,12 @@ export interface CameraControls {
   /** Whether the hand moves the camera now: a swipe's events less than G apart, or its glide. */
   swiping(): boolean;
   /**
+   * The content's size in px, as the view renders it now (either way left out: not known): one that
+   * gets smaller has the camera check, in that render's commit, whether the box's edge came in,
+   * before the frame is drawn (VIEW-9). Without it, a ResizeObserver tells, a frame later.
+   */
+  content(size: { w?: number; h?: number }): void;
+  /**
    * Take in a move the browser made to the box and the camera hasn't heard yet (its `scroll` comes a
    * frame late): before the app decides from where the view is, so a move made before it listened
    * is not heard as one made after.
@@ -91,6 +97,9 @@ export class Rig {
   private near: { io: IntersectionObserver; inView: IntersectionObserver; seen: Map<Element, (near: boolean, inView: boolean) => void> } | null = null;
   /** When the hand last moved the camera (`performance.now()`). */
   private handAt = -Infinity;
+  /** The content's size the view says it renders now, and as its last commit drew it. */
+  private contentNow: { w?: number; h?: number } | null = null;
+  private contentDrawn: { w?: number; h?: number } | null = null;
   readonly hands: Recognizer;
   readonly controls: CameraControls;
 
@@ -137,6 +146,7 @@ export class Rig {
       toContent: (cx, cy) => toContent(this.camera(), this.controls.boxPoint(cx, cy), this.shape()),
       held: pointerHeld,
       swiping: () => this.hands.busy() || performance.now() - this.handAt < SWIPE_GAP,
+      content: (size) => void (this.contentNow = size),
       sync: () => this.takeIn(),
     };
   }
@@ -340,10 +350,12 @@ export class Rig {
   /** After each render of the view: a zoom it drew is written now, in the frame it lands in (VIEW-8). Reads nothing of the page. */
   afterRender() {
     this.measure();
+    const now = this.contentNow, was = this.contentDrawn;
+    this.contentDrawn = now;
     if (this.zoomed) {
       this.zoomed = false;
       this.write();
-    }
+    } else if (now && was && ((now.w ?? Infinity) < (was.w ?? Infinity) || (now.h ?? Infinity) < (was.h ?? Infinity))) this.clamped();
   }
 
   /**
