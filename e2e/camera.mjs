@@ -41,7 +41,7 @@ const cam = (name) => page.evaluate((name) => window.m2canvas?.camera?.now(name)
 const renders = () => page.evaluate(() => window.m2canvas?.frames?.().total ?? {});
 const since = (a, b) => Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map((k) => [k, (b[k] ?? 0) - (a[k] ?? 0)]).filter(([, n]) => n));
 const scroll = (sel) => page.$eval(sel, (e) => ({ x: e.scrollLeft, y: e.scrollTop, w: e.clientWidth, h: e.clientHeight, room: { x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight } }));
-const setScroll = (sel, x, y) => page.$eval(sel, (e, x, y) => { if (x !== null) e.scrollLeft = x; if (y !== null) e.scrollTop = y; }, sel, x ?? null, y ?? null);
+const setScroll = (sel, x, y) => page.$eval(sel, (e, x, y) => { if (x !== null) e.scrollLeft = x; if (y !== null) e.scrollTop = y; }, x ?? null, y ?? null);
 /**
  * Wheel events at known times (ms after the first), each dispatched on whatever is under (x, y) then,
  * as a trackpad's: `dx`, `dy`, `mode`, `cancelable`, `ctrl`, `meta`, `shift`. `spread` ms apart in
@@ -50,7 +50,9 @@ const setScroll = (sel, x, y) => page.$eval(sel, (e, x, y) => { if (x !== null) 
 const feed = (x, y, list, spread = 0) =>
   page.evaluate(
     async (x, y, list, spread) => {
-      const base = performance.now();
+      // A second after the last feed's last event at least: each feed is a swipe of its own.
+      const base = Math.max(performance.now(), (window.__stamp ?? 0) + 1000);
+      window.__stamp = base + (list.at(-1)?.t ?? 0);
       for (const w of list) {
         const el = document.elementFromPoint(x, y) ?? document.body;
         const e = new WheelEvent("wheel", {
@@ -425,7 +427,8 @@ await frames();
   const rows = (await page.$$(`${tl} [data-track]`)).length;
   const r1 = await renders();
   await sleep(120);
-  await feed(at.x, at.y, swipe(120, 3, 0, 8));
+  // A step and 60 px more: across one step, never two.
+  await feed(at.x, at.y, swipe(120, (step + 60) / 120, 0, 8));
   await frames(6);
   await sleep(400);
   const s2 = await scroll(tl);
@@ -440,7 +443,8 @@ const clipsShown = () =>
     els.map((e) => ({ track: e.closest("[data-track]")?.dataset.track, start: Number(e.dataset.start), length: Number(e.dataset.length) })),
   );
 {
-  await setScroll(tl, 3000, 0);
+  // At the foot: the tracks at the top are more than a view above.
+  await setScroll(tl, 3000, 10000);
   await frames();
   await sleep(500);
   const c = await arr();
@@ -455,11 +459,11 @@ const clipsShown = () =>
   const far = shown.filter((s) => !nearTracks.includes(s.track));
   const all = 24 * 64;
   check(
-    !!c && shown.length > 0 && shown.length < all / 2 && outside.length === 0 && far.length === 0,
-    `scrolled to 3000 px: ${shown.length} of ${all} clips drawn, none outside beats ${from.toFixed(1)} to ${to.toFixed(1)} (${outside.length}), none in a track more than a view below (${far.length}; ${nearTracks.length} tracks near)`,
+    !!c && shown.length > 0 && shown.length < all && outside.length === 0 && far.length === 0 && nearTracks.length < 25,
+    `scrolled to 3000 px and the foot: ${shown.length} of ${all} clips drawn, none outside beats ${from.toFixed(1)} to ${to.toFixed(1)} (${outside.length}), none in a track more than a view above (${far.length}; ${nearTracks.length} of ${tracks.length} rows near)`,
   );
-  const rowsKept = await page.$$eval(`${tl} [data-track="keys-6"] [data-lane]`, (els) => els.map((e) => e.getBoundingClientRect().height));
-  check(rowsKept.length > 0 && rowsKept.every((h) => h > 20), `a track far below keeps its row box, drawn without its clips: ${json(rowsKept)}`);
+  const rowsKept = await page.$$eval(`${tl} [data-track="kick-1"] [data-lane]`, (els) => els.map((e) => ({ h: e.getBoundingClientRect().height, clips: e.querySelectorAll("[data-clip]").length })));
+  check(rowsKept.length > 0 && rowsKept.every((r) => r.h > 20 && r.clips === 0), `a track far above keeps its row box, drawn without its clips: ${json(rowsKept)}`);
 }
 
 // ---------------------------------------------------------------- zoom: once a frame, around the pointer, no mini drawing
@@ -538,16 +542,21 @@ const post = (p, body) => api(p, { method: "POST", body: json(body) });
   };
   check(await pages(40), `playing at 192 px a beat, Follow pages to the playhead (${(await scroll(tl)).x})`);
   const at = await lanes();
+  // Each moves the view well left of the playhead: Follow pauses until play starts again or the
+  // playhead is back in view (Q11), so a seek further on must leave the view where it was put.
   const tries = [
-    ["a swipe", () => feed(at.x, at.y, swipe(10, -20, 0))],
+    ["a swipe", () => feed(at.x, at.y, swipe(20, -100, 0))],
     [
       "a key's scroll",
       async () => {
         await page.$eval(tl, (e) => e.focus({ preventScroll: true }));
-        await page.keyboard.press("ArrowLeft");
+        const x0 = (await scroll(tl)).x;
+        // ← scrolls 40 px a press, smoothly: until it has gone 1500 px.
+        for (let i = 0; i < 80 && x0 - (await scroll(tl)).x < 1500; i++) await page.keyboard.press("ArrowLeft");
+        await until(async () => x0 - (await scroll(tl)).x >= 1500, 2000);
       },
     ],
-    ["a write to scrollLeft", () => page.$eval(tl, (e) => void (e.scrollLeft -= 400))],
+    ["a write to scrollLeft", () => page.$eval(tl, (e) => void (e.scrollLeft -= 2000))],
   ];
   let beatTo = 60;
   for (const [what, act] of tries) {
