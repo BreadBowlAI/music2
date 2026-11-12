@@ -223,7 +223,7 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
   // Track camera-probe: the command palette's frame meter and swipe probe (taste.md VIEW-10), before the camera.
-  ["camera-probe", "fix", { expect: 44, s: 12 }],
+  ["camera-probe", "fix", { expect: 54, s: 20 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

@@ -246,11 +246,14 @@ await lintIn(panel, "round A's step");
   const r = await roomOf(tl);
   check(r.x >= r.w && (await clipW()) > was.width, `the probe zoomed the timeline in until it has a view's width of room: ${JSON.stringify(r)}`);
 }
-// A control under the pointer: a wheel listener of a lane's own, as a knob's or a dot's.
-await page.evaluate(() => {
-  window.__seen = 0;
-  document.querySelector("[data-testid=timeline] [data-lane]").addEventListener("wheel", () => window.__seen++);
-});
+// A control under the pointer: a wheel listener of the element there, as a knob's or a dot's.
+{
+  const at = await lanes();
+  await page.evaluate(({ x, y }) => {
+    window.__seen = 0;
+    document.elementFromPoint(x, y).addEventListener("wheel", () => window.__seen++);
+  }, at);
+}
 {
   const s0 = await scrollOf(tl);
   const at = await lanes();
@@ -330,7 +333,7 @@ await goTo("B7");
   const c0 = Number((await heard()).cancelled);
   const s0 = await scrollOf(gr);
   const g = await box(gr);
-  await page.mouse.move(g.x + g.width - 60, g.y + 40);
+  await page.mouse.move(g.x + 40, g.y + g.height - 40);
   await page.mouse.wheel({ deltaY: 100 });
   check(await until(async () => Number((await heard()).cancelled) > c0, 3000), `over the Graph too: ${JSON.stringify(await heard())}`);
   await sleep(400);
@@ -406,8 +409,8 @@ check(await until(async () => !(await has("[data-testid=frame-meter]"))), "Hide 
   const s0 = await scrollOf(tl);
   const at = await lanes();
   await page.mouse.move(at.x, at.y);
-  await page.mouse.wheel({ deltaX: 240 });
-  check(await until(async () => (await scrollOf(tl)).left === s0.left + 240, 3000), `closed, the wheel is the web view's again: it scrolls the arrangement once: ${JSON.stringify([s0, await scrollOf(tl)])}`);
+  await page.mouse.wheel({ deltaX: -240 });
+  check(await until(async () => (await scrollOf(tl)).left === s0.left - 240, 3000), `closed, the wheel is the web view's again: it scrolls the arrangement once: ${JSON.stringify([s0, await scrollOf(tl)])}`);
 }
 await pinch(tl, [["gesturestart", 1], ["gestureend", 1]]);
 await run("swipe");
