@@ -1115,7 +1115,9 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
 (DV-13), a lit column (DV-18), Notes' opening and its rows' height. A move the browser makes to a
 box itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
 taken in: on the box's `scroll`, a position more than 1 px from what the camera last wrote is the
-browser's. Follow pauses on any move that isn't the app's own.
+browser's. Follow pauses on any move that isn't the app's own, until play starts again or the
+playhead comes back into view after being out of it (Q11): a hand that scrolls with the playhead in
+view is never undone by Follow's next page.
 - *Why:* WebKit keeps scroll positions in whole pixels while the camera keeps fractions, so the
   camera compares the box only with what it wrote (the note's §4, C6, C8).
 - *Today:* since track `camera`: `useCamera`'s writer; the app's moves in `SongTimeline.tsx`,

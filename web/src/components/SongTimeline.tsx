@@ -447,8 +447,14 @@ export default function SongTimeline({
   useEffect(() => {
     paused.current = false;
     if (!playing || !follow) return;
+    // Whether the playhead has been out of the view since Follow paused: only coming into it again
+    // is "back in view". A hand that scrolls with the playhead in view (a key's scroll, a slow swipe)
+    // keeps Follow paused, so its next page never takes the view back from the hand.
+    let away = false;
     const off = onCamera(ARRANGEMENT, (now, was) => {
-      if ((now.x !== was.x || now.y !== was.y) && (now.by === "hand" || now.by === "browser")) paused.current = true;
+      if ((now.x === was.x && now.y === was.y) || (now.by !== "hand" && now.by !== "browser")) return;
+      if (!paused.current) away = false;
+      paused.current = true;
     });
     const offFrame = onFrame((b) => {
       if (camera.held()) return;
@@ -456,7 +462,11 @@ export default function SongTimeline({
       const w = view.w - latest.current.headerW;
       const at = b * zoom - x;
       if (paused.current) {
-        if (at < 0 || at > w) return;
+        if (at < 0 || at > w) {
+          away = true;
+          return;
+        }
+        if (!away) return;
         paused.current = false;
       }
       if (at < 0 || at > w * 0.85) camera.to(b * zoom - w * 0.15);
