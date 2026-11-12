@@ -227,7 +227,7 @@ export const SUITES = [
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 10, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 51, s: 60 }],
+  ["camera", "fix", { expect: 53, s: 60 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

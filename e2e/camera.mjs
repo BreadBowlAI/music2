@@ -280,7 +280,7 @@ const graphCam = async () => {
   await expand(page, `${graph} [data-node-id]`).catch(() => {});
   await setScroll(graph, 0, 0);
   await frames();
-  const bars = await page.$$(`${graph} [data-knob-id]`);
+  const bars = await page.$$(`${graph} [role=slider][tabindex="0"]`);
   const g = await box(graph);
   let target = null;
   for (const b of bars) {
@@ -295,6 +295,51 @@ const graphCam = async () => {
   const s = await scroll(graph);
   const c = await graphCam();
   check(!!target && (s.x > 0 || s.y > 0) && !!c && near(c.x, s.x, 1) && near(c.y, s.y, 1), `focus on a bar out of view scrolls the Graph, and its camera takes it in: ${json({ s, cam: c && { x: c.x, y: c.y } })}`);
+}
+
+// A picture's dot keeps its wheel (VIEW-2, DV-17): a swipe that carries it under the pointer is still
+// the camera's, to its end, and changes no file; one that starts on it is the dot's, and moves no view.
+{
+  const st = await state();
+  const pluck = st.view.modules.find((m) => m.key === "keys").nodes.find((n) => n.kind === "call" && n.audio);
+  await (await fetch(`${sess.url}/api/graph/effect/add`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: json({ session: st.session, revision: st.view.revision, call: pluck.id, component: "@m2/effects:delay" }) })).text();
+  await until(() => read("tracks/keys.ts").includes("delay("), 15000);
+  await show("keys");
+  // The second echo's dot: its wheel turns the feedback.
+  const dotSel = `${graph} [data-module="keys"] [data-dot="1"]`;
+  await until(() => has(dotSel), 15000);
+  await sleep(500);
+  // Zoomed in at the graph's corner: room to move.
+  const n = await box(`${graph} [data-node-id]`);
+  for (let i = 0; i < 2; i++) {
+    await feed(n.x + 2, n.y + 2, [{ t: 0, dy: -100, ctrl: true }]);
+    await frames();
+  }
+  const g = await box(graph);
+  let d = await box(dotSel);
+  // The dot at the view's middle, so it can pass under a pointer 60 px left of it.
+  await setScroll(graph, (await scroll(graph)).x + d.x - (g.x + g.width / 2), (await scroll(graph)).y + d.y - (g.y + g.height / 2));
+  await frames();
+  await sleep(200);
+  d = await box(dotSel);
+  // Towards the side the Graph has room on.
+  const s0 = await scroll(graph);
+  const way = s0.room.x - s0.x >= 130 ? 1 : -1;
+  const at = { x: d.x + d.width / 2 - 60 * way, y: d.y + d.height / 2 };
+  const bare = await page.evaluate(({ x, y }) => !document.elementFromPoint(x, y)?.closest("[data-wheel]"), at);
+  const file = read("tracks/keys.ts");
+  await feed(at.x, at.y, swipe(20, 6 * way, 0), 16);
+  await frames();
+  await sleep(1500);
+  const s1 = await scroll(graph);
+  check(bare && Math.abs(s1.x - s0.x) === 120 && read("tracks/keys.ts") === file, `a swipe that carries a Delay's dot under the pointer moves the Graph 120 px and changes no file: ${json({ bare, moved: s1.x - s0.x })}`);
+  d = await box(dotSel);
+  const s2 = await scroll(graph);
+  await sleep(120);
+  await feed(d.x + d.width / 2, d.y + d.height / 2, [{ t: 0, dy: -100 }]);
+  const turned = await until(() => read("tracks/keys.ts") !== file, 8000);
+  const s3 = await scroll(graph);
+  check(turned && s3.x === s2.x && s3.y === s2.y, `one that starts on the dot is the dot's: it writes its value, and the Graph stays (${json({ turned, s2, s3 })})`);
 }
 
 // ================================================================ the beat grid: a kit, as a musician makes one
