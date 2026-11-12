@@ -460,11 +460,11 @@ each marker means something. The markers and the `fg-muted` default text replace
 | slow | 220 | `--ease-out` | dialogs opening (opacity, plus scale from 0.98); the dock showing or hiding |
 | exit | 100 | `--ease-in` | anything leaving (opacity only) |
 | lit | 1200 | `--ease-out` | a lane or track just made (today's `lit` flash: keep it, with `accent` at 18% and a 3 px `accent` inset edge) |
-| none | 0 | — | the playhead, meters, knob, fader and cable drags, zoom, scroll |
+| none | 0 | — | the playhead, meters, knob, fader and cable drags, zoom, scroll; but off the Mac the camera's own glide after a flick (VIEW-4) |
 
 - No `active:scale`, no `hover:brightness`, no `transition-all`.
-- Under `prefers-reduced-motion`, every duration becomes 0, so `lit` is skipped. The new lane is
-  still selected and scrolled into view.
+- Under `prefers-reduced-motion`, every duration becomes 0, so `lit` is skipped, and the camera has
+  no glide of its own. The new lane is still selected and scrolled into view.
 
 ### 2.14 Components
 
@@ -976,8 +976,8 @@ view at first launch.
   the status pill, ranked below every problem (ST-1): nothing sits under the song's name (lead
   decision T2).
 - The dock body is never shorter than 180 px, and the lanes are never shorter than 3 rows.
-- Nothing scrolls horizontally except the arrangement, the roll, the Graph and the Mix
-  strips.
+- Nothing scrolls horizontally except the arrangement, the roll, the beat grid, the Graph and the
+  Mix strips.
 
 ### 3.9 The keyboard piano and Settings (as `next` built them)
 
@@ -1009,19 +1009,157 @@ tools after Hear notes, 24 px like every Notes tool):
 ### 3.10 Moving the view
 
 [The camera](../camera/design.md) moves the arrangement, the Graph, Notes and the beat grid as the
-hand does. Its rules are VIEW-1 to VIEW-11. VIEW-10 came first, to measure today's views on the
-owner's Mac before anything changes; VIEW-5 (as today's views can) and VIEW-11 came with track
-`mac-feel`; the rest come with track `camera-core`.
+hand does. Its rules are VIEW-1 to VIEW-12. VIEW-10 came first, to measure today's views on the
+owner's Mac before anything changes; VIEW-5 (as today's views could) and VIEW-11 came with track
+`mac-feel`; the rest came with track `camera`, which put all four views on the camera at once (the
+note's §16). The camera is a library of its own, `web/src/camera/` (its `README.md` says how a
+view uses it): the app imports only its `index.ts`, and it imports nothing of the app's. Its
+numbers (G, the rails, the glide, the culling's margin and step) are named in its `numbers.ts`,
+until the owner's probe report says otherwise.
+
+**VIEW-1.** Each of the four views MUST have one camera: where it looks, across and down, and its
+zoom. It is the one truth of what the view shows. Each view keeps its scroll box, and the camera
+writes the box's scroll position: the browser still thinks the view scrolls, so the sticky ruler and
+names, Tab, the waveforms drawn when seen and every suite's click keep working.
+- *Why:* one place says where a view looks, so every move (a swipe, a zoom, Follow, Show) agrees
+  with every other, and none fights the box (the note's §1, §3, §4).
+- *Today:* since track `camera`: the cameras, the pure functions (`move`, `to`, `zoomAround`,
+  `reveal`, `fit`, `toContent`, `cull`) and `useCamera`, the writer, in `web/src/camera/`; a camera
+  named `arrangement` (`SongTimeline.tsx`), `graph:<module>` (`NodeGraph.tsx`, one for each module,
+  dropped when the Graph closes), `notes` (`NoteView.tsx`) and `beat` (`BeatView.tsx`). The
+  arrangement's zoom is still kept in `view.json` (FMT-20, `lib/zoom.ts`). The writer writes whole
+  pixels and remembers what it wrote, so the camera keeps its fractions. Tested by `camera` (the
+  library's functions against known numbers, in the page; the writer against a box that keeps whole
+  pixels).
+
+**VIEW-2.** A swipe is a run of wheel events less than G ms apart (G = 50 ms). Its first event
+decides whose it is, for all of it, whatever its later events' deltas or keys: ⌘ or Ctrl held at
+its first event, a zoom (VIEW-5); else, started on a control marked `data-wheel` (a picture's dot,
+DV-17), that control's, unless a camera moved in the last 250 ms and the pointer hasn't moved since
+(the dot came under a still pointer: a pause in a swipe, or its glide arriving late); else the
+camera's. ⌘ pressed later in a camera's swipe zooms nothing, and a control's swipe whose events stop
+landing on it (the dot slid away) is cancelled to its end. The web view MUST scroll none of these
+swipes, and no control under the pointer sees the camera's; only a swipe WebKit marks as not
+cancelable (it took the swipe over, having waited 50 ms for the page, and scrolled by its first
+event too) is the web view's: the camera moves by none of its events, the first included, and takes
+the box's move in.
+- *Why:* WebKit on the Mac keeps a swipe to one axis, and a page can cancel a swipe only at its
+  first event; PR #112 moved the events that went both ways and left the rest to WebKit, so one
+  swipe had two owners and felt wrong (the note's §1, §16).
+- *Today:* since track `camera`: `web/src/camera/recognizer.ts`, one listener in the capture phase
+  on each view's box; whether a control may take a swipe in `state.ts` (`controlMayTake`). Tested by
+  `camera` (a swipe's events all the camera's, its first decides; ⌘ held in a glide after a key
+  zooming nothing; a swipe WebKit took over moving the box once, by WebKit, taken in; a swipe that
+  carries a picture's dot under the pointer, and one 60 ms after it over the dot, changing no file;
+  one started on the dot changing its value and moving no view, and cancelled once it slides off).
+
+**VIEW-3.** The camera MUST move 1:1 with the fingers, both ways at once, the events of a frame
+summed and written once in it. In the arrangement, Notes and the beat grid, a swipe whose first
+8 px go within 10° of an axis (their sum, with signs: a hand's jitter cancels) starts on that axis's
+rail, so scrolling down the tracks doesn't drift sideways, however long the swipe or its glide. The
+rail breaks, for the rest of the swipe, once its last 50 px have gone more than 20° off it, all
+told (a turn, not a long swipe's slant or its jitter adding up), and the swipe moves both ways from
+there (what was held back off the rail is not moved). A swipe further from an axis moves both ways
+from its start. The Graph has no rails: a canvas pans freely, as
+Figma, Freeform and tldraw do. ⇧ + wheel is never turned by the camera: the Mac and WebKitGTK turn it
+already. Chrome's lines and pages, which only the suites send, are 33 px and the view's height.
+- *Why:* the Mac's own scroll views move with the fingers and VS Code keeps a nearly straight
+  swipe on its line (the note's §2, D6); rails that never break made a swipe that turned diagonal
+  feel stuck, so they break as Chromium's touch scrolling's do (the owner, 2026-11-12, the note's
+  §16).
+- *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts` (`RAIL_ANGLE`,
+  `RAIL_AFTER`, `RAIL_TURN`, `RAIL_RECENT`, and why each), `rails: false` for the Graph's cameras.
+  Tested by `camera` (a diagonal swipe 1:1 both ways in each view; 5° off straight on its rail; 45°
+  and 30° free; straight then turning 45° free once its last 50 px turn 20° off; 1500 px at 3° with
+  a pixel of jitter each way, and its glide, on the rail to the end; the Graph 5° off moving 5° off).
+
+**VIEW-4.** The glide after a flick MUST be the system's on a Mac: the camera moves by its wheel
+events like any other. Where the page gets none (WebKitGTK, on Linux), the camera glides itself:
+from one frame after a swipe's last event, at the speed of its last 50 ms, slowing as an iPhone's
+scroll view does (0.998 of its speed kept each ms), only after a swipe in pixels (a trackpad's: a
+mouse's wheel, in lines, never glides). The next wheel event, a click or a key stops it, and so does
+an edge, each way. After a click, a key or a move by the app, wheel events are dropped until a gap
+of G, so a glide still arriving from the system stops too; Follow's page stops only the camera's own
+glide (VIEW-9). With reduced motion there is no glide of the camera's own.
+- *Why:* WebKitGTK glides inside itself and gives the page nothing to glide by (the note's §5, C5).
+- *Today:* since track `camera`: `recognizer.ts`; the app tells the library the platform
+  (`setPlatform`, from `isMac` and the reduced-motion setting, in `main.tsx`). No one here has a
+  Linux laptop, so the Linux glide is checked only by suites (gaps.md). Tested by `camera` (with
+  Linux's flag set in the page: it starts after a swipe, slows, and stops at the next event and at
+  an edge; a mouse's two notches don't glide).
 
 **VIEW-5.** ⌘-scroll (Ctrl-scroll) MUST zoom around the pointer in all four views: the point under
 it stays under it. So MUST a pinch on a Mac, and the Graph's zoom bar's Zoom in, Zoom out and actual
-size, around the view's middle. Fit fits, from the graph's top left.
-- *Today:* since track `mac-feel` for the Graph: `NodeGraph.tsx` holds the graph's point under the
-  pointer in its own units and scrolls it back after the zoom's render. The arrangement's
-  `zoomTo` does the same across (its tracks don't scale); Notes and the beat grid take ⌘-scroll
-  around the pointer but no pinch yet. Tested by `graph-zoom` (⌘-scroll in and out and a pinch in
-  and out, each within a pixel and a half of the point, the zoom bar's buttons around the middle,
-  Fit) and `pl-zoom` (the arrangement).
+size, around the view's middle. Fit fits, from the graph's top left. The Graph's dotted background
+MUST zoom and move with the graph: its dots 20 of the graph's px apart from its top left, doubled
+while that is under 12 on screen, each 1 px in radius at every zoom.
+- *Today:* since track `camera`, in all four views, with a pinch in each: the recognizer (`web/src/camera/recognizer.ts`) sums
+  a frame's ⌘-scroll events, or takes a pinch's last scale (Safari's `gesturechange`), and the
+  camera's `zoomAround` keeps the point under the pointer, across in the arrangement, Notes and the
+  beat grid (their rows don't scale), both ways in the Graph. 100 px of ⌘-scroll zooms ×1.5, as ⌘=
+  does in the arrangement. The zoom renders the view once, and the writer scrolls in that render's
+  layout effect, before the frame is drawn. The dots: `Dots` in `draw.tsx`, given the Graph's zoom
+  by `NodeGraph.tsx`, in the content the camera scrolls, so a pan carries them too. Tested by
+  `graph-zoom` (⌘-scroll in and out and a pinch in and out, each within a pixel and a half of the
+  point, the zoom bar's buttons around the middle, Fit, the dots at each zoom on the way),
+  `pl-zoom` (the arrangement) and `camera` (a pinch and ⌘-scroll in Notes and the beat grid, and
+  the arrangement's pinch).
+
+**VIEW-6.** The view MUST stop at its edges, on every system (D3). Apple's stretch and spring back
+are a later track, if the owner misses them.
+- *Today:* since track `camera`: the writer clamps the camera to the box's room. Tested by `camera`
+  (a swipe past the start stops there).
+
+**VIEW-7.** The scrollbars MUST be the browser's own (D5), until the probe shows the Mac hides them
+for the camera's moves; dragging one is the browser's move, taken in (VIEW-9).
+- *Today:* since track `camera`: nothing of the camera's draws them. Tested by `camera` (a write to
+  `scrollLeft`, as a scrollbar's drag makes, taken in).
+
+**VIEW-8.** No React component MUST render on a frame the camera moves, except when the view crosses
+a step of what it draws (VIEW-12) or a waveform tile shows for the first time. The status poll MUST
+NOT render the window: only what shows the status (the top bar) renders by it, and the arrangement
+grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
+frame. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
+reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
+catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
+- An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
+  style, never by a render while only its place changes.
+- *Why:* moving the view must cost two numbers written, not a redraw (the note's §8, C9, C10).
+- *Today:* since track `camera`: the per-frame `x` and `y` are read by subscription only; the hooks
+  read the zoom and the culling's step (`useZoomOf`, `useCull`); `movingNow()` mutes Notes' and the
+  wires' hover; the status in `web/src/lib/status.ts`; the pointer note hears `onViewMoved` (after
+  each write of a view's box) and writes its place, rendering only when its ring, edge, Show or
+  words change (`PointerNote.tsx`). Tested by `camera` (120 events of a swipe
+  rendering no view, with the pointer over notes and over wires; a zoom's 30 events rendering the
+  arrangement and Notes at most once a frame; a drag holding the camera and Follow; an agent's
+  pointer at a clip rendered 0 times through a swipe, still on the clip) and `camera-probe` (a zoom
+  redraws only the arrangement).
+
+**VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
+`zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
+(DV-13), a lit column (DV-18), Notes' opening, its rows' height and Fold (the drum in its middle
+stays there). Content that gets smaller than where the camera looks (or a box that gets bigger)
+stops the camera at the new edge, as the browser stops the box, though it may send no `scroll`:
+in the render that made it smaller, where the view says its content's size (`camera.content`, so
+Fold's rows are drawn in that frame), else heard by ResizeObservers on the box and what is in it,
+after layout; never by reading the page after every render. That move is the box's edge's
+(`clamp`), no one's. A move the browser makes to a box
+itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
+taken in: on the box's `scroll`, a position more than 1 px from what the camera last wrote is the
+browser's. Follow pauses on a move across that isn't the app's own (the hand's or the browser's; a
+move straight down the tracks isn't one), until play starts again or the playhead comes back into
+view after being out of it (Q11): a hand that scrolls with the playhead in view is never undone by
+Follow's next page. Follow never comes back while the hand still moves the view (a swipe's events
+less than G apart, or its glide), and its page drops no swipe still arriving.
+- *Why:* WebKit keeps scroll positions in whole pixels while the camera keeps fractions, so the
+  camera compares the box only with what it wrote (the note's §4, C6, C8).
+- *Today:* since track `camera`: `useCamera`'s writer; the app's moves in `SongTimeline.tsx`,
+  `NodeGraph.tsx`, `PictureView.tsx`, `NoteView.tsx` and `lib/pointer.ts`, none of which calls
+  `scrollIntoView` or writes `scrollLeft`. Tested by `camera` (a swipe, a key's scroll and a write to
+  `scrollLeft` while playing each pausing Follow; a swipe straight down not pausing it; a swipe back
+  to the playhead moving 1:1 to its end; tracks made shorter at the foot stopping the camera, moved
+  by `clamp`; agents' `seen` following the camera; Tab to an
+  off-screen bar and a test's click taken in) and `pl-zoom` (Follow).
 
 **VIEW-10.** The command palette (⇧⌘P, §5.1) MUST offer **Show frame rate** and **Swipe probe**.
 - **Show frame rate** turns on a small meter over the window, at the right under the ruler, clear of
@@ -1029,10 +1167,14 @@ size, around the view's middle. Fit fits, from the graph's top left.
   the frames a second, from `requestAnimationFrame`'s intervals over the last second; the slowest
   frame of the last second, in ms; and the redraws of the last second for each view (the
   arrangement and its tracks' rows, the Graph and its nodes, Notes and its keys, the beat grid and
-  its rows), counted by one `useRenderCount` line at the top of each. Its numbers change four times
+  its rows), counted by one `useRenderCount` line at the top of each. A redraw is a render React puts
+  on the page (since track `camera`: counted in a layout effect), not one it starts and drops, as it
+  may a transition's. Its numbers change four times
   a second, written straight into its own text: it redraws no view. Suites read the same numbers,
-  and how many frames have been measured since the page loaded, from `window.m2canvas.frames()`:
-  the only part of the window the page gives them.
+  and how many frames have been measured since the page loaded, from `window.m2canvas.frames()`.
+  With `window.m2canvas.camera`, the camera library's face for the `camera` suite (its functions,
+  its numbers, each camera now, and the platform's glide to set), it is the only part of the window
+  the page gives them.
 - **Swipe probe** opens a panel at the window's lower right, above the Graph's zoom bar, that leads
   the musician in plain steps.
   - First, **about your Mac**: its model (a few choices, and a field), its macOS version (a field)
@@ -1050,6 +1192,11 @@ size, around the view's middle. Fit fits, from the graph's top left.
     zooms the timeline in. It puts a view's zoom back after each pinch, and when it closes puts
     back every zoom, the selection and the dock's view it changed.
   - **Round A, "Let the app scroll as it does today":** its listeners only listen.
+  - While the probe listens, in both rounds, the camera leaves plain swipes to the web view
+    (`pauseSwipes`) and takes the box's moves in; it still zooms. So round A measures what the web
+    view does by itself, as before the camera, and round B moves the view the camera's way by its own
+    listener, which hears each event first, on the window. The camera's numbers come from what the
+    probe measures; the camera moving the view too would change what it measures (the note's §16).
   - **Round B, "Cancel the swipe":** a listener in the capture phase cancels and stops each wheel
     event over the timeline's and the Graph's scroll boxes (`preventDefault`, `stopPropagation`),
     so neither the web view nor any control under the pointer sees it, and moves the box itself
@@ -1093,10 +1240,11 @@ size, around the view's middle. Fit fits, from the graph's top left.
   `web/src/lib/frames.ts`, the meter in `FrameMeter.tsx`, the probe in `web/src/lib/probe.ts` and
   `SwipeProbe.tsx`, the palette in `CommandPalette.tsx`, which holds only these two commands so far
   (gaps.md). The meter shows the last second's redraws: the note's §8 meter, with the redraws of
-  the last swipe and a count of the swipes WebKit took over, comes with track `camera-core`'s
+  the last swipe and a count of the swipes WebKit took over, comes with track `camera`'s
   recognizer; the probe's report gives both for each step now. `node e2e/big-song.mjs <folder>`
   makes a song of 24 tracks of 64 clips each to measure on. Tested by `camera-probe` (the
-  palette's two rows; the meter's numbers and `frames()`'s, and no view redrawn by its updates; a
+  palette's two rows; the meter's numbers and `frames()`'s (and since track `camera` the camera's
+  face beside them), and no view redrawn by its updates; a
   zoom redrawing the arrangement and no other view; the Mac's answers first in the report; room
   made in the timeline and the Graph, the zoom put back after a pinch and on closing; round A's
   wheel scrolling the arrangement, heard with its scrolls, and a control under it seeing it; round
@@ -1114,6 +1262,48 @@ private call is there. Where it isn't, the shell says so in one line and the pag
   on the window's web view. Tested on a Mac by the desktop app's `frame_rate` test (the shell's
   switch turns the setting off in a `WKPreferences`; a WebKit without it is said so), and by the
   frame meter (VIEW-10), which shows 120 frames a second on such a screen.
+
+**VIEW-12.** The arrangement and Notes MUST draw only what is in view, plus a margin of one view's
+width (or height) each side. The window they draw is kept while it holds what shows and half a view
+more each side, and isn't twice as wide as a new one; then a new one is made around what shows. So
+a pan makes a new one every half a view and a zoom every ×1.5 out or ×2 in, never every frame, and
+a swipe renders a view only then (VIEW-8). A new window MUST be drawn without holding up a frame of
+the swipe (a React transition: the margin lets it lag), unless what shows has left the window on
+screen (the one last drawn, not one asked for that hasn't landed): then at once. A zoom MUST render
+no clip: each clip's box is placed by the zoom straight into its style.
+- The arrangement draws only the clips that overlap the window across, and the ruler's bar numbers
+  in it. Tracks more than a view's height above or below draw no clips, but keep their row boxes,
+  so heights, the sticky names and Tab's order stay. A track coming within that margin, or leaving
+  it, draws or lets go of its clips as a transition; one that comes into view before that has landed
+  is drawn at once.
+- Notes draws only the notes in the window, across and down, and their velocity bars across.
+- The beat grid keeps its culling by bar (KIT-10), through the camera's window. The Graph is small:
+  it draws everything.
+- A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT read the zoom: it is
+  drawn in beats, or in percent of its clip, and kept by its clip, so a zoom changes only the clip's
+  box. A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px, its
+  clip is marked (`data-fine`, as it zooms) and each note gets a 2 px mark the stretch doesn't scale.
+  Each note is drawn at its loudness by its own opacity, never a group's (WebKit paints a group with
+  opacity through a layer of its own). An audio clip's waveform is drawn in pixels and
+  redraws on a zoom. A new window draws only the clips entering it: a clip already drawn is kept.
+- *Why:* on #112's branch the owner saw the frame rate drop when zooming the tracks or Notes at
+  120 Hz: every zoom step redrew every clip of the song, once for each wheel event (the note's §16).
+- *Today:* since track `camera`: `cull` and `useCull` in `web/src/camera/` (the margin and the step
+  in its `numbers.ts`; what to do with a window judged by `cullPlan` against the window on screen; a
+  new window set in a `startTransition`); `useSpan` places a clip's box, and a control lane's
+  fallback, by the zoom, and marks a clip `data-fine` (a CSS variable for the zoom was tried first: a change to it
+  made the browser work out the style of the whole arrangement anew, 56 ms of each zoom frame on the
+  big song); in `SongTimeline.tsx` the window across from `useCull`, and each track's nearness down
+  from an IntersectionObserver whose margin is the view's height (as a transition) and another at the
+  view's edge (at once); each clip box memoised; in
+  `NoteView.tsx` both ways from `useCull`. Tested by `camera` (on the 24-by-64 song: no more clips
+  than the view and its margins can show; a swipe of 120 small events rendering the rows only at a
+  step; 30 ⌘-scroll events rendering the arrangement at most once a frame, zooming in and out
+  rendering no clip box drawn before, only those entering the window; the same in Notes with a clip
+  of many notes; a zoom rendering no clip's mini drawing; a swipe down the tracks and back drawing
+  every row in view; no group opacity in a clip's notes and their marks only where a note is under
+  2 px; `cullPlan` keeping, waiting and drawing at once against a window on screen that lags the one
+  asked for).
 
 ---
 
@@ -1150,7 +1340,7 @@ new says "(new)".
 | TL-13 | CHANGE | Broken on open (D2) | Show the tracks and clips from `data/` and the tempo from `arrangement.json`, greyed, with one line at the top of the lanes: "Waiting for the code to compile." Never "No tracks yet". | `g02` | S (+ the server sends the last-known timeline) |
 | TL-14 | CHANGE | Fallback line | 1 px dashed `line-strong`, drawn only between clips. | `b01` | T |
 | TL-15 | CHANGE | Clip look | `tint` body, `bar` border, `ink` marks, `rounded-sm`. No top strip, gradient or double muting. | `f06` | T |
-| TL-16 | CHANGE | Revealing a lane doesn't hide the first name (D12) | Set `scroll-padding-top` to the ruler's height; reveal with `block: "nearest"`. | `c07`, `d09` | S |
+| TL-16 | CHANGE | Revealing a lane doesn't hide the first name (D12) | The app reveals a new lane or track through the arrangement's camera, clear of the ruler, the headers and the Song row (`reveal`, VIEW-9); the scroll padding (`scroll-padding-top` the ruler's height, and the headers' and the Song row's) stays for the browser's own reveals: Tab, a rename field's autofocus, a click. | `c07`, `d09` | S |
 | TL-17 | REMOVE | "TRACKS" and "4/4 · 124 BPM" in the corner | The corner holds "+ Track" and fold-all; the tempo and meter move to the top bar. | `f06` | S |
 | TL-18 | KEEP | Double-click empty lane space to make a 1-bar clip; the `lit` flash; clips addressed by id | | `c22`, `c07` | — |
 
@@ -1236,7 +1426,7 @@ rules is [Cards you play with](../cards2/design.md), and its D numbers are that 
 
 **DV-13.** (Was CARD-44.) A collapsed node MUST be 216 px wide; an expanded one as wide as its columns, up to four, and never narrower. **⤢** expands it and collapses it again, and so does Enter on its header; **Collapse all**, beside Fit in the zoom bar, collapses every node. Expanding or collapsing a node runs the layout again with the node's new size: the others move aside, the zoom stays as it is (Fit isn't worked out again), and the graph scrolls the node's top into view. Neither writes anything. Which nodes are expanded is kept by each node's key, so an edit (an effect added, a value set, ⋯ ▸ Move, Remove, an undo or a redo) never moves it to another node nor loses it, and a node an edit adds starts collapsed.
 - *Why:* expanding a node pushes the others aside so the wires stay true and nothing jumps in size (the graph note's D3); a node's number changes with an edit above it, its key doesn't.
-- *Today:* since track `graph-node`: `useExpanded` (`web/src/lib/expanded.ts`), the zoom bar's Collapse all in `NodeGraph.tsx`. Tested by `nodes` (⤢ and Enter, its width and the others moved aside, the zoom kept, Collapse all, nothing written, and the expanded node kept across an effect added before it in its file and its undo).
+- *Today:* since track `graph-node`: `useExpanded` (`web/src/lib/expanded.ts`), the zoom bar's Collapse all in `NodeGraph.tsx`; since track `camera` the node's top comes into view through the Graph's camera (`reveal`, VIEW-9). Tested by `nodes` (⤢ and Enter, its width and the others moved aside, the zoom kept, Collapse all, nothing written, and the expanded node kept across an effect added before it in its file and its undo).
 
 **DV-14.** (Was CARD-45.) Each value a node can set MUST be one control, the **bar**, at both sizes: its label, its number and a fill for how far along its range the value is. The fill follows the knob's own curve (a frequency fills on a log scale); a value with two sides (a range centred on 0: Pan, Formant, Feedback) fills from the middle, left or right, so 0 reads as empty. It drags up and down only, never sideways (300 px for the whole range, ⇧ for fine steps, §5.2); a double-click types a number; ⌥-click or ⌫ resets it to its default; right-click opens its menu (Automate, Reset). The wheel never edits a bar: it scrolls the graph, wherever the pointer is (a picture's dot keeps its wheel, DV-17). A choice of five options or fewer is a segmented control on an expanded node, and a longer one a menu; a switch is a switch. A value a wire, a lane or the code drives is no bar: it is a row that names its source. A default shows in `fg-muted` and a written value in `fg` (HOME-1). Each value's tooltip says how to use it, then its whole label, its value and its range (a label the bar cuts is whole there), where it is written, and its id for `m2 set`. Every bar stays a knob to the rest of the app (`data-knob`, `data-knob-id`): the focus, the pointer, wires and glows find it.
 - *Why:* one control in place of knobs takes half the room and shows the exact number at a glance (the graph note's D5); a drag read one way never jumps from a crooked hand, and leaves a sideways drag free.
@@ -1244,11 +1434,11 @@ rules is [Cards you play with](../cards2/design.md), and its D numbers are that 
 
 **DV-15.** (Was CARD-46.) A click on a node's header MUST select it: the selected node has a ring. Tab goes through the nodes in layout order, and inside a node through its header's buttons, then its values. Enter on a header expands or collapses its node; Delete removes the selected node where Remove is offered (an effect or a note effect), and elsewhere says why: the view's words on a call's node, "Chords isn't an effect: change it in code" on any other (CARD-36); Esc clears the selection. On a bar, ↑ and ↓ (and → and ←) move it one step and with ⇧ ten (§5.2), PageUp and PageDown a tenth of its range, Home and End to its lowest and highest, ⌫ to its default, and Enter types a value. A bar that its own keys or menu write while it has the focus keeps it when that write gives it a new id and it is drawn again; no other bar, nor a copy of it elsewhere, takes it, and a bar left by the musician never takes the focus back, whatever writes it later. The selection is the window's own and writes nothing.
 - *Why:* hands stay on the keyboard (principle 5), and a screen reader meets the graph in the order it is drawn.
-- *Today:* since track `graph-node`: the header's keys and the selection in `NodeGraph.tsx` (`useExpanded`'s `selected`), the bar's keys in `Bar.tsx`, `focused` in `NodeGraph.tsx`. Tested by `nodes` (a click selects, Esc clears, Tab's order, Enter, Delete removing an effect and refusing nothing else, End, Home, PageUp and ⌫ on a bar, its focus kept across its first write, and a bar left by a click that an agent then writes, which doesn't take the focus back).
+- *Today:* since track `graph-node`: the header's keys and the selection in `NodeGraph.tsx` (`useExpanded`'s `selected`), the bar's keys in `Bar.tsx`, `focused` in `NodeGraph.tsx`. Since track `camera` the browser still scrolls the focused node or bar into view, and the Graph's camera takes that move in (VIEW-9). Tested by `nodes` (a click selects, Esc clears, Tab's order, Enter, Delete removing an effect and refusing nothing else, End, Home, PageUp and ⌫ on a bar, its focus kept across its first write, and a bar left by a click that an agent then writes, which doesn't take the focus back).
 
 **DV-16.** (Was CARD-47.) A value a collapsed node doesn't draw MUST stay a knob to the rest of the app: its node's **+N** stands for it (every value it hides, never one drawn). +N lights when an agent changes one ([AGENT-5](../../architecture.md#agents)); an agent's pointer at one shows on it, and Show expands the node and scrolls to that value ([AGENT-6](../../architecture.md#agents)); a click on it expands the node. A wire dropped on a collapsed node offers its values in a menu (DV-6).
 - *Why:* an agent's change must be seen wherever the musician is looking (the design's §3.5).
-- *Today:* since track `graph-node`: `data-hides` on +N, `expandFor` (`web/src/lib/expanded.ts`), the drop menu in `NodeGraph.tsx`. Tested by `nodes` (an agent's change to a hidden value lighting +N, its pointer, and Show expanding the node; a face value's change lighting no +N; a wire dropped on a collapsed node and its menu).
+- *Today:* since track `graph-node`: `data-hides` on +N, `expandFor` (`web/src/lib/expanded.ts`), the drop menu in `NodeGraph.tsx`; since track `camera` Show reaches the value through the Graph's camera (`reveal` in `lib/pointer.ts`). Tested by `nodes` (an agent's change to a hidden value lighting +N, its pointer, and Show expanding the node; a face value's change lighting no +N; a wire dropped on a collapsed node and its menu).
 
 **DV-17.** (Was CARD-69.) The window MUST draw a picture from its shapes in music2's own style: an SVG at the picture's own size in pixels, over its grid, its axes' lines and labels as this page formats each unit (§1, Words and numbers) (a log axis at 1, 2 and 5 of each decade, "1k" for 1000 Hz, "−12" for dB), its labels never over a line (a bare axis, [CARD-60](../../architecture.md#pictures-on-the-card), has no grid lines and no labels, and no room for them: the plot runs to that edge): the x axis's in the room at its foot, each clear of the others and of the right edge, where they don't all fit a log axis's decades first (100, 1k, 10k: what a beginner reads a spectrum by), then its 5s where they fit; the y axis's in room of their own at its left, as wide as its longest label, each by its line (one each 12 px at the least, counted from 0), and its shapes and live layers drawn only on the plot between, at every height (DV-19), both laid out from one size, rounded, so at any zoom of the patch a live layer sits on its shapes' plot; hairlines, its tones as music2's greys, a fill as a faint tint of its line, the accent only on the dot picked, no gradients, its text and its dots never stretched at any size. Each dot is a 7 px circle with its `mark` on it, hollow when `off` or fixed, a button in a group named by the picture's words, which are its tooltip too. While a picture is asked for and its answer hasn't come, its frame shows; one that can't be drawn is greyed with its `why` in words. It asks for its shapes only while it is on screen in a window that shows (as DV-10's scope does), and draws each `pictures` message for it.
 - *Why:* every pack's picture looks like music2's, so a beginner learns one card (D2, the design's §4.4 rule 6); a screen reader reaches each dot (review G9, G17).
@@ -1256,7 +1446,7 @@ rules is [Cards you play with](../cards2/design.md), and its D numbers are that 
 
 **DV-18.** (Was CARD-71.) A dot whose `opens` names a group of its node MUST light that group's column when it is picked, and scroll the graph to it (expanding a collapsed node first); picking a value in that column MUST mark the dot whose `opens` names it, in the accent, until another is picked.
 - *Why:* the dot and its column are one band (the design's §3.1): picking EQ band 3's dot shows band 3's column, which was its tab until 2026-11-08.
-- *Today:* since track `pictures`; its column since track `graph-node` (`PictureView.tsx`, `useExpanded`'s `lit`). Tested by the `pictures` suite.
+- *Today:* since track `pictures`; its column since track `graph-node` (`PictureView.tsx`, `useExpanded`'s `lit`); since track `camera` the column comes into view through the Graph's camera (`reveal`). A picture's dot is marked `data-wheel`, so it keeps its wheel (VIEW-2). Tested by the `pictures` suite.
 
 **DV-19.** (Was CARD-105.) A picture MUST be drawn 48 px tall on a collapsed node, so a node's picture never pushes the graph's other nodes out of its first view, and 132 px tall on an expanded one, across its width or at the top of its group's column. Its dots and live layers work there as anywhere.
 - *Why:* collapsed is for wiring and glancing, expanded for shaping (the graph note's §2). When std's LFO gained its picture (CARD-98), a picture as tall as the chain's pushed the next node's knobs out of the graph's view, where a cable is dropped (the `cables` and `undo` suites). Normal's 104 px went with Normal.
@@ -1270,7 +1460,7 @@ rules is [Cards you play with](../cards2/design.md), and its D numbers are that 
 | NT-2 | CHANGE (new) | Audition | Sound on note-down, while dragging across pitches, and on clicked keys. A header toggle, on by default. ⌘. is panic. | `e05` | 8b:audition |
 | NT-3 | CHANGE | The keyboard is an instrument | As in §3.5: playable, every C labelled. | `f09` | UI + 8b:audition |
 | NT-4 | CHANGE | Header | The §3.5 tools. Drop "48 notes", "New notes 1/16" and the ✕. | `f09` | S |
-| NT-5 | CHANGE (new) | Vertical zoom and drum folding | ⌘↑ and ⌘↓ set rows from 10 to 24 px. "Fold" shows only used rows, which is the default for `hits` lanes. | `b11`, `e15`, `e03` (the top note is cut) | UI |
+| NT-5 | CHANGE (new) | Vertical zoom and drum folding | ⌘↑ and ⌘↓ set rows from 10 to 24 px, the row in the roll's middle kept there through Notes' camera (VIEW-9). "Fold" shows only used rows, which is the default for `hits` lanes. | `b11`, `e15`, `e03` (the top note is cut) | UI |
 | NT-6 | CHANGE (new) | Ghost notes | Other tracks' notes in this bar range as 1 px `fg-off` outlines; a header toggle, off by default. | — | UI |
 | NT-7 | CHANGE (new) | Quantize, triplets, swing | Q and ⌘3; snap down to 1/64. | — | later #15 |
 | NT-8 | CHANGE | Note colours | From the palette by velocity; the selection as in §2.9. | `e04` | T |
@@ -1453,6 +1643,8 @@ keys, Space, Return, ⌫, arrows, ⌥ chords) is handled by the page, with no na
 | Automation clip | click or drag within 6 px of the curve / click or drag elsewhere on the clip | add a point and move it / select or move the clip, as for notes clips |
 | Ruler | click / drag | set the start point / set the loop |
 | Notes grid | the click rules in §3.5 | |
+| The arrangement, the Graph, Notes, the beat grid | two-finger swipe, any way, or the wheel | the view moves with the fingers, both ways at once; a nearly straight swipe keeps to its line (VIEW-2, VIEW-3) |
+| | pinch, or ⌘-scroll (Ctrl-scroll) | zoom around the pointer (VIEW-5) |
 
 ### 5.3 Rules
 

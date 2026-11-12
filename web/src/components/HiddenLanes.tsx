@@ -24,7 +24,8 @@ export function HiddenRow({
   color: TrackColor;
   selected: boolean;
   headerW: number;
-  width: number;
+  /** The lanes' width, in px; left out, the rest of the row. */
+  width?: number;
 }) {
   const n = lanes.length;
   return (
@@ -48,7 +49,7 @@ export function HiddenRow({
           </button>
         </span>
       </div>
-      <div className="border-t border-hover" style={{ width }} />
+      <div className="border-t border-hover" style={width === undefined ? { flex: "1 1 0", minWidth: 0 } : { width }} />
     </div>
   );
 }

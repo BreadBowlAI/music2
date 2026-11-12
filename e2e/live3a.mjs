@@ -10,7 +10,7 @@
 //   lock     the piano roll is read only while its lane's file doesn't read (FMT-9), with a chip
 //            saying why, and editable again once it is fixed
 //   node run.mjs live3a fix
-import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { check, done, open, read, rollNotes, sleep, until, write } from "./fixlib.mjs";
 
 const { browser, page, errors, api, state, show, view, box, drag } = await open(1600, 1000);
 // The roll's rows and its ruler (taste.md §3.5: 14px rows, the arrangement's 28px ruler).
@@ -131,7 +131,7 @@ const notesFile = "data/bass/notes.json";
 const original = read(notesFile);
 const clipBox = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(clipBox.x + 60, clipBox.y + clipBox.height / 2, { count: 2 });
-check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 48), "the bass clip opens in the piano roll");
+check(await until(async () => (await rollNotes(page)) === 48), "the bass clip opens in the piano roll");
 await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; }, ROW, RULER);
 await sleep(150);
 const grid = await box("[data-testid=roll-grid]");
@@ -193,7 +193,7 @@ const locked = () => page.$("[data-testid=notes-locked]");
 // Back from the Device view: open the clip again.
 const again = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(again.x + 60, again.y + again.height / 2, { count: 2 });
-check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 49), "the bass clip opens again, C4 and all");
+check(await until(async () => (await rollNotes(page)) === 49), "the bass clip opens again, C4 and all");
 await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollTop = ruler + (127 - 60) * row - el.clientHeight / 2; }, ROW, RULER);
 await sleep(150);
 check(!(await locked()), "the roll is editable");
@@ -212,7 +212,7 @@ const d4 = cell(62, 6.1);
 await page.mouse.click(d4.x, d4.y, { count: 2 });
 await sleep(800);
 check(read(notesFile) === before, "a double-click adds nothing: the broken file is left as it is");
-check((await page.$$("[data-testid=notes] [data-note]")).length === 49, "the roll still shows the notes the lane plays");
+check((await rollNotes(page)) === 49, "the roll still shows the notes the lane plays");
 write(notesFile, withC4);
 check(await until(async () => !(await locked()), 5000), "fixed by hand, it unlocks");
 await page.mouse.click(d4.x, d4.y, { count: 2 });

@@ -16,6 +16,29 @@ export const until = async (f, ms = 8000) => {
   }
   return false;
 };
+/**
+ * How many of the open clip's notes Notes draws as its roll is scrolled through, top to bottom, a
+ * view at a time: it draws only those near the view (VIEW-12), so a count of what it draws at once
+ * depends on the view's size. Each note counted once, by its index; the roll put back where it was.
+ */
+export async function rollNotes(page) {
+  const sel = "[data-testid=roll-scroller]";
+  if (!(await page.$(sel))) return 0;
+  const frame = () => page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+  const { h, room, was } = await page.$eval(sel, (e) => ({ h: e.clientHeight, room: e.scrollHeight - e.clientHeight, was: e.scrollTop }));
+  const seen = new Set();
+  for (let y = 0; ; y += Math.max(1, h)) {
+    await page.$eval(sel, (e, y) => void (e.scrollTop = y), Math.min(y, room));
+    await frame();
+    await sleep(60);
+    for (const i of await page.$$eval("[data-testid=notes] [data-note]", (els) => els.map((e) => e.dataset.note))) seen.add(i);
+    if (y >= room) break;
+  }
+  await page.$eval(sel, (e, y) => void (e.scrollTop = y), was);
+  await frame();
+  return seen.size;
+}
+
 export const read = (path) => fs.readFileSync(`${PROJ}/${path}`, "utf8");
 export const write = (path, text) => fs.writeFileSync(`${PROJ}/${path}`, text);
 

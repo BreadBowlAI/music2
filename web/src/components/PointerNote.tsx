@@ -1,7 +1,12 @@
 import { ArrowDown, ArrowLeft, ArrowRight, ArrowUp } from "lucide-react";
-import { useEffect, useState, type CSSProperties } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
+import { onViewMoved } from "../camera";
 import { behindFold, dismissPointer, elsewhere, reveal, seenIn, targetBox, usePointer, type Pointer } from "../lib/pointer";
-import { canvas } from "../lib/shell";
+import { useRenderCount } from "../lib/frames";
+import { canvas, useShell } from "../lib/shell";
+import { useStore } from "../lib/store";
+import { useExpanded } from "../lib/expanded";
+import { useLocalStore } from "../lib/local";
 import { keepFocus } from "./ui";
 
 type Edge = "left" | "right" | "up" | "down";
@@ -79,6 +84,16 @@ function placed(p: Pointer, area: DOMRect, aside: boolean): Place | null {
 
 const ARROWS = { left: ArrowLeft, right: ArrowRight, up: ArrowUp, down: ArrowDown };
 
+/** What of a place only a render can show: whether it rings its target, its edge, Show, the knob it names, which sides it is placed by. */
+const shapeOf = (p: Place | null) =>
+  p && JSON.stringify({ mark: !!p.mark, edge: p.edge, show: p.show, names: p.names ?? null, sides: Object.keys(p.style), transform: p.style.transform ?? null });
+
+/** Write where a place is into the note's and the ring's own style: a move needs no render. */
+function write(p: Place, mark: HTMLElement | null, note: HTMLElement | null) {
+  if (mark && p.mark) for (const [k, v] of Object.entries(p.mark)) mark.style.setProperty(k, `${v}px`);
+  if (note) for (const [k, v] of Object.entries(p.style)) if (k !== "transform" && typeof v === "number") note.style.setProperty(k, `${v}px`);
+}
+
 /**
  * An agent's pointer (AGENT-6): a small note at its target, "Claude: listen to the hats here", with
  * OK. It takes no focus, and no press but its buttons': one on its words reaches what is under it.
@@ -86,32 +101,77 @@ const ARROWS = { left: ArrowLeft, right: ArrowRight, up: ArrowUp, down: ArrowDow
  * click moves the view.
  */
 export default function PointerNote({ session }: { session: number }) {
+  useRenderCount("pointer.note");
   const pointer = usePointer((s) => s.pointer);
   const p = pointer?.session === session ? pointer : null;
   const [place, setPlace] = useState<Place | null>(null);
-  // Follows its target as the view scrolls, zooms or resizes, a frame at a time while it shows.
+  const markEl = useRef<HTMLDivElement>(null);
+  const noteEl = useRef<HTMLDivElement>(null);
+  const placeNow = useRef<Place | null>(null);
+  // Follows its target on each frame a view moved (taste.md VIEW-8, the camera note's §7), and as
+  // the window, the song or the shell changes: where it is written straight into its own style; a
+  // render only when what it shows changes (its ring, its edge, Show, the knob it names).
   useEffect(() => {
     if (!p) return setPlace(null);
-    let frame = 0;
-    let last = "";
-    const tick = () => {
+    let shown: string | null = null;
+    const follow = () => {
       const next = placeOf(p);
-      const said = JSON.stringify(next);
-      if (said !== last) {
-        last = said;
+      placeNow.current = next;
+      const shape = shapeOf(next);
+      if (shape !== shown) {
+        shown = shape;
         setPlace(next);
-      }
-      frame = requestAnimationFrame(tick);
+      } else if (next) write(next, markEl.current, noteEl.current);
     };
-    tick();
-    return () => cancelAnimationFrame(frame);
+    // After React has drawn a change of the song or the shell.
+    let frame = 0;
+    const soon = () => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(follow);
+    };
+    follow();
+    // While the Graph's nodes move aside (DV-13, 280 ms), every frame of it: they ease, no view moves.
+    let easing = 0;
+    const ease = () => {
+      follow();
+      easing = useExpanded.getState().moving ? requestAnimationFrame(ease) : 0;
+    };
+    // The song, the shell (the dock, a track unfolded), the view's settings (track heights), a node expanded.
+    const offs = [
+      onViewMoved(follow),
+      useStore.subscribe(soon),
+      useShell.subscribe(soon),
+      useLocalStore.subscribe(soon),
+      useExpanded.subscribe((now) => {
+        if (now.moving && !easing) easing = requestAnimationFrame(ease);
+        soon();
+      }),
+      () => cancelAnimationFrame(easing),
+    ];
+    // A box the camera doesn't move (Mix's strips), the window's size, and the end of a move that
+    // eases (the Graph's nodes moving aside).
+    document.addEventListener("scroll", follow, { capture: true, passive: true });
+    document.addEventListener("transitionend", soon, true);
+    window.addEventListener("resize", soon);
+    return () => {
+      cancelAnimationFrame(frame);
+      offs.forEach((off) => off());
+      document.removeEventListener("scroll", follow, { capture: true });
+      document.removeEventListener("transitionend", soon, true);
+      window.removeEventListener("resize", soon);
+    };
   }, [p]);
+  // A render writes where it is now: a move written since may have left React's own style behind.
+  useLayoutEffect(() => {
+    if (placeNow.current) write(placeNow.current, markEl.current, noteEl.current);
+  });
   if (!p || !place) return null;
   const Arrow = place.edge ? ARROWS[place.edge] : null;
   return (
     <>
       {place.mark && (
         <div
+          ref={markEl}
           data-testid="pointer-mark"
           aria-hidden
           className="fixed z-[44] pointer-events-none rounded-sm outline-2 outline-dashed outline-accent outline-offset-2"
@@ -119,7 +179,7 @@ export default function PointerNote({ session }: { session: number }) {
         />
       )}
       {/* Placed by the outer box; the card rises in it, so its animation never moves where it sits. */}
-      <div className="fixed z-[44] max-w-[320px] pointer-events-none" style={place.style}>
+      <div ref={noteEl} className="fixed z-[44] max-w-[320px] pointer-events-none" style={place.style}>
         <div
           data-testid="pointer-note"
           data-edge={place.edge ?? undefined}

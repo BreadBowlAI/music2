@@ -57,7 +57,8 @@ export function TakeRows({
   color: TrackColor;
   selected: boolean;
   headerW: number;
-  width: number;
+  /** The lanes' width, in px; left out, the rest of the row. */
+  width?: number;
   /** Each row's height: the track's (taste.md §3.2). */
   height: number;
   editable: boolean;
@@ -93,7 +94,8 @@ function TakeRow({
   color: TrackColor;
   selected: boolean;
   headerW: number;
-  width: number;
+  /** The lanes' width, in px; left out, the rest of the row. */
+  width?: number;
   height: number;
   editable: boolean;
 }) {
@@ -165,7 +167,7 @@ function TakeRow({
       </div>
       <div
         className={clsx("relative overflow-hidden border-t border-hover touch-none", editable && "cursor-pointer")}
-        style={{ width }}
+        style={width === undefined ? { flex: "1 1 0", minWidth: 0 } : { width }}
         title={editable ? `Swipe along ${name} to play it there, or click a faint part` : undefined}
         onPointerDown={down}
       >

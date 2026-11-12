@@ -76,8 +76,8 @@ check(await until(async () => !(await has("[data-testid=palette]"))), "and so do
 // ---------------------------------------------------------------- the frame meter
 
 check(
-  (await page.evaluate(() => Object.keys(window.m2canvas ?? {}).join())) === "frames" && (await frames())?.fps === null,
-  `the page gives suites only frames(), and before the meter shows it measures no frames: ${JSON.stringify(await frames())}`,
+  (await page.evaluate(() => Object.keys(window.m2canvas ?? {}).join())) === "frames,camera" && (await frames())?.fps === null,
+  `the page gives suites only frames() and the camera's face (since track camera), and before the meter shows it measures no frames: ${JSON.stringify(await frames())}`,
 );
 await run("frame");
 check(await until(() => has("[data-testid=frame-meter]"), 3000), "Show frame rate shows the meter");

@@ -154,6 +154,11 @@ input, textarea { @apply select-text; }
 [data-clip][data-glow] { box-shadow: none; outline: 2px solid var(--color-accent); outline-offset: 1px; }
 @keyframes glow { from { box-shadow: inset 0 0 0 2px transparent; outline-color: transparent; } }
 
+/* A clip's mini drawing marks each note 2 px wide only while its shortest note is thinner than that
+   at the zoom (`data-fine`, set as it zooms): else the mark would only darken the note it is on. */
+[data-clip] [data-note-mark] { display: none; }
+[data-clip][data-fine] [data-note-mark] { display: inline; }
+
 /* Desktop app: native controls use the arrow cursor, not the web's pointing hand. */
 html.native .cursor-pointer { cursor: default; }
 

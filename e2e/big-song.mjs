@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 // A big song to measure the views on (taste.md VIEW-10, the camera note's §8): examples/first-song's
 // four sounds as 24 tracks (six each of Kick, Hats, Bass and Keys), each with 64 one-bar notes clips
-// one after another, 64 bars in all. Open it in music2, then ⇧⌘P ▸ Show frame rate, and move, zoom
-// and pinch the timeline while it plays.
+// one after another, 64 bars in all, each note's velocity a little off its part's, as a played or
+// humanized part's are (31 loudnesses in all). Open it in music2, then ⇧⌘P ▸ Show frame rate, and
+// move, zoom and pinch the timeline while it plays.
 //
 //   node e2e/big-song.mjs <folder>        (a new folder, or an empty one)
 import fs from "node:fs";
@@ -53,6 +54,9 @@ const ORDER = ["kick", "hats", "bass", "keys"];
 
 /** A clip id (FMT-11): 8 characters of lowercase Crockford base32, unique in its lane. */
 const CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz";
+/** A note's velocity `v` humanized: up to 0.15 off, in hundredths, the same each time the song is made. */
+const human = (v, n) => Math.round((v + (((n * 7919) % 31) - 15) / 100) * 100) / 100;
+
 const clipId = (n) => {
   let s = "";
   for (let i = 0; i < 6; i++, n = Math.floor(n / 32)) s = CROCKFORD[n % 32] + s;
@@ -79,7 +83,12 @@ for (let t = 0; t < TRACKS; t++) {
   const key = `${ORDER[t % ORDER.length]}-${n}`;
   const label = `${kind.name} ${n}`;
   fs.writeFileSync(path.join(dir, "tracks", `${key}.ts`), kind.code(key, label));
-  const clips = Array.from({ length: CLIPS }, (_, c) => ({ id: clipId(t * CLIPS + c + 1), start: c * BAR, length: BAR, notes: kind.notes(c) }));
+  const clips = Array.from({ length: CLIPS }, (_, c) => ({
+    id: clipId(t * CLIPS + c + 1),
+    start: c * BAR,
+    length: BAR,
+    notes: kind.notes(c).map((note, i) => ({ ...note, velocity: human(note.velocity, (t * CLIPS + c) * 8 + i) })),
+  }));
   fs.mkdirSync(path.join(dir, "data", key));
   fs.writeFileSync(path.join(dir, "data", key, `${kind.lane}.json`), lane(clips));
   tracks.push(key);

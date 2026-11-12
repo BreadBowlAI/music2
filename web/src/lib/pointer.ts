@@ -5,6 +5,7 @@
 // knob of a track the dock doesn't show is named beside that track's header instead.
 
 import { create } from "zustand";
+import { controlsAt } from "../camera";
 import { expandFor } from "./expanded";
 import { token } from "./native";
 import { canvas, useShell } from "./shell";
@@ -79,6 +80,12 @@ const headerOf = (track: string) => document.querySelector<HTMLElement>(`[data-m
 const knobOf = (id: string) =>
   document.querySelector<HTMLElement>(`[data-knob-id="${CSS.escape(id)}"]`) ?? document.querySelector<HTMLElement>(`[data-hides~="${CSS.escape(id)}"]`);
 
+/** The clip a pointer names, as the timeline has it. */
+function clipOf(p: Pointer) {
+  const t = useStore.getState().graph?.timeline.tracks.find((x) => x.module === p.track);
+  return t?.lanes.find((l) => l.key === p.lane)?.clips.find((c) => c.id === p.clip) ?? null;
+}
+
 /** Where a pointer's target is drawn, on screen; null when the page doesn't draw it now. */
 export function targetBox(p: Pointer): DOMRect | null {
   switch (p.kind) {
@@ -90,7 +97,13 @@ export function targetBox(p: Pointer): DOMRect | null {
     }
     case "clip": {
       const row = p.track && p.lane ? rowOf(p.track, p.lane) : null;
-      return row?.querySelector<HTMLElement>(`[data-clip="${CSS.escape(p.clip ?? "")}"]`)?.getBoundingClientRect() ?? null;
+      const drawn = row?.querySelector<HTMLElement>(`[data-clip="${CSS.escape(p.clip ?? "")}"]`);
+      if (drawn || !row) return drawn?.getBoundingClientRect() ?? null;
+      // Far from the view the arrangement doesn't draw it (VIEW-12): where its beats are on its lane's row.
+      const c = clipOf(p);
+      const lane = (row.lastElementChild ?? row).getBoundingClientRect();
+      const [a, b] = c ? [canvas.beatX?.(c.start), canvas.beatX?.(c.start + c.length)] : [null, null];
+      return a != null && b != null ? new DOMRect(a, lane.top, Math.max(2, b - a), lane.height) : null;
     }
     case "knob":
       // Drawn in the dock; else, of a track the dock doesn't show, its track's header stands for it.
@@ -134,14 +147,22 @@ export function seenIn(p: Pointer): DOMRect | null {
  */
 export function reveal(p: Pointer) {
   const shell = useShell.getState();
-  const into = (find: () => HTMLElement | null | undefined, inline: ScrollLogicalPosition = "nearest") =>
-    requestAnimationFrame(() => find()?.scrollIntoView({ block: "nearest", inline }));
+  // Through the camera of the view it is in (VIEW-9); a knob in Mix, which has none, by the browser.
+  // A row's header is held at the left: only down is moved for it.
+  const into = (find: () => HTMLElement | null | undefined, ways: "y" | "xy" = "xy") =>
+    requestAnimationFrame(() => {
+      const el = find();
+      if (!el) return;
+      const camera = controlsAt(el);
+      if (camera) camera.reveal(el, { ways });
+      else el.scrollIntoView({ block: "nearest", inline: "nearest" });
+    });
   switch (p.kind) {
     case "bars":
       if (p.beats) canvas.reveal?.(p.beats[0], p.beats[1]);
       return;
     case "knob":
-      if (elsewhere(p)) return into(() => (p.track ? headerOf(p.track) : null));
+      if (elsewhere(p)) return into(() => (p.track ? headerOf(p.track) : null), "y");
       // A collapsed node expands to show it (DV-16).
       if (p.knob) expandFor(p.knob);
       if (p.knob && !knobOf(p.knob)) {
@@ -152,12 +173,16 @@ export function reveal(p: Pointer) {
     case "lane":
     case "clip":
       if (p.track && p.lane && !rowOf(p.track, p.lane)) shell.unfold(p.track);
-      return into(() => {
-        const row = p.track && p.lane ? rowOf(p.track, p.lane) : null;
-        // A lane by its header: its row is as wide as the song.
-        return p.kind === "clip" ? row?.querySelector<HTMLElement>(`[data-clip="${CSS.escape(p.clip ?? "")}"]`) : (row?.firstElementChild as HTMLElement | null);
-      }, p.kind === "clip" ? "center" : "nearest");
+      if (p.kind === "clip")
+        return requestAnimationFrame(() => {
+          const row = p.track && p.lane ? rowOf(p.track, p.lane) : null;
+          const c = clipOf(p);
+          // In the view's middle, drawn now or not (VIEW-12).
+          if (row && c) canvas.revealClip?.(row, c.start, c.start + c.length);
+        });
+      // A lane by its header: its row is as wide as the song.
+      return into(() => (p.track && p.lane ? (rowOf(p.track, p.lane)?.firstElementChild as HTMLElement | null) : null), "y");
     case "track":
-      return into(() => (p.track ? headerOf(p.track) : null));
+      return into(() => (p.track ? headerOf(p.track) : null), "y");
   }
 }

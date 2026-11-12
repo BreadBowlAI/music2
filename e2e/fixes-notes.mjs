@@ -2,7 +2,7 @@
 // name the revision their notes came from, the roll is read only while the code is broken and a
 // refused edit leaves nothing stale selected, and Enter in a field doesn't jump playback.
 //   node fixes-notes.mjs <root> <home> <project>
-import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { ROOT, check, done, open, read, rollNotes, sleep, until, write } from "./fixlib.mjs";
 
 const { browser, page, errors, posts, api, state, toasts, key, box, drag } = await open();
 // The roll's rows and its ruler (taste.md §3.5: 14px rows, the arrangement's 28px ruler).
@@ -89,7 +89,7 @@ await page.screenshot({ path: `${ROOT}/fix-roll-follow.png` });
 
 c = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(c.x + 60, c.y + c.height / 2, { count: 2 });
-check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 48), "the first clip opens with its 48 notes");
+check(await until(async () => (await rollNotes(page)) === 48), "the first clip opens with its 48 notes");
 const first = await page.$('[data-testid=notes] [data-note="0"]');
 await first.evaluate((e) => e.scrollIntoView({ block: "center", inline: "center" }));
 const n = await first.boundingBox();
@@ -125,11 +125,17 @@ await page.$eval("[data-testid=roll-scroller]", (el, row, ruler) => { el.scrollT
 await sleep(100);
 const g2 = await box("[data-testid=roll-grid]");
 const ppb2 = await rollPpb();
+// Notes draws only the notes near the view (taste.md VIEW-12): those it draws, before and after.
+const drawn = (await page.$$("[data-testid=notes] [data-note]")).length;
 await page.mouse.click(g2.x + 1.1 * ppb2, g2.y + (127 - 72) * ROW + ROW / 2, { count: 2 });
 await sleep(500);
 check(!posts.some((p) => p.url === "/api/graph/lane"), "a double-click on the grid writes nothing");
-check((await page.$$("[data-testid=notes] [data-note]")).length === 48, "and adds no note");
+check(JSON.parse(read(FILE)).clips[0].notes.length === 48 && (await page.$$("[data-testid=notes] [data-note]")).length === drawn, "and adds no note");
 check((await page.$$("[data-testid=notes] [data-note][data-selected]")).length === 0, "nor selects one");
+// Note 5's row in view first: far from the view, a note isn't drawn (VIEW-12).
+const five = (await state()).timeline.tracks.find((t) => t.module === "bass").lanes.find((l) => l.key === "notes").clips[0].notes[5];
+await page.$eval("[data-testid=roll-scroller]", (el, row, ruler, pitch) => void (el.scrollTop = ruler + (127 - pitch) * row - el.clientHeight / 2), ROW, RULER, five.pitch);
+await until(() => page.$('[data-testid=notes] [data-note="5"]'), 3000);
 const onNote = await page.$('[data-testid=notes] [data-note="5"]');
 await onNote.evaluate((e) => e.scrollIntoView({ block: "center", inline: "center" }));
 const nb = await onNote.boundingBox();

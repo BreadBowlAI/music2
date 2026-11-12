@@ -3,7 +3,9 @@
 // each view and of its rows. Plain module state: nothing here redraws anything, and it works in the
 // app's own build, where React's Profiler does nothing (the camera note's C11).
 
+import { useLayoutEffect, useRef } from "react";
 import { create } from "zustand";
+import { face } from "../camera";
 
 const SECOND = 1000;
 
@@ -12,17 +14,33 @@ const total: Record<string, number> = {};
 /** Each name's redraws in about the last second: their times, oldest first. */
 const recent: Record<string, number[]> = {};
 
-/**
- * Count a redraw of `name` (`"arrangement"`, `"arrangement.rows"`…): one line at the top of a view's
- * or a row's component. Only a counter: no state, no effect, nothing that itself redraws. Under
- * `npm run dev` React's StrictMode draws each component twice, so the counts double there.
- */
-export function useRenderCount(name: string) {
+function count(name: string) {
   const now = performance.now();
   total[name] = (total[name] ?? 0) + 1;
   const times = (recent[name] ??= []);
   times.push(now);
   while (times[0] < now - SECOND) times.shift();
+}
+
+/**
+ * Count a redraw of `name` (`"arrangement"`, `"arrangement.rows"`…): one line at the top of a view's
+ * or a row's component. A redraw is a render React puts on the page (counted as it does, in a layout
+ * effect), not a render it starts and drops, as it may a transition's (VIEW-12). `first`, if given,
+ * names the component's first redraw apart (a clip entering the window). Only a counter: no state,
+ * nothing that itself redraws.
+ */
+export function useRenderCount(name: string, first?: string) {
+  const drawn = useRef(false);
+  // This render's own mark: React's StrictMode (in a development build) runs a new component's
+  // effects twice for one commit, and that is counted once.
+  const render = {};
+  const counted = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    if (counted.current === render) return;
+    counted.current = render;
+    count(first && !drawn.current ? first : name);
+    drawn.current = true;
+  });
 }
 
 /** The frames' times while something measures them, from just before the last second on. */
@@ -98,11 +116,11 @@ export function frames(): Frames {
 
 declare global {
   interface Window {
-    /** What the page gives the browser suites, and only that: the meter's numbers (VIEW-10). */
-    m2canvas?: { frames: typeof frames };
+    /** What the page gives the browser suites, and only that: the meter's numbers, and the camera library's face (VIEW-10). */
+    m2canvas?: { frames: typeof frames; camera: typeof face };
   }
 }
-window.m2canvas = { frames };
+window.m2canvas = { frames, camera: face };
 
 /** Whether the frame meter shows (the command palette's Show frame rate). The window's own, not kept. */
 export const useFrameMeter = create<{ on: boolean }>(() => ({ on: false }));

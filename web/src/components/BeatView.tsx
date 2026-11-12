@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import { onCamera, useCamera, useCameraState, useCull, useZoomOf } from "../camera";
 import { send } from "../lib/clips";
 import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, position, type GraphState, type DrumKit, type DrumRow, type Meter, type TimelineView } from "../lib/graph";
 import { clean, GRID_VIEW, useGrid } from "../lib/grid";
@@ -28,6 +29,8 @@ import { Button, EmptyState, keepFocus, MenuRow, Popover } from "./ui";
 const ROW_H = 28;
 /** The row names' column. */
 const NAMES_W = 160;
+/** The beat grid's camera (taste.md VIEW-1). */
+const BEAT = "beat";
 const VEL_H = 56;
 /** The velocity lane's bars stop this far from its edges. */
 const VEL_PAD = 8;
@@ -143,13 +146,18 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const { meter } = timeline;
   const grid = useGrid((s) => s.beat);
   const step = grid.step;
-  const [ppb, setPpb] = useState(88);
-  const [visible, setVisible] = useState(0);
-  // How far it is scrolled: only the steps near what shows are drawn.
-  const [left, setLeft] = useState(0);
   const scroller = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
-  const anchor = useRef<{ beat: number; x: number } | null>(null);
+  // The beat grid's camera (taste.md VIEW-1): the names at its left and the ruler at its top stay as
+  // it moves; the zoom (px a beat) stretches time across.
+  const camera = useCamera(BEAT, scroller, { margins: { left: NAMES_W, top: ROLL_RULER_H }, origin: { x: NAMES_W, y: ROLL_RULER_H }, zoom: { min: 16, max: 400 }, start: () => 88 });
+  const ppb = useZoomOf(camera);
+  const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - NAMES_W);
+  // Only the steps near what shows are drawn (KIT-10, VIEW-12): a bar's room (4 beats) each side,
+  // the window moving when that falls under 2 beats.
+  const cull = useCull(camera, "x", { x: { margin: 4, step: 2 } }).x;
+  // The velocity strip under the grid scrolls with it, written as the camera moves: nothing renders.
+  useEffect(() => onCamera(camera, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), [camera]);
   // What gestures asked, shown until the song shows it; and a drag along a row, or of a velocity, under
   // way (in refs, as pointer events come faster than renders; `redraw` shows them).
   const [asked, setAsked] = useState<Asked[]>([]);
@@ -173,9 +181,9 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   while (end * ppb < visible) end += barAt(meter, end).length;
   const steps = stepsTo(meter, end, step);
   const width = end * ppb;
+  camera.content({ w: NAMES_W + width, h: ROLL_RULER_H + kit.rows.length * ROW_H });
   // What shows, a bar's room either side: the steps drawn, and the hits.
-  const from = left / ppb - 4, to = (left + visible) / ppb + 4;
-  const near = (start: number, length = 0) => start + length > from && start < to;
+  const near = (start: number, length = 0) => start + length > cull.from && start < cull.to;
   const shown = steps.filter((s) => near(s.start, s.end - s.start));
 
   // Once the song shows what a gesture asked, the grid shows the song.
@@ -183,36 +191,8 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
     if (asked.some((a) => a.revision <= graph.view.revision)) setAsked((all) => all.filter((a) => a.revision > graph.view.revision));
   }, [graph.view.revision, asked]);
 
-  useEffect(() => {
-    const el = scroller.current!;
-    const observer = new ResizeObserver(() => setVisible(el.clientWidth - NAMES_W));
-    observer.observe(el);
-    // ⌘/Ctrl + wheel zooms time around the pointer, as Notes does; plain wheels scroll.
-    const wheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const x = e.clientX - el.getBoundingClientRect().left - NAMES_W;
-      setPpb((p) => {
-        anchor.current = { beat: (el.scrollLeft + x) / p, x };
-        return clamp(p * Math.exp(-e.deltaY * 0.004), 16, 400);
-      });
-    };
-    el.addEventListener("wheel", wheel, { passive: false });
-    return () => {
-      observer.disconnect();
-      el.removeEventListener("wheel", wheel);
-    };
-  }, []);
-  useLayoutEffect(() => {
-    const el = scroller.current, a = anchor.current;
-    anchor.current = null;
-    if (el && a) el.scrollLeft = Math.max(0, a.beat * ppb - a.x);
-  }, [ppb]);
-  const zoom = (by: number) => {
-    const el = scroller.current;
-    if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - NAMES_W) / ppb, x: el.clientWidth / 2 - NAMES_W };
-    setPpb((p) => clamp(p * by, 16, 400));
-  };
+  /** Its zoom buttons: around the view's middle (VIEW-5). */
+  const zoom = (by: number) => camera.zoomAround(ppb * by);
 
   // ---------------------------------------------------------------- writing
 
@@ -352,11 +332,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           ref={scroller}
           data-testid="beat-scroller"
           data-view-box="beat"
-          className="absolute inset-0 overflow-auto"
-          onScroll={(e) => {
-            if (strip.current) strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`;
-            setLeft(e.currentTarget.scrollLeft);
-          }}
+          className="absolute inset-0 overflow-auto [overflow-anchor:none] overscroll-none"
         >
           <div className="relative" style={{ width: NAMES_W + width, height: ROLL_RULER_H + kit.rows.length * ROW_H }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
@@ -437,7 +413,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           <div
             ref={strip}
             className="absolute inset-y-0 left-0 touch-none"
-            style={{ width, transform: `translateX(${-(scroller.current?.scrollLeft ?? 0)}px)` }}
+            style={{ width, transform: `translateX(${-Math.round(camera.now().x)}px)` }}
             onPointerDown={onVelDown}
             onPointerMove={onVelMove}
             onPointerUp={(e) => onVelUp(e)}

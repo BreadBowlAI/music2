@@ -526,6 +526,8 @@ export function MiniKnob({
   return (
     <svg
       ref={el}
+      // It keeps its wheel, one step a notch, wherever it is (VIEW-2): no camera's swipe.
+      data-wheel
       width={size}
       height={size}
       role="slider"

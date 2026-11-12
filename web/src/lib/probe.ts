@@ -12,6 +12,7 @@
 // `listen`'s stop removes every listener it added and stops its frame loop.
 
 import { create } from "zustand";
+import { pauseSwipes } from "../camera";
 import { measureFrames } from "./frames";
 import { native } from "./native";
 import { canvas, useShell, type DockView } from "./shell";
@@ -294,6 +295,9 @@ export function listen(round: Round): () => void {
     target.addEventListener(type, f as EventListener, options);
     offs.push(() => target.removeEventListener(type, f as EventListener, options));
   };
+  // The web view scrolls plain swipes while the probe listens, as before the camera: the camera takes
+  // them in, and still zooms (VIEW-10). The probe measures the platform, which the camera would change.
+  offs.push(pauseSwipes());
   const quiet = { capture: true, passive: true };
   add(window, "wheel", onWheel, quiet);
   for (const type of ["gesturestart", "gesturechange", "gestureend"]) add(window, type, onGesture, quiet);
