@@ -7,8 +7,10 @@
 //             carries a picture's dot under the pointer, and one 60 ms after over it, change no file,
 //             one that starts on it is the dot's, to its end; Tab to a bar out of view is taken in
 //   beat      a kit made as a musician makes one: ⌘-scroll and a pinch keep the step under the pointer
+//   twin      a fresh copy of first-song opened over it (no close), its Graph showing: its own zoom,
+//             its Graph at Fit and zooming
 //   big song  24 tracks of 64 clips (big-song.mjs), Bass 1's first clip of 256 notes, opened straight
-//             after first-song (no close): its own zoom, its clips placed by it, its Graph zooming
+//             after the twin (no close): its own zoom, its clips placed by it, its Graph zooming
 //     arrangement  a diagonal swipe 1:1, 10° on its rail, 45° free, a long 3° swipe with jitter and
 //                  its glide on the rail, ⇧ not turned; a swipe WebKit took over moving once; an edge
 //                  stops it; content getting smaller stops it (`clamp`); ⌘ in a dropped glide zooms
