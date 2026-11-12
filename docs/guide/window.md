@@ -183,11 +183,11 @@ The timeline, the Graph, Notes and the beat grid move the same way. Each view ke
 
 | Do | What happens |
 |---|---|
-| Swipe with two fingers, any way (or turn the scroll wheel) | The view moves with your fingers, both ways at once. In the timeline, Notes and the beat grid, a swipe that starts nearly straight (within 10°) keeps to its line, so the tracks don't drift sideways while you scroll down; once it has turned 24 pixels off that line it moves freely. The Graph always moves freely. |
-| Flick and let go | The view glides on and slows, as the Mac's own windows do. On Linux the app glides it itself. Any new swipe, a click or a key stops it. |
+| Swipe with two fingers, any way (or turn the scroll wheel) | The view moves with your fingers, both ways at once. In the timeline, Notes and the beat grid, a swipe that starts nearly straight (within 10°) keeps to its line, so the tracks don't drift sideways while you scroll down, however far; once it turns off that line (more than 20°) it moves freely. The Graph always moves freely. |
+| Flick and let go | The view glides on and slows, as the Mac's own windows do. On Linux the app glides it itself after a trackpad's swipe (a mouse's wheel doesn't glide). Any new swipe, a click, a key or an edge stops it. |
 | Pinch, or ⌘ + scroll (Ctrl + scroll on Linux) | Zoom around the pointer: what is under it stays under it. Pinch works on a Mac; on Linux, not yet. |
 | ⇧ + scroll | Move sideways. |
-| Scroll over a picture's dot, a knob or a list | It turns that control (or scrolls the list), never the view. |
+| Start a swipe on a picture's dot in the Graph | It turns that dot, never the view, to the end of the swipe. A swipe that starts elsewhere and carries a dot under the pointer stays the view's. (No knob in these four views takes the wheel.) |
 | Reach an edge | The view stops there. |
 
 - The scrollbars are the system's own: drag one to move the view.

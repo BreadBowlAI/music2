@@ -1032,26 +1032,35 @@ names, Tab, the waveforms drawn when seen and every suite's click keep working.
   library's functions against known numbers, in the page; the writer against a box that keeps whole
   pixels).
 
-**VIEW-2.** A swipe is a run of wheel events less than G ms apart (G = 50 ms). A swipe over these
-views MUST be the camera's, from its first event to its last, whatever its events' deltas, unless it
-starts on a control marked `data-wheel` (a picture's dot, DV-17) or with ⌘ or Ctrl held (a zoom).
-The web view MUST scroll none of the camera's swipes, and no control under the pointer sees them;
-only an event WebKit marks as not cancelable (it took the swipe over, having waited 50 ms for the
-page) is the web view's: the camera doesn't move by it, and takes the box's move in.
+**VIEW-2.** A swipe is a run of wheel events less than G ms apart (G = 50 ms). Its first event
+decides whose it is, for all of it, whatever its later events' deltas or keys: ⌘ or Ctrl held at
+its first event, a zoom (VIEW-5); else, started on a control marked `data-wheel` (a picture's dot,
+DV-17), that control's, unless a camera moved in the last 250 ms and the pointer hasn't moved since
+(the dot came under a still pointer: a pause in a swipe, or its glide arriving late); else the
+camera's. ⌘ pressed later in a camera's swipe zooms nothing, and a control's swipe whose events stop
+landing on it (the dot slid away) is cancelled to its end. The web view MUST scroll none of these
+swipes, and no control under the pointer sees the camera's; only a swipe WebKit marks as not
+cancelable (it took the swipe over, having waited 50 ms for the page, and scrolled by its first
+event too) is the web view's: the camera moves by none of its events, the first included, and takes
+the box's move in.
 - *Why:* WebKit on the Mac keeps a swipe to one axis, and a page can cancel a swipe only at its
   first event; PR #112 moved the events that went both ways and left the rest to WebKit, so one
   swipe had two owners and felt wrong (the note's §1, §16).
 - *Today:* since track `camera`: `web/src/camera/recognizer.ts`, one listener in the capture phase
-  on each view's box. Tested by `camera` (a swipe's events all the camera's, its first decides;
-  events WebKit took over moving the box once, taken in; a swipe started on a picture's dot changing
-  no file and moving no view).
+  on each view's box; whether a control may take a swipe in `state.ts` (`controlMayTake`). Tested by
+  `camera` (a swipe's events all the camera's, its first decides; ⌘ held in a glide after a key
+  zooming nothing; a swipe WebKit took over moving the box once, by WebKit, taken in; a swipe that
+  carries a picture's dot under the pointer, and one 60 ms after it over the dot, changing no file;
+  one started on the dot changing its value and moving no view, and cancelled once it slides off).
 
 **VIEW-3.** The camera MUST move 1:1 with the fingers, both ways at once, the events of a frame
 summed and written once in it. In the arrangement, Notes and the beat grid, a swipe whose first
-8 px lie within 10° of an axis starts on that axis's rail, so scrolling down the tracks doesn't
-drift sideways; the rail breaks, for the rest of the swipe, once it has gone 24 px off it, and the
-swipe moves both ways from there (what was held back off the rail is not moved). A swipe further
-from an axis moves both ways from its start. The Graph has no rails: a canvas pans freely, as
+8 px go within 10° of an axis (their sum, with signs: a hand's jitter cancels) starts on that axis's
+rail, so scrolling down the tracks doesn't drift sideways, however long the swipe or its glide. The
+rail breaks, for the rest of the swipe, once its last 50 px have gone more than 20° off it, all
+told (a turn, not a long swipe's slant or its jitter adding up), and the swipe moves both ways from
+there (what was held back off the rail is not moved). A swipe further from an axis moves both ways
+from its start. The Graph has no rails: a canvas pans freely, as
 Figma, Freeform and tldraw do. ⇧ + wheel is never turned by the camera: the Mac and WebKitGTK turn it
 already. Chrome's lines and pages, which only the suites send, are 33 px and the view's height.
 - *Why:* the Mac's own scroll views move with the fingers and VS Code keeps a nearly straight
@@ -1059,21 +1068,25 @@ already. Chrome's lines and pages, which only the suites send, are 33 px and the
   feel stuck, so they break as Chromium's touch scrolling's do (the owner, 2026-11-12, the note's
   §16).
 - *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts` (`RAIL_ANGLE`,
-  `RAIL_AFTER`, `RAIL_BREAK`), `rails: false` for the Graph's cameras. Tested by `camera` (a
-  diagonal swipe 1:1 both ways in each view; 5° off straight on its rail; 45° and 30° free; straight
-  then turning 45° free once 24 px off its rail; the Graph 5° off moving 5° off).
+  `RAIL_AFTER`, `RAIL_TURN`, `RAIL_RECENT`, and why each), `rails: false` for the Graph's cameras.
+  Tested by `camera` (a diagonal swipe 1:1 both ways in each view; 5° off straight on its rail; 45°
+  and 30° free; straight then turning 45° free once its last 50 px turn 20° off; 1500 px at 3° with
+  a pixel of jitter each way, and its glide, on the rail to the end; the Graph 5° off moving 5° off).
 
 **VIEW-4.** The glide after a flick MUST be the system's on a Mac: the camera moves by its wheel
 events like any other. Where the page gets none (WebKitGTK, on Linux), the camera glides itself:
 from one frame after a swipe's last event, at the speed of its last 50 ms, slowing as an iPhone's
-scroll view does (0.998 of its speed kept each ms). The next wheel event, a click or a key stops it.
-After a click, a key or a move by the app, wheel events are dropped until a gap of G, so a glide
-still arriving from the system stops too. With reduced motion there is no glide of the camera's own.
+scroll view does (0.998 of its speed kept each ms), only after a swipe in pixels (a trackpad's: a
+mouse's wheel, in lines, never glides). The next wheel event, a click or a key stops it, and so does
+an edge, each way. After a click, a key or a move by the app, wheel events are dropped until a gap
+of G, so a glide still arriving from the system stops too; Follow's page stops only the camera's own
+glide (VIEW-9). With reduced motion there is no glide of the camera's own.
 - *Why:* WebKitGTK glides inside itself and gives the page nothing to glide by (the note's §5, C5).
 - *Today:* since track `camera`: `recognizer.ts`; the app tells the library the platform
   (`setPlatform`, from `isMac` and the reduced-motion setting, in `main.tsx`). No one here has a
   Linux laptop, so the Linux glide is checked only by suites (gaps.md). Tested by `camera` (with
-  Linux's flag set in the page: it starts after a swipe, slows, and stops at the next event).
+  Linux's flag set in the page: it starts after a swipe, slows, and stops at the next event and at
+  an edge; a mouse's two notches don't glide).
 
 **VIEW-5.** ⌘-scroll (Ctrl-scroll) MUST zoom around the pointer in all four views: the point under
 it stays under it. So MUST a pinch on a Mac, and the Graph's zoom bar's Zoom in, Zoom out and actual
@@ -1125,19 +1138,25 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
 (DV-13), a lit column (DV-18), Notes' opening, its rows' height and Fold (the drum in its middle
-stays there). A render that makes the content smaller than where the camera looks stops the camera
-at the new edge, as the browser stops the box, though it may send no `scroll`. A move the browser makes to a
-box itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
+stays there). Content that gets smaller than where the camera looks (or a box that gets bigger)
+stops the camera at the new edge, as the browser stops the box, though it may send no `scroll`:
+heard by ResizeObservers on the box and what is in it, after layout, never by reading the page after
+every render; that move is the box's edge's (`clamp`), no one's. A move the browser makes to a box
+itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
 taken in: on the box's `scroll`, a position more than 1 px from what the camera last wrote is the
-browser's. Follow pauses on any move that isn't the app's own, until play starts again or the
-playhead comes back into view after being out of it (Q11): a hand that scrolls with the playhead in
-view is never undone by Follow's next page.
+browser's. Follow pauses on a move across that isn't the app's own (the hand's or the browser's; a
+move straight down the tracks isn't one), until play starts again or the playhead comes back into
+view after being out of it (Q11): a hand that scrolls with the playhead in view is never undone by
+Follow's next page. Follow never comes back while the hand still moves the view (a swipe's events
+less than G apart, or its glide), and its page drops no swipe still arriving.
 - *Why:* WebKit keeps scroll positions in whole pixels while the camera keeps fractions, so the
   camera compares the box only with what it wrote (the note's §4, C6, C8).
 - *Today:* since track `camera`: `useCamera`'s writer; the app's moves in `SongTimeline.tsx`,
   `NodeGraph.tsx`, `PictureView.tsx`, `NoteView.tsx` and `lib/pointer.ts`, none of which calls
   `scrollIntoView` or writes `scrollLeft`. Tested by `camera` (a swipe, a key's scroll and a write to
-  `scrollLeft` while playing each pausing Follow; agents' `seen` following the camera; Tab to an
+  `scrollLeft` while playing each pausing Follow; a swipe straight down not pausing it; a swipe back
+  to the playhead moving 1:1 to its end; tracks made shorter at the foot stopping the camera, moved
+  by `clamp`; agents' `seen` following the camera; Tab to an
   off-screen bar and a test's click taken in) and `pl-zoom` (Follow).
 
 **VIEW-10.** The command palette (⇧⌘P, §5.1) MUST offer **Show frame rate** and **Swipe probe**.
@@ -1219,7 +1238,7 @@ view is never undone by Follow's next page.
   `web/src/lib/frames.ts`, the meter in `FrameMeter.tsx`, the probe in `web/src/lib/probe.ts` and
   `SwipeProbe.tsx`, the palette in `CommandPalette.tsx`, which holds only these two commands so far
   (gaps.md). The meter shows the last second's redraws: the note's §8 meter, with the redraws of
-  the last swipe and a count of the swipes WebKit took over, comes with track `camera-core`'s
+  the last swipe and a count of the swipes WebKit took over, comes with track `camera`'s
   recognizer; the probe's report gives both for each step now. `node e2e/big-song.mjs <folder>`
   makes a song of 24 tracks of 64 clips each to measure on. Tested by `camera-probe` (the
   palette's two rows; the meter's numbers and `frames()`'s (and since track `camera` the camera's
@@ -1247,31 +1266,42 @@ width (or height) each side. The window they draw is kept while it holds what sh
 more each side, and isn't twice as wide as a new one; then a new one is made around what shows. So
 a pan makes a new one every half a view and a zoom every ×1.5 out or ×2 in, never every frame, and
 a swipe renders a view only then (VIEW-8). A new window MUST be drawn without holding up a frame of
-the swipe (a React transition: the margin lets it lag), unless what shows has already left the old
-one. A zoom MUST render no clip: each clip's box is placed by the zoom straight into its style.
+the swipe (a React transition: the margin lets it lag), unless what shows has left the window on
+screen (the one last drawn, not one asked for that hasn't landed): then at once. A zoom MUST render
+no clip: each clip's box is placed by the zoom straight into its style.
 - The arrangement draws only the clips that overlap the window across, and the ruler's bar numbers
   in it. Tracks more than a view's height above or below draw no clips, but keep their row boxes,
-  so heights, the sticky names and Tab's order stay.
+  so heights, the sticky names and Tab's order stay. A track coming within that margin, or leaving
+  it, draws or lets go of its clips as a transition; one that comes into view before that has landed
+  is drawn at once.
 - Notes draws only the notes in the window, across and down, and their velocity bars across.
 - The beat grid keeps its culling by bar (KIT-10), through the camera's window. The Graph is small:
   it draws everything.
 - A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT read the zoom: it is
   drawn in beats, or in percent of its clip, and kept by its clip, so a zoom changes only the clip's
-  box. A note under 2 px wide still shows 2 px wide. An audio clip's waveform is drawn in pixels and
+  box. A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px, its
+  clip is marked (`data-fine`, as it zooms) and each note gets a 2 px mark the stretch doesn't scale.
+  Each note is drawn at its loudness by its own opacity, never a group's (WebKit paints a group with
+  opacity through a layer of its own). An audio clip's waveform is drawn in pixels and
   redraws on a zoom. A new window draws only the clips entering it: a clip already drawn is kept.
 - *Why:* on #112's branch the owner saw the frame rate drop when zooming the tracks or Notes at
   120 Hz: every zoom step redrew every clip of the song, once for each wheel event (the note's §16).
 - *Today:* since track `camera`: `cull` and `useCull` in `web/src/camera/` (the margin and the step
-  in its `numbers.ts`; a new window set in a `startTransition`); `useSpan` places a clip's box, and a
-  control lane's fallback, by the zoom (a CSS variable for the zoom was tried first: a change to it
+  in its `numbers.ts`; what to do with a window judged by `cullPlan` against the window on screen; a
+  new window set in a `startTransition`); `useSpan` places a clip's box, and a control lane's
+  fallback, by the zoom, and marks a clip `data-fine` (a CSS variable for the zoom was tried first: a change to it
   made the browser work out the style of the whole arrangement anew, 56 ms of each zoom frame on the
   big song); in `SongTimeline.tsx` the window across from `useCull`, and each track's nearness down
-  from an IntersectionObserver whose margin is the view's height; each clip box memoised; in
+  from an IntersectionObserver whose margin is the view's height (as a transition) and another at the
+  view's edge (at once); each clip box memoised; in
   `NoteView.tsx` both ways from `useCull`. Tested by `camera` (on the 24-by-64 song: no more clips
   than the view and its margins can show; a swipe of 120 small events rendering the rows only at a
   step; 30 ⌘-scroll events rendering the arrangement at most once a frame, zooming in and out
   rendering no clip box drawn before, only those entering the window; the same in Notes with a clip
-  of many notes; a zoom rendering no clip's mini drawing).
+  of many notes; a zoom rendering no clip's mini drawing; a swipe down the tracks and back drawing
+  every row in view; no group opacity in a clip's notes and their marks only where a note is under
+  2 px; `cullPlan` keeping, waiting and drawing at once against a window on screen that lags the one
+  asked for).
 
 ---
 
