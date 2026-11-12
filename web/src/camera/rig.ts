@@ -43,6 +43,22 @@ export interface CameraControls {
 /** The views at work now, by camera name. */
 export const rigs = new Map<string, Rig>();
 
+/** Who hears a view's box move: after the camera wrote it, or took in the browser's move. */
+const moves = new Set<() => void>();
+
+/**
+ * Hear every move of a view's box, right after it is written (in the frame it moves) or taken in:
+ * for what is placed over a view by where things in it are on screen (an agent's pointer). Returns
+ * how to stop.
+ */
+export function onViewMoved(f: () => void): () => void {
+  moves.add(f);
+  return () => void moves.delete(f);
+}
+const moved_ = () => {
+  for (const f of moves) f();
+};
+
 export class Rig {
   fixed: Fixed = {};
   private el: HTMLElement | null = null;
@@ -241,13 +257,16 @@ export class Rig {
     if (!theirs) return;
     this.hands.stopGlide();
     this.cam.setState({ x: theirs.x, y: theirs.y, by: "browser" });
+    moved_();
   }
 
   /** Write the camera to the box, and keep it where the box stopped it. */
   private write() {
     if (!this.writer) return;
     const c = this.camera();
+    const was = this.writer.written;
     const w = this.writer.write(c);
+    if (this.writer.written.x !== was.x || this.writer.written.y !== was.y) moved_();
     if (w.x !== c.x || w.y !== c.y) {
       // At an edge (VIEW-6): a glide stops there.
       this.hands.stopGlide();

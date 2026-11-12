@@ -1102,13 +1102,18 @@ grows a bar at a time while it plays. A zoom renders a view at most once a frame
 frame. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
 reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
 catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
+- An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
+  style, never by a render while only its place changes.
 - *Why:* moving the view must cost two numbers written, not a redraw (the note's §8, C9, C10).
 - *Today:* since track `camera`: the per-frame `x` and `y` are read by subscription only; the hooks
   read the zoom and the culling's step (`useZoomOf`, `useCull`); `movingNow()` mutes Notes' and the
-  wires' hover; the status in `web/src/lib/status.ts`. Tested by `camera` (120 events of a swipe
+  wires' hover; the status in `web/src/lib/status.ts`; the pointer note hears `onViewMoved` (after
+  each write of a view's box) and writes its place, rendering only when its ring, edge, Show or
+  words change (`PointerNote.tsx`). Tested by `camera` (120 events of a swipe
   rendering no view, with the pointer over notes and over wires; a zoom's 30 events rendering the
-  arrangement and Notes at most once a frame; a drag holding the camera and Follow) and
-  `camera-probe` (a zoom redraws only the arrangement).
+  arrangement and Notes at most once a frame; a drag holding the camera and Follow; an agent's
+  pointer at a clip rendered 0 times through a swipe, still on the clip) and `camera-probe` (a zoom
+  redraws only the arrangement).
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
