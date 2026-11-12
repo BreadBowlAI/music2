@@ -50,13 +50,28 @@ let held = false;
 /** Whether a pointer is pressed: a drag holds the camera still (VIEW-8). */
 export const pointerHeld = () => held;
 
-function press() {
-  held = true;
+/**
+ * Any press stops a glide and drops the swipe still arriving; only the primary button's holds. A
+ * press whose release the page may never hear (a context menu opened on it, the window hidden, the
+ * pointer moving with no button down) holds no longer.
+ */
+function press(e: PointerEvent) {
+  if (e.button === 0) held = true;
   for (const f of hearing) f();
 }
 function release() {
   held = false;
 }
+let pointerAt = -Infinity;
+let last = { x: NaN, y: NaN };
+function hover(e: PointerEvent) {
+  if (e.buttons === 0) held = false;
+  // A move of the pointer itself, not the content moving under it.
+  if (e.clientX === last.x && e.clientY === last.y) return;
+  last = { x: e.clientX, y: e.clientY };
+  pointerAt = performance.now();
+}
+const hidden = () => document.visibilityState === "hidden" && release();
 function key(e: KeyboardEvent) {
   // ⌘ for ⌘-scroll, ⇧ for a sideways wheel: a modifier alone is no key that stops anything.
   if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") return;
@@ -72,7 +87,11 @@ export function hearInput(f: () => void): () => void {
     window.addEventListener("pointerdown", press, true);
     window.addEventListener("pointerup", release, true);
     window.addEventListener("pointercancel", release, true);
+    window.addEventListener("lostpointercapture", release, true);
+    window.addEventListener("contextmenu", release, true);
+    window.addEventListener("pointermove", hover, true);
     window.addEventListener("blur", release);
+    document.addEventListener("visibilitychange", hidden);
     window.addEventListener("keydown", key, true);
   }
   return () => {
@@ -83,7 +102,11 @@ export function hearInput(f: () => void): () => void {
     window.removeEventListener("pointerdown", press, true);
     window.removeEventListener("pointerup", release, true);
     window.removeEventListener("pointercancel", release, true);
+    window.removeEventListener("lostpointercapture", release, true);
+    window.removeEventListener("contextmenu", release, true);
+    window.removeEventListener("pointermove", hover, true);
     window.removeEventListener("blur", release);
+    document.removeEventListener("visibilitychange", hidden);
     window.removeEventListener("keydown", key, true);
   };
 }
@@ -97,3 +120,10 @@ export const moved = () => void (movedAt = performance.now());
 
 /** Whether a camera moved in the last `QUIET` ms: the views' hover does nothing then (VIEW-8). Read in a handler: it renders nothing. */
 export const movingNow = () => performance.now() - movedAt < QUIET;
+
+/**
+ * Whether a control under the pointer may take a new swipe (VIEW-2): no camera moved in the last
+ * `QUIET` ms, or the pointer itself moved since one did. Not a control a camera just carried under a
+ * still pointer.
+ */
+export const controlMayTake = () => !movingNow() || pointerAt > movedAt;

@@ -2,15 +2,17 @@
 // has deltas, a time and the modifier keys, and nothing else: no phase. So a swipe is a run of events
 // less than G ms apart, and whose it is is decided at its first event, for all of it (VIEW-2):
 //   - ⌘ or Ctrl held: a zoom (VIEW-5);
-//   - over a control marked `data-wheel` (a picture's dot): that control's;
+//   - over a control marked `data-wheel` (a picture's dot), unless a camera moved the content under
+//     a still pointer just now: that control's, to its end;
 //   - else the camera's: each event cancelled and stopped there, moving the view 1:1, both ways,
-//     a nearly straight swipe on its rail until it goes far enough off it (VIEW-3), where the view
-//     has rails. One WebKit marks not cancelable is the web view's: the view's box moves by it and
-//     the camera takes that in.
+//     a nearly straight swipe on its rail until it turns off it (VIEW-3), where the view has rails.
+//     A swipe WebKit marks not cancelable is the web view's: the view's box moves by it and the
+//     camera takes that in.
+// Later events never change whose it is: ⌘ pressed in a camera's swipe zooms nothing.
 // Where the platform gives the page no glide, the camera glides itself (VIEW-4).
 
-import { GLIDE_FROM, GLIDE_RATE, GLIDE_STOP, LINE, RAIL_AFTER, RAIL_ANGLE, RAIL_BREAK, SWIPE_GAP, ZOOM_STEP, ZOOM_WHEEL } from "./numbers";
-import { ownGlide, pointerHeld, swipesPaused } from "./state";
+import { GLIDE_FROM, GLIDE_RATE, GLIDE_STOP, LINE, RAIL_AFTER, RAIL_ANGLE, RAIL_RECENT, RAIL_TURN, SWIPE_GAP, ZOOM_STEP, ZOOM_WHEEL } from "./numbers";
+import { controlMayTake, ownGlide, pointerHeld, swipesPaused } from "./state";
 
 /** What a frame's events ask of the camera. */
 export interface Asked {
@@ -45,9 +47,14 @@ export class Recognizer {
   private dropping = false;
   /** The rail: decided once the swipe has gone `RAIL_AFTER` px; null until then. */
   private rail: "x" | "y" | "free" | null = null;
-  /** How far the swipe has gone each way (its whole length), and what was held back off the way it mostly went before its rail was decided. */
+  /** Where the swipe has gone, with signs, and what was held back off the way it mostly went before its rail was decided. */
   private went = { x: 0, y: 0 };
   private heldBack = { x: 0, y: 0 };
+  /** On a rail: its last `RAIL_RECENT` px of events, as they came, their sum with signs, and their length. */
+  private recent: { dx: number; dy: number; d: number }[] = [];
+  private recentSum = { x: 0, y: 0, d: 0 };
+  /** A swipe with any event in lines or pages (a mouse's wheel): no glide of the camera's own after it. */
+  private notched = false;
   /** The swipe's recent events, as moved: the glide starts at their speed. */
   private samples: { t: number; dx: number; dy: number }[] = [];
   /** Events heard since the last frame took them. */
@@ -93,24 +100,38 @@ export class Recognizer {
     const fresh = !(t - this.last >= 0 && t - this.last < SWIPE_GAP);
     this.last = t;
     const zooming = e.ctrlKey || e.metaKey;
+    const over = (t: EventTarget | null) => t instanceof Element && !!t.closest("[data-wheel]") && !!this.box()?.contains(t);
     if (fresh) {
-      // A gap of G: a new swipe, whatever was dropped before it.
-      const control = e.target instanceof Element && !!e.target.closest("[data-wheel]") && !!this.box()?.contains(e.target);
-      this.owner = zooming ? "zoom" : control ? "control" : "camera";
+      // A gap of G: a new swipe, whatever was dropped before it. A control takes it only where the
+      // hand put the pointer on it: not one a camera just carried under a still pointer (a pause in
+      // a swipe, its glide coming late).
+      this.owner = zooming ? "zoom" : over(e.target) && controlMayTake() ? "control" : "camera";
       this.dropping = false;
       this.rail = null;
       this.went = { x: 0, y: 0 };
       this.heldBack = { x: 0, y: 0 };
+      this.recent = [];
+      this.recentSum = { x: 0, y: 0, d: 0 };
       this.samples = [];
+      this.notched = false;
       this.overThisSwipe = false;
     } else if (this.dropping) this.owner = "dropped";
     // Any new event stops the camera's glide: it takes over from it.
     this.glide = null;
-    if (this.owner === "control") return false;
-    if (zooming) {
+    if (this.owner === "control") {
+      // The control's to its end: one that slid out from under the pointer leaves the rest to no
+      // one (but to the web view while the swipe probe listens: it measures the platform's own way).
+      if (!over(e.target) && !swipesPaused()) {
+        if (e.cancelable) e.preventDefault();
+        e.stopPropagation();
+      }
+      return false;
+    }
+    if (this.owner === "zoom") {
       e.preventDefault();
       e.stopPropagation();
-      if (pointerHeld()) return false;
+      // ⌘ let go: the rest of the swipe zooms nothing, and the view stays.
+      if (!zooming || pointerHeld()) return false;
       const box = this.box();
       if (!box) return false;
       const dy = Math.max(-ZOOM_WHEEL, Math.min(ZOOM_WHEEL, e.deltaY * this.unit(e, box)));
@@ -119,8 +140,8 @@ export class Recognizer {
       this.zoom = { by: (this.zoom?.by ?? 1) * by, to: null, at: { x: e.clientX - r.left - box.clientLeft, y: e.clientY - r.top - box.clientTop } };
       return true;
     }
-    if (this.owner === "zoom" || this.owner === "dropped") {
-      // The rest of a zoom's swipe, or one still arriving after a click: the view stays.
+    if (this.owner === "dropped") {
+      // One still arriving after a click or a key, ⌘ held or not: the view stays.
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
       return false;
@@ -128,8 +149,13 @@ export class Recognizer {
     // The swipe probe has the swipes: the web view scrolls them, and the camera takes that in.
     if (swipesPaused()) return false;
     if (!e.cancelable) {
-      // WebKit took the swipe over (VIEW-2): its move is the box's, taken in.
-      if (!this.overThisSwipe) this.takenOver++;
+      // WebKit took the swipe over (VIEW-2): it moved the box by the swipe's first event too, whose
+      // cancel came late; the box's moves are taken in, and what the camera kept of it is dropped.
+      if (!this.overThisSwipe) {
+        this.takenOver++;
+        this.pending = { dx: 0, dy: 0 };
+        this.samples = [];
+      }
       this.overThisSwipe = true;
       return false;
     }
@@ -139,6 +165,7 @@ export class Recognizer {
     if (pointerHeld()) return false;
     const box = this.box();
     if (!box) return false;
+    if (e.deltaMode !== 0) this.notched = true;
     const u = this.unit(e, box);
     this.take(t, e.deltaX * u, e.deltaY * u);
     return true;
@@ -151,22 +178,43 @@ export class Recognizer {
 
   /** One event's move, put on the swipe's rail (VIEW-3). */
   private take(t: number, dx: number, dy: number) {
-    this.went.x += Math.abs(dx);
-    this.went.y += Math.abs(dy);
+    this.went.x += dx;
+    this.went.y += dy;
     if (!this.rails()) this.rail = "free";
-    // Gone far enough off its rail since it began: free from here, for the rest of the swipe. What
-    // was held back off the rail stays back.
-    else if ((this.rail === "x" && this.went.y > RAIL_BREAK) || (this.rail === "y" && this.went.x > RAIL_BREAK)) this.rail = "free";
+    else if (this.rail === "x" || this.rail === "y") {
+      // Its last RAIL_RECENT px, with signs: turned more than RAIL_TURN off its rail, it is free
+      // from here, for the rest of the swipe. What was held back off the rail stays back.
+      const d = Math.hypot(dx, dy);
+      this.recent.push({ dx, dy, d });
+      const sum = this.recentSum;
+      sum.x += dx;
+      sum.y += dy;
+      sum.d += d;
+      while (this.recent.length > 1 && sum.d - this.recent[0].d >= RAIL_RECENT) {
+        const old = this.recent.shift()!;
+        sum.x -= old.dx;
+        sum.y -= old.dy;
+        sum.d -= old.d;
+      }
+      const [on, off] = this.rail === "x" ? [sum.x, sum.y] : [sum.y, sum.x];
+      if (sum.d >= RAIL_RECENT && (Math.atan2(Math.abs(off), Math.abs(on)) * 180) / Math.PI > RAIL_TURN) this.rail = "free";
+    }
     if (this.rail === null) {
-      const way = this.went.x >= this.went.y ? "x" : "y";
-      if (Math.hypot(this.went.x, this.went.y) >= RAIL_AFTER) {
-        const angle = (Math.atan2(this.went.y, this.went.x) * 180) / Math.PI;
+      const ax = Math.abs(this.went.x), ay = Math.abs(this.went.y);
+      const way = ax >= ay ? "x" : "y";
+      if (Math.hypot(ax, ay) >= RAIL_AFTER) {
+        const angle = (Math.atan2(ay, ax) * 180) / Math.PI;
         this.rail = angle <= RAIL_ANGLE ? "x" : angle >= 90 - RAIL_ANGLE ? "y" : "free";
         // What was held back off the way it mostly went joins it now, where the rail lets it.
         const back = this.heldBack;
         this.heldBack = { x: 0, y: 0 };
         if (this.rail !== "y") dx += back.x;
         if (this.rail !== "x") dy += back.y;
+        if (this.rail !== "free") {
+          const d = Math.hypot(dx, dy);
+          this.recent = [{ dx, dy, d }];
+          this.recentSum = { x: dx, y: dy, d };
+        }
       } else if (way === "x") {
         this.heldBack.y += dy;
         dy = 0;
@@ -211,7 +259,7 @@ export class Recognizer {
     if (heard) return asked;
     this.quiet++;
     // One frame after the swipe's last event, where the platform gives none: the camera's own glide.
-    if (this.quiet === 1 && this.owner === "camera" && !this.glide && ownGlide() && !pointerHeld()) {
+    if (this.quiet === 1 && this.owner === "camera" && !this.notched && !this.overThisSwipe && !this.glide && ownGlide() && !pointerHeld()) {
       const v = speedOf(this.samples);
       if (v && Math.hypot(v.x, v.y) >= GLIDE_STOP) this.glide = v;
       this.samples = [];
@@ -231,9 +279,12 @@ export class Recognizer {
     return asked;
   }
 
-  /** The glide met an edge: it stops (VIEW-6). */
-  stopGlide() {
-    this.glide = null;
+  /** The glide met an edge (VIEW-6): it stops, that way (`x` or `y`), or both. */
+  stopGlide(way?: "x" | "y") {
+    const g = this.glide;
+    if (!g || !way) return void (this.glide = null);
+    const left = way === "x" ? { x: 0, y: g.y } : { x: g.x, y: 0 };
+    this.glide = left.x === 0 && left.y === 0 ? null : left;
   }
 
   /** Whether the camera glides now. */

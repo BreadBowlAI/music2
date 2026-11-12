@@ -5,13 +5,18 @@
 export const SWIPE_GAP = 50;
 
 /**
- * Rails (VIEW-3), as Chromium's touch scrolling has them: a swipe whose first `RAIL_AFTER` px lie
- * within `RAIL_ANGLE` degrees of an axis starts on that axis's rail, and breaks free of it, for the
- * rest of the swipe, once it has gone `RAIL_BREAK` px off it. A view may have none (the Graph).
+ * Rails (VIEW-3), as Chromium's touch scrolling has them: a swipe whose first `RAIL_AFTER` px go
+ * (as a sum with signs: a hand's jitter cancels) within `RAIL_ANGLE` degrees of an axis starts on that
+ * axis's rail. It breaks free of it, for the rest of the swipe, once its last `RAIL_RECENT` px have
+ * gone, all told, more than `RAIL_TURN` degrees off it: a turn, never a long swipe's slant or its
+ * jitter adding up. 50 px is six events of a swipe at 120 a second: jitter of a pixel each way can't
+ * take that 20° off (17 px would), and a turn to 45° breaks within three events. 20° is twice the
+ * start's 10°, so a hand's arc that drifts a little past 10° stays on. A view may have none (the Graph).
  */
 export const RAIL_ANGLE = 10;
 export const RAIL_AFTER = 8;
-export const RAIL_BREAK = 24;
+export const RAIL_TURN = 20;
+export const RAIL_RECENT = 50;
 
 /**
  * The glide after a flick (VIEW-4): the system's on a Mac, which reaches the page as more wheel
