@@ -1,0 +1,688 @@
+// The camera (taste.md §3.10, VIEW-1 to VIEW-12; docs/designs/camera/design.md §9): every view moves
+// as the hand does, through one camera each. Chrome can't show WebKit's own behaviour, so the suite
+// sends the events WebKit would send, at known times, on whatever is under the pointer.
+//   library   the camera's functions against known numbers, run in the page; the writer on a box
+//             that keeps whole pixels, as WebKit does; its numbers
+//   graph     on first-song: a diagonal swipe 1:1; 120 events over a wire render nothing; a swipe that
+//             carries a picture's dot under the pointer changes no file, one that starts on it is the
+//             dot's; Tab to a bar out of view is taken in
+//   beat      a kit made as a musician makes one: ⌘-scroll and a pinch keep the step under the pointer
+//   big song  24 tracks of 64 clips (big-song.mjs), Bass 1's first clip of 256 notes:
+//     arrangement  a diagonal swipe 1:1, 10° on its rail, 45° free, ⇧ not turned; events WebKit took
+//                  over taken in once; an edge stops it; 120 events render nothing within a step, the
+//                  rows once at a step; no more clips than the view and its margins can show, none in
+//                  tracks far below; 30 ⌘-scroll events render it at most once a frame; a pinch keeps
+//                  the beat; a zoom renders no clip's mini drawing; a click's scroll taken in; agents'
+//                  `seen` follows; a swipe, a key's scroll and a write to `scrollLeft` pause Follow;
+//                  a drag holds the camera and Follow; the camera's own glide with Linux's flag
+//     notes        a diagonal swipe 1:1; no more notes than the view and its margins show; 120 events
+//                  over a note render nothing; 30 ⌘-scroll events at most once a frame; ⌘-scroll and a
+//                  pinch keep the beat under the pointer
+//
+//   node e2e/camera.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
+import { PROJ, ROOT, check, done, open, read, sess, sleep, until } from "./fixlib.mjs";
+import { expand } from "./graphlib.mjs";
+
+const { browser, page, errors, api, state, key, box, show, view } = await open(1440, 900);
+
+const near = (a, b, d = 1) => Math.abs(a - b) <= d;
+const json = (o) => JSON.stringify(o);
+const has = async (sel) => !!(await page.$(sel));
+/** A few frames: what a frame's events asked is written, and a render it made has landed. */
+const frames = (n = 3) => page.evaluate((n) => new Promise((r) => { const one = (k) => (k ? requestAnimationFrame(() => one(k - 1)) : r()); one(n); }), n);
+/** The camera library's face, where the page gives it (VIEW-10): null where it doesn't. */
+const face = () => page.evaluate(() => !!window.m2canvas?.camera);
+const cam = (name) => page.evaluate((name) => window.m2canvas?.camera?.now(name) ?? null, name);
+/** Each view's renders since the page loaded (`useRenderCount`). */
+const renders = () => page.evaluate(() => window.m2canvas?.frames?.().total ?? {});
+const since = (a, b) => Object.fromEntries([...new Set([...Object.keys(a), ...Object.keys(b)])].map((k) => [k, (b[k] ?? 0) - (a[k] ?? 0)]).filter(([, n]) => n));
+const scroll = (sel) => page.$eval(sel, (e) => ({ x: e.scrollLeft, y: e.scrollTop, w: e.clientWidth, h: e.clientHeight, room: { x: e.scrollWidth - e.clientWidth, y: e.scrollHeight - e.clientHeight } }));
+const setScroll = (sel, x, y) => page.$eval(sel, (e, x, y) => { if (x !== null) e.scrollLeft = x; if (y !== null) e.scrollTop = y; }, sel, x ?? null, y ?? null);
+/**
+ * Wheel events at known times (ms after the first), each dispatched on whatever is under (x, y) then,
+ * as a trackpad's: `dx`, `dy`, `mode`, `cancelable`, `ctrl`, `meta`, `shift`. `spread` ms apart in
+ * real time (0: all in one task).
+ */
+const feed = (x, y, list, spread = 0) =>
+  page.evaluate(
+    async (x, y, list, spread) => {
+      const base = performance.now();
+      for (const w of list) {
+        const el = document.elementFromPoint(x, y) ?? document.body;
+        const e = new WheelEvent("wheel", {
+          deltaX: w.dx ?? 0,
+          deltaY: w.dy ?? 0,
+          deltaMode: w.mode ?? 0,
+          clientX: x,
+          clientY: y,
+          ctrlKey: !!w.ctrl,
+          metaKey: !!w.meta,
+          shiftKey: !!w.shift,
+          bubbles: true,
+          cancelable: w.cancelable ?? true,
+        });
+        Object.defineProperty(e, "timeStamp", { value: base + w.t });
+        el.dispatchEvent(e);
+        if (spread) await new Promise((r) => setTimeout(r, spread));
+      }
+    },
+    x,
+    y,
+    list,
+    spread,
+  );
+/** `n` events of a swipe, `apart` ms apart, each moving (dx, dy). */
+const swipe = (n, dx, dy, apart = 16, more = {}) => Array.from({ length: n }, (_, i) => ({ t: i * apart, dx, dy, ...more }));
+/** A pinch at (x, y), as WebKit sends it: Safari's gesture events, each scale from the pinch's start. */
+const pinch = (x, y, scales) =>
+  page.evaluate(
+    (x, y, scales) => {
+      const el = document.elementFromPoint(x, y);
+      const send = (type, scale) => {
+        const e = new UIEvent(type, { bubbles: true, cancelable: true });
+        for (const [k, v] of Object.entries({ scale, clientX: x, clientY: y })) Object.defineProperty(e, k, { value: v });
+        el.dispatchEvent(e);
+      };
+      send("gesturestart", 1);
+      for (const s of scales) send("gesturechange", s);
+      send("gestureend", scales.at(-1));
+    },
+    x,
+    y,
+    scales,
+  );
+/**
+ * `n` frames of ⌘-scroll at (x, y), two events in each (`dy` each), each event a task of its own, as
+ * a trackpad's are: however fast the page draws its frames. Then three frames more.
+ */
+const zoomFrames = (x, y, n, dy) =>
+  page.evaluate(
+    (x, y, n, dy) =>
+      new Promise((done) => {
+        let k = 0;
+        const one = () => {
+          const send = () => {
+            const e = new WheelEvent("wheel", { deltaY: dy, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true });
+            (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(e);
+          };
+          send();
+          setTimeout(send, 0);
+          if (++k < n) requestAnimationFrame(one);
+          else requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(done)));
+        };
+        requestAnimationFrame(one);
+      }),
+    x,
+    y,
+    n,
+    dy,
+  );
+
+// ================================================================ the library, in the page
+
+check(await face(), "the page gives the camera's face beside frames() (VIEW-10)");
+const lib = await page.evaluate(() => {
+  const c = window.m2canvas?.camera;
+  if (!c) return null;
+  const n = c.numbers;
+  // An arrangement's shape: 240 px of names at the left, a 36 px ruler, the zoom stretching time across.
+  const arr = { view: { w: 1240, h: 600 }, content: { w: 5000, h: 2000 }, margins: { left: 240, top: 36, right: 0, bottom: 50 }, origin: { x: 240, y: 36 }, stretch: { x: true, y: false } };
+  // A graph's: 16 px of padding, stretched both ways.
+  const gr = { view: { w: 800, h: 400 }, content: { w: 2000, h: 1000 }, margins: { left: 0, top: 0, right: 0, bottom: 0 }, origin: { x: 16, y: 16 }, stretch: { x: true, y: true } };
+  const at = { x: 100, y: 50, zoom: 24 };
+  const out = {};
+  out.numbers = [n.SWIPE_GAP, n.RAIL_ANGLE, n.RAIL_AFTER, n.GLIDE_RATE, n.SCROLLBARS, n.EDGES, n.CULL_MARGIN, n.CULL_STEP, n.SYSTEM_GLIDE.mac, n.SYSTEM_GLIDE.other];
+  out.move = [c.move(at, 30, -20, arr), c.move(at, -500, -500, arr), c.move(at, 9000, 9000, arr), c.to(at, 10.25, 20.5, arr)];
+  // 300 px into the lanes at beat (100 + 300) / 24; at 48 px a beat it stays under the pointer.
+  out.zoom = [c.zoomAround(at, { x: 540, y: 300 }, 48, arr), c.zoomAround(at, { x: 100, y: 300 }, 48, arr), c.zoomAround({ x: 0, y: 0, zoom: 1 }, { x: 216, y: 116 }, 2, gr)];
+  out.reveal = [
+    c.reveal(at, { x: [2000, 2100] }, arr),
+    c.reveal(at, { x: [400, 500] }, arr),
+    c.reveal(at, { x: [100, 200] }, arr),
+    c.reveal(at, { x: [400, 3000] }, arr),
+    c.reveal(at, { y: [800, 840] }, arr),
+    c.reveal(at, { x: [2000, 2100] }, arr, { align: "center" }),
+    c.reveal(at, { x: [2000, 2100] }, arr, { pad: 10 }),
+  ];
+  out.fit = [c.fit(at, [8, 16], arr, { pad: 16 }), c.fit(at, [8, 16], arr, { pad: 16, zoomOf: (z) => Math.min(z, 60) })];
+  const u = c.toContent(at, { x: 540, y: 300 }, arr);
+  const r6 = (p) => ({ x: Math.round(p.x * 1e6) / 1e6, y: Math.round(p.y * 1e6) / 1e6 });
+  out.convert = [r6(u), r6(c.toBox(at, u, arr)), c.toContent({ x: 50, y: 20, zoom: 2 }, { x: 116, y: 96 }, gr)];
+  const w = (x) => c.cull({ ...at, x }, arr).x;
+  out.cull = [w(0), w(499), w(500), w(1700), c.cull({ ...at, y: 0 }, arr).y, c.cull(at, { ...arr, view: { w: 0, h: 0 } }).x, c.cull({ ...at, x: 0 }, arr, { x: { margin: 96, step: 96 } }).x];
+  // A box that keeps whole pixels, as WebKit's does (`long scrollLeft`).
+  const box = { left: 0, top: 0, scrollWidth: 2000, scrollHeight: 1000, clientWidth: 500, clientHeight: 300 };
+  const whole = {
+    get scrollLeft() { return box.left; },
+    set scrollLeft(v) { box.left = Math.max(0, Math.min(this.scrollWidth - this.clientWidth, Math.trunc(v))); },
+    get scrollTop() { return box.top; },
+    set scrollTop(v) { box.top = Math.max(0, Math.min(this.scrollHeight - this.clientHeight, Math.trunc(v))); },
+    scrollWidth: 2000, scrollHeight: 1000, clientWidth: 500, clientHeight: 300,
+  };
+  const wr = c.writer(whole);
+  let cam = { x: 0, y: 0, zoom: 1 };
+  // A slow swipe: 30 events of 0.3 px. Reading the box and adding would never leave 0.
+  for (let i = 0; i < 30; i++) cam = wr.write({ ...cam, x: cam.x + 0.3 });
+  out.slow = [Math.round(cam.x * 1000) / 1000, box.left, wr.theirs()];
+  box.left += 1;
+  out.slack = wr.theirs();
+  box.left += 40;
+  out.theirs = wr.theirs();
+  out.clamped = wr.write({ x: 5000, y: -10, zoom: 1 });
+  return out;
+});
+check(
+  json(lib?.numbers) === json([50, 20, 8, 0.998, "browser", "stop", 1, 0.5, true, false]),
+  `its numbers, until the probe's report: G 50 ms, rails 20° after 8 px, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
+);
+check(
+  json(lib?.move) === json([{ x: 130, y: 30, zoom: 24 }, { x: 0, y: 0, zoom: 24 }, { x: 3760, y: 1400, zoom: 24 }, { x: 10.25, y: 20.5, zoom: 24 }]),
+  `move and to: by and to a point, with fractions, stopped at the content's edges: ${json(lib?.move)}`,
+);
+check(
+  json(lib?.zoom) === json([{ x: 500, y: 50, zoom: 48 }, { x: 200, y: 50, zoom: 48 }, { x: 200, y: 100, zoom: 2 }]),
+  `zoomAround: the beat under the pointer stays (over the names: at their edge), and the graph's point both ways: ${json(lib?.zoom)}`,
+);
+check(
+  json(lib?.reveal?.map((r) => [r.x, r.y])) === json([[860, 50], [100, 50], [0, 50], [160, 50], [100, 290], [1310, 50], [870, 50]]),
+  `reveal: the least move clear of the names and the ruler, none when it shows, its start when too big, the middle, a pad: ${json(lib?.reveal?.map((r) => [r.x, r.y]))}`,
+);
+check(
+  json(lib?.fit) === json([{ x: 952, y: 50, zoom: 121 }, { x: 464, y: 50, zoom: 60 }]),
+  `fit: beats 8 to 16 fill the view 16 px in from each side, the zoom clamped as asked: ${json(lib?.fit)}`,
+);
+check(
+  json(lib?.convert) === json([{ x: 16.666667, y: 314 }, { x: 540, y: 300 }, { x: 75, y: 50 }]),
+  `toContent and back: the box's point as beats and px, and the graph's both ways: ${json(lib?.convert)}`,
+);
+check(
+  json(lib?.cull) ===
+    json([
+      { from: -41.666666666666664, to: 104.16666666666667, step: 0 },
+      { from: -41.666666666666664, to: 104.16666666666667, step: 0 },
+      { from: -20.833333333333332, to: 125, step: 1 },
+      { from: 20.833333333333332, to: 166.66666666666666, step: 3 },
+      { from: -514, to: 1285, step: 0 },
+      { from: 0, to: 0, step: 0 },
+      { from: -4, to: 49.666666666666664, step: 0 },
+    ]),
+  `cull: what shows and a view each side, the same within a step of half a view, the next at the step, down too, nothing before the box is laid out, a margin of its own: ${json(lib?.cull)}`,
+);
+check(
+  json(lib?.slow) === json([9, 9, null]) && lib?.slack === null && json(lib?.theirs) === json({ x: 50, y: 0 }) && json(lib?.clamped) === json({ x: 1500, y: 0, zoom: 1 }),
+  `the writer on a box that keeps whole pixels: 30 moves of 0.3 px reach 9 (${json(lib?.slow)}), 1 px off is its own (${json(lib?.slack)}), 40 more the browser's (${json(lib?.theirs)}), stopped at the box's edges (${json(lib?.clamped)})`,
+);
+
+// ================================================================ the Graph, on first-song
+
+const graph = "[data-testid=graph]";
+await view("graph");
+await page.waitForSelector(`${graph} [data-node-id]`);
+const graphCam = async () => {
+  const names = await page.evaluate(() => window.m2canvas?.camera?.names() ?? []);
+  const name = names.find((n) => n.startsWith("graph:"));
+  return name ? { name, ...(await cam(name)) } : null;
+};
+// Room both ways: zoomed in at the graph's corner.
+{
+  const n = await box(`${graph} [data-node-id]`);
+  for (let i = 0; i < 2; i++) {
+    await feed(n.x + 2, n.y + 2, [{ t: 0, dy: -100, ctrl: true }]);
+    await frames();
+  }
+}
+{
+  const g = await box(graph);
+  const s0 = await scroll(graph);
+  const at = { x: g.x + g.width * 0.5, y: g.y + g.height * 0.5 };
+  await feed(at.x, at.y, swipe(20, 6, 4));
+  await frames();
+  const s1 = await scroll(graph);
+  const c = await graphCam();
+  check(
+    s0.room.x > 150 && s0.room.y > 100 && s1.x - s0.x === 120 && s1.y - s0.y === 80 && !!c && near(c.x, s1.x, 0.5) && near(c.y, s1.y, 0.5),
+    `the Graph: a diagonal swipe moves it 1:1 both ways (120 × 80): ${json({ s0, s1, cam: c })}`,
+  );
+}
+// 120 events of a swipe with the pointer over a wire: no view renders (VIEW-8), its hover muted.
+{
+  const wire = await page.$$eval(`${graph} svg path[data-from]`, (els) => {
+    for (const p of els) {
+      const r = p.getBoundingClientRect();
+      if (r.width > 40) return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+    }
+    return null;
+  });
+  if (wire) await page.mouse.move(wire.x, wire.y);
+  await sleep(300);
+  const r0 = await renders();
+  const s0 = await scroll(graph);
+  await feed(wire?.x ?? 0, wire?.y ?? 0, swipe(120, 0.5, -0.25, 8));
+  await frames(6);
+  await sleep(400);
+  const r = since(r0, await renders());
+  const s1 = await scroll(graph);
+  check(!!wire && s1.x !== s0.x && Object.keys(r).length === 0, `120 events of a swipe over a wire move the Graph and render nothing: ${json({ moved: [s1.x - s0.x, s1.y - s0.y], renders: r })}`);
+}
+// Tab to a bar out of view: the browser scrolls it into view, and the camera takes that in (VIEW-9).
+{
+  await expand(page, `${graph} [data-node-id]`).catch(() => {});
+  await setScroll(graph, 0, 0);
+  await frames();
+  const bars = await page.$$(`${graph} [data-knob-id]`);
+  const g = await box(graph);
+  let target = null;
+  for (const b of bars) {
+    const r = await b.boundingBox();
+    if (r && (r.x > g.x + g.width || r.y > g.y + g.height)) {
+      target = b;
+      break;
+    }
+  }
+  if (target) await target.evaluate((e) => e.focus());
+  await frames();
+  const s = await scroll(graph);
+  const c = await graphCam();
+  check(!!target && (s.x > 0 || s.y > 0) && !!c && near(c.x, s.x, 1) && near(c.y, s.y, 1), `focus on a bar out of view scrolls the Graph, and its camera takes it in: ${json({ s, cam: c && { x: c.x, y: c.y } })}`);
+}
+
+// ================================================================ the beat grid: a kit, as a musician makes one
+
+await show("hats");
+await key("Meta+t");
+await page.waitForSelector("[data-testid=instrument-list]", { timeout: 3000 }).catch(() => null);
+await page.keyboard.type("basic kit");
+await sleep(150);
+await page.keyboard.press("Enter");
+await until(async () => ((await state()).view.drum_kits ?? []).length === 1, 15000);
+await show("kick-2");
+await view("beat");
+const beat = "[data-testid=beat-scroller]";
+await page.waitForSelector(beat);
+await frames();
+/** The beat under screen x in the beat grid, from where its step of beat 0 is drawn. */
+const beatX = (x) =>
+  page.$eval(
+    `${beat} [data-testid=beat-row] [data-step="0"]`,
+    (e, x) => {
+      const r = e.getBoundingClientRect();
+      const s1 = e.parentElement.querySelector('[data-step="0.25"]')?.getBoundingClientRect();
+      const ppb = s1 ? (s1.left - r.left) / 0.25 : NaN;
+      return { beat: (x - r.left) / ppb, ppb };
+    },
+    x,
+  ).catch(() => ({ beat: NaN, ppb: NaN }));
+{
+  const b = await box(beat);
+  const at = { x: b.x + 420, y: b.y + 60 };
+  const a = await beatX(at.x);
+  await feed(at.x, at.y, [{ t: 0, dy: -100, ctrl: true }]);
+  await frames();
+  const z = await beatX(at.x);
+  check(z.ppb > a.ppb * 1.4 && near(z.beat * z.ppb, a.beat * z.ppb, 1.5), `the beat grid: ⌘-scroll zooms around the pointer, beat ${a.beat.toFixed(3)} staying under it (${z.beat.toFixed(3)}, ${a.ppb.toFixed(1)} → ${z.ppb.toFixed(1)} px a beat)`);
+  await pinch(at.x, at.y, [0.9, 0.8]);
+  await frames();
+  const p = await beatX(at.x);
+  check(near(p.ppb, z.ppb * 0.8, 0.5) && near(p.beat * p.ppb, a.beat * p.ppb, 1.5), `and a pinch out (WebKit's gesture events), around it too: beat ${p.beat.toFixed(3)}, ${p.ppb.toFixed(1)} px a beat`);
+}
+
+// ================================================================ the big song
+
+const big = path.join(ROOT, "big");
+execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta.url)), "big-song.mjs"), big]);
+// Bass 1's first clip: 64 beats of 256 notes over four octaves, for Notes (its other clips after it).
+{
+  const file = path.join(big, "data/bass-1/notes.json");
+  const lane = JSON.parse(fs.readFileSync(file, "utf8"));
+  const notes = Array.from({ length: 256 }, (_, i) => ({ pitch: 36 + ((i * 7) % 48), start: i / 4, length: 0.25, velocity: 0.8 }));
+  lane.clips = [{ ...lane.clips[0], start: 0, length: 64, notes }, ...lane.clips.slice(16)];
+  fs.writeFileSync(file, JSON.stringify(lane));
+}
+await api("/close", { method: "POST", body: "{}" });
+check((await api("/open", { method: "POST", body: json({ path: big }) })).status === 200, "the big song opens: 24 tracks of 64 clips");
+const tl = "[data-testid=timeline]";
+await page.waitForSelector(`${tl} [data-track="keys-6"]`, { timeout: 60000 });
+await until(async () => (await page.$$(`${tl} [data-clip]`)).length > 50, 60000);
+await frames();
+const lanes = async () => {
+  const t = await box(tl);
+  return { x: t.x + 700, y: t.y + 200 };
+};
+const arr = () => cam("arrangement");
+
+// ---------------------------------------------------------------- swipes: 1:1, rails, ⇧, edges
+await setScroll(tl, 600, 300);
+await frames();
+{
+  const at = await lanes();
+  const s0 = await scroll(tl);
+  await feed(at.x, at.y, swipe(20, 6, 4));
+  await frames();
+  const s1 = await scroll(tl);
+  const c = await arr();
+  check(s1.x - s0.x === 120 && s1.y - s0.y === 80 && !!c && near(c.x, s1.x, 0.5) && near(c.y, s1.y, 0.5), `the arrangement: a diagonal swipe moves it 1:1 both ways (120 × 80): ${json({ s0, s1, cam: c && { x: c.x, y: c.y } })}`);
+  await sleep(120);
+  await feed(at.x, at.y, swipe(20, 10, 1.763));
+  await frames();
+  const s2 = await scroll(tl);
+  check(s2.x - s1.x === 200 && s2.y === s1.y, `a swipe 10° off straight keeps to its rail: 200 across, none down (${s2.x - s1.x} × ${s2.y - s1.y})`);
+  await sleep(120);
+  await feed(at.x, at.y, swipe(20, -5, -5));
+  await frames();
+  const s3 = await scroll(tl);
+  check(s3.x - s2.x === -100 && s3.y - s2.y === -100, `a 45° one moves both ways (${s3.x - s2.x} × ${s3.y - s2.y})`);
+  await sleep(120);
+  await feed(at.x, at.y, swipe(10, 0, 5, 16, { shift: true }));
+  await frames();
+  const s4 = await scroll(tl);
+  check(s4.x === s3.x && s4.y - s3.y === 50, `⇧ + wheel isn't turned by the camera: the Mac and WebKitGTK turn it already (${s4.x - s3.x} × ${s4.y - s3.y})`);
+  await sleep(120);
+  await feed(at.x, at.y, swipe(30, -100, -100));
+  await frames();
+  const s5 = await scroll(tl);
+  const c5 = await arr();
+  check(s5.x === 0 && s5.y === 0 && !!c5 && c5.x === 0 && c5.y === 0, `at the edges it stops, and so does the camera: ${json({ s5, cam: c5 && { x: c5.x, y: c5.y } })}`);
+}
+// Events WebKit took over (`cancelable: false`): the web view moves the box by them, the camera doesn't too.
+{
+  await setScroll(tl, 600, 0);
+  await frames();
+  await sleep(120);
+  const at = await lanes();
+  const s0 = await scroll(tl);
+  await feed(at.x, at.y, [{ t: 0, dx: 10 }, ...swipe(9, 10, 0, 16, { cancelable: false }).map((w) => ({ ...w, t: w.t + 16 }))]);
+  // What WebKit does with the nine it kept: it scrolls the box itself.
+  await page.$eval(tl, (e) => void (e.scrollLeft += 90));
+  await frames();
+  await sleep(100);
+  const s1 = await scroll(tl);
+  const c = await arr();
+  check(s1.x - s0.x === 100 && !!c && near(c.x, s1.x, 0.5), `a swipe WebKit took over after its first event moves 100, not 190: the camera takes the box's move in (${s1.x - s0.x}, camera at ${c?.x})`);
+}
+
+// ---------------------------------------------------------------- moving renders nothing; the rows at a step
+{
+  const c = await arr();
+  const step = c ? (c.view.w - c.margins.left - c.margins.right) / 2 : 600;
+  await setScroll(tl, Math.round(step * 2 + 20), 0);
+  await frames();
+  await sleep(300);
+  const at = await lanes();
+  await page.mouse.move(at.x, at.y);
+  await sleep(300);
+  const r0 = await renders();
+  const s0 = await scroll(tl);
+  await feed(at.x, at.y, swipe(120, 1.5, 0, 8));
+  await frames(6);
+  await sleep(400);
+  const s1 = await scroll(tl);
+  const r = since(r0, await renders());
+  check(s1.x - s0.x === 180 && Object.keys(r).length === 0, `120 events of a swipe within a step move the arrangement 180 px and render nothing: ${json(r)}`);
+  const rows = (await page.$$(`${tl} [data-track]`)).length;
+  const r1 = await renders();
+  await sleep(120);
+  await feed(at.x, at.y, swipe(120, 3, 0, 8));
+  await frames(6);
+  await sleep(400);
+  const s2 = await scroll(tl);
+  const crossed = Math.floor(s2.x / step) - Math.floor(s1.x / step);
+  const q = since(r1, await renders());
+  check(crossed === 1 && (q["arrangement.rows"] ?? 0) > 0 && (q["arrangement.rows"] ?? 0) <= rows && !q.arrangement, `120 more that cross one step render each row once at most (${rows} rows), and the arrangement not: ${json(q)}`);
+}
+
+// ---------------------------------------------------------------- only what is in view
+const clipsShown = () =>
+  page.$$eval(`${tl} [data-clip]`, (els) =>
+    els.map((e) => ({ track: e.closest("[data-track]")?.dataset.track, start: Number(e.dataset.start), length: Number(e.dataset.length) })),
+  );
+{
+  await setScroll(tl, 3000, 0);
+  await frames();
+  await sleep(500);
+  const c = await arr();
+  const shown = await clipsShown();
+  const t = await box(tl);
+  const tracks = await page.$$eval(`${tl} [data-track]`, (els) => els.map((e) => ({ track: e.dataset.track, top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom })));
+  const clear = c ? c.view.w - c.margins.left : 0;
+  // The window across: what shows, a view each side, and up to a step more.
+  const from = c ? (c.x - clear) / c.zoom : 0, to = c ? (c.x + clear * 2.5) / c.zoom : 0;
+  const nearTracks = tracks.filter((x) => x.bottom >= t.y - t.height && x.top <= t.y + t.height * 2).map((x) => x.track);
+  const outside = shown.filter((s) => s.start + s.length < from - 1e-6 || s.start > to + 1e-6);
+  const far = shown.filter((s) => !nearTracks.includes(s.track));
+  const all = 24 * 64;
+  check(
+    !!c && shown.length > 0 && shown.length < all / 2 && outside.length === 0 && far.length === 0,
+    `scrolled to 3000 px: ${shown.length} of ${all} clips drawn, none outside beats ${from.toFixed(1)} to ${to.toFixed(1)} (${outside.length}), none in a track more than a view below (${far.length}; ${nearTracks.length} tracks near)`,
+  );
+  const rowsKept = await page.$$eval(`${tl} [data-track="keys-6"] [data-lane]`, (els) => els.map((e) => e.getBoundingClientRect().height));
+  check(rowsKept.length > 0 && rowsKept.every((h) => h > 20), `a track far below keeps its row box, drawn without its clips: ${json(rowsKept)}`);
+}
+
+// ---------------------------------------------------------------- zoom: once a frame, around the pointer, no mini drawing
+{
+  await setScroll(tl, 1200, 0);
+  await frames();
+  await sleep(300);
+  const at = await lanes();
+  const r0 = await renders();
+  await feed(at.x, at.y, Array.from({ length: 30 }, (_, i) => ({ t: i * 4, dy: -3, meta: true })));
+  await frames(4);
+  const r = since(r0, await renders());
+  check((r.arrangement ?? 0) >= 1 && (r.arrangement ?? 0) <= 1, `30 ⌘-scroll events in one go render the arrangement once (${r.arrangement ?? 0})`);
+  const r1 = await renders();
+  await zoomFrames(at.x, at.y, 15, 3);
+  const q = since(r1, await renders());
+  check((q.arrangement ?? 0) >= 1 && (q.arrangement ?? 0) <= 18, `30 more, two in each of 15 frames, render it at most once a frame (18 frames): ${q.arrangement ?? 0} renders`);
+  check((r["arrangement.drawings"] === undefined || r["arrangement.drawings"] === 0) && (await page.evaluate(() => "arrangement.drawings" in (window.m2canvas?.frames?.().total ?? {}))), `a zoom in renders no clip's mini drawing: ${r["arrangement.drawings"] ?? 0} (each counted)`);
+}
+/** The beat under screen x, from where Kick 1's clip at beat 0… is drawn: any clip with its start. */
+const beatAt = async (x) =>
+  page.$eval(
+    tl,
+    (e, x) => {
+      const c = [...e.querySelectorAll('[data-track="kick-1"] [data-clip]')].map((d) => ({ s: Number(d.dataset.start), l: Number(d.dataset.length), r: d.getBoundingClientRect() })).find((d) => d.r.width > 0);
+      if (!c) return { beat: NaN, ppb: NaN };
+      const ppb = (c.r.width + 2) / c.l;
+      return { beat: c.s + (x - (c.r.left - 1)) / ppb, ppb };
+    },
+    x,
+  );
+{
+  const at = await lanes();
+  const a = await beatAt(at.x);
+  await pinch(at.x, at.y, [1.2, 1.5]);
+  await frames();
+  const b = await beatAt(at.x);
+  check(near(b.ppb, a.ppb * 1.5, 0.05) && near(b.beat * b.ppb, a.beat * b.ppb, 1.5), `a pinch over the arrangement (WebKit's gesture events) zooms around the pointer: beat ${a.beat.toFixed(3)} stays (${b.beat.toFixed(3)}, ${a.ppb.toFixed(2)} → ${b.ppb.toFixed(2)})`);
+  await pinch(at.x, at.y, [1 / 1.5]);
+  await frames();
+}
+
+// ---------------------------------------------------------------- a click's scroll, and agents' seen
+{
+  await setScroll(tl, 800, 0);
+  await frames();
+  await page.click(`${tl} [data-module-tab="keys-6"]`);
+  await frames();
+  const s = await scroll(tl);
+  const c = await arr();
+  check(s.y > 0 && !!c && near(c.y, s.y, 1) && near(c.x, s.x, 1), `a click on a track's name out of view scrolls to it, and the camera takes it in: ${json({ s, cam: c && { x: c.x, y: c.y } })}`);
+  const at = await lanes();
+  await sleep(120);
+  await feed(at.x, at.y, swipe(10, 13, 0));
+  await frames();
+  await sleep(600);
+  const now = await arr();
+  const said = (await (await fetch(`${sess.url}/api/focus`, { headers: { "x-m2-token": sess.token } })).json()).seen;
+  const want = now && [now.x / now.zoom, (now.x + now.view.w - now.margins.left) / now.zoom].map((b) => Math.round(b * 1000) / 1000);
+  check(!!want && json(said) === json(want), `agents' seen follows the camera: ${json(said)} (${json(want)})`);
+}
+
+// ---------------------------------------------------------------- Follow pauses on any move not the app's
+const status = async () => (await api("/status")).body;
+const post = (p, body) => api(p, { method: "POST", body: json(body) });
+{
+  for (let i = 0; i < 6; i++) await page.click("[data-testid=zoom-in]");
+  await setScroll(tl, 0, 0);
+  await post("/seek", { beat: 8 });
+  await key("Space");
+  await until(async () => (await status()).playing);
+  const pages = async (beat) => {
+    const s0 = (await scroll(tl)).x;
+    await post("/seek", { beat });
+    return until(async () => Math.abs((await scroll(tl)).x - s0) > 300, 2500);
+  };
+  check(await pages(40), `playing at 192 px a beat, Follow pages to the playhead (${(await scroll(tl)).x})`);
+  const at = await lanes();
+  const tries = [
+    ["a swipe", () => feed(at.x, at.y, swipe(10, -20, 0))],
+    [
+      "a key's scroll",
+      async () => {
+        await page.$eval(tl, (e) => e.focus({ preventScroll: true }));
+        await page.keyboard.press("ArrowLeft");
+      },
+    ],
+    ["a write to scrollLeft", () => page.$eval(tl, (e) => void (e.scrollLeft -= 400))],
+  ];
+  let beatTo = 60;
+  for (const [what, act] of tries) {
+    // Play again: Follow follows again.
+    await key("Space");
+    await until(async () => !(await status()).playing);
+    await key("Space");
+    await until(async () => (await status()).playing);
+    await pages((beatTo += 20));
+    await act();
+    await frames();
+    await sleep(300);
+    const kept = (await scroll(tl)).x;
+    await post("/seek", { beat: (beatTo += 40) });
+    await sleep(900);
+    check(Math.abs((await scroll(tl)).x - kept) < 2, `${what} while playing pauses Follow: the view stays at ${kept} (${(await scroll(tl)).x})`);
+  }
+  // A drag holds the camera: a swipe and Follow move nothing until it is let go.
+  await key("Space");
+  await until(async () => !(await status()).playing);
+  await key("Space");
+  await until(async () => (await status()).playing);
+  await pages((beatTo += 20));
+  const t = await box(tl);
+  const lane = await box(`${tl} [data-track="hats-1"] [data-lane]`);
+  await page.mouse.move(t.x + 400, lane.y + lane.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(t.x + 460, lane.y + lane.height / 2, { steps: 4 });
+  const held = (await scroll(tl)).x;
+  await feed(t.x + 700, lane.y + 10, swipe(10, 30, 0));
+  await post("/seek", { beat: (beatTo += 40) });
+  await sleep(900);
+  check(Math.abs((await scroll(tl)).x - held) < 2, `during a drag, a swipe and Follow move nothing (${held} → ${(await scroll(tl)).x})`);
+  await page.mouse.up();
+  check(await until(async () => Math.abs((await scroll(tl)).x - held) > 300, 2500), `let go, Follow catches up (${(await scroll(tl)).x})`);
+  await key("Escape");
+  await key("Space");
+  await until(async () => !(await status()).playing);
+}
+
+// ---------------------------------------------------------------- the camera's own glide, with Linux's flag
+{
+  await page.evaluate(() => window.m2canvas?.camera?.glide(true));
+  await setScroll(tl, 0, 0);
+  await frames();
+  await sleep(150);
+  const at = await lanes();
+  await feed(at.x, at.y, swipe(10, 10, 0));
+  const xs = [];
+  for (let i = 0; i < 8; i++) {
+    await frames(1);
+    xs.push((await arr())?.x ?? 0);
+  }
+  const steps = xs.slice(1).map((x, i) => x - xs[i]);
+  const slowing = steps.slice(2).every((s, i) => s > 0 && s <= steps[i + 1] + 1e-9);
+  check(xs.at(-1) > 100 + 20 && slowing, `with Linux's flag, a swipe's glide carries on after it, slowing (${xs.map((x) => x.toFixed(1)).join(", ")})`);
+  await feed(at.x, at.y, [{ t: 0, dx: 1 }]);
+  await frames(2);
+  const x0 = (await arr())?.x ?? 0;
+  await frames(6);
+  const x1 = (await arr())?.x ?? 0;
+  check(near(x1, x0, 0.01), `the next event stops it (${x0.toFixed(2)} → ${x1.toFixed(2)})`);
+  await page.evaluate(() => window.m2canvas?.camera?.glide(null));
+}
+
+// ================================================================ Notes, on a clip of 256 notes
+await page.keyboard.press("Escape");
+{
+  for (let i = 0; i < 6; i++) await key("Meta+Minus");
+  await setScroll(tl, 0, 0);
+  await frames();
+  const clip = await box(`${tl} [data-track="bass-1"] [data-clip]`);
+  await page.mouse.click(clip.x + 20, clip.y + clip.height / 2, { clickCount: 2 });
+}
+const roll = "[data-testid=roll-scroller]";
+await page.waitForSelector(`${roll} [data-note]`, { timeout: 10000 }).catch(() => null);
+await frames();
+{
+  const notes = await page.$$eval(`${roll} [data-note]`, (els) => els.length);
+  const c = await cam("notes");
+  check(notes > 0 && notes < 256, `Notes draws only the notes in view and a margin of the 256: ${notes}${c ? ` (${c.view.w} × ${c.view.h} px)` : ""}`);
+  const r = await box(roll);
+  const at = { x: r.x + r.width * 0.6, y: r.y + r.height * 0.6 };
+  const s0 = await scroll(roll);
+  await feed(at.x, at.y, swipe(20, 6, 4));
+  await frames();
+  const s1 = await scroll(roll);
+  check(s1.x - s0.x === 120 && s1.y - s0.y === 80, `Notes: a diagonal swipe moves it 1:1 both ways (${s1.x - s0.x} × ${s1.y - s0.y})`);
+  // Over a note: 120 events render nothing.
+  const note = await page.$$eval(`${roll} [data-note]`, (els, r) => {
+    for (const e of els) {
+      const b = e.getBoundingClientRect();
+      if (b.left > r.x + 100 && b.right < r.x + r.width - 100 && b.top > r.y + 40 && b.bottom < r.y + r.height - 40) return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+    }
+    return null;
+  }, r);
+  if (note) await page.mouse.move(note.x, note.y);
+  await sleep(300);
+  const c1 = await cam("notes");
+  const stepX = c1 ? (c1.view.w - c1.margins.left) / 2 : 400;
+  await setScroll(roll, Math.round(stepX + 10), null);
+  await frames();
+  await sleep(300);
+  const r0 = await renders();
+  await feed(note?.x ?? at.x, note?.y ?? at.y, swipe(120, 0.5, 0, 8));
+  await frames(6);
+  await sleep(400);
+  const q = since(r0, await renders());
+  check(!!note && Object.keys(q).length === 0, `120 events of a swipe over a note render nothing: ${json(q)}`);
+  const r1 = await renders();
+  await zoomFrames(at.x, at.y, 15, -3);
+  const z = since(r1, await renders());
+  check((z.notes ?? 0) >= 1 && (z.notes ?? 0) <= 18, `30 ⌘-scroll events, two in each of 15 frames, render Notes at most once a frame (18 frames): ${z.notes ?? 0} renders`);
+}
+/** The beat under screen x in Notes, from the ruler's bar 1. */
+const rollBeat = (x) =>
+  page.$eval(`${roll} [data-ppb]`, (e, x) => {
+    const ppb = Number(e.dataset.ppb);
+    return { beat: (x - e.getBoundingClientRect().left) / ppb, ppb };
+  }, x);
+{
+  const r = await box(roll);
+  const at = { x: r.x + r.width * 0.5, y: r.y + r.height * 0.5 };
+  const a = await rollBeat(at.x);
+  await sleep(120);
+  await feed(at.x, at.y, [{ t: 0, dy: -100, ctrl: true }]);
+  await frames();
+  const b = await rollBeat(at.x);
+  check(b.ppb > a.ppb * 1.4 && near(b.beat * b.ppb, a.beat * b.ppb, 1.5), `Notes: ⌘-scroll zooms around the pointer, beat ${a.beat.toFixed(3)} staying (${b.beat.toFixed(3)}, ${a.ppb.toFixed(1)} → ${b.ppb.toFixed(1)})`);
+  await pinch(at.x, at.y, [0.9, 0.75]);
+  await frames();
+  const p = await rollBeat(at.x);
+  check(near(p.ppb, b.ppb * 0.75, 0.5) && near(p.beat * p.ppb, a.beat * p.ppb, 1.5), `and a pinch out, around it too (${p.beat.toFixed(3)}, ${p.ppb.toFixed(1)} px a beat)`);
+}
+
+check(read("song.ts").length > 0, "first-song's files are still there");
+done(errors);
+await browser.close();

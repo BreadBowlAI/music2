@@ -6,6 +6,8 @@
 //   pinch   WebKit's gesture events, at another point
 //   bar     Zoom in and Zoom out, around the view's middle
 //   fit     Fit still fits
+//   dots    the dotted background is the graph's: 20 of its px apart (doubled while under 12 on
+//           screen), from its corner, 1 px dots, at each zoom on the way
 //   node run.mjs graph-zoom fix
 import { check, done, open, until } from "./fixlib.mjs";
 
@@ -69,6 +71,14 @@ const held = (what, before, after, x, y) => {
   const off = Math.max(Math.abs(p.x - x), Math.abs(p.y - y));
   check(Math.abs(p.s - 1) > 0.05 && off <= 1.5, `${what}: zoomed ×${p.s.toFixed(2)} and the point stays (${off.toFixed(1)} px off) at ${x}, ${y}`);
 };
+/** The dots' pattern at the zoom now: its spacing, its offset and its dots' radius, in screen px. */
+const dotsAt = [];
+const dots = async () =>
+  dotsAt.push({
+    zoom: Number(await zoomNow()),
+    ...(await page.$eval(`${graph} [data-canvas] > svg pattern`, (p) => ({ w: Number(p.getAttribute("width")), x: Number(p.getAttribute("x")), r: Number(p.querySelector("circle").getAttribute("r")) }))),
+  });
+await dots();
 
 // ---------------------------------------------------------------- room
 // Zooming in at the graph's own corner needs no scroll: it makes the room the checks need. The
@@ -76,6 +86,7 @@ const held = (what, before, after, x, y) => {
 const start = await look(id);
 await wheel(start.node.x, start.node.y, -100);
 const roomy = await look(id);
+await dots();
 check(roomy.room.x > 200 && roomy.room.y > 50, `zoomed in at the corner (${await zoomNow()}): room to scroll ${roomy.room.x} across and ${roomy.room.y} down`);
 
 // ---------------------------------------------------------------- ⌘-scroll
@@ -85,6 +96,7 @@ check(roomy.room.x > 200 && roomy.room.y > 50, `zoomed in at the corner (${await
   await wheel(x, y, -60);
   const b = await look(id);
   held("⌘-scroll in", a, b, x, y);
+  await dots();
   await wheel(x, y, 60);
   held("⌘-scroll out", b, await look(id), x, y);
 }
@@ -95,6 +107,7 @@ check(roomy.room.x > 200 && roomy.room.y > 50, `zoomed in at the corner (${await
   const a = await look(id);
   await pinch(x, y, [1.1, 1.2, 1.3]);
   held("a pinch in", a, await look(id), x, y);
+  await dots();
   const b = await look(id);
   await pinch(x, y, [0.9, 0.77]);
   held("a pinch out", b, await look(id), x, y);
@@ -116,6 +129,21 @@ check(roomy.room.x > 200 && roomy.room.y > 50, `zoomed in at the corner (${await
 // ---------------------------------------------------------------- Fit
 await page.click('button[aria-label="Fit to panel"]');
 check(await until(async () => (await page.$eval('button[aria-label="Fit to panel"]', (e) => e.getAttribute("aria-pressed"))) === "true", 3000), `Fit fits again (${await zoomNow()})`);
+
+// ---------------------------------------------------------------- the dots
+// Zoomed out as far as it goes, at the graph's corner: 20 px apart would be 6 on screen, so 12.
+// Four steps of ⌘-scroll: one event zooms by ×1.5 at most (VIEW-5).
+{
+  const a = await look(id);
+  for (let i = 0; i < 4; i++) await wheel(a.node.x, a.node.y, 100);
+  await dots();
+  const wrong = dotsAt.filter((d) => {
+    let want = 20 * d.zoom;
+    while (want < 12) want *= 2;
+    return Math.abs(d.w - want) > 0.3 || Math.abs(d.x + d.w / 2) > 0.01 || d.r !== 1;
+  });
+  check(dotsAt.length === 5 && wrong.length === 0, `the dots are the graph's at each zoom (${dotsAt.map((d) => `${d.zoom}: ${d.w.toFixed(1)} px`).join(", ")})${wrong.length ? `; wrong: ${JSON.stringify(wrong)}` : ""}`);
+}
 
 done(errors);
 await browser.close();

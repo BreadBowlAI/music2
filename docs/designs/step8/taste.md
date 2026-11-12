@@ -1070,16 +1070,20 @@ still arriving from the system stops too. With reduced motion there is no glide 
 
 **VIEW-5.** ⌘-scroll (Ctrl-scroll) MUST zoom around the pointer in all four views: the point under
 it stays under it. So MUST a pinch on a Mac, and the Graph's zoom bar's Zoom in, Zoom out and actual
-size, around the view's middle. Fit fits, from the graph's top left.
+size, around the view's middle. Fit fits, from the graph's top left. The Graph's dotted background
+MUST zoom and move with the graph: its dots 20 of the graph's px apart from its top left, doubled
+while that is under 12 on screen, each 1 px in radius at every zoom.
 - *Today:* since track `camera`, in all four views, with a pinch in each: the recognizer (`web/src/camera/recognizer.ts`) sums
   a frame's ⌘-scroll events, or takes a pinch's last scale (Safari's `gesturechange`), and the
   camera's `zoomAround` keeps the point under the pointer, across in the arrangement, Notes and the
   beat grid (their rows don't scale), both ways in the Graph. 100 px of ⌘-scroll zooms ×1.5, as ⌘=
   does in the arrangement. The zoom renders the view once, and the writer scrolls in that render's
-  layout effect, before the frame is drawn. Tested by `graph-zoom` (⌘-scroll in and out and a pinch in and out, each within
-  a pixel and a half of the point, the zoom bar's buttons around the middle, Fit), `pl-zoom` (the
-  arrangement) and `camera` (a pinch and ⌘-scroll in Notes and the beat grid, and the
-  arrangement's pinch).
+  layout effect, before the frame is drawn. The dots: `Dots` in `draw.tsx`, given the Graph's zoom
+  by `NodeGraph.tsx`, in the content the camera scrolls, so a pan carries them too. Tested by
+  `graph-zoom` (⌘-scroll in and out and a pinch in and out, each within a pixel and a half of the
+  point, the zoom bar's buttons around the middle, Fit, the dots at each zoom on the way),
+  `pl-zoom` (the arrangement) and `camera` (a pinch and ⌘-scroll in Notes and the beat grid, and
+  the arrangement's pinch).
 
 **VIEW-6.** The view MUST stop at its edges, on every system (D3). Apple's stretch and spring back
 are a later track, if the owner misses them.
