@@ -1124,7 +1124,9 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
-(DV-13), a lit column (DV-18), Notes' opening and its rows' height. A move the browser makes to a
+(DV-13), a lit column (DV-18), Notes' opening, its rows' height and Fold (the drum in its middle
+stays there). A render that makes the content smaller than where the camera looks stops the camera
+at the new edge, as the browser stops the box, though it may send no `scroll`. A move the browser makes to a
 box itself (Tab bringing a focused bar into view, a key's scroll, a click's, a scrollbar's drag) is
 taken in: on the box's `scroll`, a position more than 1 px from what the camera last wrote is the
 browser's. Follow pauses on any move that isn't the app's own, until play starts again or the

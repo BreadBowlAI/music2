@@ -287,9 +287,28 @@ export class Rig {
   /** After each render of the view: a zoom it drew is written now, in the frame it lands in (VIEW-8). */
   afterRender() {
     this.measure();
-    if (!this.zoomed) return;
-    this.zoomed = false;
-    this.write();
+    if (this.zoomed) {
+      this.zoomed = false;
+      return this.write();
+    }
+    this.clamped();
+  }
+
+  /**
+   * A render that made the content smaller than where the camera looks (Fold, a shorter song): the
+   * browser stopped the box at its new edge, and may send no `scroll` for it. The camera stops there
+   * too, as no one's move.
+   */
+  private clamped() {
+    const box = this.el;
+    if (!box || !this.writer) return;
+    const s = this.cam.getState();
+    const x = Math.min(s.x, Math.max(0, box.scrollWidth - box.clientWidth));
+    const y = Math.min(s.y, Math.max(0, box.scrollHeight - box.clientHeight));
+    if (s.x - x <= 1 && s.y - y <= 1) return;
+    this.writer.settle();
+    this.cam.setState({ x, y });
+    moved_();
   }
 
   private schedule() {

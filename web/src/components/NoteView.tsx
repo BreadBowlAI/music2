@@ -283,6 +283,14 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
 
   /** Its zoom buttons: around the view's middle (VIEW-5). */
   const zoom = (by: number) => camera.zoomAround(ppb * by);
+  /** The pitch in the middle of the roll, kept there as Fold shows or hides the rows around it. */
+  const foldAnchor = useRef<number | null>(null);
+  useLayoutEffect(() => {
+    const el = scroller.current, p = foldAnchor.current;
+    foldAnchor.current = null;
+    const row = p === null ? -1 : rowOf(p);
+    if (el && row >= 0) camera.to(undefined, Math.max(0, (row + 0.5) * rowH - (el.clientHeight - ROLL_RULER_H) / 2));
+  }, [folded]);
   /** The row in the middle of the roll, kept there while rows get taller or shorter. */
   const rowAnchor = useRef<number | null>(null);
   /** ⌘↓ (`dir` 1) and ⌘↑ (-1): rows 2 px taller or shorter, 10 to 24 px (NOTE-9, taste.md NT-5). */
@@ -1191,6 +1199,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                   onClick={() => {
                     // Folding again folds to what the clip uses now.
                     if (!folded) setFoldFrom(usedRows(names, server.notes));
+                    // The drum in the roll's middle stays there, the rows above it come or go (VIEW-9).
+                    const el = scroller.current;
+                    if (el) foldAnchor.current = pitchOfRow(Math.floor((camera.now().y + (el.clientHeight - ROLL_RULER_H) / 2) / rowH));
                     setRoll({ fold: !folded });
                   }}
                   title={folded ? "Fold: on. Only the drums this clip uses show; click to show every row" : "Fold: off. Every row shows; click to show only the drums this clip uses"}
