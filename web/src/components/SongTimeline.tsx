@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
   barAt,
@@ -65,7 +65,7 @@ import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { ARRANGEMENT, followNow, keepZoom, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { onCamera, useCamera, useCameraState, type CameraState } from "../camera";
+import { onCamera, useCamera, useCameraState, useCull, useNear, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -2055,6 +2055,8 @@ const Ruler = memo(function Ruler({
   // A change undone or removed elsewhere closes its popover.
   const open = mark && marks.some((c) => c.beat === mark.beat) ? mark : null;
   const ruled = bars(timeline.meter, width / ppb);
+  // Its bar numbers only near the view (VIEW-12): the window moves in steps, so it redraws at a step.
+  const cull = useCull(ARRANGEMENT, "x").x;
   // Where the tempo or the time signature changes: both at one beat share a mark, which opens them.
   const chip = (c: (typeof marks)[number]) => (
     <span
@@ -2157,7 +2159,7 @@ const Ruler = memo(function Ruler({
         const w = b.length * ppb;
         const every = w >= 40 ? 1 : w >= 20 ? 2 : w >= 10 ? 4 : 8;
         // None under the ruler's tools at its very end, where no scroll can bring it out.
-        const numbered = b.bar % every === 0 && b.start * ppb + 6 < width - TOOLS_W - 16;
+        const numbered = b.bar % every === 0 && b.start * ppb + 6 < width - TOOLS_W - 16 && within(cull, b.start, b.start + b.length);
         const change = marks.find((c) => Math.abs(c.beat - b.start) < 1e-6);
         return numbered || change ? (
           <div key={b.bar} className="absolute top-[17px] flex items-center gap-1.5 pointer-events-none" style={{ left: b.start * ppb + 6 }}>
@@ -2416,6 +2418,11 @@ const TrackRows = memo(function TrackRows({
   useRenderCount("arrangement.rows");
   const module = track.module;
   const ppb = useZoom();
+  // Only what is near the view is drawn (VIEW-12): the clips in the window across, which moves in
+  // steps; and none at all while the track is more than a view above or below, its rows kept.
+  const cull = useCull(ARRANGEMENT, "x").x;
+  const self = useRef<HTMLDivElement>(null);
+  const near = useNear(ARRANGEMENT, self);
   const selected = useShell((s) => s.selected === module);
   // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
   const glows = useGlows("tracks", module);
@@ -2518,12 +2525,13 @@ const TrackRows = memo(function TrackRows({
             <BusWords module={module} />
           </div>
         )}
-        {lane && (
+        {lane && (near || drag) && (
           <div className={clsx("absolute inset-0", waiting ? "opacity-50 grayscale" : heard !== "heard" && "opacity-40 grayscale-60")}>
             <Hatched.Provider value={heard === "muted-in-song"}>
               <LaneClips
                 module={module}
                 lane={lane}
+                cull={cull}
                 height={opts.height}
                 color={color}
                 shown={at(shown, lane)}
@@ -2556,7 +2564,9 @@ const TrackRows = memo(function TrackRows({
   const movable = track.track && !last;
   return (
     <div
+      ref={self}
       data-track={module}
+      data-near={near || undefined}
       data-bus={track.bus || undefined}
       data-selected={selected || undefined}
       className={clsx("group relative", !last && "border-b border-line", dy !== null && "z-30 shadow-lift")}
@@ -2866,6 +2876,7 @@ const involves = (d: Drag, module: string) => d.to?.module === module || d.clips
 function LaneClips({
   module,
   lane,
+  cull,
   height,
   color,
   shown,
@@ -2877,6 +2888,8 @@ function LaneClips({
 }: {
   module: string;
   lane: TimelineLane;
+  /** The beats drawn: the window near the view (VIEW-12). */
+  cull: Window;
   /** Its row's height. */
   height: number;
   color: TrackColor;
@@ -2907,16 +2920,17 @@ function LaneClips({
 
   // What a clip of this lane's kind draws inside it.
   // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
-  const scale = lane.kind === "control" ? laneScale(lane) : null;
+  // Kept while the lane is: a clip's drawing is kept by its clip (VIEW-12).
+  const scale = useMemo(() => (lane.kind === "control" ? laneScale(lane) : null), [lane]);
   const level = (v: number) => scale?.level(v) ?? 0;
   const steps = (c: AnyClip): c is StepClip => lane.kind === "steps" && "points" in c;
   const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1, wave?: WaveEdit) =>
     "notes" in c ? (
-      <Notes notes={audible(c)} length={c.length} color={tone} />
+      <Notes notes={audibleOf(c)} length={c.length} color={tone} />
     ) : steps(c) ? (
       <Steps clip={c} options={lane.kind === "steps" ? lane.options : []} color={tone} picked={pickedPoint} />
     ) : "points" in c ? (
-      <Curve clip={c} level={level} path={scale?.path ?? line} color={tone} picked={pickedPoint} />
+      <Curve clip={c} scale={scale} color={tone} picked={pickedPoint} />
     ) : (
       <Wave clip={c} color={tone} edit={wave} />
     );
@@ -2931,10 +2945,13 @@ function LaneClips({
   // The lane's own clips: one being moved away (not copied) isn't drawn here; one moved along this
   // lane, or resized, is drawn where it goes.
   const own = lane.clips.map((c: AnyClip, i) => {
+    if (!drag && !within(cull, c.start, c.start + c.length)) return null;
     const ref = clipRef(module, lane.key, lane.clips, i);
     // Drawn from the clip as the drag found it, so the timeline showing the edit before the drag
     // is cleared draws it in the same place, not moved twice.
     const d = drag?.clips.find((x) => sameClip(x.ref, ref));
+    // Far from the view, not drawn (VIEW-12); a dragged one always, as it holds the pointer.
+    if (!d && !within(cull, c.start, c.start + c.length)) return null;
     let drawn: AnyClip = c;
     let hidden = false;
     if (editing && "points" in c && !steps(c) && sameClip(editing.clip, ref)) drawn = { ...c, points: editing.points };
@@ -3115,9 +3132,16 @@ function Body({ length, curve, children }: { length: number; curve?: boolean; ch
   );
 }
 
-/** A mini piano roll of a clip's audible notes, over their own pitch range. */
-export function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
-  const ppb = useZoom();
+/** A clip's audible notes, the same array while the clip is the same: its drawing is kept by it. */
+const audibles = new WeakMap<NoteClip, NoteClip["notes"]>();
+const audibleOf = (c: NoteClip) => audibles.get(c) ?? audibles.set(c, audible(c)).get(c)!;
+
+/**
+ * A mini piano roll of a clip's audible notes, over their own pitch range. Drawn in beats, the zoom
+ * never read: a zoom changes only its clip's box, and it is kept by its notes (VIEW-12).
+ */
+export const Notes = memo(function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
+  useRenderCount("arrangement.drawings");
   if (notes.length === 0) return null;
   const lo = Math.min(...notes.map((n) => n.pitch));
   const hi = Math.max(...notes.map((n) => n.pitch));
@@ -3125,41 +3149,52 @@ export function Notes({ notes, length, color }: { notes: NoteClip["notes"]; leng
   // Few pitches stay thin and centered rather than filling the clip.
   const h = Math.min(100 / rows, 16);
   const top = (100 - rows * h) / 2;
+  // By loudness: each group at its opacity once, so a note and its mark never darken each other.
+  const loud = new Map<number, NoteClip["notes"]>();
+  for (const n of notes) {
+    const o = Math.round((0.35 + 0.65 * n.velocity) * 100) / 100;
+    (loud.get(o) ?? loud.set(o, []).get(o)!).push(n);
+  }
   return (
     <Body length={length}>
-      {notes.map((n, i) => (
-        <rect
-          key={i}
-          x={n.start}
-          width={Math.max(n.length, 2 / ppb)}
-          y={top + (hi - n.pitch) * h + h * 0.1}
-          height={h * 0.8}
-          fill={color.ink}
-          fillOpacity={0.35 + 0.65 * n.velocity}
-        />
+      {[...loud].map(([o, group]) => (
+        <g key={o} opacity={o} fill={color.ink} stroke={color.ink}>
+          {group.map((n, i) => {
+            const y = top + (hi - n.pitch) * h + h * 0.1;
+            const mid = n.start + n.length / 2;
+            return (
+              <Fragment key={i}>
+                <rect x={n.start} width={n.length} y={y} height={h * 0.8} stroke="none" />
+                {/* At least 2 px wide at any zoom: a mark the drawing's stretch doesn't scale. */}
+                <line x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} vectorEffect="non-scaling-stroke" />
+              </Fragment>
+            );
+          })}
+        </g>
       ))}
     </Body>
   );
-}
+});
 
 /**
  * The automation curve, its points marked; values hold before the first point and after the last.
  * The point `picked` is `fg-strong` in a 2px white ring (taste.md §2.8).
  */
-function Curve({
+const Curve = memo(function Curve({
   clip,
-  level,
-  path,
+  scale,
   color,
   picked,
 }: {
   clip: ControlClip;
-  level: (v: number) => number;
-  /** The line through the points, as the lane's scale draws it (D3). */
-  path: LaneScale["path"];
+  /** The lane's scale: where a value is up the clip, and the line through the points as it draws it (D3). */
+  scale: LaneScale | null;
   color: TrackColor;
   picked: number;
 }) {
+  useRenderCount("arrangement.drawings");
+  const level = (v: number) => scale?.level(v) ?? 0;
+  const path = scale?.path ?? line;
   const { points } = clip;
   if (points.length === 0) return <Body length={clip.length} curve>{null}</Body>;
   const drawn = path(points, clip.length);
@@ -3184,14 +3219,15 @@ function Curve({
       </div>
     </>
   );
-}
+});
 
 /**
  * A clip of a lane of names (CARD-23): each point's name held until the next, the first from the
  * clip's start, each step marked at its start. A name the choice no longer has shows struck through
  * (it plays the fallback there, `lane.unknown-option`).
  */
-function Steps({ clip, options, color, picked }: { clip: StepClip; options: { value: string | boolean; label: string }[]; color: TrackColor; picked: number }) {
+const Steps = memo(function Steps({ clip, options, color, picked }: { clip: StepClip; options: { value: string | boolean; label: string }[]; color: TrackColor; picked: number }) {
+  useRenderCount("arrangement.drawings");
   const { points, length } = clip;
   return (
     <div className="absolute left-0 w-full" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
@@ -3220,7 +3256,7 @@ function Steps({ clip, options, color, picked }: { clip: StepClip; options: { va
       })}
     </div>
   );
-}
+});
 
 /** A lane of names' fallback where no clip is (CARD-23): its name, faint, at the start of each gap. */
 function NamesFallback({ clips, name }: { clips: StepClip[]; name: string }) {
