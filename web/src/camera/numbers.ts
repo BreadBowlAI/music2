@@ -4,9 +4,14 @@
 /** G: wheel events less than this many ms apart are one swipe (VIEW-2). */
 export const SWIPE_GAP = 50;
 
-/** Rails (VIEW-3): a swipe whose first `RAIL_AFTER` px lie within `RAIL_ANGLE` degrees of an axis keeps to it. */
-export const RAIL_ANGLE = 20;
+/**
+ * Rails (VIEW-3), as Chromium's touch scrolling has them: a swipe whose first `RAIL_AFTER` px lie
+ * within `RAIL_ANGLE` degrees of an axis starts on that axis's rail, and breaks free of it, for the
+ * rest of the swipe, once it has gone `RAIL_BREAK` px off it. A view may have none (the Graph).
+ */
+export const RAIL_ANGLE = 10;
 export const RAIL_AFTER = 8;
+export const RAIL_BREAK = 24;
 
 /**
  * The glide after a flick (VIEW-4): the system's on a Mac, which reaches the page as more wheel

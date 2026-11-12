@@ -17,6 +17,8 @@ export interface Fixed {
   origin?: { x?: number; y?: number };
   /** Which ways the zoom stretches its content: across only, by default. */
   stretch?: { x: boolean; y: boolean };
+  /** Whether a nearly straight swipe keeps to its rail (VIEW-3): yes, but a canvas pans freely. */
+  rails?: boolean;
   /** Its zooms: from `min` to `max`; `round` keeps one as the view keeps it. */
   zoom?: { min: number; max: number; round?: (z: number) => number };
 }
@@ -85,6 +87,7 @@ export class Rig {
     this.hands = new Recognizer(
       () => this.el,
       () => this.cam.getState().zoom,
+      () => this.fixed.rails !== false,
     );
     this.controls = {
       now: () => ({ ...this.cam.getState() }),

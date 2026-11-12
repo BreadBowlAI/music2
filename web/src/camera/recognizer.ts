@@ -4,11 +4,12 @@
 //   - ⌘ or Ctrl held: a zoom (VIEW-5);
 //   - over a control marked `data-wheel` (a picture's dot): that control's;
 //   - else the camera's: each event cancelled and stopped there, moving the view 1:1, both ways,
-//     a nearly straight swipe on its rail (VIEW-3). One WebKit marks not cancelable is the web
-//     view's: the view's box moves by it and the camera takes that in.
+//     a nearly straight swipe on its rail until it goes far enough off it (VIEW-3), where the view
+//     has rails. One WebKit marks not cancelable is the web view's: the view's box moves by it and
+//     the camera takes that in.
 // Where the platform gives the page no glide, the camera glides itself (VIEW-4).
 
-import { GLIDE_FROM, GLIDE_RATE, GLIDE_STOP, LINE, RAIL_AFTER, RAIL_ANGLE, SWIPE_GAP, ZOOM_STEP, ZOOM_WHEEL } from "./numbers";
+import { GLIDE_FROM, GLIDE_RATE, GLIDE_STOP, LINE, RAIL_AFTER, RAIL_ANGLE, RAIL_BREAK, SWIPE_GAP, ZOOM_STEP, ZOOM_WHEEL } from "./numbers";
 import { ownGlide, pointerHeld, swipesPaused } from "./state";
 
 /** What a frame's events ask of the camera. */
@@ -44,7 +45,7 @@ export class Recognizer {
   private dropping = false;
   /** The rail: decided once the swipe has gone `RAIL_AFTER` px; null until then. */
   private rail: "x" | "y" | "free" | null = null;
-  /** How far the swipe went each way before its rail was decided, and what was held back off the way it mostly went. */
+  /** How far the swipe has gone each way (its whole length), and what was held back off the way it mostly went before its rail was decided. */
   private went = { x: 0, y: 0 };
   private heldBack = { x: 0, y: 0 };
   /** The swipe's recent events, as moved: the glide starts at their speed. */
@@ -66,6 +67,8 @@ export class Recognizer {
     private readonly box: () => HTMLElement | null,
     /** The camera's zoom now. */
     private readonly zoomNow: () => number,
+    /** Whether the view has rails: a canvas (the Graph) pans freely, as Figma, Freeform and tldraw do. */
+    private readonly rails: () => boolean = () => true,
   ) {}
 
   /** Whether frames are still wanted: events to sum, a glide to run, or one to start. */
@@ -148,9 +151,13 @@ export class Recognizer {
 
   /** One event's move, put on the swipe's rail (VIEW-3). */
   private take(t: number, dx: number, dy: number) {
+    this.went.x += Math.abs(dx);
+    this.went.y += Math.abs(dy);
+    if (!this.rails()) this.rail = "free";
+    // Gone far enough off its rail since it began: free from here, for the rest of the swipe. What
+    // was held back off the rail stays back.
+    else if ((this.rail === "x" && this.went.y > RAIL_BREAK) || (this.rail === "y" && this.went.x > RAIL_BREAK)) this.rail = "free";
     if (this.rail === null) {
-      this.went.x += Math.abs(dx);
-      this.went.y += Math.abs(dy);
       const way = this.went.x >= this.went.y ? "x" : "y";
       if (Math.hypot(this.went.x, this.went.y) >= RAIL_AFTER) {
         const angle = (Math.atan2(this.went.y, this.went.x) * 180) / Math.PI;

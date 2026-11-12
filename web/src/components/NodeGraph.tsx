@@ -169,6 +169,8 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   const camera = useCamera(name, scroller, {
     origin: { x: GRAPH_IN, y: GRAPH_IN },
     stretch: { x: true, y: true },
+    // A canvas pans freely, as Figma, Freeform and tldraw do (VIEW-3): no rails.
+    rails: false,
     zoom: { min: 0.3, max: 2 },
     start: () => FIT,
     keep: true,

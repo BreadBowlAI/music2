@@ -1047,14 +1047,21 @@ page) is the web view's: the camera doesn't move by it, and takes the box's move
   no file and moving no view).
 
 **VIEW-3.** The camera MUST move 1:1 with the fingers, both ways at once, the events of a frame
-summed and written once in it. A swipe whose first 8 px lie within 20° of an axis keeps to that
-axis to its end (rails), so scrolling down the tracks doesn't drift sideways; one further from an
-axis moves both ways. ⇧ + wheel is never turned by the camera: the Mac and WebKitGTK turn it
+summed and written once in it. In the arrangement, Notes and the beat grid, a swipe whose first
+8 px lie within 10° of an axis starts on that axis's rail, so scrolling down the tracks doesn't
+drift sideways; the rail breaks, for the rest of the swipe, once it has gone 24 px off it, and the
+swipe moves both ways from there (what was held back off the rail is not moved). A swipe further
+from an axis moves both ways from its start. The Graph has no rails: a canvas pans freely, as
+Figma, Freeform and tldraw do. ⇧ + wheel is never turned by the camera: the Mac and WebKitGTK turn it
 already. Chrome's lines and pages, which only the suites send, are 33 px and the view's height.
 - *Why:* the Mac's own scroll views move with the fingers and VS Code keeps a nearly straight
-  swipe on its line (the note's §2, D6).
-- *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts`. Tested by
-  `camera` (a diagonal swipe 1:1 both ways in each view; 10° off straight on its rail; 45° free).
+  swipe on its line (the note's §2, D6); rails that never break made a swipe that turned diagonal
+  feel stuck, so they break as Chromium's touch scrolling's do (the owner, 2026-11-12, the note's
+  §16).
+- *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts` (`RAIL_ANGLE`,
+  `RAIL_AFTER`, `RAIL_BREAK`), `rails: false` for the Graph's cameras. Tested by `camera` (a
+  diagonal swipe 1:1 both ways in each view; 5° off straight on its rail; 45° and 30° free; straight
+  then turning 45° free once 24 px off its rail; the Graph 5° off moving 5° off).
 
 **VIEW-4.** The glide after a flick MUST be the system's on a Mac: the camera moves by its wheel
 events like any other. Where the page gets none (WebKitGTK, on Linux), the camera glides itself:
