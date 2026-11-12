@@ -349,6 +349,49 @@ const graphCam = async () => {
   check(turned && s3.x === s2.x && s3.y === s2.y, `one that starts on the dot is the dot's: it writes its value, and the Graph stays (${json({ turned, s2, s3 })})`);
 }
 
+// An agent's pointer at the Delay's knob follows it each frame as the nodes move aside (DV-13,
+// 280 ms) when the Pluck before it expands: no view moves then, the nodes ease.
+{
+  // Fit: 100%, from the top left, the Delay's knobs in view.
+  await page.click('button[aria-label="Fit to panel"]');
+  await frames();
+  const st = await state();
+  const keys = st.view.modules.find((m) => m.key === "keys");
+  const delay = keys.nodes.find((n) => n.kind === "call" && /delay/i.test(n.component ?? n.label ?? ""));
+  const pluck = keys.nodes.find((n) => n.kind === "call" && n.audio);
+  const knob = delay?.knobs?.[0]?.id;
+  await (await fetch(`${sess.url}/api/point`, { method: "POST", headers: { "x-m2-token": sess.token, "content-type": "application/json" }, body: json({ session: st.session, target: `knob:${knob}`, words: "this one" }) })).text();
+  const marked = await until(() => has("[data-testid=pointer-mark]"), 3000);
+  await sleep(300);
+  // Each frame, after it is drawn: the ring's box against the knob's (or its +N's), from before the
+  // click to well after the nodes have moved.
+  await page.evaluate((knob) => {
+    window.__off = [];
+    window.__sampling = true;
+    const one = () =>
+      setTimeout(() => {
+        const mark = document.querySelector("[data-testid=pointer-mark]")?.getBoundingClientRect();
+        const target = (document.querySelector(`[data-knob-id="${CSS.escape(knob)}"]`) ?? document.querySelector(`[data-hides~="${CSS.escape(knob)}"]`))?.getBoundingClientRect();
+        if (mark && target) window.__off.push({ x: Math.round(mark.left - target.left), y: Math.round(mark.top - target.top), at: target.left });
+        if (window.__sampling) requestAnimationFrame(one);
+      }, 0);
+    requestAnimationFrame(one);
+  }, knob);
+  await until(() => page.evaluate(() => window.__off.length >= 2), 3000);
+  await page.click(`${graph} [data-expand="${pluck.id}"]`);
+  await sleep(700);
+  const off = await page.evaluate(() => {
+    window.__sampling = false;
+    return window.__off;
+  });
+  const moved = off.length ? Math.abs(off.at(-1).at - off[0].at) : 0;
+  const worst = Math.max(0, ...off.map((o) => Math.max(Math.abs(o.x), Math.abs(o.y))));
+  check(!!knob && marked && moved > 20 && worst <= 1, `an agent's pointer at a knob follows it each frame while the nodes move aside: the knob moved ${Math.round(moved)} px, the ring at most ${worst} px off it over ${off.length} frames (${marked ? "ringed" : "no ring"})`);
+  await page.click("[data-testid=pointer-ok]").catch(() => {});
+  await page.click(`${graph} [data-expand="${pluck.id}"]`).catch(() => {});
+  await sleep(500);
+}
+
 // ================================================================ the beat grid: a kit, as a musician makes one
 
 await show("hats");
