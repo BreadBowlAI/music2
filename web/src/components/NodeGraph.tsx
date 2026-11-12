@@ -71,7 +71,7 @@ import { mod, opt } from "../lib/native";
 import { useGlows, useNotice } from "../lib/notice";
 import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, ROW_H, VALUE_H, gridRows, segHeight, shapeOf, type Column, type HeadRoom, type Shape, type Value } from "../lib/nodes";
 import { trackColors } from "../lib/palette";
-import { useShell } from "../lib/shell";
+import { canvas, useShell } from "../lib/shell";
 import { useRenderCount } from "../lib/frames";
 import { useStore } from "../lib/store";
 import { Bar } from "./Bar";
@@ -198,6 +198,19 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
   // WebKit, the desktop app's web view, as gesture events).
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
+  const fittedRef = useRef(true);
+  fittedRef.current = zooms[module] == null;
+  const moduleRef = useRef(module);
+  moduleRef.current = module;
+  // The zoom, read and set from outside as the zoom bar does: the swipe probe makes room (VIEW-10).
+  useEffect(() => {
+    canvas.graphZoom = (to) => {
+      const now = { zoom: zoomRef.current, fitted: fittedRef.current, module: moduleRef.current };
+      if (to !== undefined) setZoom(to);
+      return now;
+    };
+    return () => void delete canvas.graphZoom;
+  }, [setZoom]);
   useEffect(() => {
     const el = scroller.current;
     if (!el) return;
