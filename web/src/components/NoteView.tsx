@@ -1,6 +1,7 @@
 import clsx from "clsx";
 import { Check, ChevronDown, FoldVertical, Lock, Minus, MousePointer2, Pencil, Plus, UnfoldVertical, ZoomIn, ZoomOut } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { movingNow, onCamera, useCamera, useCameraState, useCull, useZoomOf, within } from "../camera";
 import {
   barAt,
   bars as barList,
@@ -56,6 +57,9 @@ const ROW_MAX = 24;
 /** How much ⌘↓ and ⌘↑ change a row's height, in px. */
 const ROW_STEP = 2;
 const VEL_H = 64;
+/** Notes' camera (taste.md VIEW-1). */
+const NOTES = "notes";
+
 /** The velocity strip's bars stop this far from its edges. */
 const VEL_PAD = 8;
 /** The highest pitch, at the top; the lowest is 0. */
@@ -164,8 +168,6 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useEffect(() => void loadTheory(), []);
   /** Where the pointer is over the grid, for a stamp's outline: null when it isn't, or no chord is picked. */
   const [hover, setHover] = useState<{ beat: number; pitch: number; off: boolean } | null>(null);
-  const [ppb, setPpb] = useState(48);
-  const [visible, setVisible] = useState(0);
   const [marquee, setMarquee] = useState<Box | null>(null);
   /** The right-click menu (D1), where it opened. */
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
@@ -175,6 +177,20 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const scroller = useRef<HTMLDivElement>(null);
   const grid = useRef<HTMLDivElement>(null);
   const strip = useRef<HTMLDivElement>(null);
+  // Notes' camera (taste.md VIEW-1): the keys at its left and the ruler at its top stay as it moves;
+  // the zoom (px a beat) stretches time across.
+  const camera = useCamera(NOTES, scroller, {
+    margins: { left: keysW, top: ROLL_RULER_H },
+    origin: { x: keysW, y: ROLL_RULER_H },
+    zoom: { min: 8, max: 400 },
+    start: () => 48,
+  });
+  const ppb = useZoomOf(NOTES);
+  const visible = Math.max(0, useCameraState(NOTES, (s) => s.view.w) - keysW);
+  // Only the notes near the view are drawn (VIEW-12): the window across in beats, down in px of rows.
+  const cull = useCull(NOTES);
+  // The velocity strip under the roll scrolls with it, written as the camera moves: nothing renders.
+  useEffect(() => onCamera(NOTES, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), []);
   const gesture = useRef<Gesture | null>(null);
   /** The notes a pointer holds down on the grid, sounding (audition): their handles, null where nothing sounds. A chord stamp holds several. */
   const hold = useRef<{ pointer: number; h: (number | null)[] } | null>(null);
@@ -204,8 +220,6 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         ? blocked!
         : "Notes live in the code's lanes: they can be edited again once the code compiles";
   const seen = useRef(server?.notes.length);
-  /** The beat to keep under the pointer while zooming. */
-  const anchor = useRef<{ beat: number; x: number } | null>(null);
 
   const clip: Shape | null = draft ?? (server ? { length: server.length, notes: server.notes } : null);
   const start = server?.start ?? 0;
@@ -254,48 +268,21 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useLayoutEffect(() => {
     const el = scroller.current;
     if (!el || !server) return;
-    setPpb(clamp(Math.floor((el.clientWidth - keysWRef.current - 32) / server.length), 12, 160));
+    const fitted = clamp(Math.floor((el.clientWidth - keysWRef.current - 32) / server.length), 12, 160);
     // Centred on the clip's pitches, so its whole range shows when it fits (a row to spare at
     // 14px rows for an octave in the 300px dock), and on whole rows: no key cut under the ruler.
     // Folded, its few rows start at the top.
     const pitches = server.notes.map((n) => n.pitch);
     const mid = pitches.length ? (Math.min(...pitches) + Math.max(...pitches)) / 2 : 60;
     const centred = ROLL_RULER_H + (TOP - mid) * rowH + rowH / 2 - (ROLL_RULER_H + el.clientHeight) / 2;
-    el.scrollTop = rows ? 0 : Math.round(centred / rowH) * rowH;
+    // Through the camera (VIEW-9): at the clip's start, its zoom fitted.
+    camera.to(0, rows ? 0 : Math.round(centred / rowH) * rowH, fitted);
     root.current?.focus({ preventScroll: true });
     // Only on opening: later edits keep the view where the user put it.
   }, []);
 
-  useEffect(() => {
-    const el = scroller.current!;
-    const observer = new ResizeObserver(() => setVisible(el.clientWidth - keysWRef.current));
-    observer.observe(el);
-    // ⌘/Ctrl + wheel zooms time around the pointer; plain wheels scroll.
-    const wheel = (e: WheelEvent) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
-      e.preventDefault();
-      const x = e.clientX - el.getBoundingClientRect().left - keysWRef.current;
-      setPpb((p) => {
-        anchor.current = { beat: (el.scrollLeft + x) / p, x };
-        return clamp(p * Math.exp(-e.deltaY * 0.004), 8, 400);
-      });
-    };
-    el.addEventListener("wheel", wheel, { passive: false });
-    return () => {
-      observer.disconnect();
-      el.removeEventListener("wheel", wheel);
-    };
-  }, []);
-  useLayoutEffect(() => {
-    const el = scroller.current, a = anchor.current;
-    anchor.current = null;
-    if (el && a) el.scrollLeft = Math.max(0, a.beat * ppb - a.x);
-  }, [ppb]);
-  const zoom = (by: number) => {
-    const el = scroller.current;
-    if (el) anchor.current = { beat: (el.scrollLeft + el.clientWidth / 2 - keysW) / ppb, x: el.clientWidth / 2 - keysW };
-    setPpb((p) => clamp(p * by, 8, 400));
-  };
+  /** Its zoom buttons: around the view's middle (VIEW-5). */
+  const zoom = (by: number) => camera.zoomAround(ppb * by);
   /** The row in the middle of the roll, kept there while rows get taller or shorter. */
   const rowAnchor = useRef<number | null>(null);
   /** ⌘↓ (`dir` 1) and ⌘↑ (-1): rows 2 px taller or shorter, 10 to 24 px (NOTE-9, taste.md NT-5). */
@@ -309,7 +296,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   useLayoutEffect(() => {
     const el = scroller.current, r = rowAnchor.current;
     rowAnchor.current = null;
-    if (el && r !== null) el.scrollTop = Math.max(0, r * rowH - (el.clientHeight - ROLL_RULER_H) / 2);
+    // Through the camera (VIEW-9), once the rows are drawn at their new height.
+    if (el && r !== null) camera.to(undefined, Math.max(0, r * rowH - (el.clientHeight - ROLL_RULER_H) / 2));
   }, [rowH]);
 
   // ---------------------------------------------------------------- writing
@@ -875,6 +863,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     if (!g && stamp && !locked && clip) {
       const p = at(e);
       const h = { beat: p.beat, pitch: p.pitch, off: offGrid(e) };
+      // While the view moves the outline waits (VIEW-8): the page's own mouse move after a scroll draws nothing.
+      if (movingNow()) return;
       if (!(e.target as HTMLElement).closest("[data-note]")) setHover(h);
       else setHover(null);
     }
@@ -1238,8 +1228,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           ref={scroller}
           data-testid="roll-scroller"
           data-view-box="notes"
-          className="absolute inset-0 overflow-auto"
-          onScroll={(e) => strip.current && (strip.current.style.transform = `translateX(${-e.currentTarget.scrollLeft}px)`)}
+          className="absolute inset-0 overflow-auto [overflow-anchor:none] overscroll-none"
         >
           <div className="relative" style={{ width: keysW + width, height: ROLL_RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
@@ -1291,6 +1280,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                 {clip.notes.map((n, i) => {
                   const row = rowOf(n.pitch);
                   if (row < 0) return null;
+                  // Far from the view, not drawn (VIEW-12); a selected note always, as a gesture may hold it.
+                  if (!shown.has(i) && !(within(cull.x, n.start, n.start + n.length) && within(cull.y, row * rowH, (row + 1) * rowH))) return null;
                   const w = Math.max(n.length * ppb - 1, 4);
                   const outside = n.start >= clip.length;
                   const on = shown.has(i);
@@ -1405,7 +1396,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           <div
             ref={strip}
             className="absolute inset-y-0 left-0 touch-none"
-            style={{ width, transform: `translateX(${-(scroller.current?.scrollLeft ?? 0)}px)` }}
+            style={{ width, transform: `translateX(${-Math.round(camera.now().x)}px)` }}
             onPointerDown={onStripDown}
             onPointerMove={onStripMove}
             onPointerUp={(e) => onStripUp(e)}
@@ -1418,6 +1409,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
             {/* Selected notes' bars on top, so a chord's can be picked out. */}
             {clip.notes
               .map((n, i) => ({ n, i }))
+              .filter(({ n, i }) => shown.has(i) || within(cull.x, n.start, n.start + n.length))
               .sort((a, b) => Number(shown.has(a.i)) - Number(shown.has(b.i)))
               .map(({ n, i }) => {
                 const h = (VEL_H - 2 * VEL_PAD) * clamp(n.velocity, 0, 1);
