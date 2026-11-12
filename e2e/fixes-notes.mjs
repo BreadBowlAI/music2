@@ -2,7 +2,7 @@
 // name the revision their notes came from, the roll is read only while the code is broken and a
 // refused edit leaves nothing stale selected, and Enter in a field doesn't jump playback.
 //   node fixes-notes.mjs <root> <home> <project>
-import { ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { ROOT, check, done, open, read, rollNotes, sleep, until, write } from "./fixlib.mjs";
 
 const { browser, page, errors, posts, api, state, toasts, key, box, drag } = await open();
 // The roll's rows and its ruler (taste.md §3.5: 14px rows, the arrangement's 28px ruler).
@@ -89,7 +89,7 @@ await page.screenshot({ path: `${ROOT}/fix-roll-follow.png` });
 
 c = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(c.x + 60, c.y + c.height / 2, { count: 2 });
-check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 48), "the first clip opens with its 48 notes");
+check(await until(async () => (await rollNotes(page)) === 48), "the first clip opens with its 48 notes");
 const first = await page.$('[data-testid=notes] [data-note="0"]');
 await first.evaluate((e) => e.scrollIntoView({ block: "center", inline: "center" }));
 const n = await first.boundingBox();

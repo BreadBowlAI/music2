@@ -8,7 +8,7 @@
 //
 //   node e2e/pl-notes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
-import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { PROJ, ROOT, check, done, open, read, rollNotes, sleep, until, write } from "./fixlib.mjs";
 import { lint as lintIn } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, caughtUp, box, key, status } = await open(1440, 900);
@@ -104,7 +104,7 @@ async function oneStep(rev) {
 // Open Bass's notes clip in Notes.
 const clip = await box('[data-lane="bass.notes"] :nth-child(1 of [data-clip])');
 await page.mouse.click(clip.x + 60, clip.y + clip.height / 2, { count: 2 });
-check(await until(async () => (await page.$$("[data-testid=notes] [data-note]")).length === 48), "double-clicking Bass's notes clip opens it in Notes, 48 notes");
+check(await until(async () => (await rollNotes(page)) === 48), "double-clicking Bass's notes clip opens it in Notes, 48 notes");
 const original = read(FILE);
 const gridTitle = await page.$eval("[data-testid=roll-grid]", (e) => e.title);
 check(gridTitle.includes("right-click for note tools"), `the grid's tooltip says right-click for note tools: ${gridTitle.slice(-60)}`);
