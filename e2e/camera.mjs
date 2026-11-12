@@ -583,7 +583,7 @@ const beatAt = async (x) =>
   const counted = await page.evaluate(() => "pointer.note" in (window.m2canvas?.frames?.().total ?? {}));
   check(
     !!id && !!mark && !!clip && counted && !r["pointer.note"] && near(mark.x, clip.x, 1) && near(mark.width, clip.width, 1),
-    `with an agent's pointer at a clip, 120 events of a swipe render its note 0 times (${r["pointer.note"] ?? "uncounted"}), and its mark still sits on the clip: ${json({ said: !!said, mark, clip })}`,
+    `with an agent's pointer at a clip, 120 events of a swipe render its note 0 times (${counted ? (r["pointer.note"] ?? 0) : "uncounted"}), and its mark still sits on the clip: ${json({ said: !!said, mark, clip })}`,
   );
   await page.click("[data-testid=pointer-ok]").catch(() => {});
 }
@@ -597,10 +597,16 @@ const post = (p, body) => api(p, { method: "POST", body: json(body) });
   await post("/seek", { beat: 8 });
   await key("Space");
   await until(async () => (await status()).playing);
+  // A seek to `beat`, and Follow's page to it: the playhead past it, in the view's left half.
+  // (Any page is no proof: playing again pages to where the playhead stopped first.)
   const pages = async (beat) => {
-    const s0 = (await scroll(tl)).x;
     await post("/seek", { beat });
-    return until(async () => Math.abs((await scroll(tl)).x - s0) > 300, 2500);
+    return until(async () => {
+      const c = await arr();
+      const b = (await status()).beat;
+      const at = b * c.zoom - c.x;
+      return b >= beat && at > 0 && at < (c.view.w - c.margins.left) / 2;
+    }, 2500);
   };
   check(await pages(40), `playing at 192 px a beat, Follow pages to the playhead (${(await scroll(tl)).x})`);
   const at = await lanes();
