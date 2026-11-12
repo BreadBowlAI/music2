@@ -151,13 +151,13 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   // The beat grid's camera (taste.md VIEW-1): the names at its left and the ruler at its top stay as
   // it moves; the zoom (px a beat) stretches time across.
   const camera = useCamera(BEAT, scroller, { margins: { left: NAMES_W, top: ROLL_RULER_H }, origin: { x: NAMES_W, y: ROLL_RULER_H }, zoom: { min: 16, max: 400 }, start: () => 88 });
-  const ppb = useZoomOf(BEAT);
-  const visible = Math.max(0, useCameraState(BEAT, (s) => s.view.w) - NAMES_W);
+  const ppb = useZoomOf(camera);
+  const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - NAMES_W);
   // Only the steps near what shows are drawn (KIT-10, VIEW-12): a bar's room (4 beats) each side,
   // the window moving when that falls under 2 beats.
-  const cull = useCull(BEAT, "x", { x: { margin: 4, step: 2 } }).x;
+  const cull = useCull(camera, "x", { x: { margin: 4, step: 2 } }).x;
   // The velocity strip under the grid scrolls with it, written as the camera moves: nothing renders.
-  useEffect(() => onCamera(BEAT, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), []);
+  useEffect(() => onCamera(camera, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), [camera]);
   // What gestures asked, shown until the song shows it; and a drag along a row, or of a velocity, under
   // way (in refs, as pointer events come faster than renders; `redraw` shows them).
   const [asked, setAsked] = useState<Asked[]>([]);

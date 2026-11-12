@@ -5,8 +5,7 @@
 // of the whole arrangement anew each frame, 56 ms of a zoom frame on the big song.)
 
 import { useLayoutEffect, type RefObject } from "react";
-import type { StoreApi } from "zustand";
-import { cameraOf, type CameraState } from "./store";
+import { useCameraOf, type CameraRef, type CameraStore } from "./store";
 
 interface Span {
   el: HTMLElement;
@@ -15,26 +14,43 @@ interface Span {
   to: number | null;
   inset: number;
   min: number;
+  /** The shortest thing drawn in it, in the content's units: under `FINE` px at a zoom, the box is marked `data-fine`. */
+  fine: number | null;
 }
 
+/** Under this many px, what a box draws is too thin to see unless marked (VIEW-12). */
+export const FINE = 2;
+
 /** Each camera's boxes, and how to stop hearing its zoom. */
-const placed = new Map<StoreApi<CameraState>, { spans: Set<Span>; off: () => void }>();
+const placed = new Map<CameraStore, { spans: Set<Span>; off: () => void }>();
 
 function place(s: Span, zoom: number) {
   s.el.style.left = `${s.from * zoom + s.inset}px`;
   if (s.to !== null) s.el.style.width = `${Math.max((s.to - s.from) * zoom - 2 * s.inset, s.min)}px`;
+  if (s.fine === null) return;
+  const fine = s.fine * zoom < FINE;
+  if (fine !== s.el.hasAttribute("data-fine")) s.el.toggleAttribute("data-fine", fine);
 }
 
 /**
- * Place the element `ref` from `from` to `to` (the content's units: beats) along the camera `name`'s
+ * Place the element `ref` from `from` to `to` (the content's units: beats) along the camera's
  * stretched way, in px from where its parent starts: `inset` px in at each end, `min` px wide at the
- * least. The element's own style must leave `left` and `width` to this.
+ * least. The element's own style must leave `left` and `width` to this. Given `fine`, the shortest
+ * thing it draws, it is marked `data-fine` while that is under `FINE` px: its drawing can show marks
+ * that keep each thing visible then, and only then (a mini drawing's notes).
  */
-export function useSpan(name: string, ref: RefObject<HTMLElement | null>, from: number, to: number | null, { inset = 0, min = 0 }: { inset?: number; min?: number } = {}) {
+export function useSpan(
+  ref: CameraRef,
+  box: RefObject<HTMLElement | null>,
+  from: number,
+  to: number | null,
+  { inset = 0, min = 0, fine = null }: { inset?: number; min?: number; fine?: number | null } = {},
+) {
+  // The camera at render: a view above lends it (never looked up later, by name, in the effect).
+  const cam = useCameraOf(ref);
   useLayoutEffect(() => {
-    const el = ref.current;
-    if (!el) return;
-    const cam = cameraOf(name);
+    const el = box.current;
+    if (!el || !cam) return;
     let group = placed.get(cam);
     if (!group) {
       const spans = new Set<Span>();
@@ -43,7 +59,7 @@ export function useSpan(name: string, ref: RefObject<HTMLElement | null>, from: 
       });
       placed.set(cam, (group = { spans, off }));
     }
-    const span: Span = { el, from, to, inset, min };
+    const span: Span = { el, from, to, inset, min, fine };
     const g = group;
     g.spans.add(span);
     place(span, cam.getState().zoom);
@@ -53,5 +69,5 @@ export function useSpan(name: string, ref: RefObject<HTMLElement | null>, from: 
       g.off();
       placed.delete(cam);
     };
-  }, [name, from, to, inset, min]);
+  }, [cam, from, to, inset, min, fine]);
 }

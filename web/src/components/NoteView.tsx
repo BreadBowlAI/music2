@@ -185,12 +185,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
     zoom: { min: 8, max: 400 },
     start: () => 48,
   });
-  const ppb = useZoomOf(NOTES);
-  const visible = Math.max(0, useCameraState(NOTES, (s) => s.view.w) - keysW);
+  const ppb = useZoomOf(camera);
+  const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - keysW);
   // Only the notes near the view are drawn (VIEW-12): the window across in beats, down in px of rows.
-  const cull = useCull(NOTES);
+  const cull = useCull(camera);
   // The velocity strip under the roll scrolls with it, written as the camera moves: nothing renders.
-  useEffect(() => onCamera(NOTES, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), []);
+  useEffect(() => onCamera(camera, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), [camera]);
   const gesture = useRef<Gesture | null>(null);
   /** The notes a pointer holds down on the grid, sounding (audition): their handles, null where nothing sounds. A chord stamp holds several. */
   const hold = useRef<{ pointer: number; h: (number | null)[] } | null>(null);

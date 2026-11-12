@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, Fragment, isValidElement, memo, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, Fragment, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
   barAt,
@@ -64,8 +64,8 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
-import { ARRANGEMENT, followNow, keepZoom, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { onCamera, useCamera, useCameraState, useCull, useNear, useSpan, within, type CameraState, type Window } from "../camera";
+import { ARRANGEMENT, followNow, keepZoom, kept, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
+import { CameraScope, onCamera, useCamera, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -412,17 +412,19 @@ export default function SongTimeline({
   const songLanesH = songShown * LANE_H + (songShown < songRows.controls.length ? HIDDEN_ROW_H : 0);
   const songH = ROW_H + 1 + songRows.others.length * ROW_H + (open.has(song.module) ? songLanesH : 0);
   // The arrangement's camera (VIEW-1): the names at its left, the ruler at its top and the Song row
-  // at its foot stay as it moves; the zoom stretches time across. Its zoom is view.json's (FMT-20).
-  const ppb = useZoom();
+  // at its foot stay as it moves; the zoom stretches time across. It starts at the zoom this song's
+  // view.json keeps (FMT-20), and keeps it there.
   const camera = useCamera(ARRANGEMENT, scroller, {
     margins: { left: headerW, top: RULER_H, bottom: songH },
     origin: { x: headerW },
     zoom: { min: ZOOM.min, max: ZOOM.max, round: roundZoom },
+    start: kept,
   });
-  useEffect(() => keepZoom(), []);
-  const visible = Math.max(0, useCameraState(ARRANGEMENT, (s) => s.view.w) - headerW);
+  const ppb = useZoomOf(camera);
+  useLayoutEffect(() => keepZoom(camera.store), [camera.store]);
+  const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - headerW);
   // What a zoom looked at keeps its room: the beat it held in place stays there (VIEW-5).
-  const asked = useCameraState(ARRANGEMENT, (s) => s.asked.w) - headerW;
+  const asked = useCameraState(camera, (s) => s.asked.w) - headerW;
   // A bar of room after the last clip and after the playhead, which plays on past the
   // song's end; never narrower than the window. Grown a bar at a time, the rows redraw
   // once a bar rather than on every poll. While it follows the playhead, a view's width more,
@@ -440,9 +442,11 @@ export default function SongTimeline({
   songRow.current = songH;
 
   // Follow the playhead while playing (Q11, taste.md §5.1): when it passes 85% of the view, or is
-  // out of it, the view pages so it sits at 15%. Any move that isn't the app's own (a swipe, a key's
-  // scroll, a scrollbar, a click's: VIEW-9) pauses it until play starts again or the playhead is
-  // back in view. A drag holds the view still: Follow catches up after (VIEW-8).
+  // out of it, the view pages so it sits at 15%. A move across that isn't the app's own (a swipe, a
+  // key's scroll, a scrollbar, a click's: VIEW-9) pauses it until play starts again or the playhead
+  // is back in view; a move straight down the tracks doesn't. A drag holds the view still: Follow
+  // catches up after (VIEW-8). It never comes back while the hand moves the view, and its page
+  // never drops a swipe still arriving.
   const paused = useRef(false);
   useEffect(() => {
     paused.current = false;
@@ -454,8 +458,8 @@ export default function SongTimeline({
     // A move the browser made before play started, its `scroll` not heard yet, isn't one made while
     // following: taken in now, before Follow listens.
     camera.sync();
-    const off = onCamera(ARRANGEMENT, (now, was) => {
-      if ((now.x === was.x && now.y === was.y) || (now.by !== "hand" && now.by !== "browser")) return;
+    const off = onCamera(camera, (now, was) => {
+      if (now.x === was.x || (now.by !== "hand" && now.by !== "browser")) return;
       if (!paused.current) away = false;
       paused.current = true;
     });
@@ -467,6 +471,8 @@ export default function SongTimeline({
       const w = view.w - latest.current.headerW;
       const at = b * zoom - x;
       if (paused.current) {
+        // The hand still moving the view: Follow waits for it to stop, whatever it shows.
+        if (camera.swiping()) return;
         if (at < 0 || at > w) {
           away = true;
           return;
@@ -474,7 +480,7 @@ export default function SongTimeline({
         if (!away) return;
         paused.current = false;
       }
-      if (at < 0 || at > w * 0.85) camera.to(b * zoom - w * 0.15);
+      if (at < 0 || at > w * 0.85) camera.to(b * zoom - w * 0.15, undefined, undefined, { swipe: "keep" });
     });
     return () => {
       off();
@@ -582,7 +588,7 @@ export default function SongTimeline({
   useEffect(() => {
     const say = (s: CameraState) => look({ seen: [s.x / s.zoom, (s.x + Math.max(0, s.view.w - s.margins.left)) / s.zoom] });
     say(camera.now());
-    return onCamera(ARRANGEMENT, say);
+    return onCamera(camera, say);
   }, [camera]);
 
   // Clips being dragged (moved, copied or resized), drawn where they go until the timeline shows
@@ -1775,6 +1781,7 @@ export default function SongTimeline({
   const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
+    <CameraScope camera={camera}>
     <div
       ref={scroller}
       data-testid="timeline"
@@ -1918,6 +1925,7 @@ export default function SongTimeline({
         </div>
       </div>
     </div>
+    </CameraScope>
   );
 }
 
@@ -2990,6 +2998,7 @@ function LaneClips({
         editable={editable}
         painting={painting}
         glow={glows}
+        fine={"notes" in drawn ? shortestOf(drawn) : null}
         onDoubleClick={lane.kind === "notes" ? () => handlers.current.onOpen(i) : undefined}
         onPointerDown={(e) => handlers.current.onDown(ref, e)}
         onContextMenu={(e) => handlers.current.onMenu(ref, e)}
@@ -3072,6 +3081,7 @@ const Clip = memo(function Clip({
   editable,
   painting,
   glow,
+  fine = null,
   onDoubleClick,
   onPointerDown,
   onContextMenu,
@@ -3096,6 +3106,8 @@ const Clip = memo(function Clip({
   painting?: boolean;
   /** Its lane changed elsewhere just now (AGENT-5). */
   glow?: boolean;
+  /** The shortest note it draws, in beats: under 2 px, its notes' marks show (`data-fine`). */
+  fine?: number | null;
   onDoubleClick?: () => void;
   /** Given, the clip can be selected (and, editable, dragged by its body or either edge). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
@@ -3108,7 +3120,7 @@ const Clip = memo(function Clip({
   const handles = !!onPointerDown && editable;
   // Placed in beats by the camera's zoom, straight into its style: a zoom renders no clip (VIEW-12).
   const box = useRef<HTMLDivElement>(null);
-  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4 });
+  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4, fine });
   return (
     <div
       ref={box}
@@ -3173,10 +3185,22 @@ function Body({ length, curve, children }: { length: number; curve?: boolean; ch
 /** A clip's audible notes, the same array while the clip is the same: its drawing is kept by it. */
 const audibles = new WeakMap<NoteClip, NoteClip["notes"]>();
 const audibleOf = (c: NoteClip) => audibles.get(c) ?? audibles.set(c, audible(c)).get(c)!;
+/** Its shortest audible note, in beats; null with none. */
+const shortest = new WeakMap<NoteClip, number | null>();
+const shortestOf = (c: NoteClip) => {
+  if (!shortest.has(c)) {
+    const notes = audibleOf(c);
+    shortest.set(c, notes.length ? Math.min(...notes.map((n) => n.length)) : null);
+  }
+  return shortest.get(c)!;
+};
 
 /**
  * A mini piano roll of a clip's audible notes, over their own pitch range. Drawn in beats, the zoom
- * never read: a zoom changes only its clip's box, and it is kept by its notes (VIEW-12).
+ * never read: a zoom changes only its clip's box, and it is kept by its notes (VIEW-12). Each note
+ * at its loudness by its own opacity (never a group's: WebKit paints a group with opacity through a
+ * layer of its own); and a 2 px mark the drawing's stretch doesn't scale, shown only while its clip's
+ * shortest note is under 2 px (`data-fine`, set by the clip's span on a zoom).
  */
 export const Notes = memo(function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
   useRenderCount("arrangement.drawings");
@@ -3187,29 +3211,22 @@ export const Notes = memo(function Notes({ notes, length, color }: { notes: Note
   // Few pitches stay thin and centered rather than filling the clip.
   const h = Math.min(100 / rows, 16);
   const top = (100 - rows * h) / 2;
-  // By loudness: each group at its opacity once, so a note and its mark never darken each other.
-  const loud = new Map<number, NoteClip["notes"]>();
-  for (const n of notes) {
-    const o = Math.round((0.35 + 0.65 * n.velocity) * 100) / 100;
-    (loud.get(o) ?? loud.set(o, []).get(o)!).push(n);
-  }
   return (
     <Body length={length}>
-      {[...loud].map(([o, group]) => (
-        <g key={o} opacity={o} fill={color.ink} stroke={color.ink}>
-          {group.map((n, i) => {
-            const y = top + (hi - n.pitch) * h + h * 0.1;
-            const mid = n.start + n.length / 2;
-            return (
-              <Fragment key={i}>
-                <rect x={n.start} width={n.length} y={y} height={h * 0.8} stroke="none" />
-                {/* At least 2 px wide at any zoom: a mark the drawing's stretch doesn't scale. */}
-                <line x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} vectorEffect="non-scaling-stroke" />
-              </Fragment>
-            );
-          })}
-        </g>
-      ))}
+      <g fill={color.ink} stroke={color.ink}>
+        {notes.map((n, i) => {
+          const y = top + (hi - n.pitch) * h + h * 0.1;
+          const mid = n.start + n.length / 2;
+          const o = 0.35 + 0.65 * n.velocity;
+          return (
+            <Fragment key={i}>
+              <rect x={n.start} width={n.length} y={y} height={h * 0.8} stroke="none" fillOpacity={o} />
+              {/* At least 2 px wide at any zoom: a mark the drawing's stretch doesn't scale. */}
+              <line data-mark x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} strokeOpacity={o} vectorEffect="non-scaling-stroke" />
+            </Fragment>
+          );
+        })}
+      </g>
     </Body>
   );
 });

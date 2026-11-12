@@ -152,5 +152,41 @@ export function cull(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?:
   };
 }
 
+/** What a view does with its culling window on a camera's move (VIEW-12). */
+export interface CullPlan {
+  /**
+   * `keep`: nothing. `wait`: draw `next` between frames (a transition), as what shows is still in the
+   * window on screen. `urgent`: draw `next` at once, as what shows has left the window on screen.
+   */
+  now: "keep" | "wait" | "urgent";
+  next: { x: Window; y: Window };
+}
+
+/**
+ * What a view with the window `committed` on screen, and `asked` asked for last (the same while none
+ * waits), does as the camera is `c`: it keeps `asked` while `cull` keeps it, else asks for a new one;
+ * and judges whether that can wait by the window on screen, never by the one asked for, which may not
+ * be drawn yet. Only the `ways` it culls count.
+ */
+export function cullPlan(
+  c: Camera,
+  s: Omit<Shape, "content">,
+  by: { x?: CullBy; y?: CullBy },
+  committed: { x: Window; y: Window },
+  asked: { x: Window; y: Window },
+  ways: "x" | "y" | "xy" = "xy",
+): CullPlan {
+  const xs = ways.includes("x"), ys = ways.includes("y");
+  const next = cull(c, s, by, asked);
+  const fresh = (xs && next.x !== asked.x) || (ys && next.y !== asked.y);
+  const waiting = (xs && asked.x !== committed.x) || (ys && asked.y !== committed.y);
+  // What shows, between the margins.
+  const shows = cull(c, s, { x: { margin: 0 }, y: { margin: 0 } });
+  const inside = (w: Window, v: Window) => w.from <= v.from && w.to >= v.to;
+  const left = (xs && !inside(committed.x, shows.x)) || (ys && !inside(committed.y, shows.y));
+  if (left && (fresh || waiting)) return { now: "urgent", next };
+  return { now: fresh ? "wait" : "keep", next };
+}
+
 /** Whether [start, end] of the content's units meets a window. */
 export const within = (w: Window, start: number, end = start) => end >= w.from && start <= w.to;

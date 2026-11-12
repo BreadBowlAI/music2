@@ -2,11 +2,11 @@
 // frame, a zoom written in the render that draws it, the browser's own moves taken in, and the
 // app's moves (VIEW-9). One for each mounted view, made by `useCamera`.
 
-import type { StoreApi } from "zustand";
 import { fit, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
+import { SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
 import { hearInput, moved, pointerHeld } from "./state";
-import type { CameraState, MovedBy } from "./store";
+import type { CameraStore, MovedBy, CameraState } from "./store";
 import { Writer } from "./writer";
 
 /** What a view tells its camera, each time it renders. */
@@ -25,10 +25,16 @@ export interface Fixed {
 
 /** The app's moves of a view (VIEW-9). Points are in the box, px from its top-left corner. */
 export interface CameraControls {
+  /** The camera's name, and its store: for the view's own hooks (`useZoomOf(camera)`) and `<CameraScope camera>`. */
+  readonly name: string;
+  readonly store: CameraStore;
   /** The camera now, and what it keeps of its view: its box's size, margins, origin. Reads nothing of the page. */
   now(): CameraState;
-  /** Look at (x, y) (either left out: as it is), at `zoom` if given. */
-  to(x?: number, y?: number, zoom?: number): void;
+  /**
+   * Look at (x, y) (either left out: as it is), at `zoom` if given. A swipe still arriving is
+   * dropped, as after a click; `{ swipe: "keep" }` stops only the camera's own glide (Follow's page).
+   */
+  to(x?: number, y?: number, zoom?: number, opts?: { swipe?: "drop" | "keep" }): void;
   /** Zoom to `zoom` around `at` (the clear view's middle if left out), what is there staying there. */
   zoomAround(zoom: number, at?: { x: number; y: number }): void;
   /** The units [from, to] across fill the view, `pad` px each side. */
@@ -40,6 +46,8 @@ export interface CameraControls {
   toContent(clientX: number, clientY: number): { x: number; y: number };
   /** Whether a pointer drag holds the camera still (VIEW-8). */
   held(): boolean;
+  /** Whether the hand moves the camera now: a swipe's events less than G apart, or its glide. */
+  swiping(): boolean;
   /**
    * Take in a move the browser made to the box and the camera hasn't heard yet (its `scroll` comes a
    * frame late): before the app decides from where the view is, so a move made before it listened
@@ -50,6 +58,10 @@ export interface CameraControls {
 
 /** The views at work now, by camera name. */
 export const rigs = new Map<string, Rig>();
+/** And by camera. */
+const byStore = new WeakMap<CameraStore, Rig>();
+/** The view at work on the camera `cam` now, if one is. */
+export const rigOf = (cam: CameraStore) => byStore.get(cam) ?? null;
 
 /** Who hears a view's box move: after the camera wrote it, or took in the browser's move. */
 const moves = new Set<() => void>();
@@ -75,14 +87,16 @@ export class Rig {
   /** A zoom set and not yet drawn: its render writes the position. */
   private zoomed = false;
   private offs: (() => void)[] = [];
-  /** Who sees whether elements are near the view: one IntersectionObserver for the box (VIEW-12). */
-  private near: { io: IntersectionObserver; seen: Map<Element, (near: boolean) => void> } | null = null;
+  /** Who sees whether elements are near the view, and in it: two IntersectionObservers for the box (VIEW-12). */
+  private near: { io: IntersectionObserver; inView: IntersectionObserver; seen: Map<Element, (near: boolean, inView: boolean) => void> } | null = null;
+  /** When the hand last moved the camera (`performance.now()`). */
+  private handAt = -Infinity;
   readonly hands: Recognizer;
   readonly controls: CameraControls;
 
   constructor(
     readonly name: string,
-    readonly cam: StoreApi<CameraState>,
+    readonly cam: CameraStore,
   ) {
     this.hands = new Recognizer(
       () => this.el,
@@ -90,13 +104,15 @@ export class Rig {
       () => this.fixed.rails !== false,
     );
     this.controls = {
+      name,
+      store: cam,
       now: () => ({ ...this.cam.getState() }),
-      to: (x, y, zoom) =>
+      to: (x, y, zoom, opts) =>
         this.app((c, s) => {
           if (zoom === undefined || zoom === c.zoom) return to(c, x ?? c.x, y ?? c.y, s);
           // A new zoom: the render that draws it writes the position, where the box then has room.
           return { x: Math.max(0, x ?? c.x), y: Math.max(0, y ?? c.y), zoom: this.clampZoom(zoom) };
-        }),
+        }, opts?.swipe !== "keep"),
       zoomAround: (zoom, at) => this.zoomTo(zoom, at ?? this.middle(), "app"),
       fit: (span, pad = 0) => {
         const s = this.shape();
@@ -120,24 +136,43 @@ export class Rig {
       },
       toContent: (cx, cy) => toContent(this.camera(), this.controls.boxPoint(cx, cy), this.shape()),
       held: pointerHeld,
+      swiping: () => this.hands.busy() || performance.now() - this.handAt < SWIPE_GAP,
       sync: () => this.takeIn(),
     };
   }
 
   // ---------------------------------------------------------------- the box
 
+  /** On the box `el` the view rendered now: put on it, moved to another one, or (null) taken off. */
+  hold(el: HTMLElement | null) {
+    if (el === this.el) return;
+    if (this.el) this.detach();
+    if (el) this.attach(el);
+  }
+
   attach(el: HTMLElement) {
     this.el = el;
     this.writer = new Writer(el);
     rigs.set(this.name, this);
+    byStore.set(this.cam, this);
     const wheel = (e: WheelEvent) => this.hands.wheel(e) && this.schedule();
     const gesture = (e: Event) => this.hands.gesture(e) && this.schedule();
     const scroll = () => this.takeIn();
     el.addEventListener("wheel", wheel, { capture: true, passive: false });
     for (const t of ["gesturestart", "gesturechange", "gestureend"]) el.addEventListener(t, gesture, { capture: true, passive: false });
     el.addEventListener("scroll", scroll, { passive: true });
-    const size = new ResizeObserver(() => this.measure(true));
+    const size = new ResizeObserver(() => {
+      this.measure(true);
+      this.clamped();
+    });
     size.observe(el);
+    // The content's size (each box in the view's box): one that shrinks may stop the box at a new edge.
+    const content = new ResizeObserver(() => this.clamped());
+    for (const child of el.children) content.observe(child);
+    const children = new MutationObserver((records) => {
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element) content.observe(n);
+    });
+    children.observe(el, { childList: true });
     this.offs = [
       () => el.removeEventListener("wheel", wheel, { capture: true }),
       () => {
@@ -145,6 +180,8 @@ export class Rig {
       },
       () => el.removeEventListener("scroll", scroll),
       () => size.disconnect(),
+      () => content.disconnect(),
+      () => children.disconnect(),
       hearInput(() => this.hands.stop()),
     ];
     this.measure(true);
@@ -158,8 +195,10 @@ export class Rig {
     this.offs.forEach((off) => off());
     this.offs = [];
     this.near?.io.disconnect();
+    this.near?.inView.disconnect();
     this.near = null;
     if (rigs.get(this.name) === this) rigs.delete(this.name);
+    if (byStore.get(this.cam) === this) byStore.delete(this.cam);
     this.el = null;
     this.writer = null;
   }
@@ -240,11 +279,15 @@ export class Rig {
     else this.schedule();
   }
 
-  /** The app's move (VIEW-9): the browser's move taken in first, then set and written; a swipe still arriving is dropped. */
-  private app(f: (c: Camera, s: Shape) => Camera) {
+  /**
+   * The app's move (VIEW-9): the browser's move taken in first, then set and written; a swipe still
+   * arriving is dropped (`drop`), else only the camera's own glide stops.
+   */
+  private app(f: (c: Camera, s: Shape) => Camera, drop = true) {
     if (!this.el) return;
     this.takeIn();
-    this.hands.appMoved();
+    if (drop) this.hands.appMoved();
+    else this.hands.stopGlide();
     this.set(f(this.camera(), this.shape()), "app");
   }
 
@@ -260,13 +303,23 @@ export class Rig {
     this.set(zoomAround(this.camera(), at, z, s), by);
   }
 
-  /** A move the browser made to the box itself, taken in (VIEW-9). Not while a zoom waits for its render: that one clamped the box. */
+  /**
+   * A move the browser made to the box itself, taken in (VIEW-9). Not while a zoom waits for its
+   * render: that one clamped the box. One to the box's new edge, the camera beyond it, is the
+   * content getting smaller (`clamp`, no one's move): its `scroll` may come before the
+   * ResizeObserver that would say so, when something read the page's layout before the frame.
+   */
   private takeIn() {
-    if (this.zoomed || !this.writer) return;
+    if (this.zoomed || !this.writer || !this.el) return;
     const theirs = this.writer.theirs();
     if (!theirs) return;
+    const box = this.el;
+    const s = this.cam.getState();
+    const edge = (at: number, was: number, room: number) => was - room > 1 && Math.abs(at - room) <= 1;
+    const clamp =
+      edge(theirs.x, s.x, Math.max(0, box.scrollWidth - box.clientWidth)) || edge(theirs.y, s.y, Math.max(0, box.scrollHeight - box.clientHeight));
     this.hands.stopGlide();
-    this.cam.setState({ x: theirs.x, y: theirs.y, by: "browser" });
+    this.cam.setState({ x: theirs.x, y: theirs.y, by: clamp ? "clamp" : "browser" });
     moved_();
   }
 
@@ -284,30 +337,29 @@ export class Rig {
     }
   }
 
-  /** After each render of the view: a zoom it drew is written now, in the frame it lands in (VIEW-8). */
+  /** After each render of the view: a zoom it drew is written now, in the frame it lands in (VIEW-8). Reads nothing of the page. */
   afterRender() {
     this.measure();
     if (this.zoomed) {
       this.zoomed = false;
-      return this.write();
+      this.write();
     }
-    this.clamped();
   }
 
   /**
-   * A render that made the content smaller than where the camera looks (Fold, a shorter song): the
-   * browser stopped the box at its new edge, and may send no `scroll` for it. The camera stops there
-   * too, as no one's move.
+   * The content got smaller than where the camera looks (Fold, a shorter song), or the box bigger:
+   * the browser stopped the box at its new edge, and may send no `scroll` for it. The camera stops
+   * there too, moved by `clamp`: no one's move. Heard from ResizeObservers, after layout.
    */
   private clamped() {
     const box = this.el;
-    if (!box || !this.writer) return;
+    if (!box || !this.writer || this.zoomed) return;
     const s = this.cam.getState();
     const x = Math.min(s.x, Math.max(0, box.scrollWidth - box.clientWidth));
     const y = Math.min(s.y, Math.max(0, box.scrollHeight - box.clientHeight));
     if (s.x - x <= 1 && s.y - y <= 1) return;
     this.writer.settle();
-    this.cam.setState({ x, y });
+    this.cam.setState({ x, y, by: "clamp" });
     moved_();
   }
 
@@ -326,7 +378,10 @@ export class Rig {
     }
     this.takeIn();
     const asked = this.hands.frame(t);
-    if (asked.dx || asked.dy || asked.zoom) moved();
+    if (asked.dx || asked.dy || asked.zoom) {
+      moved();
+      this.handAt = performance.now();
+    }
     if (asked.zoom) {
       const s = this.cam.getState();
       const z = this.clampZoom(asked.zoom.to ?? s.zoom * asked.zoom.by);
@@ -334,29 +389,39 @@ export class Rig {
       this.set({ ...c, x: c.x + asked.dx, y: c.y + asked.dy }, z === s.zoom ? "hand" : "zoom");
     } else if (asked.dx || asked.dy) {
       const c = this.camera();
-      const s = this.shape();
-      this.set(to(c, c.x + asked.dx, c.y + asked.dy, s), "hand");
+      const want = { x: c.x + asked.dx, y: c.y + asked.dy };
+      const got = to(c, want.x, want.y, this.shape());
+      // At an edge (VIEW-6): the glide stops that way.
+      if (got.x !== want.x) this.hands.stopGlide("x");
+      if (got.y !== want.y) this.hands.stopGlide("y");
+      this.set(got, "hand");
     }
     if (this.hands.busy()) this.schedule();
   }
 
   // ---------------------------------------------------------------- near the view
 
-  /** Hear whether `el` is in view, or within a margin of it (`margin` of the box's size each way). */
-  watchNear(el: Element, margin: number, f: (near: boolean) => void): () => void {
+  /**
+   * Hear whether `el` is within a margin of the view (`margin` of the box's size each way): `near`;
+   * and when it comes into the view itself: `inView` true.
+   */
+  watchNear(el: Element, margin: number, f: (near: boolean, inView: boolean) => void): () => void {
     const box = this.el;
     if (!box) return () => {};
     if (!this.near) {
-      const seen = new Map<Element, (near: boolean) => void>();
-      const io = new IntersectionObserver((entries) => entries.forEach((e) => seen.get(e.target)?.(e.isIntersecting)), { root: box, rootMargin: `${margin * 100}%` });
-      this.near = { io, seen };
+      const seen = new Map<Element, (near: boolean, inView: boolean) => void>();
+      const io = new IntersectionObserver((entries) => entries.forEach((e) => seen.get(e.target)?.(e.isIntersecting, false)), { root: box, rootMargin: `${margin * 100}%` });
+      const inView = new IntersectionObserver((entries) => entries.forEach((e) => e.isIntersecting && seen.get(e.target)?.(true, true)), { root: box });
+      this.near = { io, inView, seen };
     }
     const near = this.near;
     near.seen.set(el, f);
     near.io.observe(el);
+    near.inView.observe(el);
     return () => {
       near.seen.delete(el);
       near.io.unobserve(el);
+      near.inView.unobserve(el);
     };
   }
 }

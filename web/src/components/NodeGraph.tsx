@@ -33,7 +33,7 @@ import {
   ZoomIn,
   ZoomOut,
 } from "lucide-react";
-import { createContext, memo, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { create } from "zustand";
 import {
@@ -73,7 +73,7 @@ import { COL_W, EXPR_H, NODE_W, PACK_H, packOf, GROUP_H, LINE_H, PAD, PLUGIN_H, 
 import { trackColors } from "../lib/palette";
 import { canvas, useShell } from "../lib/shell";
 import { useRenderCount } from "../lib/frames";
-import { controlsAt, forgetCameras, movingNow, onCamera, useCamera, useZoomOf } from "../camera";
+import { controlsAt, movingNow, onCamera, useCamera, useZoomOf } from "../camera";
 import { useStore } from "../lib/store";
 import { Bar } from "./Bar";
 import { Dots } from "./draw";
@@ -163,7 +163,8 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
 
   // The Graph's camera (taste.md VIEW-1): one for each module while the Graph shows, its zoom the
   // graph's scale, stretching both ways from the graph's corner (the box's and the section's 16 px
-  // of padding in). A module's zoom and place are kept while the Graph shows; Fit until the user picks one.
+  // of padding in). A module's zoom and place are kept while the Graph shows (the cameras are this
+  // view's, and go with it); Fit until the user picks one.
   const scroller = useRef<HTMLDivElement>(null);
   const name = `graph:${module}`;
   const camera = useCamera(name, scroller, {
@@ -173,16 +174,14 @@ export function NodeGraph({ graph, module }: { graph: GraphState; module: string
     rails: false,
     zoom: { min: 0.3, max: 2 },
     start: () => FIT,
-    keep: true,
   });
-  useEffect(() => () => forgetCameras("graph:"), []);
-  const zoom = useZoomOf(name);
+  const zoom = useZoomOf(camera);
   // The modules whose zoom the user picked: the zoom bar's Fit is pressed for the others.
   const [chosen, setChosen] = useState<ReadonlySet<string>>(() => new Set());
   const fitted = !chosen.has(module);
   const choose = useCallback((m: string, on: boolean) => setChosen((c) => (c.has(m) === on ? c : on ? new Set([...c, m]) : new Set([...c].filter((x) => x !== m)))), []);
   // A zoom by the hand (⌘-scroll, a pinch) is a zoom picked too.
-  useEffect(() => onCamera(name, (now, was) => now.zoom !== was.zoom && now.by === "zoom" && choose(module, true)), [name, module, choose]);
+  useLayoutEffect(() => onCamera(camera, (now, was) => now.zoom !== was.zoom && now.by === "zoom" && choose(module, true)), [camera, module, choose]);
   const latest = useRef({ module, fitted, zoom });
   latest.current = { module, fitted, zoom };
   /** The zoom bar's: around the view's middle (VIEW-5), and Fit (`null`): 100%, from the graph's top left. */
