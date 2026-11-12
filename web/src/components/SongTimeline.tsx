@@ -451,6 +451,9 @@ export default function SongTimeline({
     // is "back in view". A hand that scrolls with the playhead in view (a key's scroll, a slow swipe)
     // keeps Follow paused, so its next page never takes the view back from the hand.
     let away = false;
+    // A move the browser made before play started, its `scroll` not heard yet, isn't one made while
+    // following: taken in now, before Follow listens.
+    camera.sync();
     const off = onCamera(ARRANGEMENT, (now, was) => {
       if ((now.x === was.x && now.y === was.y) || (now.by !== "hand" && now.by !== "browser")) return;
       if (!paused.current) away = false;
@@ -458,6 +461,8 @@ export default function SongTimeline({
     });
     const offFrame = onFrame((b) => {
       if (camera.held()) return;
+      // The hand's latest move first (its `scroll` comes a frame late): it may pause Follow.
+      camera.sync();
       const { x, zoom, view } = camera.now();
       const w = view.w - latest.current.headerW;
       const at = b * zoom - x;

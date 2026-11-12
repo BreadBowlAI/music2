@@ -121,6 +121,7 @@
   - On a Mac, the glide after a flick reaches the page as more wheel events, both ways. On recent macOS they are AppKit's own; on older paths WebKit builds them from the unfiltered deltas (`RemoteLayerTreeEventDispatcher.mm:280-297`, `EventDispatcher.cpp:140-208`). The camera moves by them like any other, and the probe confirms they still come when the swipe was cancelled.
   - On Linux, WebKitGTK glides inside itself and gives the page nothing to glide by (`ScrollingEffectsController.cpp:337-388`). So there the camera glides itself, decided by the platform, not guessed. A swipe's glide starts one frame after its last event, at the speed of its last 50 ms, and slows as Apple's iPhone scroll views do (UIScrollView's normal rate, 0.998 a millisecond). An event that comes late takes over from the glide.
   - Any new wheel event, a click or a key stops the camera's glide.
+  - A move the browser made is heard on the box's `scroll`, a frame later. What decides from where the view is (Follow) takes it in first (`sync`), so a move made before Follow listened is not heard as one made while it follows.
   - After a click, a key or a move by the app, wheel events are dropped until a gap of G ms. That is how a glide still arriving from the system stops.
 - **Drags hold the camera still.** While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a reorder, the ruler's loop), the camera doesn't move by a swipe, a glide or Follow. Follow catches up after the release. The eight drags that measure from where they started (inventory §7) stay as they are.
 - **No hover while moving.** While the camera moves, and for 250 ms after, the views' hover handlers do nothing (a `moving` flag). WebKit sends a fake mouse move after a scroll, and Notes' and the wires' hover would otherwise render.
@@ -158,7 +159,7 @@ Every move the app makes goes through the camera. None calls `scrollIntoView` or
 | Notes' and the beat grid's zoom buttons | anchor and layout effect | `zoomAround` the middle | 3 |
 
 - **What agents see** (AGENT-6's "the bars the timeline shows") is read from the camera, rounded as today (`focus.ts`), and not from a scroll event.
-- **The pointer's note** (`PointerNote.tsx`) moves on each frame the camera moved, and not otherwise.
+- **The pointer's note** (`PointerNote.tsx`) moves on each frame the camera moved, and not otherwise: it hears `onViewMoved` (right after each write) and writes its place into its own style, rendering only when what it shows changes.
 - **The scroll padding stays** (TL-16). The app reveals through the camera; the padding keeps the browser's own reveals (Tab, autofocus, a test's click, a drag) clear of the headers.
 
 ## 8. Speed

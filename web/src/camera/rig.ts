@@ -38,6 +38,12 @@ export interface CameraControls {
   toContent(clientX: number, clientY: number): { x: number; y: number };
   /** Whether a pointer drag holds the camera still (VIEW-8). */
   held(): boolean;
+  /**
+   * Take in a move the browser made to the box and the camera hasn't heard yet (its `scroll` comes a
+   * frame late): before the app decides from where the view is, so a move made before it listened
+   * is not heard as one made after.
+   */
+  sync(): void;
 }
 
 /** The views at work now, by camera name. */
@@ -111,6 +117,7 @@ export class Rig {
       },
       toContent: (cx, cy) => toContent(this.camera(), this.controls.boxPoint(cx, cy), this.shape()),
       held: pointerHeld,
+      sync: () => this.takeIn(),
     };
   }
 

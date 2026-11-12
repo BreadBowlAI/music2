@@ -68,7 +68,8 @@ function Timeline() {
   with `onCamera`, which renders nothing.
 - **Move the view only through the camera** (VIEW-9): `camera.to`, `camera.reveal(element)`,
   `camera.fit([from, to])`, `camera.zoomAround(zoom, at)`. Never `scrollIntoView` or `scrollLeft`.
-  A move the browser makes itself (Tab, a key, a scrollbar, a click) is taken in.
+  A move the browser makes itself (Tab, a key, a scrollbar, a click) is taken in, a frame late (on
+  its `scroll`): `camera.sync()` takes it in at once, before the app decides from where the view is.
 - **Draw only what is in view** (VIEW-12): `useCull` gives the window in the content's units, a view
   each side more. It is kept while it holds what shows and half a view more each side, so it changes
   every half a view of a pan, or ×1.5 out or ×2 in of a zoom; a new one comes as a transition, which
