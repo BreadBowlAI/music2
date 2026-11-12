@@ -154,8 +154,22 @@ const lib = await page.evaluate(() => {
   const u = c.toContent(at, { x: 540, y: 300 }, arr);
   const r6 = (p) => ({ x: Math.round(p.x * 1e6) / 1e6, y: Math.round(p.y * 1e6) / 1e6 });
   out.convert = [r6(u), r6(c.toBox(at, u, arr)), c.toContent({ x: 50, y: 20, zoom: 2 }, { x: 116, y: 96 }, gr)];
-  const w = (x) => c.cull({ ...at, x }, arr).x;
-  out.cull = [w(0), w(499), w(500), w(1700), c.cull({ ...at, y: 0 }, arr).y, c.cull(at, { ...arr, view: { w: 0, h: 0 } }).x, c.cull({ ...at, x: 0 }, arr, { x: { margin: 96, step: 96 } }).x];
+  // A window is kept while it holds what shows and half a view more each side, and isn't twice as
+  // wide as a new one: so a pan moves it every half a view, a zoom only every ×1.5 out or ×2 in.
+  const rw = (w) => [Math.round(w.from * 1e6) / 1e6, Math.round(w.to * 1e6) / 1e6];
+  const fresh = c.cull({ ...at, x: 0 }, arr);
+  const after = (cam) => c.cull({ ...at, ...cam }, arr, {}, fresh).x;
+  out.cull = [
+    rw(fresh.x),
+    after({ x: 499 }) === fresh.x,
+    rw(after({ x: 520 })),
+    after({ x: 0, zoom: 48 }) === fresh.x,
+    rw(after({ x: 0, zoom: 60 })),
+    rw(after({ x: 0, zoom: 16 })),
+    rw(c.cull({ ...at, y: 0 }, arr).y),
+    rw(c.cull(at, { ...arr, view: { w: 0, h: 0 } }).x),
+    rw(c.cull({ ...at, x: 0 }, arr, { x: { margin: 4, step: 2 } }).x),
+  ];
   // A box that keeps whole pixels, as WebKit's does (`long scrollLeft`).
   const box = { left: 0, top: 0, scrollWidth: 2000, scrollHeight: 1000, clientWidth: 500, clientHeight: 300 };
   const whole = {
@@ -202,17 +216,8 @@ check(
   `toContent and back: the box's point as beats and px, and the graph's both ways: ${json(lib?.convert)}`,
 );
 check(
-  json(lib?.cull) ===
-    json([
-      { from: -41.666666666666664, to: 104.16666666666667, step: 0 },
-      { from: -41.666666666666664, to: 104.16666666666667, step: 0 },
-      { from: -20.833333333333332, to: 125, step: 1 },
-      { from: 20.833333333333332, to: 166.66666666666666, step: 3 },
-      { from: -514, to: 1285, step: 0 },
-      { from: 0, to: 0, step: 0 },
-      { from: -4, to: 49.666666666666664, step: 0 },
-    ]),
-  `cull: what shows and a view each side, the same within a step of half a view, the next at the step, down too, nothing before the box is laid out, a margin of its own: ${json(lib?.cull)}`,
+  json(lib?.cull) === json([[-41.666667, 83.333333], true, [-20, 105], true, [-16.666667, 33.333333], [-62.5, 125], [-514, 1028], [0, 0], [-4, 45.666667]]),
+  `cull: what shows and a view each side; kept within half a view of a pan, a new one past it; kept zooming in ×2, new at ×2.5 in and ×1.5 out; down too; nothing before the box is laid out; a margin of its own: ${json(lib?.cull)}`,
 );
 check(
   json(lib?.slow) === json([9, 9, null]) && lib?.slack === null && json(lib?.theirs) === json({ x: 50, y: 0 }) && json(lib?.clamped) === json({ x: 1500, y: 0, zoom: 1 }),
@@ -410,6 +415,9 @@ await frames();
 {
   const c = await arr();
   const step = c ? (c.view.w - c.margins.left - c.margins.right) / 2 : 600;
+  // A jump far from where it was: a new window, around where it lands.
+  await setScroll(tl, 0, 0);
+  await frames();
   await setScroll(tl, Math.round(step * 2 + 20), 0);
   await frames();
   await sleep(300);
@@ -482,6 +490,27 @@ const clipsShown = () =>
   const q = since(r1, await renders());
   check((q.arrangement ?? 0) >= 1 && (q.arrangement ?? 0) <= 18, `30 more, two in each of 15 frames, render it at most once a frame (18 frames): ${q.arrangement ?? 0} renders`);
   check((r["arrangement.drawings"] === undefined || r["arrangement.drawings"] === 0) && (await page.evaluate(() => "arrangement.drawings" in (window.m2canvas?.frames?.().total ?? {}))), `a zoom in renders no clip's mini drawing: ${r["arrangement.drawings"] ?? 0} (each counted)`);
+}
+// A zoom renders no clip's box, only those entering the window drawn; the arrangement still once a frame.
+{
+  await setScroll(tl, 0, 0);
+  await frames();
+  await setScroll(tl, 2400, 0);
+  await frames();
+  await sleep(300);
+  const at = await lanes();
+  for (const [what, dy] of [["in", -3], ["out", 3]]) {
+    await page.$$eval(`${tl} [data-clip]`, (els) => void (window.__clips = new Set(els)));
+    const r0 = await renders();
+    await zoomFrames(at.x, at.y, 15, dy);
+    const entered = await page.$$eval(`${tl} [data-clip]`, (els) => els.filter((e) => !window.__clips.has(e)).length);
+    const r = since(r0, await renders());
+    const counted = await page.evaluate(() => "arrangement.clips" in (window.m2canvas?.frames?.().total ?? {}));
+    check(
+      counted && (r["arrangement.clips"] ?? 0) <= entered && (r.arrangement ?? 0) >= 1 && (r.arrangement ?? 0) <= 18,
+      `30 ⌘-scroll events zooming ${what} render ${r["arrangement.clips"] ?? 0} clip boxes, no more than the ${entered} entering the window (each counted), and the arrangement ${r.arrangement ?? 0} times in 18 frames: ${json(r)}`,
+    );
+  }
 }
 /** The beat under screen x, from where Kick 1's clip at beat 0… is drawn: any clip with its start. */
 const beatAt = async (x) =>
