@@ -4,7 +4,6 @@
 // app's own build, where React's Profiler does nothing (the camera note's C11).
 
 import { create } from "zustand";
-import { canvas } from "./shell";
 
 const SECOND = 1000;
 
@@ -32,10 +31,13 @@ const times: number[] = [];
 const hearing = new Set<(dt: number, at: number) => void>();
 let measuring = 0;
 let raf = 0;
+/** Frames measured since the page loaded: a suite sees the loop stop when nothing measures. */
+let measured = 0;
 
 function frame(at: number) {
   const last = times.at(-1);
   times.push(at);
+  measured++;
   while (times.length > 2 && times[1] < at - SECOND) times.shift();
   if (last !== undefined) for (const f of hearing) f(at - last, at);
   raf = requestAnimationFrame(frame);
@@ -72,6 +74,8 @@ export interface Frames {
   renders: Record<string, number>;
   /** Each name's redraws since the page loaded. */
   total: Record<string, number>;
+  /** Frames measured since the page loaded. */
+  measured: number;
 }
 
 /** The meter's numbers, now. */
@@ -82,16 +86,23 @@ export function frames(): Frames {
     while (list[0] < now - SECOND) list.shift();
     renders[name] = list.length;
   }
-  if (!measuring) return { fps: null, slowest: null, renders, total: { ...total } };
+  if (!measuring) return { fps: null, slowest: null, renders, total: { ...total }, measured };
   let fps = 0, slowest = 0;
   for (let i = 1; i < times.length; i++) {
     if (times[i] < now - SECOND) continue;
     fps++;
     slowest = Math.max(slowest, times[i] - times[i - 1]);
   }
-  return { fps, slowest: Math.round(slowest * 10) / 10, renders, total: { ...total } };
+  return { fps, slowest: Math.round(slowest * 10) / 10, renders, total: { ...total }, measured };
 }
-canvas.frames = frames;
+
+declare global {
+  interface Window {
+    /** What the page gives the browser suites, and only that: the meter's numbers (VIEW-10). */
+    m2canvas?: { frames: typeof frames };
+  }
+}
+window.m2canvas = { frames };
 
 /** Whether the frame meter shows (the command palette's Show frame rate). The window's own, not kept. */
 export const useFrameMeter = create<{ on: boolean }>(() => ({ on: false }));

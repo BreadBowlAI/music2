@@ -9,7 +9,6 @@
 import { create } from "zustand";
 import { DOCK_H, DOCK_MIN, WIDE, dockMax } from "./layout";
 import type { ClipRef } from "./graph";
-import type { Frames } from "./frames";
 
 /**
  * The dock's views, in the order of ⌥1 to ⌥5. Beat, the beat grid (KIT-10), is ⌥5, and the switcher
@@ -230,14 +229,9 @@ export const canvas: {
   lanesBox?: () => DOMRect | null;
   /** A pointer's Show: beats `start` to `end` in view. */
   reveal?: (start: number, end: number) => void;
-  /** The frame meter's numbers (taste.md VIEW-10), from `lib/frames.ts`, with or without a song. */
-  frames?: () => Frames;
+  /**
+   * The Graph's zoom for the module it shows, whether it is at Fit, and that module; with `to`,
+   * set it as its zoom bar does (null: Fit). The swipe probe makes room with it (taste.md VIEW-10).
+   */
+  graphZoom?: (to?: number | null) => { zoom: number; fitted: boolean; module: string };
 } = {};
-
-declare global {
-  interface Window {
-    /** The canvas, for the browser suites: they read `m2canvas.frames()` (VIEW-10). */
-    m2canvas?: typeof canvas;
-  }
-}
-window.m2canvas = canvas;
