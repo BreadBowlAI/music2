@@ -31,7 +31,13 @@ function count(name: string) {
  */
 export function useRenderCount(name: string, first?: string) {
   const drawn = useRef(false);
+  // This render's own mark: React's StrictMode (in a development build) runs a new component's
+  // effects twice for one commit, and that is counted once.
+  const render = {};
+  const counted = useRef<object | null>(null);
   useLayoutEffect(() => {
+    if (counted.current === render) return;
+    counted.current = render;
     count(first && !drawn.current ? first : name);
     drawn.current = true;
   });
