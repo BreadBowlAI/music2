@@ -224,6 +224,8 @@ export const SUITES = [
   ["own-window", "fix", { expect: 15, s: 15 }],
   // Track camera-probe: the command palette's frame meter and swipe probe (taste.md VIEW-10), before the camera.
   ["camera-probe", "fix", { expect: 54, s: 20 }],
+  // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
+  ["graph-zoom", "fix", { expect: 9, s: 10 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
