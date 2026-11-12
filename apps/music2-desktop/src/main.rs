@@ -14,6 +14,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod actions;
+#[cfg(target_os = "macos")]
+mod frame_rate;
 mod menu;
 mod plugin_host;
 
@@ -107,6 +109,13 @@ fn main() {
                 // Vertically centred in the UI's 44px top bar, inside the 80px it keeps for them.
                 .traffic_light_position(tauri::LogicalPosition::new(18.0, 16.0));
             let window = builder.build()?;
+            // The page at the screen's own rate, 120 Hz where it has it, not WebKit's 60 (VIEW-11).
+            #[cfg(target_os = "macos")]
+            window.with_webview(|view| {
+                if !frame_rate::lift(view.inner()) {
+                    eprintln!("music2: this macOS's WebKit has no 60 frames a second setting to turn off; the page keeps its rate");
+                }
+            })?;
             keep_title_in_sync(window, server);
             Ok(())
         })
