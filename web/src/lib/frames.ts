@@ -4,6 +4,7 @@
 // app's own build, where React's Profiler does nothing (the camera note's C11).
 
 import { create } from "zustand";
+import { face } from "../camera";
 
 const SECOND = 1000;
 
@@ -98,11 +99,11 @@ export function frames(): Frames {
 
 declare global {
   interface Window {
-    /** What the page gives the browser suites, and only that: the meter's numbers (VIEW-10). */
-    m2canvas?: { frames: typeof frames };
+    /** What the page gives the browser suites, and only that: the meter's numbers, and the camera library's face (VIEW-10). */
+    m2canvas?: { frames: typeof frames; camera: typeof face };
   }
 }
-window.m2canvas = { frames };
+window.m2canvas = { frames, camera: face };
 
 /** Whether the frame meter shows (the command palette's Show frame rate). The window's own, not kept. */
 export const useFrameMeter = create<{ on: boolean }>(() => ({ on: false }));

@@ -1064,7 +1064,7 @@ After a click, a key or a move by the app, wheel events are dropped until a gap 
 still arriving from the system stops too. With reduced motion there is no glide of the camera's own.
 - *Why:* WebKitGTK glides inside itself and gives the page nothing to glide by (the note's §5, C5).
 - *Today:* since track `camera`: `recognizer.ts`; the app tells the library the platform
-  (`setPlatform`, from `isMac` and the reduced-motion setting, in `App.tsx`). No one here has a
+  (`setPlatform`, from `isMac` and the reduced-motion setting, in `main.tsx`). No one here has a
   Linux laptop, so the Linux glide is checked only by suites (gaps.md). Tested by `camera` (with
   Linux's flag set in the page: it starts after a swipe, slows, and stops at the next event).
 
