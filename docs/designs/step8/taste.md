@@ -1130,7 +1130,9 @@ browser's. Follow pauses on any move that isn't the app's own.
   the frames a second, from `requestAnimationFrame`'s intervals over the last second; the slowest
   frame of the last second, in ms; and the redraws of the last second for each view (the
   arrangement and its tracks' rows, the Graph and its nodes, Notes and its keys, the beat grid and
-  its rows), counted by one `useRenderCount` line at the top of each. Its numbers change four times
+  its rows), counted by one `useRenderCount` line at the top of each. A redraw is a render React puts
+  on the page (since track `camera`: counted in a layout effect), not one it starts and drops, as it
+  may a transition's. Its numbers change four times
   a second, written straight into its own text: it redraws no view. Suites read the same numbers,
   and how many frames have been measured since the page loaded, from `window.m2canvas.frames()`.
   With `window.m2canvas.camera`, the camera library's face for the `camera` suite (its functions,
@@ -1225,8 +1227,12 @@ private call is there. Where it isn't, the shell says so in one line and the pag
   frame meter (VIEW-10), which shows 120 frames a second on such a screen.
 
 **VIEW-12.** The arrangement and Notes MUST draw only what is in view, plus a margin of one view's
-width (or height) each side; the window they draw MUST move in steps of half a view, never every
-frame, so a swipe renders a view only when it crosses a step (VIEW-8).
+width (or height) each side. The window they draw is kept while it holds what shows and half a view
+more each side, and isn't twice as wide as a new one; then a new one is made around what shows. So
+a pan makes a new one every half a view and a zoom every ×1.5 out or ×2 in, never every frame, and
+a swipe renders a view only then (VIEW-8). A new window MUST be drawn without holding up a frame of
+the swipe (a React transition: the margin lets it lag), unless what shows has already left the old
+one. A zoom MUST render no clip: each clip's box is placed by the zoom straight into its style.
 - The arrangement draws only the clips that overlap the window across, and the ruler's bar numbers
   in it. Tracks more than a view's height above or below draw no clips, but keep their row boxes,
   so heights, the sticky names and Tab's order stay.
@@ -1236,16 +1242,20 @@ frame, so a swipe renders a view only when it crosses a step (VIEW-8).
 - A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT read the zoom: it is
   drawn in beats, or in percent of its clip, and kept by its clip, so a zoom changes only the clip's
   box. A note under 2 px wide still shows 2 px wide. An audio clip's waveform is drawn in pixels and
-  redraws on a zoom.
+  redraws on a zoom. A new window draws only the clips entering it: a clip already drawn is kept.
 - *Why:* on #112's branch the owner saw the frame rate drop when zooming the tracks or Notes at
   120 Hz: every zoom step redrew every clip of the song, once for each wheel event (the note's §16).
 - *Today:* since track `camera`: `cull` and `useCull` in `web/src/camera/` (the margin and the step
-  in its `numbers.ts`); in `SongTimeline.tsx` the window across from `useCull`, and each track's
-  nearness down from an IntersectionObserver whose margin is the view's height; in `NoteView.tsx`
-  both ways from `useCull`. Tested by `camera` (on the 24-by-64 song: no more clips than the view and
-  its margins can show; a swipe of 120 small events rendering the rows only at a step; 30 ⌘-scroll
-  events rendering the arrangement at most once a frame; the same in Notes with a clip of many
-  notes; a zoom rendering no clip's mini drawing).
+  in its `numbers.ts`; a new window set in a `startTransition`); `useSpan` places a clip's box, and a
+  control lane's fallback, by the zoom (a CSS variable for the zoom was tried first: a change to it
+  made the browser work out the style of the whole arrangement anew, 56 ms of each zoom frame on the
+  big song); in `SongTimeline.tsx` the window across from `useCull`, and each track's nearness down
+  from an IntersectionObserver whose margin is the view's height; each clip box memoised; in
+  `NoteView.tsx` both ways from `useCull`. Tested by `camera` (on the 24-by-64 song: no more clips
+  than the view and its margins can show; a swipe of 120 small events rendering the rows only at a
+  step; 30 ⌘-scroll events rendering the arrangement at most once a frame, zooming in and out
+  rendering no clip box drawn before, only those entering the window; the same in Notes with a clip
+  of many notes; a zoom rendering no clip's mini drawing).
 
 ---
 

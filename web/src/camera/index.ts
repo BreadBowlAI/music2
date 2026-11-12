@@ -10,5 +10,6 @@ export { controlsAt, controlsOf, useCamera, useNear } from "./useCamera";
 export type { CameraOptions } from "./useCamera";
 export type { CameraControls } from "./rig";
 export { movingNow, pauseSwipes, setPlatform } from "./state";
+export { useSpan } from "./spans";
 export type { Platform } from "./state";
 export { face } from "./face";

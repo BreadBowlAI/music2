@@ -16,6 +16,7 @@ VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/
 | `store.ts` | The cameras: one small zustand store each, by name. `useZoomOf`, `useCull`, `onCamera`. |
 | `recognizer.ts` | What wheel and pinch events mean: swipes, rails, the `cancelable` rule, zoom, and its own glide where the platform gives none. |
 | `writer.ts` | Writes the camera into the box in whole pixels, and tells a move the browser made itself. |
+| `spans.ts` | `useSpan`: places a box along the stretched way by the zoom, straight into its style, so a zoom renders it not. |
 | `rig.ts` | One view's camera at work on its box: the recognizer's events once a frame, the writer, the app's moves. |
 | `useCamera.ts` | `useCamera`, `useNear` and `controlsOf`: how a view uses all this. |
 | `state.ts` | What every camera shares: the platform, the probe's pause, a drag holding the pointer, `movingNow`. |
@@ -69,8 +70,12 @@ function Timeline() {
   `camera.fit([from, to])`, `camera.zoomAround(zoom, at)`. Never `scrollIntoView` or `scrollLeft`.
   A move the browser makes itself (Tab, a key, a scrollbar, a click) is taken in.
 - **Draw only what is in view** (VIEW-12): `useCull` gives the window in the content's units, a view
-  each side more, moving in steps of half a view. For rows of their own heights, `useNear(name, ref)`
-  says whether a row is within a view of the box.
+  each side more. It is kept while it holds what shows and half a view more each side, so it changes
+  every half a view of a pan, or ×1.5 out or ×2 in of a zoom; a new one comes as a transition, which
+  never holds up a frame. For rows of their own heights, `useNear(name, ref)` says whether a row is
+  within a view of the box.
+- **A zoom renders nothing it can place:** `useSpan(name, ref, from, to)` writes a box's `left` and
+  `width` from the zoom. Memoise what a new window keeps, so only what enters it renders.
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.
 - **A control that keeps its wheel** (a picture's dot): mark it `data-wheel`.
 - **Who moved it:** `onCamera(name, (now, was) => …)` with `now.by`: `"hand"`, `"app"`, `"browser"`

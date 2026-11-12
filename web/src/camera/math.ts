@@ -112,40 +112,43 @@ export function fit(c: Camera, [a, b]: [number, number], s: Omit<Shape, "content
   return { x: Math.max(0, s.origin.x + a * zoom - s.margins.left - pad), y: c.y, zoom };
 }
 
-/** One way of a culling window: the units drawn, [from, to], and its step's number (it changes only when the step does). */
+/** One way of a culling window: the content's units drawn, [from, to]. */
 export interface Window {
   from: number;
   to: number;
-  step: number;
 }
 
-/** A way's margin and step, in px of the box: by default `CULL_MARGIN` and `CULL_STEP` of the clear view. */
+/**
+ * A way's margin and step, in the content's units: by default `CULL_MARGIN` and `CULL_STEP` of
+ * what shows that way.
+ */
 export interface CullBy {
   margin?: number;
   step?: number;
 }
 
 /**
- * What part of the content is in view plus a margin, in its units, each way (VIEW-12). The window
- * moves in steps: it is the same while the camera stays in one step, so a view that draws only it
- * redraws only when the camera crosses a step. A box not laid out yet (no size) shows nothing.
+ * What part of the content to draw, in its units, each way (VIEW-12): what is in view and a margin
+ * each side. The window `was` is kept while it holds what shows and its margin less a step each side,
+ * and isn't twice as wide as a new one; else a new one is made around what shows. So a pan moves it
+ * a step at a time, and a zoom only every ×(1 + step) out or ×2 in: a view that draws only it
+ * renders only then. A box not laid out yet (no size) shows nothing.
  */
-export function cull(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?: CullBy } = {}): { x: Window; y: Window } {
-  const axis = (at: number, lo: number, hi: number, view: number, origin: number, stretch: boolean, b: CullBy = {}): Window => {
-    const clear = view - lo - hi;
-    if (clear <= 0) return { from: 0, to: 0, step: 0 };
-    const margin = b.margin ?? clear * CULL_MARGIN;
-    const size = Math.max(1, b.step ?? clear * CULL_STEP);
-    const step = Math.floor(at / size);
-    // In the content's px: the clear part starts `lo` in from the camera.
-    const from = step * size - margin + lo, to = (step + 1) * size + clear + margin + lo;
+export function cull(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?: CullBy } = {}, was: { x?: Window; y?: Window } = {}): { x: Window; y: Window } {
+  const axis = (at: number, lo: number, hi: number, view: number, origin: number, stretch: boolean, b: CullBy = {}, kept?: Window): Window => {
+    if (view - lo - hi <= 0) return { from: 0, to: 0 };
     const unit = (px: number) => (stretch ? (px - origin) / c.zoom : px - origin);
-    return { from: unit(from), to: unit(to), step };
+    // What shows, between the margins, in the content's units.
+    const from = unit(at + lo), to = unit(at + view - hi), shows = to - from;
+    const margin = b.margin ?? shows * CULL_MARGIN;
+    const step = b.step ?? shows * CULL_STEP;
+    if (kept && kept.from <= from - (margin - step) && kept.to >= to + (margin - step) && kept.to - kept.from <= 2 * (shows + 2 * margin)) return kept;
+    return { from: from - margin, to: to + margin };
   };
   const m = s.margins;
   return {
-    x: axis(c.x, m.left, m.right, s.view.w, s.origin.x, s.stretch.x, by.x),
-    y: axis(c.y, m.top, m.bottom, s.view.h, s.origin.y, s.stretch.y, by.y),
+    x: axis(c.x, m.left, m.right, s.view.w, s.origin.x, s.stretch.x, by.x, was.x),
+    y: axis(c.y, m.top, m.bottom, s.view.h, s.origin.y, s.stretch.y, by.y, was.y),
   };
 }
 

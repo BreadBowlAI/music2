@@ -2,7 +2,7 @@
 // by subscription; hooks select only coarse ones (the zoom, a culling window's step), so moving the
 // view renders nothing (VIEW-8).
 
-import { useMemo } from "react";
+import { startTransition, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { createStore, useStore, type StoreApi } from "zustand";
 import { NO_EDGES, cull, type Camera, type CullBy, type Shape, type Size, type Window } from "./math";
 
@@ -72,21 +72,36 @@ export const useCameraState = <T,>(name: string, select: (s: CameraState) => T) 
 /** Which ways a culling window is wanted. */
 export type Ways = "x" | "y" | "xy";
 
-const key = (s: CameraState, ways: Ways, by: { x?: CullBy; y?: CullBy }) => {
-  const w = cull(s, s, by);
-  return `${s.zoom}|${s.view.w}|${s.view.h}|${s.margins.left}|${s.margins.top}|${s.margins.right}|${s.margins.bottom}|${ways.includes("x") ? w.x.step : ""}|${ways.includes("y") ? w.y.step : ""}`;
-};
-
 /**
  * What part of the content a view draws (VIEW-12): the window in view plus a margin, in the
- * content's units, each way asked for. It renders only when the window's step changes, the zoom, or
- * the box's size, never on a frame that stays in one step.
+ * content's units, each way asked for. It renders the view only when that window is made anew (a pan
+ * of a step, a zoom of ×1.5 out or ×2 in, the box's size), never on a frame that keeps it; and then as
+ * a transition, which never holds up a frame of the swipe: the margin lets it lag. Only once what
+ * shows has left the window is it drawn at once.
  */
 export function useCull(name: string, ways: Ways = "xy", by: { x?: CullBy; y?: CullBy } = {}): { x: Window; y: Window } {
   const cam = cameraOf(name);
   // The margins and steps asked for, kept while they are the same numbers: a new object each render asks nothing new.
   const asked = JSON.stringify(by);
   const kept = useMemo(() => by, [asked]);
-  useStore(cam, (s) => key(s, ways, kept));
-  return cull(cam.getState(), cam.getState(), kept);
+  const [shown, setShown] = useState(() => cull(cam.getState(), cam.getState(), kept));
+  // The window asked for last: the next camera's checks keep it while its render waits.
+  const latest = useRef(shown);
+  useLayoutEffect(() => {
+    const check = (s: CameraState) => {
+      const was = latest.current;
+      const w = cull(s, s, kept, was);
+      if (!((ways.includes("x") && w.x !== was.x) || (ways.includes("y") && w.y !== was.y))) return;
+      latest.current = w;
+      // What shows, between the margins: still in the window drawn, the new one can wait.
+      const shows = cull(s, s, { x: { margin: 0 }, y: { margin: 0 } });
+      const inside = (a: Window, b: Window) => a.from <= b.from && a.to >= b.to;
+      const waits = (!ways.includes("x") || inside(was.x, shows.x)) && (!ways.includes("y") || inside(was.y, shows.y));
+      if (waits) startTransition(() => setShown(w));
+      else setShown(w);
+    };
+    check(cam.getState());
+    return cam.subscribe(check);
+  }, [cam, kept, ways]);
+  return shown;
 }
