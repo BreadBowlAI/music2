@@ -501,12 +501,37 @@ execFileSync(process.execPath, [path.join(path.dirname(fileURLToPath(import.meta
   lane.clips = [{ ...lane.clips[0], start: 0, length: 64, notes }, ...lane.clips.slice(16)];
   fs.writeFileSync(file, JSON.stringify(lane));
 }
-// First-song zoomed in to 54 px a beat, then the big song opened straight after it, with no close
-// in between (Open Recent, Save As): the new song's views get cameras of their own (review Q1).
+// First-song zoomed in to 54 px a beat, its Graph showing, then a twin of it and the big song each
+// opened straight after the last, with no close in between (Open Recent, Save As): each song's views
+// get cameras of their own (review Q1).
 await key("Meta+Equal");
 await key("Meta+Equal");
 await until(async () => (await cam("arrangement"))?.zoom === 54, 3000);
-check((await api("/open", { method: "POST", body: json({ path: big }) })).status === 200, "the big song opens straight after first-song: 24 tracks of 64 clips");
+const tabWas = await page.$eval('[data-view-tab][aria-selected="true"]', (e) => e.dataset.viewTab).catch(() => null);
+await view("graph");
+await page.waitForSelector(`${graph} [data-node-id]`);
+// A twin of first-song (a fresh copy: its own view.json), whose Graph shows the same track at once.
+{
+  const twin = path.join(ROOT, "twin");
+  fs.cpSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../examples/first-song"), twin, { recursive: true });
+  const opened = (await api("/open", { method: "POST", body: json({ path: twin }) })).status === 200;
+  await until(async () => (await cam("arrangement"))?.zoom !== 54 && (await has(`${graph} [data-node-id]`)), 30000);
+  await frames();
+  const zoom = (await cam("arrangement"))?.zoom;
+  const n = await box(`${graph} [data-node-id]`);
+  const before = await page.$eval("[data-zoom]", (e) => e.dataset.zoom);
+  await feed(n.x + 4, n.y + 4, [{ t: 0, dy: -100, ctrl: true }]);
+  await frames();
+  const after = await page.$eval("[data-zoom]", (e) => e.dataset.zoom);
+  check(
+    opened && zoom === 24 && before === "1.00" && after === "1.50",
+    `first-song's twin opened over it, its Graph showing: its own zoom (24 px a beat: ${zoom}), its Graph at Fit and zooming by ⌘-scroll (${before} → ${after})`,
+  );
+  await key("Meta+Equal");
+  await key("Meta+Equal");
+  await until(async () => (await cam("arrangement"))?.zoom === 54, 3000);
+}
+check((await api("/open", { method: "POST", body: json({ path: big }) })).status === 200, "the big song opens straight after the twin: 24 tracks of 64 clips");
 const tl = "[data-testid=timeline]";
 await page.waitForSelector(`${tl} [data-track="keys-6"]`, { timeout: 60000 });
 await until(async () => (await page.$$(`${tl} [data-clip]`)).length > 50, 60000);
@@ -526,7 +551,7 @@ const clipsOff = () =>
   });
 {
   const o = await clipsOff();
-  check(o.zoom === 24 && o.n > 0 && o.worst <= 1, `it opens at its own zoom (24 px a beat, no view.json), not first-song's 54, each clip box where its beats put it: ${json(o)}`);
+  check(o.zoom === 24 && o.n > 0 && o.worst <= 1, `it opens at its own zoom (24 px a beat, no view.json), not the twin's 54, each clip box where its beats put it: ${json(o)}`);
   await key("Meta+Equal");
   await until(async () => (await cam("arrangement"))?.zoom === 36, 3000);
   await frames();
@@ -534,16 +559,18 @@ const clipsOff = () =>
   check(z.zoom === 36 && z.worst <= 1, `⌘= zooms it, and every clip box follows: ${json(z)}`);
   await key("Meta+Minus");
   await until(async () => (await cam("arrangement"))?.zoom === 24, 3000);
-  const tabWas = await page.$eval('[data-view-tab][aria-selected="true"]', (e) => e.dataset.viewTab).catch(() => null);
-  await view("graph");
   await page.waitForSelector(`${graph} [data-node-id]`);
+  await until(async () => (await page.$eval("[data-zoom]", (e) => e.dataset.zoom).catch(() => null)) === "1.00", 3000);
   const n = await box(`${graph} [data-node-id]`);
   const before = await page.$eval("[data-zoom]", (e) => e.dataset.zoom);
   await feed(n.x + 4, n.y + 4, [{ t: 0, dy: -100, ctrl: true }]);
   await frames();
   const after = await page.$eval("[data-zoom]", (e) => e.dataset.zoom);
   check(before === "1.00" && after === "1.50", `the new song's Graph zooms by ⌘-scroll (${before} → ${after})`);
-  if (tabWas && tabWas !== "graph") await view(tabWas);
+  // Off the Graph again, as before the switch (first-song's beat grid has no tab in the big song:
+  // Notes, with no clip, draws nothing either).
+  const back = (await has(`[data-view-tab="${tabWas}"]`)) ? tabWas : "notes";
+  if (back && back !== "graph") await view(back);
 }
 const lanes = async () => {
   const t = await box(tl);
