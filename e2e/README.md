@@ -220,6 +220,35 @@ or `grains`: the script skips it and says so.
 `renders.sha256` is the one record every OS must match (PLAT-4); `ci/check.sh` renders with
 `baseline.sh` and checks against it (`cd <out> && shasum -a 256 -c <repo>/e2e/renders.sha256`).
 
+## WebKit numbers (`webkit/`)
+
+In short: `node e2e/webkit/webkit.mjs` runs `zoom-bench`'s plan in WebKit (WebKitGTK's MiniBrowser),
+the engine of the Linux app and the same engine code as the Mac's. It is a tool, not a suite: no
+tier runs it. A track that wants WebKit's numbers for a zoom runs it by hand.
+
+```sh
+node e2e/beat-song.mjs /tmp/beat                     # a beat song like the owner's (or big-song.mjs)
+node e2e/webkit/webkit.mjs target/debug/examples/headless /tmp/beat /tmp/wk [--dpr 2] [--web web/dist]
+```
+
+- It copies the song into the out folder (a new or empty one), starts the headless server on the
+  copy with a scratch `HOME` there (`M2_AUDIO=none`, `M2_MIDI=none`), and serves a copy of the web
+  build whose page gets its key and a small driver: the plan and `zoomlib.mjs`'s page functions.
+- It opens the page in MiniBrowser, full screen on an invisible Xvfb screen of its own (it needs
+  `Xvfb` and `python3`), and sizes the window until the page is 1440×900 px at `--dpr` device px a
+  px (2 by default, as the owner's Mac): `xresize.py` does it, since no window manager runs there.
+- The page runs the plan itself, through the app's zoom bench, and posts each run to a listener in
+  the tool. The tool prints the same table as `zoom-bench` and writes every frame to
+  `<out>/webkit.json`. Its logs are `server.log` and `minibrowser.log` there.
+- **WebKit draws in software here**: a server has no graphics chip, and Xvfb gives none. Paint and
+  commit cost more than on a Mac's graphics chip; style, layout and script are the same engine
+  code. Its clock is coarser than Chrome's (whole ms). The zoom note's §1 reads 0.7 to 1.3 times
+  these numbers for a Mac.
+- `MINIBROWSER` names the browser if it isn't where Debian or Fedora put WebKitGTK 4.1's.
+  `WEBKIT_TIMEOUT` is the seconds the page may take (600 by default).
+- The packs the server installs in the scratch `HOME` are read-only (PACK-6): `chmod -R u+w <out>`
+  before removing it.
+
 ## Suites
 
 | suite | kind | checks | covers |
