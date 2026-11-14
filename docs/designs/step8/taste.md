@@ -1124,8 +1124,9 @@ fingers, which stays put; the view is not laid out again (VIEW-8). When the zoom
 `gestureend`, or no ⌘-scroll for G), the view MUST be laid out at the new zoom and the stretch go,
 in the same frame: the picture after is the one a direct zoom to the same zoom and place draws. It
 is laid out early only when a zoom out would show past what the view has drawn (the window it
-draws, VIEW-12, or its content's end). While the stretch lasts, the stretched layers take no
-pointer. A zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
+draws, VIEW-12, or its content's end), or a step before, where a view's window would no longer be
+kept: then it draws its new window between frames, as a swipe's. While the stretch lasts, the
+stretched layers take no pointer. A zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
 once, as is any other move while a stretch lasts (a swipe, Follow's page, a press or a key lays it
 out first). A view that marks nothing (the Graph) is laid out on each frame of a zoom.
 - *Two zooms.* While a live zoom lasts, the camera keeps two: the zoom **shown** (its state's `x`,
@@ -1152,10 +1153,13 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   the arrangement's pinch).
 - *Today, the live zoom:* since track `live-zoom`. In the library: `rig.ts` (a zoom by the hand is
   `stretch`ed: `begin` reads where the box is scrolled and each marked element's place once, at a
-  frame's start; `covered` asks each `useCull`'s window on screen and the content's end; `layOut`
-  ends it, at a `gestureend`, G with no ⌘-scroll, a press, a key, a resize, a move or the app's
-  zoom), `stretch.ts` (`useStretch`, `stretchOf`, `shownAt`) and `store.ts` (`laid`, `laidOf`, the
-  windows on screen). The arrangement marks its lanes, the grid under the tracks, the take rows, its
+  frame's start, and puts one element over the box's view to take the pointer; `covered` asks each
+  `useCull`'s window on screen and the content's end, and lays a zoom out early a step before them,
+  once the window asked for last no longer holds what shows and its kept margin (`holds` in
+  `math.ts`), so the view draws its new window between frames; `layOut` ends it, at a
+  `gestureend`, G with no ⌘-scroll, a press, a key, a resize, a move or the app's zoom; the layers
+  are kept `LAYERS_KEPT`, 400 ms, after), `stretch.ts` (`useStretch`, `stretchOf`, `shownAt`) and
+  `store.ts` (`laid`, `laidOf`, the windows on screen and asked for). The arrangement marks its lanes, the grid under the tracks, the take rows, its
   ruler, the loop's shade and the selected bars (the Song row's too); its playhead follows the zoom
   shown (`usePlayhead`). Notes marks its grid (with its notes and playhead) and its ruler; the beat
   grid its ruler, bar lines, rows and playhead; their velocity strips follow the zoom shown
@@ -1168,7 +1172,9 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   out once, every frame of the gesture showing each clip or note within a px of the zoom shown and
   none showing both the stretch and the new layout; the arrangement's layout equal to a direct
   zoom's, clip box for clip box; ⌘-scroll never laid out before G after its last event; the Graph,
-  which marks nothing, laid out in each frame of a zoom). Measured in the zoom note's §2.
+  which marks nothing, laid out in each frame of a zoom; a pinch out to a quarter laid out early as it
+  goes, every frame drawn across the view; a pinch in ×4 laid out only at its end; `stretchOf`,
+  `shownAt` and `laidOf` against known numbers). Measured in the zoom note's §2.
 
 **VIEW-6.** The view MUST stop at its edges, on every system (D3). Apple's stretch and spring back
 are a later track, if the owner misses them.

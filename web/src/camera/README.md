@@ -13,7 +13,7 @@ VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/
 |---|---|
 | `index.ts` | The only file the app imports. |
 | `numbers.ts` | Its numbers: G (the gap that ends a swipe), the rails, the glide, the culling's margin and step. One line each, so the owner's probe report changes one line. |
-| `math.ts` | The pure functions: `move`, `to`, `zoomAround`, `reveal`, `fit`, `toContent`, `toBox`, `cull`, `cullPlan`. Each takes a camera and the view's shape, and gives a new camera or a conversion. |
+| `math.ts` | The pure functions: `move`, `to`, `zoomAround`, `reveal`, `fit`, `toContent`, `toBox`, `cull`, `cullPlan`, `holds`. Each takes a camera and the view's shape, and gives a new camera or a conversion. |
 | `store.ts` | The cameras: one small zustand store each, owned by the view that made it, lent to what it draws (`CameraScope`) and listed by name while mounted. `useZoomOf`, `useCull`, `onCamera`. |
 | `recognizer.ts` | What wheel and pinch events mean: swipes, rails, the `cancelable` rule, zoom, and its own glide where the platform gives none. |
 | `writer.ts` | Writes the camera into the box in whole pixels, and tells a move the browser made itself. |
@@ -110,13 +110,18 @@ function Clip({ clip }) {
   zoom with the ref `useStretch(camera)` (or by name, under the scope): the lanes or grid, the ruler,
   a shade over them. While a pinch or a run of ⌘-scroll lasts, the camera writes one `transform` on
   each, a stretch around the content's origin that keeps the point under the fingers where it is; it
-  renders nothing, and the marked elements take no pointer. When the zoom ends (`gestureend`, or no
+  renders nothing, and one element it puts over the box's view takes the pointer, so nothing
+  stretched is hit (not `pointer-events: none`, which is inherited: every clip's style worked out
+  anew). The marked elements keep their own layers `LAYERS_KEPT` ms after, unless a press or a key
+  comes. When the zoom ends (`gestureend`, or no
   ⌘-scroll for G) the view renders once at the new zoom, and its stretch goes in that render's layout
   effect: no frame shows both. It is laid out early only when the zoom shown would show past what is
-  drawn: a culling window on screen (each `useCull` says its own) or the content's end. A zoom by the
+  drawn (a culling window on screen, each `useCull` says its own, or the content's end), or a step
+  before, once the window asked for last no longer holds what shows and its kept margin (`holds`):
+  then the view draws its new window between frames. A zoom by the
   app (`zoomAround`, `fit`, `to` with a zoom) is laid out at once; any other move lays a live zoom
-  out first. The camera owns a marked element's `transform`, `transform-origin`, `will-change` and
-  `pointer-events`: leave them to it, and mark nothing inside something marked. What has its own
+  out first. The camera owns a marked element's `transform`, `transform-origin` and `will-change`:
+  leave them to it, and mark nothing inside something marked. What has its own
   transform follows the zoom shown instead: a playhead places itself at `shownAt(state, beat)`, a
   strip outside the box scales itself by `stretchOf(state)`, each from `onCamera`. A view that marks
   nothing is laid out on each frame of a zoom, as the Graph is: to take the live zoom back from a
