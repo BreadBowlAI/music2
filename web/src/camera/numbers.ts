@@ -20,15 +20,17 @@ export const SWIPE_GAP = 50;
  * The probe: the owner's straight swipes go 0 to 11° off an axis all told, but their first 8 to 20 px
  * often go 15 to 25° off, in small whole deltas such as (3, 0), (5, -3). Within 10° after 8 px (the
  * guess) put 14 of their 32 straight swipes on a rail, and moved them 328 px of the 681 they went
- * off it. Within 25° after 16 px, broken by the last 100 px: 31 of 32 stay on a rail, 2 px move off;
- * none of their 11 diagonal swipes (25 to 45° off) gets one, and 4721 of their 4814 px across are
- * kept (98%). 100 px is a dozen of their events: jitter of a pixel each way can't take that 20° off
- * (36 px would), and a turn to 45° in events of 10 px breaks free at its fifth (its third before).
- * A swipe that keeps 20 to 25° off starts on its rail and leaves it after 100 px; the owner made none.
+ * off it. Within 25° after 16 px, broken by the last 100 px turning 25° off: all 32 stay on a rail,
+ * none moves off; none of their 11 diagonal swipes (25 to 45° off) gets one, and 4721 of their
+ * 4814 px across are kept (98%). The break's angle is the start's: a swipe that may start on a rail
+ * 22° off also stays on it at 22°. 100 px is a dozen of their events: jitter of a pixel each way
+ * can't take that 25° off (47 px would), and a turn to 45° in events of 10 px breaks free at its
+ * seventh (its third before). One flick of theirs only 19° off all told, in a step of diagonal
+ * flicks, stays on its rail: 8 of its 333 px across move.
  */
 export const RAIL_ANGLE = 25;
 export const RAIL_AFTER = 16;
-export const RAIL_TURN = 20;
+export const RAIL_TURN = 25;
 export const RAIL_RECENT = 100;
 
 /**
