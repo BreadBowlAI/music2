@@ -83,7 +83,9 @@ struct SearchQuery {
 
 async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>, ApiError> {
     let found = crate::routes::blocking(move || {
-        let items = s.library()?;
+        // The indexes running as the samples were read, never after (LIB-5): the page asks again
+        // while any did.
+        let (items, indexing) = s.library()?;
         let mut query = m2_editor::library::Query::parse(&q.q);
         if let Some(beat) = q.fits {
             query.fits = Some(s.graph.fits(beat)?.ok_or_else(|| anyhow::anyhow!("Fits my song needs a song open."))?);
@@ -94,7 +96,6 @@ async fn search(State(s): S, Query(q): Query<SearchQuery>) -> Result<Json<Value>
         let found_there = m2_editor::get::find(&offers, &query);
         let more = found_there.len().saturating_sub(crate::registry::LIBRARY_ROWS);
         let library: Vec<Value> = found_there.into_iter().take(crate::registry::LIBRARY_ROWS).map(|o| o.json()).collect();
-        let indexing = s.sample_index.indexing();
         let not_wav: usize = s.sample_folders_shown().iter().map(|f| f.not_wav).sum();
         Ok::<_, anyhow::Error>(json!({
             "items": found, "library": library, "library_more": more, "registry": s.registry_said(),
