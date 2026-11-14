@@ -12,20 +12,25 @@ import { onFrame } from "../lib/clock";
 import { useRenderCount } from "../lib/frames";
 import { INPUT } from "../lib/meters";
 import type { TrackColor } from "../lib/palette";
-import { useRecord } from "../lib/record";
+import { useRecord, type Take as Recorded } from "../lib/record";
 import { useZoom } from "../lib/zoom";
 import Meter from "./Meter";
 import { Notes } from "./SongTimeline";
 
-/** The take in lane `module.lane`, if one records there. */
+/** The take in lane `module.lane`, if one records there. It renders on no zoom while none does (VIEW-8). */
 export default function Take({ module, lane, color }: { module: string; lane: string; color: TrackColor }) {
   useRenderCount("arrangement.take");
   const take = useRecord((s) => (s.take?.phase === "take" && (s.take.lanes ?? [s.take]).some((l) => l.module === module && l.lane === lane) ? s.take : null));
-  const mine = take?.lanes?.find((l) => l.module === module && l.lane === lane);
+  return take ? <Recording take={take} module={module} lane={lane} color={color} /> : null;
+}
+
+/** A take recording in lane `module.lane`: placed by the zoom, grown by the playhead's clock each frame. */
+function Recording({ take, module, lane, color }: { take: Recorded; module: string; lane: string; color: TrackColor }) {
+  const mine = take.lanes?.find((l) => l.module === module && l.lane === lane);
   const ppb = useZoom();
   const [now, setNow] = useState<number | null>(null);
-  useEffect(() => (take ? onFrame(setNow) : undefined), [take]);
-  if (!take || now === null) return null;
+  useEffect(() => onFrame(setNow), []);
+  if (now === null) return null;
   // To the playhead; never past the loop's end, where the take ends; never before where it started.
   const end = Math.max(take.from, take.until === null ? now : Math.min(now, take.until));
   const audio = (mine?.kind ?? take.kind) === "audio";

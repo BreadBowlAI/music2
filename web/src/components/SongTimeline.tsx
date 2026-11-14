@@ -77,7 +77,7 @@ import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startRe
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
-import { Hatch, VLines } from "./draw";
+import { Hatch, usePatternId, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
 import TrackHeader from "./TrackHeader";
@@ -1778,8 +1778,10 @@ export default function SongTimeline({
     e.stopPropagation();
   };
 
-  // The Song row's grid, the same while the meter is: a zoom renders the grid, not the row.
-  const songGrid = useMemo(() => <Grid meter={timeline.meter} />, [timeline.meter]);
+  // Every row's grid draws with the patterns `GridLines` spaces by the zoom: a zoom renders those
+  // once, not a row's grid. The Song row's, the same while the meter is.
+  const gridId = usePatternId();
+  const songGrid = useMemo(() => <Grid meter={timeline.meter} id={gridId} />, [timeline.meter, gridId]);
   const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
   return (
@@ -1859,8 +1861,10 @@ export default function SongTimeline({
             style={{ top: RULER_H, left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }}
           />
         )}
+        <GridLines meter={timeline.meter} id={gridId} />
         <Tracks
           timeline={timeline}
+          gridId={gridId}
           rows={rows}
           visible={visible}
           headerW={headerW}
@@ -2005,28 +2009,59 @@ function PlayCap({ headerW }: { headerW: number }) {
  * Bar and beat lines from beat 0 to the lanes' end: one stretch per time signature, each with its own bar
  * length. Under them the snap grid's own lines, where it is finer than a beat, its lines are at
  * least 12px apart and they meet every bar line (a triplet grid in 3/4 doesn't: none then).
+ *
+ * Each row draws its stretches with the patterns `GridLines` spaces by the zoom: a zoom renders the
+ * patterns once, never a row's grid (VIEW-8). Each stretch is placed by the zoom, straight into its style.
  */
-const Grid = memo(function Grid({ meter }: { meter: Meter[] }) {
+const Grid = memo(function Grid({ meter, id }: { meter: Meter[]; id: string }) {
+  useRenderCount("arrangement.grid");
+  return meterSpans(meter, 0, Infinity).map((s, i) => <GridSpan key={s.start} from={s.start} to={s.end} id={`${id}-${i}`} />);
+});
+
+/** A grid's layers, under to over: the snap grid's, the beats', the bars'. */
+const GRID_LAYERS = [0, 1, 2];
+
+/** One stretch of a row's grid, from beat `from` to `to` (the lanes' end: Infinity), drawn with the patterns `id`. */
+function GridSpan({ from, to, id }: { from: number; to: number; id: string }) {
+  const el = useRef<HTMLDivElement>(null);
+  useSpan(ARRANGEMENT, el, from, to === Infinity ? null : to);
+  return (
+    <div ref={el} aria-hidden className="absolute inset-y-0 pointer-events-none" style={to === Infinity ? { right: 0 } : undefined}>
+      <svg className="absolute inset-y-0 left-0" width="100%" height="100%">
+        {GRID_LAYERS.map((k) => (
+          <rect key={k} width="100%" height="100%" fill={`url(#${id}-${k})`} />
+        ))}
+      </svg>
+    </div>
+  );
+}
+
+/** The grid's patterns at the zoom, one set a stretch, for every row's grid to draw with: they render once a zoom. */
+const GridLines = memo(function GridLines({ meter, id }: { meter: Meter[]; id: string }) {
   useRenderCount("arrangement.grid");
   const grid = useGrid((s) => s.song);
-  // Its lines are a pattern a span, spaced in px by the zoom: it renders on a zoom, a few elements a row.
   const ppb = useZoom();
-  return meterSpans(meter, 0, Infinity).map((s) => {
-    const step = fineStep(grid, s.bar, ppb);
-    return (
-      <VLines
-        key={s.start}
-        className="inset-y-0"
-        style={s.end === Infinity ? { left: s.start * ppb, right: 0 } : { left: s.start * ppb, width: (s.end - s.start) * ppb }}
-        layers={[
-          ...(step ? [{ every: step * ppb, color: "var(--color-hover)" }] : []),
-          // Zoomed far out, beats are too close to draw: bars only.
-          ...(ppb >= BEAT_LINES ? [{ every: ppb, color: "var(--color-line)" }] : []),
-          { every: s.bar * ppb, color: "var(--color-line-strong)" },
-        ]}
-      />
-    );
-  });
+  return (
+    <svg aria-hidden className="absolute" width={0} height={0}>
+      <defs>
+        {meterSpans(meter, 0, Infinity).flatMap((s, i) => {
+          const step = fineStep(grid, s.bar, ppb);
+          const layers = [
+            step ? { every: step * ppb, color: "var(--color-hover)" } : null,
+            // Zoomed far out, beats are too close to draw: bars only.
+            ppb >= BEAT_LINES ? { every: ppb, color: "var(--color-line)" } : null,
+            { every: s.bar * ppb, color: "var(--color-line-strong)" },
+          ];
+          // A layer not drawn at this zoom: a pattern that paints nothing.
+          return layers.map((l, k) => (
+            <pattern key={`${i}-${k}`} id={`${id}-${i}-${k}`} patternUnits="userSpaceOnUse" x={0} y={0} width={l?.every ?? 1} height={1}>
+              {l && <rect width={1} height={1} fill={l.color} />}
+            </pattern>
+          ));
+        })}
+      </defs>
+    </svg>
+  );
 });
 
 /** The closest beat lines the timeline draws, in px: zoomed out further, bars only. */
@@ -2288,6 +2323,7 @@ function SectionBand({ meter, ppb }: { meter: Meter[]; ppb: number }) {
 /** Every track's rows, then empty grid to the foot. Memoized: the playhead moves without redrawing clips. */
 const Tracks = memo(function Tracks({
   timeline,
+  gridId,
   rows,
   visible,
   headerW,
@@ -2300,6 +2336,8 @@ const Tracks = memo(function Tracks({
   onOpenClip,
 }: {
   timeline: TimelineView;
+  /** The grid's patterns, which `GridLines` spaces by the zoom. */
+  gridId: string;
   rows: TimelineTrack[];
   /** The lanes' width on screen, to centre a line in. */
   visible: number;
@@ -2313,7 +2351,7 @@ const Tracks = memo(function Tracks({
   waiting: boolean;
   onOpenClip: (clip: ClipRef) => void;
 }) {
-  const grid = useMemo(() => <Grid meter={timeline.meter} />, [timeline.meter]);
+  const grid = useMemo(() => <Grid meter={timeline.meter} id={gridId} />, [timeline.meter, gridId]);
   const said = waiting || rows.length === 0;
   return (
     <div role="tablist" aria-label="Tracks" aria-orientation="vertical" className="contents">
