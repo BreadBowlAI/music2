@@ -1009,11 +1009,13 @@ tools after Hear notes, 24 px like every Notes tool):
 ### 3.10 Moving the view
 
 [The camera](../camera/design.md) moves the arrangement, the Graph, Notes and the beat grid as the
-hand does. Its rules are VIEW-1 to VIEW-12. VIEW-10 came first, to measure today's views on the
+hand does. Its rules are VIEW-1 to VIEW-13. VIEW-10 came first, to measure today's views on the
 owner's Mac before anything changes; VIEW-5 (as today's views could) and VIEW-11 came with track
 `mac-feel`; the rest came with track `camera`, which put all four views on the camera at once (the
 note's §16). The live zoom of VIEW-5 and VIEW-8 came with track `live-zoom`, from [the zoom
-note](../camera/zoom.md) (its Z1). The camera is a library of its own, `web/src/camera/` (its `README.md` says how a
+note](../camera/zoom.md) (its Z1); the drawn zoom of VIEW-5, VIEW-8 and VIEW-13 came with track
+`drawn-zoom`, from [the drawn zoom's note](../camera/drawn-zoom.md), and replaces Z1 in the
+arrangement. The camera is a library of its own, `web/src/camera/` (its `README.md` says how a
 view uses it): the app imports only its `index.ts`, and it imports nothing of the app's. Its
 numbers (G, the rails, the glide, the culling's margin and step) are named in its `numbers.ts`. G
 and the rails are set from the owner's swipe probe of 2026-11-14 on their Mac (VIEW-2, VIEW-3); the
@@ -1119,19 +1121,31 @@ MUST zoom and move with the graph: its dots 20 of the graph's px apart from its 
 while that is under 12 on screen, each 1 px in radius at every zoom.
 
 A zoom by the hand (a pinch, or a run of ⌘-scroll: its events less than G apart) MUST show in the
-frame it was asked in. In a view that marks what stretches (the arrangement, Notes and the beat
-grid), it is a **live zoom**: the camera writes one `transform` on what the view marks (its lanes
-or grid, its ruler, and what is drawn over them), a stretch across around the point under the
-fingers, which stays put; the view is not laid out again (VIEW-8). When the zoom ends (the pinch's
-`gestureend`, or no ⌘-scroll for G), the view MUST be laid out at the new zoom and the stretch go,
-in the same frame: the picture after is the one a direct zoom to the same zoom and place draws. It
-is laid out early only when a zoom out would show past what the view has drawn (the window it
-draws, VIEW-12, or its content's end), or a step before, where a view's window would no longer be
-kept: then it draws its new window between frames, as a swipe's. While the stretch lasts, a press
-lands on what it shows (the browser hits the picture as stretched), and lays the zoom out first. A
-zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
-once, as is any other move while a stretch lasts (a swipe, Follow's page, a press or a key lays it
-out first). A view that marks nothing (the Graph) is laid out on each frame of a zoom.
+frame it was asked in, the point under the fingers staying put. It ends at the pinch's
+`gestureend`, or once no ⌘-scroll has come for G. That G is counted in the frames after the last
+event, each frame at most G/2: a frame that came late (the page was busy) may come before the
+events sent meanwhile are heard, so it never ends a zoom alone.
+- **A drawn zoom**, in a view that draws its zoom (the arrangement): the view is drawn into a
+  picture over it, sharp at the zoom shown, in the frame it was asked in, and in every frame after,
+  from what the view renders from (the song, the selection, the playhead). The page under the
+  picture is not stretched, not laid out early, and keeps no layers of its own: it is laid out only
+  when the zoom ends, at the zoom shown, and the picture hides in that same frame (VIEW-13). A press
+  while the picture shows ends the zoom and does nothing else, as a touch stops a glide on an
+  iPhone: no click, no selection, no playhead moved.
+- **A live zoom** (Z1), in a view that marks what stretches (Notes and the beat grid, until the
+  drawn zoom's second track): the camera writes one `transform` on what the view marks (its grid,
+  its ruler, and what is drawn over them), a stretch across around the point under the fingers; the
+  view is not laid out again (VIEW-8). When the zoom ends, the view MUST be laid out at the new zoom
+  and the stretch go, in the same frame: the picture after is the one a direct zoom to the same
+  zoom and place draws. It is laid out early only when a zoom out would show past what the view has
+  drawn (the window it draws, VIEW-12, or its content's end), or a step before, where a view's
+  window would no longer be kept: then it draws its new window between frames, as a swipe's. While
+  the stretch lasts, a press lands on what it shows (the browser hits the picture as stretched), and
+  lays the zoom out first.
+- A zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at once, as is
+  any other move while a drawn or live zoom lasts (a swipe, Follow's page, a key, or for a live zoom
+  a press, lays it out first). A view that neither draws its zoom nor marks anything (the Graph) is
+  laid out on each frame of a zoom.
 - *Two zooms.* While a live zoom lasts, the camera keeps two: the zoom **shown** (its state's `x`,
   `y` and `zoom`, where the fingers asked) and the zoom **laid out** (its state's `laid`: what the
   view draws, and where its box is scrolled). `laid` is null at all other times: the two are one.
@@ -1140,9 +1154,14 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   `useCull`, the box's scroll position and the zoom view.json keeps follow it.
 - *Why:* each frame of a zoom laid out and drew every clip again: 38 ms of work a frame on a beat
   song in WebKit, where 120 Hz gives 8.3 ms. A stretch is the graphics chip's: 8 ms (the zoom note,
-  `docs/designs/camera/zoom.md`, §1 and §2). Names, bar numbers and borders stretch for a moment
-  while the fingers move, as in Maps and Preview; the lead said yes for the owner (the note's §4).
+  `docs/designs/camera/zoom.md`, §1 and §2). With it, names, bar numbers and borders stretched
+  while the fingers moved, then snapped sharp. The owner tried it and rejected it: Maps draws every
+  frame sharp, and Maps is the bar. So the arrangement draws its zoom (the drawn zoom's note,
+  `docs/designs/camera/drawn-zoom.md`), and Notes and the beat grid follow it in a second track.
   The Graph's zoom is cheap already.
+- *Why the end is counted in frames:* a timer of G fired when one frame ran long, before the
+  ⌘-scroll events sent meanwhile were heard, and ended the zoom in the middle of a run (main's CI,
+  2026-11-14; a long frame on a big song on a Mac can do the same).
 - *Not built:* the zoom note's `pointer-events: none` on what is stretched while it lasts. It is
   inherited, so WebKit worked out every clip's style anew at both ends of each zoom: 25 to 40 ms on
   a beat song, 100 on the big song; and it found nothing under the fingers faster (input 4 ms a
@@ -1199,12 +1218,13 @@ NOT render the window: only what shows the status (the top bar) renders by it, a
 grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
 frame. Inside the view, a zoom MUST render only what draws by the zoom, once: no clip box or clip
 drawing (VIEW-12), no node of the Graph (it scales its nodes as one), and the arrangement's grid and
-recording take once a zoom, never once a track. No React component MUST render on a frame of a live
-zoom (VIEW-5): the camera writes its stretch, and what follows the zoom shown (the arrangement's
-playhead, Notes' and the beat grid's velocity strips, Notes' hint on an empty clip) writes its own
-style. The view renders once at the zoom's end, and once at each early layout; after an early
-layout, the new window it asked for may render in a later stretched frame, between frames, as a
-transition, as a swipe's does (VIEW-12). While a pointer drag holds the pointer (a clip, a marquee,
+recording take once a zoom, never once a track. No React component MUST render on a frame of a
+drawn zoom (VIEW-5): the picture paints from the camera, outside React, and the view renders once,
+at the zoom's end. No React component MUST render on a frame of a live zoom either: the camera
+writes its stretch, and what follows the zoom shown (Notes' and the beat grid's velocity strips,
+Notes' hint on an empty clip) writes its own style. The view renders once at a live zoom's end, and
+once at each early layout; after an early layout, the new window it asked for may render in a later
+stretched frame, between frames, as a transition, as a swipe's does (VIEW-12). While a pointer drag holds the pointer (a clip, a marquee,
 a note, a cable, a fade, a reorder, the ruler's loop), the camera holds still: no swipe, glide or
 Follow moves it; Follow catches up after. While the camera moves, and for 250 ms after, the views'
 hover does nothing.
@@ -1501,6 +1521,16 @@ no clip: each clip's box is placed by the zoom straight into its style.
   canvas drawing at most once a frame), `st-record` (a take's canvas drawing once a frame as it
   grows), `beat-grid` and `layout` (the notes the canvases drew) and `pl-lanes` (the line a curve's
   canvas drew, through its points), through `e2e/drawlib.mjs`.
+
+**VIEW-13.** The last frame of a drawn zoom (VIEW-5) and the page laid out after it MUST look the
+same, within anti-aliasing: nothing on screen changes when the fingers stop. So the picture MUST draw
+everything the view can show where it shows it: in the arrangement, the clips (notes, curves and
+their points, audio waves and their names and fades, lanes of names and their fallbacks), takes
+(also while one records), hidden and faded rows, a bus's words, the hatching of a track muted in the
+song, tempo and time signature changes, the grid, the ruler and its bar numbers, markers, the loop,
+the selected bars, picked clips, the playhead and the Song row. It never falls back to a stretch.
+- *Why:* the owner judges motion against Apple Maps: sharp every frame, and nothing changes when the
+  fingers stop. Z1's stretch showed stretched text, then a jump (the drawn zoom's note, §1).
 
 ---
 
