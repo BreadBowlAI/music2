@@ -13,6 +13,8 @@ type ControlLane = Extract<TimelineLane, { kind: "control" }>;
 export interface LaneScale {
   /** True on a log scale. */
   log: boolean;
+  /** Says how it maps values: two scales with the same key draw every value at the same height. */
+  key: string;
   /** Where value `v` sits: 0 at the bottom of the drawing, 1 at its top. */
   level: (v: number) => number;
   /** The value at `level` (0 the bottom, 1 the top; past them, on past the range). */
@@ -37,6 +39,7 @@ export function laneScale(lane: ControlLane): LaneScale {
   const range = lane.max - lane.min || 1;
   return {
     log: false,
+    key: `linear ${lane.min} ${range}`,
     level: (v) => (v - lane.min) / range,
     value: (l) => lane.min + l * range,
     round: (v) => rounded(v, range),
@@ -50,6 +53,7 @@ function logScale(lane: ControlLane): LaneScale {
   const floor = Math.exp(lo);
   return {
     log: true,
+    key: `log ${lo} ${hi}`,
     // Nothing is below the bottom: 0 Hz sits there.
     level: (v) => (Math.log(Math.max(v, floor)) - lo) / (hi - lo),
     value: (l) => Math.exp(lo + l * (hi - lo)),

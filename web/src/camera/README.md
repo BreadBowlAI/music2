@@ -16,7 +16,7 @@ VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/
 | `store.ts` | The cameras: one small zustand store each, owned by the view that made it, lent to what it draws (`CameraScope`) and listed by name while mounted. `useZoomOf`, `useCull`, `onCamera`. |
 | `recognizer.ts` | What wheel and pinch events mean: swipes, rails, the `cancelable` rule, zoom, and its own glide where the platform gives none. |
 | `writer.ts` | Writes the camera into the box in whole pixels, and tells a move the browser made itself. |
-| `spans.ts` | `useSpan`: places a box along the stretched way by the zoom, straight into its style, so a zoom renders it not. |
+| `spans.ts` | `useSpan`: places a box along the stretched way by the zoom, straight into its style, so a zoom renders it not; `spanBox`, where such a box lies, its ends on the screen's own pixels. |
 | `rig.ts` | One view's camera at work on its box: the recognizer's events once a frame, the writer, the app's moves. |
 | `useCamera.ts` | `useCamera`, `useNear`, `controlsOf` and `controlsAt`: how a view uses all this. |
 | `state.ts` | What every camera shares: the platform, the probe's pause, a drag holding the pointer, `movingNow`. |
@@ -96,7 +96,8 @@ function Clip({ clip }) {
   `useNear(name, ref)` says whether a row is within a view of the box: coming near and going far
   render as a transition, coming into view at once.
 - **A zoom renders nothing it can place:** `useSpan(name, ref, from, to)` writes a box's `left` and
-  `width` from the zoom. Memoise what a new window keeps, so only what enters it renders. Given
+  `width` from the zoom, each end on the screen's own pixels (`spanBox`: what draws over a box finds
+  it with the same function, so the two never disagree). Memoise what a new window keeps, so only what enters it renders. Given
   `{ fine }`, the shortest thing the box draws, it marks the box `data-fine` while that is under
   2 px: CSS can then show marks that keep thin things visible only then.
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.

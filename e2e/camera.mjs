@@ -3,9 +3,10 @@
 // sends the events WebKit would send, at known times, on whatever is under the pointer.
 //   library   the camera's functions against known numbers, run in the page (`cullPlan` too); the
 //             writer on a box that keeps whole pixels, as WebKit does; its numbers
-//   graph     on first-song: a diagonal swipe 1:1; 120 events over a wire render nothing; a swipe that
-//             carries a picture's dot under the pointer, and one 60 ms after over it, change no file,
-//             one that starts on it is the dot's, to its end; Tab to a bar out of view is taken in
+//   graph     on first-song: a diagonal swipe 1:1; 120 events over a wire render nothing; a pinch
+//             renders no node; a swipe that carries a picture's dot under the pointer, and one 60 ms
+//             after over it, change no file, one that starts on it is the dot's, to its end; Tab to a
+//             bar out of view is taken in
 //   beat      a kit made as a musician makes one: ⌘-scroll and a pinch keep the step under the pointer
 //   twin      a fresh copy of first-song opened over it (no close), its Graph showing: its own zoom,
 //             its Graph at Fit and zooming
@@ -20,9 +21,13 @@
 //                  nothing; a right-click holds nothing; 120 events across frames render nothing
 //                  within a step, the rows once at a step; no more clips than the view and its margins
 //                  can show, none in tracks far below; a swipe down the tracks and back; 30 ⌘-scroll
-//                  events render it at most once a frame; a pinch keeps the beat; a zoom renders no
-//                  clip's mini drawing, and its notes have no group opacity; a click's scroll taken
-//                  in; agents' `seen` follows; a swipe, a key's scroll and a write to `scrollLeft`
+//                  events render it at most once a frame, and its grid and take once, not once a
+//                  track; a pinch keeps the beat; a zoom renders no clip's mini drawing; each clip's
+//                  canvas drawn at the zoom, sharp, its notes each at its own alpha (its pixels read),
+//                  the 2 px marks only where a note is under 2 px; a zoom by the hand stretching the
+//                  canvases and drawing each once as it settles, ⌘= at once; a long clip's canvas
+//                  bounded around what shows at 192 px a beat, drawn again only past it; a click's
+//                  scroll taken in; agents' `seen` follows; a swipe, a key's scroll and a write to `scrollLeft`
 //                  pause Follow, a swipe straight down doesn't, and Follow never takes a swipe back to
 //                  the playhead; a drag holds the camera and Follow; the camera's own glide with
 //                  Linux's flag, stopped by an edge, and none after a mouse's notches
@@ -36,9 +41,11 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until } from "./fixlib.mjs";
+import { drawings, rgb } from "./drawlib.mjs";
 import { expand } from "./graphlib.mjs";
 
-const { browser, page, errors, api, state, key, box, show, view } = await open(1440, 900);
+// At 2 device px a px, as the owner's Mac draws: the canvases' checks read the screen's own pixels (VIEW-12).
+const { browser, page, errors, api, state, key, box, show, view } = await open(1440, 900, { dpr: 2 });
 
 const near = (a, b, d = 1) => Math.abs(a - b) <= d;
 const json = (o) => JSON.stringify(o);
@@ -120,6 +127,31 @@ const pinch = (x, y, scales) =>
       for (const s of scales) send("gesturechange", s);
       send("gestureend", scales.at(-1));
     },
+    x,
+    y,
+    scales,
+  );
+/** A pinch at (x, y) across frames, as WebKit sends one: a `gesturechange` a frame, each scale from its start. Then three frames more. */
+const pinchFrames = (x, y, scales) =>
+  page.evaluate(
+    (x, y, scales) =>
+      new Promise((done) => {
+        const el = document.elementFromPoint(x, y);
+        const send = (type, scale) => {
+          const e = new UIEvent(type, { bubbles: true, cancelable: true });
+          for (const [k, v] of Object.entries({ scale, clientX: x, clientY: y })) Object.defineProperty(e, k, { value: v });
+          el.dispatchEvent(e);
+        };
+        send("gesturestart", 1);
+        let i = 0;
+        const one = () => {
+          send("gesturechange", scales[i]);
+          if (++i < scales.length) return requestAnimationFrame(one);
+          send("gestureend", scales.at(-1));
+          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(done)));
+        };
+        requestAnimationFrame(one);
+      }),
     x,
     y,
     scales,
@@ -328,6 +360,24 @@ const graphCam = async () => {
   const r = since(r0, await renders());
   const s1 = await scroll(graph);
   check(!!wire && s1.x !== s0.x && Object.keys(r).length === 0, `120 events of a swipe over a wire move the Graph and render nothing: ${json({ moved: [s1.x - s0.x, s1.y - s0.y], renders: r })}`);
+}
+// A pinch over the Graph renders the Graph at most once a frame, and none of its nodes: the Graph
+// scales them as one (VIEW-8).
+{
+  const g = await box(graph);
+  const at = { x: g.x + g.width * 0.5, y: g.y + g.height * 0.5 };
+  const z0 = (await graphCam())?.zoom;
+  const nodes = (await page.$$(`${graph} [data-node-id]`)).length;
+  const scales = [0.95, 0.9, 0.85, 0.8, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+  const r0 = await renders();
+  await pinchFrames(at.x, at.y, scales);
+  await sleep(300);
+  const r = since(r0, await renders());
+  const z1 = (await graphCam())?.zoom;
+  check(
+    nodes > 0 && (r.graph ?? 0) >= 1 && (r.graph ?? 0) <= scales.length + 3 && !r["graph.nodes"] && z0 !== undefined && near(z1, z0, 1e-6),
+    `a pinch over the Graph (${scales.length} frames, out and back to ${z0}) renders it at most once a frame and none of its ${nodes} nodes: ${json(r)}`,
+  );
 }
 // Tab to a bar out of view: the browser scrolls it into view, and the camera takes that in (VIEW-9).
 {
@@ -952,37 +1002,238 @@ const clipsShown = () =>
   const q = since(r1, await renders());
   check((q.arrangement ?? 0) >= 1 && (q.arrangement ?? 0) <= 18, `30 more, two in each of 15 frames, render it at most once a frame (18 frames): ${q.arrangement ?? 0} renders`);
   check((r["arrangement.drawings"] === undefined || r["arrangement.drawings"] === 0) && (await page.evaluate(() => "arrangement.drawings" in (window.m2canvas?.frames?.().total ?? {}))), `a zoom in renders no clip's mini drawing: ${r["arrangement.drawings"] ?? 0} (each counted)`);
+  // The grid and the recording take render with the zoom once, never once a track (VIEW-8): the
+  // grid's lines (`arrangement.grid`) each time the zoom renders the arrangement, no row's grid
+  // (`arrangement.grid.rows`), and no lane's take while none records.
+  const counted = await page.evaluate(() => ["arrangement.grid", "arrangement.grid.rows", "arrangement.take"].every((k) => k in (window.m2canvas?.frames?.().total ?? {})));
+  const rows = (await page.$$(`${tl} [data-track]`)).length;
+  check(
+    counted && [r, q].every((x) => (x["arrangement.grid"] ?? 0) >= 1 && (x["arrangement.grid"] ?? 0) <= (x.arrangement ?? 0) && !x["arrangement.grid.rows"] && !x["arrangement.take"]),
+    `a zoom renders the grid's lines once each time it renders the arrangement, and no row's grid or take of the ${rows} tracks (each counted): ${json({ "in one go": r, "a frame each": q })}`,
+  );
 }
-// A clip's mini drawing (review Q9): each note at its own opacity, never a group's (WebKit paints a
-// group with opacity through a layer of its own); its 2 px marks shown only in a clip whose shortest
-// note is under 2 px at the zoom. At this zoom and six steps out.
+// A clip's notes on its lane's canvas (VIEW-12; review Q9 before it): drawn at the camera's zoom once a
+// zoom settles, sharp at the screen's own pixels (its bitmap its box at devicePixelRatio, not
+// stretched), each note inside its clip's box as painted, at its own alpha (its middle pixel the
+// track's ink at that alpha; no opacity on the canvas, which WebKit would paint through a layer of
+// its own), its 2 px marks only in a clip whose shortest note is under 2 px at that zoom, each
+// centred on its note. At this zoom and six steps out.
 {
-  const drawing = () =>
-    page.evaluate(() => {
-      const zoom = window.m2canvas?.camera?.now("arrangement")?.zoom ?? 0;
-      const clips = [...document.querySelectorAll("[data-testid=timeline] [data-clip]")].filter((e) => e.querySelector("svg rect"));
-      const wrong = clips.filter((e) => {
-        const shortest = Math.min(...[...e.querySelectorAll("svg rect")].map((r) => Number(r.getAttribute("width"))));
-        const line = e.querySelector("svg line[data-note-mark]");
-        const shown = !!line && getComputedStyle(line).display !== "none";
-        return shown !== shortest * zoom < 2;
+  const look = async () => {
+    await sleep(200);
+    await frames(2);
+    const zoom = (await arr())?.zoom ?? 0;
+    const dpr = await page.evaluate(() => devicePixelRatio);
+    const all = (await page.$$eval(`${tl} [data-clip]`, drawings)).filter((d) => d?.kind === "lane" && d.notes.length > 0);
+    const wrong = [];
+    for (const d of all) {
+      const fine = (Math.min(...d.notes.map((n) => n.w)) / d.k) * zoom < 2;
+      const ink = rgb(d.ink);
+      const why = [];
+      if (d.zoom !== zoom) why.push(`drawn at ${d.zoom}`);
+      if (d.stretch !== 1 || d.scale !== dpr || d.bitmap[0] !== Math.round(d.drawnBox[0] * dpr) || d.bitmap[1] !== Math.round(d.drawnBox[1] * dpr)) why.push(`not sharp: ${json({ stretch: d.stretch, scale: d.scale, bitmap: d.bitmap, box: d.drawnBox })}`);
+      if (d.opacity !== "1") why.push(`opacity ${d.opacity}`);
+      // The box on the screen's own pixels, as the canvas rounds it (one function rounds both), and
+      // each note inside it, within its 1 px border and 4 px more at its top and foot.
+      const onPx = (v) => near(v * dpr, Math.round(v * dpr), 0.01);
+      if (!onPx(d.clip.left) || !onPx(d.clip.right)) why.push(`the box ${json(d.clip)} is off the screen's pixels`);
+      const [l, r] = [d.clip.left + 1, d.clip.right - 1];
+      const out = d.notes.filter((n) => n.x < l - 0.01 || n.x + n.w > r + 0.01 || n.y < d.clip.top + 5 - 0.01 || n.y + n.h > d.clip.bottom - 5 + 0.01);
+      if (out.length) why.push(`${out.length} notes outside the box ${json(d.clip)}: ${json(out[0])}`);
+      if (d.marks.length !== (fine ? d.notes.length : 0)) why.push(`${d.marks.length} marks for ${d.notes.length} notes, fine ${fine}`);
+      d.marks.forEach((m, i) => {
+        const n = d.notes[i];
+        if (!near(m.w, 2, 0.01) || !near(m.x + m.w / 2, n.x + n.w / 2, 0.01) || !near(m.h, n.h, 0.01) || m.alpha !== n.alpha) why.push(`mark ${i} ${json(m)} for ${json(n)}`);
       });
-      const marked = clips.filter((e) => {
-        const line = e.querySelector("svg line[data-note-mark]");
-        return !!line && getComputedStyle(line).display !== "none";
-      }).length;
-      return { zoom, clips: clips.length, layers: document.querySelectorAll("[data-testid=timeline] [data-clip] svg [opacity]").length, wrong: wrong.length, marked };
-    });
-  const a = await drawing();
+      for (const n of d.notes) {
+        if (n.w < 3 || n.h < 3) continue;
+        const a = fine ? 1 - (1 - n.alpha) ** 2 : n.alpha;
+        const p = n.pixel;
+        if (!p || Math.abs(p[3] - a * 255) > 4 || p.slice(0, 3).some((v, j) => Math.abs(v - ink[j]) > 3)) why.push(`note ${json(n)}: its pixel ${json(p)}, not ${json([...ink, Math.round(a * 255)])}`);
+      }
+      if (why.length) wrong.push({ start: d.start, why: why.slice(0, 3) });
+    }
+    // Every clip whose box shows notes in the beats its lane's canvas holds is in that canvas's list,
+    // with each of its audible notes there: a lane's canvas that left a clip out would draw an empty box.
+    const st = await state();
+    const lanes = await page.$$eval(`${tl} [data-lane]`, (els) =>
+      els.map((e) => {
+        const c = e.querySelector("canvas[data-drawing=lane]");
+        const d = c?.drawn;
+        return {
+          lane: e.dataset.lane,
+          held: d ? [d.from, d.to] : null,
+          clips: [...e.querySelectorAll("[data-clip]")]
+            .filter((x) => !x.querySelector("canvas[data-drawing]"))
+            .map((x) => {
+              const start = Number(x.dataset.start), length = Number(x.dataset.length);
+              const got = d?.clips.find((y) => y.start === start && y.length === length);
+              return { start, length, notes: got ? got.notes.length : null, k: got?.k ?? null };
+            }),
+        };
+      }),
+    );
+    const missing = [];
+    let listed = 0;
+    for (const l of lanes) {
+      const [module, key] = l.lane.split(".");
+      const data = st.timeline.tracks.find((t) => t.module === module)?.lanes.find((x) => x.key === key);
+      if (data?.kind !== "notes") continue;
+      for (const c of l.clips) {
+        const clip = data.clips.find((x) => x.start === c.start && x.length === c.length);
+        const audible = (clip?.notes ?? []).map((n) => [Math.max(n.start, 0), Math.min(n.start + n.length, c.length)]).filter(([a, b]) => b > a);
+        if (!l.held || c.start + c.length < l.held[0] || c.start > l.held[1] || !audible.length) continue;
+        // A thin note's 2 px mark reaches past it: those notes that near the part held count too.
+        const slack = 2 / (c.k ?? zoom);
+        const want = audible.filter(([a, b]) => b >= l.held[0] - c.start - slack && a <= l.held[1] - c.start + slack).length;
+        listed++;
+        if (c.notes !== want) missing.push({ lane: l.lane, start: c.start, drew: c.notes, want });
+      }
+    }
+    const alphas = new Set(all.flatMap((d) => d.notes.map((n) => n.alpha)));
+    return { zoom, clips: all.length, listed, marked: all.filter((d) => d.marks.length).length, alphas: alphas.size, wrong: wrong.slice(0, 4), wrongs: wrong.length, missing: missing.slice(0, 4), missed: missing.length };
+  };
+  const a = await look();
   for (let i = 0; i < 6; i++) await key("Meta+Minus");
   await frames(3);
-  const b = await drawing();
+  const b = await look();
   for (let i = 0; i < 6; i++) await key("Meta+Equal");
   await frames(3);
   check(
-    a.clips > 0 && b.clips > 0 && a.layers + b.layers === 0 && a.wrong + b.wrong === 0 && b.marked > 0,
-    `a clip's notes: no group opacity, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
+    a.clips > 0 && b.clips > 0 && a.listed >= a.clips && b.listed >= b.clips && a.wrongs + b.wrongs + a.missed + b.missed === 0 && b.marked > 0 && a.alphas > 0,
+    `a clip's notes on its lane's canvas: every clip in the beats it holds, each with all its notes there; at the zoom, sharp, each clip's box on the screen's pixels and its notes inside it, each at its own alpha in the track's ink, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
   );
+}
+// A zoom by the hand stretches each lane's canvas with the view and draws none again until the zoom
+// settles (no zoom for G, nor in a frame); then it draws each once, at the new zoom. A zoom by the app
+// (⌘=) draws them in the frame it lands in (VIEW-12).
+{
+  await setScroll(tl, 0, 0);
+  await frames();
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom;
+  const n0 = await page.$$eval(`${tl} canvas[data-drawing]`, (els) => (window.__canvases = els).length);
+  const r0 = await renders();
+  // 10 frames of ⌘-scroll in, read in the frame after the last event: well before G.
+  const mid = await page.evaluate(
+    (x, y) =>
+      new Promise((done) => {
+        let k = 0;
+        const send = () => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: -3, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true }));
+        const one = () => {
+          send();
+          send();
+          if (++k < 10) return requestAnimationFrame(one);
+          requestAnimationFrame(() =>
+            setTimeout(() => {
+              const els = window.__canvases.filter((e) => e.isConnected);
+              done({
+                zoom: window.m2canvas.camera.now("arrangement").zoom,
+                kept: els.length,
+                // Those holding any of their clip (one far from the view may hold none of it).
+                drawn: els.filter((e) => e.drawn.w > 0).length,
+                stretched: els.filter((e) => e.drawn.w > 0 && Math.abs(e.getBoundingClientRect().width - e.drawn.w) > 0.5).length,
+                at: [...new Set(els.map((e) => e.drawn.zoom))],
+                total: window.m2canvas.frames().total,
+              });
+            }, 0),
+          );
+        };
+        requestAnimationFrame(one);
+      }),
+    at.x,
+    at.y,
+  );
+  const r1 = since(r0, mid.total);
+  await sleep(300);
+  await frames(2);
+  const r2 = since(r0, await renders());
+  const end = await page.evaluate(() => {
+    const z = window.m2canvas.camera.now("arrangement").zoom;
+    const els = window.__canvases.filter((e) => e.isConnected);
+    return { zoom: z, n: els.length, at: els.filter((e) => e.drawn.zoom === z && Math.abs(e.getBoundingClientRect().width - e.drawn.w) < 0.5).length };
+  });
+  check(
+    n0 > 0 && mid.zoom > z0 * 1.2 && mid.kept === n0 && json(mid.at) === json([z0]) && mid.drawn > 0 && mid.stretched === mid.drawn && !r1["arrangement.canvas"],
+    `while 20 ⌘-scroll events zoom in (${z0} → ${mid.zoom?.toFixed(2)} px a beat), the ${n0} lanes' canvases stretch with the view (${mid.stretched} of the ${mid.drawn} holding any of their lane), each still as drawn at ${json(mid.at)}, none drawn again: ${json(r1)}`,
+  );
+  check(
+    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0,
+    `once it settles, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at})`,
+  );
+  const r3 = await renders();
+  await key("Meta+Equal");
+  await frames(1);
+  const app = await page.evaluate(() => {
+    const z = window.m2canvas.camera.now("arrangement").zoom;
+    const els = window.__canvases.filter((e) => e.isConnected);
+    return { zoom: z, n: els.length, at: els.filter((e) => e.drawn.zoom === z && Math.abs(e.getBoundingClientRect().width - e.drawn.w) < 0.5).length };
+  });
+  const r4 = since(r3, await renders());
+  check(
+    near(app.zoom, end.zoom * 1.5, 0.01) && app.n > 0 && app.at === app.n && (r4["arrangement.canvas"] ?? 0) >= app.n,
+    `⌘= draws every canvas again in the frame it lands in, at its zoom (${app.at} of ${app.n}, ${app.zoom.toFixed(2)} px a beat): ${json(r4)}`,
+  );
+  // And the grid's lines follow it: a row's beat and bar lines are the new px a beat and a bar (4/4) apart.
+  const lines = await page.evaluate(() =>
+    [...document.querySelectorAll('[data-testid=timeline] [data-lane="kick-1.hits"] svg rect[fill^="url(#"]')].slice(0, 3).map((r) => {
+      const p = document.getElementById(r.getAttribute("fill").slice(5, -1));
+      return p ? { every: Number(p.getAttribute("width")), drawn: !!p.querySelector("rect") } : null;
+    }),
+  );
+  check(
+    lines.length === 3 && lines[1]?.drawn && lines[2]?.drawn && near(lines[1].every, app.zoom, 0.001) && near(lines[2].every, app.zoom * 4, 0.001),
+    `the grid's lines follow the zoom: a beat ${lines[1]?.every} px and a bar ${lines[2]?.every} px apart at ${app.zoom.toFixed(3)} px a beat`,
+  );
+  await key("Meta+Minus");
+  await frames(2);
+}
+// Bounded: at 192 px a beat, the canvas of Bass 1's lane, whose first clip is 64 beats (12,288 px),
+// holds only what shows and up to a view more each side, in a bitmap of at most 8192 × 512 device px,
+// sharp; a pan within that draws it not again; a pan past it draws it again at once, around what
+// shows then (VIEW-12).
+{
+  const bass = `${tl} [data-track="bass-1"] [data-clip]`;
+  for (let i = 0; i < 8; i++) await key("Meta+Equal");
+  await until(async () => (await arr())?.zoom === 192, 3000);
+  await frames(2);
+  const view = async () => {
+    const c = await arr();
+    const w = c.view.w - c.margins.left - c.margins.right;
+    return { from: c.x / c.zoom, to: (c.x + w) / c.zoom, w };
+  };
+  // The view's middle at beat 32 of the clip.
+  const v0 = await view();
+  await setScroll(tl, Math.round(32 * 192 - v0.w / 2), null);
+  await frames(3);
+  await sleep(300);
+  const dpr = await page.evaluate(() => devicePixelRatio);
+  const holds = (d, v) => !!d && d.from <= v.from - d.start + 1e-6 && d.to >= Math.min(d.length, v.to - d.start) - 1e-6;
+  const a = (await page.$$eval(bass, drawings))[0];
+  const va = await view();
+  const sharp = (d) => d.scale === dpr && d.bitmap[0] === Math.round(d.drawnBox[0] * dpr) && d.stretch === 1;
+  check(
+    !!a && a.kind === "lane" && a.start === 0 && a.length === 64 && a.from > 0 && a.to < 64 && a.to - a.from <= 3 * (va.to - va.from) + 1e-6 && holds(a, va) && a.bitmap[0] <= 8192 && a.bitmap[1] <= 512 && sharp(a),
+    `at 192 px a beat its lane's canvas holds beats ${a?.from.toFixed(2)} to ${a?.to.toFixed(2)} of its 64, around what shows (${va.from.toFixed(2)} to ${va.to.toFixed(2)}), in ${json(a?.bitmap)} device px, sharp`,
+  );
+  const r0 = await renders();
+  await setScroll(tl, Math.round(32 * 192 - va.w / 2 + va.w * 0.4), null);
+  await frames(3);
+  const r1 = since(r0, await renders());
+  const b = (await page.$$eval(bass, drawings))[0];
+  check(!!a && !!b && !r1["arrangement.canvas"] && b.from === a.from && b.to === a.to && holds(b, await view()), `a pan of 0.4 views within what it holds draws it not again: ${json(r1)}`);
+  await setScroll(tl, Math.round(32 * 192 - va.w / 2 + va.w * 1.6), null);
+  await frames(3);
+  const r2 = since(r0, await renders());
+  const c = (await page.$$eval(bass, drawings))[0];
+  const vc = await view();
+  check(
+    (r2["arrangement.canvas"] ?? 0) >= 1 && holds(c, vc) && c.from > a.from && c.bitmap[0] <= 8192 && sharp(c),
+    `a pan of 1.6 views draws it again at once, around what shows then: beats ${c?.from.toFixed(2)} to ${c?.to.toFixed(2)} for ${vc.from.toFixed(2)} to ${vc.to.toFixed(2)} (${json(r2)})`,
+  );
+  for (let i = 0; i < 8; i++) await key("Meta+Minus");
+  await frames(2);
 }
 // A zoom renders no clip's box, only those entering the window drawn; the arrangement still once a frame.
 {
@@ -1339,6 +1590,125 @@ const rollBeat = (x) =>
   await frames();
   const p = await rollBeat(at.x);
   check(near(p.ppb, b.ppb * 0.75, 0.5) && near(p.beat * p.ppb, a.beat * p.ppb, 1.5), `and a pinch out, around it too (${p.beat.toFixed(3)}, ${p.ppb.toFixed(1)} px a beat)`);
+}
+
+// ================================================================ clips laid over each other (VIEW-12)
+// A copy of first-song whose Bass has clips over each other, as a drag or a MIDI file leaves them:
+// the later clip covers the earlier one, its notes, its curve and the curve's points, as each box
+// covered the one before it when each clip drew its own SVG. Then one file changed outside the app
+// draws only its own lane again.
+{
+  const ovl = path.join(ROOT, "ovl");
+  fs.cpSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "../examples/first-song"), ovl, { recursive: true });
+  const notesFile = path.join(ovl, "data/bass/notes.json");
+  const bassNotes = JSON.parse(fs.readFileSync(notesFile, "utf8"));
+  const first = bassNotes.clips[0];
+  // A: beats 0 to 8; B: 4 to 12, a note at its start and at beats 10.5 and 11.25 of the song; C: 16 to 24.
+  const a = { ...first, length: 8, notes: first.notes.filter((n) => n.start < 8) };
+  const b = { id: "c0000001", start: 4, length: 8, notes: [0, 6.5, 7.25].map((t) => ({ pitch: "C3", start: t, length: 0.25, velocity: 0.9 })) };
+  const c = { id: "c0000002", start: 16, length: 8, notes: first.notes.filter((n) => n.start < 8) };
+  fs.writeFileSync(notesFile, JSON.stringify({ ...bassNotes, clips: [a, b, c] }));
+  // The cutoff: E from 0 to 16 through 1 kHz at beat 8; L from 6 to 10, flat at 5 kHz, over E's point.
+  const cutFile = path.join(ovl, "data/bass/cutoff.json");
+  const cut = JSON.parse(fs.readFileSync(cutFile, "utf8"));
+  const e = { ...cut.clips[0], start: 0, length: 16, points: [[0, 300], [8, 1000], [16, 2200]] };
+  const l = { id: "c0000003", start: 6, length: 4, points: [[0, 5000], [4, 5000]] };
+  fs.writeFileSync(cutFile, JSON.stringify({ ...cut, clips: [e, l] }));
+  const opened = (await api("/open", { method: "POST", body: json({ path: ovl }) })).status === 200;
+  await until(async () => (await page.$$('[data-lane="bass.notes"] [data-clip]')).length === 3, 30000);
+  await setScroll(tl, 0, 0);
+  if (!(await has('[data-lane="bass.cutoff"] [data-clip]'))) await page.click('[data-fold="bass"]');
+  await until(async () => (await page.$$('[data-lane="bass.cutoff"] [data-clip]')).length === 2, 10000);
+  await sleep(500);
+  await frames(3);
+
+  /** The screen's colour at (x, y) as a picture of the page shows it: [r, g, b]. */
+  const screenAt = async (x, y) => {
+    const shot = await page.screenshot({ encoding: "base64", clip: { x: Math.floor(x), y: Math.floor(y), width: 1, height: 1 } });
+    return page.evaluate(async (shot) => {
+      const img = new Image();
+      img.src = `data:image/png;base64,${shot}`;
+      await img.decode();
+      const cv = document.createElement("canvas");
+      cv.width = img.width;
+      cv.height = img.height;
+      const g = cv.getContext("2d");
+      g.drawImage(img, 0, 0);
+      return [...g.getImageData(0, 0, 1, 1).data].slice(0, 3);
+    }, shot);
+  };
+  const same = (p, q) => p.every((v, i) => Math.abs(v - q[i]) <= 6);
+  const boxOf = (sel) => page.$eval(sel, (x) => x.getBoundingClientRect().toJSON());
+  /**
+   * Where `under`'s notes (or its curve's line and points) lie inside `over`'s box, clear of
+   * `over`'s own notes: each must show only `over`: its body, as its colour in the strip above its
+   * drawing, under the shade of its curve (its ink at 0.1) below the curve's line.
+   */
+  const covered = async (lane, under, over) => {
+    const sel = (start) => `[data-lane="${lane}"] [data-clip][data-start="${start}"]`;
+    const [du] = await page.$$eval(sel(under), drawings);
+    const [dv] = await page.$$eval(sel(over), drawings);
+    const ov = await boxOf(sel(over));
+    const inside = (x) => x > ov.left + 2 && x < ov.right - 2;
+    // Clear of what `over` draws itself there: its notes, and its curve's points (6 px dots).
+    const dots = await page.$$eval(`${sel(over)} [data-point]`, (els) => els.map((p) => { const r = p.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; }));
+    const clear = (x, y) => !(dv?.notes ?? []).some((n) => x >= n.x - 1 && x <= n.x + n.w + 1 && y >= n.y - 1 && y <= n.y + n.h + 1) && !dots.some(([px, py]) => Math.hypot(x - px, y - py) < 5);
+    const spots = [];
+    for (const n of du?.notes ?? []) {
+      const [x, y] = [n.x + n.w / 2, n.y + n.h / 2];
+      if (n.w >= 3 && inside(x) && clear(x, y)) spots.push({ what: "note", x, y });
+    }
+    const line = du?.line ?? [];
+    for (let i = 1; i < line.length; i++) {
+      const [[x0, y0], [x1, y1]] = [line[i - 1], line[i]];
+      const x = x0 + (x1 - x0) * 0.75;
+      if (inside(x) && clear(x, y0)) spots.push({ what: "line", x, y: y0 + (y1 - y0) * 0.75 });
+    }
+    for (const pt of await page.$$eval(`${sel(under)} [data-point]`, (els) => els.map((p) => { const r = p.getBoundingClientRect(); return [r.left + r.width / 2, r.top + r.height / 2]; })))
+      if (inside(pt[0]) && clear(pt[0], pt[1])) spots.push({ what: "point", x: pt[0], y: pt[1] });
+    const lineY = dv?.line?.length ? dv.line[0][1] : null;
+    const ink = dv ? rgb(dv.ink) : null;
+    const wrong = [];
+    for (const sp of spots) {
+      const [seen, body] = [await screenAt(sp.x, sp.y), await screenAt(sp.x, ov.top + 2)];
+      const want = lineY !== null && sp.y > lineY + 2 ? body.map((v, i) => Math.round(v * 0.9 + ink[i] * 0.1)) : body;
+      if (!same(seen, want)) wrong.push({ ...sp, seen, want });
+    }
+    return { spots: spots.length, kinds: [...new Set(spots.map((sp) => sp.what))], wrong: wrong.slice(0, 3), wrongs: wrong.length };
+  };
+  const n1 = await covered("bass.notes", 0, 4);
+  check(opened && n1.spots > 0 && n1.wrongs === 0, `a notes clip laid over the one before covers its notes, as its box did: ${json(n1)}`);
+  const c1 = await covered("bass.cutoff", 0, 6);
+  check(c1.kinds.includes("point") && c1.kinds.includes("line") && c1.wrongs === 0, `an automation clip laid over the one before covers its curve and its points, as the later one plays there: ${json(c1)}`);
+  // A drag that drops C onto B: from beat 16 to 10, so C covers B's notes at beats 10.5 and 11.25.
+  const cb = await boxOf('[data-lane="bass.notes"] [data-clip][data-start="16"]');
+  const ppb = (await arr())?.zoom ?? 24;
+  await page.mouse.move(cb.left + cb.width / 2, cb.top + cb.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(cb.left + cb.width / 2 - 6 * ppb, cb.top + cb.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const dropped = await until(() => JSON.parse(fs.readFileSync(notesFile, "utf8")).clips.some((x) => x.start === 10), 8000);
+  await until(async () => !!(await page.$('[data-lane="bass.notes"] [data-clip][data-start="10"]')), 8000);
+  await sleep(300);
+  await frames(3);
+  const d1 = await covered("bass.notes", 4, 10);
+  check(dropped && d1.spots >= 2 && d1.wrongs === 0, `a clip dragged onto the next covers the notes it lands on: ${json(d1)}`);
+
+  // One note's loudness changed in Kick's file, outside the app, as an agent would: Kick's lane's
+  // canvas is drawn again, and no other lane's (VIEW-12: only when what it draws changes).
+  const drawnN = () => page.$$eval(`${tl} [data-lane]`, (els) => Object.fromEntries(els.flatMap((x) => { const cv = x.querySelector("canvas[data-drawing=lane]"); return cv?.drawn ? [[x.dataset.lane, cv.drawn.n]] : []; })));
+  const n0 = await drawnN();
+  const kickFile = path.join(ovl, "data/kick/hits.json");
+  const kick = JSON.parse(fs.readFileSync(kickFile, "utf8"));
+  kick.clips[0].notes[3].velocity = kick.clips[0].notes[3].velocity === 0.5 ? 0.6 : 0.5;
+  fs.writeFileSync(kickFile, JSON.stringify(kick));
+  const want = kick.clips[0].notes[3].velocity;
+  const heard = await until(async () => (await state()).timeline.tracks.find((t) => t.module === "kick")?.lanes.find((x) => x.key === "hits")?.clips[0].notes[3].velocity === want, 10000);
+  await sleep(500);
+  await frames(3);
+  const nz = await drawnN();
+  const again = Object.keys(n0).filter((k) => nz[k] !== n0[k]);
+  check(heard && Object.keys(n0).length >= 4 && json(again) === json(["kick.hits"]), `one note's loudness changed in Kick's file draws Kick's lane's canvas again and none of the other ${Object.keys(n0).length - 1}: ${json({ again, before: n0, after: nz })}`);
 }
 
 check(read("song.ts").length > 0, "first-song's files are still there");

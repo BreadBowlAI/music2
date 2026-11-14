@@ -75,7 +75,7 @@ check(await until(async () => !!(await page.$(`${clipSel}[data-picked]`))), "the
 
 /** Where value `v` at beat `b` of the clip is drawn, on screen. */
 const where = async (b, v) => {
-  const r = await box(`${clipSel} svg[data-curve]`);
+  const r = await box(`${clipSel} [data-curve]`);
   const { min, max } = await lane();
   const level = (v - min) / (max - min || 1);
   return { x: r.x + (b / 4) * r.width, y: r.y + (1 - level) * r.height, r };
@@ -109,14 +109,34 @@ check(await until(async () => (await undoNow()).startsWith("Undo adding a Decay 
 const from = await where(2, v0);
 const target = { x: from.x + PPB, y: from.r.y + 2 };
 n = posts.length;
+// The frames while it moves, and how often the lane's canvas draws meanwhile (taste.md VIEW-12).
+const laneCanvas = '[data-lane="kick.decay"] canvas[data-drawing=lane]';
+const drawsBefore = await page.$eval(laneCanvas, (c) => c.drawn?.n ?? null).catch(() => null);
+await page.evaluate(() => {
+  window.__frames = 0;
+  const tick = () => {
+    window.__frames++;
+    window.__tick = requestAnimationFrame(tick);
+  };
+  window.__tick = requestAnimationFrame(tick);
+});
 await page.mouse.move(from.x, from.y);
 await page.mouse.down();
 await page.mouse.move(target.x, target.y, { steps: 8 });
 const bubble = await page.$eval("[data-testid=clip-bubble]", (e) => e.textContent).catch(() => null);
 await page.mouse.up();
+const dragFrames = await page.evaluate(() => {
+  cancelAnimationFrame(window.__tick);
+  return window.__frames;
+});
+const drawsAfter = await page.$eval(laneCanvas, (c) => c.drawn?.n ?? null).catch(() => null);
 check(await until(async () => (await clips())[0].points[1][0] === 3 && (await clips())[0].points[1][1] > v0), `a drag moves the point a beat on and up: ${JSON.stringify((await clips())[0].points[1])}`);
 check(!!bubble && / · 2\.4\.1$/.test(bubble), `while dragged, a bubble says its value and where: ${bubble}`);
 check(gestures(n).length === 1 && (await clips())[0].points.length === 3, "one gesture, still three points");
+check(
+  drawsBefore !== null && drawsAfter - drawsBefore >= 1 && drawsAfter - drawsBefore <= dragFrames + 1,
+  `while the point moves, its lane's canvas draws it at most once a frame: ${drawsAfter - drawsBefore} draws in ${dragFrames} frames`,
+);
 
 // ---------------------------------------------------------------- ⌫ deletes it
 n = posts.length;

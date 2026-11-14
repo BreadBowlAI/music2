@@ -137,6 +137,18 @@ const w1 = (await box("[data-testid=take]"))?.width ?? 0;
 await sleep(500);
 const w2 = (await box("[data-testid=take]"))?.width ?? 0;
 check(w2 > w1 + 10, `it grows to the playhead (${w1.toFixed(0)} → ${w2.toFixed(0)} px)`);
+// It grows each frame, and its canvas draws once a frame for it, not twice (taste.md VIEW-12).
+const takeDraws = await page.evaluate(
+  () =>
+    new Promise((done) => {
+      const drawn = () => document.querySelector("[data-testid=take] canvas[data-drawing]")?.drawn?.n ?? null;
+      const n0 = drawn();
+      let frames = 0;
+      const tick = () => (++frames < 30 ? requestAnimationFrame(tick) : done({ frames, draws: n0 === null ? null : drawn() - n0 }));
+      requestAnimationFrame(tick);
+    }),
+);
+check(takeDraws.draws > 0 && takeDraws.draws <= takeDraws.frames + 1, `while it records, the take's canvas draws at most once a frame: ${JSON.stringify(takeDraws)}`);
 const label = await page.$eval("[data-testid=take]", (e) => ({ text: e.textContent, outline: getComputedStyle(e).outlineColor, bg: getComputedStyle(e).backgroundColor })).catch(() => null);
 check(label?.text === "Recording" && label.outline === DANGER && label.bg === DANGER_SOFT, `it says Recording, a danger outline round a danger-soft body (${JSON.stringify(label)})`);
 const bad1 = await page.evaluate(lint, "header");

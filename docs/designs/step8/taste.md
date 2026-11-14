@@ -1145,9 +1145,12 @@ for the camera's moves; dragging one is the browser's move, taken in (VIEW-9).
 a step of what it draws (VIEW-12) or a waveform tile shows for the first time. The status poll MUST
 NOT render the window: only what shows the status (the top bar) renders by it, and the arrangement
 grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
-frame. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
-reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
-catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
+frame. Inside the view, a zoom MUST render only what draws by the zoom, once: no clip box or clip
+drawing (VIEW-12), no node of the Graph (it scales its nodes as one), and the arrangement's grid and
+recording take once a zoom, never once a track. While a pointer drag holds the pointer (a clip, a
+marquee, a note, a cable, a fade, a reorder, the ruler's loop), the camera holds still: no swipe,
+glide or Follow moves it; Follow catches up after. While the camera moves, and for 250 ms after,
+the views' hover does nothing.
 - An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
   style, never by a render while only its place changes.
 - *Why:* moving the view must cost two numbers written, not a redraw (the note's §8, C9, C10).
@@ -1159,7 +1162,15 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
   rendering no view, with the pointer over notes and over wires; a zoom's 30 events rendering the
   arrangement and Notes at most once a frame; a drag holding the camera and Follow; an agent's
   pointer at a clip rendered 0 times through a swipe, still on the clip) and `camera-probe` (a zoom
-  redraws only the arrangement).
+  redraws only the arrangement). Since track `canvas-clips` (the zoom note's §3): the Graph's nodes
+  are the same elements across a zoom (`nodes` in `NodeGraph.tsx`'s `ModuleSection`); each row of
+  the arrangement draws its grid with the patterns `GridLines` spaces by the zoom, which render once a
+  zoom, each stretch placed by `useSpan`; a lane's take reads the zoom only while it records
+  (`Recording` in `Take.tsx`). Tested by `camera` (a pinch over the Graph rendering it at most once a
+  frame and none of its nodes; a zoom rendering the grid's lines once each time it renders the
+  arrangement, and no row's grid and no take, each counted apart: `arrangement.grid`,
+  `arrangement.grid.rows`, `arrangement.take`; after ⌘=, a row's beat and bar lines the new px a beat
+  and a bar apart).
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
@@ -1336,21 +1347,44 @@ no clip: each clip's box is placed by the zoom straight into its style.
 - Notes draws only the notes in the window, across and down, and their velocity bars across.
 - The beat grid keeps its culling by bar (KIT-10), through the camera's window. The Graph is small:
   it draws everything.
-- A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT read the zoom: it is
-  drawn in beats, or in percent of its clip, and kept by its clip, so a zoom changes only the clip's
-  box. A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px, its
-  clip is marked (`data-fine`, as it zooms) and each note gets a 2 px mark the stretch doesn't scale.
-  Each note is drawn at its loudness by its own opacity, never a group's (WebKit paints a group with
-  opacity through a layer of its own). An audio clip's waveform is drawn in pixels and
-  redraws on a zoom. A new window draws only the clips entering it: a clip already drawn is kept.
+- A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT render on a zoom: it
+  is kept by its clip, so a zoom changes only the clip's box.
+- Clips draw their notes, and an automation curve's line and the shade under it, on canvases (the zoom
+  note's §3), at the screen's own pixels (`devicePixelRatio`), in their track's colours: one canvas a
+  lane draws its clips that sit still, each inside its box as the zoom places the box, in the lane's
+  order, each clearing its box first; a clip that moves (dragged, or a copy where it lands), a clip a
+  later one lies over, and a take while it records draw on a canvas of their own, in their box. So a
+  later clip covers an earlier one, its notes, its curve, the curve's points and its hatching, as each
+  box covered the one before it. Not one a clip: Chrome makes every canvas a layer of its own, and one
+  a clip made 416 layers for the beat song's 36, and a frame with nothing new to draw 5 ms dearer.
+- A clip's box MUST lie on the screen's own pixels, and its canvas MUST find it by the same function
+  that places it (`spanBox`), so the two never disagree.
+- A canvas MUST be drawn again only when what it draws changes (the clips, their notes or points, the
+  colour, the size), at most once a frame for such changes, and a zoom by the hand (⌘-scroll, a pinch)
+  draws it again only once the zoom settles (no zoom for G, nor in a whole frame): until then it
+  stretches with the view, each note still at its time. A zoom by the app (⌘=, Fit) draws it again in
+  the frame it lands in. A pan draws no canvas again, unless what shows reaches past the part a canvas
+  holds (below): then that canvas, at once.
+- A canvas MUST hold only what shows and up to a view more each side (the margin above), and MUST
+  NOT make a bitmap over 8192 device px across or 512 down: a lane's covers only where its clips
+  are in that.
+- A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px at the
+  zoom its canvas is drawn at, each of its notes gets a 2 px mark. Each note is drawn at its
+  loudness by its own alpha. A curve's points and a lane of names' steps stay elements over the
+  drawing, as before: they are few, a point stays round while the drawing stretches, and a name is
+  text.
+- Each canvas keeps what it drew last as `drawn` (for each clip, its notes, marks and line in px of
+  the canvas's box; the zoom and the beats it holds), which the suites read beside its pixels.
+- An audio clip's waveform is drawn in pixels and redraws on a zoom. A new window draws only the
+  clips entering it: a clip already drawn is kept.
 - *Why:* on #112's branch the owner saw the frame rate drop when zooming the tracks or Notes at
   120 Hz: every zoom step redrew every clip of the song, once for each wheel event (the note's §16).
 - *Today:* since track `camera`: `cull` and `useCull` in `web/src/camera/` (the margin and the step
   in its `numbers.ts`; what to do with a window judged by `cullPlan` against the window on screen; a
   new window set in a `startTransition`); `useSpan` places a clip's box, and a control lane's
-  fallback, by the zoom, and marks a clip `data-fine` (a CSS variable for the zoom was tried first: a change to it
-  made the browser work out the style of the whole arrangement anew, 56 ms of each zoom frame on the
-  big song); in `SongTimeline.tsx` the window across from `useCull`, and each track's nearness down
+  fallback, by the zoom (a CSS variable for the zoom was tried first: a change to it made the browser
+  work out the style of the whole arrangement anew, 56 ms of each zoom frame on the big song); in
+  `SongTimeline.tsx` the window across from `useCull`, and each track's nearness down
   from an IntersectionObserver whose margin is the view's height (as a transition) and another at the
   view's edge (at once); each clip box memoised; in
   `NoteView.tsx` both ways from `useCull`. Tested by `camera` (on the 24-by-64 song: no more clips
@@ -1358,9 +1392,46 @@ no clip: each clip's box is placed by the zoom straight into its style.
   step; 30 ⌘-scroll events rendering the arrangement at most once a frame, zooming in and out
   rendering no clip box drawn before, only those entering the window; the same in Notes with a clip
   of many notes; a zoom rendering no clip's mini drawing; a swipe down the tracks and back drawing
-  every row in view; no group opacity in a clip's notes and their marks only where a note is under
-  2 px; `cullPlan` keeping, waiting and drawing at once against a window on screen that lags the one
-  asked for).
+  every row in view; `cullPlan` keeping, waiting and drawing at once against a window on screen that
+  lags the one asked for).
+- *Today, the canvases:* since track `canvas-clips` (the zoom note's §3): in
+  `web/src/components/ClipDrawing.tsx`, `LaneDrawing` (a lane's, from `LaneClips` in
+  `SongTimeline.tsx`, which gives it the clips that sit still, kept by value with `useKept`, so a new
+  state of the song draws again only the lanes whose clips changed; an automation lane's scale is kept
+  by its `key` too) and `Notes` and `Curve` (a clip's own, and the points over a curve), the clip's
+  box's numbers beside them (`CLIP_INSET`, `CLIP_END`, `CLIP_MIN`, `BORDER`, `BODY_TOP`,
+  `BODY_BOTTOM`), and the bounds `MAX_W` and `MAX_H`. `spanBox` and `onPixels` in
+  `web/src/camera/spans.ts` put each box's ends on the screen's pixels: `useSpan` places a box by
+  them, and a lane's canvas finds each clip's box and drawing area by them; a change of the screen's
+  px a px places every box again. A lane's canvas is placed across by the zoom, as its clips' boxes
+  are, over the clips' bodies (`z-[1]`), under a curve's points and the hatching of the clips it draws
+  (`z-[2]`), taking no pointer; a clip on a canvas of its own keeps those in its box, under the clip
+  over it. A lane's canvas's height comes from one ResizeObserver on the lane's box; a clip's own
+  canvas measures its drawing area as its render asks it to draw, the observer telling it of a size it
+  hasn't drawn at. A change draws a canvas at once, and one more change in the same frame at the next
+  frame's start (`request`). Nothing reads the page's layout but a clip's own canvas, for its own
+  area. The zoom and what shows come from the arrangement's camera, heard once for all its canvases; a
+  zoom by the hand is settled when a frame's start finds no zoom for G and none since the frame before
+  (Z1, the live zoom, replaces that detector). Each canvas is on the CPU (`willReadFrequently`), which
+  WebKit is expected to paint into the layer under it, as its code reads; that is not measured on the
+  Mac yet. A take's notes keep their marks always, as before. Each draw is counted
+  (`arrangement.canvas`, and `arrangement.canvas.new` for a first) beside the renders in `frames()`,
+  and each canvas counts its own (`drawn.n`). Tested by `camera`, at 2 device px a px as the owner's
+  Mac draws (every clip in the beats its lane's canvas holds listed there with each of its audible
+  notes; each clip's box on the screen's pixels and its notes inside it, drawn at the zoom, the
+  canvas's bitmap its box at `devicePixelRatio`, each note's middle pixel the track's ink at the
+  note's own alpha, the 2 px marks only where a note is under 2 px, each centred on it, at 24 and 2.1
+  px a beat; 20 ⌘-scroll events stretching every lane's canvas and drawing none, then each once as the
+  zoom settles; ⌘= drawing them in the frame it lands in; at 192 px a beat, Bass 1's lane's canvas
+  holding only what shows and a view each side in at most 8192 × 512 device px, a pan of 0.4 views
+  drawing it not again and one of 1.6 views at once; every swipe within a step drawing no canvas, with
+  the renders; on a copy of first-song with clips laid over each other, the screen's own pixels
+  showing only the later clip where it lies over an earlier notes clip, over an earlier automation
+  clip's curve and points, and over a clip a drag dropped it on; one note's loudness changed in Kick's
+  file drawing Kick's lane's canvas again and no other), `s8-automation` (a point dragged, its lane's
+  canvas drawing at most once a frame), `st-record` (a take's canvas drawing once a frame as it
+  grows), `beat-grid` and `layout` (the notes the canvases drew) and `pl-lanes` (the line a curve's
+  canvas drew, through its points), through `e2e/drawlib.mjs`.
 
 ---
 

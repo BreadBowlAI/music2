@@ -59,12 +59,15 @@ export const check = (ok, what) => {
  * `late` (ms; by default `E2E_LATE_READS`, else none): the page's own reads of the song's state
  * (`GET /api/graph`) are held back that long, as on a page that hears of each change late. The
  * suite's own reads (`api`, `state`) never wait.
+ *
+ * `dpr`: device px a px (1 by default; 2 as the owner's Mac draws, for a suite that reads what the
+ * screen's own pixels show: taste.md VIEW-12's canvases).
  */
-export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0) } = {}) {
+export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0), dpr = 1 } = {}) {
   const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
   const page = await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
-  await page.setViewport({ width, height });
+  await page.setViewport({ width, height, deviceScaleFactor: dpr });
   // The page's requests, intercepted only while some are held back: its own reads (`late`), or
   // those a suite's `hold` names.
   const holders = new Set();
