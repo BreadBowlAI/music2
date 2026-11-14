@@ -36,9 +36,21 @@ const lintNow = async (what) => {
   const bad = [...new Set(await page.evaluate(lint))];
   check(bad.length === 0, `lint, ${what}: nothing outside the design system${bad.length ? ` (${bad.slice(0, 5).join("; ")})` : ""}`);
 };
-/** Close the song, write `.music2/view.json`, and open it again: what the page shows when it does. */
+/** The page's sends of its view settings on their way. */
+let sending = 0;
+const viewSend = (r) => new URL(r.url()).pathname === "/api/graph/view";
+page.on("request", (r) => void (viewSend(r) && sending++));
+page.on("requestfinished", (r) => void (viewSend(r) && sending--));
+page.on("requestfailed", (r) => void (viewSend(r) && sending--));
+/**
+ * Close the song, write `.music2/view.json`, and open it again: what the page shows when it does.
+ * What the page set and hadn't sent yet (a zoom just made) goes to the song as it closes (FMT-20):
+ * the file is written once the page has the close and that has landed, never under it.
+ */
 const reopen = async (v) => {
   await post("/close", {});
+  await page.waitForSelector("[data-testid=start]");
+  await until(async () => sending === 0);
   if (v) fs.writeFileSync(`${PROJ}/.music2/view.json`, JSON.stringify(v));
   const opened = await post("/open", { path: PROJ });
   await page.waitForSelector('[data-lane="bass.notes"] [data-clip]');
