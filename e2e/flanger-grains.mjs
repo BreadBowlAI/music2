@@ -13,9 +13,12 @@
 // two reads in a row show it (the first may be stale: voice2's review V1). A read is where the card's
 // canvas says it drew its line (CARD-103's `data-said`, the entry that follows its meter) and an
 // agent's look at the meter; the canvas lit each line where `data-said` puts it (its pixels, by the
-// plot's place in `data-plot`). The Flanger's line is drawn at its LFO's phase; Grains' at `reads /
-// 2.5 s` across, its buffer, each within 0.05 of the plot, read between two looks that agree (no grain
-// started between them) after the canvas drew twice. The nodes are shot
+// plot's place in `data-plot`). Each line is drawn where its canvas's read says, and that read lies
+// between two of an agent's looks around it (the canvas drew twice since the first), never held
+// against one look a moment apart: the Flanger's at its LFO's phase, on its way from the first look
+// to the second (the looks held back 250 ms, as on GitHub's Mac); Grains' at `reads / 2.5 s` across,
+// its buffer, between two looks at one grain (an octave up a grain's place falls a second each second
+// of the song, whose place is read around each look), twice in a row. The nodes are shot
 // while the song plays, in the graph collapsed and expanded: to $E2E_SHOTS when set, else the run's
 // folder, as `flanger-<collapsed|expanded>.png` and `grains-…`. ⌘Z steps back, byte for byte, a step
 // at a time. Each node linted.
@@ -39,7 +42,7 @@ write(
     .replace("      kick: kick.out,", "      kick: kick.out,\n      lead: { in: lead.out, db: db(-12) },"),
 );
 
-const { page, errors, show, view, key, box, api } = await open(1600, 1000);
+const { page, errors, show, view, key, box, api, hold } = await open(1600, 1000);
 const post = (p, body) => api(p, { method: "POST", body: JSON.stringify(body) });
 const linted = async (sel, what) => {
   const bad = await page.evaluate(lint, sel);
@@ -191,7 +194,8 @@ const drawn = (pic, from) =>
     .$eval(
       `${pic} canvas[data-live]`,
       (c, from) => {
-        const x = JSON.parse(c.dataset.said ?? "[]").find((e) => e?.from === from)?.x;
+        const entry = JSON.parse(c.dataset.said ?? "[]").find((e) => e?.from === from);
+        const x = entry?.x;
         const [left, span, plot] = (c.dataset.plot ?? "").split(",").map(Number);
         const cols = [];
         if (span) {
@@ -199,11 +203,11 @@ const drawn = (pic, from) =>
           for (let i = 0; i < c.width; i++) if (row[4 * i + 3] > 0) cols.push(i);
         }
         const lit = cols.length ? ((cols[0] + cols[cols.length - 1]) / 2 + 0.5 - 2 * left) / (2 * span) : null;
-        return { said: typeof x === "number" ? x : null, lit };
+        return { said: typeof x === "number" ? x : null, v: typeof entry?.v === "number" ? entry.v : null, lit };
       },
       from,
     )
-    .catch(() => ({ said: null, lit: null }));
+    .catch(() => ({ said: null, v: null, lit: null }));
 /** Where each picture says it drew its line now, and what an agent's looks at their meters say. */
 const where = async () => ({
   sweep: (await drawn(sweep, "phase")).said,
@@ -228,36 +232,67 @@ const still = (a, b, k) => known(a, b, k) && Math.abs(a[k] - b[k]) < 1e-6;
 const told = (w) => JSON.stringify(Object.fromEntries(Object.entries(w).map(([k, v]) => [k, typeof v === "number" ? +v.toFixed(4) : v])));
 
 await post("/loop", { start: 0, end: 8, on: true });
+// An agent's looks reach the server 250 ms late, as on GitHub's Mac, where a canvas's read and a look
+// were 200 ms apart: each line is held against its meter by two looks around the canvas's read, never
+// by one a moment apart.
+const unhold = await hold((r) => (r.method() === "POST" && new URL(r.url()).pathname === "/api/graph/look" && /agent:fx3/.test(r.postData() ?? "") ? 250 : 0));
 await seen(sweep);
 await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
 let m = await twice((a, b) => moved(a, b, "sweep") && moved(a, b, "phase"), 400, 15000);
 check(m.ok, `while the song plays, the Flanger's line moves with its sweep, and so does an agent's look at its meter: ${told(m.last)}`);
-// Drawn where its meter says its sweep is: the read of each a moment apart, its sweep a quarter of a cycle a second.
-check(known(m.last, m.last, "sweep") && known(m.last, m.last, "phase") && Math.abs(m.last.sweep - m.last.phase) < 0.05, `the Flanger's line is drawn at its LFO's phase: ${told(m.last)}`);
+/** How many reads a picture's canvas has drawn. */
+const drew = (pic) => page.$eval(`${pic} canvas[data-live]`, (c) => Number(c.dataset.reads ?? 0)).catch(() => 0);
+/** The song's place, in seconds: the clock a grain's place falls by. */
+const place = async () => (await api("/status")).body.seconds;
+/** An agent's look at meter `name` of `label`, and the song's place just before and after it. */
+const lookAt = async (label, name) => {
+  const s0 = await place();
+  const v = (await look(label, name))?.now;
+  return { v, s0, s1: await place() };
+};
+/** A look, then picture `pic`'s line once its canvas drew twice since (so from reads after the look's), then a look again. */
+const around = async (pic, label, name) => {
+  const a = await lookAt(label, name);
+  const r0 = await drew(pic);
+  await until(async () => (await drew(pic)) >= r0 + 2, 2000);
+  const d = await drawn(pic, name);
+  return { a, d, b: await lookAt(label, name) };
+};
+// Drawn where its meter says its sweep is (the canvas's x its read's phase), and that read lies
+// between the two looks: the sweep goes on from the first to the second, a quarter of a cycle a
+// second, round from 1 to 0, however long they took.
+const ahead = (from, to) => (((to - from) % 1) + 1) % 1;
+const f = await around(sweep, "flanger", "phase");
+const [fa, fb] = [f.a.v, f.b.v];
+check(
+  typeof fa === "number" && typeof fb === "number" && typeof f.d.said === "number" && Math.abs(f.d.said - f.d.v) < 0.001 && ahead(fa, fb) < 0.5 && ahead(fa, f.d.said) <= ahead(fa, fb) + 0.002,
+  `the Flanger's line is drawn at its LFO's phase: at ${f.d.said} (its read ${f.d.v}), between an agent's looks at ${fa?.toFixed(4)} and ${fb?.toFixed(4)}`,
+);
+await unhold();
 m = await twice((a, b) => moved(a, b, "cloud") && moved(a, b, "reads"), 400, 15000);
 check(m.ok, `while the song plays, Grains' line jumps from grain to grain, and so does an agent's look at its meter: ${told(m.last)}`);
-// Drawn where its meter says its newest grain reads, `reads / 2.5 s` across: read between two looks
-// that agree (no grain started between them: an octave up a grain's place drifts 0.1 s in the time),
-// once the canvas has drawn twice since the first, twice in a row.
-const drew = () => page.$eval(`${cloud} canvas[data-live]`, (c) => Number(c.dataset.reads ?? 0)).catch(() => 0);
+// Drawn where its meter says its newest grain reads, `reads / 2.5 s` across (the canvas's x its
+// read over 2.5), and that read lies between two looks at one grain. An octave up a grain's place
+// falls a second each second of the song, so one grain at both looks is `a − b` apart in the song's
+// time between them, which its place read around each look bounds (the loop not round between).
+// Twice in a row.
 const against = [];
-/** Grains' last read between two looks that agree: a grain plays, so its line is away from now. */
+/** Grains' last read between two looks at one grain: a grain plays, so its line is away from now. */
 let grain = null;
-for (const end = Date.now() + 20000; Date.now() < end && against.length < 2; ) {
-  const a = (await look("grains", "reads"))?.now;
-  const r0 = await drew();
-  await until(async () => (await drew()) >= r0 + 2, 2000);
-  const d = await drawn(cloud, "reads");
-  const c = d.said;
-  const b = (await look("grains", "reads"))?.now;
-  if (!(a > 0 && b > 0 && Math.abs(a - b) < 0.1 && typeof c === "number")) continue;
+let [tries, oneGrain] = [0, 0];
+for (const end = Date.now() + 20000; Date.now() < end && against.length < 2; tries++) {
+  const { a, d, b } = await around(cloud, "grains", "reads");
+  const read = a.v > 0 && b.v > 0 && typeof d.said === "number" && typeof a.s0 === "number" && a.s0 <= a.s1 && a.s1 <= b.s0 && b.s0 <= b.s1;
+  if (!read || a.v - b.v < b.s0 - a.s1 - 0.02 || a.v - b.v > b.s1 - a.s0 + 0.02) continue;
+  oneGrain++;
   grain = d;
-  const off = Math.abs(c - (a + b) / 2 / 2.5);
-  if (off < 0.05) against.push(+off.toFixed(4));
+  const c = 2.5 * d.said;
+  const off = Math.max(Math.abs(d.said - d.v / 2.5), (b.v - c) / 2.5, (c - a.v) / 2.5, 0);
+  if (off < 0.005) against.push(+off.toFixed(4));
   else against.length = 0;
 }
-check(against.length === 2, `Grains' line is drawn at reads / 2.5 s across, within 0.05 (off by ${against.join(", ")})`);
+check(against.length === 2, `Grains' line is drawn at reads / 2.5 s across, between two looks at one grain (off by ${against.join(", ")}; ${oneGrain} of ${tries} reads at one grain)`);
 // Each canvas lit its line where `data-said` puts it, read in the same draw: the Flanger's now, Grains'
 // at that last read, while a grain played.
 const lines = { sweep: await drawn(sweep, "phase"), cloud: grain };

@@ -4,7 +4,8 @@
 // chorus, the phaser, the tremolo, drive, the bitcrusher and the widener. The graph's nodes,
 // expanded, draw each one's face pictures across their tops; while the song plays, the live ones move (the spectra, the levels over
 // time, Pump's playhead), and the meters the gate, the de-esser and the multiband send (track
-// meters2, CARD-126): the gate's strip lights on the hits and goes dark between them, and its and
+// meters2, CARD-126): the gate's strip lights on the hits (and goes dark between them, in
+// dress2a-strip.mjs, which needs the meters' 33 ms tick), and its and
 // the de-esser's `down` say how far they turn down; the multiband's `down` stands its three bars
 // side by side, low to high, and its low band's turns down. A meter in dB or of a switch is drawn
 // from the most it said since the read before (CARD-73): over 3 s of the gate's `down`, every
@@ -212,9 +213,11 @@ await shown(gatePic);
 const strip = await reads(gatePic, 3);
 const lit = strip.map((l) => l.v);
 // Its last read is drawn as a strip: the window knows the meter is a switch from its ask's answer.
+// That it goes dark between the hits is dress2a-strip's: a read wholly between two hits needs the
+// meters' 33 ms tick (read every 120 ms, as on GitHub's Mac, each read holds an opening).
 check(
-  lit.includes(1) && lit.includes(0) && strip.at(-1)?.y > 0.9,
-  `the gate's strip, along its foot, lights on the hits and goes dark between them (its meter open, a switch): ${[...new Set(lit)]} at ${strip.at(-1)?.y}`,
+  lit.includes(1) && strip.at(-1)?.y > 0.9,
+  `the gate's strip, along its foot, lights on the hits (its meter open, a switch): ${[...new Set(lit)]} at ${strip.at(-1)?.y}`,
 );
 await shown(gateDown);
 const turned = (await reads(gateDown, 1, 40)).map((l) => l.v);

@@ -149,11 +149,22 @@ check(value.endsWith("asdf") && ons(typed).length === 0, `"asdf" typed into the 
 await page.keyboard.press("Escape");
 await until(async () => !(await page.$("[data-testid=song-title-input]")));
 
-// The code editor gets its letters.
+// The code editor gets its letters. Frames come 300 ms late here, as on GitHub's Mac, where the
+// editor was clicked after it had its file but before a frame drew it: it took no focus there, and
+// the keys played notes.
+await page.evaluate(() => {
+  const raf = (window.__raf = window.requestAnimationFrame.bind(window));
+  window.requestAnimationFrame = (f) => raf((t) => setTimeout(() => f(t), 300));
+});
 await key("Alt+4");
-await page.waitForSelector(".monaco-editor .view-lines", { timeout: 20000 }).catch(() => null);
-const lines = await box(".monaco-editor .view-lines");
-check(!!lines, `the code view shows its editor (${JSON.stringify(lines)})`);
+// Clicked once a frame drew it: its lines have a size.
+const drawn = async () => {
+  const b = await box(".monaco-editor .view-lines");
+  return b && b.width > 0 && b.height > 0 ? b : null;
+};
+await until(drawn, 20000);
+const lines = await drawn();
+check(!!lines, `the code view shows its editor, drawn (${JSON.stringify(await box(".monaco-editor .view-lines"))})`);
 // An element as the messages name it, and whether it is in the code editor.
 const named = (e) => `${e?.tagName.toLowerCase()}${e?.getAttribute("class")?.trim() ? `.${e.getAttribute("class").trim().split(/\s+/).join(".")}` : ""}${e?.closest(".monaco-editor") ? " in the editor" : ""}`;
 const at = lines && { x: Math.round(lines.x + 40), y: Math.round(lines.y + 6) };
@@ -162,12 +173,16 @@ if (at) await page.mouse.click(at.x, at.y);
 // The keys follow the click with nothing between, as before: where the focus is, is read after them.
 const inCode = await sends(() => page.keyboard.type("asdf"));
 const after = await page.evaluate(`(${named})(document.activeElement)`);
-const code = await page.$eval(".monaco-editor .view-lines", (e) => e.textContent).catch(() => "");
+// What it shows once a frame drew the letters.
+const shown = () => page.$eval(".monaco-editor .view-lines", (e) => e.textContent).catch(() => "");
+await until(async () => (await shown()).includes("asdf"), 3000);
+const code = await shown();
 check(
   code.includes("asdf"),
   `the code editor gets its letters (the click at ${JSON.stringify(at)} hit ${hit}; after the keys the focus was in ${after}; it shows ${JSON.stringify(code.slice(0, 60))}…)`,
 );
 check(ons(inCode).length === 0, `and nothing plays while typing in it (${JSON.stringify(ons(inCode))})`);
+await page.evaluate(() => (window.requestAnimationFrame = window.__raf));
 for (let i = 0; i < 4; i++) await key("Meta+z");
 await blur();
 await key("Alt+2");

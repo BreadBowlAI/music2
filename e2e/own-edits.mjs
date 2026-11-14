@@ -14,9 +14,20 @@
 import { check, done, open, read, sleep, until } from "./fixlib.mjs";
 
 const { page, errors, toasts, key, box, view, show, api, state } = await open(1440, 900, { late: 400 });
-/** Every answer that refused something, as it came. */
+/**
+ * Every answer that refused something, as it came: its route and status, then the revision it named
+ * and the server's words once read (2026-11-14 a picture's ask was refused once on GitHub's Linux,
+ * with nothing to say why).
+ */
 const refusals = [];
-page.on("response", (r) => r.status() >= 400 && /\/api\//.test(r.url()) && refusals.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "/api")} ${r.status()}`));
+page.on("response", (r) => {
+  if (r.status() < 400 || !/\/api\//.test(r.url())) return;
+  const i = refusals.push(`${r.request().method()} ${r.url().replace(/^.*\/api/, "/api")} ${r.status()}`) - 1;
+  const named = /"revision":(\d+)/.exec(r.request().postData() ?? "")?.[1];
+  r.json()
+    .then((b) => void (refusals[i] += `${named ? ` (revision ${named})` : ""}: ${b?.error ?? JSON.stringify(b)}`))
+    .catch(() => {});
+});
 const undoTitle = () => page.$eval('button[aria-label="Undo"]', (e) => e.title).catch(() => null);
 /** No answer refused since `n` refusals, and no toast that says one was. */
 const quiet = async (n) => refusals.length === n && !(await toasts()).some((t) => /newest|changed|Nothing was|try again/i.test(t));

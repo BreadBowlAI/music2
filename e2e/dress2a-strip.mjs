@@ -1,7 +1,8 @@
 // Track dress2a's gate strip (CARD-73, CARD-126), apart from dress2a.mjs: on dress2a's song, while it
 // plays, the gate's strip along the foot of its levels picture (its meter `open`, a switch, drawn
-// from the most since the read before) lights once for each opening its `down` meter's last 3 s
-// show (one more or less at the window's edges, the two pictures' reads not quite at one moment).
+// from the most since the read before) lights on the hits and goes dark between them, read again
+// and again, and lights once for each opening its `down` meter's last 3 s show (one more or less at
+// the window's edges, the two pictures' reads not quite at one moment).
 // That needs reads shorter than the gate's closed spells: the meters read every 33 ms, a sleep, so
 // it is tagged `sleeps` (left out of GitHub's Mac job, whose sleeps run late: every 120 ms there,
 // most reads hold an opening and a closing).
@@ -54,6 +55,14 @@ const runs = (h, on) => {
   });
   return out;
 };
+// What the strip drew last, read 60 times 100 ms apart: lit on the hits, dark between them.
+const lit = [];
+for (let i = 0; i < 60; i++) {
+  await sleep(100);
+  const l = await page.$eval(`${gatePic} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")[3]).catch(() => null);
+  if (l) lit.push(l.v);
+}
+check(lit.includes(1) && lit.includes(0), `the gate's strip lights on the hits and goes dark between them (its meter open, a switch): ${[...new Set(lit)]}`);
 const [downH, stripH] = await histories();
 const openings = runs(downH, (v) => v < 0.5).length;
 const lighted = runs(stripH, (v) => v >= 0.5).length;

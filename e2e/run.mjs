@@ -172,7 +172,7 @@ export const SUITES = [
   ["st-tips", "fix", { expect: 45, s: 11 }],
   ["gestures", "fix", { expect: 30, s: 8, tier: "nightly", why: "flake: a first run failed (2026-10-18); cause not recorded" }],
   ["g11-play", "fix", { expect: 24, s: 11 }],
-  ["s8-tracks", "fix", { expect: 75, s: 5, tier: "nightly", why: "speed: within 1.5 s; flake: it reads the new track's tab a moment too soon (twice at half CPU, 2026-10-21)" }],
+  ["s8-tracks", "fix", { expect: 76, s: 5, tier: "nightly", why: "speed: within 1.5 s" }],
   ["pl-tracks", "fix", { expect: 20, s: 4 }],
   ["s8-mute", "export", { expect: 152, s: 28, tier: "nightly", why: "speed: overlays.json within 1.5 s; flake: once on the Mac at e7518f4 (HANDOFF.md)" }],
   ["s8-songbar", "fix", { expect: 84, s: 13 }],
@@ -200,7 +200,7 @@ export const SUITES = [
   ["dress", "fix", { expect: 44, s: 10 }],
   ["dress2a", "fix", { expect: 94, s: 20 }],
   // dress2a's gate strip, apart: it needs the meters read every 33 ms.
-  ["dress2a-strip", "fix", { expect: 5, s: 6, sleeps: "its gate's strip lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
+  ["dress2a-strip", "fix", { expect: 6, s: 12, sleeps: "its gate's strip goes dark between the hits, and lights once a read for each opening: the meters' 33 ms tick is a sleep, and read every 120 ms the gate opens and shuts inside one read" }],
   ["dressed", "fix", { expect: 41, s: 10 }],
   // Track dress2b: the instruments' pictures, and std's Limit and Master their ceiling, in the graph.
   ["instruments", "fix", { expect: 58, s: 12 }],

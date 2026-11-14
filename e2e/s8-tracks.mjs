@@ -8,7 +8,7 @@ import { spawn } from "node:child_process";
 import fs from "node:fs";
 import { PROJ, check, done, open, read, sess, sleep, until, write } from "./fixlib.mjs";
 
-const { page, errors, api, state, toasts, key, box, status } = await open(1440, 900);
+const { page, errors, api, state, toasts, key, box, status, hold } = await open(1440, 900);
 const post = (path, body) => api(path, { method: "POST", body: JSON.stringify(body) });
 const exists = (f) => fs.existsSync(`${PROJ}/${f}`);
 const readOr = (f) => (exists(f) ? read(f) : null);
@@ -212,8 +212,14 @@ await select("keys");
 await page.click("[data-testid=add-track]");
 await page.waitForSelector("[data-testid=instrument-list]");
 await page.keyboard.type("pad");
+// The page hears of the new track a second after its file lands, as a busy machine's page may: its
+// reads of the song's state held back.
+const unhold = await hold((r) => (r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"] ? 1000 : 0));
 await page.keyboard.press("Enter");
 check(await until(() => exists("tracks/synth-pad.ts")) && read("layout.json") === conflicted, "+ Track still adds a track, and leaves layout.json as it is");
+await unhold();
+// Its tab is dragged once the page shows it: the file lands before the page hears of the track.
+check(await until(async () => !!(await box('[data-module-tab="synth-pad"]'))), "its tab shows once the page hears of it");
 const dragFrom = await box('[data-module-tab="synth-pad"]');
 await page.mouse.move(dragFrom.x + 60, dragFrom.y + dragFrom.height / 2);
 await page.mouse.down();
