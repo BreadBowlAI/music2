@@ -1078,9 +1078,9 @@ already. Chrome's lines and pages, which only the suites send, are 33 px and the
   deltas such as (3, 0) and (5, −3). The guess before, within 10° after 8 px and broken by the last
   50 px, put only 14 of their 32 straight swipes on a rail, and moved them 328 px of the 681 they
   went off it. Now 31 of 32 stay on a rail and 2 px move off; none of their 11 diagonal swipes (25
-  to 45° off) gets one, and 98% of their move across is kept (4721 of 4814 px). A turn to 45°
-  in events of 10 px breaks free at its fifth (its third before). A swipe that keeps 20 to 25° off starts on its
-  rail and leaves it after 100 px; the owner made none.
+  to 45° off) gets one, and 98% of their move across is kept (4721 of 4814 px). A turn to 45° in
+  events of 10 px breaks free at its fifth (its third before). A swipe that keeps 20 to 25° off
+  starts on its rail and leaves it after 100 px; the owner made none.
 - *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts` (`RAIL_ANGLE`,
   `RAIL_AFTER`, `RAIL_TURN`, `RAIL_RECENT`, and why each), `rails: false` for the Graph's cameras.
   Tested by `camera` (a diagonal swipe 1:1 both ways in each view; 5° off straight on its rail, and
