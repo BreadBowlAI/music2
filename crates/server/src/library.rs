@@ -153,16 +153,30 @@ impl Drop for Running {
 }
 
 impl SampleIndex {
-    /// The samples of `of` as indexed so far, and whether an index of it is running, never
-    /// waiting: `job` is started in the background, at background priority, when there is none or
-    /// the last is `fresh` or older, and no index of it runs.
+    /// The samples of `of` as indexed so far, and whether an index of it was running as they were
+    /// read (one started now is: they are from before it), never waiting: `job` is started in the
+    /// background, at background priority, when there is none or the last is `fresh` or older,
+    /// and no index of it runs. Whether one runs is read with the samples, never after: an index
+    /// may end at any moment, with what they miss.
     pub(crate) fn get(
         self: &Arc<Self>,
         of: Of,
         fresh: Duration,
         job: impl FnOnce(&AtomicBool) -> Indexed + Send + 'static,
     ) -> (Option<Arc<Indexed>>, bool) {
-        let (indexed, start) = {
+        self.get_on(of, fresh, job, |index| std::thread::Builder::new().name("music2-samples".into()).spawn(index).map(drop))
+    }
+
+    /// [`SampleIndex::get`], an index it starts run by `spawn`: on a thread of its own, as `get`
+    /// runs it, or as a test needs it to.
+    pub(crate) fn get_on(
+        self: &Arc<Self>,
+        of: Of,
+        fresh: Duration,
+        job: impl FnOnce(&AtomicBool) -> Indexed + Send + 'static,
+        spawn: impl FnOnce(Box<dyn FnOnce() + Send>) -> std::io::Result<()>,
+    ) -> (Option<Arc<Indexed>>, bool) {
+        let (indexed, busy, start) = {
             let mut kept = self.kept.lock();
             let k =
                 kept.entry(of.clone()).or_insert_with(|| Kept { indexed: None, at: Instant::now(), indexing: false, stop: Arc::default() });
@@ -172,19 +186,22 @@ impl SampleIndex {
                 k.stop = Arc::default();
                 *self.running.lock() += 1;
             }
-            (k.indexed.clone(), start.then(|| k.stop.clone()))
+            (k.indexed.clone(), k.indexing, start.then(|| k.stop.clone()))
         };
-        let Some(stop) = start else { return (indexed, self.indexing_of(&of)) };
+        let Some(stop) = start else { return (indexed, busy) };
         // Started with no lock held: a thread that can't start drops its guard here, which takes it.
-        let running = Running { index: self.clone(), of: of.clone(), stop };
-        let started = std::thread::Builder::new().name("music2-samples".into()).spawn(move || {
+        let running = Running { index: self.clone(), of, stop };
+        let started = spawn(Box::new(move || {
             let _ = m2_os::thread::background();
             let made = job(&running.stop);
             running.finish(made);
-        });
-        (indexed, started.is_ok() && self.indexing_of(&of))
+        }));
+        (indexed, started.is_ok())
     }
 
+    /// Whether an index of `of` runs now: for tests. An answer reads it with its samples
+    /// ([`SampleIndex::get`]), never after.
+    #[cfg(test)]
     pub(crate) fn indexing_of(&self, of: &Of) -> bool {
         self.kept.lock().get(of).is_some_and(|k| k.indexing)
     }

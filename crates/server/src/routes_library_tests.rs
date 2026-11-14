@@ -887,6 +887,26 @@ fn a_packages_samples_are_indexed_once_in_the_background() {
     assert_eq!((made.items.len(), made.measured), (3, 3), "each file measured once");
 }
 
+// LIB-5: an ask that starts an index answers that one is running, though it has ended before the
+// ask has its answer: what the ask was given is from before it. So a folder just added shows
+// "looking…" and the page asks again, never "0 samples" for good.
+#[test]
+fn an_index_an_ask_started_is_running_in_its_answer_though_it_ended_first() {
+    use crate::library::{Of, SampleIndex};
+    use m2_editor::library::samples::Indexed;
+    use std::time::Duration;
+    let index = std::sync::Arc::new(SampleIndex::default());
+    let of = Of::Folder(PathBuf::from("/nowhere/small"));
+    // The index runs to its end inside the ask, before the ask makes its answer.
+    let to_its_end =
+        |run: Box<dyn FnOnce() + Send>| std::thread::spawn(run).join().map_err(|_| std::io::Error::other("the index panicked"));
+    let (made, busy) = index.get_on(of.clone(), Duration::from_secs(60), |_| Indexed { measured: 1, ..Default::default() }, to_its_end);
+    assert!(!index.indexing_of(&of), "the index has ended");
+    assert!(made.is_none() && busy, "nothing from before it, and an index running as that was read");
+    let (made, busy) = index.get(of, Duration::from_secs(60), |_| unreachable!("a second index"));
+    assert_eq!((made.map(|m| m.measured), busy), (Some(1), false), "the next ask has what it made");
+}
+
 /// A look for one sample in a package's samples (`kit`), as the library's first look is at its
 /// worst: it starts the kit's index and has nothing of it yet, and the index ends before the look
 /// does. What it found: how many files the index measured.
