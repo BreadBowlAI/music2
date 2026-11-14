@@ -222,6 +222,18 @@ impl SampleIndex {
         true
     }
 
+    /// What `look` finds in the samples indexed so far; when it finds nothing, what it finds after
+    /// waiting for the indexes running to end, up to `limit`, whatever runs by then (LIB-5).
+    /// Whether an index runs is never asked after the look: one the look started, or read while it
+    /// ran, may have ended before the look did, with what the look missed.
+    pub fn find<T>(&self, limit: Duration, look: impl Fn() -> Result<Option<T>>) -> Result<Option<T>> {
+        if let Some(found) = look()? {
+            return Ok(Some(found));
+        }
+        self.settled(limit);
+        look()
+    }
+
     /// Forget folder `dir` of yours: it was removed from the library. Its index running stops
     /// between two files, and what it made is never kept.
     pub fn forget(&self, dir: &Path) {
@@ -361,20 +373,14 @@ impl AppState {
     }
 
     /// The sample with library id `id`, as the library lists it now (LIB-6, LIB-7): never a
-    /// path asked for. An index running (the app just started) is waited for, up to 30 seconds.
-    /// Why there is none, in words.
+    /// path asked for. Not found, it is looked for again once the indexes running end (the app
+    /// just started, or the look started one), up to 30 seconds ([`SampleIndex::find`]). Why
+    /// there is none, in words.
     pub fn listed_sample(&self, id: &str) -> Result<Item> {
         let find = |lib: &Library| lib.get(id).filter(|i| i.kind == Kind::Sample && i.sample.is_some()).cloned();
-        if let Some(found) = find(&self.library()?) {
-            return Ok(found);
-        }
-        if self.sample_index.indexing() > 0
-            && self.sample_index.settled(WAIT_FOR_INDEX)
-            && let Some(found) = find(&self.library()?)
-        {
-            return Ok(found);
-        }
-        Err(anyhow!("There is no sample {id} in the library."))
+        self.sample_index
+            .find(WAIT_FOR_INDEX, || Ok(find(&self.library()?)))?
+            .ok_or_else(|| anyhow!("There is no sample {id} in the library."))
     }
 
     /// Start indexing the samples a search will want first, std's and the store's packs' and

@@ -887,6 +887,51 @@ fn a_packages_samples_are_indexed_once_in_the_background() {
     assert_eq!((made.items.len(), made.measured), (3, 3), "each file measured once");
 }
 
+/// A look for one sample in a package's samples (`kit`), as the library's first look is at its
+/// worst: it starts the kit's index and has nothing of it yet, and the index ends before the look
+/// does. What it found: how many files the index measured.
+fn kit_look(index: &std::sync::Arc<crate::library::SampleIndex>) -> anyhow::Result<Option<usize>> {
+    use crate::library::Of;
+    use std::time::{Duration, Instant};
+    let kit = Of::Package(PathBuf::from("/nowhere/kit"));
+    let (indexed, _) =
+        index.get(kit.clone(), Duration::from_secs(60), |_| m2_editor::library::samples::Indexed { measured: 1, ..Default::default() });
+    let until = Instant::now() + Duration::from_secs(10);
+    while index.indexing_of(&kit) {
+        assert!(Instant::now() < until, "the kit's index ends");
+        std::thread::yield_now();
+    }
+    Ok(indexed.map(|i| i.measured))
+}
+
+// LIB-5: asking for one sample that isn't listed yet waits for the indexes running, then looks
+// once more, though none runs by then: the index its own look started may end before that look
+// does (kick.wav "not in the library", the m2-server flake of 2026-11-14).
+#[test]
+fn asking_for_a_sample_looks_again_once_its_index_has_ended() {
+    let index = std::sync::Arc::new(crate::library::SampleIndex::default());
+    let found = index.find(std::time::Duration::from_secs(10), || kit_look(&index));
+    assert_eq!(found.unwrap(), Some(1), "found by a second look");
+}
+
+// LIB-5: asking for one sample looks once more after its wait however that ends: with a folder
+// of yours still being indexed past the limit, the sample whose index has ended is found.
+#[test]
+fn asking_for_a_sample_looks_again_after_its_wait_runs_out() {
+    use crate::library::{Of, SampleIndex};
+    use std::time::Duration;
+    let index = std::sync::Arc::new(SampleIndex::default());
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    index.get(Of::Folder(PathBuf::from("/nowhere/huge")), Duration::ZERO, move |_| {
+        let _ = held.recv();
+        m2_editor::library::samples::Indexed::default()
+    });
+    let found = index.find(Duration::from_millis(200), || kit_look(&index));
+    drop(release);
+    assert_eq!(found.unwrap(), Some(1), "found by the look after the wait");
+    assert!(index.settled(Duration::from_secs(10)));
+}
+
 // LIB-5 (review D11): an index that panics still ends: its folder isn't "looking…" for good, and
 // the next search starts another.
 #[test]
