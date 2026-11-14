@@ -6,7 +6,7 @@
 //
 // Round A only listens. Round B cancels and stops each wheel event over the timeline's and the
 // Graph's scroll boxes before any control sees it, so the web view doesn't scroll them, and moves the
-// box itself, once a frame, as the camera will (the note's §4): so the musician can say whether the
+// box itself, once a frame, as the camera does (the note's §4): so the musician can say whether the
 // Mac shows its scrollbars for a move the page makes. Before each step it makes room for the view to
 // move (zoom, and the Song's graph), and it puts back what it changed. It writes nothing to the song;
 // `listen`'s stop removes every listener it added and stops its frame loop.

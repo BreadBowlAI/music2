@@ -10,9 +10,13 @@ const EVERY = 250;
 /** Its foot, clear of the Graph's zoom bar (32 px from the dock's foot, 28 tall) and 8 px over it. */
 const ABOVE_ZOOM_BAR = 68;
 
+/** Each round's words: round A says plainly that the camera is off, as it is while the probe listens (VIEW-10). */
 const ROUNDS = {
-  A: { title: "Let the app scroll as it does today", more: "music2 only listens." },
-  B: { title: "Cancel the swipe", more: "music2 stops the window's own scrolling here and moves the view itself, as the camera will." },
+  A: {
+    title: "Let the Mac scroll on its own",
+    more: "music2 turns its camera (what moves the view) off in this round, and only listens. So a diagonal swipe moves one way only, as the Mac does on its own.",
+  },
+  B: { title: "Cancel the swipe", more: "music2 stops the window's own scrolling here and moves the view itself, so diagonal swipes work again." },
 };
 const WHERE = {
   timeline: "Over the timeline (the tracks at the top):",
