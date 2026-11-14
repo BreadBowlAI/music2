@@ -249,10 +249,13 @@ const laidOut = async (name, ms = 3000) => {
  *   many px it is from the beat there in the first frame. Judged against the start, never against
  *   each frame's own camera, so a frame where the camera itself jumps shows it.
  * - `fill`: an element that must reach the clear view's right edge (`covers`): nothing blank past it.
+ * - `canvases`: how many of the lanes' canvases holding any clip were not drawn at the zoom laid out,
+ *   or are not as wide on screen as that drawing stretched by the live zoom's stretch (`cv`): drawn
+ *   anew in the frame a zoom is laid out, and stretched once, by the camera, never twice (VIEW-5).
  */
-const watchFrames = async (name, boxSel, sel, { hold = null, fill = null } = {}) => {
+const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvases = false } = {}) => {
   await page.evaluate(
-    (name, boxSel, sel, hold, fill) => {
+    (name, boxSel, sel, hold, fill, canvases) => {
       const face = window.m2canvas.camera;
       const probe = document.createElement("div");
       probe.style.cssText = "position: fixed; left: 0; top: 0; width: 1px; height: 1px; opacity: 0; pointer-events: none; contain: strict";
@@ -307,9 +310,14 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null } = {})
           }
         }
         const covers = fill ? (document.querySelector(fill)?.getBoundingClientRect().right ?? -Infinity) >= hi - 1 : null;
+        let cv = null;
+        if (canvases) {
+          const laid = c.laid?.zoom ?? c.zoom;
+          cv = [...box.querySelectorAll("canvas[data-drawing=lane]")].filter((e) => e.drawn && e.drawn.w > 0 && e.getClientRects().length).filter((e) => e.drawn.zoom !== laid || Math.abs(e.getBoundingClientRect().width - (e.drawn.w * c.zoom) / laid) > 1).length;
+        }
         const st = face.stretched?.(name) ?? [];
         const now = renders();
-        seen.push({ live: !!c.laid, laid: c.laid?.zoom ?? c.zoom, stretched: st.filter((s) => s.transform.includes("scale")).length, drew: now - drawn, worst: Math.round(worst * 100) / 100, n, full: left <= lo + 2 && right >= hi - 2, off, covers, zoom: c.zoom });
+        seen.push({ live: !!c.laid, laid: c.laid?.zoom ?? c.zoom, stretched: st.filter((s) => s.transform.includes("scale")).length, drew: now - drawn, worst: Math.round(worst * 100) / 100, n, full: left <= lo + 2 && right >= hi - 2, off, covers, cv, zoom: c.zoom });
         drawn = now;
       });
       ro.observe(probe);
@@ -333,6 +341,7 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null } = {})
     sel,
     hold,
     fill,
+    canvases,
   );
   return () => page.evaluate(() => window.__watch());
 };
@@ -359,7 +368,8 @@ const pointHeld = (fs) => fs.length > 0 && fs.every((f) => f.off !== null && f.o
  * every stretched one carried the transform and rendered only where VIEW-8 allows (`rendersAllowed`),
  * every other carried none (no frame shows both the stretch and the new layout), the last was laid
  * out, and in each the items sat where the zoom shown puts them (unless `items` is false: a view whose
- * items have no length, as the beat grid's steps); with a held point, it stayed put in
+ * items have no length, as the beat grid's steps); with the lanes' canvases watched, each drawn at the
+ * zoom laid out and stretched once, in every frame; with a held point, it stayed put in
  * every frame, the end's too (`pointHeld`).
  */
 const liveFrames = (fs, { items = true } = {}) => {
@@ -372,11 +382,12 @@ const liveFrames = (fs, { items = true } = {}) => {
     !!fs.length &&
     !fs.at(-1).live &&
     (!items || fs.every((f) => f.n > 0 && f.worst <= 1)) &&
-    (fs[0].off === null || pointHeld(fs))
+    (fs[0].off === null || pointHeld(fs)) &&
+    fs.every((f) => !f.cv)
   );
 };
 /** Frames from `watchFrames`, briefly: stretched (S) or laid out (L), its transforms, its renders (+n), its items and their worst px off, and the held point's px off (@). */
-const brief = (fs) => fs.map((f) => `${f.live ? "S" : "L"}${f.stretched}${f.drew ? `+${f.drew}` : ""}/${f.n}/${f.worst}${f.off === null ? "" : `@${f.off}`}${f.covers === false ? "!" : ""}`).join(" ");
+const brief = (fs) => fs.map((f) => `${f.live ? "S" : "L"}${f.stretched}${f.drew ? `+${f.drew}` : ""}/${f.n}/${f.worst}${f.off === null ? "" : `@${f.off}`}${f.covers === false ? "!" : ""}${f.cv ? `~${f.cv}` : ""}`).join(" ");
 
 // ================================================================ the library, in the page
 
@@ -1394,9 +1405,10 @@ const clipsShown = () =>
     `a clip's notes on its lane's canvas: every clip in the beats it holds, each with all its notes there; at the zoom, sharp, each clip's box on the screen's pixels and its notes inside it, each at its own alpha in the track's ink, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
   );
 }
-// A zoom by the hand stretches each lane's canvas with the view and draws none again until the zoom
-// settles (no zoom for G, nor in a frame); then it draws each once, at the new zoom. A zoom by the app
-// (⌘=) draws them in the frame it lands in (VIEW-12).
+// A zoom by the hand stretches each lane's canvas with the view (the live zoom's one transform) and
+// draws none again until the zoom is laid out (no ⌘-scroll for G); then it draws each once, at the new
+// zoom, in the frame it is laid out in. A zoom by the app (⌘=) draws them in the frame it lands in
+// (VIEW-5, VIEW-12).
 {
   await setScroll(tl, 0, 0);
   await frames();
@@ -1405,6 +1417,7 @@ const clipsShown = () =>
   const z0 = (await arr())?.zoom;
   const n0 = await page.$$eval(`${tl} canvas[data-drawing]`, (els) => (window.__canvases = els).length);
   const r0 = await renders();
+  const watch = await watchFrames("arrangement", tl, "[data-clip]", { canvases: true });
   // 10 frames of ⌘-scroll in, read in the frame after the last event: well before G.
   const mid = await page.evaluate(
     (x, y) =>
@@ -1438,6 +1451,7 @@ const clipsShown = () =>
   const r1 = since(r0, mid.total);
   await sleep(300);
   await frames(2);
+  const fs = await watch();
   const r2 = since(r0, await renders());
   const end = await page.evaluate(() => {
     const z = window.m2canvas.camera.now("arrangement").zoom;
@@ -1449,8 +1463,8 @@ const clipsShown = () =>
     `while 20 ⌘-scroll events zoom in (${z0} → ${mid.zoom?.toFixed(2)} px a beat), the ${n0} lanes' canvases stretch with the view (${mid.stretched} of the ${mid.drawn} holding any of their lane), each still as drawn at ${json(mid.at)}, none drawn again: ${json(r1)}`,
   );
   check(
-    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0,
-    `once it settles, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at})`,
+    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0 && fs.some((f) => f.live) && !fs.at(-1).live && fs.every((f) => !f.cv),
+    `once it is laid out, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at}): in every frame, each lane's canvas drawn at the zoom laid out and stretched once, the frame it is laid out in too (${brief(fs)})`,
   );
   const r3 = await renders();
   await key("Meta+Equal");
@@ -1667,7 +1681,7 @@ const beatMid = (x) =>
   const before = await overlays(marker);
   const a = await beatMid(at.x);
   const r0 = await renders();
-  const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   await pinchOver(at.x, at.y, [1.1, 1.2, 1.3, 1.4, 1.5], false);
   await frames(2);
   const r = since(r0, await renders());
@@ -1726,7 +1740,7 @@ const beatMid = (x) =>
   await sleep(300);
   const at = await lanes();
   const z0 = (await arr())?.zoom;
-  const out = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  const out = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   await pinchOver(at.x, at.y, Array.from({ length: 24 }, (_, i) => 1 - (0.75 * (i + 1)) / 24), false);
   await frames(3);
   await pinchEnd(at.x, at.y, 0.25);
@@ -1736,12 +1750,12 @@ const beatMid = (x) =>
   // The zooms the stretched frames were laid out at: the start's, and those laid out early since.
   const early = [...new Set(fo.filter((f) => f.live).map((f) => f.laid))];
   check(
-    early.length >= 2 && Math.min(...early) < (z0 ?? 0) && fo.every((f) => f.full && f.worst <= 1 && (f.live ? f.stretched > 0 : f.stretched === 0)) && pointHeld(fo) && rendersAllowed(fo),
+    early.length >= 2 && Math.min(...early) < (z0 ?? 0) && fo.every((f) => f.full && f.worst <= 1 && !f.cv && (f.live ? f.stretched > 0 : f.stretched === 0)) && pointHeld(fo) && rendersAllowed(fo),
     `a pinch out to a quarter is laid out early as it goes (stretched from ${early.length} zooms laid out, ${z0} down to ${Math.min(...early).toFixed(2)}), every frame drawn across the whole view, each clip within a px of the zoom shown, the beat under the fingers held (@), and renders only at a layout or in the frames of the new window one asked for (${brief(fo)})`,
   );
   await sleep(300);
   const z1 = (await arr())?.zoom;
-  const inn = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  const inn = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   await pinchOver(at.x, at.y, Array.from({ length: 24 }, (_, i) => 1 + (3 * (i + 1)) / 24));
   await laidOut("arrangement");
   await frames(3);
@@ -1788,7 +1802,7 @@ const beatMid = (x) =>
   await sleep(300);
   const at = await lanes();
   const r0 = await renders();
-  const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   const t = await page.evaluate(
     (x, y) =>
       new Promise((done) => {
