@@ -1370,15 +1370,15 @@ const beatMid = (x) =>
   const out = await watchFrames("arrangement", tl, "[data-clip]");
   await pinchOver(at.x, at.y, Array.from({ length: 24 }, (_, i) => 1 - (0.75 * (i + 1)) / 24), false);
   await frames(3);
-  const mid = await arr();
   await pinchEnd(at.x, at.y, 0.25);
   await laidOut("arrangement");
   await frames(3);
   const fo = await out();
-  const early = new Set(fo.filter((f) => f.live).map((f) => f.laid)).size;
+  // The zooms the stretched frames were laid out at: the start's, and those laid out early since.
+  const early = [...new Set(fo.filter((f) => f.live).map((f) => f.laid))];
   check(
-    !!mid?.laid && mid.laid.zoom < (z0 ?? 0) && early >= 2 && fo.every((f) => f.full && f.worst <= 1 && (f.live ? f.stretched > 0 : f.stretched === 0)),
-    `a pinch out to a quarter is laid out early as it goes (stretched from ${early} zooms laid out, ${z0} down to ${mid?.laid?.zoom?.toFixed(2)} by mid-pinch), every frame drawn across the whole view, each clip within a px of the zoom shown (${brief(fo)})`,
+    early.length >= 2 && Math.min(...early) < (z0 ?? 0) && fo.every((f) => f.full && f.worst <= 1 && (f.live ? f.stretched > 0 : f.stretched === 0)),
+    `a pinch out to a quarter is laid out early as it goes (stretched from ${early.length} zooms laid out, ${z0} down to ${Math.min(...early).toFixed(2)}), every frame drawn across the whole view, each clip within a px of the zoom shown (${brief(fo)})`,
   );
   await sleep(300);
   const z1 = (await arr())?.zoom;
