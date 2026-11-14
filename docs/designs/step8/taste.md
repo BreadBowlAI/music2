@@ -1114,6 +1114,30 @@ it stays under it. So MUST a pinch on a Mac, and the Graph's zoom bar's Zoom in,
 size, around the view's middle. Fit fits, from the graph's top left. The Graph's dotted background
 MUST zoom and move with the graph: its dots 20 of the graph's px apart from its top left, doubled
 while that is under 12 on screen, each 1 px in radius at every zoom.
+
+A zoom by the hand (a pinch, or a run of ⌘-scroll: its events less than G apart) MUST show in the
+frame it was asked in. In a view that marks what stretches (the arrangement, Notes and the beat
+grid), it is a **live zoom**: the camera writes one `transform` on what the view marks (its lanes
+or grid, its ruler, and what is drawn over them), a stretch across around the point under the
+fingers, which stays put; the view is not laid out again (VIEW-8). When the zoom ends (the pinch's
+`gestureend`, or no ⌘-scroll for G), the view MUST be laid out at the new zoom and the stretch go,
+in the same frame: the picture after is the one a direct zoom to the same zoom and place draws. It
+is laid out early only when a zoom out would show past what the view has drawn (the window it
+draws, VIEW-12, or its content's end). While the stretch lasts, the stretched layers take no
+pointer. A zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
+once, as is any other move while a stretch lasts (a swipe, Follow's page, a press or a key lays it
+out first). A view that marks nothing (the Graph) is laid out on each frame of a zoom.
+- *Two zooms.* While a live zoom lasts, the camera keeps two: the zoom **shown** (its state's `x`,
+  `y` and `zoom`, where the fingers asked) and the zoom **laid out** (its state's `laid`: what the
+  view draws, and where its box is scrolled). `laid` is null at all other times: the two are one.
+  What reads the camera from outside sees the zoom shown: `camera.now()`, `cameraNow`, agents'
+  `seen`, Follow, the playhead. The zoom laid out is the views' own: `useZoomOf`, `useSpan`,
+  `useCull`, the box's scroll position and the zoom view.json keeps follow it.
+- *Why:* each frame of a zoom laid out and drew every clip again: 38 ms of work a frame on a beat
+  song in WebKit, where 120 Hz gives 8.3 ms. A stretch is the graphics chip's: 8 ms (the zoom note,
+  `docs/designs/camera/zoom.md`, §1 and §2). Names, bar numbers and borders stretch for a moment
+  while the fingers move, as in Maps and Preview; the lead said yes for the owner (the note's §4).
+  The Graph's zoom is cheap already.
 - *Today:* since track `camera`, in all four views, with a pinch in each: the recognizer (`web/src/camera/recognizer.ts`) sums
   a frame's ⌘-scroll events, or takes a pinch's last scale (Safari's `gesturechange`), and the
   camera's `zoomAround` keeps the point under the pointer, across in the arrangement, Notes and the
@@ -1143,7 +1167,10 @@ for the camera's moves; dragging one is the browser's move, taken in (VIEW-9).
 a step of what it draws (VIEW-12) or a waveform tile shows for the first time. The status poll MUST
 NOT render the window: only what shows the status (the top bar) renders by it, and the arrangement
 grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
-frame. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
+frame. No React component MUST render on a frame of a live zoom (VIEW-5): the camera writes its
+stretch, and what follows the zoom shown (the arrangement's playhead, Notes' and the beat grid's
+velocity strips) writes its own style; the view renders once at the zoom's end, and once at each
+early layout. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
 reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
 catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
 - An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
