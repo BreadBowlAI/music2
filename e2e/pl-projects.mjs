@@ -3,7 +3,8 @@
 //   C1  view settings kept per song (Q16): the roll's grid, the timeline's snap and the audition
 //       toggle are as left after the server stops and another starts (another port, another
 //       browser context: nothing in the browser's storage), and `.music2/view.json` holds them; a
-//       new song starts with the defaults.
+//       new song starts with the defaults; one changed just before another song opens with no close
+//       is kept for the song it was changed in.
 //   C2  recent songs (Q17, taste.md SS-2): songs made with New Song are listed newest first on the
 //       start screen with their tempo and "opened today"; a click opens one, Return opens the
 //       newest; Tab lights a row accent-soft; a folder that is gone says "Moved or deleted" and
@@ -206,6 +207,33 @@ if (part("c1")) {
   check(await openBass(p2), "back to the first song");
   check(same(await shown(p2), { roll: "1/8", snap: "false", audition: "false" }), `its settings come back with it: ${JSON.stringify(await shown(p2))}`);
   check(!fs.existsSync(`${other}/.music2/view.json`) || !readJson(`${other}/.music2/view.json`)?.grid, "and nothing was kept for the other song");
+
+  // A setting changed just before another song opens over this one with no close (an agent's
+  // POST /open, inside the page's 300 ms wait): it is sent for this song, and kept in its file
+  // (FMT-20). The page's sends are held until the server has switched, so they reach it after.
+  {
+    const held = [];
+    const hold = (r) => (new URL(r.url()).pathname === "/api/graph/view" ? held.push(r) : r.continue());
+    await p2.setRequestInterception(true);
+    p2.on("request", hold);
+    await p2.click("[data-testid=audition]");
+    const set = (await shown(p2)).audition === "true";
+    const switched = (await s2.api("graph/open", { path: other })).status === 200;
+    const sent = await until(async () => held.length > 0, 3000);
+    p2.off("request", hold);
+    for (const r of held) await r.continue();
+    await p2.setRequestInterception(false);
+    // On is audition's default: the file then keeps no key for it (it held `false`).
+    const kept = () => !!view() && !("audition" in view());
+    check(
+      set && switched && sent && (await until(async () => kept(), 5000)),
+      `audition turned on, then another song opened with no close inside 300 ms: sent for this song and kept in its file (${JSON.stringify({ set, switched, sent, file: view() })})`,
+    );
+    await s2.api("graph/open", { path: song });
+    await until(async () => (await s2.api("graph")).json?.dir === song);
+    const notes = await openBass(p2);
+    check(notes && (await until(async () => (await shown(p2)).audition === "true", 5000)), `and it is on when the song opens again: ${JSON.stringify(await shown(p2))}`);
+  }
   await p2.browserContext().close();
   await s2.stop();
 }

@@ -138,7 +138,7 @@ export const SUITES = [
   ["attention", "attn", { expect: 60, s: 6, tier: "nightly", why: "flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded" }],
   ["st-errors", "fix", { expect: 34, s: 5, tier: "nightly", why: "flake: waited over 30 s for a Needs attention row, under load (HANDOFF.md)" }],
   ["newsong", "none", { expect: 71, s: 10, tier: "nightly", why: "flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21)" }],
-  ["pl-projects", "none", { expect: 66, s: 10 }],
+  ["pl-projects", "none", { expect: 68, s: 10 }],
   ["nx-settings", "none", { expect: 42, s: 12 }],
   ["tr-trust", "none", { expect: 25, s: 15 }],
   ["nx-nodevice", "none", { expect: 11, s: 2 }],
