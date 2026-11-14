@@ -93,12 +93,27 @@ const WAIT_FOR_INDEX: Duration = Duration::from_secs(30);
 /// The samples indexed so far (LIB-4, LIB-5), by folder: a package's `samples/`, or a folder of
 /// yours. Every index runs in the background, one at a time for each folder; a search uses the
 /// last one meanwhile, and never waits.
-#[derive(Default)]
 pub struct SampleIndex {
     kept: Mutex<HashMap<Of, Kept>>,
     /// Counts the indexes running, for [`SampleIndex::settled`].
     running: Mutex<usize>,
     done: parking_lot::Condvar,
+    /// How an index is run: on a thread of its own.
+    spawn: Spawn,
+}
+
+/// How a [`SampleIndex`] runs an index it starts: an error when it can't.
+pub(crate) type Spawn = fn(Box<dyn FnOnce() + Send>) -> std::io::Result<()>;
+
+/// Run an index on a thread of its own.
+fn on_a_thread(index: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::Builder::new().name("music2-samples".into()).spawn(index).map(drop)
+}
+
+impl Default for SampleIndex {
+    fn default() -> SampleIndex {
+        SampleIndex::run_by(on_a_thread)
+    }
 }
 
 /// What an index is of: a package's folder, or a folder of yours (the same folder may be both).
@@ -153,16 +168,24 @@ impl Drop for Running {
 }
 
 impl SampleIndex {
-    /// The samples of `of` as indexed so far, and whether an index of it is running, never
-    /// waiting: `job` is started in the background, at background priority, when there is none or
-    /// the last is `fresh` or older, and no index of it runs.
+    /// An index that runs each index it starts with `spawn`: on a thread of its own, as
+    /// [`SampleIndex::default`]'s does, or as a test needs.
+    pub(crate) fn run_by(spawn: Spawn) -> SampleIndex {
+        SampleIndex { kept: Mutex::default(), running: Mutex::default(), done: parking_lot::Condvar::new(), spawn }
+    }
+
+    /// The samples of `of` as indexed so far, and whether an index of it was running as they were
+    /// read (one started now is: they are from before it), never waiting: `job` is started in the
+    /// background, at background priority, when there is none or the last is `fresh` or older,
+    /// and no index of it runs. Whether one runs is read with the samples, never after: an index
+    /// may end at any moment, with what they miss.
     pub(crate) fn get(
         self: &Arc<Self>,
         of: Of,
         fresh: Duration,
         job: impl FnOnce(&AtomicBool) -> Indexed + Send + 'static,
     ) -> (Option<Arc<Indexed>>, bool) {
-        let (indexed, start) = {
+        let (indexed, busy, start) = {
             let mut kept = self.kept.lock();
             let k =
                 kept.entry(of.clone()).or_insert_with(|| Kept { indexed: None, at: Instant::now(), indexing: false, stop: Arc::default() });
@@ -172,19 +195,22 @@ impl SampleIndex {
                 k.stop = Arc::default();
                 *self.running.lock() += 1;
             }
-            (k.indexed.clone(), start.then(|| k.stop.clone()))
+            (k.indexed.clone(), k.indexing, start.then(|| k.stop.clone()))
         };
-        let Some(stop) = start else { return (indexed, self.indexing_of(&of)) };
+        let Some(stop) = start else { return (indexed, busy) };
         // Started with no lock held: a thread that can't start drops its guard here, which takes it.
-        let running = Running { index: self.clone(), of: of.clone(), stop };
-        let started = std::thread::Builder::new().name("music2-samples".into()).spawn(move || {
+        let running = Running { index: self.clone(), of, stop };
+        let started = (self.spawn)(Box::new(move || {
             let _ = m2_os::thread::background();
             let made = job(&running.stop);
             running.finish(made);
-        });
-        (indexed, started.is_ok() && self.indexing_of(&of))
+        }));
+        (indexed, started.is_ok())
     }
 
+    /// Whether an index of `of` runs now: for tests. An answer reads it with its samples
+    /// ([`SampleIndex::get`]), never after.
+    #[cfg(test)]
     pub(crate) fn indexing_of(&self, of: &Of) -> bool {
         self.kept.lock().get(of).is_some_and(|k| k.indexing)
     }
@@ -205,7 +231,9 @@ impl SampleIndex {
         self.get(Of::Folder(dir.to_path_buf()), FRESH, move |stop| samples::index_until(Root::Folder(&d), cache.as_deref(), stop))
     }
 
-    /// How many indexes are running.
+    /// How many indexes are running now: for tests. A search reads it with the samples
+    /// ([`AppState::library`]), never after.
+    #[cfg(test)]
     pub fn indexing(&self) -> usize {
         *self.running.lock()
     }
@@ -220,6 +248,18 @@ impl SampleIndex {
             }
         }
         true
+    }
+
+    /// What `look` finds in the samples indexed so far; when it finds nothing, what it finds after
+    /// waiting for the indexes running to end, up to `limit`, whatever runs by then (LIB-5).
+    /// Whether an index runs is never asked after the look: one the look started, or read while it
+    /// ran, may have ended before the look did, with what the look missed.
+    pub fn find<T>(&self, limit: Duration, look: impl Fn() -> Result<Option<T>>) -> Result<Option<T>> {
+        if let Some(found) = look()? {
+            return Ok(Some(found));
+        }
+        self.settled(limit);
+        look()
     }
 
     /// Forget folder `dir` of yours: it was removed from the library. Its index running stops
@@ -290,9 +330,11 @@ fn listed(kept: Option<&serde_json::Value>) -> Vec<Plugin> {
 impl AppState {
     /// The library (LIB-1): the open song's build's components, or std's and the store's packs'
     /// with no song open; their presets and yours; their samples and your folders' as indexed so
-    /// far, borrowed from their indexes; the plugins the app has listed. Reads files: call it off
-    /// the async threads.
-    pub fn library(&self) -> Result<Library> {
+    /// far, borrowed from their indexes; the plugins the app has listed. And how many of those
+    /// indexes were running as their samples were read, one it started among them (LIB-5): never
+    /// asked after, as an index may end at any moment, with what the library misses. Reads files:
+    /// call it off the async threads.
+    pub fn library(&self) -> Result<(Library, usize)> {
         let folders = self.library_folders();
         let (catalog, packages) = match self.graph.library()? {
             Some(both) => both,
@@ -304,25 +346,27 @@ impl AppState {
         };
         // The list kept from before any scan that runs now: the scan holds another lock.
         let plugins = listed(self.plugins.lock().as_ref());
-        let samples = self.samples(&packages, &folders);
+        let (samples, indexing) = self.samples(&packages, &folders);
         let yours = folders.presets.as_deref();
-        Ok(Library::of(&Sources { catalog: &catalog, packages: &packages, yours, plugins: &plugins, samples: &samples }))
+        Ok((Library::of(&Sources { catalog: &catalog, packages: &packages, yours, plugins: &plugins, samples: &samples }), indexing))
     }
 
     /// The samples of `packages` and of your sample folders, as indexed so far (LIB-4, LIB-5): an
     /// index is started where there is none, or an old one. A folder inside another of yours (kept
-    /// from before they were refused) is that one's.
-    fn samples(&self, packages: &[(String, PathBuf)], folders: &Folders) -> Vec<Arc<Indexed>> {
+    /// from before they were refused) is that one's. And how many of their indexes were running as
+    /// they were read.
+    fn samples(&self, packages: &[(String, PathBuf)], folders: &Folders) -> (Vec<Arc<Indexed>>, usize) {
         let cache = folders.samples.as_deref();
-        let mut out = vec![];
+        let mut read = vec![];
         for (name, dir) in packages {
-            out.extend(self.sample_index.package(name, dir, cache).0);
+            read.push(self.sample_index.package(name, dir, cache));
         }
         let yours = self.sample_folders();
         for dir in yours.iter().filter(|d| !yours.iter().any(|o| o != *d && d.starts_with(o))) {
-            out.extend(self.sample_index.folder(dir, cache).0);
+            read.push(self.sample_index.folder(dir, cache));
         }
-        out
+        let indexing = read.iter().filter(|(_, running)| *running).count();
+        (read.into_iter().filter_map(|(indexed, _)| indexed).collect(), indexing)
     }
 
     /// Your sample folders, as this computer's settings keep them (LIB-5): none when this server
@@ -361,20 +405,14 @@ impl AppState {
     }
 
     /// The sample with library id `id`, as the library lists it now (LIB-6, LIB-7): never a
-    /// path asked for. An index running (the app just started) is waited for, up to 30 seconds.
-    /// Why there is none, in words.
+    /// path asked for. Not found, it is looked for again once the indexes running end (the app
+    /// just started, or the look started one), up to 30 seconds ([`SampleIndex::find`]). Why
+    /// there is none, in words.
     pub fn listed_sample(&self, id: &str) -> Result<Item> {
         let find = |lib: &Library| lib.get(id).filter(|i| i.kind == Kind::Sample && i.sample.is_some()).cloned();
-        if let Some(found) = find(&self.library()?) {
-            return Ok(found);
-        }
-        if self.sample_index.indexing() > 0
-            && self.sample_index.settled(WAIT_FOR_INDEX)
-            && let Some(found) = find(&self.library()?)
-        {
-            return Ok(found);
-        }
-        Err(anyhow!("There is no sample {id} in the library."))
+        self.sample_index
+            .find(WAIT_FOR_INDEX, || Ok(find(&self.library()?.0)))?
+            .ok_or_else(|| anyhow!("There is no sample {id} in the library."))
     }
 
     /// Start indexing the samples a search will want first, std's and the store's packs' and

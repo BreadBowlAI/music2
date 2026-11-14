@@ -93,10 +93,11 @@ const E2E = path.dirname(fileURLToPath(import.meta.url));
 // `s`: about how many seconds the run takes, one at a time on the Linux server (2026-10-21), so
 // --shard can make parts of about the same length; it needn't be exact. `tier: "nightly"`, with
 // `why`: the run is left out of the PR tier (--tier pr) and runs in the nightly one, for one of
-// two reasons only. speed: it judges how fast something happens (a bound under 2 s, a rate), so
+// three reasons only. speed: it judges how fast something happens (a bound under 2 s, a rate), so
 // a slow or busy machine fails it with correct code; a wait that only fails if something never
 // happens isn't one. flake: it failed on correct code in a recorded run, and the cause isn't
-// fixed yet (HANDOFF.md's "Known flakes"). `sleeps`, a why: the run needs a sleep to last what it
+// fixed yet (HANDOFF.md's "Known flakes"). measure: it only measures, for people to compare
+// builds by (zoom-bench), and its checks prove only that it measured. `sleeps`, a why: the run needs a sleep to last what it
 // asks (the capture's clock, the meters' tick, are sleeps), so a machine whose sleeps run long
 // fails it with correct code, every time; --late-sleeps leaves it out there, and only there (the
 // Rust tests of this kind: ci/sleeps-tests.txt). It says nothing of the run's tier.
@@ -223,11 +224,13 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
   // Track camera-probe: the command palette's frame meter and swipe probe (taste.md VIEW-10), before the camera.
-  ["camera-probe", "fix", { expect: 54, s: 20 }],
+  ["camera-probe", "fix", { expect: 58, s: 30 }],
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
   ["camera", "fix", { expect: 76, s: 60 }],
+  // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
+  ["zoom-bench", "fix", { expect: 15, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 
