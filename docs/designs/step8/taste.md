@@ -1143,9 +1143,12 @@ for the camera's moves; dragging one is the browser's move, taken in (VIEW-9).
 a step of what it draws (VIEW-12) or a waveform tile shows for the first time. The status poll MUST
 NOT render the window: only what shows the status (the top bar) renders by it, and the arrangement
 grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
-frame. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
-reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
-catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
+frame. Inside the view, a zoom MUST render only what draws by the zoom, once: no clip box or clip
+drawing (VIEW-12), no node of the Graph (it scales its nodes as one), and the arrangement's grid and
+recording take once a zoom, never once a track. While a pointer drag holds the pointer (a clip, a
+marquee, a note, a cable, a fade, a reorder, the ruler's loop), the camera holds still: no swipe,
+glide or Follow moves it; Follow catches up after. While the camera moves, and for 250 ms after,
+the views' hover does nothing.
 - An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
   style, never by a render while only its place changes.
 - *Why:* moving the view must cost two numbers written, not a redraw (the note's §8, C9, C10).
@@ -1334,13 +1337,27 @@ no clip: each clip's box is placed by the zoom straight into its style.
 - Notes draws only the notes in the window, across and down, and their velocity bars across.
 - The beat grid keeps its culling by bar (KIT-10), through the camera's window. The Graph is small:
   it draws everything.
-- A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT read the zoom: it is
-  drawn in beats, or in percent of its clip, and kept by its clip, so a zoom changes only the clip's
-  box. A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px, its
-  clip is marked (`data-fine`, as it zooms) and each note gets a 2 px mark the stretch doesn't scale.
-  Each note is drawn at its loudness by its own opacity, never a group's (WebKit paints a group with
-  opacity through a layer of its own). An audio clip's waveform is drawn in pixels and
-  redraws on a zoom. A new window draws only the clips entering it: a clip already drawn is kept.
+- A clip's mini drawing (its notes, its automation curve, its steps) MUST NOT render on a zoom: it
+  is kept by its clip, so a zoom changes only the clip's box.
+- A clip draws its notes, and an automation curve's line and the shade under it, on a canvas of its
+  own (the zoom note's §3), at the screen's own pixels (`devicePixelRatio`), in its track's colours.
+  The canvas MUST be drawn again only when what it draws changes (its notes, its curve, its colour,
+  its size), and a zoom by the hand (⌘-scroll, a pinch) draws it again only once the zoom settles,
+  no zoom for G: until then it stretches with its clip, each note still at its time. A zoom by the
+  app (⌘=, Fit) draws it again in the frame it lands in. A pan draws no canvas again, unless what
+  shows has left the part of a long clip its canvas holds (below): then that canvas, at once.
+- A canvas MUST hold only the part of its clip in view and up to a view more each side (the margin
+  above), and MUST NOT make a bitmap over 8192 device px across or 512 down: a longer part is cut
+  around what shows.
+- A note under 2 px wide still shows 2 px wide: while a clip's shortest note is under 2 px at the
+  zoom its canvas is drawn at, each of its notes gets a 2 px mark. Each note is drawn at its
+  loudness by its own alpha. A curve's points and a lane of names' steps stay elements over the
+  drawing, as before: they are few, a point stays round while the drawing stretches, and a name is
+  text.
+- Each canvas keeps what it drew last as `drawn` (its notes, marks and line in px of its box, the
+  zoom and the beats it covers), which the suites read beside its pixels.
+- An audio clip's waveform is drawn in pixels and redraws on a zoom. A new window draws only the
+  clips entering it: a clip already drawn is kept.
 - *Why:* on #112's branch the owner saw the frame rate drop when zooming the tracks or Notes at
   120 Hz: every zoom step redrew every clip of the song, once for each wheel event (the note's §16).
 - *Today:* since track `camera`: `cull` and `useCull` in `web/src/camera/` (the margin and the step
