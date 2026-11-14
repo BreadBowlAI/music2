@@ -54,7 +54,7 @@ WebKit here drew in software on a server, not on a Mac's graphics chip. Its main
 **What it does.**
 - While a pinch or a run of ⌘-scroll lasts, the camera doesn't lay the tracks out again on each frame. It sets one `transform` on the tracks and the ruler: a stretch across, around the point under the fingers. The browser stretches what it already drew, on the graphics chip.
 - When the zoom ends (the gesture ends, or no ⌘-scroll for G), the camera lays the tracks out once at the new zoom and takes the stretch away in the same frame. The picture after is the same as today's, byte for byte (measured).
-- The tracks are laid out early only when a zoom out shows more than the drawn margin covers, about ×1.5 out or ×2 in.
+- The tracks are laid out early only when a zoom out comes near the edge of what is drawn: a step before it, so the new clips come between frames. A zoom in is laid out only at its end. *(As built; the note first said "about ×1.5 out or ×2 in".)*
 
 **Measured** (median work per frame, ms; the 95th percentile in brackets):
 
@@ -77,7 +77,7 @@ The one real layout at the end still costs what a frame costs today, 38 to 51 ms
 - Everything that reads the camera from outside sees the zoom shown: `camera.now()`, agents' `seen`, Follow, and the playhead.
 - The zoom laid out is the views' business.
 
-**While the stretch lasts, the tracks don't take the pointer** (`pointer-events: none`). That saves WebKit finding what is under the fingers on each event, and hover is muted while the camera moves anyway (VIEW-8). *Not built: measured, it cost more than it saved (below).*
+**While the stretch lasts, the tracks still take the pointer.** *(As built; the note first said `pointer-events: none`.)* The browser hits the picture as it shows, so a press lands on what you see, and lays the zoom out first. Hover is muted while the camera moves anyway (VIEW-8). Measured, `pointer-events: none` cost more than it saved: see "Departures from this note" below.
 
 **Notes and the beat grid** get the same live zoom across. The Graph doesn't need it: its zoom is already cheap (9 ms on the beat song in WebKit). Instead, its nodes stop re-rendering on a zoom (§3).
 
@@ -111,20 +111,27 @@ Z1's frames apart, in ms: median / 95th percentile, from the first event to 200 
 | Big, Chrome, pinch | 138 | 10 / 15 | 3 | 38 / 61 | 9 / 10 | 43 / 62 |
 | Big, Chrome, ⌘-scroll | 159 | 11 / 20 | 2 | 73 / 77 | 18 / 18 | 63 / 76 |
 
+These were measured at `bb1e472b`. The fixes after the review (Notes and the beat grid given room where a zoom looked, a zoom started from the box's whole px, the browser's move taken in) change nothing these runs measure in the timeline.
+
 - **A pinch frame on a beat song in WebKit went from 37 ms to 9**, as the prototype said (38 to 8). WebKit here drew 111 frames in the time it drew 46. On the big song, 94 to 16.
 - **A laid-out frame costs about what a frame cost before**, 47 ms on the beat song in WebKit, and the frame after it is cheap. Z2 makes the laid-out ones cheaper.
-- **A zoom out is laid out a step before the edge of what is drawn**, where the view would ask for a new window anyway (VIEW-12), so the view draws its new clips between frames. Laid out only once the edge was reached, it drew them all in one frame: 150 to 220 ms on the big song in Chrome.
-- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit. The layers stay, with a transform that moves nothing, until the cameras have been still for 400 ms; letting them go then costs one frame of 14 to 33 ms, at rest. With the transforms taken away in the frame the zoom ends, the frame after it cost 31 to 34 ms instead of 9 to 11 (WebKit, beat song): WebKit lays an element out again when its transform goes.
-- **The stretched layers still take the pointer.** The browser hits the picture as it shows, and a press lays the zoom out first. The A/B, in WebKit on the beat song (pinch, ms, median / 95th percentile; two runs each, in turn):
+- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit.
 
-  | Built | the laid-out frame | the frame after it | the first frame | input, a stretched frame |
-  |---|---|---|---|---|
-  | Z1 | 53 / 73 | 9 / 45 | 25 / 40 | 4 |
-  | with `pointer-events: none` on what is stretched | 84 / 103 | 59 / 70 | 61 / 75 | 4 |
-  | with one element over the view taking the pointer | 99 / 138 | 91 / 111 | 80 / 101 | – |
+**Departures from this note**, each measured. The lead kept all three.
 
-  `pointer-events` is inherited, so WebKit works out every clip's style anew at each end: on the big song the laid-out frame was 203 ms against 90. An element over the view made WebKit composite it over the layers.
-- **Not measured on the owner's Mac yet.** The swipe probe's last step, Replay a pinch, measures it there with the same bench.
+1. **The stretched layers take the pointer.** The note said `pointer-events: none`. It is inherited, so WebKit works out every clip's style anew at both ends of a zoom, and it found nothing faster. One element over the view to take the pointer instead was worse: WebKit composites it over the layers. The A/B, in WebKit on the beat song (pinch, ms, median / 95th percentile; two runs each, in turn):
+
+   | Built | the laid-out frame | the frame after it | the first frame | input, a stretched frame |
+   |---|---|---|---|---|
+   | Z1 | 53 / 73 | 9 / 45 | 25 / 40 | 4 |
+   | with `pointer-events: none` on what is stretched | 84 / 103 | 59 / 70 | 61 / 75 | 4 |
+   | with one element over the view taking the pointer | 99 / 138 | 91 / 111 | 80 / 101 | – |
+
+   On the big song the laid-out frame was 203 ms with `pointer-events: none`, against 90 without. So a press lands on what the stretch shows, and lays the zoom out first.
+2. **A zoom out is laid out a step before the edge of what is drawn**, where the view would ask for a new window anyway (VIEW-12), not at the edge. Then the view draws its new clips between frames. Laid out only once the edge was reached, it drew them all in one frame: 150 to 220 ms on the big song in Chrome. A zoom in is laid out only at its end.
+3. **The layers stay a moment after a zoom**, with a transform that moves nothing, until the cameras have been still for 400 ms (`LAYERS_KEPT`). WebKit lays an element out again when its transform goes. With the transforms taken away in the frame the zoom ends, the frame after it cost 31 to 34 ms instead of 9 to 11 (WebKit, beat song). Letting the layers go at rest costs one frame of 14 to 33 ms. A press or a key lets them go at once.
+
+- **Not measured on the owner's Mac yet.** The swipe probe's last step, Replay a pinch, measures it there with the same bench, and its report splits the timeline's frames the same way: stretched, laid out, and the frame after each.
 - **Pictures** for the owner, before, mid-pinch and after, on a beat song, in the arrangement and in Notes: `~/m2-runs/live-zoom/look/`. The app has one look (taste.md: no dark mode).
 
 ## 3. Z2: cheaper redraws

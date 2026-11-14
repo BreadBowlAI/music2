@@ -153,6 +153,9 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const camera = useCamera(BEAT, scroller, { margins: { left: NAMES_W, top: ROLL_RULER_H }, origin: { x: NAMES_W, y: ROLL_RULER_H }, zoom: { min: 16, max: 400 }, start: () => 88 });
   const ppb = useZoomOf(camera);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - NAMES_W);
+  // What a zoom looked at keeps its room, as the arrangement's (VIEW-5, VIEW-6): the step it held in
+  // place stays there, at the far end too, and a live zoom ends where its stretch showed it.
+  const looked = useCameraState(camera, (s) => s.asked.w) - NAMES_W;
   // Only the steps near what shows are drawn (KIT-10, VIEW-12): a bar's room (4 beats) each side,
   // the window moving when that falls under 2 beats.
   const cull = useCull(camera, "x", { x: { margin: 4, step: 2 } }).x;
@@ -177,11 +180,11 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const selected = kit.rows.find((r) => r.track === module) ?? kit.rows[0];
   const name = (track: string) => moduleName(graph.view.modules.find((m) => m.key === track) ?? { key: track, label: timeline.tracks.find((t) => t.module === track)?.label });
 
-  // The song's bars and one bar more (KIT-10), at least as wide as the view.
+  // The song's bars and one bar more (KIT-10), at least as wide as the view and the room a zoom looked at.
   const last = barAt(meter, Math.max(0, timeline.end - SAME_PLACE));
   let end = last.start + last.length;
   end += barAt(meter, end).length;
-  while (end * ppb < visible) end += barAt(meter, end).length;
+  while (end * ppb < Math.max(visible, looked)) end += barAt(meter, end).length;
   const steps = stepsTo(meter, end, step);
   const width = end * ppb;
   camera.content({ w: NAMES_W + width, h: ROLL_RULER_H + kit.rows.length * ROW_H });

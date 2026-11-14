@@ -7,7 +7,7 @@ import * as numbers from "./numbers";
 import { rigs } from "./rig";
 import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
-import { markedOf, shownAt, stretchOf } from "./stretch";
+import { markedOf, shownAt, shownScroll, stretchOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -23,6 +23,7 @@ export const face = {
   cullPlan,
   stretchOf,
   shownAt,
+  shownScroll,
   laidOf,
   /** The cameras mounted now. */
   names: cameraNames,

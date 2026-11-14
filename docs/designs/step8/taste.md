@@ -1160,31 +1160,25 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   point, the zoom bar's buttons around the middle, Fit, the dots at each zoom on the way),
   `pl-zoom` (the arrangement) and `camera` (a pinch and ⌘-scroll in Notes and the beat grid, and
   the arrangement's pinch).
-- *Today, the live zoom:* since track `live-zoom`. In the library: `rig.ts` (a zoom by the hand is
-  `stretch`ed: `begin` reads where the box is scrolled and each marked element's place once, at a
-  frame's start; `covered` asks each
-  `useCull`'s window on screen and the content's end, and lays a zoom out early a step before them,
-  once the window asked for last no longer holds what shows and its kept margin (`holds` in
-  `math.ts`), so the view draws its new window between frames; `layOut` ends it, at a
-  `gestureend`, G with no ⌘-scroll, a press, a key, a resize, a move or the app's zoom; the layers,
-  with a transform that moves nothing, are kept until the cameras have been still `LAYERS_KEPT`,
-  400 ms, as taking them away lays them out again in WebKit), `stretch.ts` (`useStretch`, `stretchOf`, `shownAt`) and
-  `store.ts` (`laid`, `laidOf`, the windows on screen and asked for). The arrangement marks its lanes, the grid under the tracks, the take rows, its
-  ruler, the loop's shade and the selected bars (the Song row's too); its playhead follows the zoom
-  shown (`usePlayhead`). Notes marks its grid (with its notes and playhead) and its ruler; the beat
-  grid its ruler, bar lines, rows and playhead; their velocity strips follow the zoom shown
-  (`stripStyle` in `NoteView.tsx`). The zoom view.json keeps is the one laid out (`keepZoom`).
-  Tested by `camera` (mid-pinch in the arrangement, Notes and the beat grid: what is marked carries
-  the transform and takes no pointer, nothing renders, the point under the fingers stays, the
-  camera says the zoom shown and the one laid out; the arrangement's loop shade, loop and bars in
-  the ruler and the Song row, selected bars, a marker, playhead and grid within a px of the zoom
-  shown, and agents' `seen` saying it; Notes' velocity bars under their notes; at the end, laid
-  out once, every frame of the gesture showing each clip or note within a px of the zoom shown and
-  none showing both the stretch and the new layout; the arrangement's layout equal to a direct
-  zoom's, clip box for clip box; ⌘-scroll never laid out before G after its last event; the Graph,
-  which marks nothing, laid out in each frame of a zoom; a pinch out to a quarter laid out early as it
-  goes, every frame drawn across the view; a pinch in ×4 laid out only at its end; `stretchOf`,
-  `shownAt` and `laidOf` against known numbers). Measured in the zoom note's §2.
+- *Today, the live zoom:* since track `live-zoom`, in these parts. The `camera` suite tests each.
+
+  | Part | Where | Tested by `camera` |
+  |---|---|---|
+  | A view marks what stretches. | `useStretch` in `web/src/camera/stretch.ts`. The arrangement marks its lanes, the grid under the tracks, the take rows, its ruler, the loop's shade and the selected bars (the Song row's too). Notes marks its grid and ruler. The beat grid marks its ruler, bar lines, rows and playhead. | Mid-pinch, what is marked carries the transform and nothing renders, in all three. |
+  | The camera keeps two zooms. | `laid` and `laidOf` in `store.ts`. `useZoomOf`, `useSpan` and `useCull` read the zoom laid out. So does the zoom view.json keeps (`keepZoom`). | Mid-pinch, the camera says both zooms. |
+  | A zoom starts from what the box shows. | `begin` in `rig.ts`: it reads every place once, at a frame's start, and takes the camera to where the box is scrolled. | The beat under the fingers holds within a px in every frame. |
+  | One transform on what is marked. | `apply` and `stretchOf`. | Every frame shows each clip or note within a px of the zoom shown. |
+  | What has a transform of its own follows the zoom shown. | The arrangement's playhead (`shownAt`). Notes' and the beat grid's velocity strips (`stripStyle` in `NoteView.tsx`). Notes' hint on an empty clip. | The loop, bars, a marker, the playhead and the grid line up mid-pinch. So do the velocity bars and the hint. |
+  | Laid out early, a step before the edge of what is drawn. | `covered` and `holds` in `math.ts`. | A pinch out to a quarter is laid out as it goes, every frame drawn across the view. A pinch in ×4 is laid out only at its end. Past the content's end, Notes is laid out each frame. |
+  | The end: laid out once, the stretch gone in that render. | `layOut` and `dropStretch`. It comes at `gestureend`, at G with no ⌘-scroll, or at a press, a key, a resize, a move or the app's zoom. | No frame shows both. The layout equals a direct zoom's. ⌘-scroll is never laid out before G. |
+  | Room where a zoom looked, so the end never stops at an edge (VIEW-6). | `asked`, read by the arrangement, Notes and the beat grid. | A pinch in near the right of Notes and of the beat grid: no jump at the end. |
+  | A press while stretched lands on what shows, and lays it out first. | `hearInput` in `rig.ts`. | It picks the clip shown under it. |
+  | The browser's own move while stretched is kept. | `takeIn`. | A write to `scrollLeft` moves the view on from where it showed. |
+  | Layers are kept until the cameras are still. | `LAYERS_KEPT` (400 ms) in `numbers.ts`. | (Measured in the zoom note's §2.) |
+  | A view that marks nothing zooms as before. | The Graph. | Each frame of its zoom is laid out. |
+
+  Measured in the zoom note's §2. The swipe probe's Replay a pinch splits its frames the same way
+  (VIEW-10).
 
 **VIEW-6.** The view MUST stop at its edges, on every system (D3). Apple's stretch and spring back
 are a later track, if the owner misses them.
@@ -1205,8 +1199,10 @@ NOT render the window: only what shows the status (the top bar) renders by it, a
 grows a bar at a time while it plays. A zoom renders a view at most once a frame, and lands in that
 frame. No React component MUST render on a frame of a live zoom (VIEW-5): the camera writes its
 stretch, and what follows the zoom shown (the arrangement's playhead, Notes' and the beat grid's
-velocity strips) writes its own style; the view renders once at the zoom's end, and once at each
-early layout. While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
+velocity strips, Notes' hint on an empty clip) writes its own style. The view renders once at the
+zoom's end, and once at each early layout; after an early layout, the new window it asked for may
+render in a later stretched frame, between frames, as a transition, as a swipe's does (VIEW-12).
+While a pointer drag holds the pointer (a clip, a marquee, a note, a cable, a fade, a
 reorder, the ruler's loop), the camera holds still: no swipe, glide or Follow moves it; Follow
 catches up after. While the camera moves, and for 250 ms after, the views' hover does nothing.
 - An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
@@ -1221,8 +1217,9 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
   arrangement and Notes at most once a frame; a drag holding the camera and Follow; an agent's
   pointer at a clip rendered 0 times through a swipe, still on the clip) and `camera-probe` (a zoom
   redraws only the arrangement). Since track `live-zoom`, a live zoom's frames render nothing: the
-  views' hooks read the zoom laid out. Tested by `camera` (every frame of a pinch and of ⌘-scroll counted:
-  none of the stretched ones rendered; once at the end).
+  views' hooks read the zoom laid out. Tested by `camera` (every frame of a pinch and of ⌘-scroll
+  counted: renders only at a laid-out frame, or in a stretched frame after an early layout, where its
+  new window lands; never in another stretched frame).
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
@@ -1339,6 +1336,9 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
       whole work, script, the layout it forced, style and layout, paint and commit, input, and the
       time between frames) the median, the 95th percentile and the slowest, and how many frames'
       work went over 8.3 and over 16.7 ms; and how far each view's zoom went and where it came back.
+      Then the timeline's live zoom apart (VIEW-5), as `zoom-bench` gives it: its frames only a
+      transform apart from the one before (stretched), those drawn at a new zoom (laid out), and the
+      frame after each, with each one's work.
 
     Then the raw events: for each step its first 90 wheel events and 40 gesture events, and round
     B's scrolls that weren't the probe's, saying what each step cut, so the report stays near 60 KB.
@@ -1371,9 +1371,11 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
   zooms each view and puts it back, and its report has every part of the split for both views) and
   by `zoom-bench`, in the nightly tier: a measure, not a speed test, of a pinch and ⌘-scroll on the
   arrangement and a pinch on the Graph, on a beat song (`e2e/beat-song.mjs`) and the big song.
-  Since track `live-zoom` the bench also reads the zoom laid out after each frame, and `zoom-bench`
-  and the WebKit tool print a live zoom's frames apart (`liveTable` in `e2e/zoomlib.mjs`: those only
-  a transform apart from the frame before, those laid out, and the frame after each).
+  Since track `live-zoom` the bench also reads the zoom laid out after each frame, and splits a live
+  zoom's frames apart (`liveTable` in `web/src/lib/zoomBench.ts`: those only a transform apart from
+  the frame before, those laid out, and the frame after each). `zoom-bench`, the WebKit tool and the
+  probe's report print it. Tested by `camera-probe` (the report has the timeline's split, with
+  stretched frames in it).
 
 **VIEW-11.** On a Mac the page MUST draw at the screen's own rate, 120 frames a second on a 120 Hz
 screen. WebKit holds a page in an app near 60 on macOS 13 to 15 by a setting on by default,

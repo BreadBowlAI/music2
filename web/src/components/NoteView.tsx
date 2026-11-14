@@ -187,10 +187,18 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   });
   const ppb = useZoomOf(camera);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - keysW);
+  // What a zoom looked at keeps its room, as the arrangement's (VIEW-5, VIEW-6): the beat it held in
+  // place stays there, at the far end too, and a live zoom ends where its stretch showed it.
+  const asked = useCameraState(camera, (s) => s.asked.w) - keysW;
   // Only the notes near the view are drawn (VIEW-12): the window across in beats, down in px of rows.
   const cull = useCull(camera);
   // The velocity strip under the roll scrolls with it, written as the camera moves: nothing renders.
   useEffect(() => onCamera(camera, (now) => void (strip.current && placeStrip(strip.current, now))), [camera]);
+  // The hint on an empty clip, over the roll, placed by the zoom shown as the camera moves: a live
+  // zoom's end moves it nowhere (VIEW-5). Where it goes is set below, once the clip is known.
+  const hint = useRef<HTMLDivElement>(null);
+  const hintAt = useRef((s: CameraState) => s.zoom * 0);
+  useEffect(() => onCamera(camera, (now) => void (hint.current && (hint.current.style.left = `${hintAt.current(now)}px`))), [camera]);
   // What a live zoom stretches (VIEW-5): the grid, its notes and playhead, and the ruler; the strip
   // follows the zoom shown by its own style.
   const stretched = useStretch(camera);
@@ -1104,7 +1112,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   }
 
   const end = Math.max(clip.length, ...clip.notes.map((n) => n.start + n.length));
-  const width = Math.max(visible, Math.ceil((end + bpb) / bpb) * bpb * ppb);
+  hintAt.current = (s) => keysW + Math.min(clip.length * s.zoom, visible) / 2;
+  const width = Math.max(visible, asked, Math.ceil((end + bpb) / bpb) * bpb * ppb);
   const height = nRows * rowH;
   // Fold or shorter rows: the camera stops at the new edge in this render, the notes there drawn.
   camera.content({ w: keysW + width, h: ROLL_RULER_H + height });
@@ -1396,7 +1405,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           </div>
         </div>
         {clip.notes.length === 0 && (
-          <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: keysW + Math.min(clip.length * ppb, visible) / 2 }}>
+          <EmptyState ref={hint} className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: hintAt.current(camera.now()) }}>
             {stamp ? (draw ? "Click in the grid to place a chord" : "Double-click in the grid to place a chord") : draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
           </EmptyState>
         )}

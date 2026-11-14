@@ -90,45 +90,12 @@ export async function zoomTable(first, rows) {
 export const rowsOf = (results) => GESTURES.map((g) => [`${g}, ${results.filter((r) => r.name === g).length} runs`, results.filter((r) => r.name === g).map((r) => r.run)]);
 
 /**
- * A live zoom's frames (taste.md VIEW-5), from each run of `results` (the plan's, with their runs), as
- * a table to print: from its first event to 200 ms after its last, so a run of ⌘-scroll's end, G after
- * it, is in. A frame is **stretched** when the view was laid out at the zoom it was laid out at in the
- * frame before and a live zoom stretched it: only a transform apart from the last. It is **laid out**
- * when the zoom it is laid out at changed: an early layout (a zoom out past what was drawn) or the
- * zoom's end. Then the frame after each. Each: its frames, and their work's median / 95th percentile
- * in ms (input, and paint and commit, apart for the stretched ones). On a build with no live zoom every
- * frame of a zoom is laid out.
+ * In the page: the zoom bench's table of a live zoom's frames apart (taste.md VIEW-5): stretched,
+ * laid out and the frame after each, for `rows` (each [name, runs]), headed `first`. On a build with
+ * no live zoom every frame of a zoom is laid out.
  */
-export function liveTable(results) {
-  const q = (xs, p) => {
-    const s = xs.filter((x) => typeof x === "number").sort((a, b) => a - b);
-    return s.length ? s[Math.min(s.length - 1, Math.floor(p * s.length))] : NaN;
-  };
-  const one = (v) => (Number.isFinite(v) ? String(Math.round(v * 10) / 10) : "–");
-  const both = (fs, k = "work") => `${one(q(fs.map((f) => f[k]), 0.5))} / ${one(q(fs.map((f) => f[k]), 0.95))}`;
-  const out = [
-    "A live zoom's frames, in ms: median / 95th percentile",
-    "| Run | stretched frames | their work | of it input | of it paint and commit | laid out, a run | a laid-out frame's work | the frame after it |",
-    "|---|---|---|---|---|---|---|---|",
-  ];
-  for (const g of GESTURES) {
-    const runs = results.filter((r) => r.name === g).map((r) => r.run);
-    const stretched = [], laid = [], after = [];
-    for (const run of runs) {
-      const fs = run.frames.filter((f) => f.at >= 0 && f.at <= run.sent + 200);
-      let drawn = run.zoom.from;
-      fs.forEach((f, i) => {
-        const now = f.laid ?? f.zoom;
-        if (now !== drawn) {
-          laid.push(f);
-          if (fs[i + 1]) after.push(fs[i + 1]);
-        } else if (f.laid !== null && f.laid !== undefined && !after.includes(f)) stretched.push(f);
-        drawn = now;
-      });
-    }
-    out.push(`| ${g}, ${runs.length} runs | ${stretched.length} | ${both(stretched)} | ${both(stretched, "input")} | ${both(stretched, "paint")} | ${one(laid.length / Math.max(runs.length, 1))} | ${both(laid)} | ${both(after)} |`);
-  }
-  return out.join("\n");
+export async function zoomLive(first, rows) {
+  return (await window.m2canvas.bench()).liveTable(first, rows);
 }
 
 /**

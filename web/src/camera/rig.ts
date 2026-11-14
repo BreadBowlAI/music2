@@ -8,7 +8,7 @@ import { LAYERS_KEPT, SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
 import { hearInput, moved, movingNow, pointerHeld } from "./state";
 import { drawnOf, type CameraStore, type MovedBy, type CameraState } from "./store";
-import { markedOf, onMarked, stretchOf, unstretch } from "./stretch";
+import { markedOf, onMarked, shownScroll, stretchOf, unstretch } from "./stretch";
 import { Writer } from "./writer";
 
 /** What a view tells its camera, each time it renders. */
@@ -159,8 +159,11 @@ export class Rig {
         if (!box) return;
         let spans: { x?: Span; y?: Span };
         if (what instanceof Element) {
+          // Its place as it shows (stretched, in a live zoom), in the content's px of the zoom shown:
+          // the zoom the move is made from, once `app` has laid it out.
           const r = what.getBoundingClientRect(), b = this.boxRect();
-          const x = r.left - b.left + box.scrollLeft, y = r.top - b.top + box.scrollTop;
+          const at = shownScroll(this.cam.getState(), { x: box.scrollLeft, y: box.scrollTop });
+          const x = r.left - b.left + at.x, y = r.top - b.top + at.y;
           spans = { x: [x, x + r.width], y: [y, y + r.height] };
         } else spans = what;
         const ways = opts?.ways ?? "xy";
@@ -385,8 +388,14 @@ export class Rig {
     if (this.zoomed || !this.writer || !this.el) return;
     const theirs = this.writer.theirs();
     if (!theirs) return;
-    // The browser moved the box under a stretch: laid out at what it showed, where the writer puts it.
-    if (this.layOut()) return;
+    const live = this.cam.getState();
+    if (this.live && live.laid) {
+      // The browser moved the box under a stretch (a scrollbar's drag, a key's scroll): it moved what
+      // the stretch showed by as much. Laid out there, as it would be with no live zoom (VIEW-9).
+      this.cam.setState({ x: live.x + theirs.x - live.laid.x, y: live.y + theirs.y - live.laid.y, by: "browser" });
+      this.layOut();
+      return;
+    }
     const box = this.el;
     const s = this.cam.getState();
     const edge = (at: number, was: number, room: number) => was - room > 1 && Math.abs(at - room) <= 1;
@@ -464,14 +473,14 @@ export class Rig {
       this.handAt = performance.now();
     }
     if (asked.zoom) {
-      const s = this.cam.getState();
-      const z = this.clampZoom(asked.zoom.to ?? s.zoom * asked.zoom.by);
-      const c = z === s.zoom ? this.camera() : zoomAround(this.camera(), asked.zoom.at, z, s);
+      const z = this.clampZoom(asked.zoom.to ?? this.cam.getState().zoom * asked.zoom.by);
       // A zoom by the hand alone, still under way: shown by a stretch (VIEW-5). Else laid out now.
-      if (!asked.dx && !asked.dy && !ending && this.stretch(c)) {
+      if (!asked.dx && !asked.dy && !ending && this.stretch(z, asked.zoom.at)) {
         // Shown.
       } else {
         this.layOut();
+        const s = this.cam.getState();
+        const c = z === s.zoom ? this.camera() : zoomAround(this.camera(), asked.zoom.at, z, s);
         this.set({ ...c, x: c.x + asked.dx, y: c.y + asked.dy }, z === s.zoom ? "hand" : "zoom");
       }
     } else if (asked.dx || asked.dy) {
@@ -503,17 +512,19 @@ export class Rig {
   }
 
   /**
-   * Show the camera `c`, a zoom by the hand, by stretching what the view marks: the view stays laid
-   * out as it is, and renders nothing (VIEW-8). Laid out at `c` instead when that would show past
-   * what the view has drawn. Returns false where the view marks nothing: then it is laid out on each
-   * frame, as before.
+   * Show a zoom by the hand to `zoom`, around the box's point `at`, by stretching what the view
+   * marks: the view stays laid out as it is, and renders nothing (VIEW-8). Laid out at it instead when
+   * that would show past what the view has drawn. Returns false where the view marks nothing: then
+   * it is laid out on each frame, as before.
    */
-  private stretch(c: Camera): boolean {
+  private stretch(zoom: number, at: { x: number; y: number }): boolean {
     if (!this.live && !markedOf(this.cam).size) return false;
-    const s = this.cam.getState();
-    if (c.x === s.x && c.y === s.y && c.zoom === s.zoom) return true;
+    if (zoom === this.cam.getState().zoom) return true;
     const live = this.live ?? this.begin();
     if (!live) return false;
+    // From where the box shows the view: `begin` took the camera to it.
+    const s = this.cam.getState();
+    const c = zoomAround(this.camera(), at, zoom, s);
     if (!this.covered(c, live)) {
       this.layOut();
       this.set(c, "zoom");
@@ -528,7 +539,9 @@ export class Rig {
   /**
    * A live zoom begins: the camera laid out is where the box is scrolled now and the zoom it draws,
    * and each marked element takes its stretch's origin. Read at a frame's start, where the page's
-   * layout is still the last frame's: it costs nothing.
+   * layout is still the last frame's: it costs nothing. The camera shown starts there too, the
+   * fractions of a px it kept let go of: so the zoom keeps what the box shows under the fingers, not
+   * a point up to half a px off it, which the zoom would carry ×(its stretch) off.
    */
   private begin(): Live | null {
     const els = markedOf(this.cam);
@@ -550,7 +563,7 @@ export class Rig {
       },
     };
     this.live = live;
-    this.cam.setState({ laid: { x: at.x, y: at.y, zoom: s.zoom } });
+    this.cam.setState({ x: at.x, y: at.y, by: "zoom", laid: { x: at.x, y: at.y, zoom: s.zoom } });
     for (const [el, r] of places) this.join(live, el, r);
     return live;
   }

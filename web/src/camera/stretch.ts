@@ -80,6 +80,17 @@ export function stretchOf(s: CameraState): Stretch | null {
 }
 
 /**
+ * Where a box scrolled to `scrolled` shows the content, in the px of the zoom shown: a live zoom's
+ * stretch moves the picture by its shift, so that is where the box is scrolled less the shift. What
+ * reads an element's place on screen (stretched, as it shows) as the content's px reads it so, in one
+ * zoom (`reveal`).
+ */
+export function shownScroll(s: CameraState, scrolled: { x: number; y: number }): { x: number; y: number } {
+  const st = stretchOf(s);
+  return st ? { x: scrolled.x - st.shift.x, y: scrolled.y - st.shift.y } : { x: scrolled.x, y: scrolled.y };
+}
+
+/**
  * Where the content's unit `u` across shows now, in px from the content's origin in the box as it is
  * laid out and scrolled: with a live zoom, where its stretch puts it. For what follows the zoom shown
  * by its own transform (the arrangement's playhead).

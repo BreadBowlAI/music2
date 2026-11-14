@@ -18,7 +18,7 @@ VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/
 | `recognizer.ts` | What wheel and pinch events mean: swipes, rails, the `cancelable` rule, zoom, and its own glide where the platform gives none. |
 | `writer.ts` | Writes the camera into the box in whole pixels, and tells a move the browser made itself. |
 | `spans.ts` | `useSpan`: places a box along the stretched way by the zoom, straight into its style, so a zoom renders it not. |
-| `stretch.ts` | The live zoom's marks: `useStretch` marks what a view lets the camera stretch; `stretchOf` and `shownAt` for what follows the zoom shown by its own style. |
+| `stretch.ts` | The live zoom's marks: `useStretch` marks what a view lets the camera stretch; `stretchOf` and `shownAt` for what follows the zoom shown by its own style; `shownScroll` for reading a place on screen in one zoom. |
 | `rig.ts` | One view's camera at work on its box: the recognizer's events once a frame, the writer, the live zoom, the app's moves. |
 | `useCamera.ts` | `useCamera`, `useNear`, `controlsOf` and `controlsAt`: how a view uses all this. |
 | `state.ts` | What every camera shares: the platform, the probe's pause, a drag holding the pointer, `movingNow`. |
@@ -134,6 +134,11 @@ function Clip({ clip }) {
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.
 - **A control that keeps its wheel** (a picture's dot): mark it `data-wheel`. It takes a swipe that
   starts on it, unless a camera just carried it under a still pointer.
+- **Keep room where a zoom looked** (VIEW-5, VIEW-6): size the content at least as wide as the
+  camera's `asked` (`useCameraState(camera, (s) => s.asked.w)`), as the arrangement, Notes and the
+  beat grid do. A zoom asks for room to look where it put the camera; content no wider than the view
+  would stop the box at its edge when the zoom lands, so the point under the fingers would jump (a
+  live zoom's end most of all).
 - **Say the content's size** as you render it, where you know it: `camera.content({ w, h })`. When
   it gets smaller (Fold, shorter rows), the camera stops at the box's new edge in that render, and
   what the view culls by it is drawn before the frame. Without it, a ResizeObserver tells, a frame
