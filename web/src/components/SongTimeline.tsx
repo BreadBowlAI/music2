@@ -65,7 +65,7 @@ import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { ARRANGEMENT, followNow, keepZoom, kept, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { CameraScope, onCamera, useCamera, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
+import { CameraScope, onCamera, shownAt, useCamera, useCameraOf, useCameraState, useCull, useNear, useSpan, useStretch, useZoomOf, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -333,19 +333,28 @@ function rowsOf(track: TimelineTrack) {
   };
 }
 
-/** Draws the playhead on every frame from the transport clock: never eased between polls (TL-9). */
+/**
+ * Draws the playhead on every frame from the transport clock: never eased between polls (TL-9). It
+ * follows the zoom shown (VIEW-5): through a live zoom it moves with the stretch, by its own style.
+ */
 function usePlayhead(ref: React.RefObject<HTMLElement | null>, attr = false) {
   const ppb = useZoom();
-  useEffect(
-    () =>
-      onFrame((beat) => {
-        const el = ref.current;
-        if (!el) return;
-        el.style.transform = `translateX(${beat * ppb}px)`;
-        if (attr) el.dataset.beat = String(beats(beat));
-      }),
-    [ref, attr, ppb],
-  );
+  const cam = useCameraOf(ARRANGEMENT);
+  useEffect(() => {
+    const draw = (beat: number) => {
+      const el = ref.current;
+      if (!el) return;
+      el.style.transform = `translateX(${cam ? shownAt(cam.getState(), beat) : beat * ppb}px)`;
+      if (attr) el.dataset.beat = String(beats(beat));
+    };
+    const off = onFrame(draw);
+    // A live zoom moves it while the clock may stand still.
+    const offCam = cam ? onCamera(cam, (now, was) => void ((now.laid || was.laid) && draw(beatNow()))) : null;
+    return () => {
+      off();
+      offCam?.();
+    };
+  }, [ref, attr, ppb, cam]);
 }
 
 function PlayLine({ testid, className, style }: { testid?: string; className: string; style: React.CSSProperties }) {
@@ -416,6 +425,9 @@ export default function SongTimeline({
     start: kept,
   });
   const ppb = useZoomOf(camera);
+  // What a live zoom stretches (VIEW-5): the lanes and their grid, the ruler, and the loop's shade and
+  // the selected bars over them; the playhead follows the zoom shown by its own style.
+  const stretch = useStretch(camera);
   useLayoutEffect(() => keepZoom(camera.store), [camera.store]);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - headerW);
   // What a zoom looked at keeps its room: the beat it held in place stays there (VIEW-5).
@@ -1838,6 +1850,7 @@ export default function SongTimeline({
             Under the headers and the playhead. */}
         {looping && loopStart !== null && loopEnd !== null && (
           <div
+            ref={stretch}
             data-testid="loop-shade"
             aria-hidden
             className="absolute bottom-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply"
@@ -1848,6 +1861,7 @@ export default function SongTimeline({
             1 px accent outline and an accent wash, unlike the loop's plain wash. */}
         {bars && (
           <div
+            ref={stretch}
             data-testid="section"
             data-start={bars[0]}
             data-end={bars[1]}
@@ -1903,10 +1917,10 @@ export default function SongTimeline({
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
           {looping && loopStart !== null && loopEnd !== null && (
-            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
+            <div ref={stretch} aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
           )}
           {bars && (
-            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
+            <div ref={stretch} aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
           )}
           <TrackRows
             track={song}
@@ -2095,6 +2109,8 @@ const Ruler = memo(function Ruler({
   onLoop: (start: number, end: number) => void;
 }) {
   const ppb = useZoom();
+  // Stretched in a live zoom, with the lanes (VIEW-5).
+  const stretch = useStretch(ARRANGEMENT);
   // A loop being dragged, shown until it is let go.
   const [drag, setDrag] = useState<{ start: number; end: number } | null>(null);
   const shown = drag ?? (loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd } : null);
@@ -2145,6 +2161,7 @@ const Ruler = memo(function Ruler({
   );
   return (
     <div
+      ref={stretch}
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
@@ -2348,6 +2365,8 @@ const Tracks = memo(function Tracks({
 }) {
   const grid = useMemo(() => <Grid meter={timeline.meter} id={gridId} />, [timeline.meter, gridId]);
   const said = waiting || rows.length === 0;
+  // The grid under the last track is stretched in a live zoom, as the lanes are (VIEW-5).
+  const stretch = useStretch(ARRANGEMENT);
   return (
     <div role="tablist" aria-label="Tracks" aria-orientation="vertical" className="contents">
       {rows.map((t) => (
@@ -2384,7 +2403,7 @@ const Tracks = memo(function Tracks({
       >
         <DropLine before={END} />
         <div className="sticky left-0 z-20 shrink-0 bg-chrome border-r border-line" style={{ width: headerW }} />
-        <div className="relative flex-1 min-w-0">
+        <div ref={stretch} className="relative flex-1 min-w-0">
           {grid}
           {/* Under the last track, in the lanes' visible middle: a line here never pushes a row down (principle 8). */}
           {said && (
@@ -2477,6 +2496,8 @@ const TrackRows = memo(function TrackRows({
   const cull = useCull(ARRANGEMENT, "x").x;
   const self = useRef<HTMLDivElement>(null);
   const near = useNear(ARRANGEMENT, self);
+  // Each lane, its grid and clips, is stretched in a live zoom (VIEW-5).
+  const stretch = useStretch(ARRANGEMENT);
   const selected = useShell((s) => s.selected === module);
   // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
   const glows = useGlows("tracks", module);
@@ -2552,6 +2573,7 @@ const TrackRows = memo(function TrackRows({
         {opts.edge && <HeightEdge id={opts.edge} height={opts.height} name={opts.first ? moduleName({ key: module, label: track.label }) : laneTitle(lane!)} />}
       </div>
       <div
+        ref={stretch}
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
         className={clsx("relative flex-1 min-w-0 overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         title={!lane || locked ? undefined : lane.kind === "audio" ? `Drop WAV or FLAC files here, or use File ▸ Import Audio (${chord("I", { shift: true })})` : "Double-click to add a one-bar clip"}

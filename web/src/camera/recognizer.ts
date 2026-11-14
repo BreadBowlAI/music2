@@ -94,8 +94,11 @@ export class Recognizer {
     this.stop();
   }
 
-  /** A wheel event over the view's box, heard first (the capture phase). Returns whether it moves the camera. */
-  wheel(e: WheelEvent): boolean {
+  /**
+   * A wheel event over the view's box, heard first (the capture phase). Returns what it asks of the
+   * camera: a zoom (⌘ or Ctrl held from the swipe's first event), a move, or nothing.
+   */
+  wheel(e: WheelEvent): "zoom" | "move" | null {
     const t = e.timeStamp;
     const fresh = !(t - this.last >= 0 && t - this.last < SWIPE_GAP);
     this.last = t;
@@ -125,29 +128,29 @@ export class Recognizer {
         if (e.cancelable) e.preventDefault();
         e.stopPropagation();
       }
-      return false;
+      return null;
     }
     if (this.owner === "zoom") {
       e.preventDefault();
       e.stopPropagation();
       // ⌘ let go: the rest of the swipe zooms nothing, and the view stays.
-      if (!zooming || pointerHeld()) return false;
+      if (!zooming || pointerHeld()) return null;
       const box = this.box();
-      if (!box) return false;
+      if (!box) return null;
       const dy = Math.max(-ZOOM_WHEEL, Math.min(ZOOM_WHEEL, e.deltaY * this.unit(e, box)));
       const r = box.getBoundingClientRect();
       const by = ZOOM_STEP ** (-dy / ZOOM_WHEEL);
       this.zoom = { by: (this.zoom?.by ?? 1) * by, to: null, at: { x: e.clientX - r.left - box.clientLeft, y: e.clientY - r.top - box.clientTop } };
-      return true;
+      return "zoom";
     }
     if (this.owner === "dropped") {
       // One still arriving after a click or a key, ⌘ held or not: the view stays.
       if (e.cancelable) e.preventDefault();
       e.stopPropagation();
-      return false;
+      return null;
     }
     // The swipe probe has the swipes: the web view scrolls them, and the camera takes that in.
-    if (swipesPaused()) return false;
+    if (swipesPaused()) return null;
     if (!e.cancelable) {
       // WebKit took the swipe over (VIEW-2): it moved the box by the swipe's first event too, whose
       // cancel came late; the box's moves are taken in, and what the camera kept of it is dropped.
@@ -157,18 +160,18 @@ export class Recognizer {
         this.samples = [];
       }
       this.overThisSwipe = true;
-      return false;
+      return null;
     }
     e.preventDefault();
     e.stopPropagation();
     // A drag holds the pointer: the view holds still (VIEW-8).
-    if (pointerHeld()) return false;
+    if (pointerHeld()) return null;
     const box = this.box();
-    if (!box) return false;
+    if (!box) return null;
     if (e.deltaMode !== 0) this.notched = true;
     const u = this.unit(e, box);
     this.take(t, e.deltaX * u, e.deltaY * u);
-    return true;
+    return "move";
   }
 
   /** Lines and pages as pixels: Chrome's, which only the suites send (VIEW-3). */

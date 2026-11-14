@@ -26,7 +26,17 @@ export interface CameraState extends Camera, Omit<Shape, "content"> {
    * content at least this big keeps what a zoom held in place there, at its far end too.
    */
   asked: Size;
+  /**
+   * While a live zoom lasts (VIEW-5), the camera the view is laid out at: the box's scroll position
+   * as written, and the zoom its view draws by. Its `x`, `y` and `zoom` are then the camera shown,
+   * where the hand asked: a stretch of the view laid out shows it. Null at all other times: the two
+   * are one.
+   */
+  laid: Camera | null;
 }
+
+/** The camera a view is laid out at (VIEW-5): `laid` while a live zoom lasts, else the camera itself. */
+export const laidOf = (s: CameraState): Camera => s.laid ?? s;
 
 /** A camera's store. */
 export type CameraStore = StoreApi<CameraState>;
@@ -45,6 +55,7 @@ export function makeCamera(zoom = 1): CameraStore {
     stretch: { x: true, y: true },
     by: "app",
     asked: ZERO,
+    laid: null,
   }));
 }
 
@@ -117,14 +128,31 @@ export function onCamera(cam: { store: CameraStore } | CameraStore, f: (now: Cam
   return ("store" in cam ? cam.store : cam).subscribe(f);
 }
 
-/** The camera's zoom, for a view that draws by it: it renders when the zoom changes, never when the view only moves. */
-export const useZoomOf = (ref: CameraRef) => useStore(useStoreOf(ref), (s) => s.zoom);
+/**
+ * The camera's zoom, for a view that draws by it: the zoom it is laid out at (VIEW-5). It renders when
+ * that changes, never when the view only moves or a live zoom stretches it.
+ */
+export const useZoomOf = (ref: CameraRef) => useStore(useStoreOf(ref), (s) => laidOf(s).zoom);
 
 /** Any coarse part of the camera (its box's size, say), for a view that draws by it. Never `x` or `y`: those change every frame. */
 export const useCameraState = <T,>(ref: CameraRef, select: (s: CameraState) => T) => useStore(useStoreOf(ref), select);
 
 /** Which ways a culling window is wanted. */
 export type Ways = "x" | "y" | "xy";
+
+/** A view's culling window on screen (`on`), the one it asked for last (`asked`, the same while none waits), its margins and steps, and the ways it culls. */
+export interface Drawn {
+  ways: Ways;
+  by: { x?: CullBy; y?: CullBy };
+  on: { readonly current: { x: Window; y: Window } };
+  asked: { readonly current: { x: Window; y: Window } };
+}
+
+/** The windows each camera's views have on screen now: a live zoom is laid out before it shows past one (VIEW-5). */
+const drawn = new Map<CameraStore, Set<Drawn>>();
+
+/** The culling windows on screen in the views of the camera `cam`. */
+export const drawnOf = (cam: CameraStore): ReadonlySet<Drawn> => drawn.get(cam) ?? new Set();
 
 /**
  * What part of the content a view draws (VIEW-12): the window in view plus a margin, in the
@@ -138,7 +166,8 @@ export function useCull(ref: CameraRef, ways: Ways = "xy", by: { x?: CullBy; y?:
   // The margins and steps asked for, kept while they are the same numbers: a new object each render asks nothing new.
   const said = JSON.stringify(by);
   const kept = useMemo(() => by, [said]);
-  const [shown, setShown] = useState(() => cull(cam.getState(), cam.getState(), kept));
+  // By the camera laid out: a live zoom's stretch draws nothing anew (VIEW-5).
+  const [shown, setShown] = useState(() => cull(laidOf(cam.getState()), cam.getState(), kept));
   // The window on screen (set as the render that draws it lands), and the one asked for last.
   const committed = useRef(shown);
   const asked = useRef(shown);
@@ -147,14 +176,25 @@ export function useCull(ref: CameraRef, ways: Ways = "xy", by: { x?: CullBy; y?:
     committed.current = shown;
   }, [shown]);
   useLayoutEffect(() => {
+    const mine: Drawn = { ways, by: kept, on: committed, asked };
+    let all = drawn.get(cam);
+    if (!all) drawn.set(cam, (all = new Set()));
+    all.add(mine);
+    const of = all;
+    return () => {
+      of.delete(mine);
+      if (!of.size && drawn.get(cam) === of) drawn.delete(cam);
+    };
+  }, [cam, ways, kept]);
+  useLayoutEffect(() => {
     if (of.current !== cam) {
       // Another camera (one mounted again under the name): a window of its own, at once.
       of.current = cam;
-      asked.current = cull(cam.getState(), cam.getState(), kept);
+      asked.current = cull(laidOf(cam.getState()), cam.getState(), kept);
       setShown(asked.current);
     }
     const check = (s: CameraState) => {
-      const plan = cullPlan(s, s, kept, committed.current, asked.current, ways);
+      const plan = cullPlan(laidOf(s), s, kept, committed.current, asked.current, ways);
       if (plan.now === "keep") return;
       asked.current = plan.next;
       if (plan.now === "wait") startTransition(() => setShown(plan.next));

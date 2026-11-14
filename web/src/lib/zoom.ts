@@ -3,7 +3,7 @@
 // song's arrangement makes its camera at the zoom its view.json keeps (`kept`), and keeps view.json's
 // copy of it as it changes (`keepZoom`).
 
-import { cameraNow, controlsOf, onCamera, useCameraOf, useZoomOf, type CameraStore } from "../camera";
+import { cameraNow, controlsOf, laidOf, onCamera, useCameraOf, useZoomOf, type CameraStore } from "../camera";
 import { getLocal, setLocal, useLocal } from "./local";
 
 /** The arrangement's camera. */
@@ -20,13 +20,14 @@ const valid = (z: unknown) => (typeof z === "number" && Number.isFinite(z) ? cla
 /** The zoom the open song's view.json keeps: its arrangement's camera's when the arrangement makes it. */
 export const kept = () => valid(getLocal<unknown>("zoom", ZOOM.start));
 
-/** The timeline's px a beat: the arrangement's camera's, or view.json's while no arrangement is mounted. */
+/** The timeline's px a beat as drawn (the zoom laid out, VIEW-5): the arrangement's camera's, or view.json's while no arrangement is mounted. */
 export function useZoom() {
   const cam = useCameraOf(ARRANGEMENT);
   const z = useZoomOf(ARRANGEMENT);
   const local = valid(useLocal<unknown>("zoom", ZOOM.start));
   return cam ? z : local;
 }
+/** The timeline's px a beat as shown now (the zoom shown, VIEW-5), outside React. */
 export const zoomNow = () => cameraNow(ARRANGEMENT)?.getState().zoom ?? kept();
 
 /** A zoom as kept: clamped, to a thousandth of a px. */
@@ -41,8 +42,15 @@ export function setZoom(z: number) {
   return to;
 }
 
-/** Keep the arrangement's camera's zoom in view.json as it changes, until the function this returns is called. */
-export const keepZoom = (cam: CameraStore) => onCamera(cam, (now, was) => now.zoom !== was.zoom && setLocal("zoom", now.zoom));
+/**
+ * Keep the arrangement's camera's zoom in view.json as it changes, until the function this returns is
+ * called: the zoom laid out, so a live zoom renders nothing that reads it until it ends (VIEW-5).
+ */
+export const keepZoom = (cam: CameraStore) =>
+  onCamera(cam, (now, was) => {
+    const zoom = laidOf(now).zoom;
+    if (zoom !== laidOf(was).zoom) setLocal("zoom", zoom);
+  });
 
 /** The zoom one step in (1) or out (-1) from `z`. */
 export const stepped = (z: number, dir: 1 | -1) => clampZoom(dir > 0 ? z * ZOOM.step : z / ZOOM.step);

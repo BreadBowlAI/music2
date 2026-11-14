@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { Check, ChevronDown, FoldVertical, Lock, Minus, MousePointer2, Pencil, Plus, UnfoldVertical, ZoomIn, ZoomOut } from "lucide-react";
-import { memo, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { movingNow, onCamera, useCamera, useCameraState, useCull, useZoomOf, within } from "../camera";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
+import { movingNow, onCamera, stretchOf, useCamera, useCameraState, useCull, useStretch, useZoomOf, within, type CameraState } from "../camera";
 import {
   barAt,
   bars as barList,
@@ -187,10 +187,32 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   });
   const ppb = useZoomOf(camera);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - keysW);
+  // What a zoom looked at keeps its room, as the arrangement's (VIEW-5, VIEW-6): the beat it held in
+  // place stays there, at the far end too, and a live zoom ends where its stretch showed it.
+  const asked = useCameraState(camera, (s) => s.asked.w) - keysW;
   // Only the notes near the view are drawn (VIEW-12): the window across in beats, down in px of rows.
   const cull = useCull(camera);
   // The velocity strip under the roll scrolls with it, written as the camera moves: nothing renders.
-  useEffect(() => onCamera(camera, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), [camera]);
+  useEffect(() => onCamera(camera, (now) => void (strip.current && placeStrip(strip.current, now))), [camera]);
+  // The hint on an empty clip, over the roll, placed by the zoom shown as the camera moves: a live
+  // zoom's end moves it nowhere (VIEW-5). Where it goes is set below, once the clip is known.
+  const hint = useRef<HTMLDivElement>(null);
+  const hintAt = useRef((s: CameraState) => s.zoom * 0);
+  useEffect(() => onCamera(camera, (now) => void (hint.current && (hint.current.style.left = `${hintAt.current(now)}px`))), [camera]);
+  // What a live zoom stretches (VIEW-5): the grid, its notes and playhead, and the ruler; the strip
+  // follows the zoom shown by its own style.
+  const stretched = useStretch(camera);
+  const gridRef = useCallback(
+    (el: HTMLDivElement | null) => {
+      grid.current = el;
+      const off = stretched(el);
+      return () => {
+        grid.current = null;
+        off?.();
+      };
+    },
+    [stretched],
+  );
   const gesture = useRef<Gesture | null>(null);
   /** The notes a pointer holds down on the grid, sounding (audition): their handles, null where nothing sounds. A chord stamp holds several. */
   const hold = useRef<{ pointer: number; h: (number | null)[] } | null>(null);
@@ -1090,7 +1112,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   }
 
   const end = Math.max(clip.length, ...clip.notes.map((n) => n.start + n.length));
-  const width = Math.max(visible, Math.ceil((end + bpb) / bpb) * bpb * ppb);
+  hintAt.current = (s) => keysW + Math.min(clip.length * s.zoom, visible) / 2;
+  const width = Math.max(visible, asked, Math.ceil((end + bpb) / bpb) * bpb * ppb);
   const height = nRows * rowH;
   // Fold or shorter rows: the camera stops at the new edge in this render, the notes there drawn.
   camera.content({ w: keysW + width, h: ROLL_RULER_H + height });
@@ -1246,12 +1269,12 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           <div className="relative" style={{ width: keysW + width, height: ROLL_RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: keysW }} />
-              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
+              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} stretch={stretched} />
             </div>
             <div className="flex">
               <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} names={names} width={keysW} rows={rows} rowH={rowH} />
               <div
-                ref={grid}
+                ref={gridRef}
                 data-testid="roll-grid"
                 data-shaded={shaded}
                 data-rows={rows ? rows.join(",") : undefined}
@@ -1382,7 +1405,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           </div>
         </div>
         {clip.notes.length === 0 && (
-          <EmptyState className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: keysW + Math.min(clip.length * ppb, visible) / 2 }}>
+          <EmptyState ref={hint} className="absolute top-1/2 -translate-x-1/2 -translate-y-1/2 pointer-events-none whitespace-nowrap" style={{ left: hintAt.current(camera.now()) }}>
             {stamp ? (draw ? "Click in the grid to place a chord" : "Double-click in the grid to place a chord") : draw ? "Click in the grid to add a note" : "Double-click in the grid to add a note"}
           </EmptyState>
         )}
@@ -1408,8 +1431,8 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
         <div className="relative flex-1 min-w-0 overflow-hidden">
           <div
             ref={strip}
-            className="absolute inset-y-0 left-0 touch-none"
-            style={{ width, transform: `translateX(${-Math.round(camera.now().x)}px)` }}
+            className="absolute inset-y-0 left-0 origin-top-left touch-none"
+            style={{ width, ...stripStyle(camera.now()) }}
             onPointerDown={onStripDown}
             onPointerMove={onStripMove}
             onPointerUp={(e) => onStripUp(e)}
@@ -1855,6 +1878,7 @@ export const Ruler = memo(function Ruler({
   start,
   length,
   tone,
+  stretch,
 }: {
   width: number;
   ppb: number;
@@ -1862,10 +1886,13 @@ export const Ruler = memo(function Ruler({
   start: number;
   length?: number;
   tone?: TrackColor;
+  /** Its view's mark for what a live zoom stretches (VIEW-5). */
+  stretch?: Ref<HTMLDivElement>;
 }) {
   const shown = barList(meter, start + width / ppb).filter((b) => b.start >= start - 1e-9);
   return (
     <div
+      ref={stretch}
       data-testid="roll-ruler"
       className="relative bg-chrome border-b border-line cursor-pointer overflow-hidden"
       style={{ width }}
@@ -1900,6 +1927,20 @@ export const Ruler = memo(function Ruler({
     </div>
   );
 });
+
+/**
+ * Where a strip under a view that scrolls with it across shows (the velocity lanes), as the camera `s`
+ * shows the view: stretched too while a live zoom lasts (VIEW-5). Its transform's origin is its top
+ * left.
+ */
+export function stripStyle(s: CameraState): { transform: string } {
+  return { transform: `translateX(${-Math.round(s.x)}px) scaleX(${stretchOf(s)?.scale.x ?? 1})` };
+}
+
+/** A strip written where `stripStyle` puts it, as the camera moves: nothing renders. */
+export function placeStrip(el: HTMLElement, s: CameraState) {
+  el.style.transform = stripStyle(s).transform;
+}
 
 // ---------------------------------------------------------------- the playhead
 

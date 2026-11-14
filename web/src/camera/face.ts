@@ -5,8 +5,9 @@
 import { cull, cullPlan, fit, move, reveal, to, toBox, toContent, zoomAround } from "./math";
 import * as numbers from "./numbers";
 import { rigs } from "./rig";
-import { cameraNames, cameraNow } from "./store";
+import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
+import { markedOf, shownAt, shownScroll, stretchOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -20,12 +21,24 @@ export const face = {
   toBox,
   cull,
   cullPlan,
+  stretchOf,
+  shownAt,
+  shownScroll,
+  laidOf,
   /** The cameras mounted now. */
   names: cameraNames,
   /** The camera mounted as `name` now, as its store holds it; null while none is. */
   now: (name: string) => {
     const cam = cameraNow(name);
     return cam ? { ...cam.getState() } : null;
+  },
+  /**
+   * What the camera mounted as `name` stretches in a live zoom (VIEW-5): each marked element's
+   * transform as the camera wrote it ("" where it wrote none).
+   */
+  stretched: (name: string) => {
+    const cam = cameraNow(name);
+    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
   },
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,

@@ -3,7 +3,8 @@
 In short: a small library that moves a view as the hand does. A view keeps its own scroll box, and
 the camera tells the box where to look. Every swipe over the box is the camera's: it moves 1:1 with
 the fingers, both ways at once, a nearly straight swipe on its line. ⌘-scroll and a pinch zoom
-around the pointer. The view draws only what is in view. Its rules are taste.md §3.10 (VIEW-1 to
+around the pointer; while the hand zooms, the camera stretches what the view has drawn, and the view
+is laid out once when the zoom ends (a live zoom). The view draws only what is in view. Its rules are taste.md §3.10 (VIEW-1 to
 VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/design.md`).
 
 ## What is in it
@@ -12,12 +13,13 @@ VIEW-12), and why it is built this way is the camera note (`docs/designs/camera/
 |---|---|
 | `index.ts` | The only file the app imports. |
 | `numbers.ts` | Its numbers: G (the gap that ends a swipe), the rails, the glide, the culling's margin and step. One line each, so the owner's probe report changes one line. |
-| `math.ts` | The pure functions: `move`, `to`, `zoomAround`, `reveal`, `fit`, `toContent`, `toBox`, `cull`, `cullPlan`. Each takes a camera and the view's shape, and gives a new camera or a conversion. |
+| `math.ts` | The pure functions: `move`, `to`, `zoomAround`, `reveal`, `fit`, `toContent`, `toBox`, `cull`, `cullPlan`, `holds`. Each takes a camera and the view's shape, and gives a new camera or a conversion. |
 | `store.ts` | The cameras: one small zustand store each, owned by the view that made it, lent to what it draws (`CameraScope`) and listed by name while mounted. `useZoomOf`, `useCull`, `onCamera`. |
 | `recognizer.ts` | What wheel and pinch events mean: swipes, rails, the `cancelable` rule, zoom, and its own glide where the platform gives none. |
 | `writer.ts` | Writes the camera into the box in whole pixels, and tells a move the browser made itself. |
 | `spans.ts` | `useSpan`: places a box along the stretched way by the zoom, straight into its style, so a zoom renders it not; `spanBox`, where such a box lies, its ends on the screen's own pixels. |
-| `rig.ts` | One view's camera at work on its box: the recognizer's events once a frame, the writer, the app's moves. |
+| `stretch.ts` | The live zoom's marks: `useStretch` marks what a view lets the camera stretch; `stretchOf` and `shownAt` for what follows the zoom shown by its own style; `shownScroll` for reading a place on screen in one zoom. |
+| `rig.ts` | One view's camera at work on its box: the recognizer's events once a frame, the writer, the live zoom, the app's moves. |
 | `useCamera.ts` | `useCamera`, `useNear`, `controlsOf` and `controlsAt`: how a view uses all this. |
 | `state.ts` | What every camera shares: the platform, the probe's pause, a drag holding the pointer, `movingNow`. |
 | `face.ts` | What the `camera` suite sees of it, on `window.m2canvas.camera`. |
@@ -36,6 +38,9 @@ which fails the web build on any import that crosses these bounds.
 | origin | where the part of the content that the zoom stretches starts, in px (the headers' width) |
 | units | the content's own measure: beats where the zoom stretches it, px from the origin elsewhere |
 | swipe | wheel events less than G ms apart |
+| live zoom | a zoom by the hand (a pinch, or ⌘-scroll until none for G) shown by stretching what the view marks, and laid out once at its end (VIEW-5) |
+| zoom shown | where the camera looks and its zoom as the hand asked: its state's `x`, `y` and `zoom` |
+| zoom laid out | what the view draws by and where its box is scrolled: its state's `laid` during a live zoom, else the zoom shown |
 
 ## How a view uses it
 
@@ -95,14 +100,44 @@ function Clip({ clip }) {
   landed), the new one is drawn at once (`cullPlan`). For rows of their own heights,
   `useNear(name, ref)` says whether a row is within a view of the box: coming near and going far
   render as a transition, coming into view at once.
+- **Two zooms** (VIEW-5). A camera's state is the zoom shown: `x`, `y` and `zoom`, where the hand
+  asked. During a live zoom, `laid` holds the zoom laid out: the box's scroll position as written,
+  and the zoom the view draws by. `laid` is null at all other times, and `laidOf(state)` gives the
+  one laid out either way. What reads the camera from outside (`camera.now()`, `cameraNow`, agents'
+  `seen`, Follow) sees the zoom shown. The view's own hooks follow the zoom laid out: `useZoomOf`,
+  `useSpan` and `useCull`, and the writer.
+- **A zoom by the hand stretches what the view marks** (VIEW-5, VIEW-8). Mark what is drawn by the
+  zoom with the ref `useStretch(camera)` (or by name, under the scope): the lanes or grid, the ruler,
+  a shade over them. While a pinch or a run of ⌘-scroll lasts, the camera writes one `transform` on
+  each, a stretch around the content's origin that keeps the point under the fingers where it is; it
+  renders nothing. What is stretched still takes the pointer: the browser hits the picture as it
+  shows, and a press lays the zoom out first (`pointer-events: none` on it is inherited, so it worked
+  out every clip's style anew at both ends of a zoom, and found nothing faster: the zoom note's §2).
+  The marked elements keep their own layers (and a transform that moves nothing) until the cameras
+  have been still `LAYERS_KEPT` ms, unless a press or a key comes. When the zoom ends (`gestureend`, or no
+  ⌘-scroll for G) the view renders once at the new zoom, and its stretch goes in that render's layout
+  effect: no frame shows both. It is laid out early only when the zoom shown would show past what is
+  drawn (a culling window on screen, each `useCull` says its own, or the content's end), or a step
+  before, once the window asked for last no longer holds what shows and its kept margin (`holds`):
+  then the view draws its new window between frames. A zoom by the
+  app (`zoomAround`, `fit`, `to` with a zoom) is laid out at once; any other move lays a live zoom
+  out first. The camera owns a marked element's `transform`, `transform-origin` and `will-change`:
+  leave them to it, and mark nothing inside something marked. What has its own
+  transform follows the zoom shown instead: a playhead places itself at `shownAt(state, beat)`, a
+  strip outside the box scales itself by `stretchOf(state)`, each from `onCamera`. A view that marks
+  nothing is laid out on each frame of a zoom, as the Graph is: to take the live zoom back from a
+  view, stop marking.
 - **A zoom renders nothing it can place:** `useSpan(name, ref, from, to)` writes a box's `left` and
   `width` from the zoom, each end on the screen's own pixels (`spanBox`: what draws over a box finds
-  it with the same function, so the two never disagree). Memoise what a new window keeps, so only what enters it renders. Given
-  `{ fine }`, the shortest thing the box draws, it marks the box `data-fine` while that is under
-  2 px: CSS can then show marks that keep thin things visible only then.
+  it with the same function, so the two never disagree). Memoise what a new window keeps, so only what enters it renders.
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.
 - **A control that keeps its wheel** (a picture's dot): mark it `data-wheel`. It takes a swipe that
   starts on it, unless a camera just carried it under a still pointer.
+- **Keep room where a zoom looked** (VIEW-5, VIEW-6): size the content at least as wide as the
+  camera's `asked` (`useCameraState(camera, (s) => s.asked.w)`), as the arrangement, Notes and the
+  beat grid do. A zoom asks for room to look where it put the camera; content no wider than the view
+  would stop the box at its edge when the zoom lands, so the point under the fingers would jump (a
+  live zoom's end most of all).
 - **Say the content's size** as you render it, where you know it: `camera.content({ w, h })`. When
   it gets smaller (Fold, shorter rows), the camera stops at the box's new edge in that render, and
   what the view culls by it is drawn before the frame. Without it, a ResizeObserver tells, a frame

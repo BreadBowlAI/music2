@@ -468,6 +468,8 @@ function pointIn(el: HTMLElement, m: Edges, fx: number, fy: number) {
   return [Math.round(r.left + el.clientLeft + m.left + (el.clientWidth - m.left - m.right) * fx), Math.round(r.top + el.clientTop + m.top + (el.clientHeight - m.top - m.bottom) * fy)] as const;
 }
 const zoomOfCamera = (name: string) => () => cameraNow(name)?.getState().zoom ?? null;
+/** The zoom a camera's view is laid out at while a live zoom stretches it (taste.md VIEW-5); null when none does. */
+const laidOfCamera = (name: string) => () => cameraNow(name)?.getState().laid?.zoom ?? null;
 const SONG_GRAPH = "graph:song";
 /** The zoom bench, once the last step has loaded it. */
 let bench: typeof import("./zoomBench") | null = null;
@@ -494,14 +496,14 @@ export async function replayPinch() {
     await settle();
     const tl = boxEl("arrangement");
     if (!tl || !alive()) return;
-    const timeline = await b.replay(...pointIn(tl, cameraNow(ARRANGEMENT)?.getState().margins ?? NO_EDGES, 0.4, 0.3), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(ARRANGEMENT) });
+    const timeline = await b.replay(...pointIn(tl, cameraNow(ARRANGEMENT)?.getState().margins ?? NO_EDGES, 0.4, 0.3), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(ARRANGEMENT), laid: laidOfCamera(ARRANGEMENT) });
     if (!alive()) return;
     await songGraph(alive);
     canvas.graphZoom?.(null);
     await settle();
     const gr = boxEl("graph");
     if (!gr || !alive()) return;
-    const graph = await b.replay(...pointIn(gr, NO_EDGES, 0.5, 0.5), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(SONG_GRAPH) });
+    const graph = await b.replay(...pointIn(gr, NO_EDGES, 0.5, 0.5), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(SONG_GRAPH), laid: laidOfCamera(SONG_GRAPH) });
     done = heard.replay = { timeline, graph };
     const med = (r: Run) => b.split([r]).work?.med ?? null;
     useProbe.setState({ replay: { timeline: med(timeline), graph: med(graph) } });
@@ -720,6 +722,9 @@ export function report(): string {
     );
     line(bench.table("View", [["timeline", [r.timeline]], ["Graph", [r.graph]]]));
     line(`  The zoom: timeline ${way(r.timeline)}; Graph ${way(r.graph)}`);
+    // The timeline's live zoom apart (VIEW-5), as zoom-bench gives it: what a stretched frame costs
+    // here, and what the frame that lays the zoom out costs.
+    line(bench.liveTable("View", [["timeline", [r.timeline]]]));
   } else line("The replayed pinch: not run (the last step's Replay wasn't pressed)");
   line();
 

@@ -8,7 +8,9 @@
 // and splits every frame into script (and the layout it forced), style and layout, paint and
 // commit, and input; the plan and the page's side are zoomlib.mjs's, which the WebKit tool shares.
 //
-// It prints a table for each song and writes every frame as JSON beside its log
+// It prints a table for each song, and one of the live zoom's frames (taste.md VIEW-5: those only a
+// transform apart from the frame before, those laid out, and the frame after each; `zoomLive`), and
+// writes every frame as JSON beside its log
 // (<out>/zoom-bench-fix.json, the run's folder's name and .json). It judges no speed: its checks
 // prove only that it measured: each run saw frames while its gesture lasted, every part was timed,
 // and the zoom went out and came back.
@@ -19,7 +21,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ROOT, check, done, open, sleep, until } from "./fixlib.mjs";
-import { GESTURES, PLAN, measured, rowsOf, zoomRun, zoomTable } from "./zoomlib.mjs";
+import { GESTURES, PLAN, measured, rowsOf, zoomLive, zoomRun, zoomTable } from "./zoomlib.mjs";
 
 const { browser, page, errors, api } = await open(1440, 900);
 // The owner's Mac: a window of 1440×900 px at 2 device px a px.
@@ -51,6 +53,8 @@ for (const s of SONGS) {
   for (const step of PLAN) results.push({ ...step, run: await page.evaluate(zoomRun, step) });
   console.log(`\n## ${s.what}: Chrome ${engine.browser}, ${engine.window.join("×")} at ${engine.dpr} device px a px\n`);
   console.log(await page.evaluate(zoomTable, "Run", rowsOf(results)));
+  console.log("");
+  console.log(await page.evaluate(zoomLive, "Run", rowsOf(results)));
   console.log("");
   for (const g of GESTURES) {
     const runs = results.filter((r) => r.name === g).map((r) => r.run);

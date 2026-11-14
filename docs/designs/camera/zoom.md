@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted, 2026-11-14: Z1 and Z2 (§4). Z2 built (track `canvas-clips`): §3 says what changed and what it measured. |
+| **Status** | Accepted, 2026-11-14: Z1 and Z2 (§4). Z2 built (track `canvas-clips`): §3 says what changed and what it measured. Z1 built by track `live-zoom`, on top of Z2 ("Measured after Z1", §2). |
 | **Written** | 2026-11-14, from `main` at `e06d0bfc`, after the owner's swipe probe: a pinch over the tracks had 69 frames over 16.7 ms. The owner asked earlier: "why does frame rate drop significantly when i zoom in on the tracks or notes editor". |
 | **Beside it** | [design.md](design.md), the camera note (VIEW-1 to VIEW-12). This note changes VIEW-5, VIEW-8 and VIEW-12. |
 | **Measured on** | Branch `pinch-cost` (not for merge): a pinch bench in Chrome and in WebKit (WebKitGTK 2.52, the engine the Mac app uses), on a beat song like the owner's (10 tracks, 312 clips) and on the big song (24 × 64 clips). |
@@ -54,7 +54,7 @@ WebKit here drew in software on a server, not on a Mac's graphics chip. Its main
 **What it does.**
 - While a pinch or a run of ⌘-scroll lasts, the camera doesn't lay the tracks out again on each frame. It sets one `transform` on the tracks and the ruler: a stretch across, around the point under the fingers. The browser stretches what it already drew, on the graphics chip.
 - When the zoom ends (the gesture ends, or no ⌘-scroll for G), the camera lays the tracks out once at the new zoom and takes the stretch away in the same frame. The picture after is the same as today's, byte for byte (measured).
-- The tracks are laid out early only when a zoom out shows more than the drawn margin covers, about ×1.5 out or ×2 in.
+- The tracks are laid out early only when a zoom out comes near the edge of what is drawn: a step before it, so the new clips come between frames. A zoom in is laid out only at its end. *(As built; the note first said "about ×1.5 out or ×2 in".)*
 
 **Measured** (median work per frame, ms; the 95th percentile in brackets):
 
@@ -77,9 +77,60 @@ The one real layout at the end still costs what a frame costs today, 38 to 51 ms
 - Everything that reads the camera from outside sees the zoom shown: `camera.now()`, agents' `seen`, Follow, and the playhead.
 - The zoom laid out is the views' business.
 
-**While the stretch lasts, the tracks don't take the pointer** (`pointer-events: none`). That saves WebKit finding what is under the fingers on each event, and hover is muted while the camera moves anyway (VIEW-8).
+**While the stretch lasts, the tracks still take the pointer.** *(As built; the note first said `pointer-events: none`.)* The browser hits the picture as it shows, so a press lands on what you see, and lays the zoom out first. Hover is muted while the camera moves anyway (VIEW-8). Measured, `pointer-events: none` cost more than it saved: see "Departures from this note" below.
 
 **Notes and the beat grid** get the same live zoom across. The Graph doesn't need it: its zoom is already cheap (9 ms on the beat song in WebKit). Instead, its nodes stop re-rendering on a zoom (§3).
+
+### Measured after Z1
+
+Track `live-zoom` built Z1 on top of Z2. Today is `main` at `229aec41`, Z2 in (a zoom by the hand lays the tracks out each frame, and draws the canvases again once it settles); Z1 is the track's branch merged with it. Both were measured in turn on one machine, two rounds each, with the WebKit tool (WebKitGTK 2.52, drawing in software) and `zoom-bench` (headless Chrome 133), at 1440×900 and 2 device px a px. The machine was busy (load 10 to 30 on 32 threads), the same for both. Each round ran each gesture three times over the timeline, from 24 px a beat: the owner's A13 pinch (out to 0.44 and back) and a run of ⌘-scroll (out and back). "Work" is a frame's main-thread time, as the zoom bench splits it.
+
+Work per frame while the gesture lasts, in ms: median (95th percentile); then the frames over 8.3 ms, of all the frames drawn:
+
+| Song, engine, gesture | Today | Z1 |
+|---|---|---|
+| Beat, WebKit, pinch | 34 (61); 68 of 76 | 8 (47); 66 of 156 |
+| Beat, WebKit, ⌘-scroll | 36 (62); 73 of 79 | 7 (43); 63 of 180 |
+| Big, WebKit, pinch | 59 (151); 37 of 44 | 22 (121); 80 of 84 |
+| Big, WebKit, ⌘-scroll | 74 (150); 35 of 38 | 19 (128); 85 of 93 |
+| Beat, Chrome, pinch | 12 (25); 263 of 313 | 3.2 (25); 47 of 315 |
+| Beat, Chrome, ⌘-scroll | 11 (24); 304 of 347 | 3.2 (9.5); 23 of 352 |
+| Big, Chrome, pinch | 50 (74); 657 of 661 | 13 (48); 219 of 319 |
+| Big, Chrome, ⌘-scroll | 57 (94); 713 of 713 | 13 (43); 254 of 331 |
+
+Z1's frames apart, in ms: median / 95th percentile, from the first event to 200 ms after the last. A **stretched** frame is only a transform apart from the frame before. A **laid-out** frame draws a new zoom: an early one, as a zoom out nears the edge of what is drawn (A13 goes out to 0.44, past it), or the one at the end. Then the frame after each.
+
+| Song, engine, gesture | stretched frames | their work | laid out, a run | a laid-out frame | the frame after it | Today's frames |
+|---|---|---|---|---|---|---|
+| Beat, WebKit, pinch | 130 | 8 / 16 | 2 | 50 / 80 | 13 / 49 | 34 / 61 |
+| Beat, WebKit, ⌘-scroll | 161 | 7 / 15 | 2.7 | 52 / 94 | 11 / 40 | 36 / 62 |
+| Big, WebKit, pinch | 55 | 19 / 60 | 2.8 | 116 / 171 | 42 / 133 | 59 / 151 |
+| Big, WebKit, ⌘-scroll | 70 | 17 / 47 | 3.2 | 97 / 183 | 41 / 141 | 74 / 150 |
+| Beat, Chrome, pinch | 284 | 3 / 11 | 2.5 | 34 / 55 | 13 / 39 | 12 / 25 |
+| Beat, Chrome, ⌘-scroll | 339 | 3 / 7.5 | 2.2 | 33 / 49 | 16 / 27 | 11 / 24 |
+| Big, Chrome, pinch | 286 | 13 / 30 | 2.7 | 77 / 208 | 29 / 59 | 50 / 74 |
+| Big, Chrome, ⌘-scroll | 312 | 12 / 31 | 2.8 | 85 / 166 | 35 / 55 | 57 / 94 |
+
+- **A pinch frame on a beat song in WebKit went from 34 ms to 8**, and WebKit here drew 156 frames in the time it drew 76. On the big song, 59 to 22. In Chrome, 12 to 3.2 and 50 to 13.
+- **A laid-out frame costs more than one of today's zoom frames:** 50 ms on the beat song in WebKit against 34, 34 against 12 in Chrome. It lays the view out and draws every lane's canvas anew in the same frame; today a hand zoom draws them only once it settles, in a frame of its own (21 ms on the beat song in Chrome, §3), which these columns don't count. It comes two or three times a pinch: the early layouts and the end. The frame after it is cheap.
+- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit (measured before Z2 landed).
+
+**Departures from this note**, each measured (before Z2 landed, on `main` at `6d4963eb`). The lead kept all three.
+
+1. **The stretched layers take the pointer.** The note said `pointer-events: none`. It is inherited, so WebKit works out every clip's style anew at both ends of a zoom, and it found nothing faster. One element over the view to take the pointer instead was worse: WebKit composites it over the layers. The A/B, in WebKit on the beat song (pinch, ms, median / 95th percentile; two runs each, in turn):
+
+   | Built | the laid-out frame | the frame after it | the first frame | input, a stretched frame |
+   |---|---|---|---|---|
+   | Z1 | 53 / 73 | 9 / 45 | 25 / 40 | 4 |
+   | with `pointer-events: none` on what is stretched | 84 / 103 | 59 / 70 | 61 / 75 | 4 |
+   | with one element over the view taking the pointer | 99 / 138 | 91 / 111 | 80 / 101 | – |
+
+   On the big song the laid-out frame was 203 ms with `pointer-events: none`, against 90 without. So a press lands on what the stretch shows, and lays the zoom out first.
+2. **A zoom out is laid out a step before the edge of what is drawn**, where the view would ask for a new window anyway (VIEW-12), not at the edge. Then the view draws its new clips between frames. Laid out only once the edge was reached, it drew them all in one frame: 150 to 220 ms on the big song in Chrome. A zoom in is laid out only at its end.
+3. **The layers stay a moment after a zoom**, with a transform that moves nothing, until the cameras have been still for 400 ms (`LAYERS_KEPT`). WebKit lays an element out again when its transform goes. With the transforms taken away in the frame the zoom ends, the frame after it cost 31 to 34 ms instead of 9 to 11 (WebKit, beat song). Letting the layers go at rest costs one frame of 14 to 33 ms. A press or a key lets them go at once.
+
+- **Not measured on the owner's Mac yet.** The swipe probe's last step, Replay a pinch, measures it there with the same bench, and its report splits the timeline's frames the same way: stretched, laid out, and the frame after each.
+- **Pictures** for the owner, before, mid-pinch and after, on a beat song, in the arrangement and in Notes: `~/m2-runs/live-zoom/look/`. The app has one look (taste.md: no dark mode).
 
 ## 3. Z2: cheaper redraws
 
@@ -98,13 +149,13 @@ Tried and not worth it: notes as a few `<path>`s (−3 to −10%); `contain: str
 - **One canvas a lane, not one a clip.** Chrome makes every canvas a layer of its own, whatever it is told. One canvas a clip gave the beat song's arrangement 416 layers (main has 36), and a frame with nothing new to draw cost 7.1 ms (main 1.5): Chrome's step that sorts what it drew into layers took most of it, so a zoom was no cheaper in Chrome. One canvas a lane draws every clip of the lane that sits still, each inside its box, in the lane's order, each clearing its box first: 47 layers, and that frame 2.1 ms. A clip that moves with a drag, a copy where it lands, a clip a later one lies over, and a take while it records draw on a canvas of their own, in their box (a few at a time).
 - **Notes, their 2 px marks and a curve's line and shade** are on the canvases. A curve's points and a lane of names' steps stay elements: they were never SVG, they are few, a point stays round while the drawing stretches, and a step's name is text.
 - **Kept sharp.** Each canvas is drawn at the screen's own pixels, and lies on them, so nothing is resampled while it holds still. Each clip's box lies on them too: the camera places it by `spanBox` (its start and width rounded to the screen's pixels), and the lane's canvas finds the box by the same function.
-- **When a canvas is drawn again:** when what it draws changes (a lane's clips are kept by value, so a new state of the song draws only the lanes whose clips changed), at most once a frame for such changes; on a zoom by the app (⌘=, Fit) in the frame it lands in; on a zoom by the hand once it settles (no zoom for G, nor in a whole frame: a frame slower than G is no pause of the hand), stretching with the view until then; on a pan only when what shows reaches past the part it holds.
+- **When a canvas is drawn again:** when what it draws changes (a lane's clips are kept by value, so a new state of the song draws only the lanes whose clips changed), at most once a frame for such changes; on a zoom by the app (⌘=, Fit) in the frame it lands in; on a pan only when what shows reaches past the part it holds. On a zoom by the hand, Z2 alone drew it once the zoom settled (no zoom for G, nor in a whole frame), stretching it until then. Since Z1 (track `live-zoom`), it draws when the zoom laid out changes, in the frame that lays it out (the live zoom's end, or an early layout), and the camera's one transform stretches it with its clips' boxes until then: ClipDrawing's own detector of a zoom's end went.
 - **Bounded:** a canvas holds what shows and up to a view each side (the culling's margin), never a bitmap over 8192 × 512 device px; a lane's covers only where its clips are.
 - **The Graph's nodes** render no more on a zoom (5 nodes, 10 frames of a pinch: 50 renders before, 0 now). **The grid** renders once a zoom: each row draws it with shared SVG patterns that one component spaces by the zoom (before: 26 renders for each render of the arrangement on the big song). **The take** renders on a zoom only while it records (before: once a lane, 23).
 - **What the review found, and what changed for it.** Two things the owner would have seen: where clips lay over each other (a drag, a MIDI file), both clips' notes showed, and an earlier automation clip's curve and points showed through the later one, which plays there; and at 2 device px a px, far zoomed out, some clips' drawings reached half a px over their border, as the canvas rounded the box's ends and the browser rounded them otherwise. Both are fixed: a clip a later one lies over draws in its own box, under that one, as on main; and one function places the box and finds it for the canvas. The camera suite now runs at 2 device px a px, as the owner's Mac draws, and checks both.
 - **Nothing looks different.** Pictures of both songs at 24 px a beat match main's to within 8 of 255 in a colour channel (the big song's within 1), and zoomed in ×3.4 to within 32. Far zoomed out (×0.13), some clip boxes' edges sit one device px from where main's browser put them, as the app now puts each box on the screen's pixels itself; the notes and marks inside them follow their boxes.
-- **While a zoom by the hand lasts**, a lane's canvas stretches around the lane's start, while each box is placed by the zoom with its 1 px ends: notes can sit up to 2 px off their boxes until the zoom settles. Z1, which stretches the whole view as one, ends this.
-- **With Z1**, the zoom laid out at the end of a live zoom should draw the canvases in that frame, as a zoom by the app does, and Z1's end of a zoom replaces ClipDrawing's own settle detector.
+- **While a zoom by the hand lasts**, Z2 alone stretched a lane's canvas around the lane's start while each box was placed by the zoom with its 1 px ends, so notes could sit up to 2 px off their boxes until the zoom settled. Z1 ended this: the camera stretches the lane, its canvas and its boxes as one.
+- **With Z1** (built), the canvases draw in the frame a live zoom is laid out, as for a zoom by the app; the camera suite checks it in every frame of a live zoom (each lane's canvas drawn at the zoom laid out, and stretched once).
 
 ### Measured after Z2
 
@@ -126,7 +177,8 @@ The zoom bench in Chrome and the WebKit tool, three rounds each on the server, `
 | Big, WebKit, Graph pinch | 24 (33) | 19 (25) | −21% | 15 → 13 | 855 → 704 |
 
 - Every zoom frame of the tracks, which today is a whole layout of them, is a third to nearly a half cheaper, in both engines, as the plan said. Most of what is left is the clip boxes and their layout: Z1's to take away while the fingers move.
-- The new cost is the frame that draws the canvases again once a zoom settles: 21 ms on the beat song in Chrome (8 ms of drawing, the rest handing the bitmaps over), up to 54 ms on the big song. It comes once, after the gesture; a whole run's work still falls by 12% to 48%. The review measured it apart, in Chrome at 2 device px a px, the slowest frame after each of six hand zooms: beat song 5.6 ms on main, 10.1 here; big song 15.2 and 22.4. Most of it is the canvases' bitmaps handed over (25 ms of a 38 ms traced settle on the big song; main's 1.9). Holding a tenth of a view each side, not a view, made it 15% to 21% cheaper, and swipes draw again sooner then; drawing the lanes that show first did nothing. Drawing what shows first at Z1's landing frame is Z1's to try.
+- The new cost is the frame that draws the canvases again once a zoom settles: 21 ms on the beat song in Chrome (8 ms of drawing, the rest handing the bitmaps over), up to 54 ms on the big song. It comes once, after the gesture; a whole run's work still falls by 12% to 48%. The review measured it apart, in Chrome at 2 device px a px, the slowest frame after each of six hand zooms: beat song 5.6 ms on main, 10.1 here; big song 15.2 and 22.4. Most of it is the canvases' bitmaps handed over (25 ms of a 38 ms traced settle on the big song; main's 1.9). Holding a tenth of a view each side, not a view, made it 15% to 21% cheaper, and swipes draw again sooner then; drawing the lanes that show first did nothing.
+- **Tried with Z1, not kept: drawing what shows first at the landing frame.** In the frame a live zoom is laid out, each lane's canvas held what shows and a tenth of a view each side, and its whole margin came in a frame once the view was still. Median work of that laid-out frame, ms, today's build against the variant, two rounds each: in Chrome it was cheaper (beat pinch 30 → 19, ⌘-scroll 28 → 25; big pinch 59 → 45, ⌘-scroll 63 → 59), but in WebKit, which the Mac runs, it was not (beat pinch 49 → 53 and 84 → 97; beat ⌘-scroll 46 → 57 and 76 → 87; big pinch 87 → 105; big ⌘-scroll 88 → 101 and 98 → 73), and it adds a second draw at rest.
 - WebKit draws in software here, so its paint is dearer than on a Mac; Chrome's numbers are from its headless shell. How WebKit on the Mac handles these canvases (`willReadFrequently`, kept on the CPU, which its code paints into the layer under them) is not measured yet: the swipe probe's Replay a pinch measures it on the owner's Mac.
 
 **The margin, measured again with the canvases in** (the same bench, two rounds; median work of a zoom frame):

@@ -224,11 +224,11 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
   // Track camera-probe: the command palette's frame meter and swipe probe (taste.md VIEW-10), before the camera.
-  ["camera-probe", "fix", { expect: 58, s: 30 }],
+  ["camera-probe", "fix", { expect: 59, s: 30 }],
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 89, s: 60 }],
+  ["camera", "fix", { expect: 114, s: 75 }],
   // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
   ["zoom-bench", "fix", { expect: 15, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
 ];

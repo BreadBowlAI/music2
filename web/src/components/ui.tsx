@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ChevronRight } from "lucide-react";
-import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type HTMLAttributes, type ReactNode, type Ref } from "react";
 import { createPortal } from "react-dom";
 
 /**
@@ -173,7 +173,7 @@ export function Segment({ on, className, ...props }: ButtonHTMLAttributes<HTMLBu
  * The one empty state (taste.md §3.5): a line or two, centred, `text-sm` `fg-muted`, on the canvas,
  * so grid lines never run through it, with what to do next under it. Its place is the caller's.
  */
-export function EmptyState({ className, children, bare, ...rest }: HTMLAttributes<HTMLDivElement> & { /** On a plain surface (a list, a popover): no backing. */ bare?: boolean }) {
+export function EmptyState({ className, children, bare, ...rest }: HTMLAttributes<HTMLDivElement> & { ref?: Ref<HTMLDivElement>; /** On a plain surface (a list, a popover): no backing. */ bare?: boolean }) {
   return (
     <div {...rest} className={clsx("max-w-md px-3 py-2 rounded-sm text-center text-sm text-fg-muted space-y-3", !bare && "bg-canvas", className)}>
       {children}
