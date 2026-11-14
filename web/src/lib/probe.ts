@@ -10,14 +10,19 @@
 // Mac shows its scrollbars for a move the page makes. Before each step it makes room for the view to
 // move (zoom, and the Song's graph), and it puts back what it changed. It writes nothing to the song;
 // `listen`'s stop removes every listener it added and stops its frame loop.
+//
+// Its last step, after round B, replays the owner's pinch (A13) over the timeline and the Graph by
+// itself, and the zoom bench (`zoomBench.ts`, loaded then) measures each frame's split, so the Mac's
+// numbers compare one for one with the bench's (the zoom note's §6 step 1).
 
 import { create } from "zustand";
-import { pauseSwipes } from "../camera";
+import { cameraNow, controlsOf, NO_EDGES, pauseSwipes, type Edges } from "../camera";
 import { measureFrames } from "./frames";
 import { native } from "./native";
 import { canvas, useShell, type DockView } from "./shell";
 import { useStore } from "./store";
-import { setZoom, stepped, ZOOM, zoomNow } from "./zoom";
+import { ARRANGEMENT, setZoom, stepped, ZOOM, zoomNow } from "./zoom";
+import type { Run } from "./zoomBench";
 
 export type Round = "A" | "B";
 type Box = "arrangement" | "graph";
@@ -67,8 +72,8 @@ export interface Mac {
 
 interface Probe {
   open: boolean;
-  /** Its first page, the Mac's, the steps, or the end. */
-  page: "intro" | "mac" | "steps" | "done";
+  /** Its first page, the Mac's, the steps, the last step (a pinch replayed), or the end. */
+  page: "intro" | "mac" | "steps" | "replay" | "done";
   round: Round;
   /** The step shown, 0 to 13. */
   step: number;
@@ -77,20 +82,22 @@ interface Probe {
   mac: Mac;
   /** The step the probe has made room for, and its room: "A3 1200x340". */
   room: string;
+  /** The last step: not run, running, or each view's median frame's work, in ms. */
+  replay: "ready" | "running" | { timeline: number | null; graph: number | null };
 }
 
-export const useProbe = create<Probe>(() => ({ open: false, page: "intro", round: "A", step: 0, answers: {}, mac: { model: null, more: "", macos: "", rate: null }, room: "" }));
+export const useProbe = create<Probe>(() => ({ open: false, page: "intro", round: "A", step: 0, answers: {}, mac: { model: null, more: "", macos: "", rate: null }, room: "", replay: "ready" }));
 export const openProbe = () => useProbe.setState({ open: true });
 export const closeProbe = () => useProbe.setState({ open: false });
 
-/** Go `by` steps on, from round A's last into round B's first, and past round B's last to the end. */
+/** Go `by` steps on, from round A's last into round B's first, and past round B's last to the last step, Replay a pinch. */
 export function go(by: 1 | -1, answer?: "Yes" | "No") {
   const { round, step, answers } = useProbe.getState();
   const next = answer ? { ...answers, [`${round}${step + 1}`]: answer } : answers;
   const at = step + by;
   if (at < 0) return useProbe.setState(round === "B" ? { round: "A", step: STEPS.length - 1, answers: next } : { page: "mac", answers: next });
   if (at < STEPS.length) return useProbe.setState({ step: at, answers: next });
-  useProbe.setState(round === "A" ? { round: "B", step: 0, answers: next } : { page: "done", answers: next });
+  useProbe.setState(round === "A" ? { round: "B", step: 0, answers: next } : { page: "replay", answers: next });
 }
 
 // ---------------------------------------------------------------- what it hears
@@ -140,7 +147,16 @@ interface StepLog {
   frames: number[];
 }
 
-const heard = { start: 0, wheels: [] as Wheel[], gestures: [] as Gesture[], scrolls: [] as Scroll[], frames: [] as number[], steps: new Map<string, StepLog>() };
+const heard = {
+  start: 0,
+  wheels: [] as Wheel[],
+  gestures: [] as Gesture[],
+  scrolls: [] as Scroll[],
+  frames: [] as number[],
+  steps: new Map<string, StepLog>(),
+  /** The last step's: what the zoom bench measured over each view. */
+  replay: null as { timeline: Run; graph: Run } | null,
+};
 /** What the panel counts, kept as it hears: round B's scrolls in swipe and flick steps not the probe's are `theirs`. */
 const tally = { wheels: 0, scrolls: 0, gestures: 0, cancelled: 0, theirs: 0 };
 /** Wheel events whose dispatch hasn't finished: whether one was cancelled is known after. */
@@ -159,9 +175,10 @@ export function startAgain() {
   heard.scrolls = [];
   heard.frames = [];
   heard.steps = new Map();
+  heard.replay = null;
   unsettled = [];
   for (const k of Object.keys(tally) as (keyof typeof tally)[]) tally[k] = 0;
-  useProbe.setState({ page: "intro", round: "A", step: 0, answers: {}, room: "" });
+  useProbe.setState({ page: "intro", round: "A", step: 0, answers: {}, room: "", replay: "ready" });
 }
 
 const now = () => performance.now() - heard.start;
@@ -371,13 +388,7 @@ async function makeRoom(box: Box, alive: () => boolean) {
     return !!el && roomOf(el).x >= ROOM && roomOf(el).y >= ROOM;
   };
   if (enough()) return;
-  const shell = useShell.getState();
-  if (shell.module !== "song" || shell.view !== "graph" || !shell.dock) {
-    useShell.setState({ view: "graph", dock: true });
-    shell.select("song");
-  }
-  for (let i = 0; i < 30 && alive() && canvas.graphZoom?.().module !== "song"; i++) await frames(1);
-  songZoom ??= canvas.graphZoom?.() ?? null;
+  await songGraph(alive);
   let was = -1;
   for (let i = 0; i < 16 && alive() && !enough(); i++) {
     const z = canvas.graphZoom?.();
@@ -386,6 +397,24 @@ async function makeRoom(box: Box, alive: () => boolean) {
     canvas.graphZoom?.(z.zoom * 1.2);
     await frames(2);
   }
+}
+
+/** The Song's graph in the dock, and its zoom kept to put back. */
+async function songGraph(alive: () => boolean) {
+  const shell = useShell.getState();
+  if (shell.module !== "song" || shell.view !== "graph" || !shell.dock) {
+    useShell.setState({ view: "graph", dock: true });
+    shell.select("song");
+  }
+  for (let i = 0; i < 30 && alive() && canvas.graphZoom?.().module !== "song"; i++) await frames(1);
+  songZoom ??= canvas.graphZoom?.() ?? null;
+}
+
+/** What the window shows, kept once to put back when the probe stops. */
+function keep() {
+  if (kept) return;
+  const sh = useShell.getState();
+  kept = { selected: sh.selected, module: sh.module, auto: sh.auto, view: sh.view, dock: sh.dock, zoom: zoomNow() };
 }
 
 /** A step shows: put back the last pinch's zoom, make room for this one's view, and note its start. */
@@ -397,10 +426,7 @@ export async function enter(round: Round, step: number) {
   const s = STEPS[step];
   const at = `${round}${step + 1}`;
   const log = logOf(at);
-  if (!kept) {
-    const sh = useShell.getState();
-    kept = { selected: sh.selected, module: sh.module, auto: sh.auto, view: sh.view, dock: sh.dock, zoom: zoomNow() };
-  }
+  keep();
   await makeRoom(s.box, alive);
   // What the room-making moved comes a frame or two later.
   await frames(2);
@@ -432,6 +458,57 @@ export function putBack() {
   if (sh.view !== kept.view || sh.dock !== kept.dock) useShell.setState({ view: kept.view, dock: kept.dock });
   kept = null;
   useProbe.setState({ room: "" });
+}
+
+// ---------------------------------------------------------------- the last step: a pinch replayed
+
+/** A point in `el`'s clear part (inside `m`), as fractions of it across and down. */
+function pointIn(el: HTMLElement, m: Edges, fx: number, fy: number) {
+  const r = el.getBoundingClientRect();
+  return [Math.round(r.left + el.clientLeft + m.left + (el.clientWidth - m.left - m.right) * fx), Math.round(r.top + el.clientTop + m.top + (el.clientHeight - m.top - m.bottom) * fy)] as const;
+}
+const zoomOfCamera = (name: string) => () => cameraNow(name)?.getState().zoom ?? null;
+const SONG_GRAPH = "graph:song";
+/** The zoom bench, once the last step has loaded it. */
+let bench: typeof import("./zoomBench") | null = null;
+
+/**
+ * The last step: the owner's pinch of step A13 replayed by the zoom bench over the timeline, at 24 px
+ * a beat from the song's start, then over the Song's graph at Fit (zoom 1), each frame measured.
+ * None of the probe's listeners is on. Then every zoom, the selection and the dock's view put back.
+ */
+export async function replayPinch() {
+  if (useProbe.getState().replay === "running") return;
+  useProbe.setState({ replay: "running" });
+  const me = ++entering;
+  const alive = () => me === entering && useProbe.getState().open && useProbe.getState().page === "replay";
+  const settle = async () => {
+    await frames(3);
+    await new Promise((r) => setTimeout(r, 800));
+  };
+  let done: { timeline: Run; graph: Run } | null = null;
+  try {
+    const b = (bench = await import("./zoomBench"));
+    keep();
+    controlsOf(ARRANGEMENT)?.to(0, 0, ZOOM.start);
+    await settle();
+    const tl = boxEl("arrangement");
+    if (!tl || !alive()) return;
+    const timeline = await b.replay(...pointIn(tl, cameraNow(ARRANGEMENT)?.getState().margins ?? NO_EDGES, 0.4, 0.3), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(ARRANGEMENT) });
+    if (!alive()) return;
+    await songGraph(alive);
+    canvas.graphZoom?.(null);
+    await settle();
+    const gr = boxEl("graph");
+    if (!gr || !alive()) return;
+    const graph = await b.replay(...pointIn(gr, NO_EDGES, 0.5, 0.5), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(SONG_GRAPH) });
+    done = heard.replay = { timeline, graph };
+    const med = (r: Run) => b.split([r]).work?.med ?? null;
+    useProbe.setState({ replay: { timeline: med(timeline), graph: med(graph) } });
+  } finally {
+    if (me === entering) putBack();
+    if (!done) useProbe.setState({ replay: "ready" });
+  }
 }
 
 // ---------------------------------------------------------------- the report
@@ -632,6 +709,18 @@ export function report(): string {
       `  Round ${r}: ${ws.length} (${views || "none"}); in pixels ${ws.filter((w) => w.mode === 0).length}, lines ${ws.filter((w) => w.mode === 1).length}, pages ${ws.filter((w) => w.mode === 2).length}; cancelable: false ${ws.filter((w) => !w.cancelable).length}; cancelled ${ws.filter((w) => w.cancelled).length}; both deltas ${pct(ws.filter(both).length, ws.length)}; fractions ${pct(ws.filter(fraction).length, ws.length)}; ⌘ or Ctrl ${ws.filter((w) => w.zoom).length}`,
     );
   }
+  line();
+
+  const r = heard.replay;
+  if (r && bench) {
+    const z = (v: number | null) => (v === null ? "–" : num(v, 2));
+    const way = (run: Run) => `from ${z(run.zoom.from)} to ${z(run.zoom.min)} and back to ${z(run.zoom.to)}`;
+    line(
+      `The replayed pinch: step A13's pinch (its scale from 1 to ${num(Math.min(...bench.A13))} and back, ${bench.A13.length} changes ${bench.GAP} ms apart), sent by the page over the timeline (24 px a beat, from the song's start) and over the Song's graph (Fit, zoom 1); your fingers did nothing`,
+    );
+    line(bench.table("View", [["timeline", [r.timeline]], ["Graph", [r.graph]]]));
+    line(`  The zoom: timeline ${way(r.timeline)}; Graph ${way(r.graph)}`);
+  } else line("The replayed pinch: not run (the last step's Replay wasn't pressed)");
   line();
 
   line(`Raw events: for each step, its first ${RAW_WHEELS} wheel events and ${RAW_GESTURES} gesture events, and in round B the scrolls that weren't the probe's (the first ${RAW_SCROLLS}); times in ms from the step's start`);
