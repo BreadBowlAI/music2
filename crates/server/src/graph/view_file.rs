@@ -94,16 +94,24 @@ impl Graph {
     /// holds, a null taking its key out, and kept in `.music2/view.json`. Never a Tx, never an
     /// undo step. A read-only window keeps them in memory only, as the loop (design-8b §2.2).
     /// Only [`KEYS`]. The metronome reaches the player at once, never an export (it has no
-    /// engine). Answers `{local}`.
+    /// engine). Settings for a song closed since (another opened over it while the page waited
+    /// to send them, FMT-20) go into its file only. Answers `{local}`.
     pub fn set_view(&self, token: u64, changes: Map<String, Value>) -> Result<Value> {
         if let Some(k) = changes.keys().find(|k| !KEYS.contains(&k.as_str())) {
             bail!("{k} isn't a view setting: {}", KEYS.join(", "));
         }
         let (dir, keep, local) = {
             let mut cp = self.inner.control.lock();
-            let p = cp.open.as_mut().filter(|p| p.engine.token == token).context("the open project changed; refresh first")?;
-            merge(&mut p.local, &changes);
-            (p.shown.dir.clone(), p.shown.read_only.is_none(), p.local.clone())
+            if let Some(p) = cp.open.as_mut().filter(|p| p.engine.token == token) {
+                merge(&mut p.local, &changes);
+                (p.shown.dir.clone(), p.shown.read_only.is_none(), Some(p.local.clone()))
+            } else {
+                (cp.closed.get(&token).cloned().context("the open project changed; refresh first")?, true, None)
+            }
+        };
+        let Some(local) = local else {
+            set(&dir, &changes)?;
+            return Ok(json!({ "local": self::local(&dir) }));
         };
         if changes.contains_key("metronome")
             && let Some(d) = self.inner.current_device()
@@ -114,6 +122,20 @@ impl Graph {
             set(&dir, &changes)?;
         }
         Ok(json!({ "local": local }))
+    }
+}
+
+impl super::ControlPlane {
+    /// `was`, the song closing (Close Song, or another opened over it): a writable one's folder is
+    /// kept by its session, so the page's view settings for it that come after (what waited its
+    /// 300 ms) still reach its `view.json` (FMT-20). A read-only window's go with it.
+    pub(super) fn closing(&mut self, was: Option<super::Published>) -> Option<super::Published> {
+        if let Some(p) = &was
+            && p.shown.read_only.is_none()
+        {
+            self.closed.insert(p.engine.token, p.shown.dir.clone());
+        }
+        was
     }
 }
 
