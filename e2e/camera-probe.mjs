@@ -423,6 +423,14 @@ check(copied.length > 0 && copied.length < 60_000, `and it stays under 60 KB: ${
     head.test(copied) && row("timeline").test(copied) && row("Graph").test(copied) && zoom.test(copied),
     `the report has the replayed pinch's split for the timeline and the Graph: each part's median, 95th percentile and slowest, the frames over 8.3 and 16.7 ms, and each zoom's way out and back: ${copied.slice(copied.indexOf("The replayed pinch"), copied.indexOf("The replayed pinch") + 1600)}`,
   );
+  // The timeline's live zoom (taste.md VIEW-5) apart, as zoom-bench gives it: its frames only a
+  // transform apart from the frame before (stretched), those laid out at a new zoom, and the frame
+  // after each. So the owner's Mac says what a stretched frame costs there.
+  const n = "[\\d.]+|–";
+  const live = new RegExp(
+    `\\nA live zoom's frames, in ms: median / 95th percentile[^\\n]*\\n\\| View \\| stretched frames \\| their work \\| of it input \\| of it paint and commit \\| laid out \\| a laid-out frame's work \\| the frame after it \\|\\n\\|[-|]+\\n\\| timeline \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} [\\d.]+ \\|( (${n}) / (${n}) \\|){2}\\n`,
+  );
+  check(live.test(copied), `and the timeline's live zoom apart: its stretched frames, its laid-out ones and the frame after each: ${copied.slice(copied.indexOf("A live zoom"), copied.indexOf("A live zoom") + 600) || "none"}`);
 }
 // Where the clipboard refuses (as a web view may), the report shows in a field, selected for ⌘C.
 await page.evaluate(() => (navigator.clipboard.writeText = () => Promise.reject(new Error("refused"))));
