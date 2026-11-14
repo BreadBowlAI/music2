@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Proposed, 2026-11-14. Waiting for the owner's yes on Z1 (§4). |
+| **Status** | Accepted, 2026-11-14: Z1 and Z2 (§4). |
 | **Written** | 2026-11-14, from `main` at `e06d0bfc`, after the owner's swipe probe: a pinch over the tracks had 69 frames over 16.7 ms. The owner asked earlier: "why does frame rate drop significantly when i zoom in on the tracks or notes editor". |
 | **Beside it** | [design.md](design.md), the camera note (VIEW-1 to VIEW-12). This note changes VIEW-5, VIEW-8 and VIEW-12. |
 | **Measured on** | Branch `pinch-cost` (not for merge): a pinch bench in Chrome and in WebKit (WebKitGTK 2.52, the engine the Mac app uses), on a beat song like the owner's (10 tracks, 312 clips) and on the big song (24 × 64 clips). |
@@ -93,13 +93,18 @@ The one real layout at the end still costs what a frame costs today, 38 to 51 ms
 
 Tried and not worth it: notes as a few `<path>`s (−3 to −10%); `contain: strict` on clips (no gain); clip boxes moved by `transform` (only the boxes' share, and hundreds of layers in WebKit).
 
-## 4. The decision for the owner
+## 4. The decision
 
 **Z1: while you pinch or ⌘-scroll the tracks, the picture stretches for a moment, then snaps sharp when your fingers stop. Yes or no?**
 - **Yes:** a pinch on a beat song runs near 120 frames a second.
 - **No:** we do only Z2. Then a pinch on a beat song costs about 25 ms a frame in WebKit (an estimate from the measurements): about 40 frames a second on your Mac, better than today's 20 to 25.
 
 Z2 changes nothing you see, so it goes ahead either way.
+
+**Decided, 2026-11-14: yes.** The owner left the choice to the lead, who chose yes:
+- Smooth motion under the fingers was the owner's first ask for the camera, and Z2 alone stays near 40 frames a second.
+- Apps on the Mac zoom this way: Maps, Preview, Safari's pinch. The stretch lasts only while the fingers move.
+- It can be taken back. A view that marks nothing to stretch zooms as today, so if the stretch looks wrong on the owner's Mac, the views stop marking it.
 
 ## 5. The rules that change
 
