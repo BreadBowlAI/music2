@@ -3100,7 +3100,7 @@ function LaneClips({
       {lane.kind === "control" && lane.default != null && (
         <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * (height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM)} />
       )}
-      {(lane.kind === "notes" || lane.kind === "control") && <LaneDrawing clips={still} color={color} scale={scale} height={height} />}
+      {(lane.kind === "notes" || lane.kind === "control") && <LaneDrawing clips={still} color={color} scale={scale} />}
       {own}
       {ghosts}
       {(lane.kind === "notes" || lane.kind === "audio") && <Take module={module} lane={lane.key} color={color} />}

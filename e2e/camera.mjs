@@ -995,10 +995,10 @@ const clipsShown = () =>
 }
 // A clip's notes on its lane's canvas (VIEW-12; review Q9 before it): drawn at the camera's zoom once a
 // zoom settles, sharp at the screen's own pixels (its bitmap its box at devicePixelRatio, not
-// stretched), each note inside its clip's box, at its own alpha (its middle pixel the track's ink at
-// that alpha; no opacity on the canvas, which WebKit would paint through a layer of its own), its 2 px
-// marks only in a clip whose shortest note is under 2 px at that zoom, each centred on its note. At
-// this zoom and six steps out.
+// stretched), each note inside its clip's box as painted, at its own alpha (its middle pixel the
+// track's ink at that alpha; no opacity on the canvas, which WebKit would paint through a layer of
+// its own), its 2 px marks only in a clip whose shortest note is under 2 px at that zoom, each
+// centred on its note. At this zoom and six steps out.
 {
   const look = async () => {
     await sleep(200);
@@ -1014,8 +1014,11 @@ const clipsShown = () =>
       if (d.zoom !== zoom) why.push(`drawn at ${d.zoom}`);
       if (d.stretch !== 1 || d.scale !== dpr || d.bitmap[0] !== Math.round(d.drawnBox[0] * dpr) || d.bitmap[1] !== Math.round(d.drawnBox[1] * dpr)) why.push(`not sharp: ${json({ stretch: d.stretch, scale: d.scale, bitmap: d.bitmap, box: d.drawnBox })}`);
       if (d.opacity !== "1") why.push(`opacity ${d.opacity}`);
-      // Inside the box, within its 1 px border and 4 px more at its top and foot.
-      const out = d.notes.filter((n) => n.x < d.clip.left + 1 - 0.05 || n.x + n.w > d.clip.right - 1 + 0.05 || n.y < d.clip.top + 5 - 0.05 || n.y + n.h > d.clip.bottom - 5 + 0.05);
+      // Inside the box as the browser paints it (its ends on the screen's pixels), within its 1 px
+      // border and 4 px more at its top and foot.
+      const snap = (v) => Math.round(v * dpr) / dpr;
+      const [l, r] = [snap(d.clip.left + 1), snap(d.clip.right - 1)];
+      const out = d.notes.filter((n) => n.x < l - 0.05 || n.x + n.w > r + 0.05 || n.y < d.clip.top + 5 - 0.05 || n.y + n.h > d.clip.bottom - 5 + 0.05);
       if (out.length) why.push(`${out.length} notes outside the box ${json(d.clip)}: ${json(out[0])}`);
       if (d.marks.length !== (fine ? d.notes.length : 0)) why.push(`${d.marks.length} marks for ${d.notes.length} notes, fine ${fine}`);
       d.marks.forEach((m, i) => {

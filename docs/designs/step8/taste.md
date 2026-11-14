@@ -1391,10 +1391,10 @@ no clip: each clip's box is placed by the zoom straight into its style.
   `SongTimeline.tsx`, which gives it the clips that sit still) and `Notes` and `Curve` (a clip's own,
   and the points over a curve), the clip's box's numbers beside them (`CLIP_INSET`, `CLIP_END`,
   `CLIP_MIN`, `BORDER`, `BODY_TOP`, `BODY_BOTTOM`), and the bounds `MAX_W` and `MAX_H`. A lane's
-  canvas is placed and sized from the zoom and its lane's height, over the clips' bodies (`z-[1]`),
-  under a curve's points and the hatching (`z-[2]`), taking no pointer; a clip's own takes its size
-  from one ResizeObserver on its drawing area, after layout and before paint; nothing reads the
-  page's layout. The zoom and what shows come from the arrangement's camera, heard once for all its
+  canvas is placed across by the zoom, as its clips' boxes are, over the clips' bodies (`z-[1]`),
+  under a curve's points and the hatching (`z-[2]`), taking no pointer; its height, and a clip's own
+  canvas's size, come from one ResizeObserver (on the lane's box, on the clip's drawing area), after
+  layout and before paint; nothing reads the page's layout. The zoom and what shows come from the arrangement's camera, heard once for all its
   canvases; a zoom by the hand is settled when a frame's start finds no zoom for G and none since
   the frame before. Each canvas is on the CPU (`willReadFrequently`), which WebKit paints into the
   layer under it. A take's notes keep their marks always, as before. Each draw is counted
