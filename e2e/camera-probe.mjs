@@ -8,9 +8,11 @@
 // own scrolling moves the arrangement, a control under the pointer sees the wheel, and the probe
 // hears it. Round B cancels and stops the wheel over the arrangement
 // and the Graph before any control, and moves each itself, once; a pinch's scrolls stay out of its
-// count. Known synthetic swipes, a diagonal flick and a swipe WebKit took over are read back from
-// the summary, and a long step's raw events are cut. The report is copied or, where the clipboard
-// refuses, shown in a field selected for ⌘C. Closed, it hears nothing, its frame loop stops and the
+// count. Its last step, Replay a pinch, replays the owner's A13 pinch over the timeline and the
+// Graph by itself, through the zoom bench (`m2canvas.bench()`, not loaded before), and puts every
+// zoom back. Known synthetic swipes, a diagonal flick, a swipe WebKit took over and the replayed
+// pinch's split are read back from the summary, and a long step's raw events are cut. The report is
+// copied or, where the clipboard refuses, shown in a field selected for ⌘C. Closed, it hears nothing, its frame loop stops and the
 // web view scrolls again; the song's files never changed.
 //
 //   node e2e/camera-probe.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
@@ -76,9 +78,11 @@ check(await until(async () => !(await has("[data-testid=palette]"))), "and so do
 
 // ---------------------------------------------------------------- the frame meter
 
+/** Whether the zoom bench's own file has been loaded (it is a file of its own, loaded only when asked for). */
+const benchLoaded = () => page.evaluate(() => performance.getEntriesByType("resource").some((e) => /\/zoomBench[-.][^/]*\.js$/.test(e.name)));
 check(
-  (await page.evaluate(() => Object.keys(window.m2canvas ?? {}).join())) === "frames,camera" && (await frames())?.fps === null,
-  `the page gives suites only frames() and the camera's face (since track camera), and before the meter shows it measures no frames: ${JSON.stringify(await frames())}`,
+  (await page.evaluate(() => Object.keys(window.m2canvas ?? {}).join())) === "frames,camera,bench" && (await frames())?.fps === null && !(await benchLoaded()),
+  `the page gives suites only frames(), the camera's face (since track camera) and bench() (since track zoom-bench), with the zoom bench not loaded until asked for, and before the meter shows it measures no frames: ${JSON.stringify(await frames())}`,
 );
 await run("frame");
 check(await until(() => has("[data-testid=frame-meter]"), 3000), "Show frame rate shows the meter");
@@ -351,6 +355,33 @@ await goTo("B13");
   check(Number((await heard()).theirs) === 0, `round B's scrolls in its swipe and flick steps are all the probe's, the pinch's apart: ${JSON.stringify(await heard())}`);
 }
 
+// The last step, after round B: the probe replays the owner's pinch (A13) by itself, over the
+// timeline and then the Graph, with the zoom bench measuring each frame.
+await goTo("B14");
+await advance();
+{
+  const last = await text(panel);
+  check(
+    /Last step/.test(last) && /Replay a pinch/.test(last) && /pinches by itself/.test(last) && /timeline/.test(last) && /Graph/.test(last) && /fingers off the trackpad/.test(last) && !/browser/i.test(last) && (await has("[data-probe=replay]")) && !(await benchLoaded()),
+    `after round B comes its last step, Replay a pinch: it says it pinches by itself over the timeline and the Graph, and asks for the fingers off; the bench isn't loaded yet: ${last}`,
+  );
+  await lintIn(panel, "the probe's last step");
+  const g0 = await graphShows();
+  const z0 = await graphZoom();
+  const before = await heard();
+  await page.click("[data-probe=replay]");
+  const ran = await until(async () => /Replayed/.test(await text(panel)), 60000);
+  const said = await text(panel);
+  check(
+    ran &&
+      /a frame's work took [\d.]+ ms over the timeline and [\d.]+ ms over the Graph/.test(said) &&
+      (await benchLoaded()) &&
+      (await until(async () => Math.abs((await clipW()) - was.width) < 1 && (await graphShows()) === g0 && (await graphZoom()) === z0, 3000)) &&
+      JSON.stringify(await heard()) === JSON.stringify(before),
+    `Replay replays it, loading the bench, and says each view's median frame; it puts back the timeline's zoom and the Graph's track and zoom, and the probe's listeners heard none of it: ${said} ${JSON.stringify({ was, width: await clipW(), g0, z0, graph: await graphShows(), zoom: await graphZoom(), before, after: await heard() })}`,
+  );
+}
+
 // ---------------------------------------------------------------- the report
 
 await page.click("[data-probe=copy]");
@@ -381,6 +412,18 @@ const missing = Object.entries(parts)
   .map(([what]) => what);
 check(missing.length === 0, `Copy report copies the report, with each part${missing.length ? `; missing: ${missing.join(", ")}\n${copied.slice(0, 8000)}` : ""}`);
 check(copied.length > 0 && copied.length < 60_000, `and it stays under 60 KB: ${copied.length} bytes`);
+{
+  // The replayed pinch's split: every part of a frame timed, for both views (median / p95 / slowest).
+  const part = " [\\d.]+ \\/ [\\d.]+ \\/ [\\d.]+ \\|";
+  const row = (view) => new RegExp(`\\n\\| ${view} \\| [1-9]\\d* \\| \\d+ \\/ \\d+ \\|${part.repeat(7)}\\n`);
+  const head =
+    /\nThe replayed pinch: step A13's pinch \(its scale from 1 to 0\.44 and back, 110 changes 8 ms apart\)[^\n]*your fingers did nothing\nEach part of a frame, in ms: median \/ 95th percentile \/ slowest\n\| View \| frames \| work over 8\.3 \/ 16\.7 ms \| the frame's work \| script \| of it, layout forced \| style and layout \| paint and commit \| input \| between frames \|\n/;
+  const zoom = /\n {2}The zoom: timeline from 24 to [\d.]+ and back to 24; Graph from 1 to 0\.4\d* and back to 1\n/;
+  check(
+    head.test(copied) && row("timeline").test(copied) && row("Graph").test(copied) && zoom.test(copied),
+    `the report has the replayed pinch's split for the timeline and the Graph: each part's median, 95th percentile and slowest, the frames over 8.3 and 16.7 ms, and each zoom's way out and back: ${copied.slice(copied.indexOf("The replayed pinch"), copied.indexOf("The replayed pinch") + 1600)}`,
+  );
+}
 // Where the clipboard refuses (as a web view may), the report shows in a field, selected for ⌘C.
 await page.evaluate(() => (navigator.clipboard.writeText = () => Promise.reject(new Error("refused"))));
 await page.click("[data-probe=copy]");

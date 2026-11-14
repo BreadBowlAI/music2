@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { chord } from "../lib/native";
-import { asks, closeProbe, counts, enter, go, listen, MODELS, putBack, RATES, report, startAgain, STEPS, useProbe, type Mac } from "../lib/probe";
+import { asks, closeProbe, counts, enter, go, listen, MODELS, putBack, RATES, replayPinch, report, startAgain, STEPS, useProbe, type Mac } from "../lib/probe";
 import { Button, keepFocus } from "./ui";
 
 /** How often its counts change. */
@@ -26,9 +26,10 @@ const WHERE = {
 /**
  * The swipe probe's panel (taste.md VIEW-10), from the command palette: what it is, a few questions
  * about the Mac, then plain steps for two rounds of swipes over the timeline and the Graph, what it
- * has heard, and Copy report. At the window's lower right, above the Graph's zoom bar: clear of the
- * Graph's top left, where its nodes start. It listens only while a round's steps show, makes room
- * for each step's view, and puts back what it changed when it stops.
+ * has heard, a last step that replays a pinch by itself, and Copy report. At the window's lower
+ * right, above the Graph's zoom bar: clear of the Graph's top left, where its nodes start, and of
+ * the points the last step pinches at. It listens only while a round's steps show, makes room for
+ * each step's view, and puts back what it changed when it stops.
  */
 export default function SwipeProbe() {
   const { open, page, round, step, room } = useProbe();
@@ -176,6 +177,8 @@ export default function SwipeProbe() {
         </>
       )}
 
+      {page === "replay" && <Replay />}
+
       {page === "done" && (
         <>
           <p>Done. Copy the report, then paste it back in your chat.</p>
@@ -209,6 +212,47 @@ export default function SwipeProbe() {
         </Button>
       </div>
     </div>
+  );
+}
+
+/**
+ * The last step, Replay a pinch: the probe pinches by itself as the owner's A13 pinch went, over the
+ * timeline and then the Graph, while the zoom bench times each frame; the fingers do nothing. Then
+ * each view's median frame, and Next to the end.
+ */
+function Replay() {
+  const replay = useProbe((s) => s.replay);
+  const ms = (v: number | null) => (v === null ? "–" : `${Math.round(v * 10) / 10} ms`);
+  return (
+    <>
+      <div className="text-xs text-fg-muted">Last step</div>
+      <div className="font-semibold">Replay a pinch</div>
+      <p>
+        music2 now pinches by itself, the way your pinch went: over the timeline, then over the Graph. It times each frame. Take your fingers off the trackpad, then press Replay. It takes about ten
+        seconds.
+      </p>
+      {replay === "running" && <p className="font-medium">Replaying… Keep your fingers off the trackpad.</p>}
+      {typeof replay === "object" && (
+        <p className="font-medium">
+          Replayed: a frame's work took {ms(replay.timeline)} over the timeline and {ms(replay.graph)} over the Graph (the median).
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <Button variant="secondary" data-probe="back" disabled={replay === "running"} onMouseDown={keepFocus} onClick={() => useProbe.setState({ page: "steps", round: "B", step: STEPS.length - 1 })}>
+          Back
+        </Button>
+        <span className="flex-1" />
+        {typeof replay === "object" ? (
+          <Button variant="primary" data-probe="next" onMouseDown={keepFocus} onClick={() => useProbe.setState({ page: "done" })}>
+            Next
+          </Button>
+        ) : (
+          <Button variant="primary" data-probe="replay" disabled={replay === "running"} onMouseDown={keepFocus} onClick={() => void replayPinch()}>
+            Replay
+          </Button>
+        )}
+      </div>
+    </>
   );
 }
 
