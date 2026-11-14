@@ -43,6 +43,9 @@ export function useRenderCount(name: string, first?: string) {
   });
 }
 
+/** Count a redraw that is no React render, `name` as a render's: a clip's canvas drawn again (VIEW-12). */
+export const countDraw = (name: string) => count(name);
+
 /** The frames' times while something measures them, from just before the last second on. */
 const times: number[] = [];
 /** Who hears each frame's interval (the probe). */

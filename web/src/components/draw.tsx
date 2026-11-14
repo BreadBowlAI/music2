@@ -5,7 +5,8 @@ import clsx from "clsx";
 import { useId } from "react";
 
 /** A pattern id for this component: React's ids hold characters a `url(#…)` reference can't. */
-const usePatternId = () => `p${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
+/** An id for a pattern, fit for `url(#…)`. */
+export const usePatternId = () => `p${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
 
 /** One set of evenly spaced 1px lines: every `every` px, the first `at` px from the start. */
 export interface Lines { every: number; at?: number; color: string }

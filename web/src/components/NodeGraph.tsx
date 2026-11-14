@@ -755,6 +755,30 @@ const ModuleSection = memo(function ModuleSection({
     [placed, session, revision, toast, module],
   );
 
+  // The nodes, laid out at 1: the same elements while what they show is, so a zoom, which scales
+  // them as one, renders none of them (VIEW-8).
+  const nodes = useMemo(
+    () =>
+      ordered.map((p) => (
+        <Node
+          key={p.node.key ?? p.node.id}
+          module={module.key}
+          knobKey={keys.knob}
+          node={p.node}
+          shape={p.shape}
+          session={session}
+          revision={revision}
+          editable={editable}
+          effects={effects}
+          wired={wired}
+          perNote={perNote.has(p.node.id)}
+          onCable={startCable}
+          style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
+        />
+      )),
+    [ordered, module.key, keys, session, revision, editable, effects, wired, perNote, startCable],
+  );
+
   // The selection's keys (DV-15): Delete removes the selected node where Remove is offered; Esc
   // clears the selection. Not while a value, a field or a menu has the keyboard.
   const moving = useExpanded((s) => s.moving);
@@ -838,23 +862,7 @@ const ModuleSection = memo(function ModuleSection({
                   </g>
                 )}
               </svg>
-              {ordered.map((p) => (
-                <Node
-                  key={p.node.key ?? p.node.id}
-                  module={module.key}
-                  knobKey={keys.knob}
-                  node={p.node}
-                  shape={p.shape}
-                  session={session}
-                  revision={revision}
-                  editable={editable}
-                  effects={effects}
-                  wired={wired}
-                  perNote={perNote.has(p.node.id)}
-                  onCable={startCable}
-                  style={{ left: p.x, top: p.y, width: p.w, height: p.h }}
-                />
-              ))}
+              {nodes}
               {!cable &&
                 drawn.map(({ e, at }) => {
                   const k = edgeKey(e);

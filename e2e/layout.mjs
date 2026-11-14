@@ -6,6 +6,7 @@ const S = process.argv[2];
 const proj = `${S}/proj`;
 const sess = JSON.parse(fs.readFileSync(`${S}/testhome/.music2/session.json`, "utf8"));
 import { exe } from "./chrome.mjs";
+import { drawings } from "./drawlib.mjs";
 const browser = await puppeteer.launch({ executablePath: exe, args: ["--no-sandbox"] });
 const page = await browser.newPage();
 await page.setViewport({ width: 1600, height: 1000 });
@@ -58,7 +59,12 @@ for (const t of timeline.tracks)
     total += lane.clips.length;
   }
 check(allMatch && total > 0, `clips per lane match GET /api/graph (${counts.join(", ")})`);
-check(!!(await page.$('[data-lane="bass.notes"] [data-clip] rect')) && !!(await page.$('[data-lane="bass.cutoff"] [data-clip] polyline')), "notes and the cutoff curve are drawn");
+{
+  // What the clips' canvases drew (taste.md VIEW-12): notes, and the cutoff's line.
+  const notes = (await page.$$eval('[data-lane="bass.notes"] [data-clip]', drawings)).reduce((n, d) => n + (d?.notes.length ?? 0), 0);
+  const line = (await page.$$eval('[data-lane="bass.cutoff"] [data-clip]', drawings)).reduce((n, d) => n + (d?.line.length ?? 0), 0);
+  check(notes > 0 && line > 1, `notes and the cutoff curve are drawn (${notes} notes, ${line} vertices)`);
+}
 
 // One module in the panel, the first track by default (the kick, first in the mixer).
 check(JSON.stringify(await shown()) === JSON.stringify(["kick"]), `the panel shows only Kick at first: ${await shown()}`);
@@ -177,7 +183,7 @@ check(end > drawnBeats + 2 && (await until(async () => Math.abs((await playheadB
 
 // Notes that never play (before their clip, or of no length) are neither drawn nor counted, and don't stretch the clip's pitch range.
 const notesFile = `${proj}/data/bass/notes.json`;
-const rects = () => page.$$eval('[data-lane="bass.notes"] [data-clip]:nth-child(1 of [data-clip]) rect', (els) => els.map((e) => Number(e.getAttribute("height"))));
+const rects = () => page.$$eval('[data-lane="bass.notes"] [data-clip]:nth-child(1 of [data-clip])', drawings).then((ds) => (ds[0]?.notes ?? []).map((n) => n.h));
 // Clips show no note count (taste.md §2.8): the clip's tooltip counts them.
 const label = () => page.$eval('[data-lane="bass.notes"] [data-clip]', (e) => e.title.match(/(\d+) notes/)[1]);
 const [r0, l0] = [await rects(), await label()];
@@ -189,7 +195,7 @@ const bassNotes = async () => (await api("graph")).timeline.tracks.find((t) => t
 check(await until(async () => (await bassNotes()) === written, 8000), "the server shows the two silent notes as written");
 await sleep(500);
 const [r1, l1] = [await rects(), await label()];
-check(r1.length === r0.length && Math.min(...r1) === Math.min(...r0), `the clip draws the same ${r0.length} notes at the same height (${Math.min(...r0).toFixed(2)} → ${Math.min(...r1).toFixed(2)})`);
+check(r0.length > 0 && r1.length === r0.length && Math.min(...r1) === Math.min(...r0), `the clip draws the same ${r0.length} notes at the same height (${Math.min(...r0).toFixed(2)} → ${Math.min(...r1).toFixed(2)})`);
 check(l1 === l0, `and the lane still counts ${l0} notes (${l1})`);
 
 // A knob released just before another module is selected still saves, even while the server is busy

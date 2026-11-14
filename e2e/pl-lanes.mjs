@@ -4,25 +4,39 @@
 //
 //   node e2e/pl-lanes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { drawings } from "./drawlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, caughtUp, key } = await open(1440, 900);
 
 const CUTOFF = "data/bass/cutoff.json";
 const lane = async (k) => (await state()).timeline.tracks.find((t) => t.module === "bass")?.lanes.find((l) => l.key === k);
-/** The drawing of the first clip of lane `addr` ("bass.cutoff"): its box on screen, its polyline's vertices, its points' centres. */
-const drawing = (addr) =>
-  page.evaluate((addr) => {
-    const svg = document.querySelector(`[data-lane="${addr}"] [data-clip] svg[data-curve]`);
-    if (!svg) return null;
-    const r = svg.getBoundingClientRect();
-    const line = svg.querySelector("polyline")?.getAttribute("points")?.trim().split(/\s+/) ?? [];
-    const points = [...svg.closest("[data-clip]").querySelectorAll("[data-point]")].map((p) => {
-      const b = p.getBoundingClientRect();
-      return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
-    });
-    return { top: r.top, left: r.left, width: r.width, height: r.height, vertices: line.length, points };
-  }, addr);
+/**
+ * The drawing of the first clip of lane `addr` ("bass.cutoff"): its box on screen, the vertices of the
+ * line its canvas drew (taste.md VIEW-12), its points' centres.
+ */
+const drawing = async (addr) => {
+  const clip = `[data-lane="${addr}"] [data-clip]`;
+  const [d] = await page.$$eval(clip, drawings).catch(() => []);
+  const body = await page
+    .evaluate((clip) => {
+      const body = document.querySelector(`${clip} [data-curve]`);
+      if (!body) return null;
+      const r = body.getBoundingClientRect();
+      const points = [...body.closest("[data-clip]").querySelectorAll("[data-point]")].map((p) => {
+        const b = p.getBoundingClientRect();
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      });
+      return { top: r.top, left: r.left, width: r.width, height: r.height, points };
+    }, clip)
+    .catch(() => null);
+  if (!body) return null;
+  // The line's vertices on screen, as the canvas shows them.
+  const line = (d?.line ?? []).map(([x, y]) => ({ x, y }));
+  return { ...body, vertices: line.length, line };
+};
+/** Whether the line its canvas drew passes through each of its points, within `px`. */
+const throughPoints = (d, px = 1.5) => !!d && d.points.length > 0 && d.points.every((p) => d.line.some((v) => Math.hypot(v.x - p.x, v.y - p.y) <= px));
 
 // ---------------------------------------------------------------- D3: a lane in Hz on a log scale
 
@@ -43,9 +57,9 @@ const LOG = (v) => Math.log(v / 20) / Math.log(1000);
 const want = d.top + (1 - LOG(1000)) * d.height;
 check(Math.abs(d.points[1].y - want) <= 1.5, `1 kHz is drawn where a log scale over 20 Hz to 20 kHz puts it: ${d.points[1].y.toFixed(1)} (log ${want.toFixed(1)}, linear over the points ${(d.top + (1 - (1000 - 30) / 14970) * d.height).toFixed(1)})`);
 check(Math.abs(d.points[0].y - (d.top + (1 - LOG(30)) * d.height)) <= 1.5 && Math.abs(d.points[2].y - (d.top + (1 - LOG(15000)) * d.height)) <= 1.5, "and 30 Hz and 15 kHz too");
-check(d.vertices >= 33, `the line between them curves, as it plays straight in value: ${d.vertices} vertices (3 straight)`);
+check(d.vertices >= 33 && throughPoints(d), `the line between them curves, as it plays straight in value, through its points: ${d.vertices} vertices (3 straight)`);
 const drop = await drawing("bass.drop");
-check(drop?.vertices === 4, `the Drop lane (a 0–1 amount) draws as before: straight, ${drop?.vertices} vertices for its 4 points`);
+check(drop?.vertices === 4 && throughPoints(drop), `the Drop lane (a 0–1 amount) draws as before: straight, ${drop?.vertices} vertices for its 4 points, through them`);
 
 // A point painted at half height: about √(20 × 20000) ≈ 632 Hz.
 await page.keyboard.press("b");

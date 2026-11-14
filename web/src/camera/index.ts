@@ -11,7 +11,7 @@ export type { CameraOptions } from "./useCamera";
 export type { CameraControls } from "./rig";
 export { onViewMoved } from "./rig";
 export { movingNow, pauseSwipes, setPlatform } from "./state";
-export { FINE, useSpan } from "./spans";
+export { FINE, onPixels, spanBox, useSpan } from "./spans";
 export { shownAt, shownScroll, stretchOf, useStretch } from "./stretch";
 export type { Stretch } from "./stretch";
 export type { Platform } from "./state";
