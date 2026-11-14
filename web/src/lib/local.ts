@@ -4,9 +4,9 @@
 // the state's `local` when the song opens. A read-only window keeps them in memory only.
 //
 // A change shows at once and is sent 300 ms after the last one; anything waiting is sent at once
-// before the song closes, when another song opens over it with no close (an agent's `POST /open`:
-// sent for the song it was set in, whose file the server still writes) and when the page goes
-// away, so a quick close or open never loses it.
+// before the song closes, when it is closed from elsewhere or another song opens over it with no
+// close (an agent's `POST /close` or `POST /open`: sent for the song it was set in, whose file the
+// server still writes) and when the page goes away, so a quick close or open never loses it.
 
 import { create } from "zustand";
 import { readJson } from "./graph";
