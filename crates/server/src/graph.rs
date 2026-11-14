@@ -357,6 +357,10 @@ struct Published {
 #[derive(Default)]
 struct ControlPlane {
     open: Option<Published>,
+    /// The folder of each writable song closed since the server started (Close Song, or another
+    /// opened over it), by its session: the page's view settings for it that come after still
+    /// reach its `view.json` (FMT-20, `ControlPlane::closing`).
+    closed: HashMap<u64, PathBuf>,
     leases: Leases,
     /// The windows that play notes live (MON-7).
     audition: audition::Sources,

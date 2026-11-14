@@ -91,6 +91,32 @@ fn the_rolls_view_settings_are_kept() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+// FMT-20: what the page set and hadn't sent yet (its 300 ms wait) when another song opened over it
+// with no close (an agent's `POST /open`) is sent for the song before, and kept in that song's file.
+#[test]
+fn view_settings_sent_after_another_song_opened_reach_their_own_song() {
+    let a = song("late-a", &json!({"zoom": 36.0}));
+    let b = song("late-b", &json!({}));
+    let graph = Graph::silent().stored();
+    let sa = graph.open(&a).unwrap()["session"].as_u64().unwrap();
+    let sb = graph.open(&b).unwrap()["session"].as_u64().unwrap();
+    assert_ne!(sa, sb);
+
+    let answer = graph.set_view(sa, set(json!({"zoom": 54.0, "follow": false}))).unwrap();
+    assert_eq!(answer["local"], json!({"zoom": 54.0, "follow": false}), "the song before's settings, as its file has them");
+    assert_eq!(file(&a), json!({"zoom": 54.0, "follow": false}));
+    assert_eq!(graph.state().unwrap()["local"], json!({}), "the open song's own are untouched");
+    assert_eq!(file(&b), json!({}));
+    // A session this window never had is still refused.
+    assert!(graph.set_view(sb + 100, set(json!({"zoom": 24}))).is_err());
+
+    // The first song again (no close): as kept.
+    assert_eq!(graph.open(&a).unwrap()["local"], json!({"zoom": 54.0, "follow": false}));
+    for d in [a, b] {
+        let _ = std::fs::remove_dir_all(&d);
+    }
+}
+
 #[test]
 fn a_read_only_window_keeps_view_settings_in_memory() {
     let dir = song("ro", &json!({"zoom": 36.0}));

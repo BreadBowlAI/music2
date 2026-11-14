@@ -4,7 +4,9 @@
 // the state's `local` when the song opens. A read-only window keeps them in memory only.
 //
 // A change shows at once and is sent 300 ms after the last one; anything waiting is sent at once
-// before the song closes and when the page goes away, so a quick close never loses it.
+// before the song closes, when it is closed from elsewhere or another song opens over it with no
+// close (an agent's `POST /close` or `POST /open`: sent for the song it was set in, whose file the
+// server still writes) and when the page goes away, so a quick close or open never loses it.
 
 import { create } from "zustand";
 import { readJson } from "./graph";
@@ -35,14 +37,12 @@ export const useLocalStore = create<Local>(() => ({ session: null, values: {} })
 let waiting: Record<string, unknown> = {};
 let timer: ReturnType<typeof setTimeout> | null = null;
 
-/** A song opened (or another one): its settings, as the server gave them. */
+/** A song opened (or another one): its settings, as the server gave them. What waits is the song before's: sent for it first (FMT-20). */
 function seed() {
   const graph = useStore.getState().graph;
   const session = graph?.session ?? null;
   if (session === useLocalStore.getState().session) return;
-  waiting = {};
-  if (timer) clearTimeout(timer);
-  timer = null;
+  void flushLocal();
   useLocalStore.setState({ session, values: { ...(graph?.local ?? {}) } });
 }
 useStore.subscribe(seed);

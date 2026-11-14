@@ -138,7 +138,7 @@ export const SUITES = [
   ["attention", "attn", { expect: 60, s: 6, tier: "nightly", why: "flake: first runs failed in three checks, 2026-10-15 to 10-17; cause not recorded" }],
   ["st-errors", "fix", { expect: 34, s: 5, tier: "nightly", why: "flake: waited over 30 s for a Needs attention row, under load (HANDOFF.md)" }],
   ["newsong", "none", { expect: 71, s: 10, tier: "nightly", why: "flake: the New Song dialog didn't open after Cmd-N, at half CPU (2026-10-21)" }],
-  ["pl-projects", "none", { expect: 66, s: 10 }],
+  ["pl-projects", "none", { expect: 68, s: 10 }],
   ["nx-settings", "none", { expect: 42, s: 12 }],
   ["tr-trust", "none", { expect: 25, s: 15 }],
   ["nx-nodevice", "none", { expect: 11, s: 2 }],
@@ -227,7 +227,7 @@ export const SUITES = [
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 73, s: 60 }],
+  ["camera", "fix", { expect: 76, s: 60 }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

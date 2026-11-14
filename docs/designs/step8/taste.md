@@ -1014,8 +1014,9 @@ owner's Mac before anything changes; VIEW-5 (as today's views could) and VIEW-11
 `mac-feel`; the rest came with track `camera`, which put all four views on the camera at once (the
 note's §16). The camera is a library of its own, `web/src/camera/` (its `README.md` says how a
 view uses it): the app imports only its `index.ts`, and it imports nothing of the app's. Its
-numbers (G, the rails, the glide, the culling's margin and step) are named in its `numbers.ts`,
-until the owner's probe report says otherwise.
+numbers (G, the rails, the glide, the culling's margin and step) are named in its `numbers.ts`. G
+and the rails are set from the owner's swipe probe of 2026-11-14 on their Mac (VIEW-2, VIEW-3); the
+probe confirmed the Mac's glide (VIEW-4); the rest are still guesses (gaps.md).
 
 **VIEW-1.** Each of the four views MUST have one camera: where it looks, across and down, and its
 zoom. It is the one truth of what the view shows. Each view keeps its scroll box, and the camera
@@ -1046,6 +1047,11 @@ the box's move in.
 - *Why:* WebKit on the Mac keeps a swipe to one axis, and a page can cancel a swipe only at its
   first event; PR #112 moved the events that went both ways and left the rest to WebKit, so one
   swipe had two owners and felt wrong (the note's §1, §16).
+- *The probe* (the owner's Mac, 2026-11-14): G = 50 ms finds the swipes asked for best. A flick's
+  first tiny event often comes 50 to 65 ms before its next, so G splits it in two; that does no
+  harm, since both parts' first events decide the same owner. 80 or 120 ms joins swipes, and their
+  rails get worse. In round B the page cancelled all 3121 wheel events, the glides' too, and WebKit
+  took over no swipe, though the page heard some events up to 62 ms late.
 - *Today:* since track `camera`: `web/src/camera/recognizer.ts`, one listener in the capture phase
   on each view's box; whether a control may take a swipe in `state.ts` (`controlMayTake`). Tested by
   `camera` (a swipe's events all the camera's, its first decides; ⌘ held in a glide after a key
@@ -1055,9 +1061,9 @@ the box's move in.
 
 **VIEW-3.** The camera MUST move 1:1 with the fingers, both ways at once, the events of a frame
 summed and written once in it. In the arrangement, Notes and the beat grid, a swipe whose first
-8 px go within 10° of an axis (their sum, with signs: a hand's jitter cancels) starts on that axis's
+16 px go within 25° of an axis (their sum, with signs: a hand's jitter cancels) starts on that axis's
 rail, so scrolling down the tracks doesn't drift sideways, however long the swipe or its glide. The
-rail breaks, for the rest of the swipe, once its last 50 px have gone more than 20° off it, all
+rail breaks, for the rest of the swipe, once its last 100 px have gone more than 25° off it, all
 told (a turn, not a long swipe's slant or its jitter adding up), and the swipe moves both ways from
 there (what was held back off the rail is not moved). A swipe further from an axis moves both ways
 from its start. The Graph has no rails: a canvas pans freely, as
@@ -1067,11 +1073,23 @@ already. Chrome's lines and pages, which only the suites send, are 33 px and the
   swipe on its line (the note's §2, D6); rails that never break made a swipe that turned diagonal
   feel stuck, so they break as Chromium's touch scrolling's do (the owner, 2026-11-12, the note's
   §16).
+- *The probe* (the owner's Mac, 2026-11-14) set the numbers. The owner's straight swipes go 0 to
+  11° off an axis all told, but their first 8 to 20 px often go 15 to 25° off, in small whole
+  deltas such as (3, 0) and (5, −3). The guess before, within 10° after 8 px and broken by the last
+  50 px, put only 14 of their 32 straight swipes on a rail, and moved them 328 px of the 681 they
+  went off it. Now all 32 stay on a rail and none moves off; none of their 11 diagonal swipes (25
+  to 45° off) gets one, and 98% of their move across is kept (4721 of 4814 px). The break's angle
+  is the start's: a swipe that may start on a rail 22° off also stays on it at 22°. A turn to 45°
+  in events of 10 px breaks free at its seventh (its third before). One flick of theirs only 19°
+  off all told, in a step of diagonal flicks, stays on its rail: 8 of its 333 px across move.
 - *Today:* since track `camera`: `recognizer.ts`, the rails' numbers in `numbers.ts` (`RAIL_ANGLE`,
   `RAIL_AFTER`, `RAIL_TURN`, `RAIL_RECENT`, and why each), `rails: false` for the Graph's cameras.
-  Tested by `camera` (a diagonal swipe 1:1 both ways in each view; 5° off straight on its rail; 45°
-  and 30° free; straight then turning 45° free once its last 50 px turn 20° off; 1500 px at 3° with
-  a pixel of jitter each way, and its glide, on the rail to the end; the Graph 5° off moving 5° off).
+  Tested by `camera` (a diagonal swipe 1:1 both ways in each view; 5° off straight on its rail, and
+  one whose first 16 px go 20° off; 45° and 30° free; straight then turning 45° free once its last
+  100 px turn 25° off; 1500 px at 3° with a pixel of jitter each way, and its glide, on the rail to
+  the end; the owner's own swipes from the probe, `e2e/fixtures/swipes`, each straight one at most
+  2 px off its axis and each diagonal one keeping 90% of its move across; the Graph 5° off moving 5°
+  off).
 
 **VIEW-4.** The glide after a flick MUST be the system's on a Mac: the camera moves by its wheel
 events like any other. Where the page gets none (WebKitGTK, on Linux), the camera glides itself:
@@ -1082,6 +1100,9 @@ an edge, each way. After a click, a key or a move by the app, wheel events are d
 of G, so a glide still arriving from the system stops too; Follow's page stops only the camera's own
 glide (VIEW-9). With reduced motion there is no glide of the camera's own.
 - *Why:* WebKitGTK glides inside itself and gives the page nothing to glide by (the note's §5, C5).
+  The owner's probe (2026-11-14) confirmed the Mac's: its glide reaches the page as wheel events,
+  and they stay cancelable once the page cancelled the swipe's first event (round B: all 3121
+  cancelled, glides included).
 - *Today:* since track `camera`: `recognizer.ts`; the app tells the library the platform
   (`setPlatform`, from `isMac` and the reduced-motion setting, in `main.tsx`). No one here has a
   Linux laptop, so the Linux glide is checked only by suites (gaps.md). Tested by `camera` (with
@@ -1110,8 +1131,11 @@ are a later track, if the owner misses them.
 - *Today:* since track `camera`: the writer clamps the camera to the box's room. Tested by `camera`
   (a swipe past the start stops there).
 
-**VIEW-7.** The scrollbars MUST be the browser's own (D5), until the probe shows the Mac hides them
+**VIEW-7.** The scrollbars MUST be the browser's own (D5), unless a probe shows the Mac hides them
 for the camera's moves; dragging one is the browser's move, taken in (VIEW-9).
+- *The probe* (the owner's Mac, 2026-11-14): they showed in every step, for round B's moves by the
+  page too. But that Mac shows its scroll bars always, so the Mac's default with a trackpad
+  (overlay bars, shown only while scrolling) is not measured yet (gaps.md).
 - *Today:* since track `camera`: nothing of the camera's draws them. Tested by `camera` (a write to
   `scrollLeft`, as a scrollbar's drag makes, taken in).
 
@@ -1191,7 +1215,9 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
     it has none: it shows the Song's graph and zooms the Graph in until it overflows both ways, or
     zooms the timeline in. It puts a view's zoom back after each pinch, and when it closes puts
     back every zoom, the selection and the dock's view it changed.
-  - **Round A, "Let the app scroll as it does today":** its listeners only listen.
+  - **Round A, "Let the Mac scroll on its own":** its listeners only listen. It says plainly that
+    music2 turns its camera (what moves the view) off in this round, so a diagonal swipe moves one
+    way only, as the Mac does on its own (the owner's probe of 2026-11-14 found that confusing).
   - While the probe listens, in both rounds, the camera leaves plain swipes to the web view
     (`pauseSwipes`) and takes the box's moves in; it still zooms. So round A measures what the web
     view does by itself, as before the camera, and round B moves the view the camera's way by its own
@@ -1200,8 +1226,9 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
   - **Round B, "Cancel the swipe":** a listener in the capture phase cancels and stops each wheel
     event over the timeline's and the Graph's scroll boxes (`preventDefault`, `stopPropagation`),
     so neither the web view nor any control under the pointer sees it, and moves the box itself
-    by the event's deltas, once a frame, as the camera will (the note's §4: it writes whole pixels
-    and takes in a move it didn't make). A ⌘ or Ctrl wheel event is left to the app's zoom.
+    by the event's deltas, once a frame, as the camera does (the note's §4: it writes whole pixels
+    and takes in a move it didn't make). It says that diagonal swipes work again. A ⌘ or Ctrl wheel
+    event is left to the app's zoom.
   - It records, each with its round and step: each wheel event (its time, `deltaX`, `deltaY`,
     `deltaMode`, whether it could be cancelled and was, how late the page heard it, the view under
     it, the modifier keys); each `gesturestart`, `gesturechange` and `gestureend` (time, `scale`,
@@ -1261,7 +1288,8 @@ private call is there. Where it isn't, the shell says so in one line and the pag
 - *Today:* since track `mac-feel`: `apps/music2-desktop/src/frame_rate.rs`, called from `main.rs`
   on the window's web view. Tested on a Mac by the desktop app's `frame_rate` test (the shell's
   switch turns the setting off in a `WKPreferences`; a WebKit without it is said so), and by the
-  frame meter (VIEW-10), which shows 120 frames a second on such a screen.
+  frame meter (VIEW-10), which shows 120 frames a second on such a screen. The owner's probe
+  (2026-11-14, a 120 Hz screen) measured a median frame of 8 ms: 125 a second.
 
 **VIEW-12.** The arrangement and Notes MUST draw only what is in view, plus a margin of one view's
 width (or height) each side. The window they draw is kept while it holds what shows and half a view

@@ -1606,7 +1606,8 @@ impl Actor {
             let local = super::view_file::local(&shown.dir);
             // The metronome as this song had it here: off for one that never had it on.
             device.player.set_click(super::view_file::metronome(&local));
-            cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local, drafts }).and_then(|p| p.owed())
+            let was = cp.open.replace(Published { engine, shown, revs, aliases, overlays: monitor, local, drafts });
+            cp.closing(was).and_then(|p| p.owed())
         };
         self.inner.save_owed(owed);
         *self.inner.watch.lock() = Some(watcher::Watch::new(token, o.session.accepted(), before));
@@ -1653,7 +1654,8 @@ impl Actor {
         let owed = {
             let mut cp = self.inner.control.lock();
             self.inner.end_all(&mut cp);
-            cp.open.take().and_then(|p| p.owed())
+            let was = cp.open.take();
+            cp.closing(was).and_then(|p| p.owed())
         };
         // A mute or solo made since the file was last written is saved before the project goes.
         self.inner.save_owed(owed);
