@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted, 2026-11-14: Z1 and Z2 (§4). |
+| **Status** | Accepted, 2026-11-14: Z1 and Z2 (§4). Z1 built by track `live-zoom`, 2026-11-14 ("Measured after Z1", §2). |
 | **Written** | 2026-11-14, from `main` at `e06d0bfc`, after the owner's swipe probe: a pinch over the tracks had 69 frames over 16.7 ms. The owner asked earlier: "why does frame rate drop significantly when i zoom in on the tracks or notes editor". |
 | **Beside it** | [design.md](design.md), the camera note (VIEW-1 to VIEW-12). This note changes VIEW-5, VIEW-8 and VIEW-12. |
 | **Measured on** | Branch `pinch-cost` (not for merge): a pinch bench in Chrome and in WebKit (WebKitGTK 2.52, the engine the Mac app uses), on a beat song like the owner's (10 tracks, 312 clips) and on the big song (24 × 64 clips). |
@@ -77,9 +77,55 @@ The one real layout at the end still costs what a frame costs today, 38 to 51 ms
 - Everything that reads the camera from outside sees the zoom shown: `camera.now()`, agents' `seen`, Follow, and the playhead.
 - The zoom laid out is the views' business.
 
-**While the stretch lasts, the tracks don't take the pointer** (`pointer-events: none`). That saves WebKit finding what is under the fingers on each event, and hover is muted while the camera moves anyway (VIEW-8).
+**While the stretch lasts, the tracks don't take the pointer** (`pointer-events: none`). That saves WebKit finding what is under the fingers on each event, and hover is muted while the camera moves anyway (VIEW-8). *Not built: measured, it cost more than it saved (below).*
 
 **Notes and the beat grid** get the same live zoom across. The Graph doesn't need it: its zoom is already cheap (9 ms on the beat song in WebKit). Instead, its nodes stop re-rendering on a zoom (§3).
+
+### Measured after Z1
+
+Track `live-zoom` built Z1. Today is `main` at `6d4963eb`; Z1 is the track's branch. Both were measured in turn on one machine, with the WebKit tool (WebKitGTK 2.52, drawing in software) and `zoom-bench` (headless Chrome 133), at 1440×900 and 2 device px a px. Each gesture ran three times over the timeline, from 24 px a beat: the owner's A13 pinch (out to 0.44 and back) and a run of ⌘-scroll (out and back). "Work" is a frame's main-thread time, as the zoom bench splits it.
+
+Work per frame while the gesture lasts, in ms: median (95th percentile); then the frames over 8.3 ms, of all the frames drawn:
+
+| Song, engine, gesture | Today | Z1 |
+|---|---|---|
+| Beat, WebKit, pinch | 37 (51); 41 of 46 | 9 (46); 61 of 111 |
+| Beat, WebKit, ⌘-scroll | 40 (55); 45 of 48 | 8 (46); 55 of 122 |
+| Big, WebKit, pinch | 94 (115); 19 of 21 | 16 (89); 89 of 93 |
+| Big, WebKit, ⌘-scroll | 99 (110); 18 of 21 | 23 (85); 89 of 96 |
+| Beat, Chrome, pinch | 22 (36); 138 of 152 | 2.3 (17); 10 of 168 |
+| Beat, Chrome, ⌘-scroll | 23 (37); 157 of 168 | 2.2 (3.5); 3 of 179 |
+| Big, Chrome, pinch | 43 (62); 338 of 340 | 10 (33); 101 of 155 |
+| Big, Chrome, ⌘-scroll | 63 (76); 353 of 354 | 12 (21); 115 of 166 |
+
+Z1's frames apart, in ms: median / 95th percentile, from the first event to 200 ms after the last. A **stretched** frame is only a transform apart from the frame before. A **laid-out** frame draws a new zoom: an early one, as a zoom out nears the edge of what is drawn (A13 goes out to 0.44, past it), or the one at the end. Then the frame after each.
+
+| Song, engine, gesture | stretched frames | their work | laid out, a run | a laid-out frame | the frame after it | Today's frames |
+|---|---|---|---|---|---|---|
+| Beat, WebKit, pinch | 94 | 9 / 14 | 3 | 47 / 71 | 10 / 44 | 37 / 51 |
+| Beat, WebKit, ⌘-scroll | 106 | 8 / 12 | 4 | 47 / 80 | 11 / 21 | 40 / 55 |
+| Big, WebKit, pinch | 74 | 16 / 49 | 3 | 89 / 121 | 28 / 40 | 94 / 115 |
+| Big, WebKit, ⌘-scroll | 71 | 20 / 46 | 7.3 | 81 / 99 | 77 / 92 | 99 / 110 |
+| Beat, Chrome, pinch | 147 | 2.3 / 3.7 | 3 | 19 / 20 | 2.4 / 8.4 | 22 / 36 |
+| Beat, Chrome, ⌘-scroll | 174 | 2.2 / 3.3 | 2 | 22 / 23 | 2.2 / 2.8 | 23 / 37 |
+| Big, Chrome, pinch | 138 | 10 / 15 | 3 | 38 / 61 | 9 / 10 | 43 / 62 |
+| Big, Chrome, ⌘-scroll | 159 | 11 / 20 | 2 | 73 / 77 | 18 / 18 | 63 / 76 |
+
+- **A pinch frame on a beat song in WebKit went from 37 ms to 9**, as the prototype said (38 to 8). WebKit here drew 111 frames in the time it drew 46. On the big song, 94 to 16.
+- **A laid-out frame costs about what a frame cost before**, 47 ms on the beat song in WebKit, and the frame after it is cheap. Z2 makes the laid-out ones cheaper.
+- **A zoom out is laid out a step before the edge of what is drawn**, where the view would ask for a new window anyway (VIEW-12), so the view draws its new clips between frames. Laid out only once the edge was reached, it drew them all in one frame: 150 to 220 ms on the big song in Chrome.
+- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit. The layers stay, with a transform that moves nothing, until the cameras have been still for 400 ms; letting them go then costs one frame of 14 to 33 ms, at rest. With the transforms taken away in the frame the zoom ends, the frame after it cost 31 to 34 ms instead of 9 to 11 (WebKit, beat song): WebKit lays an element out again when its transform goes.
+- **The stretched layers still take the pointer.** The browser hits the picture as it shows, and a press lays the zoom out first. The A/B, in WebKit on the beat song (pinch, ms, median / 95th percentile; two runs each, in turn):
+
+  | Built | the laid-out frame | the frame after it | the first frame | input, a stretched frame |
+  |---|---|---|---|---|
+  | Z1 | 53 / 73 | 9 / 45 | 25 / 40 | 4 |
+  | with `pointer-events: none` on what is stretched | 84 / 103 | 59 / 70 | 61 / 75 | 4 |
+  | with one element over the view taking the pointer | 99 / 138 | 91 / 111 | 80 / 101 | – |
+
+  `pointer-events` is inherited, so WebKit works out every clip's style anew at each end: on the big song the laid-out frame was 203 ms against 90. An element over the view made WebKit composite it over the layers.
+- **Not measured on the owner's Mac yet.** The swipe probe's last step, Replay a pinch, measures it there with the same bench.
+- **Pictures** for the owner, before, mid-pinch and after, on a beat song, in the arrangement and in Notes: `~/m2-runs/live-zoom/look/`. The app has one look (taste.md: no dark mode).
 
 ## 3. Z2: cheaper redraws
 
