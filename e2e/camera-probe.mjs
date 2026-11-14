@@ -4,8 +4,9 @@
 // page gives suites), and its own updates redraw no view; `useRenderCount` counts a zoom's redraw of
 // the arrangement and no other view's. The probe asks about the Mac first and prints it first; it
 // makes room in the timeline and the Graph, and puts their zoom back after a pinch and on closing.
-// Round A only listens: Chrome's own scrolling moves the arrangement, a control under the pointer
-// sees the wheel, and the probe hears it. Round B cancels and stops the wheel over the arrangement
+// Round A only listens, and says so (the camera is off: a diagonal swipe goes one way only): Chrome's
+// own scrolling moves the arrangement, a control under the pointer sees the wheel, and the probe
+// hears it. Round B cancels and stops the wheel over the arrangement
 // and the Graph before any control, and moves each itself, once; a pinch's scrolls stay out of its
 // count. Known synthetic swipes, a diagonal flick and a swipe WebKit took over are read back from
 // the summary, and a long step's raw events are cut. The report is copied or, where the clipboard
@@ -238,8 +239,8 @@ await page.click("[data-probe=next]");
 check(await roomed(), "round A's first step shows once the probe has made room");
 const stepA = await text(panel);
 check(
-  /Round A/.test(stepA) && /as it does today/i.test(stepA) && /three times/.test(stepA) && /lifting your fingers/.test(stepA) && /1 of 14/.test(stepA) && /tracks at the top/.test(stepA) && /thin bar at the right or bottom edge/.test(stepA) && (await has("[data-probe=yes]")),
-  `it asks for three swipes, says where, and asks about the scrollbar, saying what it is: ${stepA}`,
+  /Round A/.test(stepA) && /Let the Mac scroll on its own/.test(stepA) && /turns its camera \(what moves the view\) off/.test(stepA) && /a diagonal swipe moves one way only, as the Mac does on its own/.test(stepA) && /three times/.test(stepA) && /lifting your fingers/.test(stepA) && /1 of 14/.test(stepA) && /tracks at the top/.test(stepA) && /thin bar at the right or bottom edge/.test(stepA) && (await has("[data-probe=yes]")),
+  `it says plainly that the camera is off in round A, so a diagonal swipe goes one way only; it asks for three swipes, says where, and asks about the scrollbar, saying what it is: ${stepA}`,
 );
 await lintIn(panel, "round A's step");
 {
@@ -307,8 +308,8 @@ await goTo("A13");
 await goTo("B1");
 const stepB = await text(panel);
 check(
-  /Round B/.test(stepB) && /Cancel the swipe/.test(stepB) && /1 of 14/.test(stepB) && /window's own scrolling/.test(stepB) && !/browser/i.test(stepB) && (await has("[data-probe=no]")),
-  `round B's first step asks about the scrollbar: ${stepB}`,
+  /Round B/.test(stepB) && /Cancel the swipe/.test(stepB) && /1 of 14/.test(stepB) && /window's own scrolling/.test(stepB) && /diagonal swipes work again/.test(stepB) && !/browser/i.test(stepB) && (await has("[data-probe=no]")),
+  `round B's first step says diagonal swipes work again, and asks about the scrollbar: ${stepB}`,
 );
 await lintIn(panel, "round B's step");
 {
