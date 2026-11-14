@@ -1197,8 +1197,8 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
   a second, written straight into its own text: it redraws no view. Suites read the same numbers,
   and how many frames have been measured since the page loaded, from `window.m2canvas.frames()`.
   With `window.m2canvas.camera`, the camera library's face for the `camera` suite (its functions,
-  its numbers, each camera now, and the platform's glide to set), it is the only part of the window
-  the page gives them.
+  its numbers, each camera now, and the platform's glide to set), and `window.m2canvas.bench()`,
+  which loads the zoom bench (below), it is the only part of the window the page gives them.
 - **Swipe probe** opens a panel at the window's lower right, above the Graph's zoom bar, that leads
   the musician in plain steps.
   - First, **about your Mac**: its model (a few choices, and a field), its macOS version (a field)
@@ -1229,6 +1229,24 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
     by the event's deltas, once a frame, as the camera does (the note's §4: it writes whole pixels
     and takes in a move it didn't make). It says that diagonal swipes work again. A ⌘ or Ctrl wheel
     event is left to the app's zoom.
+  - **Last, "Replay a pinch":** after round B, the probe pinches by itself, and the musician's
+    fingers do nothing. It says so, and starts on **Replay**. It replays the owner's pinch of step
+    A13 (2026-11-14: its scale from 1 to 0.44 and back, 110 `gesturechange` events 8 ms apart
+    between a `gesturestart` and a `gestureend`) over the timeline, at 24 px a beat from the song's
+    start, then over the Song's graph at zoom 1. None of the probe's listeners is on. The zoom bench
+    measures each frame meanwhile, and the panel then says each view's median frame. It puts back
+    every zoom, the selection and the dock's view it changed.
+  - **The zoom bench** (`web/src/lib/zoomBench.ts`) is loaded only when asked for: by this step and
+    by `window.m2canvas.bench()` (the browser suites and the WebKit tool, `e2e/webkit/`). Nothing
+    else in the app imports it, and it imports nothing of the app's. It replays a gesture over a
+    point as WebKit sends it, each event a task of its own, dispatched on what is under the point
+    then: a pinch (`gesturestart`, a `gesturechange` every 8 ms with each scale of a list,
+    `gestureend`) or a run of ⌘-scroll. It splits each frame's main-thread time into script (the
+    frame's `requestAnimationFrame` callbacks and the microtasks they queue, where React renders a
+    store's change; with the layout they force, timed apart), style and layout (to its own
+    `ResizeObserver`), paint and commit (to a message posted in the frame's first callback), and
+    input (each event's dispatch, with finding what is under the point, before the frame). It uses
+    nothing WebKit lacks, and takes away its wrappers when it is done.
   - It records, each with its round and step: each wheel event (its time, `deltaX`, `deltaY`,
     `deltaMode`, whether it could be cancelled and was, how late the page heard it, the view under
     it, the modifier keys); each `gesturestart`, `gesturechange` and `gestureend` (time, `scale`,
@@ -1251,7 +1269,11 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
       that in round A this is WebKit's normal way;
     - round B's scrolls in swipe and flick steps that weren't the probe's (0 when cancelling
       works), and the pinches' scrolls apart, as the app's zoom;
-    - the gesture events, and the deltas with both axes and with fractions.
+    - the gesture events, and the deltas with both axes and with fractions;
+    - the replayed pinch, over the timeline and over the Graph: for each part of a frame (its
+      whole work, script, the layout it forced, style and layout, paint and commit, input, and the
+      time between frames) the median, the 95th percentile and the slowest, and how many frames'
+      work went over 8.3 and over 16.7 ms; and how far each view's zoom went and where it came back.
 
     Then the raw events: for each step its first 90 wheel events and 40 gesture events, and round
     B's scrolls that weren't the probe's, saying what each step cut, so the report stays near 60 KB.
@@ -1279,6 +1301,11 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
   the Graph; a pinch's scrolls apart from round B's count; known swipes, gaps, a diagonal flick and
   a swipe WebKit took over, read back from the summary; a step's cut raw events; the report copied
   and in the field; nothing heard and no frame loop after closing; the song's files unchanged).
+  Since track `zoom-bench` (the zoom note's §6 step 1): the zoom bench and the probe's last step,
+  Replay a pinch. Tested by `camera-probe` (the bench not loaded until asked for; the step runs,
+  zooms each view and puts it back, and its report has every part of the split for both views) and
+  by `zoom-bench`, in the nightly tier: a measure, not a speed test, of a pinch and ⌘-scroll on the
+  arrangement and a pinch on the Graph, on a beat song (`e2e/beat-song.mjs`) and the big song.
 
 **VIEW-11.** On a Mac the page MUST draw at the screen's own rate, 120 frames a second on a 120 Hz
 screen. WebKit holds a page in an app near 60 on macOS 13 to 15 by a setting on by default,
