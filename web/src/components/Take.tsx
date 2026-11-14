@@ -15,7 +15,7 @@ import type { TrackColor } from "../lib/palette";
 import { useRecord, type Take as Recorded } from "../lib/record";
 import { useZoom } from "../lib/zoom";
 import Meter from "./Meter";
-import { Notes } from "./SongTimeline";
+import { Notes } from "./ClipDrawing";
 
 /** The take in lane `module.lane`, if one records there. It renders on no zoom while none does (VIEW-8). */
 export default function Take({ module, lane, color }: { module: string; lane: string; color: TrackColor }) {
@@ -62,7 +62,7 @@ function Recording({ take, module, lane, color }: { take: Recorded; module: stri
       ) : (
         /* Below the word, so a high note never runs through it. */
         <div className="absolute inset-x-0 top-3 bottom-0">
-          <Notes notes={notes} length={length} color={color} />
+          <Notes notes={notes} start={start} length={length} color={color} marks="always" />
         </div>
       )}
     </div>

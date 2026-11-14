@@ -1,6 +1,6 @@
 import clsx from "clsx";
 import { ArrowRightFromLine, ChevronRight, Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { createContext, Fragment, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { createContext, isValidElement, memo, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal, flushSync } from "react-dom";
 import {
   barAt,
@@ -55,10 +55,10 @@ import {
   type ServerRef,
 } from "../lib/clips";
 import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
-import { added, bounded, hit, line, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
+import { added, bounded, hit, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
 import { pickedStep, putStep, stepLabel, useSteps, type StepPoint } from "../lib/steps";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
-import { laneScale, type LaneScale } from "../lib/laneScale";
+import { laneScale } from "../lib/laneScale";
 import { hide as hideLane, useAllHidden, useHidden } from "../lib/hiddenLanes";
 import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { TakeRows } from "./TakeRows";
@@ -77,6 +77,7 @@ import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startRe
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
+import { BODY_BOTTOM, BODY_TOP, Curve, Notes } from "./ClipDrawing";
 import { Hatch, usePatternId, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -89,11 +90,9 @@ import { exportMidi } from "../lib/midiFiles";
 import { useGlows } from "../lib/notice";
 import { loadRecordOptions, useRecordOptions } from "../lib/record";
 
-/** A clip sits this far inside its row, inside its 1px border; its drawing this far inside that. */
+/** A clip sits this far inside its row, inside its 1px border; its drawing `BODY_TOP` and `BODY_BOTTOM` inside that. */
 const CLIP_INSET = 4;
 const BORDER = 1;
-const BODY_TOP = 4;
-const BODY_BOTTOM = 4;
 
 const beats = (n: number) => Number(n.toFixed(3));
 
@@ -2987,7 +2986,7 @@ function LaneClips({
   const steps = (c: AnyClip): c is StepClip => lane.kind === "steps" && "points" in c;
   const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1, wave?: WaveEdit) =>
     "notes" in c ? (
-      <Notes notes={audibleOf(c)} length={c.length} color={tone} />
+      <Notes notes={audibleOf(c)} start={c.start} length={c.length} color={tone} />
     ) : steps(c) ? (
       <Steps clip={c} options={lane.kind === "steps" ? lane.options : []} color={tone} picked={pickedPoint} />
     ) : "points" in c ? (
@@ -3039,7 +3038,6 @@ function LaneClips({
         editable={editable}
         painting={painting}
         glow={glows}
-        fine={"notes" in drawn ? shortestOf(drawn) : null}
         onDoubleClick={lane.kind === "notes" ? () => handlers.current.onOpen(i) : undefined}
         onPointerDown={(e) => handlers.current.onDown(ref, e)}
         onContextMenu={(e) => handlers.current.onMenu(ref, e)}
@@ -3122,7 +3120,6 @@ const Clip = memo(function Clip({
   editable,
   painting,
   glow,
-  fine = null,
   onDoubleClick,
   onPointerDown,
   onContextMenu,
@@ -3147,8 +3144,6 @@ const Clip = memo(function Clip({
   painting?: boolean;
   /** Its lane changed elsewhere just now (AGENT-5). */
   glow?: boolean;
-  /** The shortest note it draws, in beats: under 2 px, its notes' marks show (`data-fine`). */
-  fine?: number | null;
   onDoubleClick?: () => void;
   /** Given, the clip can be selected (and, editable, dragged by its body or either edge). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
@@ -3161,7 +3156,7 @@ const Clip = memo(function Clip({
   const handles = !!onPointerDown && editable;
   // Placed in beats by the camera's zoom, straight into its style: a zoom renders no clip (VIEW-12).
   const box = useRef<HTMLDivElement>(null);
-  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4, fine });
+  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4 });
   return (
     <div
       ref={box}
@@ -3208,114 +3203,9 @@ const Clip = memo(function Clip({
   );
 }, sameClipBox);
 
-/** The clip's own drawing area: beats across, 0..100 down. `curve`: an automation clip's, where a press edits points. */
-function Body({ length, curve, children }: { length: number; curve?: boolean; children: ReactNode }) {
-  return (
-    <svg
-      data-curve={curve || undefined}
-      className="absolute left-0 w-full"
-      style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}
-      viewBox={`0 0 ${length} 100`}
-      preserveAspectRatio="none"
-    >
-      {children}
-    </svg>
-  );
-}
-
 /** A clip's audible notes, the same array while the clip is the same: its drawing is kept by it. */
 const audibles = new WeakMap<NoteClip, NoteClip["notes"]>();
 const audibleOf = (c: NoteClip) => audibles.get(c) ?? audibles.set(c, audible(c)).get(c)!;
-/** Its shortest audible note, in beats; null with none. */
-const shortest = new WeakMap<NoteClip, number | null>();
-const shortestOf = (c: NoteClip) => {
-  if (!shortest.has(c)) {
-    const notes = audibleOf(c);
-    shortest.set(c, notes.length ? Math.min(...notes.map((n) => n.length)) : null);
-  }
-  return shortest.get(c)!;
-};
-
-/**
- * A mini piano roll of a clip's audible notes, over their own pitch range. Drawn in beats, the zoom
- * never read: a zoom changes only its clip's box, and it is kept by its notes (VIEW-12). Each note
- * at its loudness by its own opacity (never a group's: WebKit paints a group with opacity through a
- * layer of its own); and a 2 px mark the drawing's stretch doesn't scale, shown only while its clip's
- * shortest note is under 2 px (`data-fine`, set by the clip's span on a zoom).
- */
-export const Notes = memo(function Notes({ notes, length, color }: { notes: NoteClip["notes"]; length: number; color: TrackColor }) {
-  useRenderCount("arrangement.drawings");
-  if (notes.length === 0) return null;
-  const lo = Math.min(...notes.map((n) => n.pitch));
-  const hi = Math.max(...notes.map((n) => n.pitch));
-  const rows = hi - lo + 1;
-  // Few pitches stay thin and centered rather than filling the clip.
-  const h = Math.min(100 / rows, 16);
-  const top = (100 - rows * h) / 2;
-  return (
-    <Body length={length}>
-      <g fill={color.ink} stroke={color.ink}>
-        {notes.map((n, i) => {
-          const y = top + (hi - n.pitch) * h + h * 0.1;
-          const mid = n.start + n.length / 2;
-          const o = 0.35 + 0.65 * n.velocity;
-          return (
-            <Fragment key={i}>
-              <rect x={n.start} width={n.length} y={y} height={h * 0.8} stroke="none" fillOpacity={o} />
-              {/* At least 2 px wide at any zoom: a mark the drawing's stretch doesn't scale. */}
-              <line data-note-mark x1={mid} x2={mid} y1={y} y2={y + h * 0.8} strokeWidth={2} strokeOpacity={o} vectorEffect="non-scaling-stroke" />
-            </Fragment>
-          );
-        })}
-      </g>
-    </Body>
-  );
-});
-
-/**
- * The automation curve, its points marked; values hold before the first point and after the last.
- * The point `picked` is `fg-strong` in a 2px white ring (taste.md §2.8).
- */
-const Curve = memo(function Curve({
-  clip,
-  scale,
-  color,
-  picked,
-}: {
-  clip: ControlClip;
-  /** The lane's scale: where a value is up the clip, and the line through the points as it draws it (D3). */
-  scale: LaneScale | null;
-  color: TrackColor;
-  picked: number;
-}) {
-  useRenderCount("arrangement.drawings");
-  const level = (v: number) => scale?.level(v) ?? 0;
-  const path = scale?.path ?? line;
-  const { points } = clip;
-  if (points.length === 0) return <Body length={clip.length} curve>{null}</Body>;
-  const drawn = path(points, clip.length);
-  const xy = drawn.map(([b, v]) => `${b},${(1 - level(v)) * 100}`).join(" ");
-  return (
-    <>
-      <Body length={clip.length} curve>
-        <polygon points={`${xy} ${drawn[drawn.length - 1][0]},100 ${drawn[0][0]},100`} fill={color.ink} fillOpacity={0.1} />
-        <polyline points={xy} fill="none" stroke={color.ink} strokeWidth={1.5} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
-      </Body>
-      {/* Circles stay round: drawn over the stretched drawing, not in it. */}
-      <div aria-hidden className="absolute left-0 w-full pointer-events-none" style={{ top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` }}>
-        {points.map(([b, v], i) => (
-          <span
-            key={i}
-            data-point={i}
-            data-picked={i === picked || undefined}
-            className={clsx("absolute size-1.5 -ml-[3px] -mt-[3px] rounded-full", i === picked && "bg-fg-strong ring-2 ring-white")}
-            style={{ left: `${(b / clip.length) * 100}%`, top: `${(1 - level(v)) * 100}%`, background: i === picked ? undefined : color.ink }}
-          />
-        ))}
-      </div>
-    </>
-  );
-});
 
 /**
  * A clip of a lane of names (CARD-23): each point's name held until the next, the first from the
