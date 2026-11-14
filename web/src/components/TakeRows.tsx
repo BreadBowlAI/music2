@@ -8,7 +8,6 @@
 
 import clsx from "clsx";
 import { useState } from "react";
-import { useStretch } from "../camera";
 import { serverRef } from "../lib/clips";
 import { clipRef, findLane, type TimelineLane } from "../lib/graph";
 import { skipsSnap, snapSong } from "../lib/grid";
@@ -17,7 +16,7 @@ import type { TrackColor } from "../lib/palette";
 import { request } from "../lib/projects";
 import { useStore } from "../lib/store";
 import { compsOf, takeClip, type Comp } from "../lib/takes";
-import { ARRANGEMENT, useZoom } from "../lib/zoom";
+import { useZoom } from "../lib/zoom";
 import { Wave } from "./Wave";
 
 /** A press that moves less than this, in px, is a click. */
@@ -101,8 +100,6 @@ function TakeRow({
   editable: boolean;
 }) {
   const ppb = useZoom();
-  // Stretched in a live zoom, as the lane above it is (VIEW-5).
-  const stretch = useStretch(ARRANGEMENT);
   // A swipe on its way: the beats it covers so far.
   const [swipe, setSwipe] = useState<[number, number] | null>(null);
   const meter = () => useStore.getState().graph?.timeline.meter ?? [];
@@ -160,7 +157,7 @@ function TakeRow({
 
   const name = `Take ${take + 1}`;
   return (
-    <div data-testid="take-row" data-lane={`${module}.${lane.key}`} data-take={take + 1} className="flex" style={{ height }}>
+    <div data-testid="take-row" data-row="take" data-lane={`${module}.${lane.key}`} data-take={take + 1} className="flex" style={{ height }}>
       <div
         className={clsx("sticky left-0 z-20 shrink-0 flex items-center border-r border-line text-xs text-fg-muted", selected ? "bg-accent-soft" : "bg-chrome")}
         style={{ width: headerW }}
@@ -169,7 +166,6 @@ function TakeRow({
         <span className="pl-7 truncate">{name}</span>
       </div>
       <div
-        ref={stretch}
         className={clsx("relative overflow-hidden border-t border-hover touch-none", editable && "cursor-pointer")}
         style={width === undefined ? { flex: "1 1 0", minWidth: 0 } : { width }}
         title={editable ? `Swipe along ${name} to play it there, or click a faint part` : undefined}

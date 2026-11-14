@@ -11,7 +11,6 @@ import {
   findLane,
   formatValue,
   hasOwnId,
-  kitOf,
   laneTitle,
   laneValue,
   meterSpans,
@@ -54,7 +53,7 @@ import {
   type LaneAddr,
   type ServerRef,
 } from "../lib/clips";
-import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid, type Grid as GridSetting } from "../lib/grid";
+import { clean, gridOp, gridTarget, pickName, skipsSnap, snapSong, stepOf, useGrid } from "../lib/grid";
 import { added, bounded, hit, moved, painted, pickedIn as pointIn, usePoints, type Point } from "../lib/points";
 import { pickedStep, putStep, stepLabel, useSteps, type StepPoint } from "../lib/steps";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
@@ -65,7 +64,7 @@ import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { ARRANGEMENT, followNow, keepZoom, kept, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { CameraScope, onCamera, shownAt, useCamera, useCameraOf, useCameraState, useCull, useNear, useSpan, useStretch, useZoomOf, within, type CameraState, type Window } from "../camera";
+import { CameraScope, onCamera, useCamera, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -75,7 +74,9 @@ import { dragsSound, droppedSound, loadSound } from "./Spotlight";
 import { listedInstrument } from "../lib/plugins";
 import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startReorder, useReorder } from "./Tracks";
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
-import { RulerMarkers } from "./Markers";
+import { RulerMarkers, useShownMarkers } from "./Markers";
+import { Said, SaidScope, useSaidTrack } from "./zoomPicture/said";
+import { ZoomPicture } from "./zoomPicture/ZoomPicture";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
 import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, Curve, LaneDrawing, Notes, useKept, type StillClip } from "./ClipDrawing";
 import { Hatch, usePatternId, VLines } from "./draw";
@@ -89,6 +90,7 @@ import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
 import { useGlows } from "../lib/notice";
 import { loadRecordOptions, useRecordOptions } from "../lib/record";
+import { audible, audibleOf, BEAT_LINES, busWords, changes, changeWords, fineStep, room, rowsOf, TOOLS_W } from "../lib/arrangement";
 
 const beats = (n: number) => Number(n.toFixed(3));
 
@@ -294,67 +296,23 @@ function DragBubble({ at, children }: { at: { x: number; y: number }; children: 
   );
 }
 
-/** The part of each note that plays: cut to its clip, as playback cuts it. Notes wholly outside are silent. */
-function audible(clip: NoteClip) {
-  return clip.notes.flatMap((n) => {
-    const start = Math.max(n.start, 0), end = Math.min(n.start + n.length, clip.length);
-    return end > start ? [{ ...n, start, length: end - start }] : [];
-  });
-}
-
-/** The tempo and time signature changes after the start, by beat. */
-function changes(timeline: TimelineView) {
-  const at = new Map<number, { beat: number; bpm?: number; meter?: string }>();
-  const get = (beat: number) => at.get(beat) ?? at.set(beat, { beat }).get(beat)!;
-  for (const t of timeline.tempo.slice(1)) get(t.beat).bpm = beats(t.bpm);
-  for (const m of timeline.meter.slice(1)) get(m.beat).meter = `${m.beats}/${m.unit}`;
-  return [...at.values()].sort((a, b) => a.beat - b.beat);
-}
-
-/** Where the timeline ends: a bar after the bar the last clip, or the playhead, is in. */
-function room(meter: Meter[], end: number, beat: number) {
-  // A clip ending on a bar line is in the bar before it.
-  const last = barAt(meter, Math.max(end, beat, 1e-6) - 1e-6);
-  const next = last.start + last.length;
-  return next + barAt(meter, next).length;
-}
-
-/**
- * A track's rows (taste.md §3.4): its own row draws its primary lane, the first notes or audio
- * lane in code order; its other notes and audio lanes are full rows under it, always shown; its
- * automation lanes are 32px rows under those, folded until asked for (A).
- */
-function rowsOf(track: TimelineTrack) {
-  const primary = track.lanes.find((l) => !automation(l)) ?? null;
-  return {
-    primary,
-    others: track.lanes.filter((l) => l !== primary && !automation(l)),
-    controls: track.lanes.filter(automation),
-  };
-}
-
 /**
  * Draws the playhead on every frame from the transport clock: never eased between polls (TL-9). It
- * follows the zoom shown (VIEW-5): through a live zoom it moves with the stretch, by its own style.
+ * keeps to the zoom laid out (VIEW-5): through a drawn zoom the picture draws the playhead, and the
+ * page's stays where it was under it.
  */
 function usePlayhead(ref: React.RefObject<HTMLElement | null>, attr = false) {
   const ppb = useZoom();
-  const cam = useCameraOf(ARRANGEMENT);
   useEffect(() => {
     const draw = (beat: number) => {
       const el = ref.current;
       if (!el) return;
-      el.style.transform = `translateX(${cam ? shownAt(cam.getState(), beat) : beat * ppb}px)`;
+      el.style.transform = `translateX(${beat * ppb}px)`;
       if (attr) el.dataset.beat = String(beats(beat));
     };
-    const off = onFrame(draw);
-    // A live zoom moves it while the clock may stand still.
-    const offCam = cam ? onCamera(cam, (now, was) => void ((now.laid || was.laid) && draw(beatNow()))) : null;
-    return () => {
-      off();
-      offCam?.();
-    };
-  }, [ref, attr, ppb, cam]);
+    draw(beatNow());
+    return onFrame(draw);
+  }, [ref, attr, ppb]);
 }
 
 function PlayLine({ testid, className, style }: { testid?: string; className: string; style: React.CSSProperties }) {
@@ -425,9 +383,6 @@ export default function SongTimeline({
     start: kept,
   });
   const ppb = useZoomOf(camera);
-  // What a live zoom stretches (VIEW-5): the lanes and their grid, the ruler, and the loop's shade and
-  // the selected bars over them; the playhead follows the zoom shown by its own style.
-  const stretch = useStretch(camera);
   useLayoutEffect(() => keepZoom(camera.store), [camera.store]);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - headerW);
   // What a zoom looked at keeps its room: the beat it held in place stays there (VIEW-5).
@@ -1791,8 +1746,28 @@ export default function SongTimeline({
   const songGrid = useMemo(() => <Grid meter={timeline.meter} id={gridId} />, [timeline.meter, gridId]);
   const all = [...rows, song].filter((t) => t.lanes.some(automation)).map((t) => t.module);
   const anyOpen = all.some((m) => open.has(m));
+  // What the drawn zoom's picture draws around the rows (VIEW-13): what this render draws by.
+  const [said] = useState(() => new Said());
+  const songGridSetting = useGrid((g) => g.song);
+  const punch = useRecordOptions((o) => o.punch);
+  const markersShown = useShownMarkers(timeline);
+  useLayoutEffect(() => {
+    said.arrangement = {
+      timeline,
+      headerW,
+      room: room(timeline.meter, timeline.end, reach),
+      visible,
+      loop: loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd, on: looping } : null,
+      punch,
+      bars,
+      markers: markersShown,
+      grid: songGridSetting,
+    };
+    said.changed();
+  });
   return (
     <CameraScope camera={camera}>
+    <SaidScope value={said}>
     <div
       ref={scroller}
       data-testid="timeline"
@@ -1806,6 +1781,7 @@ export default function SongTimeline({
       style={{ scrollPaddingTop: RULER_H, scrollPaddingLeft: headerW, scrollPaddingBottom: songH }}
     >
       <div ref={content} className="relative flex flex-col" style={{ width: headerW + width, minHeight: "100%" }}>
+        <ZoomPicture said={said} box={scroller} headerW={headerW} />
         <div className="sticky top-0 z-30 shrink-0 flex" style={{ height: RULER_H }}>
           {/* The corner (taste.md §3.4): + Track (⌘T); on the right, every track's automation (A). */}
           <div className="sticky left-0 z-40 shrink-0 bg-chrome border-b border-r border-line flex items-center justify-between px-1.5" style={{ width: headerW }}>
@@ -1850,7 +1826,6 @@ export default function SongTimeline({
             Under the headers and the playhead. */}
         {looping && loopStart !== null && loopEnd !== null && (
           <div
-            ref={stretch}
             data-testid="loop-shade"
             aria-hidden
             className="absolute bottom-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply"
@@ -1861,7 +1836,6 @@ export default function SongTimeline({
             1 px accent outline and an accent wash, unlike the loop's plain wash. */}
         {bars && (
           <div
-            ref={stretch}
             data-testid="section"
             data-start={bars[0]}
             data-end={bars[1]}
@@ -1917,10 +1891,10 @@ export default function SongTimeline({
         {/* The Song's row, Live's Main track: pinned at the foot of the track list, with its own playhead and loop wash. */}
         <div className="sticky bottom-0 z-[26] shrink-0 border-t border-line bg-canvas" data-song-row>
           {looping && loopStart !== null && loopEnd !== null && (
-            <div ref={stretch} aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
+            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none bg-accent/8 mix-blend-multiply" style={{ left: headerW + loopStart * ppb, width: (loopEnd - loopStart) * ppb }} />
           )}
           {bars && (
-            <div ref={stretch} aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
+            <div aria-hidden className="absolute inset-y-0 z-[14] pointer-events-none rounded-xs border border-accent bg-accent/10" style={{ left: headerW + bars[0] * ppb, width: (bars[1] - bars[0]) * ppb }} />
           )}
           <TrackRows
             track={song}
@@ -1940,14 +1914,13 @@ export default function SongTimeline({
         </div>
       </div>
     </div>
+    </SaidScope>
     </CameraScope>
   );
 }
 
 /** Z leaves this much room either side of what it fits, in px. */
 const FIT_PAD = 16;
-/** The ruler's tools: 3 buttons of 24 px, 2 px apart, 4 px in, and the 1 px edge. */
-const TOOLS_W = 3 * 24 + 2 * 2 + 2 * 4 + 1;
 
 /**
  * Follow, Zoom out and Zoom in (Q31), held at the right of the ruler's row as it scrolls (X25): on
@@ -2073,16 +2046,6 @@ const GridLines = memo(function GridLines({ meter, id }: { meter: Meter[]; id: s
   );
 });
 
-/** The closest beat lines the timeline draws, in px: zoomed out further, bars only. */
-const BEAT_LINES = 6;
-
-/** The grid's step where the timeline draws its lines, in a bar of `bar` beats at `ppb`; null where it doesn't. */
-function fineStep(grid: GridSetting, bar: number, ppb: number) {
-  const step = stepOf(grid, ppb, bar);
-  const fits = Math.abs(bar / step - Math.round(bar / step)) < 1e-6;
-  return step < 1 && step * ppb >= 12 && fits ? step : null;
-}
-
 /**
  * Bars and beats along the top. A click moves the playhead there; a drag across it sets a loop over
  * the beats it covered, and turns looping on. Its top band, where the markers are, selects bars of
@@ -2109,8 +2072,6 @@ const Ruler = memo(function Ruler({
   onLoop: (start: number, end: number) => void;
 }) {
   const ppb = useZoom();
-  // Stretched in a live zoom, with the lanes (VIEW-5).
-  const stretch = useStretch(ARRANGEMENT);
   // A loop being dragged, shown until it is let go.
   const [drag, setDrag] = useState<{ start: number; end: number } | null>(null);
   const shown = drag ?? (loopStart !== null && loopEnd !== null ? { start: loopStart, end: loopEnd } : null);
@@ -2156,12 +2117,11 @@ const Ruler = memo(function Ruler({
         setMark(open?.beat === c.beat ? null : { beat: c.beat, typing: false });
       }}
     >
-      {[c.meter, c.bpm && `♩${c.bpm}`].filter(Boolean).join(" ")}
+      {changeWords(c)}
     </span>
   );
   return (
     <div
-      ref={stretch}
       data-testid="ruler"
       className="relative overflow-hidden bg-chrome border-b border-line cursor-pointer touch-none"
       style={{ width }}
@@ -2365,8 +2325,6 @@ const Tracks = memo(function Tracks({
 }) {
   const grid = useMemo(() => <Grid meter={timeline.meter} id={gridId} />, [timeline.meter, gridId]);
   const said = waiting || rows.length === 0;
-  // The grid under the last track is stretched in a live zoom, as the lanes are (VIEW-5).
-  const stretch = useStretch(ARRANGEMENT);
   return (
     <div role="tablist" aria-label="Tracks" aria-orientation="vertical" className="contents">
       {rows.map((t) => (
@@ -2403,7 +2361,7 @@ const Tracks = memo(function Tracks({
       >
         <DropLine before={END} />
         <div className="sticky left-0 z-20 shrink-0 bg-chrome border-r border-line" style={{ width: headerW }} />
-        <div ref={stretch} className="relative flex-1 min-w-0">
+        <div data-lanes-end="" className="relative flex-1 min-w-0">
           {grid}
           {/* Under the last track, in the lanes' visible middle: a line here never pushes a row down (principle 8). */}
           {said && (
@@ -2440,22 +2398,10 @@ const Tracks = memo(function Tracks({
   );
 });
 
-/**
- * What a bus's row says, as it has no lanes (RENDER-34): how tracks reach it, by their output or a
- * send; for a drum kit's bus, that it is the kit, which drums play into it and that Beat writes their
- * beat (KIT-10).
- */
+/** What a bus's row says, as it has no lanes (RENDER-34; `busWords`). */
 function BusWords({ module }: { module: string }) {
   const graph = useStore((s) => s.graph);
-  const kit = graph && kitOf(graph, module);
-  if (!kit || kit.bus !== module) return <>Plays the tracks whose output is set to it, and what tracks send it. Set them in Mix ({opt("3")}).</>;
-  const names = kit.rows.map((r) => moduleName({ key: r.track, label: graph.timeline.tracks.find((t) => t.module === r.track)?.label }));
-  const drums = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)} play` : `${names[0]} plays`;
-  return (
-    <>
-      The {kit.label} kit: {drums} into it. Write {names.length > 1 ? "their" : "its"} beat in Beat ({opt("5")}).
-    </>
-  );
+  return <>{busWords(graph, module)}</>;
 }
 
 const TrackRows = memo(function TrackRows({
@@ -2496,8 +2442,6 @@ const TrackRows = memo(function TrackRows({
   const cull = useCull(ARRANGEMENT, "x").x;
   const self = useRef<HTMLDivElement>(null);
   const near = useNear(ARRANGEMENT, self);
-  // Each lane, its grid and clips, is stretched in a live zoom (VIEW-5).
-  const stretch = useStretch(ARRANGEMENT);
   const selected = useShell((s) => s.selected === module);
   // Changed elsewhere just now (AGENT-5): outlined until the next click or key press.
   const glows = useGlows("tracks", module);
@@ -2506,6 +2450,8 @@ const TrackRows = memo(function TrackRows({
   const open = useShell((s) => s.open.has(module));
   // A muted track's clips, or one a solo leaves off, draw faint and grey; muted in the song, hatched too.
   const heard = useHeard(module);
+  // What the drawn zoom's picture draws of these rows: what this render draws by (VIEW-13).
+  useSaidTrack(module, { track, color, heard, waiting, selected, last: !!last, editable: !locked });
   const { primary, others, controls } = rowsOf(track);
   // Lanes hidden one by one (D4): A never shows them; a line under the others says so.
   const hidden = useHidden(module);
@@ -2527,6 +2473,7 @@ const TrackRows = memo(function TrackRows({
   const row = (lane: TimelineLane | null, header: ReactNode, opts: { first?: boolean; height: number; movable?: boolean; edge?: string }) => (
     <div
       key={lane?.key ?? ""}
+      data-row={opts.first ? "first" : "lane"}
       data-lane={lane ? `${module}.${lane.key}` : undefined}
       className={clsx("flex", lane && lane.key === lit && "lit")}
       style={{ height: opts.height }}
@@ -2573,7 +2520,6 @@ const TrackRows = memo(function TrackRows({
         {opts.edge && <HeightEdge id={opts.edge} height={opts.height} name={opts.first ? moduleName({ key: module, label: track.label }) : laneTitle(lane!)} />}
       </div>
       <div
-        ref={stretch}
         // The lane dragged clips would land on is lit; one that can't take them isn't (design-8b §7.5).
         className={clsx("relative flex-1 min-w-0 overflow-hidden", !opts.first && "border-t border-hover", (selected || (lane && drag?.to?.module === module && drag.to.lane === lane.key)) && "bg-accent-wash")}
         title={!lane || locked ? undefined : lane.kind === "audio" ? `Drop WAV or FLAC files here, or use File ▸ Import Audio (${chord("I", { shift: true })})` : "Double-click to add a one-bar clip"}
@@ -3273,10 +3219,6 @@ const Clip = memo(function Clip({
     </div>
   );
 }, sameClipBox);
-
-/** A clip's audible notes, the same array while the clip is the same: its drawing is kept by it. */
-const audibles = new WeakMap<NoteClip, NoteClip["notes"]>();
-const audibleOf = (c: NoteClip) => audibles.get(c) ?? audibles.set(c, audible(c)).get(c)!;
 
 /**
  * A clip of a lane of names (CARD-23): each point's name held until the next, the first from the

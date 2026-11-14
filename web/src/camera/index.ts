@@ -13,6 +13,8 @@ export { onViewMoved } from "./rig";
 export { movingNow, pauseSwipes, setPlatform } from "./state";
 export { FINE, onPixels, spanBox, useSpan } from "./spans";
 export { shownAt, shownScroll, stretchOf, useStretch } from "./stretch";
+export { pictureOf, useDrawnZoom } from "./picture";
+export type { Drawn as DrawnZoom } from "./picture";
 export type { Stretch } from "./stretch";
 export type { Platform } from "./state";
 export { face } from "./face";

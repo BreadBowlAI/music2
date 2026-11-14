@@ -75,6 +75,12 @@ export function usePeaks(clip: Pick<AudioClip, "asset" | "hash">): Peaks | typeo
   return got.get(key) ?? null;
 }
 
+/** The peaks of the file clip `clip` plays, as they are now (`usePeaks`'s, outside React: the arrangement's zoom picture). */
+export function peaksNow(clip: Pick<AudioClip, "asset" | "hash">): Peaks | typeof MISSING | null {
+  const session = useStore.getState().graph?.session;
+  return got.get(`${session}\n${clip.asset}\n${clip.hash ?? ""}`) ?? null;
+}
+
 /** A tempo map as the timeline gives it: from `beat` on, `bpm` (FMT-13), the first at beat 0. */
 export type Tempo = readonly { beat: number; bpm: number }[];
 

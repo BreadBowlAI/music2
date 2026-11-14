@@ -24,9 +24,10 @@ import { Popover } from "./ui";
 /** A clip's volume, in dB (Q11): as the server takes it. */
 const GAIN = [-48, 12] as const;
 
-const TILE = 1024;
+/** A waveform's tiles across, in px. */
+export const TILE = 1024;
 /** From a clip's left edge to its inside: the 1 px gap before it and its 1 px border. */
-const INSET = 2;
+export const INSET = 2;
 /** The name's strip at the clip's top (taste.md §2.8). */
 export const STRIP = 14;
 const NO_TEMPO: Tempo = [];
@@ -44,7 +45,7 @@ export const audioLabel = (c: AudioClip) => (c.gain_db ? `${c.asset} · ${dbWord
 const curve = (t: number) => 0.5 - 0.5 * Math.cos(Math.PI * Math.min(1, Math.max(0, t)));
 
 /** What the clip plays at each point: its file's seconds, and the gain there. */
-interface Shape {
+export interface Shape {
   /** Seconds into the clip at x px from its start. */
   at: (x: number) => number;
   /** The file's second the clip plays `s` seconds in. */
@@ -54,7 +55,7 @@ interface Shape {
   seconds: number;
 }
 
-function shapeOf(c: AudioClip, tempo: Tempo, ppb: number): Shape {
+export function shapeOf(c: AudioClip, tempo: Tempo, ppb: number): Shape {
   const t0 = secondsAt(tempo, c.start);
   const seconds = clipSeconds(tempo, c);
   const rate = 2 ** ((c.pitch ?? 0) / 12);
@@ -105,6 +106,25 @@ function loudest(p: Peaks, a: number, b: number): number {
   return most / 127;
 }
 
+/**
+ * A tile's waveform on `g`, from its (0, 0): `w` columns of a device px each, `h` device px down,
+ * from px `x0` of the clip's inside, `dpr` device px a px; only the columns `from` to `to`. Each
+ * column is the loudest sample under it, mirrored about the middle (the arrangement's zoom picture
+ * draws a tile's with this too, so the two agree).
+ */
+export function paintWave(g: CanvasRenderingContext2D, p: Peaks, shape: Shape, x0: number, w: number, h: number, ink: string, dpr: number, from = 0, to = w) {
+  g.fillStyle = ink;
+  const mid = h / 2;
+  for (let d = Math.max(0, from); d < Math.min(w, to); d++) {
+    const s0 = shape.at(x0 + d / dpr);
+    const s1 = shape.at(x0 + (d + 1) / dpr);
+    const amp = Math.min(1, loudest(p, shape.source(s0), shape.source(s1)) * shape.gain((s0 + s1) / 2));
+    // Never thinner than a device pixel: silence is a flat line.
+    const half = Math.max(0.5, amp * mid);
+    g.fillRect(d, mid - half, 1, 2 * half);
+  }
+}
+
 /** Draw the tile `x0`..`x0 + width` (px from the clip's start) of the waveform on `canvas`. */
 function draw(canvas: HTMLCanvasElement, p: Peaks, shape: Shape, x0: number, width: number, height: number, ink: string) {
   const dpr = window.devicePixelRatio || 1;
@@ -115,24 +135,12 @@ function draw(canvas: HTMLCanvasElement, p: Peaks, shape: Shape, x0: number, wid
   const g = canvas.getContext("2d");
   if (!g) return;
   g.clearRect(0, 0, w, h);
-  g.fillStyle = ink;
-  const mid = h / 2;
-  for (let d = 0; d < w; d++) {
-    const s0 = shape.at(x0 + d / dpr);
-    const s1 = shape.at(x0 + (d + 1) / dpr);
-    const amp = Math.min(1, loudest(p, shape.source(s0), shape.source(s1)) * shape.gain((s0 + s1) / 2));
-    // Never thinner than a device pixel: silence is a flat line.
-    const half = Math.max(0.5, amp * mid);
-    g.fillRect(d, mid - half, 1, 2 * half);
-  }
+  paintWave(g, p, shape, x0, w, h, ink, dpr);
 }
 
-/** The fades as thin curves, drawn over the waveform, from silence at the clip's edge to full. */
-function drawFades(canvas: HTMLCanvasElement, shape: Shape, fadeIn: number, fadeOut: number, x0: number, line: string) {
-  const g = canvas.getContext("2d");
-  if (!g || (!fadeIn && !fadeOut)) return;
-  const dpr = window.devicePixelRatio || 1;
-  const { width: w, height: h } = canvas;
+/** The fades as thin curves over a tile's waveform (as `paintWave` places it), from silence at the clip's edge to full. */
+export function paintFades(g: CanvasRenderingContext2D, shape: Shape, fadeIn: number, fadeOut: number, x0: number, w: number, h: number, line: string, dpr: number) {
+  if (!fadeIn && !fadeOut) return;
   g.strokeStyle = line;
   g.lineWidth = dpr;
   for (const [on, of] of [
@@ -155,6 +163,12 @@ function drawFades(canvas: HTMLCanvasElement, shape: Shape, fadeIn: number, fade
     }
     g.stroke();
   }
+}
+
+/** The fades on a tile's `canvas`. */
+function drawFades(canvas: HTMLCanvasElement, shape: Shape, fadeIn: number, fadeOut: number, x0: number, line: string) {
+  const g = canvas.getContext("2d");
+  if (g) paintFades(g, shape, fadeIn, fadeOut, x0, canvas.width, canvas.height, line, window.devicePixelRatio || 1);
 }
 
 /** One tile: drawn once it is on screen, and again when what it shows changes. */

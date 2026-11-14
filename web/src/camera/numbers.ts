@@ -46,6 +46,14 @@ export const GLIDE_FROM = 50;
 /** And stops under this speed, in px a ms. */
 export const GLIDE_STOP = 0.02;
 
+/**
+ * A run of ⌘-scroll ends once no event has come for G (VIEW-5), counted in the frames after its last
+ * event, each frame at most this many ms: G always takes two frames, and a frame that ran long counts
+ * as half of G at most. Such a frame may come before the events sent while it ran are heard; a timer
+ * of G fired then, and ended a zoom in the middle of a run (main's CI, 2026-11-14).
+ */
+export const FRAME_MOST = SWIPE_GAP / 2;
+
 /** The scrollbars: the browser's own (D5, VIEW-7). The camera draws none. */
 export const SCROLLBARS = "browser" as const;
 /** At an edge the view stops (D3, VIEW-6): the camera never goes past its box's room. */

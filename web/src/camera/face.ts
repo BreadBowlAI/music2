@@ -7,6 +7,7 @@ import * as numbers from "./numbers";
 import { rigs } from "./rig";
 import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
+import { failPicture, pictureOf } from "./picture";
 import { markedOf, shownAt, shownScroll, stretchOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
@@ -39,6 +40,20 @@ export const face = {
   stretched: (name: string) => {
     const cam = cameraNow(name);
     return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
+  },
+  /**
+   * The picture of the view of the camera mounted as `name`, where it draws its zoom (VIEW-5): whether
+   * it shows, how many times it painted, what it drew last (the view's own list) and why it last
+   * couldn't paint; null where none.
+   */
+  picture: (name: string) => {
+    const cam = cameraNow(name);
+    return cam ? pictureOf(cam) : null;
+  },
+  /** Make the picture of the view of the camera `name` throw as it paints (`on`), as a browser without a canvas feature would. */
+  pictureFails: (name: string, on: boolean) => {
+    const cam = cameraNow(name);
+    if (cam) failPicture(cam, on);
   },
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,

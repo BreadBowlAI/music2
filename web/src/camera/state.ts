@@ -44,7 +44,7 @@ export const swipesPaused = () => paused > 0;
 // ---------------------------------------------------------------- the pointer and the keys
 
 /** Who hears a press or a key: each camera stops its glide and drops wheel events until a gap (VIEW-4). */
-const hearing = new Set<() => void>();
+const hearing = new Set<(e: PointerEvent | KeyboardEvent) => void>();
 let held = false;
 
 /** Whether a pointer is pressed: a drag holds the camera still (VIEW-8). */
@@ -57,7 +57,7 @@ export const pointerHeld = () => held;
  */
 function press(e: PointerEvent) {
   if (e.button === 0) held = true;
-  for (const f of hearing) f();
+  for (const f of hearing) f(e);
 }
 function release() {
   held = false;
@@ -75,12 +75,48 @@ const hidden = () => document.visibilityState === "hidden" && release();
 function key(e: KeyboardEvent) {
   // ⌘ for ⌘-scroll, ⇧ for a sideways wheel: a modifier alone is no key that stops anything.
   if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") return;
-  for (const f of hearing) f();
+  for (const f of hearing) f(e);
+}
+
+/** What a press brings after it, which a press the camera took takes too: its release, its click, its menu. */
+const AFTER = ["pointerup", "mousedown", "mouseup", "click", "auxclick", "contextmenu"] as const;
+/** How long after a press the camera took its double-click is taken too, in ms: the second press may come that late. */
+const DOUBLE = 500;
+
+/**
+ * A press the camera takes (a press on a drawn zoom's picture ends the zoom and does nothing else,
+ * VIEW-5): nothing else hears it, nor its release, click or menu (until the next press), nor a
+ * double-click it begins. Called while it is heard, at the window, before anything below.
+ */
+export function takePress(e: PointerEvent) {
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  const eat = (ev: Event) => {
+    if (ev instanceof PointerEvent && ev.pointerId !== e.pointerId) return;
+    ev.preventDefault();
+    ev.stopImmediatePropagation();
+    // A click ends what a press brings.
+    if (ev.type === "click" || ev.type === "auxclick") done();
+  };
+  const until = e.timeStamp + DOUBLE;
+  const double = (ev: Event) => {
+    window.removeEventListener("dblclick", double, true);
+    if (ev.timeStamp <= until) eat(ev);
+  };
+  const done = () => {
+    window.removeEventListener("pointerdown", next, true);
+    for (const t of AFTER) window.removeEventListener(t, eat, true);
+  };
+  const next = (ev: PointerEvent) => void (ev !== e && done());
+  for (const t of AFTER) window.addEventListener(t, eat, true);
+  window.addEventListener("pointerdown", next, true);
+  window.addEventListener("dblclick", double, true);
+  setTimeout(() => window.removeEventListener("dblclick", double, true), DOUBLE);
 }
 
 let listening = false;
 /** Hear presses and keys while any camera does. */
-export function hearInput(f: () => void): () => void {
+export function hearInput(f: (e: PointerEvent | KeyboardEvent) => void): () => void {
   hearing.add(f);
   if (!listening) {
     listening = true;

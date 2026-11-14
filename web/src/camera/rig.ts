@@ -1,12 +1,13 @@
 // A view's camera at work on its scroll box: the recognizer's events summed and written once a
-// frame, a zoom written in the render that draws it, a zoom by the hand shown by a stretch until it
-// ends (a live zoom, VIEW-5), the browser's own moves taken in, and the app's moves (VIEW-9). One
-// for each mounted view, made by `useCamera`.
+// frame, a zoom written in the render that draws it, a zoom by the hand shown by the view's picture
+// (a drawn zoom) or by a stretch (a live zoom) until it ends (VIEW-5), the browser's own moves taken
+// in, and the app's moves (VIEW-9). One for each mounted view, made by `useCamera`.
 
 import { cull, fit, holds, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
-import { LAYERS_KEPT, SWIPE_GAP } from "./numbers";
+import { FRAME_MOST, LAYERS_KEPT, SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
-import { hearInput, moved, movingNow, pointerHeld } from "./state";
+import { drawsZoom, hidePicture, pictureShown, showPicture } from "./picture";
+import { hearInput, moved, movingNow, pointerHeld, takePress } from "./state";
 import { drawnOf, type CameraStore, type MovedBy, type CameraState } from "./store";
 import { markedOf, onMarked, shownScroll, stretchOf, unstretch } from "./stretch";
 import { Writer } from "./writer";
@@ -88,10 +89,12 @@ const moved_ = () => {
 };
 
 /**
- * A live zoom under way (VIEW-5): the view stays laid out where it was, and what it marks is
- * stretched to show the camera.
+ * A zoom by the hand under way (VIEW-5): the view stays laid out where it was, and its picture shows
+ * the camera (`drawn`: a drawn zoom), or what it marks is stretched to (a live zoom).
  */
 interface Live {
+  /** The view draws it: its picture shows, and nothing is stretched. */
+  drawn: boolean;
   /** The content's origin on screen as it started: where each marked element's stretch is centred. */
   origin: { x: number; y: number };
   /** Each marked element stretched, and its transform's origin: the content's, in its own px. */
@@ -121,7 +124,13 @@ export class Rig {
   private gone: Live | null = null;
   /** The hand's zoom ended (a pinch's `gestureend`, or G with no ⌘-scroll): laid out at the next frame. */
   private ending = false;
-  private endTimer = 0;
+  /**
+   * A run of ⌘-scroll under way (VIEW-5): when its last event came or the last frame since it was
+   * (`at`), and the quiet since its last event, counted frame by frame (`quiet`, ms).
+   */
+  private wheelZoom: { at: number; quiet: number } | null = null;
+  /** The view's picture couldn't paint this zoom (it threw): laid out each frame instead, until the zoom ends (VIEW-5). */
+  private undrawn = false;
   /** Elements a live zoom stretched that keep their layer a while after it (`LAYERS_KEPT`). */
   private layers = new Set<HTMLElement>();
   private layersTimer = 0;
@@ -197,12 +206,16 @@ export class Rig {
     byStore.set(this.cam, this);
     const wheel = (e: WheelEvent) => {
       const asked = this.hands.wheel(e);
-      // A run of ⌘-scroll ends with no ⌘-scroll for G (VIEW-5).
-      if (asked === "zoom") this.endIn(SWIPE_GAP);
+      // A run of ⌘-scroll ends with no ⌘-scroll for G, counted in the frames after its last event (VIEW-5).
+      // Its own time, never later than it is heard (a suite's events may say a time to come).
+      if (asked === "zoom") this.wheelZoom = { at: Math.min(e.timeStamp, performance.now()), quiet: 0 };
       if (asked) this.schedule();
     };
     const gesture = (e: Event) => {
-      if (e.type === "gestureend") this.endIn(0);
+      if (e.type === "gestureend") {
+        this.ending = true;
+        this.schedule();
+      }
       if (this.hands.gesture(e)) this.schedule();
     };
     const scroll = () => this.takeIn();
@@ -232,15 +245,18 @@ export class Rig {
       () => size.disconnect(),
       () => content.disconnect(),
       () => children.disconnect(),
-      // A press or a key stops the hand's moves, lays a live zoom out, and lets its layers go now:
-      // in this same task as the render that lays it out, so no frame shows the one without the other.
-      hearInput(() => {
+      // A press or a key stops the hand's moves, lays a zoom by the hand out, and lets its layers go
+      // now: in this same task as the render that lays it out, so no frame shows the one without the
+      // other. A press on the view while its picture shows does nothing else (VIEW-5).
+      hearInput((e) => {
+        const took = e instanceof PointerEvent && pictureShown(this.cam) && e.target instanceof Node && el.contains(e.target);
         this.hands.stop();
         this.layOut();
         this.dropStretch();
         this.dropLayers();
+        if (took) takePress(e);
       }),
-      onMarked(this.cam, (el) => void (this.live && this.join(this.live, el))),
+      onMarked(this.cam, (el) => void (this.live && !this.live.drawn && this.join(this.live, el))),
     ];
     this.measure(true);
     // Where the camera looks, written at once: a view that comes back shows what it showed.
@@ -250,8 +266,9 @@ export class Rig {
   detach() {
     cancelAnimationFrame(this.raf);
     this.raf = 0;
-    clearTimeout(this.endTimer);
+    this.wheelZoom = null;
     for (const l of [this.live, this.gone]) if (l) for (const el of l.els.keys()) unstretch(el);
+    hidePicture(this.cam);
     if (this.live) this.cam.setState({ laid: null });
     this.live = this.gone = null;
     this.ending = false;
@@ -466,8 +483,10 @@ export class Rig {
     }
     this.takeIn();
     const asked = this.hands.frame(t);
+    if (this.quietFor(t, !!asked.zoom)) this.ending = true;
     const ending = this.ending;
     this.ending = false;
+    if (ending) this.undrawn = false;
     if (asked.dx || asked.dy || asked.zoom) {
       moved();
       this.handAt = performance.now();
@@ -495,30 +514,36 @@ export class Rig {
       this.set(got, "hand");
     }
     if (ending) this.layOut();
-    if (this.hands.busy()) this.schedule();
+    if (this.hands.busy() || this.wheelZoom) this.schedule();
+  }
+
+  /**
+   * Whether a run of ⌘-scroll has ended by the frame at `t`: no ⌘-scroll for G, counted frame by
+   * frame since its last event (`zoomed`: one came for this frame), each frame at most `FRAME_MOST`.
+   * Never by a timer: a frame that ran long (a busy page, a big song's layout) may come before the
+   * events sent meanwhile are heard, so it never ends a zoom alone (VIEW-5).
+   */
+  private quietFor(t: number, zoomed: boolean): boolean {
+    const w = this.wheelZoom;
+    if (!w || zoomed) return false;
+    w.quiet += Math.min(Math.max(0, t - w.at), FRAME_MOST);
+    w.at = Math.max(w.at, t);
+    if (w.quiet < SWIPE_GAP) return false;
+    this.wheelZoom = null;
+    return true;
   }
 
   // ---------------------------------------------------------------- the live zoom (VIEW-5)
 
-  /** The hand's zoom ends in `ms` (0: at the next frame), unless more of it comes first. */
-  private endIn(ms: number) {
-    clearTimeout(this.endTimer);
-    const end = () => {
-      this.ending = true;
-      this.schedule();
-    };
-    if (ms > 0) this.endTimer = window.setTimeout(end, ms);
-    else end();
-  }
-
   /**
-   * Show a zoom by the hand to `zoom`, around the box's point `at`, by stretching what the view
-   * marks: the view stays laid out as it is, and renders nothing (VIEW-8). Laid out at it instead when
-   * that would show past what the view has drawn. Returns false where the view marks nothing: then
+   * Show a zoom by the hand to `zoom`, around the box's point `at`: by the view's picture (a drawn
+   * zoom), or by stretching what the view marks (a live zoom). The view stays laid out as it is, and
+   * renders nothing (VIEW-8). A live zoom is laid out at it instead when that would show past what
+   * the view has drawn. Returns false where the view neither draws its zoom nor marks anything: then
    * it is laid out on each frame, as before.
    */
   private stretch(zoom: number, at: { x: number; y: number }): boolean {
-    if (!this.live && !markedOf(this.cam).size) return false;
+    if (!this.live && !this.drawsNow() && !markedOf(this.cam).size) return false;
     if (zoom === this.cam.getState().zoom) return true;
     const live = this.live ?? this.begin();
     if (!live) return false;
@@ -531,14 +556,26 @@ export class Rig {
       return true;
     }
     this.cam.setState({ x: c.x, y: c.y, zoom: c.zoom, by: "zoom" });
-    this.apply(live);
+    if (!this.apply(live)) {
+      // The picture couldn't paint: laid out at the zoom shown, now and each frame till the zoom
+      // ends, so the view never freezes (VIEW-5).
+      this.undrawn = true;
+      this.layOut();
+      return true;
+    }
     moved_();
     return true;
   }
 
+  /** Whether the view draws this zoom by the hand: it says it does, and its picture hasn't failed in it. */
+  private drawsNow() {
+    return drawsZoom(this.cam) && !this.undrawn;
+  }
+
   /**
-   * A live zoom begins: the camera laid out is where the box is scrolled now and the zoom it draws,
-   * and each marked element takes its stretch's origin. Read at a frame's start, where the page's
+   * A zoom by the hand begins: the camera laid out is where the box is scrolled now and the zoom it
+   * draws; the view's picture shows (a drawn zoom), or each marked element takes its stretch's origin
+   * (a live zoom). Read at a frame's start, where the page's
    * layout is still the last frame's: it costs nothing. The camera shown starts there too, the
    * fractions of a px it kept let go of: so the zoom keeps what the box shows under the fingers, not
    * a point up to half a px off it, which the zoom would carry ×(its stretch) off. That place is the
@@ -548,15 +585,17 @@ export class Rig {
   private begin(): Live | null {
     const els = markedOf(this.cam);
     const box = this.el, writer = this.writer;
-    if (!els.size || !box || !writer) return null;
+    const drawn = this.drawsNow();
+    if ((!drawn && !els.size) || !box || !writer) return null;
     // Everything read before anything is written: one layout, the last frame's.
     const b = this.boxRect();
     const content = { w: box.scrollWidth, h: box.scrollHeight };
-    const places = [...els].map((el) => [el, el.getBoundingClientRect()] as const);
+    const places = drawn ? [] : [...els].map((el) => [el, el.getBoundingClientRect()] as const);
     const s = this.cam.getState();
     const at = writer.written;
     const per = (way: "x" | "y") => (s.stretch[way] ? s.zoom : 1);
     const live: Live = {
+      drawn,
       origin: { x: b.left - at.x + s.origin.x, y: b.top - at.y + s.origin.y },
       els: new Map(),
       extent: {
@@ -583,10 +622,14 @@ export class Rig {
     if (this.cam.getState().laid) this.apply(live, [el]);
   }
 
-  /** One transform on each stretched element: the camera shown, from the one laid out. */
-  private apply(live: Live, els: Iterable<HTMLElement> = live.els.keys()) {
+  /**
+   * The camera shown: painted by the view's picture, or one transform on each stretched element, from
+   * the one laid out. False if the picture couldn't paint.
+   */
+  private apply(live: Live, els: Iterable<HTMLElement> = live.els.keys()): boolean {
+    if (live.drawn) return showPicture(this.cam);
     const st = stretchOf(this.cam.getState());
-    if (!st) return;
+    if (!st) return true;
     const tf = `translate(${st.shift.x}px, ${st.shift.y}px) scale(${st.scale.x}, ${st.scale.y})`;
     const still = markedOf(this.cam);
     for (const el of els) {
@@ -594,6 +637,7 @@ export class Rig {
       if (!still.has(el)) live.els.delete(el);
       else el.style.transform = tf;
     }
+    return true;
   }
 
   /**
@@ -604,6 +648,8 @@ export class Rig {
    * draws its new window between frames, never all in one.
    */
   private covered(c: Camera, live: Live): boolean {
+    // A drawn zoom shows what the view would draw at it, past what it has drawn too: never laid out early.
+    if (live.drawn) return true;
     const s = this.cam.getState();
     const shows = cull(c, s, { x: { margin: 0 }, y: { margin: 0 } });
     const inside = (w: { from: number; to: number }, [from, to]: [number, number]) => w.from >= from && w.to <= to;
@@ -627,9 +673,9 @@ export class Rig {
     this.live = null;
     const s = this.cam.getState();
     if (s.zoom === s.laid?.zoom) {
-      // The zoom drawn already: the box moves to what shows, and the stretch goes, now.
+      // The zoom drawn already: the box moves to what shows, and the stretch or the picture goes, now.
       this.cam.setState({ laid: null });
-      this.unstretchAll(live);
+      this.release(live);
       this.write();
       return true;
     }
@@ -642,11 +688,17 @@ export class Rig {
     return true;
   }
 
-  /** The stretch of a live zoom laid out, taken off now that its render has drawn it. */
+  /** The stretch or the picture of a zoom laid out, taken off now that its render has drawn it. */
   private dropStretch() {
     const gone = this.gone;
     this.gone = null;
-    if (gone) this.unstretchAll(gone);
+    if (gone) this.release(gone);
+  }
+
+  /** A zoom by the hand laid out: its picture hidden, or its stretch taken off. */
+  private release(l: Live) {
+    if (l.drawn) hidePicture(this.cam);
+    else this.unstretchAll(l);
   }
 
   /** A live zoom's stretch off its elements, each keeping its layer `LAYERS_KEPT` ms more. */

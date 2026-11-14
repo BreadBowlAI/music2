@@ -50,14 +50,14 @@ export const BODY_BOTTOM = 4;
 /** A clip's drawing area inside its box. */
 const AREA = { top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)` };
 /** Where the drawing of a clip in a lane starts down the lane, in px; and how tall it is in a lane `h` px tall. */
-const AREA_TOP = CLIP_INSET + BORDER + BODY_TOP;
-const areaHeight = (h: number) => Math.max(0, h - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM);
+export const AREA_TOP = CLIP_INSET + BORDER + BODY_TOP;
+export const areaHeight = (h: number) => Math.max(0, h - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM);
 /**
  * Where the box of a clip from beat `start`, `length` long, is across its lane at zoom `z`, and its
  * drawing inside its border: as the camera places the box (`spanBox`, its ends on the screen's
  * pixels), the one function both read.
  */
-const boxAcross = (start: number, length: number, z: number) => {
+export const boxAcross = (start: number, length: number, z: number) => {
   const box = spanBox(start, start + length, z, CLIP_END, CLIP_MIN);
   const w = box.width ?? 0;
   return { box: { x: box.left, w }, area: { x: box.left + BORDER, w: w - 2 * BORDER } };
@@ -99,7 +99,7 @@ export interface Drawn {
 }
 
 /** What a drawing draws with, in px of its space (`Paint`), each shape also noted in its `drawn`. */
-interface Pen {
+export interface Pen {
   /**
    * The clip whose shapes come next: its beats in the song, `k` px a beat inside its box. On a lane's
    * canvas, its box across (`box`): cleared of what clips before it drew there, as its body covers
@@ -456,7 +456,7 @@ function useDrawing(
  * `fine`, a 2 px mark down each. Only the notes from beat `from` to `to` of the clip (a mark reaches
  * past a thin note: those near too).
  */
-function paintNotes(pen: Pen, notes: NoteClip["notes"], x: number, k: number, h: number, from: number, to: number, fine: boolean) {
+export function paintNotes(pen: Pen, notes: NoteClip["notes"], x: number, k: number, h: number, from: number, to: number, fine: boolean) {
   if (!notes.length) return;
   let lo = Infinity, hi = -Infinity;
   for (const n of notes) {
@@ -476,11 +476,11 @@ function paintNotes(pen: Pen, notes: NoteClip["notes"], x: number, k: number, h:
 }
 
 /** Whether notes whose shortest is `shortest` beats get 2 px marks at zoom `z`. */
-const fineAt = (shortest: number | null, z: number | null) => shortest !== null && z !== null && shortest * z < FINE;
-const shortestOf = (notes: NoteClip["notes"]) => (notes.length ? Math.min(...notes.map((n) => n.length)) : null);
+export const fineAt = (shortest: number | null, z: number | null) => shortest !== null && z !== null && shortest * z < FINE;
+export const shortestOf = (notes: NoteClip["notes"]) => (notes.length ? Math.min(...notes.map((n) => n.length)) : null);
 
 /** A curve through `points` over a clip `length` beats long, from px `x` across, `k` px a beat, in an area `h` px tall, on the lane's scale. */
-function paintCurve(pen: Pen, points: ControlClip["points"], length: number, x: number, k: number, h: number, scale: LaneScale | null) {
+export function paintCurve(pen: Pen, points: ControlClip["points"], length: number, x: number, k: number, h: number, scale: LaneScale | null) {
   const level = (v: number) => scale?.level(v) ?? 0;
   const drawn = (scale?.path ?? line)(points, length);
   pen.curve(
