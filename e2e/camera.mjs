@@ -211,8 +211,8 @@ const lib = await page.evaluate(() => {
   return out;
 });
 check(
-  json(lib?.numbers) === json([50, 25, 16, 20, 100, 0.998, "browser", "stop", 1, 0.5, true, false]),
-  `its numbers, from the owner's swipe probe of 2026-11-14: G 50 ms, rails within 25° after 16 px, broken when the last 100 px turn 20° off, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
+  json(lib?.numbers) === json([50, 25, 16, 25, 100, 0.998, "browser", "stop", 1, 0.5, true, false]),
+  `its numbers, from the owner's swipe probe of 2026-11-14: G 50 ms, rails within 25° after 16 px, broken when the last 100 px turn 25° off, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
 );
 check(
   json(lib?.move) === json([{ x: 130, y: 30, zoom: 24 }, { x: 0, y: 0, zoom: 24 }, { x: 3760, y: 1400, zoom: 24 }, { x: 10.25, y: 20.5, zoom: 24 }]),
@@ -618,12 +618,13 @@ await frames();
   const s3b = await scroll(tl);
   check(s3b.x - s3.x === 200 && near(s3b.y - s3.y, 115.47, 0.5), `a 30° one never rails: 1:1 both ways (${s3b.x - s3.x} × ${s3b.y - s3.y})`);
   await sleep(120);
-  // Straight across, then turning to 45°: on its rail until its last 100 px go more than 20° off it
-  // (the 5th turned event: 20.2°), then free both ways from there; the 28 px held back aren't moved.
+  // Straight across, then turning to 45°: on its rail until its last 100 px go more than 25° off it
+  // (the 7th turned event: 28.8°; the 6th is 24.5°), then free both ways from there; the 42 px held
+  // back aren't moved.
   await feed(at.x, at.y, [...swipe(10, 10, 0), ...swipe(20, 7, 7).map((w) => ({ ...w, t: w.t + 160 }))]);
   await frames();
   const s3c = await scroll(tl);
-  check(s3c.x - s3b.x === 240 && s3c.y - s3b.y === 112, `one that starts straight and turns 45° breaks free once its last 100 px turn 20° off its rail, both ways from there: 240 × 112 (${s3c.x - s3b.x} × ${s3c.y - s3b.y})`);
+  check(s3c.x - s3b.x === 240 && s3c.y - s3b.y === 98, `one that starts straight and turns 45° breaks free once its last 100 px turn 25° off its rail, both ways from there: 240 × 98 (${s3c.x - s3b.x} × ${s3c.y - s3b.y})`);
   await sleep(120);
   // 1500 px across, 3° off, with ±1 px of jitter down each event (a hand's raw deltas), then a
   // glide of the same angle: on its rail to the end (review Q3).
