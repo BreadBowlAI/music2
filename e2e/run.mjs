@@ -120,7 +120,7 @@ export const SUITES = [
   ["s8-audition", "fix", { expect: 51, s: 10, tier: "nightly", why: "speed: a closed page lets go of its note within 1 s" }],
   ["nx-piano", "fix", { expect: 41, s: 6 }],
   ["nx-midi", "fix", { expect: 25, s: 3 }],
-  ["st-record", "fix", { expect: 66, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
+  ["st-record", "fix", { expect: 67, s: 24, tier: "nightly", why: "speed: R records within 2 s", sleeps: "it counts the clicks the capture's clock played in a time" }],
   ["io-record", "fix", { expect: 38, s: 7 }],
   ["rec-takes", "fix", { expect: 41, s: 12 }],
   ["comp", "fix", { expect: 27, s: 3 }],
@@ -151,7 +151,7 @@ export const SUITES = [
   ["fx-fixes", "none", { expect: 75, s: 34 }],
   ["s4-clips", "fix", { expect: 28, s: 3 }],
   ["s8-clips", "fix", { expect: 94, s: 11, tier: "nightly", why: "flake: the left edge dragged a bar right read 8+28 (HANDOFF.md)" }],
-  ["s8-automation", "fix", { expect: 45, s: 4 }],
+  ["s8-automation", "fix", { expect: 46, s: 4 }],
   ["s8-leases", "fix", { expect: 55, s: 14, tier: "nightly", why: "speed: a lease closes within 1 s, and 3 or more tempos are seen mid-drag" }],
   ["st-audio", "fix", { expect: 94, s: 8, tier: "nightly", why: "flake: the revision moved after an MP3 was refused (HANDOFF.md)" }],
   ["pl-zoom", "fix", { expect: 62, s: 20 }],
@@ -228,7 +228,7 @@ export const SUITES = [
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 84, s: 60 }],
+  ["camera", "fix", { expect: 89, s: 60 }],
   // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
   ["zoom-bench", "fix", { expect: 15, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
 ];

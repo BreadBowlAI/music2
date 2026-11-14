@@ -6,8 +6,10 @@
 // - One canvas a lane (`LaneDrawing`) draws all its clips that sit still, each inside its box as the
 //   box is placed. Chrome makes every canvas a layer of its own: one a clip made 416 layers for the
 //   beat song's 36, and a frame with nothing new to draw 5 ms dearer. A clip that moves (dragged, or
-//   a copy where it lands) and a take while it records draw on a canvas of their own, in their own
-//   box (`Notes`, `Curve`): a few at a time.
+//   a copy where it lands), one a later clip lies over (so that one covers it, as each box covered
+//   the one before it) and a take while it records draw on a canvas of their own, in their own box
+//   (`Notes`, `Curve`): a few at a time. A lane's canvas, in the lane's order, clears each clip's
+//   box before it draws the clip, as its body covers what is under it.
 // - Kept by what it draws: a canvas is drawn again only when that changes (the clips, their notes or
 //   points, the colour, the size), and on a zoom: by the app (⌘=, Fit) in the frame it lands in; by
 //   the hand (⌘-scroll, a pinch) once it settles (no zoom for G, `SWIPE_GAP`, nor in a whole frame,
@@ -24,7 +26,7 @@
 
 import clsx from "clsx";
 import { memo, useLayoutEffect, useRef } from "react";
-import { CULL_MARGIN, FINE, SWIPE_GAP, cull, useCameraOf, type CameraState, type CameraStore } from "../camera";
+import { CULL_MARGIN, FINE, SWIPE_GAP, cull, spanBox, useCameraOf, type CameraState, type CameraStore } from "../camera";
 import { countDraw, useRenderCount } from "../lib/frames";
 import type { ControlClip, NoteClip } from "../lib/graph";
 import type { LaneScale } from "../lib/laneScale";
@@ -49,14 +51,14 @@ const AREA = { top: BODY_TOP, height: `calc(100% - ${BODY_TOP + BODY_BOTTOM}px)`
 const AREA_TOP = CLIP_INSET + BORDER + BODY_TOP;
 const areaHeight = (h: number) => Math.max(0, h - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM);
 /**
- * Where the drawing of a clip from beat `start`, `length` long, is across its lane at zoom `z`: as its
- * box is placed, inside its border, on the screen's pixels (`px` of them a px) as the browser paints
- * a box: its ends rounded to them.
+ * Where the box of a clip from beat `start`, `length` long, is across its lane at zoom `z`, and its
+ * drawing inside its border: as the camera places the box (`spanBox`, its ends on the screen's
+ * pixels), the one function both read.
  */
-const areaAcross = (start: number, length: number, z: number, px: number) => {
-  const x = start * z + CLIP_END + BORDER, w = Math.max(length * z - 2 * CLIP_END, CLIP_MIN) - 2 * BORDER;
-  const l = Math.round(x * px) / px;
-  return { x: l, w: Math.round((x + w) * px) / px - l };
+const boxAcross = (start: number, length: number, z: number) => {
+  const box = spanBox(start, start + length, z, CLIP_END, CLIP_MIN);
+  const w = box.width ?? 0;
+  return { box: { x: box.left, w }, area: { x: box.left + BORDER, w: w - 2 * BORDER } };
 };
 
 /** The biggest bitmap a canvas makes, in device px across and down (VIEW-12). */
@@ -90,15 +92,18 @@ export interface Drawn {
   /** The colour it drew in. */
   ink: string;
   clips: DrawnClip[];
+  /** How many times this canvas has drawn, this one included. */
+  n: number;
 }
 
 /** What a drawing draws with, in px of its space (`Paint`), each shape also noted in its `drawn`. */
 interface Pen {
   /**
-   * The clip whose shapes come next: its beats in the song, `k` px a beat inside its box; on a lane's
-   * canvas, its drawing area across (`x`, `w`), which they don't pass, as a box's own drawing doesn't.
+   * The clip whose shapes come next: its beats in the song, `k` px a beat inside its box. On a lane's
+   * canvas, its box across (`box`): cleared of what clips before it drew there, as its body covers
+   * them; and its drawing area (`area`), which its shapes don't pass, as a box's own drawing doesn't.
    */
-  clip(start: number, length: number, k: number, across?: { x: number; w: number }): void;
+  clip(start: number, length: number, k: number, across?: { box: { x: number; w: number }; area: { x: number; w: number } }): void;
   /** A note's box in the ink at `alpha`; with `mark`, a 2 px mark down its middle too. */
   note(x: number, y: number, w: number, h: number, alpha: number, mark: boolean): void;
   /** A curve through `xy`: the shade under it to `foot` at 0.1, then its 1.5 px line. */
@@ -107,10 +112,10 @@ interface Pen {
 
 /**
  * What a drawing draws, at zoom `z` (null: none lends one), `k` px a beat across its space and `h` px
- * tall, holding the song's beats `from` to `to`, on a bitmap of `px` device px a px. A lane's space
- * starts at the lane's left, at beat 0; a clip's own at its drawing area's left, at the clip's start.
+ * tall, holding the song's beats `from` to `to`. A lane's space starts at the lane's left, at beat 0;
+ * a clip's own at its drawing area's left, at the clip's start.
  */
-type Paint = (pen: Pen, z: number | null, k: number, h: number, from: number, to: number, px: number) => void;
+type Paint = (pen: Pen, z: number | null, k: number, h: number, from: number, to: number) => void;
 
 interface Drawing {
   canvas: HTMLCanvasElement & { drawn?: Drawn };
@@ -136,6 +141,9 @@ interface Drawing {
   placed: { left: number; width: number; z: number } | null;
   /** Stretched by a zoom: drawn again once the zoom settles. */
   stale: boolean;
+  /** It drew for a change this frame; another change came since (`request`). */
+  busy: boolean;
+  pending: boolean;
   ctx: CanvasRenderingContext2D | null;
 }
 
@@ -228,7 +236,7 @@ function draw(d: Drawing) {
     c.height = bh;
   }
   const ctx = (d.ctx ??= c.getContext("2d", { willReadFrequently: true }));
-  const drawn: Drawn = { zoom: z, from, to, w, h, scale, ink: d.ink, clips: [] };
+  const drawn: Drawn = { zoom: z, from, to, w, h, scale, ink: d.ink, clips: [], n: (c.drawn?.n ?? 0) + 1 };
   if (ctx && bw && bh) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, bw, bh);
@@ -243,8 +251,9 @@ function draw(d: Drawing) {
         ctx.restore();
         ctx.save();
         if (!across) return;
+        ctx.clearRect(across.box.x, 0, across.box.w, h);
         ctx.beginPath();
-        ctx.rect(across.x, 0, across.w, h);
+        ctx.rect(across.area.x, 0, across.area.w, h);
         ctx.clip();
       },
       note(x, y, nw, nh, alpha, mark) {
@@ -276,7 +285,7 @@ function draw(d: Drawing) {
       },
     };
     ctx.save();
-    d.paint(pen, z, k, h, from, to, sx);
+    d.paint(pen, z, k, h, from, to);
     ctx.restore();
     ctx.globalAlpha = 1;
   }
@@ -285,9 +294,39 @@ function draw(d: Drawing) {
 }
 
 /**
+ * Draw `d` for a change to what it draws: at once, unless it drew for one this frame already; then
+ * once more at the next frame's start, whatever came meanwhile. A clip's own canvas measures its
+ * area first, so it draws once at the size the render gave it (a take that grows each frame would
+ * else draw at the old size, then again as the observer told the new one).
+ */
+function request(d: Drawing) {
+  if (d.busy) {
+    d.pending = true;
+    return;
+  }
+  if (!d.lane) {
+    const r = d.area.getBoundingClientRect();
+    d.size = { w: r.width, h: r.height };
+  }
+  draw(d);
+  d.busy = true;
+  requestAnimationFrame(() => {
+    d.busy = false;
+    if (!d.pending || !all.has(d)) return;
+    d.pending = false;
+    request(d);
+  });
+}
+
+/**
  * Every drawing still stretched by a zoom, drawn again at the start of a frame: after a zoom by the
  * hand, the first frame that finds no zoom for G and none since the frame before; after one by the
  * app, the frame after next (by then the observer has drawn each clip's own whose size it changed).
+ *
+ * This is a detector of its own for the end of a zoom by the hand. Z1, the live zoom (the zoom note's
+ * §2), replaces it: there the camera says when a zoom is laid out, and the canvases draw in that
+ * frame, as for a zoom by the app; `hand`, `zoomed`, `changed`, this loop and the stretch between
+ * draws then go.
  */
 function settle(g: Group, after = 0) {
   cancelAnimationFrame(g.frame);
@@ -321,6 +360,8 @@ const observer =
             draw(d);
             continue;
           }
+          // Its own drawn at this size already (the render that changed it measured it): nothing to do.
+          if (d.holds && d.size?.w === e.contentRect.width && d.size.h === e.contentRect.height) continue;
           d.size = { w: e.contentRect.width, h: e.contentRect.height };
           const g = d.cam && groups.get(d.cam);
           if (!d.holds || !g?.hand || !holdsShown(d, showing(d.cam!.getState()))) draw(d);
@@ -413,7 +454,7 @@ function useDrawing(
   useLayoutEffect(() => {
     const box = area ? area.current : (canvas.current?.parentElement ?? null);
     if (!canvas.current || !box) return;
-    const d: Drawing = { canvas: canvas.current, cam, lane: !area, area: box, start: span.start, length: span.length, size: null, ink, paint, holds: null, narrow, placed: null, stale: false, ctx: null };
+    const d: Drawing = { canvas: canvas.current, cam, lane: !area, area: box, start: span.start, length: span.length, size: null, ink, paint, holds: null, narrow, placed: null, stale: false, busy: false, pending: false, ctx: null };
     me.current = d;
     add(d);
     return () => {
@@ -427,8 +468,8 @@ function useDrawing(
     const d = me.current;
     if (!d) return;
     Object.assign(d, { start: span.start, length: span.length, ink, paint, narrow });
-    // Its first draw is the observer's, once its box is laid out.
-    if (d.holds) draw(d);
+    // A lane's first draw is the observer's, once its box is laid out.
+    if (!d.lane || d.holds) request(d);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [span.start, span.length, ink, cam, ...deps]);
 }
@@ -475,6 +516,36 @@ function paintCurve(pen: Pen, points: ControlClip["points"], length: number, x: 
 /** A clip a lane's canvas draws: a notes clip's audible notes, or an automation clip's points. */
 export type StillClip = { start: number; length: number; notes: NoteClip["notes"] } | { start: number; length: number; points: ControlClip["points"] };
 
+/** Two clips the same by value: their beats, and their notes or points. */
+function sameStill(a: StillClip, b: StillClip) {
+  if (a.start !== b.start || a.length !== b.length) return false;
+  if ("notes" in a && "notes" in b)
+    return a.notes === b.notes || (a.notes.length === b.notes.length && a.notes.every((n, i) => { const m = b.notes[i]; return n.pitch === m.pitch && n.start === m.start && n.length === m.length && n.velocity === m.velocity; }));
+  if ("points" in a && "points" in b) return a.points === b.points || (a.points.length === b.points.length && a.points.every((p, i) => p[0] === b.points[i][0] && p[1] === b.points[i][1]));
+  return false;
+}
+
+/**
+ * `clips`, kept as the list before while each clip is the same by value: a new state of the song
+ * comes with new objects for every lane, and a lane's canvas draws again only when its own clips
+ * changed (VIEW-12). Each clip the same is kept too, so what is worked out from it once stays.
+ */
+export function useKept(clips: StillClip[]): readonly StillClip[] {
+  const was = useRef<readonly StillClip[]>(clips);
+  const before = was.current;
+  if (before === clips) return clips;
+  const by = new Map(before.map((c) => [`${c.start} ${c.length}`, c]));
+  let changed = before.length !== clips.length;
+  const now = clips.map((c, i) => {
+    const old = by.get(`${c.start} ${c.length}`);
+    const kept = old && sameStill(old, c) ? old : c;
+    if (kept !== before[i]) changed = true;
+    return kept;
+  });
+  if (changed) was.current = now;
+  return was.current;
+}
+
 /**
  * The canvas of a lane (VIEW-12), in the lane's box: it draws each of `clips` (those that sit still)
  * inside its box, as the zoom places the box. Over the clips' bodies and borders, under what a clip puts over its drawing
@@ -503,13 +574,15 @@ export const LaneDrawing = memo(function LaneDrawing({
     null,
     { start: 0, length: Infinity },
     color.ink,
-    (pen, z, _k, ah, from, to, px) => {
+    (pen, z, _k, ah, from, to) => {
       if (z === null) return;
+      // In the lane's order, each over the ones before it, as their boxes lie.
       for (const c of clips) {
         if (c.start + c.length < from || c.start > to) continue;
-        const area = areaAcross(c.start, c.length, z, px);
+        const across = boxAcross(c.start, c.length, z);
+        const { area } = across;
         const k = area.w / c.length;
-        pen.clip(c.start, c.length, k, area);
+        pen.clip(c.start, c.length, k, across);
         if ("notes" in c) paintNotes(pen, c.notes, area.x, k, ah, from - c.start, to - c.start, fineAt(shortOf(c), z));
         else paintCurve(pen, c.points, c.length, area.x, k, ah, scale);
       }
@@ -532,7 +605,8 @@ export const LaneDrawing = memo(function LaneDrawing({
 
 /**
  * A clip's own mini piano roll, on a canvas in its box (VIEW-12): for a clip that moves (dragged, or
- * a copy where it lands) and a take while it records; a lane's canvas draws the clips that sit still.
+ * a copy where it lands), one a later clip lies over, and a take while it records; a lane's canvas
+ * draws the others.
  * While the clip's shortest note is under 2 px at the zoom, each note gets a 2 px mark (`marks`:
  * "always" for a take, whose notes have always had them).
  */
@@ -571,7 +645,7 @@ export const Notes = memo(function Notes({
   );
 });
 
-/** A clip's own automation curve, its line and the shade under it, on a canvas in its box: for a clip that moves. */
+/** A clip's own automation curve, its line and the shade under it, on a canvas in its box: for a clip that moves, or one a later clip lies over. */
 const CurveCanvas = memo(function CurveCanvas({ clip, scale, color }: { clip: ControlClip; scale: LaneScale | null; color: TrackColor }) {
   const area = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
@@ -588,7 +662,7 @@ const CurveCanvas = memo(function CurveCanvas({ clip, scale, color }: { clip: Co
 
 /**
  * An automation clip's points over its curve, round at any stretch; the curve itself on its lane's
- * canvas, or on one of its own while it moves (`own`). Values hold before the first point and after
+ * canvas, or on one of its own while it moves or a later clip lies over it (`own`). Values hold before the first point and after
  * the last. The point `picked` is `fg-strong` in a 2px white ring (taste.md §2.8).
  */
 export const Curve = memo(function Curve({
@@ -610,8 +684,8 @@ export const Curve = memo(function Curve({
   return (
     <>
       {own && <CurveCanvas clip={clip} scale={scale} color={color} />}
-      {/* Over the lane's canvas (`z-[2]`), in the curve's drawing area. */}
-      <div aria-hidden data-curve className="absolute left-0 w-full z-[2] pointer-events-none" style={AREA}>
+      {/* In the curve's drawing area, over the curve: over the lane's canvas (`z-[2]`) when that draws it. */}
+      <div aria-hidden data-curve className={clsx("absolute left-0 w-full pointer-events-none", !own && "z-[2]")} style={AREA}>
         {clip.points.map(([b, v], i) => (
           <span
             key={i}

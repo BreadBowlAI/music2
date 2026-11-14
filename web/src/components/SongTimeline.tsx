@@ -77,7 +77,7 @@ import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startRe
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
-import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, Curve, LaneDrawing, Notes, type StillClip } from "./ClipDrawing";
+import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, Curve, LaneDrawing, Notes, useKept, type StillClip } from "./ClipDrawing";
 import { Hatch, usePatternId, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -2009,7 +2009,7 @@ function PlayCap({ headerW }: { headerW: number }) {
  * patterns once, never a row's grid (VIEW-8). Each stretch is placed by the zoom, straight into its style.
  */
 const Grid = memo(function Grid({ meter, id }: { meter: Meter[]; id: string }) {
-  useRenderCount("arrangement.grid");
+  useRenderCount("arrangement.grid.rows");
   return meterSpans(meter, 0, Infinity).map((s, i) => <GridSpan key={s.start} from={s.start} to={s.end} id={`${id}-${i}`} />);
 });
 
@@ -2975,9 +2975,13 @@ function LaneClips({
   handlers.current = { onOpen, onDown, onMenu };
 
   // What a clip of this lane's kind draws inside it.
-  // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3).
-  // Kept while the lane is: a clip's drawing is kept by its clip (VIEW-12).
-  const scale = useMemo(() => (lane.kind === "control" ? laneScale(lane) : null), [lane]);
+  // 0 at the bottom of a clip's drawing, 1 at its top, on the lane's scale (D3). Kept while it maps
+  // values the same (its `key`), whatever new state of the song the lane comes in: a drawing is
+  // drawn again only when what it draws changes (VIEW-12).
+  const fresh = lane.kind === "control" ? laneScale(lane) : null;
+  const keptScale = useRef(fresh);
+  if (keptScale.current?.key !== fresh?.key) keptScale.current = fresh;
+  const scale = keptScale.current;
   const level = (v: number) => scale?.level(v) ?? 0;
   const steps = (c: AnyClip): c is StepClip => lane.kind === "steps" && "points" in c;
   // What a clip of this lane's kind draws inside it: a notes clip's notes and a curve are on the
@@ -3000,28 +3004,40 @@ function LaneClips({
     return `${audioLabel(c)}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)} · drag the top corners to fade` : ""}`;
   };
 
-  // A clip that moves with a drag (moved, not copied, or resized) draws on a canvas of its own; the
-  // others sit still, and the lane's canvas draws them (VIEW-12): kept while the lane, which clips
-  // move and the points being edited are the same.
-  const moving = lane.clips.map((_, i) => {
+  // A clip draws on a canvas of its own, in its box, while it moves with a drag (moved, not copied,
+  // or resized), and while a later clip lies over it, so that one covers its notes, its curve, the
+  // curve's points and its hatching, as each box covered the one before it. The others sit still,
+  // and the lane's canvas draws them (VIEW-12), each kept by value: a new state of the song draws the
+  // lane again only where its clips changed.
+  const covered = useMemo(
+    () =>
+      (lane.clips as AnyClip[]).map((c, i) =>
+        (lane.clips as AnyClip[]).some((o, j) => j > i && o.start < c.start + c.length && o.start + o.length > c.start),
+      ),
+    [lane],
+  );
+  const ownCanvas = lane.clips.map((_, i) => {
     const ref = clipRef(module, lane.key, lane.clips, i);
-    return !!drag && drag.clips.some((x) => sameClip(x.ref, ref)) && (drag.kind !== "move" || !drag.copy);
+    return covered[i] || (!!drag && drag.clips.some((x) => sameClip(x.ref, ref)) && (drag.kind !== "move" || !drag.copy));
   });
-  const movingKey = moving.join();
+  const ownKey = ownCanvas.join();
   const edited = editing && lane.kind === "control" ? editing : null;
-  const still = useMemo(
+  const byLane = lane.kind === "notes" || lane.kind === "control";
+  const still = useKept(
+    useMemo(
     (): StillClip[] =>
-      lane.kind !== "notes" && lane.kind !== "control"
+      !byLane
         ? []
         : (lane.clips as AnyClip[]).flatMap((c, i): StillClip[] => {
-            if (moving[i]) return [];
+            if (ownCanvas[i]) return [];
             if ("notes" in c) return [{ start: c.start, length: c.length, notes: audibleOf(c) }];
             if (!("points" in c) || steps(c)) return [];
             const points = edited && sameClip(edited.clip, clipRef(module, lane.key, lane.clips, i)) ? edited.points : (c as ControlClip).points;
             return [{ start: c.start, length: c.length, points: points as ControlClip["points"] }];
           }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [lane, movingKey, edited, module],
+    [lane, ownKey, edited, module],
+    ),
   );
 
   // The lane's own clips: one being moved away (not copied) isn't drawn here; one moved along this
@@ -3048,6 +3064,7 @@ function LaneClips({
     const lifted = !!d && !!drag && (drag.kind !== "move" || !drag.copy);
     return (
       <Clip
+        byLane={byLane && !ownCanvas[i]}
         key={key(i)}
         id={id(i)}
         clip={drawn}
@@ -3067,7 +3084,7 @@ function LaneClips({
         {inside(
           drawn,
           color,
-          lifted,
+          ownCanvas[i],
           steps(drawn)
             ? step && sameClip(step.clip, ref)
               ? pickedStep(step, drawn.points, !!stepping && sameClip(stepping.clip, ref))
@@ -3100,7 +3117,7 @@ function LaneClips({
       {lane.kind === "control" && lane.default != null && (
         <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * (height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM)} />
       )}
-      {(lane.kind === "notes" || lane.kind === "control") && <LaneDrawing clips={still} color={color} scale={scale} />}
+      {byLane && <LaneDrawing clips={still} color={color} scale={scale} />}
       {own}
       {ghosts}
       {(lane.kind === "notes" || lane.kind === "audio") && <Take module={module} lane={lane.key} color={color} />}
@@ -3133,6 +3150,7 @@ const sameClipBox = (a: Record<string, unknown>, b: Record<string, unknown>) => 
 
 const Clip = memo(function Clip({
   id,
+  byLane,
   ghost,
   hidden,
   clip,
@@ -3151,6 +3169,8 @@ const Clip = memo(function Clip({
 }: {
   /** Its id, or "" for a clip without one of its own. */
   id?: string;
+  /** Its lane's canvas draws it (VIEW-12): what it puts over its drawing goes over that canvas. */
+  byLane?: boolean;
   /** A copy or a moved clip drawn where it lands, under the pointer: not a clip yet. */
   ghost?: boolean;
   /** Moved to another lane while dragged: not drawn here. */
@@ -3215,9 +3235,9 @@ const Clip = memo(function Clip({
       }
     >
       {children}
-      {/* Over the lane's canvas, as over the clip's drawing (VIEW-12). */}
+      {/* Over the clip's drawing: over the lane's canvas, when that draws it (VIEW-12). */}
       {hatched && (
-        <div className="absolute inset-0 z-[2] pointer-events-none">
+        <div className={clsx("absolute inset-0 pointer-events-none", byLane && "z-[2]")}>
           <Hatch />
         </div>
       )}
