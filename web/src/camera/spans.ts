@@ -5,7 +5,7 @@
 // of the whole arrangement anew each frame, 56 ms of a zoom frame on the big song.)
 
 import { useLayoutEffect, type RefObject } from "react";
-import { useCameraOf, type CameraRef, type CameraStore } from "./store";
+import { laidOf, useCameraOf, type CameraRef, type CameraStore } from "./store";
 
 interface Span {
   el: HTMLElement;
@@ -54,15 +54,17 @@ export function useSpan(
     let group = placed.get(cam);
     if (!group) {
       const spans = new Set<Span>();
+      // By the zoom laid out: a live zoom stretches the boxes as they are (VIEW-5).
       const off = cam.subscribe((now, was) => {
-        if (now.zoom !== was.zoom) for (const s of spans) place(s, now.zoom);
+        const zoom = laidOf(now).zoom;
+        if (zoom !== laidOf(was).zoom) for (const s of spans) place(s, zoom);
       });
       placed.set(cam, (group = { spans, off }));
     }
     const span: Span = { el, from, to, inset, min, fine };
     const g = group;
     g.spans.add(span);
-    place(span, cam.getState().zoom);
+    place(span, laidOf(cam.getState()).zoom);
     return () => {
       g.spans.delete(span);
       if (g.spans.size) return;

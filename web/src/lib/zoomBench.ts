@@ -57,6 +57,11 @@ export interface Frame {
   input: number;
   /** The view's zoom once the frame was drawn, as `zoom` read it. */
   zoom: number | null;
+  /**
+   * The zoom the view was laid out at once the frame was drawn, as `laid` read it, while a live zoom
+   * stretched it (taste.md VIEW-5); null when none did.
+   */
+  laid: number | null;
 }
 
 /** One replay: every frame while it lasted, and the view's zoom. */
@@ -84,6 +89,7 @@ interface Live {
   tEnd: number | null;
   input: number;
   zoom: number | null;
+  laid: number | null;
 }
 
 /** An own property of `on` replaced by `with_` until the function this returns is called. */
@@ -99,11 +105,13 @@ function patch(on: object, name: string, with_: (was: PropertyDescriptor) => Pro
  * dispatched on what is under the point then: one the page was too busy for goes late, and those
  * after it back to back, as queued input does. A pinch is `gesturestart`, a `gesturechange` for each
  * scale, and `gestureend`; ⌘-scroll is wheel events with ⌘ held. Every frame is measured from two
- * frames before its first event to 300 ms after its last; `zoom` reads the view's zoom after each.
+ * frames before its first event to 300 ms after its last; `zoom` reads the view's zoom after each,
+ * and `laid` the zoom it is laid out at while a live zoom stretches it (null when none does).
  */
-export async function replay(x: number, y: number, g: Gesture, opts: { gap?: number; zoom?: () => number | null } = {}): Promise<Run> {
+export async function replay(x: number, y: number, g: Gesture, opts: { gap?: number; zoom?: () => number | null; laid?: () => number | null } = {}): Promise<Run> {
   const gap = opts.gap ?? GAP;
   const zoomOf = opts.zoom ?? (() => null);
+  const laidOf = opts.laid ?? (() => null);
   const gesture = (type: string, scale: number) => () => {
     const e = new UIEvent(type, { bubbles: true, cancelable: true });
     for (const [k, v] of Object.entries({ scale, rotation: 0, clientX: x, clientY: y })) Object.defineProperty(e, k, { value: v });
@@ -202,6 +210,7 @@ export async function replay(x: number, y: number, g: Gesture, opts: { gap?: num
     if (!f) return;
     f.tEnd = now();
     f.zoom = zoomOf();
+    f.laid = laidOf();
   };
   const frames: Live[] = [];
   let looping = true;
@@ -210,7 +219,7 @@ export async function replay(x: number, y: number, g: Gesture, opts: { gap?: num
   const loop = (t: number) => {
     if (!looping) return;
     if (frame) frame.forced = forced.raf - frame.forced0;
-    const f: Live = { t, t0: now(), script: 0, scriptEnd: null, forced0: forced.raf, forced: 0, tRO: null, tEnd: null, input: 0, zoom: null };
+    const f: Live = { t, t0: now(), script: 0, scriptEnd: null, forced0: forced.raf, forced: 0, tRO: null, tEnd: null, input: 0, zoom: null, laid: null };
     frame = f;
     frames.push(f);
     wide = !wide;
@@ -288,6 +297,7 @@ export async function replay(x: number, y: number, g: Gesture, opts: { gap?: num
         paint: paint === null ? null : round(paint),
         input: round(f.input),
         zoom: f.zoom,
+        laid: f.laid,
       };
     });
     const zooms = out.map((f) => f.zoom).filter((z): z is number => z !== null);

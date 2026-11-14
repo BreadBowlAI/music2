@@ -8,8 +8,8 @@
 // serving a copy of the web build whose page gets its key and a small driver (the plan and
 // zoomlib's page functions, as text), and opens it in MiniBrowser, full screen on an invisible Xvfb
 // screen of its own, sized to a page of 1440×900 px at `--dpr` device px a px. The page runs the
-// plan itself and posts each run to a listener here. It prints the table and writes every frame to
-// <out>/webkit.json.
+// plan itself and posts each run to a listener here. It prints the table, and the live zoom's frames
+// (zoomlib.mjs's `liveTable`), and writes every frame to <out>/webkit.json.
 //
 // WebKit draws in software here (no graphics chip on a server, and Xvfb has none), so paint costs
 // more than on a Mac; its style, layout and script are the same engine code.
@@ -29,7 +29,7 @@ import http from "node:http";
 import path from "node:path";
 import { execFileSync, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { GESTURES, PLAN, rowsOf, zoomRun, zoomTable } from "../zoomlib.mjs";
+import { GESTURES, PLAN, liveTable, rowsOf, zoomRun, zoomTable } from "../zoomlib.mjs";
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const usage = (msg) => {
@@ -201,6 +201,7 @@ const file = path.join(out, "webkit.json");
 fs.writeFileSync(file, JSON.stringify({ engine: { userAgent: hello?.hello, dpr: hello?.dpr, window: sized(), minibrowser }, logs, results }, null, 1));
 console.log(`\n## ${path.basename(song)}: WebKitGTK (${hello?.hello ?? "?"}), software drawing, ${JSON.stringify(sized())} px at ${hello?.dpr} device px a px\n`);
 console.log(table ?? "No table: see the page's errors above.");
+console.log(`\n${liveTable(results)}`);
 console.log(`\nEvery frame: ${file}`);
 stopAll();
 process.exit(results.length === PLAN.length ? 0 : 1);

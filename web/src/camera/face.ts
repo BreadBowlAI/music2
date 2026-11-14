@@ -7,6 +7,7 @@ import * as numbers from "./numbers";
 import { rigs } from "./rig";
 import { cameraNames, cameraNow } from "./store";
 import { movingNow, setGlide } from "./state";
+import { markedOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -26,6 +27,14 @@ export const face = {
   now: (name: string) => {
     const cam = cameraNow(name);
     return cam ? { ...cam.getState() } : null;
+  },
+  /**
+   * What the camera mounted as `name` stretches in a live zoom (VIEW-5): each marked element's
+   * transform and pointer-events, as the camera wrote them ("" where it wrote none).
+   */
+  stretched: (name: string) => {
+    const cam = cameraNow(name);
+    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform, pointer: el.style.pointerEvents })) : [];
   },
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,

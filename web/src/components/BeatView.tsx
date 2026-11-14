@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { Plus, ZoomIn, ZoomOut } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
-import { onCamera, useCamera, useCameraState, useCull, useZoomOf } from "../camera";
+import { useEffect, useRef, useState, type Ref } from "react";
+import { onCamera, useCamera, useCameraState, useCull, useStretch, useZoomOf } from "../camera";
 import { send } from "../lib/clips";
 import { barAt, bars as barList, findLane, graphApi, lockReason, moduleName, position, type GraphState, type DrumKit, type DrumRow, type Meter, type TimelineView } from "../lib/graph";
 import { clean, GRID_VIEW, useGrid } from "../lib/grid";
@@ -16,7 +16,7 @@ import { DockSlot } from "./Dock";
 import { undoAction } from "./GraphCanvas";
 import GridChip from "./GridChip";
 import { arrived, refreshed } from "./Tracks";
-import { PlayLine, Ruler } from "./NoteView";
+import { PlayLine, placeStrip, Ruler, stripStyle } from "./NoteView";
 import { Button, EmptyState, keepFocus, MenuRow, Popover } from "./ui";
 
 // The beat grid (KIT-10 to KIT-15): a drum kit's Drum tracks as rows of steps, as FL Studio's step
@@ -157,7 +157,10 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   // the window moving when that falls under 2 beats.
   const cull = useCull(camera, "x", { x: { margin: 4, step: 2 } }).x;
   // The velocity strip under the grid scrolls with it, written as the camera moves: nothing renders.
-  useEffect(() => onCamera(camera, (now) => strip.current && (strip.current.style.transform = `translateX(${-Math.round(now.x)}px)`)), [camera]);
+  useEffect(() => onCamera(camera, (now) => void (strip.current && placeStrip(strip.current, now))), [camera]);
+  // What a live zoom stretches (VIEW-5): the ruler, the bar lines, each row's steps and the playhead;
+  // the strip follows the zoom shown by its own style.
+  const stretch = useStretch(camera);
   // What gestures asked, shown until the song shows it; and a drag along a row, or of a velocity, under
   // way (in refs, as pointer events come faster than renders; `redraw` shows them).
   const [asked, setAsked] = useState<Asked[]>([]);
@@ -337,10 +340,10 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
           <div className="relative" style={{ width: NAMES_W + width, height: ROLL_RULER_H + kit.rows.length * ROW_H }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: NAMES_W }} />
-              <Ruler width={width} ppb={ppb} meter={meter} start={0} />
+              <Ruler width={width} ppb={ppb} meter={meter} start={0} stretch={stretch} />
             </div>
             {/* A line at each bar, behind the steps. */}
-            <div className="absolute bottom-0 pointer-events-none" style={{ top: ROLL_RULER_H, left: NAMES_W, width }}>
+            <div ref={stretch} className="absolute bottom-0 pointer-events-none" style={{ top: ROLL_RULER_H, left: NAMES_W, width }}>
               {barList(meter, end).map((b) => (
                 <div key={b.bar} className="absolute inset-y-0 w-px bg-line-strong" style={{ left: b.start * ppb }} />
               ))}
@@ -383,6 +386,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
                     ppb={ppb}
                     tone={t}
                     width={width}
+                    stretch={stretch}
                     locked={locked}
                     isOn={(s) => isOn(row.track, hits, s)}
                     onDown={(e) => onRowDown(e, row, hits)}
@@ -392,7 +396,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
                 </div>
               );
             })}
-            <div className="absolute bottom-0 pointer-events-none" style={{ top: ROLL_RULER_H, left: NAMES_W, width }}>
+            <div ref={stretch} className="absolute bottom-0 pointer-events-none" style={{ top: ROLL_RULER_H, left: NAMES_W, width }}>
               <PlayLine start={0} ppb={ppb} width={width} />
             </div>
           </div>
@@ -412,8 +416,8 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
         <div className="relative flex-1 min-w-0 overflow-hidden">
           <div
             ref={strip}
-            className="absolute inset-y-0 left-0 touch-none"
-            style={{ width, transform: `translateX(${-Math.round(camera.now().x)}px)` }}
+            className="absolute inset-y-0 left-0 origin-top-left touch-none"
+            style={{ width, ...stripStyle(camera.now()) }}
             onPointerDown={onVelDown}
             onPointerMove={onVelMove}
             onPointerUp={(e) => onVelUp(e)}
@@ -465,6 +469,7 @@ function Cells({
   ppb,
   tone,
   width,
+  stretch,
   locked,
   isOn,
   onDown,
@@ -483,6 +488,8 @@ function Cells({
   ppb: number;
   tone: TrackColor;
   width: number;
+  /** Its view's mark for what a live zoom stretches (VIEW-5). */
+  stretch: Ref<HTMLDivElement>;
   locked: string | null;
   isOn: (s: Step) => boolean;
   onDown: (e: React.PointerEvent<HTMLDivElement>) => void;
@@ -492,6 +499,7 @@ function Cells({
   useRenderCount("beat.rows");
   return (
     <div
+      ref={stretch}
       data-testid="beat-row"
       data-row={row.track}
       data-lane={row.lane}
