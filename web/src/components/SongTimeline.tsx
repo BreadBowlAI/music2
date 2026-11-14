@@ -77,7 +77,7 @@ import { addTrack, END, INSTRUMENT_DRAG, openInstruments, openTrackMenu, startRe
 import { MarkPopover, placeOf, RulerMenu } from "./SongBar";
 import { RulerMarkers } from "./Markers";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
-import { BODY_BOTTOM, BODY_TOP, Curve, Notes } from "./ClipDrawing";
+import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, Curve, LaneDrawing, Notes, type StillClip } from "./ClipDrawing";
 import { Hatch, usePatternId, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -89,10 +89,6 @@ import Take from "./Take";
 import { exportMidi } from "../lib/midiFiles";
 import { useGlows } from "../lib/notice";
 import { loadRecordOptions, useRecordOptions } from "../lib/record";
-
-/** A clip sits this far inside its row, inside its 1px border; its drawing `BODY_TOP` and `BODY_BOTTOM` inside that. */
-const CLIP_INSET = 4;
-const BORDER = 1;
 
 const beats = (n: number) => Number(n.toFixed(3));
 
@@ -2984,13 +2980,15 @@ function LaneClips({
   const scale = useMemo(() => (lane.kind === "control" ? laneScale(lane) : null), [lane]);
   const level = (v: number) => scale?.level(v) ?? 0;
   const steps = (c: AnyClip): c is StepClip => lane.kind === "steps" && "points" in c;
-  const inside = (c: AnyClip, tone: TrackColor, pickedPoint = -1, wave?: WaveEdit) =>
+  // What a clip of this lane's kind draws inside it: a notes clip's notes and a curve are on the
+  // lane's canvas while the clip sits still, on one of its own while it moves (`own`, VIEW-12).
+  const inside = (c: AnyClip, tone: TrackColor, own: boolean, pickedPoint = -1, wave?: WaveEdit) =>
     "notes" in c ? (
-      <Notes notes={audibleOf(c)} start={c.start} length={c.length} color={tone} />
+      own ? <Notes notes={audibleOf(c)} start={c.start} length={c.length} color={tone} /> : null
     ) : steps(c) ? (
       <Steps clip={c} options={lane.kind === "steps" ? lane.options : []} color={tone} picked={pickedPoint} />
     ) : "points" in c ? (
-      <Curve clip={c} scale={scale} color={tone} picked={pickedPoint} />
+      <Curve clip={c} scale={scale} color={tone} picked={pickedPoint} own={own} />
     ) : (
       <Wave clip={c} color={tone} edit={wave} />
     );
@@ -3001,6 +2999,30 @@ function LaneClips({
     if ("points" in c) return `${span(c)}${editable ? `\nClick the line to add a point · drag a point to move it · B to draw · drag elsewhere to move the clip · ${mod.alt}-drag to copy` : ""}`;
     return `${audioLabel(c)}, ${span(c)}${how ? `\n${how[0].toUpperCase()}${how.slice(1)} · drag the top corners to fade` : ""}`;
   };
+
+  // A clip that moves with a drag (moved, not copied, or resized) draws on a canvas of its own; the
+  // others sit still, and the lane's canvas draws them (VIEW-12): kept while the lane, which clips
+  // move and the points being edited are the same.
+  const moving = lane.clips.map((_, i) => {
+    const ref = clipRef(module, lane.key, lane.clips, i);
+    return !!drag && drag.clips.some((x) => sameClip(x.ref, ref)) && (drag.kind !== "move" || !drag.copy);
+  });
+  const movingKey = moving.join();
+  const edited = editing && lane.kind === "control" ? editing : null;
+  const still = useMemo(
+    (): StillClip[] =>
+      lane.kind !== "notes" && lane.kind !== "control"
+        ? []
+        : (lane.clips as AnyClip[]).flatMap((c, i): StillClip[] => {
+            if (moving[i]) return [];
+            if ("notes" in c) return [{ start: c.start, length: c.length, notes: audibleOf(c) }];
+            if (!("points" in c) || steps(c)) return [];
+            const points = edited && sameClip(edited.clip, clipRef(module, lane.key, lane.clips, i)) ? edited.points : (c as ControlClip).points;
+            return [{ start: c.start, length: c.length, points: points as ControlClip["points"] }];
+          }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [lane, movingKey, edited, module],
+  );
 
   // The lane's own clips: one being moved away (not copied) isn't drawn here; one moved along this
   // lane, or resized, is drawn where it goes.
@@ -3045,6 +3067,7 @@ function LaneClips({
         {inside(
           drawn,
           color,
+          lifted,
           steps(drawn)
             ? step && sameClip(step.clip, ref)
               ? pickedStep(step, drawn.points, !!stepping && sameClip(stepping.clip, ref))
@@ -3066,7 +3089,7 @@ function LaneClips({
             const c = { ...d.clip, start: clean(d.clip.start + drag.by) };
             return (
               <Clip key={`ghost:${d.ref.module}.${d.ref.lane}:${d.ref.id}`} ghost clip={c} color={d.color} title="" dragged>
-                {inside(c, d.color)}
+                {inside(c, d.color, true)}
               </Clip>
             );
           })
@@ -3077,6 +3100,7 @@ function LaneClips({
       {lane.kind === "control" && lane.default != null && (
         <Fallback clips={lane.clips} y={CLIP_INSET + BORDER + BODY_TOP + (1 - level(lane.default)) * (height - 2 * (CLIP_INSET + BORDER) - BODY_TOP - BODY_BOTTOM)} />
       )}
+      {(lane.kind === "notes" || lane.kind === "control") && <LaneDrawing clips={still} color={color} scale={scale} height={height} />}
       {own}
       {ghosts}
       {(lane.kind === "notes" || lane.kind === "audio") && <Take module={module} lane={lane.key} color={color} />}
@@ -3156,7 +3180,7 @@ const Clip = memo(function Clip({
   const handles = !!onPointerDown && editable;
   // Placed in beats by the camera's zoom, straight into its style: a zoom renders no clip (VIEW-12).
   const box = useRef<HTMLDivElement>(null);
-  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: 1, min: 4 });
+  useSpan(ARRANGEMENT, box, clip.start, clip.start + clip.length, { inset: CLIP_END, min: CLIP_MIN });
   return (
     <div
       ref={box}
@@ -3191,7 +3215,12 @@ const Clip = memo(function Clip({
       }
     >
       {children}
-      {hatched && <Hatch />}
+      {/* Over the lane's canvas, as over the clip's drawing (VIEW-12). */}
+      {hatched && (
+        <div className="absolute inset-0 z-[2] pointer-events-none">
+          <Hatch />
+        </div>
+      )}
       {/* Either edge resizes: 6 px each (design-8b §7.5). */}
       {handles && (
         <>

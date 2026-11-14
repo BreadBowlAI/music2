@@ -4,6 +4,7 @@
 //
 //   node e2e/pl-lanes.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import { check, done, open, read, sleep, until, write } from "./fixlib.mjs";
+import { drawings } from "./drawlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { browser, page, errors, api, state, caughtUp, key } = await open(1440, 900);
@@ -14,22 +15,26 @@ const lane = async (k) => (await state()).timeline.tracks.find((t) => t.module =
  * The drawing of the first clip of lane `addr` ("bass.cutoff"): its box on screen, the vertices of the
  * line its canvas drew (taste.md VIEW-12), its points' centres.
  */
-const drawing = (addr) =>
-  page.evaluate((addr) => {
-    const body = document.querySelector(`[data-lane="${addr}"] [data-clip] [data-curve]`);
-    if (!body) return null;
-    const r = body.getBoundingClientRect();
-    const canvas = body.querySelector("canvas[data-drawing]");
-    const d = canvas?.drawn;
-    const c = canvas?.getBoundingClientRect();
-    // The line's vertices on screen, as the canvas shows them.
-    const line = d && c ? d.line.map(([x, y]) => ({ x: c.left + (x * c.width) / d.w, y: c.top + (y * c.height) / d.h })) : [];
-    const points = [...body.closest("[data-clip]").querySelectorAll("[data-point]")].map((p) => {
-      const b = p.getBoundingClientRect();
-      return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
-    });
-    return { top: r.top, left: r.left, width: r.width, height: r.height, vertices: line.length, line, points };
-  }, addr);
+const drawing = async (addr) => {
+  const clip = `[data-lane="${addr}"] [data-clip]`;
+  const [d] = await page.$$eval(clip, drawings).catch(() => []);
+  const body = await page
+    .evaluate((clip) => {
+      const body = document.querySelector(`${clip} [data-curve]`);
+      if (!body) return null;
+      const r = body.getBoundingClientRect();
+      const points = [...body.closest("[data-clip]").querySelectorAll("[data-point]")].map((p) => {
+        const b = p.getBoundingClientRect();
+        return { x: b.left + b.width / 2, y: b.top + b.height / 2 };
+      });
+      return { top: r.top, left: r.left, width: r.width, height: r.height, points };
+    }, clip)
+    .catch(() => null);
+  if (!body) return null;
+  // The line's vertices on screen, as the canvas shows them.
+  const line = (d?.line ?? []).map(([x, y]) => ({ x, y }));
+  return { ...body, vertices: line.length, line };
+};
 /** Whether the line its canvas drew passes through each of its points, within `px`. */
 const throughPoints = (d, px = 1.5) => !!d && d.points.length > 0 && d.points.every((p) => d.line.some((v) => Math.hypot(v.x - p.x, v.y - p.y) <= px));
 
