@@ -83,41 +83,39 @@ The one real layout at the end still costs what a frame costs today, 38 to 51 ms
 
 ### Measured after Z1
 
-Track `live-zoom` built Z1. Today is `main` at `6d4963eb`; Z1 is the track's branch. Both were measured in turn on one machine, with the WebKit tool (WebKitGTK 2.52, drawing in software) and `zoom-bench` (headless Chrome 133), at 1440×900 and 2 device px a px. Each gesture ran three times over the timeline, from 24 px a beat: the owner's A13 pinch (out to 0.44 and back) and a run of ⌘-scroll (out and back). "Work" is a frame's main-thread time, as the zoom bench splits it.
+Track `live-zoom` built Z1 on top of Z2. Today is `main` at `229aec41`, Z2 in (a zoom by the hand lays the tracks out each frame, and draws the canvases again once it settles); Z1 is the track's branch merged with it. Both were measured in turn on one machine, two rounds each, with the WebKit tool (WebKitGTK 2.52, drawing in software) and `zoom-bench` (headless Chrome 133), at 1440×900 and 2 device px a px. The machine was busy (load 10 to 30 on 32 threads), the same for both. Each round ran each gesture three times over the timeline, from 24 px a beat: the owner's A13 pinch (out to 0.44 and back) and a run of ⌘-scroll (out and back). "Work" is a frame's main-thread time, as the zoom bench splits it.
 
 Work per frame while the gesture lasts, in ms: median (95th percentile); then the frames over 8.3 ms, of all the frames drawn:
 
 | Song, engine, gesture | Today | Z1 |
 |---|---|---|
-| Beat, WebKit, pinch | 37 (51); 41 of 46 | 9 (46); 61 of 111 |
-| Beat, WebKit, ⌘-scroll | 40 (55); 45 of 48 | 8 (46); 55 of 122 |
-| Big, WebKit, pinch | 94 (115); 19 of 21 | 16 (89); 89 of 93 |
-| Big, WebKit, ⌘-scroll | 99 (110); 18 of 21 | 23 (85); 89 of 96 |
-| Beat, Chrome, pinch | 22 (36); 138 of 152 | 2.3 (17); 10 of 168 |
-| Beat, Chrome, ⌘-scroll | 23 (37); 157 of 168 | 2.2 (3.5); 3 of 179 |
-| Big, Chrome, pinch | 43 (62); 338 of 340 | 10 (33); 101 of 155 |
-| Big, Chrome, ⌘-scroll | 63 (76); 353 of 354 | 12 (21); 115 of 166 |
+| Beat, WebKit, pinch | 34 (61); 68 of 76 | 8 (47); 66 of 156 |
+| Beat, WebKit, ⌘-scroll | 36 (62); 73 of 79 | 7 (43); 63 of 180 |
+| Big, WebKit, pinch | 59 (151); 37 of 44 | 22 (121); 80 of 84 |
+| Big, WebKit, ⌘-scroll | 74 (150); 35 of 38 | 19 (128); 85 of 93 |
+| Beat, Chrome, pinch | 12 (25); 263 of 313 | 3.2 (25); 47 of 315 |
+| Beat, Chrome, ⌘-scroll | 11 (24); 304 of 347 | 3.2 (9.5); 23 of 352 |
+| Big, Chrome, pinch | 50 (74); 657 of 661 | 13 (48); 219 of 319 |
+| Big, Chrome, ⌘-scroll | 57 (94); 713 of 713 | 13 (43); 254 of 331 |
 
 Z1's frames apart, in ms: median / 95th percentile, from the first event to 200 ms after the last. A **stretched** frame is only a transform apart from the frame before. A **laid-out** frame draws a new zoom: an early one, as a zoom out nears the edge of what is drawn (A13 goes out to 0.44, past it), or the one at the end. Then the frame after each.
 
 | Song, engine, gesture | stretched frames | their work | laid out, a run | a laid-out frame | the frame after it | Today's frames |
 |---|---|---|---|---|---|---|
-| Beat, WebKit, pinch | 94 | 9 / 14 | 3 | 47 / 71 | 10 / 44 | 37 / 51 |
-| Beat, WebKit, ⌘-scroll | 106 | 8 / 12 | 4 | 47 / 80 | 11 / 21 | 40 / 55 |
-| Big, WebKit, pinch | 74 | 16 / 49 | 3 | 89 / 121 | 28 / 40 | 94 / 115 |
-| Big, WebKit, ⌘-scroll | 71 | 20 / 46 | 7.3 | 81 / 99 | 77 / 92 | 99 / 110 |
-| Beat, Chrome, pinch | 147 | 2.3 / 3.7 | 3 | 19 / 20 | 2.4 / 8.4 | 22 / 36 |
-| Beat, Chrome, ⌘-scroll | 174 | 2.2 / 3.3 | 2 | 22 / 23 | 2.2 / 2.8 | 23 / 37 |
-| Big, Chrome, pinch | 138 | 10 / 15 | 3 | 38 / 61 | 9 / 10 | 43 / 62 |
-| Big, Chrome, ⌘-scroll | 159 | 11 / 20 | 2 | 73 / 77 | 18 / 18 | 63 / 76 |
+| Beat, WebKit, pinch | 130 | 8 / 16 | 2 | 50 / 80 | 13 / 49 | 34 / 61 |
+| Beat, WebKit, ⌘-scroll | 161 | 7 / 15 | 2.7 | 52 / 94 | 11 / 40 | 36 / 62 |
+| Big, WebKit, pinch | 55 | 19 / 60 | 2.8 | 116 / 171 | 42 / 133 | 59 / 151 |
+| Big, WebKit, ⌘-scroll | 70 | 17 / 47 | 3.2 | 97 / 183 | 41 / 141 | 74 / 150 |
+| Beat, Chrome, pinch | 284 | 3 / 11 | 2.5 | 34 / 55 | 13 / 39 | 12 / 25 |
+| Beat, Chrome, ⌘-scroll | 339 | 3 / 7.5 | 2.2 | 33 / 49 | 16 / 27 | 11 / 24 |
+| Big, Chrome, pinch | 286 | 13 / 30 | 2.7 | 77 / 208 | 29 / 59 | 50 / 74 |
+| Big, Chrome, ⌘-scroll | 312 | 12 / 31 | 2.8 | 85 / 166 | 35 / 55 | 57 / 94 |
 
-These were measured at `bb1e472b`. The fixes after the review (Notes and the beat grid given room where a zoom looked, a zoom started from the box's whole px, the browser's move taken in) change nothing these runs measure in the timeline.
+- **A pinch frame on a beat song in WebKit went from 34 ms to 8**, and WebKit here drew 156 frames in the time it drew 76. On the big song, 59 to 22. In Chrome, 12 to 3.2 and 50 to 13.
+- **A laid-out frame costs more than one of today's zoom frames:** 50 ms on the beat song in WebKit against 34, 34 against 12 in Chrome. It lays the view out and draws every lane's canvas anew in the same frame; today a hand zoom draws them only once it settles, in a frame of its own (21 ms on the beat song in Chrome, §3), which these columns don't count. It comes two or three times a pinch: the early layouts and the end. The frame after it is cheap.
+- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit (measured before Z2 landed).
 
-- **A pinch frame on a beat song in WebKit went from 37 ms to 9**, as the prototype said (38 to 8). WebKit here drew 111 frames in the time it drew 46. On the big song, 94 to 16.
-- **A laid-out frame costs about what a frame cost before**, 47 ms on the beat song in WebKit, and the frame after it is cheap. Z2 makes the laid-out ones cheaper.
-- **The first frame of a zoom** puts what stretches on layers of its own: about 20 ms on the beat song in WebKit.
-
-**Departures from this note**, each measured. The lead kept all three.
+**Departures from this note**, each measured (before Z2 landed, on `main` at `6d4963eb`). The lead kept all three.
 
 1. **The stretched layers take the pointer.** The note said `pointer-events: none`. It is inherited, so WebKit works out every clip's style anew at both ends of a zoom, and it found nothing faster. One element over the view to take the pointer instead was worse: WebKit composites it over the layers. The A/B, in WebKit on the beat song (pinch, ms, median / 95th percentile; two runs each, in turn):
 
