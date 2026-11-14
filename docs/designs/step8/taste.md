@@ -1095,7 +1095,9 @@ already. Chrome's lines and pages, which only the suites send, are 33 px and the
 events like any other. Where the page gets none (WebKitGTK, on Linux), the camera glides itself:
 from one frame after a swipe's last event, at the speed of its last 50 ms, slowing as an iPhone's
 scroll view does (0.998 of its speed kept each ms), only after a swipe in pixels (a trackpad's: a
-mouse's wheel, in lines, never glides). The next wheel event, a click or a key stops it, and so does
+mouse's wheel, in lines, never glides). It goes by the clock: where it is depends only on the time
+since the frame that took the swipe's last event, never on how many frames came since or how late
+they came. The next wheel event, a click or a key stops it, and so does
 an edge, each way. After a click, a key or a move by the app, wheel events are dropped until a gap
 of G, so a glide still arriving from the system stops too; Follow's page stops only the camera's own
 glide (VIEW-9). With reduced motion there is no glide of the camera's own.

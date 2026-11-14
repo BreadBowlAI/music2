@@ -62,11 +62,14 @@ const setScroll = (sel, x, y) => page.$eval(sel, (e, x, y) => { if (x !== null) 
 /**
  * Wheel events at known times (ms after the first), each dispatched on whatever is under (x, y) then,
  * as a trackpad's: `dx`, `dy`, `mode`, `cancelable`, `ctrl`, `meta`, `shift`. `spread` ms apart in
- * real time (0: all in one task).
+ * real time (0: all in one task). With `watch` ({ name, frames, late }): then, for that many frames,
+ * each frame's time and camera `name`'s x, read after the camera's own frame (its first event asked
+ * for one before this did); frame `late` runs 100 ms long, so the one after it comes late, as frames
+ * do on a busy machine.
  */
-const feed = (x, y, list, spread = 0) =>
+const feed = (x, y, list, spread = 0, watch = null) =>
   page.evaluate(
-    async (x, y, list, spread) => {
+    async (x, y, list, spread, watch) => {
       // A second after the last feed's last event at least: each feed is a swipe of its own.
       const base = Math.max(performance.now(), (window.__stamp ?? 0) + 1000);
       window.__stamp = base + (list.at(-1)?.t ?? 0);
@@ -88,11 +91,24 @@ const feed = (x, y, list, spread = 0) =>
         el.dispatchEvent(e);
         if (spread) await new Promise((r) => setTimeout(r, spread));
       }
+      if (!watch) return null;
+      const seen = [];
+      await new Promise((done) => {
+        const one = (t) => {
+          seen.push({ t, x: window.m2canvas?.camera?.now(watch.name)?.x ?? null });
+          if (seen.length === watch.late) for (const end = performance.now() + 100; performance.now() < end; );
+          if (seen.length < watch.frames) requestAnimationFrame(one);
+          else done();
+        };
+        requestAnimationFrame(one);
+      });
+      return seen;
     },
     x,
     y,
     list,
     spread,
+    watch,
   );
 /** `n` events of a swipe, `apart` ms apart, each moving (dx, dy). */
 const swipe = (n, dx, dy, apart = 16, more = {}) => Array.from({ length: n }, (_, i) => ({ t: i * apart, dx, dy, ...more }));
@@ -1402,15 +1418,21 @@ const post = (p, body) => api(p, { method: "POST", body: json(body) });
   await frames();
   await sleep(150);
   const at = await lanes();
-  await feed(at.x, at.y, swipe(10, 10, 0));
-  const xs = [];
-  for (let i = 0; i < 8; i++) {
-    await frames(1);
-    xs.push((await arr())?.x ?? 0);
-  }
-  const steps = xs.slice(1).map((x, i) => x - xs[i]);
-  const slowing = steps.slice(2).every((s, i) => s > 0 && s <= steps[i + 1] + 1e-9);
-  check(xs.at(-1) > 100 + 20 && slowing, `with Linux's flag, a swipe's glide carries on after it, slowing (${xs.map((x) => x.toFixed(1)).join(", ")})`);
+  // The swipe (10 events of 10 px, 16 ms apart), then its next 10 frames: the third runs 100 ms
+  // long, so the fourth comes late, as frames do on a busy machine (GitHub's Mac).
+  const seen = (await feed(at.x, at.y, swipe(10, 10, 0), 0, { name: "arrangement", frames: 10, late: 3 })) ?? [];
+  // VIEW-4, by the clock: from the frame that took the swipe's last event (its 100 px), at the speed
+  // of its last 50 ms (30 px in 48 ms), keeping 0.998 of it each ms. So t ms after that frame the
+  // camera is at 100 + v (1 − 0.998^t) / −ln 0.998, however late its frames come, and each frame's
+  // speed (its move over its time) is less than the one before.
+  const v = 30 / 48, k = -Math.log(0.998), t0 = seen[0]?.t ?? 0;
+  const off = Math.max(...seen.map((s) => Math.abs((s.x ?? 0) - (100 + (v * (1 - 0.998 ** (s.t - t0))) / k))));
+  const speeds = seen.slice(1).map((s, i) => (s.x - seen[i].x) / (s.t - seen[i].t));
+  const slowing = speeds.every((s, i) => s > 0 && (i === 0 || s < speeds[i - 1]));
+  check(
+    seen.length === 10 && seen[0].x === 100 && seen.at(-1).x > 100 + 20 && slowing && off < 0.5,
+    `with Linux's flag, a swipe's glide carries on after it, slowing by the clock, a late frame too: ${off.toFixed(2)} px from where the clock puts it (${seen.map((s) => `${(s.t - t0).toFixed(0)} ms ${s.x?.toFixed(1)}`).join(", ")})`,
+  );
   await feed(at.x, at.y, [{ t: 0, dx: 1 }]);
   await frames(2);
   const x0 = (await arr())?.x ?? 0;
