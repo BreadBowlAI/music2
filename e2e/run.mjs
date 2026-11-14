@@ -223,7 +223,7 @@ export const SUITES = [
   ["own-base", "fix", { expect: 36, s: 20 }],
   ["own-window", "fix", { expect: 15, s: 15 }],
   // Track camera-probe: the command palette's frame meter and swipe probe (taste.md VIEW-10), before the camera.
-  ["camera-probe", "fix", { expect: 54, s: 20 }],
+  ["camera-probe", "fix", { expect: 58, s: 30 }],
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.

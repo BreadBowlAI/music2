@@ -114,13 +114,16 @@ export function frames(): Frames {
   return { fps, slowest: Math.round(slowest * 10) / 10, renders, total: { ...total }, measured };
 }
 
+/** The zoom bench, a file of its own, loaded only when asked for: by a suite here, or by the swipe probe's last step (VIEW-10). */
+const bench = () => import("./zoomBench");
+
 declare global {
   interface Window {
-    /** What the page gives the browser suites, and only that: the meter's numbers, and the camera library's face (VIEW-10). */
-    m2canvas?: { frames: typeof frames; camera: typeof face };
+    /** What the page gives the browser suites, and only that: the meter's numbers, the camera library's face, and the zoom bench (VIEW-10). */
+    m2canvas?: { frames: typeof frames; camera: typeof face; bench: typeof bench };
   }
 }
-window.m2canvas = { frames, camera: face };
+window.m2canvas = { frames, camera: face, bench };
 
 /** Whether the frame meter shows (the command palette's Show frame rate). The window's own, not kept. */
 export const useFrameMeter = create<{ on: boolean }>(() => ({ on: false }));
