@@ -95,7 +95,9 @@ export const rowsOf = (results) => GESTURES.map((g) => [`${g}, ${results.filter(
  * no live zoom every frame of a zoom is laid out.
  */
 export async function zoomLive(first, rows) {
-  return (await window.m2canvas.bench()).liveTable(first, rows);
+  const bench = await window.m2canvas.bench();
+  // A page from before the live zoom has no split: its every zoom frame is laid out.
+  return bench.liveTable ? bench.liveTable(first, rows) : "No live zoom's frames apart: this page's zoom bench has no live zoom.";
 }
 
 /**

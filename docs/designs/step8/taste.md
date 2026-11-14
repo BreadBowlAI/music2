@@ -1428,10 +1428,10 @@ no clip: each clip's box is placed by the zoom straight into its style.
 - A clip's box MUST lie on the screen's own pixels, and its canvas MUST find it by the same function
   that places it (`spanBox`), so the two never disagree.
 - A canvas MUST be drawn again only when what it draws changes (the clips, their notes or points, the
-  colour, the size), at most once a frame for such changes, and a zoom by the hand (⌘-scroll, a pinch)
-  draws it again only once the zoom settles (no zoom for G, nor in a whole frame): until then it
-  stretches with the view, each note still at its time. A zoom by the app (⌘=, Fit) draws it again in
-  the frame it lands in. A pan draws no canvas again, unless what shows reaches past the part a canvas
+  colour, the size), at most once a frame for such changes, and when the zoom the view is laid out at
+  changes, in the frame it lands in: a zoom by the app (⌘=, Fit), and a live zoom's end or early
+  layout (VIEW-5). While a live zoom stretches the view, the camera's one transform stretches each
+  canvas with its clips' boxes, each note still at its time, and no canvas is drawn. A pan draws no canvas again, unless what shows reaches past the part a canvas
   holds (below): then that canvas, at once.
 - A canvas MUST hold only what shows and up to a view more each side (the margin above), and MUST
   NOT make a bitmap over 8192 device px across or 512 down: a lane's covers only where its clips
@@ -1478,9 +1478,9 @@ no clip: each clip's box is placed by the zoom straight into its style.
   canvas measures its drawing area as its render asks it to draw, the observer telling it of a size it
   hasn't drawn at. A change draws a canvas at once, and one more change in the same frame at the next
   frame's start (`request`). Nothing reads the page's layout but a clip's own canvas, for its own
-  area. The zoom and what shows come from the arrangement's camera, heard once for all its canvases; a
-  zoom by the hand is settled when a frame's start finds no zoom for G and none since the frame before
-  (Z1, the live zoom, replaces that detector). Each canvas is on the CPU (`willReadFrequently`), which
+  area. The zoom laid out and what shows of it come from the arrangement's camera (`laidOf`), heard
+  once for all its canvases; since track `live-zoom`, the camera's end of a live zoom replaced
+  ClipDrawing's own detector of a hand zoom's end. Each canvas is on the CPU (`willReadFrequently`), which
   WebKit is expected to paint into the layer under it, as its code reads; that is not measured on the
   Mac yet. A take's notes keep their marks always, as before. Each draw is counted
   (`arrangement.canvas`, and `arrangement.canvas.new` for a first) beside the renders in `frames()`,
@@ -1489,8 +1489,9 @@ no clip: each clip's box is placed by the zoom straight into its style.
   notes; each clip's box on the screen's pixels and its notes inside it, drawn at the zoom, the
   canvas's bitmap its box at `devicePixelRatio`, each note's middle pixel the track's ink at the
   note's own alpha, the 2 px marks only where a note is under 2 px, each centred on it, at 24 and 2.1
-  px a beat; 20 ⌘-scroll events stretching every lane's canvas and drawing none, then each once as the
-  zoom settles; ⌘= drawing them in the frame it lands in; at 192 px a beat, Bass 1's lane's canvas
+  px a beat; 20 ⌘-scroll events stretching every lane's canvas and drawing none, then each once in
+  the frame the live zoom is laid out, and in every frame of the arrangement's live zooms each lane's
+  canvas drawn at the zoom laid out and stretched once; ⌘= drawing them in the frame it lands in; at 192 px a beat, Bass 1's lane's canvas
   holding only what shows and a view each side in at most 8192 × 512 device px, a pan of 0.4 views
   drawing it not again and one of 1.6 views at once; every swipe within a step drawing no canvas, with
   the renders; on a copy of first-song with clips laid over each other, the screen's own pixels

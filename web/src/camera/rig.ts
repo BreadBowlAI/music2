@@ -541,7 +541,9 @@ export class Rig {
    * and each marked element takes its stretch's origin. Read at a frame's start, where the page's
    * layout is still the last frame's: it costs nothing. The camera shown starts there too, the
    * fractions of a px it kept let go of: so the zoom keeps what the box shows under the fingers, not
-   * a point up to half a px off it, which the zoom would carry ×(its stretch) off.
+   * a point up to half a px off it, which the zoom would carry ×(its stretch) off. That place is the
+   * writer's (whole CSS px, as WebKit keeps a scroll position), not a box's on the screen's pixels
+   * (`spanBox`, `onPixels`): the zoom's end scrolls the box there again, by the writer.
    */
   private begin(): Live | null {
     const els = markedOf(this.cam);
