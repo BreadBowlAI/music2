@@ -11,8 +11,11 @@
 //             its Graph at Fit and zooming
 //   big song  24 tracks of 64 clips (big-song.mjs), Bass 1's first clip of 256 notes, opened straight
 //             after the twin (no close): its own zoom, its clips placed by it, its Graph zooming
-//     arrangement  a diagonal swipe 1:1, 10° on its rail, 45° free, a long 3° swipe with jitter and
-//                  its glide on the rail, ⇧ not turned; a swipe WebKit took over moving once; an edge
+//     arrangement  a diagonal swipe 1:1, 5° on its rail, one whose first 16 px go 20° off on it too,
+//                  45° and 30° free, a turn breaking free, a long 3° swipe with jitter and its glide on
+//                  the rail, ⇧ not turned; the owner's own swipes from the probe of 2026-11-14
+//                  (`fixtures/swipes`): the straight ones on their rails, the diagonal ones
+//                  free; a swipe WebKit took over moving once; an edge
 //                  stops it; content getting smaller stops it (`clamp`); ⌘ in a dropped glide zooms
 //                  nothing; a right-click holds nothing; 120 events across frames render nothing
 //                  within a step, the rows once at a step; no more clips than the view and its margins
@@ -208,8 +211,8 @@ const lib = await page.evaluate(() => {
   return out;
 });
 check(
-  json(lib?.numbers) === json([50, 10, 8, 20, 50, 0.998, "browser", "stop", 1, 0.5, true, false]),
-  `its numbers, until the probe's report: G 50 ms, rails within 10° after 8 px, broken when the last 50 px turn 20° off, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
+  json(lib?.numbers) === json([50, 25, 16, 20, 100, 0.998, "browser", "stop", 1, 0.5, true, false]),
+  `its numbers, from the owner's swipe probe of 2026-11-14: G 50 ms, rails within 25° after 16 px, broken when the last 100 px turn 20° off, its glide 0.998 a ms and only where the system gives none, the browser's scrollbars, edges stop, a view's margin in steps of half a view: ${json(lib?.numbers)}`,
 );
 check(
   json(lib?.move) === json([{ x: 130, y: 30, zoom: 24 }, { x: 0, y: 0, zoom: 24 }, { x: 3760, y: 1400, zoom: 24 }, { x: 10.25, y: 20.5, zoom: 24 }]),
@@ -592,28 +595,35 @@ await frames();
   const c = await arr();
   check(s1.x - s0.x === 120 && s1.y - s0.y === 80 && !!c && near(c.x, s1.x, 0.5) && near(c.y, s1.y, 0.5), `the arrangement: a diagonal swipe moves it 1:1 both ways (120 × 80): ${json({ s0, s1, cam: c && { x: c.x, y: c.y } })}`);
   await sleep(120);
-  // 5° off: 17.5 px off its rail in all, under the 24 that break it.
+  // 5° off: within 25° at its start, and its last 100 px never more than 5° off its rail.
   await feed(at.x, at.y, swipe(20, 10, 0.8749));
   await frames();
   const s2 = await scroll(tl);
   check(s2.x - s1.x === 200 && s2.y === s1.y, `a swipe 5° off straight keeps to its rail: 200 across, none down (${s2.x - s1.x} × ${s2.y - s1.y})`);
   await sleep(120);
+  // A hand's start is rough (the owner's first 8 to 20 px often go 15 to 25° off): four events of
+  // 4.26 px at 20° (17 px), then straight back across. Its first 16 px decide its rail.
+  await feed(at.x, at.y, [...swipe(4, -4, -1.4559), ...swipe(16, -10, 0).map((w) => ({ ...w, t: w.t + 64 }))]);
+  await frames();
+  const s2b = await scroll(tl);
+  check(s2b.x - s2.x === -176 && s2b.y === s2.y, `a swipe whose first 16 px go 20° off still gets its rail: 176 across, none up (${s2b.x - s2.x} × ${s2b.y - s2.y})`);
+  await sleep(120);
   await feed(at.x, at.y, swipe(20, -5, -5));
   await frames();
   const s3 = await scroll(tl);
-  check(s3.x - s2.x === -100 && s3.y - s2.y === -100, `a 45° one moves both ways (${s3.x - s2.x} × ${s3.y - s2.y})`);
+  check(s3.x - s2b.x === -100 && s3.y - s2b.y === -100, `a 45° one moves both ways (${s3.x - s2b.x} × ${s3.y - s2b.y})`);
   await sleep(120);
   await feed(at.x, at.y, swipe(20, 10, 5.7735));
   await frames();
   const s3b = await scroll(tl);
   check(s3b.x - s3.x === 200 && near(s3b.y - s3.y, 115.47, 0.5), `a 30° one never rails: 1:1 both ways (${s3b.x - s3.x} × ${s3b.y - s3.y})`);
   await sleep(120);
-  // Straight across, then turning to 45°: on its rail until its last 50 px go more than 20° off it
-  // (the 3rd turned event: 27°), then free both ways from there; the 14 px held back aren't moved.
+  // Straight across, then turning to 45°: on its rail until its last 100 px go more than 20° off it
+  // (the 5th turned event: 20.2°), then free both ways from there; the 28 px held back aren't moved.
   await feed(at.x, at.y, [...swipe(10, 10, 0), ...swipe(20, 7, 7).map((w) => ({ ...w, t: w.t + 160 }))]);
   await frames();
   const s3c = await scroll(tl);
-  check(s3c.x - s3b.x === 240 && s3c.y - s3b.y === 126, `one that starts straight and turns 45° breaks free once its last 50 px turn 20° off its rail, both ways from there: 240 × 126 (${s3c.x - s3b.x} × ${s3c.y - s3b.y})`);
+  check(s3c.x - s3b.x === 240 && s3c.y - s3b.y === 112, `one that starts straight and turns 45° breaks free once its last 100 px turn 20° off its rail, both ways from there: 240 × 112 (${s3c.x - s3b.x} × ${s3c.y - s3b.y})`);
   await sleep(120);
   // 1500 px across, 3° off, with ±1 px of jitter down each event (a hand's raw deltas), then a
   // glide of the same angle: on its rail to the end (review Q3).
@@ -634,6 +644,80 @@ await frames();
   const s5 = await scroll(tl);
   const c5 = await arr();
   check(s5.x === 0 && s5.y === 0 && !!c5 && c5.x === 0 && c5.y === 0, `at the edges it stops, and so does the camera: ${json({ s5, cam: c5 && { x: c5.x, y: c5.y } })}`);
+}
+// The owner's own swipes (VIEW-3): their wheel events from the swipe probe of 2026-11-14 on their
+// Mac (`fixtures/swipes`), over the timeline and the Graph in both rounds, all one hand. Each swipe
+// (split at G) is fed at its own times over the arrangement, its tracks at their tallest, from where
+// it has room for all of it. Only a flick down further than the tracks go meets their foot, which
+// changes nothing across. One under 30 px tells no angle. A straight one (under 12° off an axis, all
+// told) moves at most 2 px off it; a diagonal one (over 20°) keeps at least 90% of its move across.
+{
+  const owner = JSON.parse(fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), "fixtures/swipes/owner-2026-11-14.json"), "utf8")).steps;
+  const G = await page.evaluate(() => window.m2canvas?.camera?.numbers.SWIPE_GAP);
+  await key("Escape");
+  const tracksWere = (await scroll(tl)).room.y;
+  await key("Meta+ArrowDown");
+  await key("Meta+ArrowDown");
+  await until(async () => (await scroll(tl)).room.y > tracksWere * 2, 3000);
+  await frames();
+  const at = await lanes();
+  const room = (await scroll(tl)).room;
+  const seen = { straight: { n: 0, asked: 0, moved: 0, wrong: [] }, diagonal: { n: 0, asked: 0, moved: 0, wrong: [] } };
+  const cramped = [];
+  for (const [step, events] of Object.entries(owner)) {
+    const swipes = [];
+    for (const [t, dx, dy] of events) {
+      const last = swipes.at(-1)?.at(-1);
+      if (!last || t - last.t >= G) swipes.push([]);
+      swipes.at(-1).push({ t, x: dx, y: dy });
+    }
+    for (const sw of swipes) {
+      const sum = (f) => sw.reduce((a, e) => a + f(e), 0);
+      const all = { x: sum((e) => e.x), y: sum((e) => e.y) };
+      if (sum((e) => Math.hypot(e.x, e.y)) < 30) continue;
+      const deg = (Math.atan2(Math.abs(all.y), Math.abs(all.x)) * 180) / Math.PI;
+      const off = Math.min(deg, 90 - deg);
+      const kind = off < 12 ? "straight" : off > 20 ? "diagonal" : null;
+      if (!kind) continue;
+      const across = Math.abs(all.x) >= Math.abs(all.y) ? "y" : "x";
+      // Each way: from what it goes back to what it goes on, in the middle of the room; where that
+      // is more than the room, from the end it moves away from.
+      const fits = {};
+      const start = (way) => {
+        const on = sum((e) => Math.max(0, e[way])), back = -sum((e) => Math.min(0, e[way]));
+        fits[way] = on + back <= room[way];
+        return fits[way] ? Math.round(back + (room[way] - on - back) / 2) : all[way] < 0 ? room[way] : 0;
+      };
+      await setScroll(tl, start("x"), start("y"));
+      await frames();
+      const c0 = await arr();
+      await feed(at.x, at.y, sw.map((e) => ({ t: e.t - sw[0].t, dx: e.x, dy: e.y })));
+      await frames();
+      const c1 = await arr();
+      const asked = Math.abs(all[across]), moved = Math.abs(c1[across] - c0[across]);
+      const s = seen[kind];
+      s.n++;
+      s.asked += asked;
+      s.moved += moved;
+      const said = { step, events: sw.length, off: Math.round(off * 10) / 10, asked, moved: Math.round(moved * 10) / 10 };
+      if (!fits[across]) cramped.push(said);
+      if (kind === "straight" ? moved > 2 : moved < asked * 0.9) s.wrong.push(said);
+    }
+  }
+  const { straight: st, diagonal: dg } = seen;
+  check(
+    st.n > 0 && !cramped.length && !st.wrong.length,
+    `the owner's ${st.n} straight swipes each move at most 2 px off their axis: ${Math.round(st.moved)} of the ${st.asked} px they went off it, all told (room ${json(room)})${st.wrong.length ? `; ${st.wrong.length} more: ${json(st.wrong)}` : ""}${cramped.length ? `; no room across: ${json(cramped)}` : ""}`,
+  );
+  check(
+    dg.n > 0 && !cramped.length && !dg.wrong.length,
+    `the owner's ${dg.n} diagonal swipes each keep at least 90% of their move across: ${Math.round(dg.moved)} of ${dg.asked} px, all told (${Math.round((dg.moved / dg.asked) * 1000) / 10}%)${dg.wrong.length ? `; ${dg.wrong.length} less: ${json(dg.wrong)}` : ""}`,
+  );
+  await key("Escape");
+  await key("Meta+ArrowUp");
+  await key("Meta+ArrowUp");
+  await until(async () => (await scroll(tl)).room.y === tracksWere, 3000);
+  await frames();
 }
 // A swipe WebKit took over (VIEW-2): the page answered its first event too late, so WebKit scrolled
 // by it anyway and marks every later one not cancelable; it scrolls the box by all ten itself. The
