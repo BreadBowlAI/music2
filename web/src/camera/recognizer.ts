@@ -250,7 +250,8 @@ export class Recognizer {
 
   /** What this frame asks: the events since the last, and the glide's step. `t` is the frame's time. */
   frame(t: number): Asked {
-    const dt = this.frameAt === null ? 16 : Math.min(64, Math.max(0, t - this.frameAt));
+    // The ms since the last frame, however late this one came: the glide goes by the clock (VIEW-4).
+    const dt = this.frameAt === null ? 16 : Math.max(0, t - this.frameAt);
     this.frameAt = t;
     const asked: Asked = { dx: this.pending.dx, dy: this.pending.dy, zoom: this.zoom };
     const heard = asked.dx !== 0 || asked.dy !== 0;
@@ -268,10 +269,13 @@ export class Recognizer {
     if (g) {
       if (pointerHeld()) this.glide = null;
       else {
-        // Slowing as an iPhone's scroll view does: GLIDE_RATE of its speed kept each ms.
+        // Slowing as an iPhone's scroll view does: GLIDE_RATE of its speed kept each ms. It moves
+        // as far as that speed goes in `dt` ms, slowing all the while, so where it is depends on the
+        // time since the swipe, never on how many frames came (VIEW-4).
         const keep = GLIDE_RATE ** dt;
-        asked.dx += g.x * dt;
-        asked.dy += g.y * dt;
+        const far = (1 - keep) / -Math.log(GLIDE_RATE);
+        asked.dx += g.x * far;
+        asked.dy += g.y * far;
         this.glide = Math.hypot(g.x * keep, g.y * keep) < GLIDE_STOP ? null : { x: g.x * keep, y: g.y * keep };
       }
     }

@@ -19,7 +19,7 @@ import { lint } from "./lintlib.mjs";
 import { tips } from "./tiplib.mjs";
 import { expand } from "./graphlib.mjs";
 
-const { page, errors, api, view, box, posts, key, caughtUp, toasts } = await open(1440, 900);
+const { page, errors, api, view, box, posts, key, caughtUp, toasts, hold } = await open(1440, 900);
 
 /** A write or a pointer from outside the page: an agent's (AGENT-5, AGENT-6). */
 const agent = (path, body) =>
@@ -526,10 +526,16 @@ const pull = async (from, to) => {
 };
 check(!!(await page.$('[data-outlet="wobble"]')), "the LFO, wobble, has an output to pull a wire from");
 await still();
+// Its picture's answers come a second late, as on a busy machine (GitHub's Mac): the page asks again
+// for the new code's picture after the wire, and shows why it can't draw it once the answer comes.
+const unhold = await hold((r) => (r.method() === "POST" && new URL(r.url()).pathname === "/api/graph/picture" ? 1000 : 0));
 await pull('[data-outlet="wobble"]', slider("cutoff", lp));
 check(await until(() => read("tracks/wob.ts").includes("cutoff: wobble")), "a wire dropped on the Lowpass's cutoff writes its name");
 check(await until(async () => /wobble/.test((await page.$eval(`${lp} [data-inlet]`, (e) => e.textContent).catch(() => "")) ?? "") && !(await page.$(`${lp} [data-knob="cutoff"]`))), "the cutoff is now a row naming the wire, not a bar");
-// Its picture can't be measured now: collapsed, it says so in one short line, its whole why in its tooltip (DV-12, review Z9).
+await unhold();
+// Its picture can't be measured now: collapsed, it says so in one short line, its whole why in its tooltip (DV-12, review Z9),
+// once the answer to its ask comes.
+await until(async () => !!(await page.$(`${lp} [data-greyed] [data-why]`)));
 const why = await page.$eval(`${lp} [data-greyed]`, (e) => { const p = e.querySelector("[data-why]"); return [p?.textContent ?? "", p ? p.scrollHeight <= 18 && p.scrollWidth <= p.clientWidth : false, e.title]; }).catch(() => ["", false, ""]);
 check(why[1] && why[2].length > why[0].length && /can't/.test(why[2]), `the picture says why in one line, whole in its tooltip: ${JSON.stringify(why)}`);
 // Dropped on a collapsed node, a menu offers its values (DV-6).
