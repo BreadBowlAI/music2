@@ -1214,7 +1214,9 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
     it has none: it shows the Song's graph and zooms the Graph in until it overflows both ways, or
     zooms the timeline in. It puts a view's zoom back after each pinch, and when it closes puts
     back every zoom, the selection and the dock's view it changed.
-  - **Round A, "Let the app scroll as it does today":** its listeners only listen.
+  - **Round A, "Let the Mac scroll on its own":** its listeners only listen. It says plainly that
+    music2 turns its camera (what moves the view) off in this round, so a diagonal swipe moves one
+    way only, as the Mac does on its own (the owner's probe of 2026-11-14 found that confusing).
   - While the probe listens, in both rounds, the camera leaves plain swipes to the web view
     (`pauseSwipes`) and takes the box's moves in; it still zooms. So round A measures what the web
     view does by itself, as before the camera, and round B moves the view the camera's way by its own
@@ -1223,8 +1225,9 @@ less than G apart, or its glide), and its page drops no swipe still arriving.
   - **Round B, "Cancel the swipe":** a listener in the capture phase cancels and stops each wheel
     event over the timeline's and the Graph's scroll boxes (`preventDefault`, `stopPropagation`),
     so neither the web view nor any control under the pointer sees it, and moves the box itself
-    by the event's deltas, once a frame, as the camera will (the note's §4: it writes whole pixels
-    and takes in a move it didn't make). A ⌘ or Ctrl wheel event is left to the app's zoom.
+    by the event's deltas, once a frame, as the camera does (the note's §4: it writes whole pixels
+    and takes in a move it didn't make). It says that diagonal swipes work again. A ⌘ or Ctrl wheel
+    event is left to the app's zoom.
   - It records, each with its round and step: each wheel event (its time, `deltaX`, `deltaY`,
     `deltaMode`, whether it could be cancelled and was, how late the page heard it, the view under
     it, the modifier keys); each `gesturestart`, `gesturechange` and `gestureend` (time, `scale`,
