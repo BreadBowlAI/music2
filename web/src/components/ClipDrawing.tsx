@@ -356,6 +356,8 @@ function add(d: Drawing) {
         // Each canvas stretches with the view: a lane's placed by the zoom now, a clip's own with its
         // box. A zoom by the app draws each lane's now and each clip's own as the observer tells its
         // size; a zoom by the hand, once it settles, unless what shows has left a lane's part.
+        // (A live zoom, the zoom note's Z1, lays the tracks out once as it ends: that zoom should draw
+        // them at once, as the app's does, rather than stretch them until it settles.)
         group.hand = now.by === "zoom";
         group.zoomed = performance.now();
         group.changed = true;
