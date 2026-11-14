@@ -887,6 +887,12 @@ fn a_packages_samples_are_indexed_once_in_the_background() {
     assert_eq!((made.items.len(), made.measured), (3, 3), "each file measured once");
 }
 
+/// Run an index to its end on a thread of its own, and only then go on: an index that ends before
+/// the ask that started it has its answer.
+fn to_its_end(index: Box<dyn FnOnce() + Send>) -> std::io::Result<()> {
+    std::thread::spawn(index).join().map_err(|_| std::io::Error::other("the index panicked"))
+}
+
 // LIB-5: an ask that starts an index answers that one is running, though it has ended before the
 // ask has its answer: what the ask was given is from before it. So a folder just added shows
 // "looking…" and the page asks again, never "0 samples" for good.
@@ -895,16 +901,45 @@ fn an_index_an_ask_started_is_running_in_its_answer_though_it_ended_first() {
     use crate::library::{Of, SampleIndex};
     use m2_editor::library::samples::Indexed;
     use std::time::Duration;
-    let index = std::sync::Arc::new(SampleIndex::default());
-    let of = Of::Folder(PathBuf::from("/nowhere/small"));
     // The index runs to its end inside the ask, before the ask makes its answer.
-    let to_its_end =
-        |run: Box<dyn FnOnce() + Send>| std::thread::spawn(run).join().map_err(|_| std::io::Error::other("the index panicked"));
-    let (made, busy) = index.get_on(of.clone(), Duration::from_secs(60), |_| Indexed { measured: 1, ..Default::default() }, to_its_end);
+    let index = std::sync::Arc::new(SampleIndex::run_by(to_its_end));
+    let of = Of::Folder(PathBuf::from("/nowhere/small"));
+    let (made, busy) = index.get(of.clone(), Duration::from_secs(60), |_| Indexed { measured: 1, ..Default::default() });
     assert!(!index.indexing_of(&of), "the index has ended");
     assert!(made.is_none() && busy, "nothing from before it, and an index running as that was read");
     let (made, busy) = index.get(of, Duration::from_secs(60), |_| unreachable!("a second index"));
     assert_eq!((made.map(|m| m.measured), busy), (Some(1), false), "the next ask has what it made");
+}
+
+/// A server of `state`, as the app serves it, with no song open: its url.
+fn serving_state(state: crate::AppState) -> String {
+    let app = crate::routes::app(std::sync::Arc::new(state), Path::new("no-web"));
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    std::thread::spawn(move || {
+        tokio::runtime::Runtime::new().unwrap().block_on(async move {
+            let _ = axum::serve(tokio::net::TcpListener::from_std(listener).unwrap(), app).await;
+        })
+    });
+    url
+}
+
+// LIB-5: a search's answer counts the indexes running as it read their samples, never after: one
+// it started counts though it ended before the answer was made, so the page and `m2 search` ask
+// again and find what it indexed (std's kit, at the first search after the app starts).
+#[test]
+fn a_search_counts_an_index_it_started_though_it_ended_first() {
+    let mut state = crate::AppState::new("t00ls".into(), Graph::silent());
+    state.sample_index = std::sync::Arc::new(crate::library::SampleIndex::run_by(to_its_end));
+    let url = serving_state(state);
+    let kick = "sample:std:samples/kit/kick.wav";
+    let (status, _, body) = get(&url, "/api/library?q=kick");
+    assert_eq!(status, 200, "{}", String::from_utf8_lossy(&body));
+    let first = json(&body);
+    let had = ids(first["items"].as_array().unwrap()).iter().any(|i| i == kick);
+    assert_eq!((had, &first["folders"]["indexing"]), (false, &json!(1)), "nothing of std's kit yet, and its index counted");
+    assert!(ids(&items(&url, "q=kick")).iter().any(|i| i == kick), "asked again, std's kick is found");
 }
 
 /// A look for one sample in a package's samples (`kit`), as the library's first look is at its
