@@ -57,6 +57,13 @@ export const LINE = 33;
 export const ZOOM_WHEEL = 100;
 export const ZOOM_STEP = 1.5;
 
+/**
+ * After a live zoom (VIEW-5), what it stretched keeps its own layer (`will-change`) this many ms: the
+ * frame it ends in only lays the view out, and a zoom soon after starts with its layers made. A press
+ * or a key lets them go at once (a drag's bubble, placed in the window, must not be in a layer).
+ */
+export const LAYERS_KEPT = 400;
+
 /** After the camera last moved, its views' hover waits this many ms (VIEW-8). */
 export const QUIET = 250;
 

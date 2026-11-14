@@ -140,10 +140,12 @@ export const useCameraState = <T,>(ref: CameraRef, select: (s: CameraState) => T
 /** Which ways a culling window is wanted. */
 export type Ways = "x" | "y" | "xy";
 
-/** A culling window on screen, and the ways it culls. */
+/** A view's culling window on screen (`on`), the one it asked for last (`asked`, the same while none waits), its margins and steps, and the ways it culls. */
 export interface Drawn {
   ways: Ways;
+  by: { x?: CullBy; y?: CullBy };
   on: { readonly current: { x: Window; y: Window } };
+  asked: { readonly current: { x: Window; y: Window } };
 }
 
 /** The windows each camera's views have on screen now: a live zoom is laid out before it shows past one (VIEW-5). */
@@ -174,7 +176,7 @@ export function useCull(ref: CameraRef, ways: Ways = "xy", by: { x?: CullBy; y?:
     committed.current = shown;
   }, [shown]);
   useLayoutEffect(() => {
-    const mine: Drawn = { ways, on: committed };
+    const mine: Drawn = { ways, by: kept, on: committed, asked };
     let all = drawn.get(cam);
     if (!all) drawn.set(cam, (all = new Set()));
     all.add(mine);
@@ -183,7 +185,7 @@ export function useCull(ref: CameraRef, ways: Ways = "xy", by: { x?: CullBy; y?:
       of.delete(mine);
       if (!of.size && drawn.get(cam) === of) drawn.delete(cam);
     };
-  }, [cam, ways]);
+  }, [cam, ways, kept]);
   useLayoutEffect(() => {
     if (of.current !== cam) {
       // Another camera (one mounted again under the name): a window of its own, at once.

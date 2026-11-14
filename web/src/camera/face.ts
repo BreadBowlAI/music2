@@ -5,9 +5,9 @@
 import { cull, cullPlan, fit, move, reveal, to, toBox, toContent, zoomAround } from "./math";
 import * as numbers from "./numbers";
 import { rigs } from "./rig";
-import { cameraNames, cameraNow } from "./store";
+import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
-import { markedOf } from "./stretch";
+import { markedOf, shownAt, stretchOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -21,6 +21,9 @@ export const face = {
   toBox,
   cull,
   cullPlan,
+  stretchOf,
+  shownAt,
+  laidOf,
   /** The cameras mounted now. */
   names: cameraNames,
   /** The camera mounted as `name` now, as its store holds it; null while none is. */
@@ -30,11 +33,16 @@ export const face = {
   },
   /**
    * What the camera mounted as `name` stretches in a live zoom (VIEW-5): each marked element's
-   * transform and pointer-events, as the camera wrote them ("" where it wrote none).
+   * transform as the camera wrote it ("" where it wrote none).
    */
   stretched: (name: string) => {
     const cam = cameraNow(name);
-    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform, pointer: el.style.pointerEvents })) : [];
+    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
+  },
+  /** Whether the pointer at (x, y) on screen would land on something the camera mounted as `name` stretches. */
+  takes: (name: string, x: number, y: number) => {
+    const cam = cameraNow(name), at = document.elementFromPoint(x, y);
+    return !!cam && !!at && [...markedOf(cam)].some((el) => el.contains(at));
   },
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,

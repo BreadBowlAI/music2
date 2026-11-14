@@ -3,8 +3,8 @@
 // ends (a live zoom, VIEW-5), the browser's own moves taken in, and the app's moves (VIEW-9). One
 // for each mounted view, made by `useCamera`.
 
-import { cull, fit, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
-import { SWIPE_GAP } from "./numbers";
+import { cull, fit, holds, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
+import { LAYERS_KEPT, SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
 import { hearInput, moved, pointerHeld } from "./state";
 import { drawnOf, type CameraStore, type MovedBy, type CameraState } from "./store";
@@ -122,6 +122,15 @@ export class Rig {
   /** The hand's zoom ended (a pinch's `gestureend`, or G with no ⌘-scroll): laid out at the next frame. */
   private ending = false;
   private endTimer = 0;
+  /**
+   * While a live zoom lasts, one element over the box's view takes the pointer, so nothing it
+   * stretches is hit (VIEW-5). Not `pointer-events: none` on what is stretched: that is inherited, so
+   * it would work out the style of every clip anew, twice a zoom.
+   */
+  private shield: HTMLElement | null = null;
+  /** Elements a live zoom stretched that keep their layer a while after it (`LAYERS_KEPT`). */
+  private layers = new Set<HTMLElement>();
+  private layersTimer = 0;
   readonly hands: Recognizer;
   readonly controls: CameraControls;
 
@@ -214,7 +223,7 @@ export class Rig {
     const content = new ResizeObserver(() => this.clamped());
     for (const child of el.children) content.observe(child);
     const children = new MutationObserver((records) => {
-      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element) content.observe(n);
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element && n !== this.shield) content.observe(n);
     });
     children.observe(el, { childList: true });
     this.offs = [
@@ -226,12 +235,15 @@ export class Rig {
       () => size.disconnect(),
       () => content.disconnect(),
       () => children.disconnect(),
-      // A press or a key stops the hand's moves, and lays a live zoom out (VIEW-5).
+      // A press or a key stops the hand's moves, lays a live zoom out, and lets its layers go now:
+      // in this same task as the render that lays it out, so no frame shows the one without the other.
       hearInput(() => {
         this.hands.stop();
         this.layOut();
+        this.dropStretch();
+        this.dropLayers();
       }),
-      onMarked(this.cam, (el) => this.live && this.join(this.live, el)),
+      onMarked(this.cam, (el) => void (this.live && this.join(this.live, el))),
     ];
     this.measure(true);
     // Where the camera looks, written at once: a view that comes back shows what it showed.
@@ -246,6 +258,8 @@ export class Rig {
     if (this.live) this.cam.setState({ laid: null });
     this.live = this.gone = null;
     this.ending = false;
+    this.dropLayers();
+    this.shield?.remove();
     this.offs.forEach((off) => off());
     this.offs = [];
     this.near?.io.disconnect();
@@ -410,9 +424,10 @@ export class Rig {
     const now = this.contentNow, was = this.contentDrawn;
     this.contentDrawn = now;
     if (this.zoomed) {
+      // The stretch off first: the writer's read of the box lays the page out once, as it shows.
       this.zoomed = false;
-      this.write();
       this.dropStretch();
+      this.write();
     } else if (now && was && ((now.w ?? Infinity) < (was.w ?? Infinity) || (now.h ?? Infinity) < (was.h ?? Infinity))) this.clamped();
   }
 
@@ -444,8 +459,8 @@ export class Rig {
     // A zoom no render drew (its view doesn't draw by it): written now, its stretch gone.
     if (this.zoomed) {
       this.zoomed = false;
-      this.write();
       this.dropStretch();
+      this.write();
     }
     this.takeIn();
     const asked = this.hands.frame(t);
@@ -526,11 +541,14 @@ export class Rig {
     const els = markedOf(this.cam);
     const box = this.el, writer = this.writer;
     if (!els.size || !box || !writer) return null;
-    const s = this.cam.getState();
+    // Everything read before anything is written: one layout, the last frame's.
     const b = this.boxRect();
+    const content = { w: box.scrollWidth, h: box.scrollHeight };
+    const view = { w: box.clientWidth, h: box.clientHeight };
+    const places = [...els].map((el) => [el, el.getBoundingClientRect()] as const);
+    const s = this.cam.getState();
     const at = writer.written;
     const per = (way: "x" | "y") => (s.stretch[way] ? s.zoom : 1);
-    const content = { w: box.scrollWidth, h: box.scrollHeight };
     const live: Live = {
       origin: { x: b.left - at.x + s.origin.x, y: b.top - at.y + s.origin.y },
       els: new Map(),
@@ -541,19 +559,25 @@ export class Rig {
     };
     this.live = live;
     this.cam.setState({ laid: { x: at.x, y: at.y, zoom: s.zoom } });
-    for (const el of els) this.join(live, el);
+    for (const [el, r] of places) this.join(live, el, r);
+    // Over the box's view, where it is scrolled: the box is its containing block, and holds still.
+    const shield = (this.shield ??= document.createElement("div"));
+    shield.setAttribute("aria-hidden", "true");
+    shield.style.cssText = `position: absolute; left: ${at.x}px; top: ${at.y}px; width: ${view.w}px; height: ${view.h}px; z-index: 2147483647`;
+    box.appendChild(shield);
     return live;
   }
 
-  /** A marked element joins the stretch: its origin is the content's, in its own px, and it takes no pointer. */
-  private join(live: Live, el: HTMLElement) {
+  /**
+   * A marked element joins the stretch: its origin is the content's, in its own px (`r`: where it is,
+   * read now if not given), on a layer of its own.
+   */
+  private join(live: Live, el: HTMLElement, r: DOMRect = el.getBoundingClientRect()) {
     if (live.els.has(el)) return;
-    const r = el.getBoundingClientRect();
     const origin = `${live.origin.x - r.left}px ${live.origin.y - r.top}px`;
     live.els.set(el, origin);
     el.style.transformOrigin = origin;
     el.style.willChange = "transform";
-    el.style.pointerEvents = "none";
     if (this.cam.getState().laid) this.apply(live, [el]);
   }
 
@@ -571,8 +595,11 @@ export class Rig {
   }
 
   /**
-   * Whether the camera `c` shows only what the view has drawn: the window on screen of each of its
-   * culling views (VIEW-12), and its content as laid out. A zoom out past it is laid out early.
+   * Whether the camera `c` may still be shown by stretching what the view has drawn: it shows nothing
+   * past the content as laid out, nor past any culling view's window on screen (VIEW-12); and each
+   * such view's window asked for last still holds what it shows and the margin a window keeps. A zoom
+   * out past that is laid out early: while what shows is still in the window on screen, so the view
+   * draws its new window between frames, never all in one.
    */
   private covered(c: Camera, live: Live): boolean {
     const s = this.cam.getState();
@@ -581,8 +608,9 @@ export class Rig {
     if (!inside(shows.x, live.extent.x) || !inside(shows.y, live.extent.y)) return false;
     for (const d of drawnOf(this.cam)) {
       const w = d.on.current;
-      if (d.ways.includes("x") && !inside(shows.x, [w.x.from, w.x.to])) return false;
-      if (d.ways.includes("y") && !inside(shows.y, [w.y.from, w.y.to])) return false;
+      const kept = holds(c, s, d.by, d.asked.current);
+      if (d.ways.includes("x") && (!inside(shows.x, [w.x.from, w.x.to]) || !kept.x)) return false;
+      if (d.ways.includes("y") && (!inside(shows.y, [w.y.from, w.y.to]) || !kept.y)) return false;
     }
     return true;
   }
@@ -599,7 +627,7 @@ export class Rig {
     if (s.zoom === s.laid?.zoom) {
       // The zoom drawn already: the box moves to what shows, and the stretch goes, now.
       this.cam.setState({ laid: null });
-      for (const el of live.els.keys()) unstretch(el);
+      this.unstretchAll(live);
       this.write();
       return true;
     }
@@ -615,7 +643,26 @@ export class Rig {
   private dropStretch() {
     const gone = this.gone;
     this.gone = null;
-    if (gone) for (const el of gone.els.keys()) if (!this.live?.els.has(el)) unstretch(el);
+    if (gone) this.unstretchAll(gone);
+  }
+
+  /** A live zoom's stretch off its elements, each keeping its layer `LAYERS_KEPT` ms more, and the pointer theirs again. */
+  private unstretchAll(l: Live) {
+    if (!this.live) this.shield?.remove();
+    for (const el of l.els.keys()) {
+      if (this.live?.els.has(el)) continue;
+      unstretch(el, true);
+      this.layers.add(el);
+    }
+    clearTimeout(this.layersTimer);
+    this.layersTimer = window.setTimeout(() => this.dropLayers(), LAYERS_KEPT);
+  }
+
+  /** The layers kept after a live zoom let go of, but those a live zoom stretches now. */
+  private dropLayers() {
+    clearTimeout(this.layersTimer);
+    for (const el of this.layers) if (!this.live?.els.has(el)) el.style.willChange = "";
+    this.layers.clear();
   }
 
   // ---------------------------------------------------------------- near the view

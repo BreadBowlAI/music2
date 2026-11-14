@@ -3,9 +3,9 @@
 // lays the view out again only when the zoom ends (rig.ts). A view that marks nothing is laid out on
 // each frame of a zoom, as before.
 //
-// The camera owns a marked element's `transform`, `transform-origin`, `will-change` and
-// `pointer-events` while the stretch lasts: the view's own style must leave them alone. Marked
-// elements are not nested in each other. What follows the zoom shown without being marked (a
+// The camera owns a marked element's `transform`, `transform-origin` and `will-change` while the
+// stretch lasts: the view's own style must leave them alone. Marked elements are not nested in each
+// other. What follows the zoom shown without being marked (a
 // playhead that moves by its own transform, a strip outside the box) reads `stretchOf` or `shownAt`.
 
 import { useCallback } from "react";
@@ -25,12 +25,11 @@ export function onMarked(cam: CameraStore, f: (el: HTMLElement) => void): () => 
   return () => void (hearing.get(cam) === f && hearing.delete(cam));
 }
 
-/** An element's stretch taken off: its style the view's own again. */
-export function unstretch(el: HTMLElement) {
+/** An element's stretch taken off: its style the view's own again, but for its layer while `keep`. */
+export function unstretch(el: HTMLElement, keep = false) {
   el.style.transform = "";
   el.style.transformOrigin = "";
-  el.style.willChange = "";
-  el.style.pointerEvents = "";
+  if (!keep) el.style.willChange = "";
 }
 
 /**

@@ -135,21 +135,46 @@ export interface CullBy {
  * renders only then. A box not laid out yet (no size) shows nothing.
  */
 export function cull(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?: CullBy } = {}, was: { x?: Window; y?: Window } = {}): { x: Window; y: Window } {
-  const axis = (at: number, lo: number, hi: number, view: number, origin: number, stretch: boolean, b: CullBy = {}, kept?: Window): Window => {
-    if (view - lo - hi <= 0) return { from: 0, to: 0 };
-    const unit = (px: number) => (stretch ? (px - origin) / c.zoom : px - origin);
-    // What shows, between the margins, in the content's units.
-    const from = unit(at + lo), to = unit(at + view - hi), shows = to - from;
-    const margin = b.margin ?? shows * CULL_MARGIN;
-    const step = b.step ?? shows * CULL_STEP;
-    if (kept && kept.from <= from - (margin - step) && kept.to >= to + (margin - step) && kept.to - kept.from <= 2 * (shows + 2 * margin)) return kept;
+  const axis = (a: Axis | null, kept?: Window): Window => {
+    if (!a) return { from: 0, to: 0 };
+    const { from, to, margin, step } = a;
+    if (kept && kept.from <= from - (margin - step) && kept.to >= to + (margin - step) && kept.to - kept.from <= 2 * (to - from + 2 * margin)) return kept;
     return { from: from - margin, to: to + margin };
   };
-  const m = s.margins;
-  return {
-    x: axis(c.x, m.left, m.right, s.view.w, s.origin.x, s.stretch.x, by.x, was.x),
-    y: axis(c.y, m.top, m.bottom, s.view.h, s.origin.y, s.stretch.y, by.y, was.y),
+  const [x, y] = axes(c, s, by);
+  return { x: axis(x, was.x), y: axis(y, was.y) };
+}
+
+/**
+ * Whether the window `w` holds what the camera `c` shows and the margin a kept window holds (its
+ * margin less a step) each side, each way: a view whose camera zooms out past that asks for a new
+ * window (VIEW-12). A live zoom is laid out there, so its view draws the new one between frames
+ * (VIEW-5).
+ */
+export function holds(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?: CullBy }, w: { x: Window; y: Window }): { x: boolean; y: boolean } {
+  const one = (a: Axis | null, k: Window) => !a || (k.from <= a.from - (a.margin - a.step) && k.to >= a.to + (a.margin - a.step));
+  const [x, y] = axes(c, s, by);
+  return { x: one(x, w.x), y: one(y, w.y) };
+}
+
+/** What shows one way, between the margins, in the content's units, and a window's margin and step there. */
+interface Axis {
+  from: number;
+  to: number;
+  margin: number;
+  step: number;
+}
+
+/** What shows each way at the camera `c`, as `cull` and `holds` measure it; null where the box isn't laid out yet (no size). */
+function axes(c: Camera, s: Omit<Shape, "content">, by: { x?: CullBy; y?: CullBy }): [Axis | null, Axis | null] {
+  const axis = (at: number, lo: number, hi: number, view: number, origin: number, stretch: boolean, b: CullBy = {}): Axis | null => {
+    if (view - lo - hi <= 0) return null;
+    const unit = (px: number) => (stretch ? (px - origin) / c.zoom : px - origin);
+    const from = unit(at + lo), to = unit(at + view - hi), shows = to - from;
+    return { from, to, margin: b.margin ?? shows * CULL_MARGIN, step: b.step ?? shows * CULL_STEP };
   };
+  const m = s.margins;
+  return [axis(c.x, m.left, m.right, s.view.w, s.origin.x, s.stretch.x, by.x), axis(c.y, m.top, m.bottom, s.view.h, s.origin.y, s.stretch.y, by.y)];
 }
 
 /** What a view does with its culling window on a camera's move (VIEW-12). */
