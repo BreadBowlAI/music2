@@ -1,7 +1,8 @@
 // Clips' mini drawings (taste.md VIEW-12; the zoom note, docs/designs/camera/zoom.md, §3): their notes,
 // with their 2 px marks, and an automation curve's line and the shade under it, drawn on canvases in
-// place of hundreds of SVG shapes. A zoom only stretches a canvas, which costs the browser almost
-// nothing; it is drawn again, sharp at the screen's own pixels, once the zoom settles.
+// place of hundreds of SVG shapes. A zoom by the hand only stretches a canvas, with the rest of the
+// view (the live zoom, VIEW-5), which costs the browser almost nothing; it is drawn again, sharp at
+// the screen's own pixels, in the frame the zoom is laid out.
 //
 // - One canvas a lane (`LaneDrawing`) draws all its clips that sit still, each inside its box as the
 //   box is placed. Chrome makes every canvas a layer of its own: one a clip made 416 layers for the
@@ -11,10 +12,11 @@
 //   (`Notes`, `Curve`): a few at a time. A lane's canvas, in the lane's order, clears each clip's
 //   box before it draws the clip, as its body covers what is under it.
 // - Kept by what it draws: a canvas is drawn again only when that changes (the clips, their notes or
-//   points, the colour, the size), and on a zoom: by the app (⌘=, Fit) in the frame it lands in; by
-//   the hand (⌘-scroll, a pinch) once it settles (no zoom for G, `SWIPE_GAP`, nor in a whole frame,
-//   looked at each frame's start), stretching with the view until then. A pan draws one again only
-//   when what shows reaches past the part it holds, at once.
+//   points, the colour, the size), and when the zoom laid out changes (`laidOf`), in the frame it
+//   lands in: a zoom by the app (⌘=, Fit), and a live zoom's end or early layout. While a live zoom
+//   stretches the view, the camera's transform stretches the lane's canvas with its clips' boxes, so
+//   it draws nothing. A pan draws one again only when what shows reaches past the part it holds, at
+//   once.
 // - Bounded: a canvas holds only what shows and up to a view more each side (the views' culling
 //   margin), and never a bitmap over MAX_W × MAX_H device px.
 // - A lane's canvas is placed across by the zoom, as its clips' boxes are; its height, and a clip's
@@ -26,7 +28,7 @@
 
 import clsx from "clsx";
 import { memo, useLayoutEffect, useRef } from "react";
-import { CULL_MARGIN, FINE, SWIPE_GAP, cull, spanBox, useCameraOf, type CameraState, type CameraStore } from "../camera";
+import { CULL_MARGIN, FINE, cull, laidOf, spanBox, useCameraOf, type CameraState, type CameraStore } from "../camera";
 import { countDraw, useRenderCount } from "../lib/frames";
 import type { ControlClip, NoteClip } from "../lib/graph";
 import type { LaneScale } from "../lib/laneScale";
@@ -137,9 +139,9 @@ interface Drawing {
   holds: [number, number] | null;
   /** How to find, of those, the beats it has anything to draw in (a lane's clips), which its canvas covers. */
   narrow: ((from: number, to: number) => [number, number] | null) | null;
-  /** A lane's canvas as its last draw placed it: px from the lane's left, at zoom `z`. */
-  placed: { left: number; width: number; z: number } | null;
-  /** Stretched by a zoom: drawn again once the zoom settles. */
+  /** A lane's canvas as its last draw placed it: px from the lane's left. */
+  placed: { left: number; width: number } | null;
+  /** A clip's own, after a zoom was laid out: drawn as the observer tells its new size, or the frame after next. */
   stale: boolean;
   /** It drew for a change this frame; another change came since (`request`). */
   busy: boolean;
@@ -151,12 +153,7 @@ interface Drawing {
 interface Group {
   drawings: Set<Drawing>;
   off: () => void;
-  /** A zoom by the hand is on: drawings stretch until it settles. */
-  hand: boolean;
-  /** When its zoom last changed, and whether it did since the last frame's look. */
-  zoomed: number;
-  changed: boolean;
-  /** The frame that looks whether the zoom settled, or draws what is still stretched. */
+  /** The frame that draws a clip's own canvas still left from a zoom laid out. */
   frame: number;
 }
 
@@ -164,9 +161,9 @@ const groups = new Map<CameraStore, Group>();
 const all = new Set<Drawing>();
 const byArea = new WeakMap<Element, Drawing>();
 
-/** What shows across, in beats; null before the view is laid out. */
+/** What shows across of the view as laid out (a live zoom's stretch draws nothing anew), in beats; null before the view is laid out. */
 function showing(s: CameraState) {
-  const x = cull(s, s, { x: { margin: 0 } }).x;
+  const x = cull(laidOf(s), s, { x: { margin: 0 } }).x;
   return x.to > x.from ? x : null;
 }
 
@@ -179,21 +176,20 @@ function holdsShown(d: Drawing, shows: { from: number; to: number } | null) {
   return hi <= lo || (d.holds[0] <= lo + 1e-9 && d.holds[1] >= hi - 1e-9);
 }
 
-/** A lane's canvas placed at zoom `z`, as it was at its draw's: between draws, a zoom stretches it so. */
-function placeLane(d: Drawing, z: number) {
+/** A lane's canvas placed where its draw put it, in px from the lane's left. */
+function placeLane(d: Drawing) {
   if (!d.placed) return;
-  const by = z / d.placed.z;
-  const left = `${d.placed.left * by}px`, width = `${d.placed.width * by}px`;
+  const left = `${d.placed.left}px`, width = `${d.placed.width}px`;
   if (d.canvas.style.left !== left) d.canvas.style.left = left;
   if (d.canvas.style.width !== width) d.canvas.style.width = width;
 }
 
-/** Draw `d` again, now, at its space's size and the camera's zoom. */
+/** Draw `d` again, now, at its space's size and the zoom the view is laid out at. */
 function draw(d: Drawing) {
   d.stale = false;
   const size = d.size;
   const s = d.cam?.getState() ?? null;
-  const z = s?.zoom ?? null;
+  const z = s ? laidOf(s).zoom : null;
   const k = d.lane ? (z ?? 0) : size && d.length > 0 ? size.w / d.length : 0;
   if (!size || k <= 0) return;
   const dpr = window.devicePixelRatio || 1;
@@ -224,8 +220,8 @@ function draw(d: Drawing) {
   const bh = h > 0 ? Math.max(1, Math.round(h * scale)) : 0;
   const c = d.canvas;
   if (d.lane) {
-    d.placed = { left: x0, width: w, z: k };
-    placeLane(d, k);
+    d.placed = { left: x0, width: w };
+    placeLane(d);
   } else {
     const left = `${((bf - d.start) / d.length) * 100}%`, width = `${((bt - bf) / d.length) * 100}%`;
     if (c.style.left !== left) c.style.left = left;
@@ -319,32 +315,20 @@ function request(d: Drawing) {
 }
 
 /**
- * Every drawing still stretched by a zoom, drawn again at the start of a frame: after a zoom by the
- * hand, the first frame that finds no zoom for G and none since the frame before; after one by the
- * app, the frame after next (by then the observer has drawn each clip's own whose size it changed).
- *
- * This is a detector of its own for the end of a zoom by the hand. Z1, the live zoom (the zoom note's
- * §2), replaces it: there the camera says when a zoom is laid out, and the canvases draw in that
- * frame, as for a zoom by the app; `hand`, `zoomed`, `changed`, this loop and the stretch between
- * draws then go.
+ * A clip's own canvas a zoom left (`stale`), drawn at the start of the frame after next, if the
+ * observer hasn't drawn it at its new size by then. A lane's draws in the frame the zoom lands in.
  */
-function settle(g: Group, after = 0) {
+function drawStale(g: Group, after = 1) {
   cancelAnimationFrame(g.frame);
   g.frame = requestAnimationFrame(() => {
-    if (after > 0) return settle(g, after - 1);
-    if (g.hand && (g.changed || performance.now() - g.zoomed < SWIPE_GAP)) {
-      g.changed = false;
-      return settle(g);
-    }
-    g.hand = false;
+    if (after > 0) return drawStale(g, after - 1);
     for (const d of g.drawings) if (d.stale) draw(d);
   });
 }
 
 // Each drawing's box, after layout: a clip's own drawing area, or the lane's box under a lane's
 // canvas, of which only the height counts (its width follows the zoom, which places the canvas). A new
-// one draws; a zoom by the hand stretches it until it settles, unless what shows has left the part it
-// holds.
+// one draws, and so does one whose size changed.
 const observer =
   typeof ResizeObserver === "undefined"
     ? null
@@ -363,9 +347,7 @@ const observer =
           // Its own drawn at this size already (the render that changed it measured it): nothing to do.
           if (d.holds && d.size?.w === e.contentRect.width && d.size.h === e.contentRect.height) continue;
           d.size = { w: e.contentRect.width, h: e.contentRect.height };
-          const g = d.cam && groups.get(d.cam);
-          if (!d.holds || !g?.hand || !holdsShown(d, showing(d.cam!.getState()))) draw(d);
-          else d.stale = true;
+          draw(d);
         }
       });
 
@@ -390,29 +372,23 @@ function add(d: Drawing) {
   if (!cam) return;
   let g = groups.get(cam);
   if (!g) {
-    const group: Group = { drawings: new Set(), off: () => {}, hand: false, zoomed: 0, changed: false, frame: 0 };
+    const group: Group = { drawings: new Set(), off: () => {}, frame: 0 };
     group.off = cam.subscribe((now, was) => {
-      const shows = showing(now);
-      if (now.zoom !== was.zoom) {
-        // Each canvas stretches with the view: a lane's placed by the zoom now, a clip's own with its
-        // box. A zoom by the app draws each lane's now and each clip's own as the observer tells its
-        // size; a zoom by the hand, once it settles, unless what shows has left a lane's part.
-        // (A live zoom, the zoom note's Z1, lays the tracks out once as it ends: that zoom should draw
-        // them at once, as the app's does, rather than stretch them until it settles.)
-        group.hand = now.by === "zoom";
-        group.zoomed = performance.now();
-        group.changed = true;
+      const laid = laidOf(now), before = laidOf(was);
+      if (laid.zoom !== before.zoom) {
+        // A zoom laid out (the app's, or a live zoom's end or early layout: VIEW-5): each lane's
+        // canvas drawn now, in the frame it lands in; a clip's own as the observer tells its new size,
+        // or the frame after next. While a live zoom only stretches the view, the zoom laid out stays.
         for (const x of group.drawings) {
           x.stale = true;
-          if (!x.lane) continue;
-          if (!group.hand || !holdsShown(x, shows)) draw(x);
-          else placeLane(x, now.zoom);
+          if (x.lane) draw(x);
         }
-        settle(group, group.hand ? 0 : 1);
+        drawStale(group);
         return;
       }
-      if (now.x === was.x && now.view === was.view) return;
+      if (laid.x === before.x && now.view === was.view) return;
       // A pan: only a canvas whose part held no longer holds what shows.
+      const shows = showing(now);
       for (const x of group.drawings) if (x.holds && !holdsShown(x, shows)) draw(x);
     });
     groups.set(cam, (g = group));

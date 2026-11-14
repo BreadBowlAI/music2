@@ -17,11 +17,9 @@ interface Span {
   to: number | null;
   inset: number;
   min: number;
-  /** The shortest thing drawn in it, in the content's units: under `FINE` px at a zoom, the box is marked `data-fine`. */
-  fine: number | null;
 }
 
-/** Under this many px, what a box draws is too thin to see unless marked (VIEW-12). */
+/** Under this many px, what a box draws is too thin to see unless marked: the clips' 2 px marks (VIEW-12). */
 export const FINE = 2;
 
 /** `px` on the screen's own pixels: rounded to the nearest of them (`devicePixelRatio` a px). */
@@ -55,32 +53,27 @@ function watchPixels() {
 }
 function newPixels() {
   watchPixels();
-  for (const [cam, g] of placed) for (const s of g.spans) place(s, cam.getState().zoom);
+  for (const [cam, g] of placed) for (const s of g.spans) place(s, laidOf(cam.getState()).zoom);
 }
 
 function place(s: Span, zoom: number) {
   const box = spanBox(s.from, s.to, zoom, s.inset, s.min);
   s.el.style.left = `${box.left}px`;
   if (box.width !== null) s.el.style.width = `${box.width}px`;
-  if (s.fine === null) return;
-  const fine = s.fine * zoom < FINE;
-  if (fine !== s.el.hasAttribute("data-fine")) s.el.toggleAttribute("data-fine", fine);
 }
 
 /**
  * Place the element `ref` from `from` to `to` (the content's units: beats) along the camera's
  * stretched way, in px from where its parent starts: `inset` px in at each end, `min` px wide at the
  * least, each end on the screen's pixels (`spanBox`). The element's own style must leave `left` and
- * `width` to this. Given `fine`, the shortest
- * thing it draws, it is marked `data-fine` while that is under `FINE` px: its drawing can show marks
- * that keep each thing visible then, and only then (a mini drawing's notes).
+ * `width` to this.
  */
 export function useSpan(
   ref: CameraRef,
   box: RefObject<HTMLElement | null>,
   from: number,
   to: number | null,
-  { inset = 0, min = 0, fine = null }: { inset?: number; min?: number; fine?: number | null } = {},
+  { inset = 0, min = 0 }: { inset?: number; min?: number } = {},
 ) {
   // The camera at render: a view above lends it (never looked up later, by name, in the effect).
   const cam = useCameraOf(ref);
@@ -98,7 +91,7 @@ export function useSpan(
       });
       placed.set(cam, (group = { spans, off }));
     }
-    const span: Span = { el, from, to, inset, min, fine };
+    const span: Span = { el, from, to, inset, min };
     const g = group;
     g.spans.add(span);
     place(span, laidOf(cam.getState()).zoom);
@@ -108,5 +101,5 @@ export function useSpan(
       g.off();
       placed.delete(cam);
     };
-  }, [cam, from, to, inset, min, fine]);
+  }, [cam, from, to, inset, min]);
 }

@@ -129,9 +129,7 @@ function Clip({ clip }) {
   view, stop marking.
 - **A zoom renders nothing it can place:** `useSpan(name, ref, from, to)` writes a box's `left` and
   `width` from the zoom, each end on the screen's own pixels (`spanBox`: what draws over a box finds
-  it with the same function, so the two never disagree). Memoise what a new window keeps, so only what enters it renders. Given
-  `{ fine }`, the shortest thing the box draws, it marks the box `data-fine` while that is under
-  2 px: CSS can then show marks that keep thin things visible only then.
+  it with the same function, so the two never disagree). Memoise what a new window keeps, so only what enters it renders.
 - **Hover:** a hover handler that renders does nothing while `movingNow()`.
 - **A control that keeps its wheel** (a picture's dot): mark it `data-wheel`. It takes a swipe that
   starts on it, unless a camera just carried it under a still pointer.
