@@ -183,7 +183,7 @@ The timeline, the Graph, Notes and the beat grid move the same way. Each view ke
 
 | Do | What happens |
 |---|---|
-| Swipe with two fingers, any way (or turn the scroll wheel) | The view moves with your fingers, both ways at once. In the timeline, Notes and the beat grid, a swipe that starts nearly straight (within 25°) keeps to its line, so the tracks don't drift sideways while you scroll down, however far; once it turns off that line (more than 20°) it moves freely. The Graph always moves freely. |
+| Swipe with two fingers, any way (or turn the scroll wheel) | The view moves with your fingers, both ways at once. In the timeline, Notes and the beat grid, a swipe that starts nearly straight (within 25°) keeps to its line, so the tracks don't drift sideways while you scroll down, however far; once it turns off that line (more than 25°) it moves freely. The Graph always moves freely. |
 | Flick and let go | The view glides on and slows, as the Mac's own windows do. On Linux the app glides it itself after a trackpad's swipe (a mouse's wheel doesn't glide). Any new swipe, a click, a key or an edge stops it. |
 | Pinch, or ⌘ + scroll (Ctrl + scroll on Linux) | Zoom around the pointer: what is under it stays under it. Pinch works on a Mac; on Linux, not yet. |
 | ⇧ + scroll | Move sideways. |
