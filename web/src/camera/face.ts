@@ -39,11 +39,6 @@ export const face = {
     const cam = cameraNow(name);
     return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
   },
-  /** Whether the pointer at (x, y) on screen would land on something the camera mounted as `name` stretches. */
-  takes: (name: string, x: number, y: number) => {
-    const cam = cameraNow(name), at = document.elementFromPoint(x, y);
-    return !!cam && !!at && [...markedOf(cam)].some((el) => el.contains(at));
-  },
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,
   /** A writer on `box`: a box of the suite's own, which keeps whole pixels as WebKit does. */

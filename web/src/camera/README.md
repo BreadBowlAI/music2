@@ -110,10 +110,11 @@ function Clip({ clip }) {
   zoom with the ref `useStretch(camera)` (or by name, under the scope): the lanes or grid, the ruler,
   a shade over them. While a pinch or a run of ⌘-scroll lasts, the camera writes one `transform` on
   each, a stretch around the content's origin that keeps the point under the fingers where it is; it
-  renders nothing, and one element it puts over the box's view takes the pointer, so nothing
-  stretched is hit (not `pointer-events: none`, which is inherited: every clip's style worked out
-  anew). The marked elements keep their own layers `LAYERS_KEPT` ms after, unless a press or a key
-  comes. When the zoom ends (`gestureend`, or no
+  renders nothing. What is stretched still takes the pointer: the browser hits the picture as it
+  shows, and a press lays the zoom out first (`pointer-events: none` on it is inherited, so it worked
+  out every clip's style anew at both ends of a zoom, and found nothing faster: the zoom note's §2).
+  The marked elements keep their own layers (and a transform that moves nothing) until the cameras
+  have been still `LAYERS_KEPT` ms, unless a press or a key comes. When the zoom ends (`gestureend`, or no
   ⌘-scroll for G) the view renders once at the new zoom, and its stretch goes in that render's layout
   effect: no frame shows both. It is laid out early only when the zoom shown would show past what is
   drawn (a culling window on screen, each `useCull` says its own, or the content's end), or a step

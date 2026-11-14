@@ -1294,9 +1294,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                 }}
                 onPointerDown={onGridDown}
                 onPointerMove={onGridMove}
-                // A live zoom's stretch takes the pointer from the grid, and the pointer seems to leave
-                // it: the hover waits while the view moves (VIEW-8).
-                onPointerLeave={() => !movingNow() && setHover(null)}
+                onPointerLeave={() => setHover(null)}
                 onPointerUp={onGridUp}
                 onPointerCancel={onGridCancel}
                 onLostPointerCapture={onGridCancel}
@@ -1923,18 +1921,16 @@ export const Ruler = memo(function Ruler({
 
 /**
  * Where a strip under a view that scrolls with it across shows (the velocity lanes), as the camera `s`
- * shows the view: stretched too while a live zoom lasts, and then taking no pointer (VIEW-5). Its
- * transform's origin is its top left.
+ * shows the view: stretched too while a live zoom lasts (VIEW-5). Its transform's origin is its top
+ * left.
  */
-export function stripStyle(s: CameraState): { transform: string; pointerEvents: "none" | undefined } {
-  return { transform: `translateX(${-Math.round(s.x)}px) scaleX(${stretchOf(s)?.scale.x ?? 1})`, pointerEvents: s.laid ? "none" : undefined };
+export function stripStyle(s: CameraState): { transform: string } {
+  return { transform: `translateX(${-Math.round(s.x)}px) scaleX(${stretchOf(s)?.scale.x ?? 1})` };
 }
 
 /** A strip written where `stripStyle` puts it, as the camera moves: nothing renders. */
 export function placeStrip(el: HTMLElement, s: CameraState) {
-  const { transform, pointerEvents } = stripStyle(s);
-  el.style.transform = transform;
-  el.style.pointerEvents = pointerEvents ?? "";
+  el.style.transform = stripStyle(s).transform;
 }
 
 // ---------------------------------------------------------------- the playhead

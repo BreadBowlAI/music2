@@ -25,10 +25,14 @@ export function onMarked(cam: CameraStore, f: (el: HTMLElement) => void): () => 
   return () => void (hearing.get(cam) === f && hearing.delete(cam));
 }
 
-/** An element's stretch taken off: its style the view's own again, but for its layer while `keep`. */
+/**
+ * An element's stretch taken off: its style the view's own again; or (`keep`) still on a layer of its
+ * own, its transform one that moves nothing. A transform taken away, or a layer, lays the element
+ * out again in WebKit: so that waits for a quiet moment (`LAYERS_KEPT`).
+ */
 export function unstretch(el: HTMLElement, keep = false) {
-  el.style.transform = "";
   el.style.transformOrigin = "";
+  el.style.transform = keep ? "translate(0px, 0px)" : "";
   if (!keep) el.style.willChange = "";
 }
 

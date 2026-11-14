@@ -1125,8 +1125,9 @@ fingers, which stays put; the view is not laid out again (VIEW-8). When the zoom
 in the same frame: the picture after is the one a direct zoom to the same zoom and place draws. It
 is laid out early only when a zoom out would show past what the view has drawn (the window it
 draws, VIEW-12, or its content's end), or a step before, where a view's window would no longer be
-kept: then it draws its new window between frames, as a swipe's. While the stretch lasts, the
-stretched layers take no pointer. A zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
+kept: then it draws its new window between frames, as a swipe's. While the stretch lasts, a press
+lands on what it shows (the browser hits the picture as stretched), and lays the zoom out first. A
+zoom by the app (⌘= and ⌘−, Z and Fit, the zoom buttons, an agent's) is laid out at
 once, as is any other move while a stretch lasts (a swipe, Follow's page, a press or a key lays it
 out first). A view that marks nothing (the Graph) is laid out on each frame of a zoom.
 - *Two zooms.* While a live zoom lasts, the camera keeps two: the zoom **shown** (its state's `x`,
@@ -1140,6 +1141,12 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   `docs/designs/camera/zoom.md`, §1 and §2). Names, bar numbers and borders stretch for a moment
   while the fingers move, as in Maps and Preview; the lead said yes for the owner (the note's §4).
   The Graph's zoom is cheap already.
+- *Not built:* the zoom note's `pointer-events: none` on what is stretched while it lasts. It is
+  inherited, so WebKit worked out every clip's style anew at both ends of each zoom: 25 to 40 ms on
+  a beat song, 100 on the big song; and it found nothing under the fingers faster (input 4 ms a
+  frame either way). One element over the view to take the pointer instead cost more (WebKit
+  composites it over the layers). The views' hover already does nothing while the camera moves
+  (VIEW-8). Measured in the zoom note's §2.
 - *Today:* since track `camera`, in all four views, with a pinch in each: the recognizer (`web/src/camera/recognizer.ts`) sums
   a frame's ⌘-scroll events, or takes a pinch's last scale (Safari's `gesturechange`), and the
   camera's `zoomAround` keeps the point under the pointer, across in the arrangement, Notes and the
@@ -1153,12 +1160,13 @@ out first). A view that marks nothing (the Graph) is laid out on each frame of a
   the arrangement's pinch).
 - *Today, the live zoom:* since track `live-zoom`. In the library: `rig.ts` (a zoom by the hand is
   `stretch`ed: `begin` reads where the box is scrolled and each marked element's place once, at a
-  frame's start, and puts one element over the box's view to take the pointer; `covered` asks each
+  frame's start; `covered` asks each
   `useCull`'s window on screen and the content's end, and lays a zoom out early a step before them,
   once the window asked for last no longer holds what shows and its kept margin (`holds` in
   `math.ts`), so the view draws its new window between frames; `layOut` ends it, at a
-  `gestureend`, G with no ⌘-scroll, a press, a key, a resize, a move or the app's zoom; the layers
-  are kept `LAYERS_KEPT`, 400 ms, after), `stretch.ts` (`useStretch`, `stretchOf`, `shownAt`) and
+  `gestureend`, G with no ⌘-scroll, a press, a key, a resize, a move or the app's zoom; the layers,
+  with a transform that moves nothing, are kept until the cameras have been still `LAYERS_KEPT`,
+  400 ms, as taking them away lays them out again in WebKit), `stretch.ts` (`useStretch`, `stretchOf`, `shownAt`) and
   `store.ts` (`laid`, `laidOf`, the windows on screen and asked for). The arrangement marks its lanes, the grid under the tracks, the take rows, its
   ruler, the loop's shade and the selected bars (the Song row's too); its playhead follows the zoom
   shown (`usePlayhead`). Notes marks its grid (with its notes and playhead) and its ruler; the beat
@@ -1211,8 +1219,7 @@ catches up after. While the camera moves, and for 250 ms after, the views' hover
   arrangement and Notes at most once a frame; a drag holding the camera and Follow; an agent's
   pointer at a clip rendered 0 times through a swipe, still on the clip) and `camera-probe` (a zoom
   redraws only the arrangement). Since track `live-zoom`, a live zoom's frames render nothing: the
-  views' hooks read the zoom laid out, and Notes' grid ignores the pointer seeming to leave it as the
-  stretch takes the pointer away. Tested by `camera` (every frame of a pinch and of ⌘-scroll counted:
+  views' hooks read the zoom laid out. Tested by `camera` (every frame of a pinch and of ⌘-scroll counted:
   none of the stretched ones rendered; once at the end).
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,

@@ -58,9 +58,11 @@ export const ZOOM_WHEEL = 100;
 export const ZOOM_STEP = 1.5;
 
 /**
- * After a live zoom (VIEW-5), what it stretched keeps its own layer (`will-change`) this many ms: the
- * frame it ends in only lays the view out, and a zoom soon after starts with its layers made. A press
- * or a key lets them go at once (a drag's bubble, placed in the window, must not be in a layer).
+ * After a live zoom (VIEW-5), what it stretched keeps its own layer (`will-change`, and a transform
+ * that moves nothing) until the cameras have been still this many ms: the frame the zoom ends in only
+ * lays the view out, a zoom soon after starts with its layers made, and letting them go (which in
+ * WebKit lays them out again) waits for a quiet moment. A press or a key lets them go at once: a
+ * drag's bubble, placed in the window, must not be inside a layer's transform.
  */
 export const LAYERS_KEPT = 400;
 

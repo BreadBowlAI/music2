@@ -6,7 +6,7 @@
 import { cull, fit, holds, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
 import { LAYERS_KEPT, SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
-import { hearInput, moved, pointerHeld } from "./state";
+import { hearInput, moved, movingNow, pointerHeld } from "./state";
 import { drawnOf, type CameraStore, type MovedBy, type CameraState } from "./store";
 import { markedOf, onMarked, stretchOf, unstretch } from "./stretch";
 import { Writer } from "./writer";
@@ -122,12 +122,6 @@ export class Rig {
   /** The hand's zoom ended (a pinch's `gestureend`, or G with no ⌘-scroll): laid out at the next frame. */
   private ending = false;
   private endTimer = 0;
-  /**
-   * While a live zoom lasts, one element over the box's view takes the pointer, so nothing it
-   * stretches is hit (VIEW-5). Not `pointer-events: none` on what is stretched: that is inherited, so
-   * it would work out the style of every clip anew, twice a zoom.
-   */
-  private shield: HTMLElement | null = null;
   /** Elements a live zoom stretched that keep their layer a while after it (`LAYERS_KEPT`). */
   private layers = new Set<HTMLElement>();
   private layersTimer = 0;
@@ -223,7 +217,7 @@ export class Rig {
     const content = new ResizeObserver(() => this.clamped());
     for (const child of el.children) content.observe(child);
     const children = new MutationObserver((records) => {
-      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element && n !== this.shield) content.observe(n);
+      for (const r of records) for (const n of r.addedNodes) if (n instanceof Element) content.observe(n);
     });
     children.observe(el, { childList: true });
     this.offs = [
@@ -259,7 +253,6 @@ export class Rig {
     this.live = this.gone = null;
     this.ending = false;
     this.dropLayers();
-    this.shield?.remove();
     this.offs.forEach((off) => off());
     this.offs = [];
     this.near?.io.disconnect();
@@ -544,7 +537,6 @@ export class Rig {
     // Everything read before anything is written: one layout, the last frame's.
     const b = this.boxRect();
     const content = { w: box.scrollWidth, h: box.scrollHeight };
-    const view = { w: box.clientWidth, h: box.clientHeight };
     const places = [...els].map((el) => [el, el.getBoundingClientRect()] as const);
     const s = this.cam.getState();
     const at = writer.written;
@@ -560,11 +552,6 @@ export class Rig {
     this.live = live;
     this.cam.setState({ laid: { x: at.x, y: at.y, zoom: s.zoom } });
     for (const [el, r] of places) this.join(live, el, r);
-    // Over the box's view, where it is scrolled: the box is its containing block, and holds still.
-    const shield = (this.shield ??= document.createElement("div"));
-    shield.setAttribute("aria-hidden", "true");
-    shield.style.cssText = `position: absolute; left: ${at.x}px; top: ${at.y}px; width: ${view.w}px; height: ${view.h}px; z-index: 2147483647`;
-    box.appendChild(shield);
     return live;
   }
 
@@ -634,6 +621,7 @@ export class Rig {
     // A zoom asks for room to look where it put the camera, as `set` does.
     this.cam.setState({ laid: null, asked: { w: s.x + s.view.w, h: s.y + s.view.h } });
     this.zoomed = true;
+    this.dropStretch();
     this.gone = live;
     this.schedule();
     return true;
@@ -646,22 +634,26 @@ export class Rig {
     if (gone) this.unstretchAll(gone);
   }
 
-  /** A live zoom's stretch off its elements, each keeping its layer `LAYERS_KEPT` ms more, and the pointer theirs again. */
+  /** A live zoom's stretch off its elements, each keeping its layer `LAYERS_KEPT` ms more. */
   private unstretchAll(l: Live) {
-    if (!this.live) this.shield?.remove();
     for (const el of l.els.keys()) {
       if (this.live?.els.has(el)) continue;
       unstretch(el, true);
       this.layers.add(el);
     }
+    this.keepLayers();
+  }
+
+  /** The layers kept until the cameras have been still `LAYERS_KEPT` ms: letting them go lays them out again. */
+  private keepLayers() {
     clearTimeout(this.layersTimer);
-    this.layersTimer = window.setTimeout(() => this.dropLayers(), LAYERS_KEPT);
+    this.layersTimer = window.setTimeout(() => (movingNow() ? this.keepLayers() : this.dropLayers()), LAYERS_KEPT);
   }
 
   /** The layers kept after a live zoom let go of, but those a live zoom stretches now. */
   private dropLayers() {
     clearTimeout(this.layersTimer);
-    for (const el of this.layers) if (!this.live?.els.has(el)) el.style.willChange = "";
+    for (const el of this.layers) if (!this.live?.els.has(el)) unstretch(el);
     this.layers.clear();
   }
 
