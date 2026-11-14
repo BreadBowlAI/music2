@@ -1394,18 +1394,20 @@ no clip: each clip's box is placed by the zoom straight into its style.
   canvas is placed across by the zoom, as its clips' boxes are, over the clips' bodies (`z-[1]`),
   under a curve's points and the hatching (`z-[2]`), taking no pointer; its height, and a clip's own
   canvas's size, come from one ResizeObserver (on the lane's box, on the clip's drawing area), after
-  layout and before paint; nothing reads the page's layout. The zoom and what shows come from the arrangement's camera, heard once for all its
-  canvases; a zoom by the hand is settled when a frame's start finds no zoom for G and none since
-  the frame before. Each canvas is on the CPU (`willReadFrequently`), which WebKit paints into the
-  layer under it. A take's notes keep their marks always, as before. Each draw is counted
+  layout and before paint; nothing reads the page's layout. Each clip's drawing area's ends are
+  rounded to the screen's pixels, as the browser paints a box, its shapes clipped to it, and a lane's
+  canvas lies on those pixels. The zoom and what shows come from the arrangement's camera, heard once
+  for all its canvases; a zoom by the hand is settled when a frame's start finds no zoom for G and
+  none since the frame before. Each canvas is on the CPU (`willReadFrequently`), which WebKit paints
+  into the layer under it. A take's notes keep their marks always, as before. Each draw is counted
   (`arrangement.canvas`, and `arrangement.canvas.new` for a first) beside the renders in `frames()`.
-  Tested by `camera` (each clip's notes drawn at the zoom, inside its box, the canvas's bitmap its box
-  at `devicePixelRatio`, each note's middle pixel the track's ink at the note's own alpha, the 2 px
-  marks only where a note is under 2 px, each centred on it, at 24 and 2.1 px a beat; 20 ⌘-scroll
-  events stretching every lane's canvas and drawing none, then each once as the zoom settles; ⌘=
-  drawing them in the frame it lands in; at 192 px a beat, Bass 1's lane's canvas holding only what
-  shows and a view each side in at most 8192 × 512 device px, a pan of 0.4 views drawing it not
-  again and one of 1.6 views at once; every swipe within a step drawing no canvas, with the
+  Tested by `camera` (each clip's notes drawn at the zoom, inside its box as painted, the canvas's
+  bitmap its box at `devicePixelRatio`, each note's middle pixel the track's ink at the note's own
+  alpha, the 2 px marks only where a note is under 2 px, each centred on it, at 24 and 2.1 px a beat;
+  20 ⌘-scroll events stretching every lane's canvas and drawing none, then each once as the zoom
+  settles; ⌘= drawing them in the frame it lands in; at 192 px a beat, Bass 1's lane's canvas holding
+  only what shows and a view each side in at most 8192 × 512 device px, a pan of 0.4 views drawing it
+  not again and one of 1.6 views at once; every swipe within a step drawing no canvas, with the
   renders), `beat-grid` and `layout` (the notes the canvases drew) and `pl-lanes` (the line a curve's
   canvas drew, through its points), through `e2e/drawlib.mjs`.
 
