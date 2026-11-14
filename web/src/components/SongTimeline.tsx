@@ -2007,6 +2007,7 @@ function PlayCap({ headerW }: { headerW: number }) {
  * least 12px apart and they meet every bar line (a triplet grid in 3/4 doesn't: none then).
  */
 const Grid = memo(function Grid({ meter }: { meter: Meter[] }) {
+  useRenderCount("arrangement.grid");
   const grid = useGrid((s) => s.song);
   // Its lines are a pattern a span, spaced in px by the zoom: it renders on a zoom, a few elements a row.
   const ppb = useZoom();

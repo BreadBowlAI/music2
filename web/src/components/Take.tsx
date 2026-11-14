@@ -9,6 +9,7 @@
 
 import { useEffect, useState } from "react";
 import { onFrame } from "../lib/clock";
+import { useRenderCount } from "../lib/frames";
 import { INPUT } from "../lib/meters";
 import type { TrackColor } from "../lib/palette";
 import { useRecord } from "../lib/record";
@@ -18,6 +19,7 @@ import { Notes } from "./SongTimeline";
 
 /** The take in lane `module.lane`, if one records there. */
 export default function Take({ module, lane, color }: { module: string; lane: string; color: TrackColor }) {
+  useRenderCount("arrangement.take");
   const take = useRecord((s) => (s.take?.phase === "take" && (s.take.lanes ?? [s.take]).some((l) => l.module === module && l.lane === lane) ? s.take : null));
   const mine = take?.lanes?.find((l) => l.module === module && l.lane === lane);
   const ppb = useZoom();

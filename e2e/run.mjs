@@ -228,7 +228,7 @@ export const SUITES = [
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 76, s: 60 }],
+  ["camera", "fix", { expect: 84, s: 60 }],
   // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
   ["zoom-bench", "fix", { expect: 15, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
 ];

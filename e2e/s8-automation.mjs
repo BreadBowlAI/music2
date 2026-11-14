@@ -75,7 +75,7 @@ check(await until(async () => !!(await page.$(`${clipSel}[data-picked]`))), "the
 
 /** Where value `v` at beat `b` of the clip is drawn, on screen. */
 const where = async (b, v) => {
-  const r = await box(`${clipSel} svg[data-curve]`);
+  const r = await box(`${clipSel} [data-curve]`);
   const { min, max } = await lane();
   const level = (v - min) / (max - min || 1);
   return { x: r.x + (b / 4) * r.width, y: r.y + (1 - level) * r.height, r };

@@ -3,9 +3,10 @@
 // sends the events WebKit would send, at known times, on whatever is under the pointer.
 //   library   the camera's functions against known numbers, run in the page (`cullPlan` too); the
 //             writer on a box that keeps whole pixels, as WebKit does; its numbers
-//   graph     on first-song: a diagonal swipe 1:1; 120 events over a wire render nothing; a swipe that
-//             carries a picture's dot under the pointer, and one 60 ms after over it, change no file,
-//             one that starts on it is the dot's, to its end; Tab to a bar out of view is taken in
+//   graph     on first-song: a diagonal swipe 1:1; 120 events over a wire render nothing; a pinch
+//             renders no node; a swipe that carries a picture's dot under the pointer, and one 60 ms
+//             after over it, change no file, one that starts on it is the dot's, to its end; Tab to a
+//             bar out of view is taken in
 //   beat      a kit made as a musician makes one: ⌘-scroll and a pinch keep the step under the pointer
 //   twin      a fresh copy of first-song opened over it (no close), its Graph showing: its own zoom,
 //             its Graph at Fit and zooming
@@ -20,9 +21,13 @@
 //                  nothing; a right-click holds nothing; 120 events across frames render nothing
 //                  within a step, the rows once at a step; no more clips than the view and its margins
 //                  can show, none in tracks far below; a swipe down the tracks and back; 30 ⌘-scroll
-//                  events render it at most once a frame; a pinch keeps the beat; a zoom renders no
-//                  clip's mini drawing, and its notes have no group opacity; a click's scroll taken
-//                  in; agents' `seen` follows; a swipe, a key's scroll and a write to `scrollLeft`
+//                  events render it at most once a frame, and its grid and take once, not once a
+//                  track; a pinch keeps the beat; a zoom renders no clip's mini drawing; each clip's
+//                  canvas drawn at the zoom, sharp, its notes each at its own alpha (its pixels read),
+//                  the 2 px marks only where a note is under 2 px; a zoom by the hand stretching the
+//                  canvases and drawing each once as it settles, ⌘= at once; a long clip's canvas
+//                  bounded around what shows at 192 px a beat, drawn again only past it; a click's
+//                  scroll taken in; agents' `seen` follows; a swipe, a key's scroll and a write to `scrollLeft`
 //                  pause Follow, a swipe straight down doesn't, and Follow never takes a swipe back to
 //                  the playhead; a drag holds the camera and Follow; the camera's own glide with
 //                  Linux's flag, stopped by an edge, and none after a mouse's notches
@@ -36,6 +41,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { PROJ, ROOT, check, done, open, read, sess, sleep, until } from "./fixlib.mjs";
+import { drawings, rgb } from "./drawlib.mjs";
 import { expand } from "./graphlib.mjs";
 
 const { browser, page, errors, api, state, key, box, show, view } = await open(1440, 900);
@@ -104,6 +110,31 @@ const pinch = (x, y, scales) =>
       for (const s of scales) send("gesturechange", s);
       send("gestureend", scales.at(-1));
     },
+    x,
+    y,
+    scales,
+  );
+/** A pinch at (x, y) across frames, as WebKit sends one: a `gesturechange` a frame, each scale from its start. Then three frames more. */
+const pinchFrames = (x, y, scales) =>
+  page.evaluate(
+    (x, y, scales) =>
+      new Promise((done) => {
+        const el = document.elementFromPoint(x, y);
+        const send = (type, scale) => {
+          const e = new UIEvent(type, { bubbles: true, cancelable: true });
+          for (const [k, v] of Object.entries({ scale, clientX: x, clientY: y })) Object.defineProperty(e, k, { value: v });
+          el.dispatchEvent(e);
+        };
+        send("gesturestart", 1);
+        let i = 0;
+        const one = () => {
+          send("gesturechange", scales[i]);
+          if (++i < scales.length) return requestAnimationFrame(one);
+          send("gestureend", scales.at(-1));
+          requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(done)));
+        };
+        requestAnimationFrame(one);
+      }),
     x,
     y,
     scales,
@@ -312,6 +343,24 @@ const graphCam = async () => {
   const r = since(r0, await renders());
   const s1 = await scroll(graph);
   check(!!wire && s1.x !== s0.x && Object.keys(r).length === 0, `120 events of a swipe over a wire move the Graph and render nothing: ${json({ moved: [s1.x - s0.x, s1.y - s0.y], renders: r })}`);
+}
+// A pinch over the Graph renders the Graph at most once a frame, and none of its nodes: the Graph
+// scales them as one (VIEW-8).
+{
+  const g = await box(graph);
+  const at = { x: g.x + g.width * 0.5, y: g.y + g.height * 0.5 };
+  const z0 = (await graphCam())?.zoom;
+  const nodes = (await page.$$(`${graph} [data-node-id]`)).length;
+  const scales = [0.95, 0.9, 0.85, 0.8, 0.75, 0.8, 0.85, 0.9, 0.95, 1];
+  const r0 = await renders();
+  await pinchFrames(at.x, at.y, scales);
+  await sleep(300);
+  const r = since(r0, await renders());
+  const z1 = (await graphCam())?.zoom;
+  check(
+    nodes > 0 && (r.graph ?? 0) >= 1 && (r.graph ?? 0) <= scales.length + 3 && !r["graph.nodes"] && z0 !== undefined && near(z1, z0, 1e-6),
+    `a pinch over the Graph (${scales.length} frames, out and back to ${z0}) renders it at most once a frame and none of its ${nodes} nodes: ${json(r)}`,
+  );
 }
 // Tab to a bar out of view: the browser scrolls it into view, and the camera takes that in (VIEW-9).
 {
@@ -936,37 +985,180 @@ const clipsShown = () =>
   const q = since(r1, await renders());
   check((q.arrangement ?? 0) >= 1 && (q.arrangement ?? 0) <= 18, `30 more, two in each of 15 frames, render it at most once a frame (18 frames): ${q.arrangement ?? 0} renders`);
   check((r["arrangement.drawings"] === undefined || r["arrangement.drawings"] === 0) && (await page.evaluate(() => "arrangement.drawings" in (window.m2canvas?.frames?.().total ?? {}))), `a zoom in renders no clip's mini drawing: ${r["arrangement.drawings"] ?? 0} (each counted)`);
+  // The grid and the recording take render with the zoom once, never once a track (VIEW-8).
+  const counted = await page.evaluate(() => ["arrangement.grid", "arrangement.take"].every((k) => k in (window.m2canvas?.frames?.().total ?? {})));
+  const rows = (await page.$$(`${tl} [data-track]`)).length;
+  check(
+    counted && [r, q].every((x) => (x["arrangement.grid"] ?? 0) <= (x.arrangement ?? 0) && (x["arrangement.take"] ?? 0) <= (x.arrangement ?? 0)),
+    `a zoom renders the grid and the take at most once each time it renders the arrangement, not once for each of the ${rows} tracks (each counted): ${json({ "in one go": r, "a frame each": q })}`,
+  );
 }
-// A clip's mini drawing (review Q9): each note at its own opacity, never a group's (WebKit paints a
-// group with opacity through a layer of its own); its 2 px marks shown only in a clip whose shortest
-// note is under 2 px at the zoom. At this zoom and six steps out.
+// A clip's canvas (VIEW-12; review Q9 before it): drawn at the camera's zoom once a zoom settles, sharp
+// at the screen's own pixels (its bitmap its box at devicePixelRatio, not stretched), each note at its
+// own alpha (its middle pixel the track's ink at that alpha; no opacity on the canvas, which WebKit
+// would paint through a layer of its own), its 2 px marks only in a clip whose shortest note is under
+// 2 px at that zoom, each centred on its note. At this zoom and six steps out.
 {
-  const drawing = () =>
-    page.evaluate(() => {
-      const zoom = window.m2canvas?.camera?.now("arrangement")?.zoom ?? 0;
-      const clips = [...document.querySelectorAll("[data-testid=timeline] [data-clip]")].filter((e) => e.querySelector("svg rect"));
-      const wrong = clips.filter((e) => {
-        const shortest = Math.min(...[...e.querySelectorAll("svg rect")].map((r) => Number(r.getAttribute("width"))));
-        const line = e.querySelector("svg line[data-note-mark]");
-        const shown = !!line && getComputedStyle(line).display !== "none";
-        return shown !== shortest * zoom < 2;
+  const look = async () => {
+    await sleep(200);
+    await frames(2);
+    const zoom = (await arr())?.zoom ?? 0;
+    const dpr = await page.evaluate(() => devicePixelRatio);
+    const all = (await page.$$eval(`${tl} [data-clip]`, drawings)).filter((d) => d?.kind === "notes" && d.notes.length > 0);
+    const wrong = [];
+    for (const d of all) {
+      const k = d.drawnBox[0] / (d.to - d.from);
+      const fine = Math.min(...d.notes.map((n) => n.w)) / k < 2 / zoom;
+      const ink = rgb(d.ink);
+      const why = [];
+      if (d.zoom !== zoom) why.push(`drawn at ${d.zoom}`);
+      if (d.stretch !== 1 || d.scale !== dpr || d.bitmap[0] !== Math.round(d.drawnBox[0] * dpr) || d.bitmap[1] !== Math.round(d.drawnBox[1] * dpr)) why.push(`not sharp: ${json({ stretch: d.stretch, scale: d.scale, bitmap: d.bitmap, box: d.drawnBox })}`);
+      if (d.opacity !== "1") why.push(`opacity ${d.opacity}`);
+      if (d.marks.length !== (fine ? d.notes.length : 0)) why.push(`${d.marks.length} marks for ${d.notes.length} notes, fine ${fine}`);
+      d.marks.forEach((m, i) => {
+        const n = d.notes[i];
+        if (!near(m.w, 2, 0.01) || !near(m.x + m.w / 2, n.x + n.w / 2, 0.01) || !near(m.h, n.h, 0.01) || m.alpha !== n.alpha) why.push(`mark ${i} ${json(m)} for ${json(n)}`);
       });
-      const marked = clips.filter((e) => {
-        const line = e.querySelector("svg line[data-note-mark]");
-        return !!line && getComputedStyle(line).display !== "none";
-      }).length;
-      return { zoom, clips: clips.length, layers: document.querySelectorAll("[data-testid=timeline] [data-clip] svg [opacity]").length, wrong: wrong.length, marked };
-    });
-  const a = await drawing();
+      for (const n of d.notes) {
+        if (n.w < 3 || n.h < 3) continue;
+        const a = fine ? 1 - (1 - n.alpha) ** 2 : n.alpha;
+        const p = n.pixel;
+        if (!p || Math.abs(p[3] - a * 255) > 4 || p.slice(0, 3).some((v, j) => Math.abs(v - ink[j]) > 3)) why.push(`note ${json(n)}: its pixel ${json(p)}, not ${json([...ink, Math.round(a * 255)])}`);
+      }
+      if (why.length) wrong.push({ start: d.start, why: why.slice(0, 3) });
+    }
+    const alphas = new Set(all.flatMap((d) => d.notes.map((n) => n.alpha)));
+    return { zoom, clips: all.length, marked: all.filter((d) => d.marks.length).length, alphas: alphas.size, wrong: wrong.slice(0, 4), wrongs: wrong.length };
+  };
+  const a = await look();
   for (let i = 0; i < 6; i++) await key("Meta+Minus");
   await frames(3);
-  const b = await drawing();
+  const b = await look();
   for (let i = 0; i < 6; i++) await key("Meta+Equal");
   await frames(3);
   check(
-    a.clips > 0 && b.clips > 0 && a.layers + b.layers === 0 && a.wrong + b.wrong === 0 && b.marked > 0,
-    `a clip's notes: no group opacity, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
+    a.clips > 0 && b.clips > 0 && a.wrongs + b.wrongs === 0 && b.marked > 0 && a.alphas > 0,
+    `a clip's notes on its canvas: at the zoom, sharp, each note at its own alpha in the track's ink, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
   );
+}
+// A zoom by the hand stretches each canvas with its clip and draws none again until the zoom settles
+// (no zoom for G); then it draws each once, at the new zoom. A zoom by the app (⌘=) draws them in the
+// frame it lands in (VIEW-12).
+{
+  await setScroll(tl, 0, 0);
+  await frames();
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom;
+  const n0 = await page.$$eval(`${tl} [data-clip] canvas[data-drawing]`, (els) => (window.__canvases = els).length);
+  const r0 = await renders();
+  // 10 frames of ⌘-scroll in, read in the frame after the last event: well before G.
+  const mid = await page.evaluate(
+    (x, y) =>
+      new Promise((done) => {
+        let k = 0;
+        const send = () => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: -3, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true }));
+        const one = () => {
+          send();
+          send();
+          if (++k < 10) return requestAnimationFrame(one);
+          requestAnimationFrame(() =>
+            setTimeout(() => {
+              const els = window.__canvases.filter((e) => e.isConnected);
+              done({
+                zoom: window.m2canvas.camera.now("arrangement").zoom,
+                kept: els.length,
+                // Those holding any of their clip (one far from the view may hold none of it).
+                drawn: els.filter((e) => e.drawn.w > 0).length,
+                stretched: els.filter((e) => e.drawn.w > 0 && Math.abs(e.getBoundingClientRect().width - e.drawn.w) > 0.5).length,
+                at: [...new Set(els.map((e) => e.drawn.zoom))],
+                total: window.m2canvas.frames().total,
+              });
+            }, 0),
+          );
+        };
+        requestAnimationFrame(one);
+      }),
+    at.x,
+    at.y,
+  );
+  const r1 = since(r0, mid.total);
+  await sleep(300);
+  await frames(2);
+  const r2 = since(r0, await renders());
+  const end = await page.evaluate(() => {
+    const z = window.m2canvas.camera.now("arrangement").zoom;
+    const els = window.__canvases.filter((e) => e.isConnected);
+    return { zoom: z, n: els.length, at: els.filter((e) => e.drawn.zoom === z && Math.abs(e.getBoundingClientRect().width - e.drawn.w) < 0.5).length };
+  });
+  check(
+    n0 > 0 && mid.zoom > z0 * 1.2 && mid.kept === n0 && json(mid.at) === json([z0]) && mid.drawn > 0 && mid.stretched === mid.drawn && !r1["arrangement.canvas"],
+    `while 20 ⌘-scroll events zoom in (${z0} → ${mid.zoom?.toFixed(2)} px a beat), the ${n0} canvases stretch with their clips (${mid.stretched} of the ${mid.drawn} holding any of it), each still as drawn at ${json(mid.at)}, none drawn again: ${json(r1)}`,
+  );
+  check(
+    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0,
+    `once it settles, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at})`,
+  );
+  const r3 = await renders();
+  await key("Meta+Equal");
+  await frames(1);
+  const app = await page.evaluate(() => {
+    const z = window.m2canvas.camera.now("arrangement").zoom;
+    const els = window.__canvases.filter((e) => e.isConnected);
+    return { zoom: z, n: els.length, at: els.filter((e) => e.drawn.zoom === z && Math.abs(e.getBoundingClientRect().width - e.drawn.w) < 0.5).length };
+  });
+  const r4 = since(r3, await renders());
+  check(
+    near(app.zoom, end.zoom * 1.5, 0.01) && app.n > 0 && app.at === app.n && (r4["arrangement.canvas"] ?? 0) >= app.n,
+    `⌘= draws every canvas again in the frame it lands in, at its zoom (${app.at} of ${app.n}, ${app.zoom.toFixed(2)} px a beat): ${json(r4)}`,
+  );
+  await key("Meta+Minus");
+  await frames(2);
+}
+// Bounded: at 192 px a beat, the canvas of Bass 1's clip of 64 beats (12,288 px) holds only what shows
+// and up to a view more each side, in a bitmap of at most 8192 × 512 device px, sharp; a pan within
+// that draws it not again; a pan past it draws it again at once, around what shows then (VIEW-12).
+{
+  const bass = `${tl} [data-track="bass-1"] [data-clip]`;
+  for (let i = 0; i < 8; i++) await key("Meta+Equal");
+  await until(async () => (await arr())?.zoom === 192, 3000);
+  await frames(2);
+  const view = async () => {
+    const c = await arr();
+    const w = c.view.w - c.margins.left - c.margins.right;
+    return { from: c.x / c.zoom, to: (c.x + w) / c.zoom, w };
+  };
+  // The view's middle at beat 32 of the clip.
+  const v0 = await view();
+  await setScroll(tl, Math.round(32 * 192 - v0.w / 2), null);
+  await frames(3);
+  await sleep(300);
+  const dpr = await page.evaluate(() => devicePixelRatio);
+  const holds = (d, v) => !!d && d.from <= v.from - d.start + 1e-6 && d.to >= Math.min(d.length, v.to - d.start) - 1e-6;
+  const a = (await page.$$eval(bass, drawings))[0];
+  const va = await view();
+  const sharp = (d) => d.scale === dpr && d.bitmap[0] === Math.round(d.drawnBox[0] * dpr) && d.stretch === 1;
+  check(
+    !!a && a.start === 0 && a.length === 64 && a.from > 0 && a.to < 64 && a.to - a.from <= 3 * (va.to - va.from) + 1e-6 && holds(a, va) && a.bitmap[0] <= 8192 && a.bitmap[1] <= 512 && sharp(a),
+    `at 192 px a beat its canvas holds beats ${a?.from.toFixed(2)} to ${a?.to.toFixed(2)} of 64, around what shows (${va.from.toFixed(2)} to ${va.to.toFixed(2)}), in ${json(a?.bitmap)} device px, sharp`,
+  );
+  const r0 = await renders();
+  await setScroll(tl, Math.round(32 * 192 - va.w / 2 + va.w * 0.4), null);
+  await frames(3);
+  const r1 = since(r0, await renders());
+  const b = (await page.$$eval(bass, drawings))[0];
+  check(!!a && !!b && !r1["arrangement.canvas"] && b.from === a.from && b.to === a.to && holds(b, await view()), `a pan of 0.4 views within what it holds draws it not again: ${json(r1)}`);
+  await setScroll(tl, Math.round(32 * 192 - va.w / 2 + va.w * 1.6), null);
+  await frames(3);
+  const r2 = since(r0, await renders());
+  const c = (await page.$$eval(bass, drawings))[0];
+  const vc = await view();
+  check(
+    (r2["arrangement.canvas"] ?? 0) >= 1 && holds(c, vc) && c.from > a.from && c.bitmap[0] <= 8192 && sharp(c),
+    `a pan of 1.6 views draws it again at once, around what shows then: beats ${c?.from.toFixed(2)} to ${c?.to.toFixed(2)} for ${vc.from.toFixed(2)} to ${vc.to.toFixed(2)} (${json(r2)})`,
+  );
+  for (let i = 0; i < 8; i++) await key("Meta+Minus");
+  await frames(2);
 }
 // A zoom renders no clip's box, only those entering the window drawn; the arrangement still once a frame.
 {

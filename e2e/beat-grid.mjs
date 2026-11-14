@@ -12,6 +12,7 @@
 //   node e2e/beat-grid.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
 import { check, done, open, PROJ, read, ROOT, sleep, until } from "./fixlib.mjs";
+import { drawings } from "./drawlib.mjs";
 import { lint } from "./lintlib.mjs";
 
 const { page, errors, api, state, caughtUp, hold, toasts, key, box, show } = await open(1440, 900);
@@ -46,7 +47,12 @@ const reNote = async (track, id, change) => {
   const c = (await state()).timeline.tracks.find((t) => t.module === track).lanes.find((l) => l.key === "hits").clips.find((x) => x.id === id);
   return post("/clips", { gesture: { op: "notes", clip: { module: track, lane: "hits", id }, notes: change(c.notes) } });
 };
-const rects = (track) => page.$$eval(`[data-testid=timeline] [data-lane="${track}.hits"] [data-clip] rect`, (els) => els.length).catch(() => -1);
+/** The notes the timeline's clips of `track` draw: what their canvases drew (taste.md VIEW-12). */
+const rects = (track) =>
+  page
+    .$$eval(`[data-testid=timeline] [data-lane="${track}.hits"] [data-clip]`, drawings)
+    .then((ds) => ds.reduce((n, d) => n + (d?.notes.length ?? 0), 0))
+    .catch(() => -1);
 // The server's meters messages, as the page gets them: each track's peaks (linear).
 const meters = [];
 const cdp = await page.createCDPSession();
