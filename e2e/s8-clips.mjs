@@ -57,7 +57,14 @@ const corner = await page.evaluate(() => {
   return { add: r("[data-testid=add-track]").right, grid: r("[data-testid=song-grid]").left, fold: r("[data-testid=fold-all]").left, snap: r("[data-testid=song-snap]").right };
 });
 check(corner.add < corner.grid && corner.snap <= corner.fold, `between + Track and the fold-all chevron: ${JSON.stringify(corner)}`);
-check(!!(await page.$('[data-lane="kick.hits"] pattern[width="12"]')), "at 24 px a beat Auto draws a line every eighth (12 px)");
+// The lane's grid draws its layers with patterns the zoom spaces, once for every row (taste.md
+// VIEW-8): its first, the snap grid's, is a line every 12 px.
+const snapLines = await page.evaluate(() => {
+  const rect = document.querySelector('[data-lane="kick.hits"] svg rect[fill^="url(#"]');
+  const pattern = rect && document.getElementById(rect.getAttribute("fill").slice(5, -1));
+  return pattern ? { width: pattern.getAttribute("width"), drawn: !!pattern.querySelector("rect") } : null;
+});
+check(snapLines?.width === "12" && snapLines.drawn, `at 24 px a beat Auto draws a line every eighth (12 px): ${JSON.stringify(snapLines)}`);
 
 // ---------------------------------------------------------------- a drag lands on the grid; ⌘ skips it
 const id = clips("data/hats/hits.json")[0].id;
