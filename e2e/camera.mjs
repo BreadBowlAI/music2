@@ -1865,6 +1865,8 @@ const beatMid = (x) =>
   await page.evaluate((loop, bars) => ((window.__loop = loop), (window.__bars = bars)), [first + 8, first + 16], await page.$eval("[data-testid=section]", (e) => [Number(e.dataset.start), Number(e.dataset.end)]));
   const a = await beatMid(at.x);
   const boxes0 = await clipBoxes();
+  const head = () => page.$eval(`${tl} [data-testid=playhead]`, (e) => e.style.transform);
+  const head0 = await head();
   const r0 = await renders();
   const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   await pinchOver(at.x, at.y, [1.1, 1.2, 1.3, 1.4, 1.5], false);
@@ -1876,9 +1878,10 @@ const beatMid = (x) =>
   const b = await beatDrawn(at.x);
   const boxes1 = await clipBoxes();
   const kept = Object.keys(boxes0).filter((k) => json(boxes0[k]) === json(boxes1[k])).length;
+  const head1 = await head();
   check(
-    Object.keys(r).length === 0 && mid?.laid?.zoom === 24 && mid?.zoom === 36 && !!pic?.shown && pic.drawn?.zoom === 36 && st.every((s) => !s.transform) && kept === Object.keys(boxes0).length && kept > 50 && near(b.ppb, 36, 0.05) && near(b.beat * 36, a.beat * 36, 1),
-    `mid-pinch the arrangement's picture shows, painted at the zoom shown (${pic?.drawn?.zoom}); the page under it is as it was laid out: nothing stretched (${st.filter((s) => s.transform).length} transforms), ${kept} of ${Object.keys(boxes0).length} clip boxes unmoved, nothing rendered (${json(r)}); beat ${a.beat.toFixed(3)} still under the fingers in the picture (${Number(b.beat).toFixed(3)}); its camera says the zoom shown, ${mid?.zoom}, laid out at ${mid?.laid?.zoom}`,
+    Object.keys(r).length === 0 && mid?.laid?.zoom === 24 && mid?.zoom === 36 && !!pic?.shown && pic.drawn?.zoom === 36 && st.every((s) => !s.transform) && kept === Object.keys(boxes0).length && kept > 50 && head1 === head0 && near(b.ppb, 36, 0.05) && near(b.beat * 36, a.beat * 36, 1),
+    `mid-pinch the arrangement's picture shows, painted at the zoom shown (${pic?.drawn?.zoom}); the page under it is as it was laid out: nothing stretched (${st.filter((s) => s.transform).length} transforms), ${kept} of ${Object.keys(boxes0).length} clip boxes unmoved, its playhead where it was (${head1}; ${head0}), nothing rendered (${json(r)}); beat ${a.beat.toFixed(3)} still under the fingers in the picture (${Number(b.beat).toFixed(3)}); its camera says the zoom shown, ${mid?.zoom}, laid out at ${mid?.laid?.zoom}`,
   );
   const o = await drawnOverlays(marker);
   check(
@@ -2012,6 +2015,84 @@ const beatMid = (x) =>
     drawnFrames(fs) && near(end?.zoom ?? 0, z0, 0.01),
     `a pinch out at the song's end and back in to its zoom (${z0}) ends where its last picture showed, the view keeping room where the zoom looked: each clip in every frame where the zoom shown puts it, the beat under the fingers held (${brief(fs)})`,
   );
+}
+// The song changing in the middle of a zoom (Kick 1's clip in view taken out of its file, as an
+// agent might): the picture reads its scene again, and draws the song as it is now, the zoom still
+// under way. Then put back.
+{
+  await sleep(300);
+  const at = await lanes();
+  const file = path.join(big, "data/kick-1/hits.json");
+  const was = fs.readFileSync(file, "utf8");
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const gone = await page.evaluate(() => {
+    const face = window.m2canvas.camera;
+    const c = face.now("arrangement"), d = face.picture?.("arrangement")?.drawn;
+    const k = (d?.clips ?? []).find((k) => k.lane === "kick-1.hits" && k.x > 100 && k.x + k.w < c.view.w - c.margins.left - 100);
+    return k ? k.id : null;
+  });
+  const lane = JSON.parse(was);
+  fs.writeFileSync(file, JSON.stringify({ ...lane, clips: lane.clips.filter((c) => c.id !== gone) }, null, 2));
+  const redrawn = await until(
+    () =>
+      page.evaluate((gone) => {
+        const face = window.m2canvas.camera;
+        const p = face.picture?.("arrangement");
+        return !!face.now("arrangement").laid && !!p?.shown && p.drawn.clips.some((k) => k.lane === "kick-1.hits") && !p.drawn.clips.some((k) => k.lane === "kick-1.hits" && k.id === gone);
+      }, gone),
+    8000,
+  );
+  check(!!gone && redrawn, `the song changing mid-zoom (Kick 1's clip ${gone} taken out of its file): the picture draws the song as it is now, the zoom still under way`);
+  await pinchEnd(at.x, at.y, 1.2);
+  await laidOut("arrangement");
+  fs.writeFileSync(file, was);
+  await until(() => has(`${tl} [data-track="kick-1"] [data-clip="${gone}"]`), 8000);
+  await pinch(at.x, at.y, [1 / 1.2]);
+  await frames(2);
+}
+// Revealing an element in the middle of a zoom (Show, a lane made: VIEW-9) moves from where it shows
+// at the zoom shown, not from where the page under the picture is laid out: a clip near the view's
+// right edge, which the zoom in carries out past it, comes into view at the zoom shown.
+{
+  await sleep(300);
+  const at = await lanes();
+  const target = await page.$$eval(
+    `${tl} [data-track="kick-1"] [data-clip]`,
+    (els, tl) => {
+      const b = document.querySelector(tl).getBoundingClientRect();
+      // The last clip wholly in view: the zoom in carries it out past the right edge.
+      const e = els.filter((e) => {
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.left > b.left + 300 && r.right < b.right - 20;
+      }).at(-1);
+      return e?.dataset.clip ?? null;
+    },
+    tl,
+  );
+  await pinchOver(at.x, at.y, [1.2, 1.4, 1.6], false);
+  await frames(2);
+  const mid = await arr();
+  if (target) await page.evaluate((tl, id) => window.m2canvas.camera.controls("arrangement").reveal(document.querySelector(`${tl} [data-clip="${id}"]`), { ways: "x" }), tl, target);
+  await laidOut("arrangement");
+  await frames(3);
+  const shown = await page.evaluate(
+    (tl, id) => {
+      const c = window.m2canvas.camera.now("arrangement");
+      const box = document.querySelector(tl), b = box.getBoundingClientRect();
+      const r = document.querySelector(`${tl} [data-clip="${id}"]`)?.getBoundingClientRect();
+      return r ? { left: r.left - b.left - c.margins.left, right: r.right - b.left - c.margins.left, clear: c.view.w - c.margins.left, zoom: c.zoom } : null;
+    },
+    tl,
+    target,
+  );
+  check(
+    !!target && !!mid?.laid && !!shown && near(shown.zoom, mid.zoom, 0.001) && shown.left >= -1 && shown.right <= shown.clear + 1 && shown.right > shown.clear - 40,
+    `a clip revealed in the middle of a zoom comes into view at the zoom shown, by the least move: ${json({ target, shown })}`,
+  );
+  await pinchEnd(at.x, at.y, 1.6);
+  await pinch(at.x, at.y, [1 / 1.6]);
+  await frames(2);
 }
 // A press while the picture shows ends the zoom and does nothing else (VIEW-5), as a touch stops a
 // glide: the zoom is laid out at the zoom shown, the picture hides, and the clip shown under the press

@@ -168,12 +168,21 @@ export class Rig {
         if (!box) return;
         let spans: { x?: Span; y?: Span };
         if (what instanceof Element) {
-          // Its place as it shows (stretched, in a live zoom), in the content's px of the zoom shown:
-          // the zoom the move is made from, once `app` has laid it out.
+          // Its place in the content's px of the zoom shown: the zoom the move is made from, once
+          // `app` has laid it out. In a live zoom, where it shows, stretched. Under a drawn zoom's
+          // picture the page is laid out at the zoom it began at, and nothing is stretched: its place
+          // there, carried to the zoom shown along the ways the zoom stretches.
           const r = what.getBoundingClientRect(), b = this.boxRect();
-          const at = shownScroll(this.cam.getState(), { x: box.scrollLeft, y: box.scrollTop });
-          const x = r.left - b.left + at.x, y = r.top - b.top + at.y;
-          spans = { x: [x, x + r.width], y: [y, y + r.height] };
+          const s = this.cam.getState();
+          if (this.live?.drawn && s.laid) {
+            const k = { x: s.stretch.x ? s.zoom / s.laid.zoom : 1, y: s.stretch.y ? s.zoom / s.laid.zoom : 1 };
+            const x = s.origin.x + (r.left - b.left + box.scrollLeft - s.origin.x) * k.x, y = s.origin.y + (r.top - b.top + box.scrollTop - s.origin.y) * k.y;
+            spans = { x: [x, x + r.width * k.x], y: [y, y + r.height * k.y] };
+          } else {
+            const at = shownScroll(s, { x: box.scrollLeft, y: box.scrollTop });
+            const x = r.left - b.left + at.x, y = r.top - b.top + at.y;
+            spans = { x: [x, x + r.width], y: [y, y + r.height] };
+          }
         } else spans = what;
         const ways = opts?.ways ?? "xy";
         this.app((c, s) => reveal(c, { x: ways.includes("x") ? spans.x : undefined, y: ways.includes("y") ? spans.y : undefined }, s, opts));

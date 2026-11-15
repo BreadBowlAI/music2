@@ -55,6 +55,8 @@ export const face = {
     const cam = cameraNow(name);
     if (cam) failPicture(cam, on);
   },
+  /** The app's moves of the camera `name` (VIEW-9), while a view uses it: `reveal`, `to`, `fit`… */
+  controls: (name: string) => rigs.get(name)?.controls ?? null,
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,
   /** A writer on `box`: a box of the suite's own, which keeps whole pixels as WebKit does. */
