@@ -462,10 +462,10 @@ check(copied.length > 0 && copied.length < 60_000, `and it stays under 60 KB: ${
   // says what a drawn frame costs there.
   const n = "[\\d.]+|–";
   // The timeline's frames drawn by its picture (a drawn zoom, VIEW-5) apart from the one laid out at
-  // the end and the frame after it, none stretched: A13 comes back to the zoom it started at, so only
-  // its way out alone is laid out at its end.
+  // the end and the frame after it: A13 comes back to the zoom it started at, so only its way out
+  // alone is laid out at its end.
   const live = new RegExp(
-    `\\nA zoom by the hand's frames, in ms: median / 95th percentile[^\\n]*\\n\\| View \\| drawn frames \\| stretched frames \\| their work \\| of it input \\| of it paint and commit \\| laid out \\| a laid-out frame's work \\| the frame after it \\|\\n\\|[-|]+\\n\\| timeline \\| [1-9]\\d* \\| 0 \\|( (${n}) / (${n}) \\|){3} 0 \\| – / – \\| – / – \\|\\n\\| timeline, its way out alone \\| [1-9]\\d* \\| 0 \\|( (${n}) / (${n}) \\|){3} 1 \\|( [\\d.]+ / [\\d.]+ \\|){2}\\n`,
+    `\\nA zoom by the hand's frames, in ms: median / 95th percentile[^\\n]*\\n\\| View \\| drawn frames \\| their work \\| of it input \\| of it paint and commit \\| laid out \\| a laid-out frame's work \\| the frame after it \\|\\n\\|[-|]+\\n\\| timeline \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} 0 \\| – / – \\| – / – \\|\\n\\| timeline, its way out alone \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} 1 \\|( [\\d.]+ / [\\d.]+ \\|){2}\\n`,
   );
   check(live.test(copied), `and the timeline's zoom apart: its frames drawn by its picture, its laid-out one and the frame after it: ${copied.slice(copied.indexOf("A zoom by the hand's frames"), copied.indexOf("A zoom by the hand's frames") + 700) || "none"}`);
   // The pinch let go of: how fast it zoomed as the fingers lifted, by the events' own times: in its

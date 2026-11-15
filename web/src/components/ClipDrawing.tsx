@@ -208,14 +208,16 @@ function draw(d: Drawing) {
   const [bf, bt] = d.narrow ? (d.narrow(from, to) ?? [from, from]) : [from, to];
   let x0 = (bf - d.start) * k, w = (bt - bf) * k;
   const h = size.h;
-  const scale = w > 0 && h > 0 ? Math.min(dpr, MAX_W / w, MAX_H / h) : dpr;
-  // A lane's canvas on the screen's own pixels: its left on one (the lane's box starts on one), its
-  // width whole ones, so the browser never resamples it while it holds still.
+  // A lane's canvas on whole px: its left on one (the lane's box starts on one), its width whole ones,
+  // so the browser never resamples it while it holds still. Whole px, not the screen's own: WebKit
+  // draws a canvas into its box rounded to whole px, so one on a half px drew its notes a device px
+  // right of their boxes, and of where the zoom's picture puts them (the drawn zoom's note, §6).
   if (d.lane && w > 0) {
-    const l = Math.floor(x0 * scale) / scale;
-    w = Math.ceil((x0 + w) * scale) / scale - l;
+    const l = Math.floor(x0);
+    w = Math.ceil(x0 + w) - l;
     x0 = l;
   }
+  const scale = w > 0 && h > 0 ? Math.min(dpr, MAX_W / w, MAX_H / h) : dpr;
   const bw = w > 0 ? Math.max(1, Math.round(w * scale)) : 0;
   const bh = h > 0 ? Math.max(1, Math.round(h * scale)) : 0;
   const c = d.canvas;

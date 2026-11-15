@@ -1,7 +1,7 @@
 import clsx from "clsx";
 import { Check, ChevronDown, FoldVertical, Lock, Minus, MousePointer2, Pencil, Plus, UnfoldVertical, ZoomIn, ZoomOut } from "lucide-react";
-import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type Ref } from "react";
-import { movingNow, onCamera, stretchOf, useCamera, useCameraState, useCull, useStretch, useZoomOf, within, type CameraState } from "../camera";
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { movingNow, onCamera, useCamera, useCameraState, useCull, useZoomOf, within, type CameraState } from "../camera";
 import {
   barAt,
   bars as barList,
@@ -199,20 +199,9 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const hint = useRef<HTMLDivElement>(null);
   const hintAt = useRef((s: CameraState) => s.zoom * 0);
   useEffect(() => onCamera(camera, (now) => void (hint.current && (hint.current.style.left = `${hintAt.current(now)}px`))), [camera]);
-  // What a live zoom stretches (VIEW-5): the grid, its notes and playhead, and the ruler; the strip
-  // follows the zoom shown by its own style.
-  const stretched = useStretch(camera);
-  const gridRef = useCallback(
-    (el: HTMLDivElement | null) => {
-      grid.current = el;
-      const off = stretched(el);
-      return () => {
-        grid.current = null;
-        off?.();
-      };
-    },
-    [stretched],
-  );
+  const gridRef = useCallback((el: HTMLDivElement | null) => {
+    grid.current = el;
+  }, []);
   const gesture = useRef<Gesture | null>(null);
   /** The notes a pointer holds down on the grid, sounding (audition): their handles, null where nothing sounds. A chord stamp holds several. */
   const hold = useRef<{ pointer: number; h: (number | null)[] } | null>(null);
@@ -1269,7 +1258,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
           <div className="relative" style={{ width: keysW + width, height: ROLL_RULER_H + height }}>
             <div className="sticky top-0 z-30 flex" style={{ height: ROLL_RULER_H }}>
               <div className="sticky left-0 z-40 shrink-0 bg-chrome border-r border-b border-line" style={{ width: keysW }} />
-              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} stretch={stretched} />
+              <Ruler width={width} ppb={ppb} meter={timeline.meter} start={start} length={clip.length} tone={tone} />
             </div>
             <div className="flex">
               <Keys selected={new Set(picked.map((i) => clip.notes[i].pitch))} tone={tone} module={module} lane={lane} names={names} width={keysW} rows={rows} rowH={rowH} />
@@ -1878,7 +1867,6 @@ export const Ruler = memo(function Ruler({
   start,
   length,
   tone,
-  stretch,
 }: {
   width: number;
   ppb: number;
@@ -1886,13 +1874,10 @@ export const Ruler = memo(function Ruler({
   start: number;
   length?: number;
   tone?: TrackColor;
-  /** Its view's mark for what a live zoom stretches (VIEW-5). */
-  stretch?: Ref<HTMLDivElement>;
 }) {
   const shown = barList(meter, start + width / ppb).filter((b) => b.start >= start - 1e-9);
   return (
     <div
-      ref={stretch}
       data-testid="roll-ruler"
       className="relative bg-chrome border-b border-line cursor-pointer overflow-hidden"
       style={{ width }}
@@ -1928,13 +1913,9 @@ export const Ruler = memo(function Ruler({
   );
 });
 
-/**
- * Where a strip under a view that scrolls with it across shows (the velocity lanes), as the camera `s`
- * shows the view: stretched too while a live zoom lasts (VIEW-5). Its transform's origin is its top
- * left.
- */
+/** Where a strip under a view that scrolls with it across shows (the velocity lanes), as the camera `s` shows the view. */
 export function stripStyle(s: CameraState): { transform: string } {
-  return { transform: `translateX(${-Math.round(s.x)}px) scaleX(${stretchOf(s)?.scale.x ?? 1})` };
+  return { transform: `translateX(${-Math.round(s.x)}px)` };
 }
 
 /** A strip written where `stripStyle` puts it, as the camera moves: nothing renders. */

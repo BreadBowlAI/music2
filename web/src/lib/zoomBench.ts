@@ -58,8 +58,8 @@ export interface Frame {
   /** The view's zoom once the frame was drawn, as `zoom` read it. */
   zoom: number | null;
   /**
-   * The zoom the view was laid out at once the frame was drawn, as `laid` read it, while a live zoom
-   * stretched it (taste.md VIEW-5); null when none did.
+   * The zoom the view was laid out at once the frame was drawn, as `laid` read it, while a drawn zoom
+   * drew its picture (taste.md VIEW-5); null when none did.
    */
   laid: number | null;
   /** Whether the view's picture showed the frame (a drawn zoom, taste.md VIEW-5); null where none was read. */
@@ -403,21 +403,19 @@ export function table(first: string, rows: readonly (readonly [string, readonly 
 /**
  * A zoom by the hand's frames (taste.md VIEW-5) in runs, from each run's first event to 200 ms after
  * its last (a run of ⌘-scroll is laid out G after it): **drawn**, a frame the view's picture painted
- * at the zoom shown, over the page as it was laid out (a drawn zoom); **stretched**, a frame only a
- * transform apart from the one before (a live zoom); **laid out**, a frame drawn at a new zoom laid
- * out (the zoom's end, or a live zoom's early layout); and the frame after each laid-out one. Where
- * the view neither draws its zoom nor marks anything every frame of a zoom is laid out.
+ * at the zoom shown, over the page as it was laid out (a drawn zoom); **laid out**, a frame drawn at a
+ * new zoom laid out (the drawn zoom's end); and the frame after each laid-out one. Where the view
+ * doesn't draw its zoom every frame of a zoom is laid out.
  */
 export interface LiveSplit {
   runs: number;
   drawn: Frame[];
-  stretched: Frame[];
   laid: Frame[];
   after: Frame[];
 }
 
 export function liveSplit(runs: readonly Run[]): LiveSplit {
-  const drawn: Frame[] = [], stretched: Frame[] = [], laid: Frame[] = [], after: Frame[] = [];
+  const drawn: Frame[] = [], laid: Frame[] = [], after: Frame[] = [];
   for (const run of runs) {
     const fs = run.frames.filter((f) => f.at >= 0 && f.at <= run.sent + 200);
     let was = run.zoom.from;
@@ -426,11 +424,11 @@ export function liveSplit(runs: readonly Run[]): LiveSplit {
       if (now !== was) {
         laid.push(f);
         if (fs[i + 1]) after.push(fs[i + 1]);
-      } else if (f.laid !== null && !after.includes(f)) (f.drawn ? drawn : stretched).push(f);
+      } else if (f.laid !== null && !after.includes(f)) drawn.push(f);
       was = now;
     });
   }
-  return { runs: runs.length, drawn, stretched, laid, after };
+  return { runs: runs.length, drawn, laid, after };
 }
 
 /** Rows of runs' live splits as a table to print or paste, under its line saying what its cells are; `first` heads the rows' names. */
@@ -440,14 +438,13 @@ export function liveTable(first: string, rows: readonly (readonly [string, reado
     return s.length ? `${one(quantile(s, 0.5))} / ${one(quantile(s, 0.95))}` : "– / –";
   };
   const out = [
-    "A zoom by the hand's frames, in ms: median / 95th percentile. Drawn: a frame the view's picture painted at the zoom shown, over the page as it was laid out. Stretched: a frame only a transform apart from the one before. Laid out: a frame drawn at a new zoom, at the zoom's end (or early, when stretched); then the frame after it",
-    `| ${first} | drawn frames | stretched frames | their work | of it input | of it paint and commit | laid out | a laid-out frame's work | the frame after it |`,
-    "|---|---|---|---|---|---|---|---|---|",
+    "A zoom by the hand's frames, in ms: median / 95th percentile. Drawn: a frame the view's picture painted at the zoom shown, over the page as it was laid out. Laid out: a frame drawn at a new zoom, at the zoom's end, a run's; then the frame after it",
+    `| ${first} | drawn frames | their work | of it input | of it paint and commit | laid out | a laid-out frame's work | the frame after it |`,
+    "|---|---|---|---|---|---|---|---|",
   ];
   for (const [name, runs] of rows) {
     const s = liveSplit(runs);
-    const zoomed = [...s.drawn, ...s.stretched];
-    out.push(`| ${name} | ${s.drawn.length} | ${s.stretched.length} | ${both(zoomed)} | ${both(zoomed, "input")} | ${both(zoomed, "paint")} | ${one(s.laid.length / Math.max(s.runs, 1))} | ${both(s.laid)} | ${both(s.after)} |`);
+    out.push(`| ${name} | ${s.drawn.length} | ${both(s.drawn)} | ${both(s.drawn, "input")} | ${both(s.drawn, "paint")} | ${one(s.laid.length / Math.max(s.runs, 1))} | ${both(s.laid)} | ${both(s.after)} |`);
   }
   return out.join("\n");
 }

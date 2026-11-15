@@ -8,7 +8,6 @@ import { rigs } from "./rig";
 import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
 import { failPicture, pictureOf } from "./picture";
-import { markedOf, shownAt, shownScroll, stretchOf } from "./stretch";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -22,9 +21,6 @@ export const face = {
   toBox,
   cull,
   cullPlan,
-  stretchOf,
-  shownAt,
-  shownScroll,
   laidOf,
   /** The cameras mounted now. */
   names: cameraNames,
@@ -32,14 +28,6 @@ export const face = {
   now: (name: string) => {
     const cam = cameraNow(name);
     return cam ? { ...cam.getState() } : null;
-  },
-  /**
-   * What the camera mounted as `name` stretches in a live zoom (VIEW-5): each marked element's
-   * transform as the camera wrote it ("" where it wrote none).
-   */
-  stretched: (name: string) => {
-    const cam = cameraNow(name);
-    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
   },
   /**
    * The picture of the view of the camera mounted as `name`, where it draws its zoom (VIEW-5): whether
