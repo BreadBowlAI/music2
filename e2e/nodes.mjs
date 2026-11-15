@@ -493,6 +493,9 @@ await page.evaluate(() => {
 const shownToasts = () => page.evaluate(() => window.__toasts);
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === kickText), "⌘Z gives the kick's code back");
+// The file is back before the page has the undo's answer: the next gesture waits until the page
+// says it, so no toast of the undo's replaces the gesture's.
+await until(async () => (await shownToasts()).includes("Undid adding Delay"));
 // Delete on a node that isn't a call says why (DV-15).
 const hits = '[data-testid=graph] [data-module="kick"] [data-node="hits"] [data-node-title]';
 await until(async () => !!(await page.$(hits)), 9000);
