@@ -202,7 +202,7 @@ export class Brush {
   }
 
   /** Words from `x` on the baseline `y` in `font`, cut with "…" to `max` px (CSS's `text-overflow: ellipsis`). Returns their width. */
-  text(s: string, x: number, y: number, font: string, color: string, max = Infinity, strike = false): number {
+  text(s: string, x: number, y: number, font: string, color: string, max = Infinity): number {
     const g = this.g;
     g.font = font;
     g.textBaseline = "alphabetic";
@@ -212,20 +212,23 @@ export class Brush {
     g.fillStyle = this.c(color);
     // Where the page puts the line: its layout's 64ths of a px.
     x = Math.round(x * 64) / 64;
-    g.fillText(t, x, y);
-    const m = g.measureText(t), w = m.width;
+    let w: number;
+    if (t === s) {
+      g.fillText(t, x, y);
+      w = g.measureText(t).width;
+    } else {
+      // Cut: the words left, then the "…" in a box of its own after them, as the page lays it out (no
+      // kerning between the two, which a font like the Mac's has).
+      const head = t.slice(0, -1);
+      const hw = Math.round(g.measureText(head).width * 64) / 64;
+      g.fillText(head, x, y);
+      g.fillText("…", x + hw, y);
+      w = hw + g.measureText("…").width;
+    }
+    const m = g.measureText(t);
     const box = { x, y: y - m.fontBoundingBoxAscent, w, h: m.fontBoundingBoxAscent + m.fontBoundingBoxDescent };
     this.put.push({ kind: "text", ...box });
     this.note(box.x, box.y, box.w, box.h);
-    if (strike) {
-      // CSS's line-through, as Chrome draws it: from a third of the font's ascent above the
-      // baseline down, a tenth of its size thick, on the screen's pixels; under the words left, not
-      // under the "…" that cuts them.
-      const size = parseFloat(font.split(" ")[1]);
-      const th = Math.max(1 / this.dpr, Math.round((size / 10) * this.dpr) / this.dpr);
-      const under = t === s ? w : g.measureText(t.slice(0, -1)).width;
-      g.fillRect(x, this.snap(y - m.fontBoundingBoxAscent / 3), under, th);
-    }
     return w;
   }
 

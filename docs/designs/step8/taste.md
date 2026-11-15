@@ -1538,8 +1538,10 @@ the selected bars, picked clips, the playhead and the Song row. It never falls b
   fingers stop. Z1's stretch showed stretched text, then a jump (the drawn zoom's note, §1).
 - *Today:* since track `drawn-zoom`, in the arrangement: `ZoomPicture` paints with the page's own
   drawing and placing, and matches how the browser draws the page (the boxes on the screen's pixels, a
-  canvas into its box's whole device px, text's glyphs, a cut name's ellipsis, the strike through a
-  name it no longer has, a muted track's grey, the loop's shade multiplied in). Tested by `drawn-zoom`
+  canvas into its box's whole device px, text's glyphs, a cut name's ellipsis in a box of its own after
+  the words left (no kerning between them, as the Mac's font has), the line through a name it no
+  longer has (the page draws its own, 7 px down the name's line, as CSS's line-through sits where each
+  font says: higher in the Mac's), a muted track's grey, the loop's shade multiplied in). Tested by `drawn-zoom`
   at a real 2 device px a px (Chrome's own scale, not an emulated one): a song with every kind of
   thing above, the playhead in view, a lane glowing (AGENT-5) with its clip picked, a clip far on
   whose waveform the page never asked for; a pinch in, out, far out, out and back at the song's
