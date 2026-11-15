@@ -60,7 +60,10 @@ for (const t of timeline.tracks)
   }
 check(allMatch && total > 0, `clips per lane match GET /api/graph (${counts.join(", ")})`);
 {
-  // What the clips' canvases drew (taste.md VIEW-12): notes, and the cutoff's line.
+  // What the clips' canvases drew (taste.md VIEW-12): notes, and the cutoff's line. The cutoff's lane
+  // was just unfolded: its canvas draws once its ResizeObserver says its height, in the frame after the
+  // render that made it, so that frame comes first (GitHub's Mac read it before: 0 vertices).
+  await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
   const notes = (await page.$$eval('[data-lane="bass.notes"] [data-clip]', drawings)).reduce((n, d) => n + (d?.notes.length ?? 0), 0);
   const line = (await page.$$eval('[data-lane="bass.cutoff"] [data-clip]', drawings)).reduce((n, d) => n + (d?.line.length ?? 0), 0);
   check(notes > 0 && line > 1, `notes and the cutoff curve are drawn (${notes} notes, ${line} vertices)`);
