@@ -45,6 +45,53 @@ const show = async (name) => {
 };
 const options = () => page.$$eval("[data-effect-browser] [data-effect]", (els) => els.map((e) => e.dataset.effect));
 const selected = () => page.$eval("[data-effect-browser] [aria-selected=true]", (e) => e.dataset.effect).catch(() => null);
+// A refused request, with what it asked and the server's words: the console says only its status.
+const refused = [];
+const hearRefusals = (p) =>
+  p.on("response", async (r) => {
+    if (r.status() >= 400) refused.push(`${r.request().method()} ${new URL(r.url()).pathname} ${r.request().postData() ?? ""} → ${r.status()} ${await r.text().catch(() => "")}`);
+  });
+hearRefusals(page);
+// Hold the page's next request `match(request, body)` names (with `every`, each one until let go):
+// the suite sends it on to the server at once, and its answer reaches the page only once let go
+// (`go`), as on a machine where the page hears late. `sent`: the server has answered the first one.
+// The page's requests are intercepted from the first hold on, until `unhold`.
+const holds = new Set();
+// The answers held for the page, until each is given: interception stays on till then, as turning it
+// off would send each request again, from the page.
+const answering = new Set();
+let intercepting = false;
+page.on("request", async (r) => {
+  if (!intercepting || r.isInterceptResolutionHandled()) return;
+  let body = {};
+  try { body = JSON.parse(r.postData() ?? "{}"); } catch {}
+  const h = [...holds].find((h) => h.match(r, body));
+  if (!h) return void r.continue().catch(() => {});
+  if (!h.every) holds.delete(h);
+  const given = (async () => {
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([k]) => k === "content-type" || k.startsWith("x-")));
+    const res = await fetch(r.url(), { method: r.method(), headers, body: r.postData() });
+    const answer = Buffer.from(await res.arrayBuffer());
+    h.answered();
+    await h.let;
+    await r.respond({ status: res.status, contentType: res.headers.get("content-type") ?? undefined, body: answer }).catch(() => {});
+  })();
+  answering.add(given);
+  await given;
+  answering.delete(given);
+});
+const hold = async (match, every = false) => {
+  const h = { match, every };
+  h.sent = new Promise((r) => (h.answered = r));
+  h.let = new Promise((r) => (h.go = () => (holds.delete(h), r())));
+  holds.add(h);
+  if (!intercepting) await page.setRequestInterception((intercepting = true));
+  return h;
+};
+const unhold = async () => {
+  await Promise.all(answering);
+  if (intercepting && !holds.size) await page.setRequestInterception((intercepting = false));
+};
 
 await page.goto(sess.url, { waitUntil: "domcontentloaded" });
 await page.waitForSelector("[data-testid=graph] [data-module]", { timeout: 8000 });
@@ -218,14 +265,50 @@ await press('button[aria-label="Undo"]');
 check(await until(() => read("tracks/bass.ts") === wired), "undo puts the cable back");
 await press('button[aria-label="Undo"]');
 check(await until(async () => !!(await page.$(target)) && (await page.$eval(target, (e) => e.dataset.value)) === "1000"), "undoing the connection brings the cutoff knob back");
+// The Lowpass's id now, which it has again once its removal is undone.
+const lpId = (await api("graph")).view.modules.find((m) => m.key === "bass").nodes.find((n) => n.label === "lowpass")?.id;
 await press('[data-module="bass"] [data-node="lowpass"] [data-node-menu]');
 await press('[data-testid=node-remove][aria-label^="Remove "]');
 check(await until(() => read("tracks/bass.ts").includes('return bass(lane.notes("notes"), { cutoff: blend(cutoff, wobble, drop) });')), "removing the lowpass leaves the bass as it was");
-for (let i = 0; i < 2; i++) {
-  const rev = (await api("graph")).view.revision;
-  await page.click('button[aria-label="Undo"]');
-  await until(async () => (await api("graph")).view.revision > rev);
-}
+// Undo twice in a row: the first brings the Lowpass back, and its picture's live layers look at its
+// input and its output by its id (TAP-16); the second takes it out again, so that id names the Bass
+// once it lands. A look waits while a change of the window's own is on its way (AGENT-2), so it never
+// names a box the change gives another call. As on a slow machine (GitHub's Mac, 11-15): the
+// picture's answer comes once the second undo has landed, and the page hears of that undo, its answer
+// and the song's new state, a moment later.
+const lowpassBack = await hold((r, b) => r.url().endsWith("/api/graph/picture") && b.on && b.node === lpId);
+let rev = (await api("graph")).view.revision;
+await page.click('button[aria-label="Undo"]');
+await until(async () => (await api("graph")).view.revision > rev);
+await lowpassBack.sent;
+const reads = await hold((r) => r.method() === "GET" && new URL(r.url()).pathname === "/api/graph", true);
+const secondUndo = await hold((r) => r.url().endsWith("/api/graph/undo"));
+const named = [];
+const lookAt = (r) => {
+  if (!r.url().endsWith("/api/graph/look")) return;
+  const b = JSON.parse(r.postData() ?? "{}");
+  if (b.on && b.node === lpId) named.push(`${b.kind} at ${b.at}`);
+};
+page.on("request", lookAt);
+rev = (await api("graph")).view.revision;
+await page.click('button[aria-label="Undo"]');
+await secondUndo.sent;
+lowpassBack.go();
+// Its live layers are drawn once the picture's answer comes; a look they ask goes as they mount.
+const live = '[data-module="bass"] [data-node="lowpass"] [data-picture] canvas[data-live]';
+const mounted = await until(async () => !!(await page.$(live)), 3000);
+await until(() => named.length > 0, 1000);
+const asked = [...named];
+secondUndo.go();
+reads.go();
+await until(async () => !(await page.$('[data-module="bass"] [data-node="lowpass"]')));
+await unhold();
+page.off("request", lookAt);
+check(
+  mounted && !!lpId && named.length === 0,
+  `with an undo on its way, the Lowpass's live layers ask no look by its id ${lpId}, which the undo gives the Bass (drawn: ${mounted}; asked: ${asked.join(", ") || "none"}; after the undo: ${named.slice(asked.length).join(", ") || "none"})`,
+);
+await until(async () => (await api("graph")).view.revision > rev);
 check(await until(() => read("tracks/bass.ts") === bassOriginal), "undoing the removal and the add restores bass.ts exactly");
 
 // ---------------------------------------------------------------- zoom
@@ -280,6 +363,7 @@ const tab = await bars.newPage();
 await tab.setViewport({ width: 1440, height: 900 });
 tab.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 tab.on("pageerror", (e) => errors.push(String(e)));
+hearRefusals(tab);
 await tab.evaluateOnNewDocument((token) => {
   window.__M2__ = { native: false, token, platform: "macos" };
   try {
@@ -358,7 +442,7 @@ check(shaky.length === 0, `fitted, Bass holds still at every panel height from $
 check(zooms.every((z, i) => i === 0 || z >= zooms[i - 1]), `and its zoom never drops as the panel grows (${zooms.join(" ")})`);
 await bars.close();
 
-check(errors.length === 0, `no console errors ${errors.join(" | ")}`);
+check(errors.length === 0, `no console errors ${errors.join(" | ")}${refused.length ? `; refused: ${refused.join(" | ")}` : ""}`);
 console.log(`\n${pass} passed, ${fail} failed`);
 await browser.close();
 process.exit(fail ? 1 : 0);

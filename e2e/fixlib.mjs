@@ -81,6 +81,9 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   // The page's requests, intercepted only while some are held back: its own reads (`late`), or
   // those a suite's `hold` names.
   const holders = new Set();
+  // The answers held for the page (`heard`), until each is given: interception stays on till then,
+  // as turning it off would send each request again, from the page.
+  const answering = new Set();
   let intercepting = false;
   const intercept = async (on) => {
     if (on !== intercepting) await page.setRequestInterception((intercepting = on));
@@ -89,6 +92,19 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
     if (!intercepting || r.isInterceptResolutionHandled()) return;
     const read = r.method() === "GET" && new URL(r.url()).pathname === "/api/graph" && !r.headers()["x-e2e"];
     const held = [...holders].map((h) => h(r)).find(Boolean);
+    if (held?.heard) {
+      // Sent on to the server now, by the suite; the page hears the answer once `heard` settles.
+      const given = (async () => {
+        const headers = Object.fromEntries(Object.entries(r.headers()).filter(([k]) => k === "content-type" || k.startsWith("x-")));
+        const res = await fetch(r.url(), { method: r.method(), headers, body: r.postData() });
+        const body = Buffer.from(await res.arrayBuffer());
+        await held.heard;
+        await r.respond({ status: res.status, contentType: res.headers.get("content-type") ?? undefined, body }).catch(() => {});
+      })();
+      answering.add(given);
+      await given;
+      return void answering.delete(given);
+    }
     if (held && typeof held === "object") {
       await held.until;
       return void (held.answer ? r.respond(held.answer) : r.continue()).catch(() => {});
@@ -100,13 +116,16 @@ export async function open(width = 1440, height = 900, { browser: side = false, 
   if (late > 0) await intercept(true);
   /**
    * Hold back each request of the page's that `f` names, until `off()`: `f` answers how many ms, or
-   * `{ until, answer }` (until that promise settles, then answered with `answer` if given), or 0.
+   * `{ until, answer }` (until that promise settles, then answered with `answer` if given), or
+   * `{ heard }` (the server gets it at once, and the page its answer once that promise settles, as a
+   * page that hears late), or 0.
    */
   const hold = async (f) => {
     holders.add(f);
     await intercept(true);
     return async () => {
       holders.delete(f);
+      await Promise.all(answering);
       if (!holders.size && !(late > 0)) await intercept(false);
     };
   };
