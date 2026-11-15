@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-08 (0.2.0 drafted; note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 being made; the 0.2.0 draft unpublished) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -17,15 +17,17 @@ design for whatever you pick up. Older versions of this page, with each track's 
   once a frame, and lists what it drew from its own brushes; a press beside it does what it says.
   **Owed on the owner's Mac:** the swipe probe's Replay a pinch and its new step "a pinch let go of" (frame
   cost at 120 Hz in WKWebView, and how fast fingers leave a pinch, for a glide).
-- **0.2.0 is made, as a draft** (#97, 2026-11-07). The tag `v0.2.0` and `release.yml`'s run (42391434245) built the
-  Linux and Mac files and made the draft pre-release (five files). **Publishing it is the owner's.** Its notes are
-  [docs/releases/0.2.0.md](docs/releases/0.2.0.md). The server has no `file` program, which linuxdeploy's AppImage
-  tool needs: a build here puts an unpacked copy on `PATH` (`apt-get download file`); `release.yml` installs it, and
-  `ci/release.sh build` says at once when it is missing.
-- **The graph waits for the owner.** On 2026-11-07 the owner asked for the Device view's Chain and Patch to become one
-  **Graph**, whose nodes are the cards: collapsed by default, expanded on a click. The note is
-  `docs/designs/graph/design.md` on branch `graph-note` (80a5d073, worktree `~/m2-runs/wt-graph-note`, not pushed),
-  with a mockup. It waits for the owner's D1 to D6. Build none of it before their yes (AGENTS.md rule 11).
+- **0.3.0 is being made (branch `release-0.3.0`, 2026-11-15)**, from `main` after #127: version 0.3.0 everywhere
+  `ci/release.sh version` reads it, and [docs/releases/0.3.0.md](docs/releases/0.3.0.md), which says what is new
+  since 0.1.0. Once it merges, the tag `v0.3.0` on `main` runs `release.yml`, which makes the draft pre-release;
+  **publishing it is the owner's.**
+  - **The 0.2.0 draft** (#97, tag `v0.2.0`, run 42391434245) was never published, and 0.3.0 replaces it: the owner
+    may delete the draft. The tag stays, as pushed tags aren't moved.
+  - The server has no `file` program, which linuxdeploy's AppImage tool needs: a build here puts an unpacked copy on
+    `PATH` (`apt-get download file`); `release.yml` installs it, and `ci/release.sh build` says at once when it is
+    missing.
+- **The Graph** (#107, #109, #111, 2026-11-08): the Device view's Chain and Patch are one Graph of nodes, collapsed or
+  expanded, with **+** on a wire. Design: `docs/designs/graph/design.md` (the owner's yes to D1 to D6).
 - **New sounds in packs (2026-11-08)** (#104, #105, #106; gaps #50, #54 and #55), the core unchanged:
   - **Tune's Formant** knob (VOX-20) moves the voice's colour without its notes; at 0 Tune plays as before.
   - **The Voice changer** (`@m2/vocals`, VOX-28): Pitch and Formant, presets Deep and Chipmunk, Tune's own kernels,
@@ -107,8 +109,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
     - a pure fixture, `core/session/tests/fixtures/meters`, pins the mixing tools' sound, and a hash in
       `core/play/tests/vocals.rs` pins Tune's.
   - **Versions since 0.2.0:** `@m2/core` 2.5.0, `@m2/effects` 1.4.0, `@m2/mixing` 1.3.0, `@m2/synths` 2.3.0,
-    `@m2/vocals` 1.2.0, `@m2/wavetable` 1.2.1 and `@m2/notes` 0.1.0; std stays 0.10.0. None has shipped yet, so a
-    change to one of these packs before the next release keeps its version, recorded again (PACK-18).
+    `@m2/vocals` 1.2.0, `@m2/wavetable` 1.2.1 and `@m2/notes` 0.1.0; std stays 0.10.0. They ship in 0.3.0: once it is
+    published, a change to one of them takes a new version (PACK-18). Until then, one keeps its version, recorded
+    again.
 - **The cards plan (2026-11-06 to 11-07) gave every sound a card that draws its sound** (#85, #87, #90, #92, #93,
   #94, #95). Design: [docs/designs/cards2/design.md](docs/designs/cards2/design.md), accepted (#85).
   - **The frame** (#87, CARD-40 to CARD-47): the Device view's **Chain**, a card for each sound in the order it
@@ -339,6 +342,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `removing_a_folder_deletes_its_cache` (`m2-server`, `routes_library_tests.rs`) | `assertion failed: file.exists()` | once, in ci-flakes' run of six crates' tests at once beside the lead's check (2026-11-08, load 17 to 21); passed on its retry. Not looked into |
 | `pl-mix-fix` (nightly tier) | "a click clears it": the clip dot stayed after its click | once in 28 runs here (2026-11-08, ci-flakes round 3). Its "after the fader" check failed before on a few page reads that caught a hat late in its fall (GitHub's Linux once; here 2 of 28, the old player 1 of 14); since round 3 it is judged on the meters messages, 28 of 28 |
 | `own-edits-fix` | one `POST /api/graph/picture` refused (400) during the clip trim | once on GitHub's Linux nightly (2026-11-14, `63b62dd`); passed on its retry. Not made to happen again in 33 runs (track `nightly-red`); the suite now logs the revision a refusal named and the server's words |
+| `spotlight-fix` | a puppeteer `TimeoutError` 10 s in, after its first three checks: a wait for a "synth" search's answer ran out (find's, or the one after the plugin list comes) | once on GitHub's Mac (2026-11-15, `c8f99c0`); passed on its retry. Not made to happen here (3 of 3 with a timer slack of 90 ms, and every plain run, track `nightly-flakes`); with the plugin list never let go it stops the same way, so a plugin list that came late or failed there is likely, not proven. The two waits now say what the field holds and when the plugin list and each search came |
 | `m2-server`'s registry tests, under `cargo test` | "Too many open files" | in a tmux shell, whose open-file limit is lower; they pass from a normal shell and in `ci/check.sh` |
 | `camera-fix` | the beat grid's step after "a kit made with ⌘T" stopped at `No element found for selector: [data-module-tab="kick-2"]`: the `until(… drum_kits === 1 …)` before `show("kick-2")` carries on silently when it times out | once in 6 runs (review R of track `canvas-clips`, 2026-11-14), on a build that only moved a lane's canvas 3 px down; its rerun reached the end; cause not found |
 | `from_the_library_is_capped_and_made_once_a_catalog` (`m2-server`, `registry_tests.rs`) | "made once for the catalog, never a keystroke": `offers_made` 1 against 0, both tries | once, in track `canvas-clips`' check at load 11 (2026-11-14; no Rust changed there); alone 3 of 3 pass. Likely the count is read before the catalog's offers are made, the same kind of race as LIB-5. Not looked into yet |
@@ -384,10 +388,12 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **Publish 0.2.0** (the owner's): the draft is made.
-2. **The graph** (the owner's D1 to D6 first): then the tracks `graph-node` (the node, collapsed and expanded, in
-   place of Chain and Patch) and `graph-insert` (**+** on a wire, which also gives a note effect its way in from the
-   window, gap #62).
+1. **Release 0.3.0** (the owner's): merge `release-0.3.0`, tag `v0.3.0` on `main`, check the draft `release.yml`
+   makes, publish it. Delete the unpublished 0.2.0 draft if wanted.
+2. **After the release, the zoom:** track `drawn-zoom-2` (Notes and the beat grid drawn as the timeline is; work in
+   progress on the local branch `drawn-zoom-2`, worktree `~/m2-runs/wt-drawn-zoom-2`), then the glide once the
+   owner's probe says how fast a pinch is let go of, then the scroll bar's thumb that jumps at a zoom's end (gaps.md,
+   Timeline and clips). The drawn zoom's note §5.
 3. **Small, left by the last tracks** (each in gaps.md):
    - the keyed compressor's dot rides its own input, not what it listens to (M2-21: it needs a look at the sidechain,
      a core change);
@@ -412,14 +418,12 @@ whether it is one of these or a real failure, and fixes the real ones (most were
    reference closer to their work would bring them back. The capture's clock
    could keep the wall clock's pace as the silent player does; then `nx-click` and `st-record` might leave the sleeps
    list.
-6. **The zoom:** track `drawn-zoom-2` (Notes and the beat grid drawn as the arrangement is), then a glide once the
-   owner's probe says how fast a pinch is let go of (the drawn zoom's note §5).
-7. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
+6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
    macro knobs #57, the rest of #62: Bake to notes, note repeat in a kit, generators), each inside a pack where it
    can be; the beat grid's gaps (a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks,
    D3).
-8. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
-9. **Open owner decisions** (below).
+7. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
+8. **Open owner decisions** (below).
 
 The owner wants music2 to be a novel, type-safe DAW built from first principles, simple yet elegant, with std as
 small as possible and most sounds in packs (2026-10-31).
@@ -454,6 +458,7 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | | |
 |---|---|
 | Which songs | Any song asking for std "0.2" to "0.9" (a song from 0.1.0 asks for "0.4"), or using the old drums and synths from before the sounds moved into packs. |
+| Songs from a try build | A song made by the 0.2.0 draft or a build of `main` since is locked to older builds of music2's own packs: Upgrade it locks it to 0.3.0's, with the same sound. A packs folder that holds `@m2/effects` 1.4.0, `@m2/mixing` 1.3.0 or `@m2/vocals` 1.2.0 from a build of `main` between #100 and #105 (11-07 to 11-08), whose files changed after, is named as music2 starts, with the `m2 pack remove` line to run. |
 | What it changes | The std line and the pack lines, the imports, the single drums (now the Drum, with their knob values converted), the song's key (from `layout.json` into `data/arrangement.json`), and the lock. Nothing else. |
 | The sound | The same, bit for bit, where it can be; anything it can't convert exactly is named with its file and line, and then nothing is written. |
 | Presets | Your saved presets for the old single drums aren't changed: the upgrade names them, so you can save them again. |

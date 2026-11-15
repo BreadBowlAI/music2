@@ -474,14 +474,42 @@ await page.waitForSelector('[data-effect-browser] [data-effect="delay"]');
 await page.click('[data-effect-browser] [data-effect="delay"]');
 check(await until(() => /\{ out: delay\(out, \{[^}]*\}\), env: follow\(out,/.test(read("tracks/kick.ts"))), `the Delay wraps the record's out; the Follow reads the drum dry: ${read("tracks/kick.ts").match(/return .*/)?.[0]}`);
 check(await stepIs("adding Delay"), `one undo step: ${await undoTitle()}`);
+// The page hears the undo's answer late, as a busy machine's may (GitHub's Linux, 11-12 and 11-15):
+// the server takes the Delay out at once, and the page has the answer once the suite has pressed its
+// next key, or after a second. Its toast, "Undid adding Delay", replaces any toast before it (one at a
+// time, taste.md §2.14), so the kick's next gesture waits for it. Every toast shown from here is kept
+// in turn, to say what replaced what.
+let heard;
+const undoHeard = new Promise((r) => (heard = r));
+setTimeout(heard, 1000);
+const unholdUndo = await hold((r) => (r.method() === "POST" && new URL(r.url()).pathname === "/api/graph/undo" ? { heard: undoHeard } : 0));
+await page.evaluate(() => {
+  window.__toasts = [];
+  window.__toastsSeen = new MutationObserver(() => {
+    for (const t of document.querySelectorAll("[data-testid=toast]")) if (window.__toasts.at(-1) !== t.textContent) window.__toasts.push(t.textContent);
+  });
+  window.__toastsSeen.observe(document.body, { subtree: true, childList: true, characterData: true });
+});
+const shownToasts = () => page.evaluate(() => window.__toasts);
 await key("Meta+z");
 check(await until(() => read("tracks/kick.ts") === kickText), "⌘Z gives the kick's code back");
+// The file is back before the page has the undo's answer: the next gesture waits until the page
+// says it, so no toast of the undo's replaces the gesture's.
+await until(async () => (await shownToasts()).includes("Undid adding Delay"));
 // Delete on a node that isn't a call says why (DV-15).
 const hits = '[data-testid=graph] [data-module="kick"] [data-node="hits"] [data-node-title]';
 await until(async () => !!(await page.$(hits)), 9000);
 await page.click(hits);
 await page.keyboard.press("Delete");
-check(await until(async () => (await toasts()).some((x) => x.includes("Hits isn't an effect: change it in code."))), "Delete on the kick's lane says why");
+heard();
+await unholdUndo();
+// Read once the page has said the undo, before Delete's words or after them.
+await until(async () => (await shownToasts()).includes("Undid adding Delay"));
+check(
+  await until(async () => (await toasts()).some((x) => x.includes("Hits isn't an effect: change it in code."))),
+  `Delete on the kick's lane says why (the toasts in turn: ${JSON.stringify(await shownToasts())})`,
+);
+await page.evaluate(() => window.__toastsSeen.disconnect());
 await page.keyboard.press("Escape");
 await page.click('[data-module-tab="wob"] [data-testid=track-label]');
 await until(async () => !!(await page.$(wob)), 15000);

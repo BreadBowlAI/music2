@@ -3,17 +3,23 @@
 // by its name. One mechanism for every look: it asks only while what shows it is on screen in a
 // window that shows, asks again every few seconds (the server keeps an ask 10 s), and stops when it
 // goes. Parts of the window that show the same look share one ask: it starts with the first and
-// stops with the last. What it sees comes in this window's `looks` message, beside the meters.
+// stops with the last. What it sees comes in this window's `looks` message, beside the meters. It
+// asks only by the ids of a view that shows the window's own last change (AGENT-2): the server judges
+// a box's id by the code it plays now, and a change of the window's own may give that id another call.
 
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { on } from "./events";
 import { graphApi } from "./graph";
+import { drawnAfterOwn, hearOwn } from "./history";
+import { useStore } from "./store";
 
 export type LookKind = "scope" | "spectrum" | "level" | "meter";
 
-/** A look at a box: its module, its id in the view, its kind, and its point. */
+/** A look at a box: its module, its id in the view of `revision`, its kind, and its point. */
 export interface Look {
   session: number;
+  /** The revision of the view the part showing it was drawn from: its ids are that view's. */
+  revision: number;
   module: string;
   node: string;
   kind: LookKind;
@@ -79,19 +85,24 @@ interface Shared {
   seen: Set<(s: Seen) => void>;
   why: Set<(words: string | null) => void>;
   stop: () => void;
+  /** A part showing it was drawn from revision `r`: an ask that waits for that may go. */
+  drawn: (r: number) => void;
   /** A meter's unit, from the answer to its ask: what a window draws a switch by (CARD-73). */
   unit?: string;
 }
 
 const shared = new Map<string, Shared>();
 
-/** Show `look` to `seen` and `why` until the function it gives back is called: the first to show it asks, the last to go stops. */
-function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) => void): () => void {
+/**
+ * Show `look` to `seen` and `why` until `leave` is called: the first to show it asks, the last to go
+ * stops. `drawn` says each revision the part showing it is drawn from after `look.revision`.
+ */
+function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) => void): { leave: () => void; drawn: (r: number) => void } {
   const { session, module, node, kind, at } = look;
   const key = JSON.stringify([session, module, node, kind, at]);
   let s = shared.get(key);
   if (!s) {
-    const one: Shared = { seen: new Set(), why: new Set(), stop: () => {} };
+    const one: Shared = { seen: new Set(), why: new Set(), stop: () => {}, drawn: () => {} };
     let alive = true;
     const tell = (words: string | null) => one.why.forEach((w) => w(words));
     const ask = (on: boolean) =>
@@ -102,8 +113,29 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
         },
         (e) => alive && on && tell(said(e)),
       );
-    void ask(true);
-    const again = setInterval(() => void ask(true), ASK_MS);
+    // The newest revision a part showing it was drawn from: its id is that view's.
+    let drawn = look.revision;
+    // Asked for, and not sent yet: it goes once the window shows its own last change and a part
+    // showing it was drawn from it (AGENT-2). Till then the id may name the call a change of the
+    // window's own, on its way, gives it; a look whose box that change took out has stopped by then.
+    let waiting = false;
+    let asked = false;
+    const may = () => useStore.getState().graph?.session === session && drawnAfterOwn(session, drawn);
+    const keep = () => {
+      if (!alive) return;
+      waiting = !may();
+      if (waiting) return;
+      asked = true;
+      void ask(true);
+    };
+    const woken = () => void (waiting && keep());
+    const unhear = hearOwn(woken);
+    one.drawn = (r) => {
+      drawn = Math.max(drawn, r);
+      woken();
+    };
+    keep();
+    const again = setInterval(keep, ASK_MS);
     const off = on<LooksIn>("looks", (msg) => {
       const mine = msg.looks.find((x) => x.module === module && x.node === node && x.kind === kind && x.at === at);
       if (!mine) return;
@@ -114,8 +146,10 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
     one.stop = () => {
       alive = false;
       clearInterval(again);
+      unhear();
       off();
-      void ask(false).catch(() => {});
+      // A look that never asked has nothing to stop.
+      if (asked) void ask(false).catch(() => {});
     };
     shared.set(key, one);
     s = one;
@@ -123,13 +157,17 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
   const mine = s;
   mine.seen.add(seen);
   mine.why.add(why);
-  return () => {
-    mine.seen.delete(seen);
-    mine.why.delete(why);
-    if (mine.seen.size === 0) {
-      shared.delete(key);
-      mine.stop();
-    }
+  mine.drawn(look.revision);
+  return {
+    leave: () => {
+      mine.seen.delete(seen);
+      mine.why.delete(why);
+      if (mine.seen.size === 0) {
+        shared.delete(key);
+        mine.stop();
+      }
+    },
+    drawn: (r) => mine.drawn(r),
   };
 }
 
@@ -141,13 +179,22 @@ function join(look: Look, seen: (s: Seen) => void, why: (words: string | null) =
 export function useLook(look: Look, looking: boolean, seen: (s: Seen) => void, why: (words: string | null) => void): void {
   const to = useRef({ seen, why });
   to.current = { seen, why };
-  const { session, module, node, kind, at } = look;
+  const { session, revision, module, node, kind, at } = look;
+  const drawnFrom = useRef(revision);
+  drawnFrom.current = revision;
+  const part = useRef<ReturnType<typeof join> | null>(null);
   useEffect(() => {
     if (!looking) return;
-    return join(
-      { session, module, node, kind, at },
+    const p = (part.current = join(
+      { session, revision: drawnFrom.current, module, node, kind, at },
       (s) => to.current.seen(s),
       (w) => to.current.why(w),
-    );
+    ));
+    return () => {
+      part.current = null;
+      p.leave();
+    };
   }, [session, module, node, kind, at, looking]);
+  // Drawn from a newer view, with the same id: an ask waiting for it may go.
+  useEffect(() => part.current?.drawn(revision), [revision]);
 }

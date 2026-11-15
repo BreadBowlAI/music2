@@ -16,6 +16,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Start a song from a template, or open an example | the start screen: **New Song…**, **Examples** |
 | Add a track: music2's own sounds (synths, FM keys, drums), a Sampler, a pack's sound, or an empty audio track; or a drum kit, a track for each drum and a bus | **+ Track** (⌘T), or the browser on the left |
 | Draw and edit notes | **Notes** (⌥2), the piano roll |
+| Play a pattern, a chord or echoes from each note you play: an arpeggiator, Chord, Note echo and Lock to key | **+** on the notes wire into the instrument, in its **Graph** ([how](sounds.md#note-effects)) |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Copy a chorus, or insert and delete bars, on every track at once | drag across the ruler, then ⌘C and ⌘V, or right-click ([Sections](sections.md)) |
 | Change values, add effects, connect wires | **Graph** (⌥1) |
