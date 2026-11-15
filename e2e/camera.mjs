@@ -2282,7 +2282,8 @@ const beatMid = (x) =>
   const z0 = (await arr())?.zoom ?? 0;
   await page.evaluate(() => window.m2canvas.camera.pictureFails?.("arrangement", true));
   const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
-  await pinchOver(at.x, at.y, [1.1, 1.2, 1.3, 1.4]);
+  // A change a frame: each laid out in a frame of its own (8 ms apart, two could share one).
+  await pinchFrames(at.x, at.y, [1.1, 1.2, 1.3, 1.4]);
   await laidOut("arrangement");
   await frames(3);
   const fs = await stop();
