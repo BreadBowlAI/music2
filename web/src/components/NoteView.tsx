@@ -188,7 +188,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const ppb = useZoomOf(camera);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - keysW);
   // What a zoom looked at keeps its room, as the arrangement's (VIEW-5, VIEW-6): the beat it held in
-  // place stays there, at the far end too, and a live zoom ends where its stretch showed it.
+  // place stays there, at the far end too.
   const asked = useCameraState(camera, (s) => s.asked.w) - keysW;
   // Only the notes near the view are drawn (VIEW-12): the window across in beats, down in px of rows.
   const cull = useCull(camera);

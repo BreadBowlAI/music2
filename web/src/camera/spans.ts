@@ -84,7 +84,7 @@ export function useSpan(
     if (!group) {
       if (!placed.size) watchPixels();
       const spans = new Set<Span>();
-      // By the zoom laid out: a live zoom stretches the boxes as they are (VIEW-5).
+      // By the zoom laid out: a drawn zoom's picture leaves the boxes as they are (VIEW-5).
       const off = cam.subscribe((now, was) => {
         const zoom = laidOf(now).zoom;
         if (zoom !== laidOf(was).zoom) for (const s of spans) place(s, zoom);

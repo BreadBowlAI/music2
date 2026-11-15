@@ -1,9 +1,9 @@
 // The drawn zoom (VIEW-5, VIEW-13): a view that draws its zoom by the hand itself. While a pinch or a
 // run of ⌘-scroll lasts, the camera shows the view's picture over it and has the view paint it,
-// sharp at the zoom shown, in each frame the zoom moves. The page under it stays as it was laid out:
-// not stretched, not laid out early, given no layer of its own. When the zoom ends, the view is laid
-// out once, at the zoom shown, and the picture hides in the render that lays it out (rig.ts): no frame
-// shows the one without the other.
+// sharp at the zoom shown, in each frame the zoom moves. The page under it stays as it was laid out.
+// When the zoom ends, the view is laid out once, at the zoom shown, and the picture hides in the
+// render that lays it out (rig.ts): no frame shows the one without the other. A view that doesn't
+// draw its zoom is laid out at the zoom shown each frame.
 //
 // The camera owns the picture's life: when it shows, when it paints, when it hides, and what a press
 // on it does. The view owns what is drawn: a scene, read as the zoom begins from what the view renders
@@ -38,7 +38,7 @@ interface Drawer {
 
 const drawers = new Map<CameraStore, Drawer>();
 
-/** Whether the view of `cam` draws its zoom (VIEW-5): then the camera stretches nothing of it. */
+/** Whether the view of `cam` draws its zoom (VIEW-5). */
 export const drawsZoom = (cam: CameraStore) => drawers.has(cam);
 
 /** Whether the picture of `cam`'s view shows now. */

@@ -8,19 +8,24 @@
 export const REPS = 3;
 
 /**
- * The runs on a song, in order: the timeline's pinch and ⌘-scroll in turn, then the Graph's pinch.
- * A run's `view` is where it happens, its `kind` the gesture: the owner's A13 pinch, or ⌘-scroll.
+ * The runs on a song, in order: the timeline's pinch, ⌘-scroll and pinch out in turn, then the
+ * Graph's pinch. A run's `view` is where it happens, its `kind` the gesture: the owner's A13 pinch,
+ * ⌘-scroll, or A13's way out alone (its end lays the view out at a new zoom, which A13's doesn't).
  */
 export const PLAN = [
   ...Array.from({ length: REPS }, (_, r) => [
     { name: "timeline pinch", rep: r + 1, view: "arrangement", kind: "pinch" },
     { name: "timeline ⌘-scroll", rep: r + 1, view: "arrangement", kind: "scroll" },
+    { name: "timeline pinch out", rep: r + 1, view: "arrangement", kind: "pinch-out" },
   ]).flat(),
   ...Array.from({ length: REPS }, (_, r) => ({ name: "Graph pinch", rep: r + 1, view: "graph", kind: "pinch" })),
 ];
 
 /** The gestures in the order of a table's rows. */
-export const GESTURES = ["timeline pinch", "timeline ⌘-scroll", "Graph pinch"];
+export const GESTURES = ["timeline pinch", "timeline ⌘-scroll", "timeline pinch out", "Graph pinch"];
+
+/** Whether a gesture's runs end where they began: all but A13's way out alone. */
+export const comesBack = (g) => g !== "timeline pinch out";
 
 /**
  * In the page: one run of the plan. Where every run starts: the timeline at 24 px a beat from the
@@ -77,7 +82,10 @@ export async function zoomRun(step) {
   const [fx, fy] = graph ? [0.5, 0.5] : [0.4, 0.3];
   const x = Math.round(r.left + box.clientLeft + m.left + (box.clientWidth - m.left - m.right) * fx);
   const y = Math.round(r.top + box.clientTop + m.top + (box.clientHeight - m.top - m.bottom) * fy);
-  const gesture = step.kind === "scroll" ? { kind: "scroll", deltas: bench.CMD_SCROLL } : { kind: "pinch", scales: bench.A13 };
+  const gesture =
+    step.kind === "scroll"
+      ? { kind: "scroll", deltas: bench.CMD_SCROLL }
+      : { kind: "pinch", scales: step.kind === "pinch-out" ? bench.pinchScales([Math.min(...bench.A13)], 55) : bench.A13 };
   // Whether the view's picture showed a frame (a drawn zoom, VIEW-5): a page from before it has none to read.
   return bench.replay(x, y, gesture, { zoom: () => cam.now(name)?.zoom ?? null, laid: () => cam.now(name)?.laid?.zoom ?? null, drawn: () => cam.picture?.(name)?.shown ?? null });
 }

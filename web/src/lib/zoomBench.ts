@@ -109,7 +109,8 @@ function patch(on: object, name: string, with_: (was: PropertyDescriptor) => Pro
  * after it back to back, as queued input does. A pinch is `gesturestart`, a `gesturechange` for each
  * scale, and `gestureend`; ⌘-scroll is wheel events with ⌘ held. Every frame is measured from two
  * frames before its first event to 300 ms after its last; `zoom` reads the view's zoom after each,
- * and `laid` the zoom it is laid out at while a live zoom stretches it (null when none does).
+ * `laid` the zoom it is laid out at while a drawn zoom's picture shows it (null when none does), and
+ * `drawn` whether that picture shows.
  */
 export async function replay(x: number, y: number, g: Gesture, opts: { gap?: number; zoom?: () => number | null; laid?: () => number | null; drawn?: () => boolean | null } = {}): Promise<Run> {
   const gap = opts.gap ?? GAP;
@@ -398,7 +399,7 @@ export function table(first: string, rows: readonly (readonly [string, readonly 
   return out.join("\n");
 }
 
-// ---------------------------------------------------------------- a live zoom's frames apart
+// ---------------------------------------------------------------- a zoom by the hand's frames apart
 
 /**
  * A zoom by the hand's frames (taste.md VIEW-5) in runs, from each run's first event to 200 ms after

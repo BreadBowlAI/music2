@@ -154,7 +154,7 @@ export default function BeatView({ graph, kit, module }: { graph: GraphState; ki
   const ppb = useZoomOf(camera);
   const visible = Math.max(0, useCameraState(camera, (s) => s.view.w) - NAMES_W);
   // What a zoom looked at keeps its room, as the arrangement's (VIEW-5, VIEW-6): the step it held in
-  // place stays there, at the far end too, and a live zoom ends where its stretch showed it.
+  // place stays there, at the far end too.
   const looked = useCameraState(camera, (s) => s.asked.w) - NAMES_W;
   // Only the steps near what shows are drawn (KIT-10, VIEW-12): a bar's room (4 beats) each side,
   // the window moving when that falls under 2 beats.

@@ -1,8 +1,8 @@
 // Clips' mini drawings (taste.md VIEW-12; the zoom note, docs/designs/camera/zoom.md, §3): their notes,
 // with their 2 px marks, and an automation curve's line and the shade under it, drawn on canvases in
-// place of hundreds of SVG shapes. A zoom by the hand only stretches a canvas, with the rest of the
-// view (the live zoom, VIEW-5), which costs the browser almost nothing; it is drawn again, sharp at
-// the screen's own pixels, in the frame the zoom is laid out.
+// place of hundreds of SVG shapes. A zoom by the hand is drawn by the arrangement's picture over the
+// page (the drawn zoom, VIEW-5), with these same functions (`paintNotes`, `paintCurve`); the canvases
+// are drawn again, sharp at the screen's own pixels, in the frame the zoom is laid out.
 //
 // - One canvas a lane (`LaneDrawing`) draws all its clips that sit still, each inside its box as the
 //   box is placed. Chrome makes every canvas a layer of its own: one a clip made 416 layers for the
@@ -13,10 +13,9 @@
 //   box before it draws the clip, as its body covers what is under it.
 // - Kept by what it draws: a canvas is drawn again only when that changes (the clips, their notes or
 //   points, the colour, the size), and when the zoom laid out changes (`laidOf`), in the frame it
-//   lands in: a zoom by the app (⌘=, Fit), and a live zoom's end or early layout. While a live zoom
-//   stretches the view, the camera's transform stretches the lane's canvas with its clips' boxes, so
-//   it draws nothing. A pan draws one again only when what shows reaches past the part it holds, at
-//   once.
+//   lands in: a zoom by the app (⌘=, Fit), and a drawn zoom's end. While the picture shows, the
+//   page under it, these canvases too, stays as it was laid out, so it draws nothing. A pan draws
+//   one again only when what shows reaches past the part it holds, at once.
 // - Bounded: a canvas holds only what shows and up to a view more each side (the views' culling
 //   margin), and never a bitmap over MAX_W × MAX_H device px.
 // - A lane's canvas is placed across by the zoom, as its clips' boxes are; its height, and a clip's
@@ -161,7 +160,7 @@ const groups = new Map<CameraStore, Group>();
 const all = new Set<Drawing>();
 const byArea = new WeakMap<Element, Drawing>();
 
-/** What shows across of the view as laid out (a live zoom's stretch draws nothing anew), in beats; null before the view is laid out. */
+/** What shows across of the view as laid out (a drawn zoom's picture draws nothing of the page anew), in beats; null before the view is laid out. */
 function showing(s: CameraState) {
   const x = cull(laidOf(s), s, { x: { margin: 0 } }).x;
   return x.to > x.from ? x : null;
@@ -378,9 +377,9 @@ function add(d: Drawing) {
     group.off = cam.subscribe((now, was) => {
       const laid = laidOf(now), before = laidOf(was);
       if (laid.zoom !== before.zoom) {
-        // A zoom laid out (the app's, or a live zoom's end or early layout: VIEW-5): each lane's
+        // A zoom laid out (the app's, or a drawn zoom's end: VIEW-5): each lane's
         // canvas drawn now, in the frame it lands in; a clip's own as the observer tells its new size,
-        // or the frame after next. While a live zoom only stretches the view, the zoom laid out stays.
+        // or the frame after next. While a drawn zoom's picture shows, the zoom laid out stays.
         for (const x of group.drawings) {
           x.stale = true;
           if (x.lane) draw(x);

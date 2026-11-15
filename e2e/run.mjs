@@ -232,7 +232,7 @@ export const SUITES = [
   // Track drawn-zoom: the last picture of a zoom by the hand against the page after it (taste.md VIEW-13).
   ["drawn-zoom", "fix", { expect: 17, s: 40 }],
   // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
-  ["zoom-bench", "fix", { expect: 15, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
+  ["zoom-bench", "fix", { expect: 17, s: 90, tier: "nightly", why: "measure: it prints what each frame of a zoom costs, to compare builds by; it judges no speed, and a pull request gains nothing from its minute and a half" }],
 ];
 const KINDS = ["proj", "cables", "fix", "attn", "empty", "none", "export", "library"];
 

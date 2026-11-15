@@ -44,7 +44,7 @@ export function setZoom(z: number) {
 
 /**
  * Keep the arrangement's camera's zoom in view.json as it changes, until the function this returns is
- * called: the zoom laid out, so a live zoom renders nothing that reads it until it ends (VIEW-5).
+ * called: the zoom laid out, so a drawn zoom renders nothing that reads it until it ends (VIEW-5).
  */
 export const keepZoom = (cam: CameraStore) =>
   onCamera(cam, (now, was) => {
