@@ -120,8 +120,12 @@ function Clip({ clip }) {
   moved by itself (`redraw()`: the playhead). When the zoom ends (`gestureend`, or no ⌘-scroll for
   G, counted in the frames after its last event, each at most `FRAME_MOST`), the view renders once
   at the zoom shown, and the picture hides in that render's layout effect: no frame shows both, or
-  neither. A press on the view while the picture shows ends the zoom and does nothing else
-  (`takePress`); a key lays it out first and goes on. A paint that throws never freezes the view:
+  neither. A press on the picture ends the zoom and does nothing else (`takePress`); a press beside
+  it, or a key, lays it out first and goes on; the window losing focus or hidden lays it out. The
+  view's `redraw` paints it in the camera's next frame, at most once a frame.
+- **No hover while a camera moves** (VIEW-8). As a camera moves by the hand, a glide or a zoom,
+  the root gets `data-camera-moved`, until the pointer itself moves after: the app's `hover:`
+  variant (`index.css`) keeps to it. A paint that throws never freezes the view:
   the picture hides and keeps why, and that zoom is laid out each frame. A zoom by the app
   (`zoomAround`, `fit`, `to` with a zoom) is laid out at once; any other move lays a drawn zoom out
   first. A view that doesn't draw its zoom is laid out at the zoom shown on each frame of a zoom, as

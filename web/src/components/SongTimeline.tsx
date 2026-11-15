@@ -3199,7 +3199,8 @@ const Clip = memo(function Clip({
       title={title || undefined}
       // Its body is the tint, its border the bar; the selected clip is the strongest outline on screen.
       className={clsx(
-        "absolute rounded-sm overflow-hidden touch-none border border-(--clip-bar)",
+        // A clip is the group its fade handles show on hover by (Wave): the app's hover rule (VIEW-8).
+        "group/clip absolute rounded-sm overflow-hidden touch-none border border-(--clip-bar)",
         picked && "outline-2 outline-fg-strong",
         ghost && "pointer-events-none",
         hidden && "invisible",

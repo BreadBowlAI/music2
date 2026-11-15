@@ -357,7 +357,7 @@ export const Wave = memo(function Wave({ clip, color, edit, bare }: { clip: Audi
         className={clsx(
           "absolute top-0 z-10 rounded-[2px] border bg-raised cursor-ew-resize touch-none",
           // Shown on hover or while the clip is selected (Q10), and while dragged.
-          edit?.picked || fading?.which === which ? "opacity-100" : "opacity-0 in-[[data-clip]:hover]:opacity-100",
+          edit?.picked || fading?.which === which ? "opacity-100" : "opacity-0 group-hover/clip:opacity-100",
         )}
         style={{ left: x, width: HANDLE, height: HANDLE, borderColor: color.ink }}
       />

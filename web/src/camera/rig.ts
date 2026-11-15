@@ -6,7 +6,7 @@
 import { fit, reveal, to, toContent, zoomAround, type Align, type Camera, type Edges, type Shape, type Span } from "./math";
 import { FRAME_MOST, SWIPE_GAP } from "./numbers";
 import { Recognizer } from "./recognizer";
-import { drawsZoom, hidePicture, pictureShown, showPicture } from "./picture";
+import { drawsZoom, hidePicture, onPicture, onPictureWants, paintPicture, showPicture } from "./picture";
 import { hearInput, moved, pointerHeld, takePress } from "./state";
 import type { CameraStore, MovedBy, CameraState } from "./store";
 import { Writer } from "./writer";
@@ -231,15 +231,18 @@ export class Rig {
       () => content.disconnect(),
       () => children.disconnect(),
       // A press or a key stops the hand's moves and lays a drawn zoom out: in this same task as the
-      // render that lays it out, so no frame shows the one without the other. A press on the view
-      // while its picture shows does nothing else (VIEW-5).
+      // render that lays it out, so no frame shows the one without the other. A press on the picture
+      // does nothing else (VIEW-5); one beside it (a header, the ruler's tools) does what it says. The
+      // window losing focus or hidden lays it out too: a pinch's `gestureend` may never come then.
       hearInput((e) => {
-        const took = e instanceof PointerEvent && pictureShown(this.cam) && e.target instanceof Node && el.contains(e.target);
+        const took = e instanceof PointerEvent && onPicture(this.cam, e.clientX, e.clientY);
         this.hands.stop();
         this.layOut();
         this.dropPicture();
         if (took) takePress(e);
       }),
+      // The view asked its picture to paint again (it moved by itself, or changed): in the next frame.
+      onPictureWants(this.cam, () => this.schedule()),
     ];
     this.measure(true);
     // Where the camera looks, written at once: a view that comes back shows what it showed.
@@ -496,6 +499,8 @@ export class Rig {
       this.set(got, "hand");
     }
     if (ending) this.layOut();
+    // What the view asked its picture to paint since (the playhead, a change): once, in this frame.
+    else if (!this.gone) paintPicture(this.cam);
     if (this.hands.busy() || this.wheelZoom) this.schedule();
   }
 

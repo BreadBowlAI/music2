@@ -34,9 +34,20 @@ interface Drawer {
   failed: { why: string; at: number } | null;
   /** The camera suite's paint that throws (`face.pictureFails`). */
   failing: boolean;
+  /** Asked to paint again (the view changed, or moved by itself), and to read its scene first. */
+  dirty: boolean;
+  reread: boolean;
 }
 
 const drawers = new Map<CameraStore, Drawer>();
+/** Each camera's way to have its frame come: a picture asked to paint again paints in it, at most once a frame. */
+const wakers = new Map<CameraStore, () => void>();
+
+/** `cam`'s rig hears a picture that asks to paint again, and paints it in its next frame (`paintPicture`). */
+export function onPictureWants(cam: CameraStore, f: () => void): () => void {
+  wakers.set(cam, f);
+  return () => void (wakers.get(cam) === f && wakers.delete(cam));
+}
 
 /** Whether the view of `cam` draws its zoom (VIEW-5). */
 export const drawsZoom = (cam: CameraStore) => drawers.has(cam);
@@ -48,6 +59,7 @@ function paintOn(d: Drawer, s: CameraState) {
   if (d.failing) throw new Error("the camera suite's paint that throws");
   d.drawn = d.picture.paint(d.scene, s);
   d.paints++;
+  d.dirty = false;
 }
 
 /**
@@ -60,7 +72,8 @@ export function showPicture(cam: CameraStore): boolean {
   const d = drawers.get(cam);
   if (!d) return false;
   try {
-    if (!d.shown) d.scene = d.picture.scene();
+    if (!d.shown || d.reread) d.scene = d.picture.scene();
+    d.reread = false;
     paintOn(d, cam.getState());
   } catch (error) {
     d.failed = { why: error instanceof Error ? error.message : String(error), at: performance.now() };
@@ -74,12 +87,42 @@ export function showPicture(cam: CameraStore): boolean {
   return true;
 }
 
+/**
+ * Paint `cam`'s picture again if the view asked (`redraw`) since it last painted: in the camera's
+ * frame, so it paints at most once a frame however often it is asked (VIEW-8). A paint that throws
+ * leaves it as it was: the zoom's next frame paints it again, or lays the zoom out if it can't.
+ */
+export function paintPicture(cam: CameraStore) {
+  const d = drawers.get(cam);
+  if (!d?.shown || !d.dirty) return;
+  try {
+    if (d.reread) d.scene = d.picture.scene();
+    d.reread = false;
+    paintOn(d, cam.getState());
+  } catch (error) {
+    d.dirty = false;
+    d.failed = { why: error instanceof Error ? error.message : String(error), at: performance.now() };
+  }
+}
+
+/** Whether the client point (`x`, `y`) is on `cam`'s picture as it shows: inside what its element holds (a press there only ends the zoom, VIEW-5). */
+export function onPicture(cam: CameraStore, x: number, y: number): boolean {
+  const d = drawers.get(cam);
+  if (!d?.shown) return false;
+  for (const c of d.picture.el.children) {
+    const r = c.getBoundingClientRect();
+    if (x >= r.left && x < r.right && y >= r.top && y < r.bottom) return true;
+  }
+  return false;
+}
+
 /** Hide `cam`'s picture: the page laid out at the zoom it showed shows now (in this same task). */
 export function hidePicture(cam: CameraStore) {
   const d = drawers.get(cam);
   if (!d?.shown) return;
   d.shown = false;
   d.scene = null;
+  d.dirty = d.reread = false;
   d.picture.el.style.visibility = "hidden";
 }
 
@@ -97,7 +140,7 @@ export function failPicture(cam: CameraStore, on: boolean) {
 
 /** How a view tells its picture that what it draws changed. */
 export interface Drawn {
-  /** Paint it again while it shows (the playhead moved), its scene read again first with `read` (the song changed). */
+  /** Paint it again while it shows (the playhead moved), its scene read again first with `read` (the song changed): in the camera's next frame, once. */
   redraw(read?: boolean): void;
 }
 
@@ -122,6 +165,8 @@ export function useDrawnZoom<S>(ref: CameraRef, el: RefObject<HTMLElement | null
       paints: 0,
       failed: null,
       failing: false,
+      dirty: false,
+      reread: false,
     };
     drawers.set(cam, d);
     return () => {
@@ -135,13 +180,9 @@ export function useDrawnZoom<S>(ref: CameraRef, el: RefObject<HTMLElement | null
       redraw(read = false) {
         const d = cam ? drawers.get(cam) : undefined;
         if (!cam || !d?.shown) return;
-        try {
-          if (read) d.scene = d.picture.scene();
-          paintOn(d, cam.getState());
-        } catch (error) {
-          // Left as it was: the zoom's next frame paints it again, or lays the zoom out if it can't.
-          d.failed = { why: error instanceof Error ? error.message : String(error), at: performance.now() };
-        }
+        d.dirty = true;
+        if (read) d.reread = true;
+        wakers.get(cam)?.();
       },
     }),
     [cam],

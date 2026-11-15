@@ -43,8 +43,11 @@ export const swipesPaused = () => paused > 0;
 
 // ---------------------------------------------------------------- the pointer and the keys
 
-/** Who hears a press or a key: each camera stops its glide and drops wheel events until a gap (VIEW-4). */
-const hearing = new Set<(e: PointerEvent | KeyboardEvent) => void>();
+/**
+ * Who hears a press or a key: each camera stops its glide and drops wheel events until a gap (VIEW-4).
+ * Null: the window lost focus or was hidden, where a pinch's `gestureend` may never come.
+ */
+const hearing = new Set<(e: PointerEvent | KeyboardEvent | null) => void>();
 let held = false;
 
 /** Whether a pointer is pressed: a drag holds the camera still (VIEW-8). */
@@ -70,8 +73,15 @@ function hover(e: PointerEvent) {
   if (e.clientX === last.x && e.clientY === last.y) return;
   last = { x: e.clientX, y: e.clientY };
   pointerAt = performance.now();
+  // Hover again, once no camera moves (VIEW-8).
+  if (unhovered && !movingNow()) hoverAgain();
 }
-const hidden = () => document.visibilityState === "hidden" && release();
+/** The window lost focus or was hidden: nothing held, and each camera lays a drawn zoom out (VIEW-5). */
+function leave() {
+  release();
+  for (const f of hearing) f(null);
+}
+const hidden = () => document.visibilityState === "hidden" && leave();
 function key(e: KeyboardEvent) {
   // ⌘ for ⌘-scroll, ⇧ for a sideways wheel: a modifier alone is no key that stops anything.
   if (e.key === "Meta" || e.key === "Control" || e.key === "Shift" || e.key === "Alt") return;
@@ -116,7 +126,7 @@ export function takePress(e: PointerEvent) {
 
 let listening = false;
 /** Hear presses and keys while any camera does. */
-export function hearInput(f: (e: PointerEvent | KeyboardEvent) => void): () => void {
+export function hearInput(f: (e: PointerEvent | KeyboardEvent | null) => void): () => void {
   hearing.add(f);
   if (!listening) {
     listening = true;
@@ -126,7 +136,7 @@ export function hearInput(f: (e: PointerEvent | KeyboardEvent) => void): () => v
     window.addEventListener("lostpointercapture", release, true);
     window.addEventListener("contextmenu", release, true);
     window.addEventListener("pointermove", hover, true);
-    window.addEventListener("blur", release);
+    window.addEventListener("blur", leave);
     document.addEventListener("visibilitychange", hidden);
     window.addEventListener("keydown", key, true);
   }
@@ -141,18 +151,37 @@ export function hearInput(f: (e: PointerEvent | KeyboardEvent) => void): () => v
     window.removeEventListener("lostpointercapture", release, true);
     window.removeEventListener("contextmenu", release, true);
     window.removeEventListener("pointermove", hover, true);
-    window.removeEventListener("blur", release);
+    window.removeEventListener("blur", leave);
     document.removeEventListener("visibilitychange", hidden);
     window.removeEventListener("keydown", key, true);
+    hoverAgain();
   };
 }
 
 // ---------------------------------------------------------------- moving
 
 let movedAt = -Infinity;
+/**
+ * Whether the root has `data-camera-moved`: a camera moved by the hand, a glide or a zoom, and the
+ * pointer hasn't moved itself since. The app's hover rules keep to it (`hover:` in `index.css`): no
+ * CSS hover while a view moves, nor after it until the pointer moves, so what the still pointer is
+ * over never changes as a zoom ends or a swipe stops (VIEW-8, VIEW-13).
+ */
+let unhovered = false;
+const MOVED = "data-camera-moved";
+function hoverAgain() {
+  if (!unhovered) return;
+  unhovered = false;
+  document.documentElement.removeAttribute(MOVED);
+}
 
-/** A camera moved by the hand, a glide or a zoom, now. */
-export const moved = () => void (movedAt = performance.now());
+/** A camera moved by the hand, a glide or a zoom, now: no hover until the pointer itself moves after it. */
+export const moved = () => {
+  movedAt = performance.now();
+  if (unhovered) return;
+  unhovered = true;
+  document.documentElement.setAttribute(MOVED, "");
+};
 
 /** Whether a camera moved in the last `QUIET` ms: the views' hover does nothing then (VIEW-8). Read in a handler: it renders nothing. */
 export const movingNow = () => performance.now() - movedAt < QUIET;

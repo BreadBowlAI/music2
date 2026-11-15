@@ -1,4 +1,4 @@
-// What the zoom picture draws with: Canvas 2D in the view's px (from the lanes' left and the view's
+// What the zoom picture draws with (a brush, not ClipDrawing's pen: that one draws a clip's notes): Canvas 2D in the view's px (from the lanes' left and the view's
 // top), at the screen's own pixels. It draws as the page does: a box's edges on the screen's pixels
 // (`box`), as the browser places a box; a canvas's or an SVG's shapes where they fall (`fill`).
 // A group (a faded track's clips) is drawn apart and laid on at its alpha, its colours through its
@@ -65,9 +65,26 @@ export function rrect(g: CanvasRenderingContext2D, x: number, y: number, w: numb
   else g.rect(x, y, w, h);
 }
 
-export class Pen {
+/**
+ * What the brush put where, of a kind the suites check (VIEW-13): the very numbers each of its
+ * fills, boxes and words was drawn at, in px from the lanes' left and the view's top. What is drawn
+ * inside `as` is listed by its kind, and every word's box as a `text`.
+ */
+export interface Put {
+  kind: string;
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  of?: Record<string, unknown>;
+}
+
+export class Brush {
   /** Where shapes go now: the canvas, or a group's own. */
   g: CanvasRenderingContext2D;
+  /** What was put where since `reset`, by kind (`as`). */
+  put: Put[] = [];
+  private tag: { kind: string; of?: Record<string, unknown> } | null = null;
   private gray = 0;
   private scratch: CanvasRenderingContext2D | null = null;
   private group: { alpha: number; y0: number; y1: number } | null = null;
@@ -91,6 +108,23 @@ export class Pen {
     this.g = m;
     this.gray = 0;
     this.group = null;
+    this.put = [];
+    this.tag = null;
+  }
+
+  /** What `f` draws is listed as `kind` (with `of`), where each fill, box and word of it went. */
+  as<T>(kind: string, f: () => T, of?: Record<string, unknown>): T {
+    const was = this.tag;
+    this.tag = { kind, of };
+    try {
+      return f();
+    } finally {
+      this.tag = was;
+    }
+  }
+
+  private note(x: number, y: number, w: number, h: number) {
+    if (this.tag) this.put.push({ kind: this.tag.kind, x, y, w, h, ...(this.tag.of ? { of: this.tag.of } : {}) });
   }
 
   /** `color` as drawn now: through a group's grayscale. */
@@ -111,6 +145,47 @@ export class Pen {
     g.fillStyle = this.c(color);
     g.fillRect(x, y, w, h);
     g.globalAlpha = 1;
+    this.note(x, y, w, h);
+  }
+
+  /** A rounded rectangle, each corner `r` px, filled (with `hole`, its ring: what lies between it and `hole`). */
+  round(x: number, y: number, w: number, h: number, r: number, color: string, hole?: [number, number, number, number, number]) {
+    const g = this.g;
+    g.fillStyle = this.c(color);
+    g.beginPath();
+    rrect(g, x, y, w, h, r);
+    if (hole) rrect(g, ...hole);
+    g.fill(hole ? "evenodd" : "nonzero");
+    this.note(x, y, w, h);
+  }
+
+  /** A shape through the points `xy`, filled. */
+  poly(xy: [number, number][], color: string) {
+    if (!xy.length) return;
+    const g = this.g;
+    g.fillStyle = this.c(color);
+    g.beginPath();
+    xy.forEach(([x, y], i) => (i ? g.lineTo(x, y) : g.moveTo(x, y)));
+    g.closePath();
+    g.fill();
+    const xs = xy.map(([x]) => x), ys = xy.map(([, y]) => y);
+    this.note(Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+  }
+
+  /**
+   * Lines 1 px wide, `every` px apart from `from` (as an SVG pattern draws them), across `x0` to `x1`,
+   * `y0` to `y1` down. With `beat`, each is listed as a `kind` at the beat it marks (the first's
+   * `beat[0]`, then `beat[1]` apart).
+   */
+  lines(from: number, every: number, x0: number, x1: number, y0: number, y1: number, color: string, beat?: { kind: string; at: [number, number] }) {
+    if (every <= 0) return;
+    for (let i = Math.max(0, Math.floor((x0 - from) / every) - 1); ; i++) {
+      const x = from + i * every;
+      if (x >= x1) break;
+      if (x + 1 <= x0) continue;
+      if (beat) this.as(beat.kind, () => this.fill(x, y0, Math.min(1, x1 - x), y1 - y0, color), { beat: beat.at[0] + i * beat.at[1] });
+      else this.fill(x, y0, Math.min(1, x1 - x), y1 - y0, color);
+    }
   }
 
   /** A box from `x0` to `x1` across and `y0` to `y1` down, its edges on the screen's pixels, as the page draws one. */
@@ -138,13 +213,18 @@ export class Pen {
     // Where the page puts the line: its layout's 64ths of a px.
     x = Math.round(x * 64) / 64;
     g.fillText(t, x, y);
-    const w = g.measureText(t).width;
+    const m = g.measureText(t), w = m.width;
+    const box = { x, y: y - m.fontBoundingBoxAscent, w, h: m.fontBoundingBoxAscent + m.fontBoundingBoxDescent };
+    this.put.push({ kind: "text", ...box });
+    this.note(box.x, box.y, box.w, box.h);
     if (strike) {
       // CSS's line-through, as Chrome draws it: from a third of the font's ascent above the
-      // baseline down, a tenth of its size thick, on the screen's pixels.
+      // baseline down, a tenth of its size thick, on the screen's pixels; under the words left, not
+      // under the "…" that cuts them.
       const size = parseFloat(font.split(" ")[1]);
       const th = Math.max(1 / this.dpr, Math.round((size / 10) * this.dpr) / this.dpr);
-      g.fillRect(x, this.snap(y - g.measureText(t).fontBoundingBoxAscent / 3), w, th);
+      const under = t === s ? w : g.measureText(t.slice(0, -1)).width;
+      g.fillRect(x, this.snap(y - m.fontBoundingBoxAscent / 3), under, th);
     }
     return w;
   }

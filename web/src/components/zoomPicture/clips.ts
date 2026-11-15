@@ -16,9 +16,9 @@ import { pickedIn } from "../../lib/points";
 import { useRecord } from "../../lib/record";
 import { pickedStep, stepLabel } from "../../lib/steps";
 import { compsOf, takeClip } from "../../lib/takes";
-import { AREA_TOP, areaHeight, BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, fineAt, paintCurve, paintNotes, shortestOf, type Pen as Drawing } from "../ClipDrawing";
+import { AREA_TOP, areaHeight, BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, fineAt, paintCurve, paintNotes, shortestOf, type Pen } from "../ClipDrawing";
 import { audioLabel, INSET, paintFades, paintWave, shapeOf, STRIP, TILE } from "../Wave";
-import { mixOklab, rrect, type Pen } from "./pen";
+import { mixOklab, rrect, type Brush } from "./brush";
 import type { Row, Scene } from "./scene";
 
 /** A clip as the picture drew it, in px from the lanes' left: for the suites (VIEW-13). */
@@ -54,36 +54,27 @@ interface Later {
 }
 
 /** The rounded inside of a box (its border's inside): what a clip's own drawing is cut to. */
-function inside(p: Pen, x: number, y: number, w: number, h: number) {
+function inside(p: Brush, x: number, y: number, w: number, h: number) {
   p.g.beginPath();
   rrect(p.g, x + BORDER, y + BORDER, w - 2 * BORDER, h - 2 * BORDER, ROUND - BORDER);
   p.g.clip();
 }
 
-/** A clip's box: its body, its 1 px border, and a picked clip's outline or a changed lane's glow (AGENT-5). */
-function box(p: Pen, x: number, y: number, w: number, h: number, body: string, border: string, outline: { color: string; off: number } | null) {
-  const g = p.g;
+/**
+ * A clip's box: its body (listed as a `clip`, `of` which), its 1 px border, and a picked clip's
+ * outline or a changed lane's glow (AGENT-5).
+ */
+function box(p: Brush, x: number, y: number, w: number, h: number, body: string, border: string, outline: { color: string; off: number } | null, of: Record<string, unknown>) {
   if (outline) {
     const o = outline.off;
-    g.fillStyle = p.c(outline.color);
-    g.beginPath();
-    rrect(g, x - o - 2, y - o - 2, w + 2 * o + 4, h + 2 * o + 4, ROUND + o + 2);
-    rrect(g, x - o, y - o, w + 2 * o, h + 2 * o, ROUND + o);
-    g.fill("evenodd");
+    p.round(x - o - 2, y - o - 2, w + 2 * o + 4, h + 2 * o + 4, ROUND + o + 2, outline.color, [x - o, y - o, w + 2 * o, h + 2 * o, ROUND + o]);
   }
-  g.fillStyle = p.c(body);
-  g.beginPath();
-  rrect(g, x, y, w, h, ROUND);
-  g.fill();
-  g.fillStyle = p.c(border);
-  g.beginPath();
-  rrect(g, x, y, w, h, ROUND);
-  rrect(g, x + BORDER, y + BORDER, w - 2 * BORDER, h - 2 * BORDER, ROUND - BORDER);
-  g.fill("evenodd");
+  p.as("clip", () => p.round(x, y, w, h, ROUND, body), of);
+  p.round(x, y, w, h, ROUND, border, [x + BORDER, y + BORDER, w - 2 * BORDER, h - 2 * BORDER, ROUND - BORDER]);
 }
 
 /** 45° hatching over a box's inside, as the page's `Hatch` pattern: 1.5 px lines 8 px apart, from its corner. */
-function hatch(p: Pen, sc: Scene, x: number, y: number, w: number, h: number) {
+function hatch(p: Brush, sc: Scene, x: number, y: number, w: number, h: number) {
   const g = p.g;
   g.save();
   inside(p, x, y, w, h);
@@ -97,7 +88,7 @@ function hatch(p: Pen, sc: Scene, x: number, y: number, w: number, h: number) {
 }
 
 /** A drawing pen (ClipDrawing's) that draws on the picture: a clip's notes and curve in its area from `top` down, in `ink`. */
-function drawing(p: Pen, ink: string, top: number): Drawing {
+function drawing(p: Brush, ink: string, top: number): Pen {
   return {
     clip() {},
     note(x, y, w, h, alpha, mark) {
@@ -128,14 +119,14 @@ function drawing(p: Pen, ink: string, top: number): Drawing {
 }
 
 /** Cut what comes next to a clip's drawing area, `x` to `x + w` across and `y` to `y + h` down. */
-function area(p: Pen, x: number, y: number, w: number, h: number) {
+function area(p: Brush, x: number, y: number, w: number, h: number) {
   p.g.beginPath();
   p.g.rect(x, y, w, h);
   p.g.clip();
 }
 
 /** A round point of a curve, at its box's place on the screen's pixels (`size-1.5`), ringed white when picked. */
-function point(p: Pen, sc: Scene, cx: number, cy: number, ink: string, picked: boolean) {
+function point(p: Brush, sc: Scene, cx: number, cy: number, ink: string, picked: boolean) {
   const x = p.snap(cx - 3) + 3, y = p.snap(cy - 3) + 3;
   const g = p.g;
   if (picked) {
@@ -151,7 +142,7 @@ function point(p: Pen, sc: Scene, cx: number, cy: number, ink: string, picked: b
 }
 
 /** A lane of names' clip inside its area (CARD-23): each name held until the next, each step marked at its start. */
-function steps(p: Pen, sc: Scene, c: StepClip, lane: TimelineLane & { kind: "steps" }, ax: number, at: number, aw: number, ah: number, ink: string, picked: number) {
+function steps(p: Brush, sc: Scene, c: StepClip, lane: TimelineLane & { kind: "steps" }, ax: number, at: number, aw: number, ah: number, ink: string, picked: number) {
   const { points, length } = c;
   const font = sc.type.font(400, 11);
   const base = at + (ah - 14) / 2 + sc.type.baseline(400, 11, 14);
@@ -177,7 +168,7 @@ function steps(p: Pen, sc: Scene, c: StepClip, lane: TimelineLane & { kind: "ste
  * them (`paintWave`, each tile's bitmap on the screen's pixels), its fades; a missing file's icon
  * and name. `px`/`pt`: its inside's corner; `pw`/`ph`: its size. `z` is the zoom shown.
  */
-function wave(p: Pen, sc: Scene, c: AudioClip, px: number, pt: number, pw: number, ph: number, ink: string, z: number, bare = false) {
+function wave(p: Brush, sc: Scene, c: AudioClip, px: number, pt: number, pw: number, ph: number, ink: string, z: number, bare = false) {
   const peaks = peaksNow(c);
   const type = sc.type;
   if (peaks === MISSING) {
@@ -244,7 +235,7 @@ function tileOf(w: number, h: number): CanvasRenderingContext2D | null {
 }
 
 /** An audio clip's fade handles (Q10), shown while it is picked: 7 px squares at its top. */
-function handles(p: Pen, sc: Scene, c: AudioClip, px: number, pt: number, z: number, ink: string) {
+function handles(p: Brush, sc: Scene, c: AudioClip, px: number, pt: number, z: number, ink: string) {
   const tempo = sc.a.timeline.tempo;
   const width = Math.max(0, c.length * z - 2 * INSET);
   if (width + 2 * INSET < HANDLES_FROM) return;
@@ -266,7 +257,7 @@ function handles(p: Pen, sc: Scene, c: AudioClip, px: number, pt: number, z: num
 }
 
 /** The take recording on this lane, if one is (lane B, Q24), at the zoom shown and the playhead now. */
-function recording(p: Pen, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
+function recording(p: Brush, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
   const take = useRecord.getState().take;
   const lane = row.lane!;
   if (!take || take.phase !== "take" || !(take.lanes ?? [take]).some((l) => l.module === row.module && l.lane === lane.key)) return;
@@ -291,7 +282,8 @@ function recording(p: Pen, sc: Scene, row: Row, z: number, X: number, top: numbe
   rrect(g, l, t, r - l, b - t, ROUND);
   rrect(g, l + 1.5, t + 1.5, r - l - 3, b - t - 3, ROUND - 1.5);
   g.fill("evenodd");
-  p.text("Recording", l + 6, t + 2 + sc.type.baseline(500, 11, 14), sc.type.font(500, 11), sc.colors.dangerStrong);
+  // Its words where the page's box puts them: from its left as laid out, not as drawn on the pixels.
+  p.text("Recording", x0 + 6, t + 2 + sc.type.baseline(500, 11, 14), sc.type.font(500, 11), sc.colors.dangerStrong);
   if (audio) {
     const meter = document.querySelector<HTMLCanvasElement>(`[data-testid=take-level]`);
     if (meter) g.drawImage(meter, r - 4 - 3, t + 4, 3, b - t - 8);
@@ -310,7 +302,7 @@ function recording(p: Pen, sc: Scene, row: Row, z: number, X: number, top: numbe
  * A lane's clips over its row's inside, `top` to `bottom` down (`said` its track), at zoom `z` seen
  * from `X`: what the clips' group draws, faded as a group where its track is (opacity, grayscale).
  */
-export function laneClips(p: Pen, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number, drawn: DrawnClip[]) {
+export function laneClips(p: Brush, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
   const lane = row.lane!;
   const said = row.said;
   const { ink, bar, tint } = said.color;
@@ -372,8 +364,11 @@ export function laneClips(p: Pen, sc: Scene, row: Row, z: number, X: number, top
     const x = sb.left - X, w = sb.width ?? 0;
     const ref = clipRef(row.module, lane.key, lane.clips, i);
     const picked = isPicked(sc.picked, ref);
-    drawn.push({ lane: `${row.module}.${lane.key}`, id: hasOwnId(lane.clips, i) ? lane.clips[i].id! : `#${i}`, start: c.start, length: c.length, x, w });
-    box(p, x, bt, w, bh, picked ? mixOklab(bar, tint, 0.35) : tint, bar, picked ? { color: sc.colors.fgStrong, off: 0 } : glow ? { color: sc.colors.accent, off: 1 } : null);
+    // A changed lane's glow wins over the picked outline, as the page's cascade has it (index.css's
+    // `[data-clip][data-glow]` lies outside Tailwind's layers).
+    const outline = glow ? { color: sc.colors.accent, off: 1 } : picked ? { color: sc.colors.fgStrong, off: 0 } : null;
+    const of = { lane: `${row.module}.${lane.key}`, id: hasOwnId(lane.clips, i) ? lane.clips[i].id! : `#${i}`, start: c.start, length: c.length };
+    box(p, x, bt, w, bh, picked ? mixOklab(bar, tint, 0.35) : tint, bar, outline, of);
     const ax = x + BORDER, aw = w - 2 * BORDER;
     const k = aw / c.length;
     const lo = from - c.start, hi = to - c.start;
@@ -433,7 +428,7 @@ export function laneClips(p: Pen, sc: Scene, row: Row, z: number, X: number, top
 }
 
 /** A take's row (VOX-7): over each comp of its lane, the whole take, faint, its parts that play lit in the track's tint. */
-export function takeRow(p: Pen, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
+export function takeRow(p: Brush, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
   const lane = row.lane;
   if (!lane) return;
   const { bar, tint, ink } = row.said.color;
@@ -462,7 +457,7 @@ export function takeRow(p: Pen, sc: Scene, row: Row, z: number, X: number, top: 
 }
 
 /** A bus's row's words (RENDER-34), at its lane's start. */
-export function busRow(p: Pen, sc: Scene, words: string, X: number, top: number, bottom: number) {
+export function busRow(p: Brush, sc: Scene, words: string, X: number, top: number, bottom: number) {
   p.text(words, 12 - X, top + (bottom - top - 14) / 2 + sc.type.baseline(400, 11, 14), sc.type.font(400, 11), sc.colors.fgFaint);
 }
 

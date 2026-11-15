@@ -7,9 +7,10 @@
 // says what is drawn.
 //
 // The scene (scene.ts) is read once a zoom, and again when a render says something changed (`Said`)
-// or a store it reads does. The playhead's clock paints it again while it shows (it plays, a take
-// grows). Each paint says what it drew (`face.picture("arrangement")`): each clip's box, the
-// playhead, the bars and the marks, at the zoom shown.
+// or a store it reads does. The playhead's clock has it painted again while it shows (it plays, a
+// take grows), as do a waveform's peaks as they come: in the camera's next frame, once. Each paint
+// says what it drew (`face.picture("arrangement")`), from what its brushes listed as they drew:
+// each clip's box, the playhead, the loop, the bars and the marks, where each was put.
 
 import { useEffect, useRef, type RefObject } from "react";
 import { useDrawnZoom, type CameraState } from "../../camera";
@@ -17,28 +18,83 @@ import { useClipSelection } from "../../lib/clips";
 import { beatNow, onFrame } from "../../lib/clock";
 import { RULER_H } from "../../lib/layout";
 import { useNotice } from "../../lib/notice";
+import { onPeaks } from "../../lib/peaks";
 import { usePoints } from "../../lib/points";
 import { useRecord } from "../../lib/record";
 import { useSteps } from "../../lib/steps";
 import { ARRANGEMENT } from "../../lib/zoom";
-import { paintLanes, type DrawnLanes } from "./lanes";
-import { Pen } from "./pen";
-import { paintRuler, type DrawnRuler } from "./ruler";
+import { Brush, type Put } from "./brush";
+import type { DrawnClip } from "./clips";
+import { paintLanes } from "./lanes";
+import { paintRuler } from "./ruler";
 import type { Said } from "./said";
 import { readScene, type Scene } from "./scene";
 
-/** What one paint drew, in px from the lanes' left at the zoom shown (`x`: the box's scroll across then). */
-export interface PictureDrawn extends DrawnLanes, DrawnRuler {
+type Span = { x: number; w: number } | null;
+/**
+ * What one paint drew, in px from the lanes' left at the zoom shown (`x`: the box's scroll across
+ * then): where its brushes put each clip's box, the loop's shade, the selected bars and the playhead
+ * over the lanes and over the Song row, the first row's bar lines (`grid`: the first, at its beat),
+ * each bar number and marker, the selected bars' band and the loop's brace in the ruler, and the
+ * playhead's cap (its middle). For the suites (VIEW-13).
+ */
+export interface PictureDrawn {
   n: number;
   zoom: number;
   x: number;
+  clips: DrawnClip[];
+  loop: Span;
+  section: Span;
+  playhead: number | null;
+  songLoop: Span;
+  songSection: Span;
+  songPlayhead: number | null;
+  grid: { x: number; beat: number } | null;
+  bars: { bar: number; x: number }[];
+  marks: { name: string; beat: number; x: number }[];
+  band: Span;
+  brace: Span;
+  cap: number | null;
+  /** Each word's box, from the view's top: where the page's text is drawn by the browser's own glyphs. */
+  texts: [number, number, number, number][];
+}
+
+/** The list of what one paint drew, from what its brushes put where. */
+function listed(n: number, zoom: number, x: number, put: Put[]): PictureDrawn {
+  const all = (kind: string) => put.filter((q) => q.kind === kind);
+  const span = (kind: string): Span => {
+    const q = all(kind)[0];
+    return q ? { x: q.x, w: q.w } : null;
+  };
+  const at = (kind: string) => all(kind)[0]?.x ?? null;
+  const grid = all("grid")[0];
+  const cap = all("cap")[0];
+  return {
+    n,
+    zoom,
+    x,
+    clips: all("clip").map((q) => ({ ...(q.of as Omit<DrawnClip, "x" | "w">), x: q.x, w: q.w })),
+    loop: span("loop"),
+    section: span("section"),
+    playhead: at("playhead"),
+    songLoop: span("songLoop"),
+    songSection: span("songSection"),
+    songPlayhead: at("songPlayhead"),
+    grid: grid ? { x: grid.x, beat: grid.of!.beat as number } : null,
+    bars: all("bar").map((q) => ({ bar: q.of!.bar as number, x: q.x })),
+    marks: all("mark").map((q) => ({ name: q.of!.name as string, beat: q.of!.beat as number, x: q.x })),
+    band: span("band"),
+    brace: span("brace"),
+    cap: cap ? cap.x + cap.w / 2 : null,
+    texts: all("text").map((q) => [q.x, q.y, q.w, q.h].map((v) => Math.round(v * 10) / 10) as [number, number, number, number]),
+  };
 }
 
 /** A scene with the pens it paints with: one a canvas, made for it at the view's size. */
 interface Painting {
   sc: Scene;
-  lanes: Pen;
-  ruler: Pen;
+  lanes: Brush;
+  ruler: Brush;
 }
 
 /** Size a canvas to `w` × `h` px at `dpr` device px a px, its bitmap on the screen's pixels. */
@@ -76,7 +132,7 @@ export function ZoomPicture({ said, box, headerW }: { said: Said; box: RefObject
       // with colour fringes (LCD smoothing), the page's in grey.
       const lanes = lc.getContext("2d"), ruler = rc.getContext("2d");
       if (!lanes || !ruler) throw new Error("no 2D canvas");
-      return { sc, lanes: new Pen(lanes, sc.dpr, RULER_H), ruler: new Pen(ruler, sc.dpr, 0) };
+      return { sc, lanes: new Brush(lanes, sc.dpr, RULER_H), ruler: new Brush(ruler, sc.dpr, 0) };
     },
     ({ sc, lanes, ruler }, s: CameraState): PictureDrawn => {
       const z = s.zoom;
@@ -85,13 +141,15 @@ export function ZoomPicture({ said, box, headerW }: { said: Said; box: RefObject
       const beat = beatNow();
       lanes.reset();
       ruler.reset();
-      const l = paintLanes(lanes, sc, z, X, beat);
-      const r = paintRuler(ruler, sc, z, X, s.x, beat);
-      return { n: ++paints.current, zoom: z, x: X, ...l, ...r };
+      paintLanes(lanes, sc, z, X, beat);
+      paintRuler(ruler, sc, z, X, s.x, beat);
+      return listed(++paints.current, z, X, [...lanes.put, ...ruler.put]);
     },
   );
-  // The playhead moves while it plays, and a take grows: painted again on its clock's frames.
+  // The playhead moves while it plays, and a take grows: painted again on its clock's frames. A
+  // waveform's peaks come (a clip the page never drew, brought into view): painted again with them.
   useEffect(() => onFrame(() => picture.redraw()), [picture]);
+  useEffect(() => onPeaks(() => picture.redraw()), [picture]);
   // What the view renders from changed (the song, a track's state, the selection): read again.
   useEffect(() => {
     const again = () => picture.redraw(true);

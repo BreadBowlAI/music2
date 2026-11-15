@@ -1,5 +1,17 @@
 @import "tailwindcss";
 
+/* No hover while a camera moves the view, nor after it until the pointer itself moves (taste.md
+   VIEW-8): the camera sets `data-camera-moved` on the root as it moves by the hand, a glide or a
+   zoom, and takes it away at the pointer's next move. Every `hover:` and `group-hover:` keeps to it,
+   so neither a zoom's end nor a swipe's flips what the still pointer is over. */
+@custom-variant hover {
+  @media (hover: hover) {
+    :root:not([data-camera-moved]) &:hover {
+      @slot;
+    }
+  }
+}
+
 /* The UI's font off the Mac: Inter 4.1 (rsms/inter's release, web/InterVariable.woff2, unchanged;
    sha256 693b77d4f32ee9b8bfc995589b5fad5e99adf2832738661f5402f9978429a8e3), under the SIL Open
    Font License: web/public/fonts/OFL.txt, beside it. The Mac keeps its own font (below). */
