@@ -289,7 +289,7 @@ const stretched = (name) =>
     STRETCHED,
   );
 /**
- * Until the camera `name` keeps one zoom again: its live zoom laid out (VIEW-5). Two frames first: a
+ * Until the camera `name` keeps one zoom again: a drawn zoom laid out (VIEW-5). Two frames first: a
  * zoom's events start it in the frame after them.
  */
 const laidOut = async (name, ms = 3000) => {
@@ -1408,7 +1408,7 @@ const clipsShown = () =>
   const at = await lanes();
   const r0 = await renders();
   await feed(at.x, at.y, Array.from({ length: 30 }, (_, i) => ({ t: i * 4, dy: -3, meta: true })));
-  // A live zoom: laid out once, G after its last event (VIEW-5).
+  // A run of ⌘-scroll: the picture until G after its last event, then laid out once (VIEW-5).
   await laidOut("arrangement");
   await frames(4);
   const r = since(r0, await renders());
@@ -1758,7 +1758,7 @@ const drawnOverlays = (marker) =>
     const loop = window.__loop, bars = window.__bars;
     const off = {};
     const one = (what, got, from, to) => {
-      if (!got) return void (off[what] = null);
+      if (got === null || got === undefined || Number.isNaN(got)) return void (off[what] = null);
       const [x, w] = typeof got === "number" ? [got, null] : [got.x, got.w];
       off[what] = Math.round(Math.max(Math.abs(x - (from * z - X)), w === null || to === undefined ? 0 : Math.abs(w - (to - from) * z)) * 100) / 100;
     };
@@ -1773,7 +1773,7 @@ const drawnOverlays = (marker) =>
     one("playhead", d.playhead, beat);
     one("Song row's playhead", d.songPlayhead, beat);
     one("playhead's cap", d.cap, beat);
-    one("grid", d.grid, 0);
+    one("grid", d.grid?.x, d.grid?.beat);
     return off;
   }, marker);
 /** The beat under screen x from the middles of two of Kick 1's clips the arrangement's picture drew in view, and its px a beat. */
@@ -1804,10 +1804,7 @@ const clipBoxes = () =>
     },
     tl,
   );
-/**
- * The beat under screen x, from the middles of two of Kick 1's clips drawn in view: as true of a view
- * stretched by a live zoom as of one laid out (a clip's 1 px inset stretches with it; its middle not).
- */
+/** The beat under screen x, from the middles of two of Kick 1's clips the page drew in view. */
 const beatMid = (x) =>
   page.$eval(
     tl,
@@ -2139,6 +2136,56 @@ const beatMid = (x) =>
   check(!!again && json(picked2) === json([target.id]), `the next press, on the page laid out, picks that clip: ${json(picked2)}`);
   await page.keyboard.press("Escape");
 }
+// A press beside the picture (the ruler's Follow: its tools aren't under the picture) ends the zoom
+// and does what it says, mid-pinch and in the G after a run of ⌘-scroll, when the picture still shows.
+{
+  await sleep(300);
+  const at = await lanes();
+  const follow = async () => page.$eval(`${tl} [data-testid=follow]`, (e) => e.getAttribute("aria-pressed"));
+  const fb = await (await page.$(`${tl} [data-testid=follow]`)).boundingBox();
+  const f0 = await follow();
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const mid = await arr();
+  await page.mouse.click(fb.x + fb.width / 2, fb.y + fb.height / 2);
+  await frames(2);
+  const f1 = await follow(), after = await arr();
+  await pinchEnd(at.x, at.y, 1.2);
+  await frames(2);
+  for (let i = 0; i < 4; i++) {
+    await page.evaluate((x, y) => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: 20, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), at.x, at.y);
+    await frames(1);
+  }
+  // The run kept going while the click is sent (⌘-scrolls of 0), so it lands while the picture shows.
+  await page.evaluate((x, y) => {
+    window.__stillScroll = setInterval(() => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: 0, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), 8);
+  }, at.x, at.y);
+  const shown = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown);
+  await page.mouse.click(fb.x + fb.width / 2, fb.y + fb.height / 2);
+  await page.evaluate(() => clearInterval(window.__stillScroll));
+  await frames(2);
+  const f2 = await follow();
+  check(
+    !!mid?.laid && after?.laid === null && f1 !== f0 && shown === true && f2 === f0,
+    `a press beside the picture (the ruler's Follow) ends the zoom and does what it says: mid-pinch Follow ${f0} → ${f1} (laid out: ${after?.laid === null}), and a frame after a run of ⌘-scroll, the picture showing (${shown}), ${f1} → ${f2}`,
+  );
+  await page.mouse.move(5, 5);
+  await sleep(300);
+}
+// The window losing focus mid-pinch (⌘-Tab: the pinch's gestureend may never come) lays the zoom out.
+{
+  const at = await lanes();
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const mid = await arr();
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await frames(2);
+  const after = await arr();
+  const shown = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown);
+  check(!!mid?.laid && after?.laid === null && shown === false && near(after.zoom, mid.zoom, 0.001), `the window losing focus mid-pinch lays the zoom out at the zoom shown (${mid?.zoom?.toFixed(2)} → ${after?.zoom?.toFixed(2)}), the picture hidden (${shown})`);
+  await pinchEnd(at.x, at.y, 1.2);
+  await frames(2);
+}
 // ⌘-scroll over time: the picture until no ⌘-scroll for G, then laid out once.
 {
   await sleep(300);
@@ -2154,8 +2201,8 @@ const beatMid = (x) =>
         const one = () => {
           send();
           if (++k < 12) return requestAnimationFrame(one);
-          // Read in the same task as the last event, so no frame or timer comes between: the view
-          // stretched by the frames before it, and nothing rendered. Then when it is laid out.
+          // Read in the same task as the last event, so no frame or timer comes between: the
+          // picture painted by the frames before it, and nothing rendered. Then when it is laid out.
           const last = performance.now();
           const pic = face.picture?.("arrangement");
           const mid = { laid: face.now("arrangement")?.laid ?? null, renders: window.m2canvas.frames().total, picture: !!pic?.shown && pic.drawn?.zoom === face.now("arrangement")?.zoom };
@@ -2554,7 +2601,7 @@ const rollBeat = (x) =>
   const a = await rollBeat(at.x);
   await sleep(120);
   await feed(at.x, at.y, [{ t: 0, dy: -100, ctrl: true }]);
-  // Read from what the grid draws (its `data-ppb`), so once the live zoom is laid out (VIEW-5).
+  // Read from what the grid draws (its `data-ppb`), so once the zoom is laid out (VIEW-5).
   await laidOut("notes");
   await frames();
   const b = await rollBeat(at.x);
@@ -2590,7 +2637,7 @@ const rollBeat = (x) =>
       const bar = document.querySelector(`[data-testid=velocity] [data-velocity="${e.dataset.note}"]`);
       if (!bar || r.left < b.left + c.margins.left || r.right > b.right) continue;
       const want = b.left + box.clientLeft + c.origin.x - Math.round(c.x) + Number(e.dataset.start) * c.zoom;
-      // A velocity bar's box starts 5 px before its note, at the zoom drawn: stretched, 5 px times the stretch.
+      // A velocity bar's box starts 5 px before its note (`s`, the zoom shown over the zoom laid out: 1, Notes laid out each frame).
       worst = Math.max(worst, Math.abs(r.left - want), Math.abs(bar.getBoundingClientRect().left + 5 * s - want));
       n++;
     }

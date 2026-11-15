@@ -30,6 +30,8 @@ import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixl
  * 288 to 846 pixels (gaps.md, "What the zoom's picture may still miss").
  */
 const LIMIT = 200;
+/** The most an 8 × 8 device px cell may differ on average, of 255, and where a word lies (why: above). */
+const CELL = 8, TEXT_CELL = 20;
 const W = 1440, H = 1200;
 
 const { page, errors, api, state, key, show } = await open(W, H, { dpr: 2 });
@@ -67,6 +69,8 @@ fs.mkdirSync(`${PROJ}/assets`, { recursive: true });
 wav(`${PROJ}/assets/vox take.wav`, 3 * N, (i) => 0.25 * (Math.floor(i / N) + 1) * Math.sin((2 * Math.PI * 220 * i) / RATE) * (0.5 + 0.5 * Math.sin((2 * Math.PI * i) / (RATE / 3))));
 write("assets/vox take.wav.json", JSON.stringify({ takes: TAKES }) + "\n");
 wav(`${PROJ}/assets/pad.wav`, Math.round(8 * BEAT * RATE), (i) => 0.8 * Math.sin((2 * Math.PI * 110 * i) / RATE) * Math.sin((Math.PI * i) / (8 * BEAT * RATE)));
+// A file only a clip far on plays: the page never draws it until a zoom out brings it in.
+wav(`${PROJ}/assets/far.wav`, Math.round(8 * BEAT * RATE), (i) => 0.9 * Math.sin((2 * Math.PI * 165 * i) / RATE) * Math.sin((Math.PI * i) / (8 * BEAT * RATE)));
 write("tracks/vox.ts", 'import { track } from "@m2/core";\n\nexport default track("vox", { name: "Vox" }, ({ lane }) => lane.audio("clips"));\n');
 fs.mkdirSync(`${PROJ}/data/vox`, { recursive: true });
 write(
@@ -75,6 +79,7 @@ write(
     clips: [
       { id: "voxclip1", start: 4, length: 4, asset: "vox take.wav", offset: TAKES[2], fade_in: 0.2, fade_out: 0.4 },
       { id: "padclip1", start: 12, length: 8, asset: "pad.wav", gain_db: -6 },
+      { id: "farclip1", start: 146, length: 8, asset: "far.wav" },
     ],
   }),
 );
@@ -85,7 +90,7 @@ write("data/kick/drum.json", JSON.stringify({ unit: "choice", clips: [{ id: "nam
 write("tracks/hats.ts", read("tracks/hats.ts").replace('{ name: "Hats" }', '{ name: "Hats", muted: true }'));
 const song = read("song.ts");
 write("song.ts", song.replace('import kick from "./tracks/kick";', 'import kick from "./tracks/kick";\nimport vox from "./tracks/vox";').replace("      kick: kick.out,", "      kick: kick.out,\n      vox: vox.out,"));
-check(await until(() => has(`${tl} [data-lane="vox.clips"] [data-clip="voxclip1"]`), 20000), "the song has a Vox track of two audio clips");
+check(await until(() => has(`${tl} [data-lane="vox.clips"] [data-clip="voxclip1"]`), 20000), "the song has a Vox track of audio clips");
 check(await until(async () => (await state()).overlays?.heard?.hats === "muted-in-song" || !!(await page.$('[data-track="hats"] [data-clip]')), 10000), "Hats is muted in the song");
 
 // A drum kit: its bus's row says what it is (KIT-10).
@@ -164,21 +169,51 @@ function pixels(buf) {
   }
   return { w, h, data: out };
 }
-/** How many pixels of `region` differ by more than 32 in a colour, and where most do (8 px cells, in css px from its corner). */
-function differ(a, b, region, dpr) {
+/**
+ * How `a` and `b` differ over `region` (device px), leaving out the columns `mask` lists (device px
+ * from the region's left, [from, to)): how many pixels by more than 32 in a colour and where most do
+ * (8 css px cells from its corner); and the mean difference of each 8 × 8 device px cell, which sees
+ * a faint wash moved or a small shape gone where no pixel differs by 32: `dense` cells over CELL, or
+ * over TEXT_CELL where a word lies (`texts`: the picture's word boxes, css px from the region's
+ * corner); `cell` the most, `where` some of them.
+ */
+function differ(a, b, region, dpr, mask = [], texts = []) {
   let over = 0, max = 0;
   const cells = new Map();
+  const C = 8, cw = Math.ceil(region.w / C), sums = new Float64Array(cw * Math.ceil(region.h / C)), counts = new Uint16Array(sums.length);
+  const masked = (x) => mask.some(([f, t]) => x >= f && x < t);
   for (let y = region.y; y < region.y + region.h; y++)
     for (let x = region.x; x < region.x + region.w; x++) {
+      if (mask.length && masked(x - region.x)) continue;
       const o = (y * a.w + x) * 4;
       const d = Math.max(Math.abs(a.data[o] - b.data[o]), Math.abs(a.data[o + 1] - b.data[o + 1]), Math.abs(a.data[o + 2] - b.data[o + 2]));
+      const q = Math.floor((y - region.y) / C) * cw + Math.floor((x - region.x) / C);
+      sums[q] += d;
+      counts[q]++;
       max = Math.max(max, d);
       if (d <= 32) continue;
       over++;
       const k = `${Math.floor((x - region.x) / (8 * dpr)) * 8},${Math.floor((y - region.y) / (8 * dpr)) * 8}`;
       cells.set(k, (cells.get(k) ?? 0) + 1);
     }
-  return { over, max, cells: [...cells].sort((p, q) => q[1] - p[1]).slice(0, 8) };
+  const texty = new Uint8Array(sums.length), ch = Math.ceil(region.h / C);
+  for (const [x, y, w, h] of texts) {
+    const x0 = Math.max(0, Math.floor(((x - 1) * dpr) / C)), x1 = Math.min(cw - 1, Math.floor(((x + w + 1) * dpr) / C));
+    const y0 = Math.max(0, Math.floor(((y - 1) * dpr) / C)), y1 = Math.min(ch - 1, Math.floor(((y + h + 1) * dpr) / C));
+    for (let cy = y0; cy <= y1; cy++) for (let cx = x0; cx <= x1; cx++) texty[cy * cw + cx] = 1;
+  }
+  let cell = 0, word = 0, dense = 0;
+  const where = [];
+  for (let q = 0; q < sums.length; q++) {
+    if (!counts[q]) continue;
+    const m = sums[q] / counts[q];
+    if (texty[q]) word = Math.max(word, m);
+    else cell = Math.max(cell, m);
+    if (m <= (texty[q] ? TEXT_CELL : CELL)) continue;
+    dense++;
+    if (where.length < 6) where.push(`${Math.round(((q % cw) * C) / dpr)},${Math.round((Math.floor(q / cw) * C) / dpr)}:${Math.round(m)}`);
+  }
+  return { over, max, cells: [...cells].sort((p, q) => q[1] - p[1]).slice(0, 8), cell: Math.round(cell * 10) / 10, word: Math.round(word * 10) / 10, dense, where };
 }
 const dpr = await page.evaluate(() => devicePixelRatio);
 // The arrangement's clear part: its lanes and its ruler, right of the headers.
@@ -206,8 +241,12 @@ const shown = () => page.evaluate(() => ({ cam: window.m2canvas.camera.now("arra
 const shot = async (file) => pixels(Buffer.from(await page.screenshot({ path: `${ROOT}/${file}` })));
 const tag = process.env.DRAWN_ZOOM_TAG ?? "";
 
-/** The last picture of a zoom, against the page laid out after its end. */
-async function compare(name, last, before) {
+/**
+ * The last picture of a zoom, against the page laid out after its end (and `later`, after that
+ * long). `mask()`, after both shots, gives the columns left out, in device px from the region's left:
+ * what moves on its own between the two shots (the playhead while the song plays).
+ */
+async function compare(name, last, before, { later = 0, mask = null } = {}) {
   const lastAt = await shown();
   const a = await shot(`${tag}${name}-last.png`);
   // Still the picture after the shot: the shot is of it, not of the page after an end.
@@ -217,15 +256,21 @@ async function compare(name, last, before) {
   await frames(3);
   const after = await shown();
   const b = await shot(`${tag}${name}-after.png`);
-  const d = differ(a, b, region, dpr);
+  const c = later ? (await sleep(later), await shot(`${tag}${name}-later.png`)) : null;
+  const m = mask ? await mask(lastAt) : [];
+  const texts = lastAt.pic?.drawn?.texts ?? [];
+  const d = differ(a, b, region, dpr, m, texts);
+  const e = c ? differ(a, c, region, dpr, m, texts) : null;
+  const worst = e && (e.over > d.over || e.dense > d.dense) ? e : d;
   check(
-    !!lastAt.cam.laid && lastAt.pic?.shown && lastAt.pic.drawn?.zoom === lastAt.cam.zoom && lastAt.cam.laid.zoom === before && !!still.cam.laid && still.pic?.shown && still.cam.zoom === lastAt.cam.zoom && after.cam.laid === null && !after.pic?.shown && after.cam.zoom === lastAt.cam.zoom && d.over <= LIMIT,
-    `${name} (${before} → ${lastAt.cam.zoom.toFixed(2)} px a beat): its last picture (the fingers still on, the page laid out at ${lastAt.cam.laid?.zoom}, the picture ${still.pic?.shown ? "still shown" : "gone"} after the shot) and the page laid out after it differ by more than 32 of 255 in ${d.over} of ${region.w * region.h} pixels (at most ${LIMIT}; the most ${d.max}; where: ${JSON.stringify(d.cells)})`,
+    !!lastAt.cam.laid && lastAt.pic?.shown && lastAt.pic.drawn?.zoom === lastAt.cam.zoom && lastAt.cam.laid.zoom === before && !!still.cam.laid && still.pic?.shown && still.cam.zoom === lastAt.cam.zoom && after.cam.laid === null && !after.pic?.shown && after.cam.zoom === lastAt.cam.zoom && worst.over <= LIMIT && worst.dense === 0,
+    `${name} (${before} → ${lastAt.cam.zoom.toFixed(2)} px a beat): its last picture (the fingers still on, the page laid out at ${lastAt.cam.laid?.zoom}, the picture ${still.pic?.shown ? "still shown" : "gone"} after the shot) and the page laid out after it${c ? ` (and ${later} ms after)` : ""}${m.length ? ` (but ${m.map(([f, t]) => `${Math.round(f / dpr)} to ${Math.round(t / dpr)} px across`).join(", ")})` : ""} differ by more than 32 of 255 in ${d.over}${e ? ` (${e.over})` : ""} of ${region.w * region.h} pixels (at most ${LIMIT}; the most ${d.max}; where: ${JSON.stringify(d.cells)}), and by more than ${CELL} on average (${TEXT_CELL} where a word lies) in ${d.dense}${e ? ` (${e.dense})` : ""} cells of 8 × 8 (none may; the most ${d.cell}${e ? ` (${e.cell})` : ""}, where a word lies ${d.word}${e ? ` (${e.word})` : ""}; where: ${JSON.stringify(worst.where)})`,
   );
   await sleep(400);
+  return { d, e };
 }
 /** A pinch at `at` to `to` (and back to 1, with `back`), a frame each of 10 steps a way, compared at its end. */
-async function pinch(name, at, to, back = false) {
+async function pinch(name, at, to, back = false, opts = {}) {
   const before = (await shown()).cam.zoom;
   await gesture(at, "gesturestart", 1);
   for (let i = 1; i <= 10; i++) {
@@ -237,10 +282,21 @@ async function pinch(name, at, to, back = false) {
     await frames(1);
   }
   await frames(3);
-  await compare(name, () => gesture(at, "gestureend", back ? 1 : to), before);
+  return compare(name, () => gesture(at, "gestureend", back ? 1 : to), before, opts);
 }
 
+/** The page's playhead, in px from the lanes' left (as the picture lists it). */
+const playheadAt = () =>
+  page.evaluate(() => {
+    const el = document.querySelector("[data-testid=timeline]"), r = el.getBoundingClientRect();
+    const m = window.m2canvas.camera.now("arrangement").margins;
+    return (document.querySelector("[data-testid=playhead]")?.getBoundingClientRect().left ?? NaN) - (r.left + el.clientLeft + m.left);
+  });
+
 await page.evaluate((tl) => document.querySelector(tl).scrollTo(0, 0), tl);
+// The playhead in view, at beat 10, in every zoom below.
+await post("/seek", { beat: 10 });
+check(await until(async () => Math.abs((await playheadAt()) - 10 * (await shown()).cam.zoom) < 2, 5000), `the playhead in view at beat 10 (${await playheadAt()} px)`);
 await frames(3);
 await sleep(300);
 // Out at the song's start and back in: the start stops the way out, so the way back in looks further
@@ -249,8 +305,71 @@ await pinch("a pinch out and back in at the song's start", await pointIn(0.3, 0.
 await page.evaluate((tl) => document.querySelector(tl).scrollTo(0, 0), tl);
 await frames(3);
 await sleep(300);
+// Vox's clips changed outside the app (AGENT-5): its lane glows, the picked clip too, until a press or a key.
+{
+  const file = `${PROJ}/data/vox/clips.json`;
+  const j = JSON.parse(fs.readFileSync(file, "utf8"));
+  j.clips.find((c) => c.id === "padclip1").gain_db = -7;
+  fs.writeFileSync(file, JSON.stringify(j));
+  check(await until(() => has(`${tl} [data-clip="voxclip1"][data-picked][data-glow]`), 10000), "Vox's clips changed outside the app: its lane glows, the picked clip too");
+  await until(async () => !(await has("[data-testid=notice]")) && !(await has("[data-testid=toast]")), 15000);
+  await sleep(300);
+}
 await pinch("a pinch in", await pointIn(0.3, 0.4), 1.6);
 await pinch("a pinch out", await pointIn(0.3, 0.4), 0.65);
+// The pointer resting on a clip, as a pinch on a Mac is where the pointer is: its hover outline.
+// Headless Chrome has no pointer that hovers, so the app's own rules for one (`@media (hover: hover)`)
+// are put on as the Mac has them.
+{
+  const hoverRules = (on) =>
+    page.evaluate((on) => {
+      window.__hoverRules ??= [];
+      if (!on) {
+        for (const r of window.__hoverRules) r.media.mediaText = "(hover: hover)";
+        window.__hoverRules = [];
+        return 0;
+      }
+      const walk = (list) => {
+        for (const r of list) {
+          if (r instanceof CSSMediaRule && r.media.mediaText.replace(/\s/g, "") === "(hover:hover)") {
+            r.media.mediaText = "all";
+            window.__hoverRules.push(r);
+          }
+          if (r.cssRules) walk(r.cssRules);
+        }
+      };
+      for (const sheet of document.styleSheets) {
+        try {
+          walk(sheet.cssRules);
+        } catch {}
+      }
+      return window.__hoverRules.length;
+    }, on);
+  const target = await page.evaluate((tl) => {
+    const el = document.querySelector(tl), b = el.getBoundingClientRect();
+    // A clip of Kick's or Bass's notes, its part in view clear of the headers and the edge.
+    const lo = b.left + 300, hi = b.right - 100;
+    const c = [...el.querySelectorAll('[data-lane="kick.hits"] [data-clip].cursor-grab, [data-lane="bass.notes"] [data-clip].cursor-grab')]
+      .map((e) => ({ id: e.dataset.clip, r: e.getBoundingClientRect() }))
+      .map(({ id, r }) => ({ id, r, l: Math.max(r.left, lo), h: Math.min(r.right, hi) }))
+      .find(({ l, h, r }) => h - l > 60 && r.bottom < b.bottom - 60);
+    return c ? { id: c.id, x: Math.round((c.l + c.h) / 2), y: Math.round(c.r.top + c.r.height / 2) } : null;
+  }, tl);
+  const border = () => page.$eval(`${tl} [data-clip="${target.id}"]`, (e) => getComputedStyle(e).borderTopColor);
+  const n = await hoverRules(true);
+  const plain = target && (await border());
+  if (target) await page.mouse.move(target.x, target.y);
+  await sleep(400);
+  const hovered = target && (await border());
+  check(n > 0 && !!target && plain !== hovered, `the Mac's hover rules on (${n}), the pointer resting on Kick's clip ${target?.id}: outlined as on a Mac (${plain} → ${hovered})`);
+  if (target) {
+    await pinch("the pointer resting on a clip, a pinch in", target, 1.25, false, { later: 600 });
+    await pinch("the pointer resting on a clip, a pinch out", target, 0.8, false, { later: 600 });
+  }
+  await hoverRules(false);
+  await page.mouse.move(5, 5);
+  await sleep(300);
+}
 // Bars selected on the ruler's band (ARR-9), from the beat 34 to 39 at this zoom: clear of the markers.
 {
   const band = await (await page.$(`${tl} [data-testid=bars-band]`)).boundingBox();
@@ -263,6 +382,9 @@ await pinch("a pinch out", await pointIn(0.3, 0.4), 0.65);
   await sleep(600);
   check(await has(`${tl} [data-testid=section]`), "bars selected");
 }
+// Vox's clip at beat 146 is far past what the page draws (VIEW-12): the page never asked for its
+// file's waveform. The way far out brings it into view.
+check(!(await has(`${tl} [data-clip="farclip1"]`)), "Vox's clip at beat 146 isn't on the page yet");
 await pinch("a pinch far out", await pointIn(0.2, 0.5), 0.3);
 {
   // A run of ⌘-scroll, an event a frame; compared at its last, before G passes. A shot takes longer
@@ -281,5 +403,57 @@ await pinch("a pinch far out", await pointIn(0.2, 0.5), 0.3);
     await page.evaluate(() => clearInterval(window.__stillScroll));
     await sleep(150);
   }, before);
+}
+// Recording a take on Vox while the song plays (lane B): the picture draws the take as it grows and
+// the playhead as it moves, painting once a frame. Left out of the compare: the columns the playhead
+// (and the take's growing end with it) crossed between the two shots.
+{
+  await page.click('[data-arm="vox"]');
+  check(await until(async () => !!(await state()).arm?.armed?.vox, 3000), `Vox armed (${JSON.stringify((await state()).arm?.armed)})`);
+  const { zoom, x, view, margins } = (await shown()).cam;
+  await post("/seek", { beat: (Math.round(x) + 0.1 * (view.w - margins.left)) / zoom });
+  await sleep(300);
+  await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
+  await page.keyboard.press("r");
+  check(await until(async () => (await state()).record?.phase === "take", 8000), `R records on Vox, the song playing (${JSON.stringify((await state()).record?.phase)})`);
+  await api("/input/inject", { method: "POST", body: JSON.stringify({ tone: { hz: 330, seconds: 20, gain: 0.5 } }) });
+  await page.mouse.move(5, 5);
+  await sleep(2500);
+  const at = await pointIn(0.6, 0.5);
+  const before = (await shown()).cam.zoom;
+  await gesture(at, "gesturestart", 1);
+  await frames(2);
+  // 20 changes, one a frame: the picture's paints in the frames they took.
+  const count = await page.evaluate(
+    (x, y) =>
+      new Promise((done) => {
+        const p0 = window.m2canvas.camera.picture("arrangement").paints;
+        let k = 0;
+        const one = () => {
+          const e = new UIEvent("gesturechange", { bubbles: true, cancelable: true });
+          for (const [key, v] of Object.entries({ scale: 1 + 0.0125 * (k + 1), clientX: x, clientY: y })) Object.defineProperty(e, key, { value: v });
+          (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(e);
+          if (++k < 20) requestAnimationFrame(one);
+          else requestAnimationFrame(() => done({ frames: k, paints: window.m2canvas.camera.picture("arrangement").paints - p0 }));
+        };
+        requestAnimationFrame(one);
+      }),
+    at.x,
+    at.y,
+  );
+  check(count.paints <= count.frames + 1, `while the song plays and a take records, the picture paints at most once a frame: ${count.paints} paints in ${count.frames} frames`);
+  await frames(3);
+  const drawnTake = (await shown()).pic?.drawn;
+  await compare("recording while the song plays, a pinch in", () => gesture(at, "gestureend", 1.25), before, {
+    mask: async (lastAt) => {
+      const from = lastAt.pic?.drawn?.playhead ?? NaN, to = await playheadAt();
+      return [[Math.floor((Math.min(from, to) - 16) * dpr), Math.ceil((Math.max(from, to) + 16) * dpr)]];
+    },
+  });
+  check(!!drawnTake && (await state()).record?.phase === "take", `the take still recording at the end (${JSON.stringify((await state()).record?.phase)})`);
+  await page.keyboard.press("r");
+  await until(async () => (await state()).record?.phase !== "take", 8000);
+  await page.keyboard.press("Space");
+  await until(async () => !(await api("/status")).body.playing, 5000);
 }
 done(errors);
