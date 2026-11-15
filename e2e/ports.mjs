@@ -54,10 +54,12 @@ const hearRefusals = (p) =>
 hearRefusals(page);
 // Hold the page's next request `match(request, body)` names (with `every`, each one until let go):
 // the suite sends it on to the server at once, and its answer reaches the page only once let go
-// (`go`), as on a machine where the page hears late. `sent`: the server has answered the first one;
-// `over`: the page has its answer. The page's requests are intercepted from the first hold on, until
-// `unhold`.
+// (`go`), as on a machine where the page hears late. `sent`: the server has answered the first one.
+// The page's requests are intercepted from the first hold on, until `unhold`.
 const holds = new Set();
+// The answers held for the page, until each is given: interception stays on till then, as turning it
+// off would send each request again, from the page.
+const answering = new Set();
 let intercepting = false;
 page.on("request", async (r) => {
   if (!intercepting || r.isInterceptResolutionHandled()) return;
@@ -66,28 +68,28 @@ page.on("request", async (r) => {
   const h = [...holds].find((h) => h.match(r, body));
   if (!h) return void r.continue().catch(() => {});
   if (!h.every) holds.delete(h);
-  const headers = r.headers();
-  const res = await fetch(r.url(), {
-    method: r.method(),
-    headers: { "content-type": headers["content-type"] ?? "application/json", "x-m2-token": headers["x-m2-token"], "x-m2-window": headers["x-m2-window"] },
-    body: r.postData(),
-  });
-  const answer = Buffer.from(await res.arrayBuffer());
-  h.answered();
-  await h.let;
-  await r.respond({ status: res.status, contentType: res.headers.get("content-type") ?? undefined, body: answer }).catch(() => {});
-  h.done();
+  const given = (async () => {
+    const headers = Object.fromEntries(Object.entries(r.headers()).filter(([k]) => k === "content-type" || k.startsWith("x-")));
+    const res = await fetch(r.url(), { method: r.method(), headers, body: r.postData() });
+    const answer = Buffer.from(await res.arrayBuffer());
+    h.answered();
+    await h.let;
+    await r.respond({ status: res.status, contentType: res.headers.get("content-type") ?? undefined, body: answer }).catch(() => {});
+  })();
+  answering.add(given);
+  await given;
+  answering.delete(given);
 });
 const hold = async (match, every = false) => {
   const h = { match, every };
   h.sent = new Promise((r) => (h.answered = r));
   h.let = new Promise((r) => (h.go = () => (holds.delete(h), r())));
-  h.over = new Promise((r) => (h.done = r));
   holds.add(h);
   if (!intercepting) await page.setRequestInterception((intercepting = true));
   return h;
 };
 const unhold = async () => {
+  await Promise.all(answering);
   if (intercepting && !holds.size) await page.setRequestInterception((intercepting = false));
 };
 
