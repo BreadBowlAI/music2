@@ -672,15 +672,18 @@ export class Rig {
     if (!live) return false;
     this.live = null;
     const s = this.cam.getState();
-    if (s.zoom === s.laid?.zoom) {
-      // The zoom drawn already: the box moves to what shows, and the stretch or the picture goes, now.
+    // A zoom asks for room to look where it put the camera, as `set` does: one that came back to the
+    // zoom it began at may look further on than the view had room for (its start stopped the way out).
+    const asked = { w: s.x + s.view.w, h: s.y + s.view.h };
+    if (s.zoom === s.laid?.zoom && asked.w <= s.asked.w && asked.h <= s.asked.h) {
+      // The zoom drawn already, and room for it: the box moves to what shows, and the stretch or the picture goes, now.
       this.cam.setState({ laid: null });
       this.release(live);
       this.write();
       return true;
     }
-    // A zoom asks for room to look where it put the camera, as `set` does.
-    this.cam.setState({ laid: null, asked: { w: s.x + s.view.w, h: s.y + s.view.h } });
+    // Else the render that draws it (and the room it asks for) writes the position, and the stretch or the picture goes then.
+    this.cam.setState({ laid: null, asked });
     this.zoomed = true;
     this.dropStretch();
     this.gone = live;

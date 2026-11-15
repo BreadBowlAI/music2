@@ -1955,6 +1955,64 @@ const beatMid = (x) =>
     `a pinch in ×4 is laid out only at its end: under the picture, laid out at ${json([...laidIn])} (${z1} before) (${brief(fi)})`,
   );
 }
+// A pinch out at the song's start, and back in (VIEW-5, VIEW-6): the picture stops at the start, as
+// the page does, never showing past it; so the way back in starts from what showed, the clips in
+// every frame where the zoom shown puts them, and the camera never looks before the start.
+{
+  await sleep(300);
+  await setScroll(tl, 0, null);
+  await frames(2);
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom ?? 0;
+  const xs = [];
+  const watch = await watchFrames("arrangement", tl, "[data-clip]");
+  const seen = page.evaluate(
+    () =>
+      new Promise((done) => {
+        const xs = [];
+        const one = () => {
+          xs.push(window.m2canvas.camera.now("arrangement").x);
+          if (xs.length < 90) requestAnimationFrame(one);
+          else done(xs);
+        };
+        requestAnimationFrame(one);
+      }),
+  );
+  await pinchOver(at.x, at.y, [...Array.from({ length: 12 }, (_, i) => 1 - (0.5 * (i + 1)) / 12), ...Array.from({ length: 12 }, (_, i) => 0.5 + (0.5 * (i + 1)) / 12)]);
+  await laidOut("arrangement");
+  xs.push(...(await seen));
+  await frames(3);
+  const fs = await watch();
+  const end = await arr();
+  check(
+    drawnFrames(fs) && Math.min(...xs) >= 0 && near(end?.zoom ?? 0, z0, 0.01),
+    `a pinch out at the song's start and back in stops at the start, as the page does: the camera never before it (its least x ${Math.min(...xs).toFixed(2)}), each clip in every frame where the zoom shown puts it (${brief(fs)})`,
+  );
+}
+// A pinch out at the song's end and back in to the zoom it began at (VIEW-5, VIEW-6): back in, the
+// zoom looks further right than the song's room went at that zoom, and the view keeps room where it
+// looked, so its end shows what the last picture did: the beat under the fingers held in every frame,
+// the end's too.
+{
+  await sleep(300);
+  const s0 = await scroll(tl);
+  await setScroll(tl, s0.room.x, null);
+  await frames(2);
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom ?? 0;
+  const watch = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  await pinchOver(at.x, at.y, [...Array.from({ length: 12 }, (_, i) => 1 - (0.5 * (i + 1)) / 12), ...Array.from({ length: 12 }, (_, i) => 0.5 + (0.5 * (i + 1)) / 12)]);
+  await laidOut("arrangement");
+  await frames(3);
+  const fs = await watch();
+  const end = await arr();
+  check(
+    drawnFrames(fs) && near(end?.zoom ?? 0, z0, 0.01),
+    `a pinch out at the song's end and back in to its zoom (${z0}) ends where its last picture showed, the view keeping room where the zoom looked: each clip in every frame where the zoom shown puts it, the beat under the fingers held (${brief(fs)})`,
+  );
+}
 // A press while the picture shows ends the zoom and does nothing else (VIEW-5), as a touch stops a
 // glide: the zoom is laid out at the zoom shown, the picture hides, and the clip shown under the press
 // isn't picked, the playhead doesn't move, nothing is written. A press after it, on the page laid

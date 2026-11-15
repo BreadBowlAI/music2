@@ -78,7 +78,8 @@ export async function zoomRun(step) {
   const x = Math.round(r.left + box.clientLeft + m.left + (box.clientWidth - m.left - m.right) * fx);
   const y = Math.round(r.top + box.clientTop + m.top + (box.clientHeight - m.top - m.bottom) * fy);
   const gesture = step.kind === "scroll" ? { kind: "scroll", deltas: bench.CMD_SCROLL } : { kind: "pinch", scales: bench.A13 };
-  return bench.replay(x, y, gesture, { zoom: () => cam.now(name)?.zoom ?? null, laid: () => cam.now(name)?.laid?.zoom ?? null });
+  // Whether the view's picture showed a frame (a drawn zoom, VIEW-5): a page from before it has none to read.
+  return bench.replay(x, y, gesture, { zoom: () => cam.now(name)?.zoom ?? null, laid: () => cam.now(name)?.laid?.zoom ?? null, drawn: () => cam.picture?.(name)?.shown ?? null });
 }
 
 /** In the page: the zoom bench's table of `rows` (each [name, runs]), headed `first`. */
@@ -90,9 +91,9 @@ export async function zoomTable(first, rows) {
 export const rowsOf = (results) => GESTURES.map((g) => [`${g}, ${results.filter((r) => r.name === g).length} runs`, results.filter((r) => r.name === g).map((r) => r.run)]);
 
 /**
- * In the page: the zoom bench's table of a live zoom's frames apart (taste.md VIEW-5): stretched,
- * laid out and the frame after each, for `rows` (each [name, runs]), headed `first`. On a build with
- * no live zoom every frame of a zoom is laid out.
+ * In the page: the zoom bench's table of a zoom by the hand's frames apart (taste.md VIEW-5): drawn
+ * by the view's picture or stretched, laid out, and the frame after each, for `rows` (each [name,
+ * runs]), headed `first`. On a build with neither, every frame of a zoom is laid out.
  */
 export async function zoomLive(first, rows) {
   const bench = await window.m2canvas.bench();

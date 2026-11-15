@@ -219,18 +219,28 @@ async function compare(name, last, before) {
   );
   await sleep(400);
 }
-/** A pinch at `at` to `to`, a frame each of 10 steps, compared at its end. */
-async function pinch(name, at, to) {
+/** A pinch at `at` to `to` (and back to 1, with `back`), a frame each of 10 steps a way, compared at its end. */
+async function pinch(name, at, to, back = false) {
   const before = (await shown()).cam.zoom;
   await gesture(at, "gesturestart", 1);
   for (let i = 1; i <= 10; i++) {
     await gesture(at, "gesturechange", 1 + ((to - 1) * i) / 10);
     await frames(1);
   }
+  for (let i = 1; back && i <= 10; i++) {
+    await gesture(at, "gesturechange", to + ((1 - to) * i) / 10);
+    await frames(1);
+  }
   await frames(3);
-  await compare(name, () => gesture(at, "gestureend", to), before);
+  await compare(name, () => gesture(at, "gestureend", back ? 1 : to), before);
 }
 
+await page.evaluate((tl) => document.querySelector(tl).scrollTo(0, 0), tl);
+await frames(3);
+await sleep(300);
+// Out at the song's start and back in: the start stops the way out, so the way back in looks further
+// on than the song's room at that zoom; the end keeps room where it looked.
+await pinch("a pinch out and back in at the song's start", await pointIn(0.3, 0.4), 0.5, true);
 await page.evaluate((tl) => document.querySelector(tl).scrollTo(0, 0), tl);
 await frames(3);
 await sleep(300);
