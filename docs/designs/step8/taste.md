@@ -1130,9 +1130,12 @@ events sent meanwhile are heard, so it never ends a zoom alone.
   from what the view renders from (the song, the selection, the playhead). The page under the
   picture is not stretched, not laid out early, and keeps no layers of its own: it is laid out only
   when the zoom ends, at the zoom shown, and the picture hides in that same frame (VIEW-13). A press
-  while the picture shows ends the zoom and does nothing else, as a touch stops a glide on an
-  iPhone: no click, no selection, no playhead moved. A picture that can't paint (a browser without a
-  canvas feature it uses) never freezes the view: that zoom is laid out each frame.
+  on the picture ends the zoom and does nothing else, as a touch stops a glide on an iPhone: no
+  click, no selection, no playhead moved. A press beside it (a track's header, the ruler's tools)
+  ends the zoom and does what it says. The window losing focus or hidden ends it too (a pinch's
+  `gestureend` may never come then). The picture paints at most once a frame, whatever asks it to
+  (the zoom, the playhead, a change). A picture that can't paint (a browser without a canvas
+  feature it uses) never freezes the view: that zoom is laid out each frame.
 - **Laid out each frame**, in a view that doesn't draw its zoom (Notes and the beat grid, until the
   drawn zoom's second track draws them; the Graph): each frame of the zoom is laid out at the zoom
   shown. Nothing stretches in any view.
@@ -1213,7 +1216,12 @@ at the zoom's end. A view that doesn't draw its zoom renders at most once a fram
 pointer drag holds the pointer (a clip, a marquee,
 a note, a cable, a fade, a reorder, the ruler's loop), the camera holds still: no swipe, glide or
 Follow moves it; Follow catches up after. While the camera moves, and for 250 ms after, the views'
-hover does nothing.
+hover does nothing. No CSS hover applies while a camera moves by the hand, a glide or a zoom, nor
+after it until the pointer itself moves: what the still pointer is over never changes look as a
+zoom ends or a swipe stops (VIEW-13).
+- *Why the hover waits for the pointer:* on a Mac a pinch is where the pointer is, so the clip under
+  the fingers is hovered; its outline went dark again in the frame a drawn zoom ended (review T of
+  track `drawn-zoom`). The Mac's own apps change hover only when the pointer moves.
 - An agent's pointer note (AGENT-6) MUST move on the frames a view moved, written into its own
   style, never by a render while only its place changes.
 - *Why:* moving the view must cost two numbers written, not a redraw (the note's §8, C9, C10).
@@ -1236,7 +1244,11 @@ hover does nothing.
   and a bar apart). Since track `drawn-zoom`, a drawn zoom's frames render nothing: the views' hooks
   read the zoom laid out, and the picture paints from the camera's subscription (`useDrawnZoom`).
   Tested by `camera` (every frame of the arrangement's pinches and ⌘-scroll counted: renders only at
-  the zoom's end; mid-pinch nothing renders).
+  the zoom's end; mid-pinch nothing renders). The hover rule: `moved()` in `web/src/camera/state.ts`
+  sets the root's `data-camera-moved`, the pointer's next move after the camera's 250 ms takes it
+  away, and `index.css` gives every `hover:` and `group-hover:` the condition. Tested by
+  `drawn-zoom` (the Mac's hover rules put on, the pointer resting on a clip: its outline the same in
+  the last picture, the frame after and 600 ms after a pinch in and out).
 
 **VIEW-9.** The app MUST move these views only through the camera (`to`, `reveal`, `fit`,
 `zoomAround`): Follow, Fit, Z, Show, a marker, a new lane or track (TL-16), an expanded node
