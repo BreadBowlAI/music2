@@ -2051,6 +2051,21 @@ const beatMid = (x) =>
   await pinch(at.x, at.y, [1 / 1.2]);
   await frames(2);
 }
+// The page's playhead, scrolled past (left of the view, under the headers), shows nowhere: not
+// through the lines between the tracks' headers, where nothing covers it.
+{
+  await sleep(300);
+  const beat = Number(await page.$eval(`${tl} [data-testid=playhead]`, (e) => e.dataset.beat));
+  const z = (await arr())?.zoom ?? 0;
+  const seen = () => page.$eval(`${tl} [data-testid=playhead]`, (e) => getComputedStyle(e).visibility);
+  await setScroll(tl, Math.round(beat * z + 300), null);
+  await frames(3);
+  const past = await seen();
+  await setScroll(tl, Math.max(0, Math.round(beat * z - 300)), null);
+  await frames(3);
+  const inView = await seen();
+  check(past === "hidden" && inView === "visible", `the page's playhead scrolled past, under the headers, is hidden (${past}), and shows again in view (${inView})`);
+}
 // Revealing an element in the middle of a zoom (Show, a lane made: VIEW-9) moves from where it shows
 // at the zoom shown, not from where the page under the picture is laid out: a clip near the view's
 // right edge, which the zoom in carries out past it, comes into view at the zoom shown.

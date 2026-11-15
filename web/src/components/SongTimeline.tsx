@@ -64,7 +64,7 @@ import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
 import { ARRANGEMENT, followNow, keepZoom, kept, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
-import { CameraScope, onCamera, useCamera, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
+import { CameraScope, laidOf, onCamera, useCamera, useCameraOf, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
 import { useStore } from "../lib/store";
 import { ALL, baseOf, editing, goesFrom, showsOwn, type Editing } from "../lib/history";
@@ -299,25 +299,41 @@ function DragBubble({ at, children }: { at: { x: number; y: number }; children: 
 /**
  * Draws the playhead on every frame from the transport clock: never eased between polls (TL-9). It
  * keeps to the zoom laid out (VIEW-5): through a drawn zoom the picture draws the playhead, and the
- * page's stays where it was under it.
+ * page's stays where it was under it. Scrolled past (left of the view, under the headers) it hides:
+ * the lines between the tracks' headers would show it through (`hides`).
  */
-function usePlayhead(ref: React.RefObject<HTMLElement | null>, attr = false) {
+function usePlayhead(ref: React.RefObject<HTMLElement | null>, attr = false, hides = false) {
   const ppb = useZoom();
+  const cam = useCameraOf(ARRANGEMENT);
   useEffect(() => {
+    let at = beatNow();
+    const place = () => {
+      const el = ref.current;
+      if (!el || !hides || !cam) return;
+      const hidden = at * ppb < laidOf(cam.getState()).x - 0.5;
+      if ((el.style.visibility === "hidden") !== hidden) el.style.visibility = hidden ? "hidden" : "";
+    };
     const draw = (beat: number) => {
       const el = ref.current;
       if (!el) return;
+      at = beat;
       el.style.transform = `translateX(${beat * ppb}px)`;
       if (attr) el.dataset.beat = String(beats(beat));
+      place();
     };
-    draw(beatNow());
-    return onFrame(draw);
-  }, [ref, attr, ppb]);
+    draw(at);
+    const offFrame = onFrame(draw);
+    const offCam = hides && cam ? onCamera(cam, place) : null;
+    return () => {
+      offFrame();
+      offCam?.();
+    };
+  }, [ref, attr, hides, ppb, cam]);
 }
 
-function PlayLine({ testid, className, style }: { testid?: string; className: string; style: React.CSSProperties }) {
+function PlayLine({ testid, className, style, hides = false }: { testid?: string; className: string; style: React.CSSProperties; hides?: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
-  usePlayhead(ref, !!testid);
+  usePlayhead(ref, !!testid, hides);
   return <div ref={ref} data-testid={testid} aria-hidden className={className} style={style} />;
 }
 
@@ -1861,6 +1877,7 @@ export default function SongTimeline({
         />
         <PlayLine
           testid="playhead"
+          hides
           className="absolute bottom-0 z-[15] w-px bg-fg-strong pointer-events-none"
           style={{ top: RULER_H, left: headerW }}
         />
