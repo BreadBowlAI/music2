@@ -309,8 +309,10 @@ await goTo("A13");
 }
 
 // A15: a pinch let go of while the fingers still move (the drawn zoom's note, §2.7): the report says
-// how fast it zoomed in its last 100 ms. Sent over time, each event a task 8 ms apart, its own time
-// the page's clock: out from 1 to 0.5 in 20 changes, then the lift 8 ms after the last.
+// how fast it zoomed in its last 100 ms, by the events' own times. Sent over time, each event a task
+// of its own, its own time 8 ms after the one before (the trackpad's clock, as WebKit stamps it):
+// out from 1 to 0.5 in 20 changes, then the lift 8 ms after the last. A runner whose timers come
+// late (GitHub's Mac: 28 ms for 8) hears them further apart, as a busy page hears a trackpad's.
 await goTo("A15");
 {
   const step = await text(panel);
@@ -319,20 +321,22 @@ await goTo("A15");
     (sel) =>
       new Promise((done) => {
         const el = document.querySelector(sel);
-        const send = (type, scale) => {
+        const t0 = performance.now();
+        const send = (type, scale, k) => {
           const e = new UIEvent(type, { bubbles: true, cancelable: true });
           Object.defineProperty(e, "scale", { value: scale });
           Object.defineProperty(e, "clientX", { value: 700 });
+          Object.defineProperty(e, "timeStamp", { value: t0 + 8 * k });
           el.dispatchEvent(e);
         };
-        send("gesturestart", 1);
+        send("gesturestart", 1, 0);
         let i = 0;
         const one = () => {
           if (++i <= 20) {
-            send("gesturechange", 1 - (0.5 * i) / 20);
+            send("gesturechange", 1 - (0.5 * i) / 20, i);
             return setTimeout(one, 8);
           }
-          send("gestureend", 0.5);
+          send("gestureend", 0.5, 21);
           done();
         };
         setTimeout(one, 8);

@@ -156,7 +156,15 @@ function steps(p: Brush, sc: Scene, c: StepClip, lane: TimelineLane & { kind: "s
     p.g.save();
     area(p, l, at, r - l, ah);
     const known = lane.options.some((o) => o.value === v);
-    p.text(stepLabel(lane.options, v), x0 + 6, base, font, ink, w - 6, !known);
+    const label = stepLabel(lane.options, v);
+    p.text(label, x0 + 6, base, font, ink, w - 6);
+    // A name the choice no longer has: struck through, as the page strikes it (its label's `after:`
+    // line, 1 px, 7 px down its line, across its words or as far as they show).
+    if (!known) {
+      p.g.font = font;
+      const y = at + (ah - 14) / 2 + 7;
+      p.box(x0 + 6, y, x0 + 6 + Math.max(0, Math.min(p.g.measureText(label).width, w - 6)), y + 1, ink);
+    }
     const tick = x0 + (Math.max(0, b - from) / Math.max(to - from, 1e-9)) * w;
     p.box(tick, at, tick + (i === picked ? 2 : 1), at + ah, i === picked ? sc.colors.fgStrong : ink);
     p.g.restore();
