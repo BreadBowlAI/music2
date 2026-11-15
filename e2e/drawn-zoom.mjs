@@ -25,7 +25,9 @@ import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixl
  * The pixels over 32 apart were 0, 53, 112, 135 and 30 for the five zooms below, the same in each of
  * three runs (drawn-zoom.md §1, "Measured after the build"). A picture that leaves out the audio waves
  * differs by 1,536 to 17,800, and one moved 1 px across by 45,268 to 217,539: each fails all five.
- * 200 lies above the glyphs and 7 times under the smaller fault.
+ * 200 lies above the glyphs and 7 times under the smaller fault. It is this song's: on the beat song
+ * Chrome rasters the page's bar numbers at a fraction of a device px half a px apart from the picture's,
+ * 288 to 846 pixels (gaps.md, "What the zoom's picture may still miss").
  */
 const LIMIT = 200;
 const W = 1440, H = 1200;

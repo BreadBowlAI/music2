@@ -1533,8 +1533,9 @@ the selected bars, picked clips, the playhead and the Song row. It never falls b
   each last picture against the page after it, at most 200 pixels more than 32 of 255 apart (measured
   0 to 135: glyphs a sub-pixel apart; a picture without the audio waves differs by 1,536 or more, one
   1 px off by 45,268 or more). `camera` reads each frame's list of what the picture drew. WebKit is
-  compared by hand (`wklook`, the drawn zoom's note §1). Not yet drawn: gaps.md, "What the zoom's
-  picture may still miss".
+  compared by hand (`wklook`, the drawn zoom's note §1). Not yet as the page draws it: gaps.md,
+  "What the zoom's picture may still miss" (in Chrome, on the beat song, the bar numbers at a
+  fraction of a device px, up to half a device px apart).
 
 ---
 

@@ -81,15 +81,16 @@ Track `drawn-zoom` against main at `d06bb743` (Z1), on this server (Linux, no GP
 
 **The end** (VIEW-13: the last frame, fingers still on, against the page laid out after it; pixels more than 32 of 255 apart, the arrangement's clear part):
 
-| Zoom | Chrome, the `drawn-zoom` suite's song, 3.95 million px | WebKitGTK, beat song, by hand (`wklook`), 6.3 million px | WebKitGTK, big song, by hand |
-|---|---|---|---|
-| Out to the song's start and back in | 0 | – | – |
-| In | 53 | 266 | 160 |
-| Out | 112 | 7 | 41 |
-| Far out | 135 | 4,058 | 4,395 |
-| ⌘-scroll | 30 | – | – |
+| Zoom | Chrome, the `drawn-zoom` suite's song, 3.95 million px | Chrome, beat song, by hand (`look.mjs`), 2.5 million px | WebKitGTK, beat song, by hand (`wklook`), 6.3 million px | WebKitGTK, big song, by hand |
+|---|---|---|---|---|
+| Out to the song's start and back in | 0 | – | – | – |
+| In | 53 | 288 | 266 | 160 |
+| Out | 112 | 428 | 7 | 41 |
+| Far out | 135 | 846 | 4,058 | 4,395 |
+| ⌘-scroll | 30 | 738 | – | – |
 
 - Chrome's are the same in each of three runs: text a sub-pixel apart (marker names, a lane of names' steps), where Chrome places the page's glyphs on its own grid. The suite's limit is 200.
+- On the beat song in Chrome, every pixel over 32 apart is in the ruler's bar numbers (the most 67 of 255): where a number's left falls on a fraction of a device px, the picture's glyphs sit up to half a device px left of the page's. Both are placed at the same px (within a hundredth of a device px); how Chrome rasters the page's text there is what differs, and on the suite's song it doesn't. The cause isn't found (gaps.md); WebKit draws them alike.
 - WebKit's are compared by hand: the WebKit tool drives no suite. Nearly all its pixels over 32 are WebKitGTK's overlay scroll bars, which show after the end's scroll write (the vertical one: 266 of the beat song's 266 in; the horizontal one: 4,006 of its 4,058 far out). The rest differ by under 32 (grid lines' anti-aliasing). Before the lane canvas lay on whole px, the beat song's far out was 16,895 (§6).
 
 ## 2. The decisions
