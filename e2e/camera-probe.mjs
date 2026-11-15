@@ -243,7 +243,7 @@ await page.click("[data-probe=next]");
 check(await roomed(), "round A's first step shows once the probe has made room");
 const stepA = await text(panel);
 check(
-  /Round A/.test(stepA) && /Let the Mac scroll on its own/.test(stepA) && /turns its camera \(what moves the view\) off/.test(stepA) && /a diagonal swipe moves one way only, as the Mac does on its own/.test(stepA) && /three times/.test(stepA) && /lifting your fingers/.test(stepA) && /1 of 14/.test(stepA) && /tracks at the top/.test(stepA) && /thin bar at the right or bottom edge/.test(stepA) && (await has("[data-probe=yes]")),
+  /Round A/.test(stepA) && /Let the Mac scroll on its own/.test(stepA) && /turns its camera \(what moves the view\) off/.test(stepA) && /a diagonal swipe moves one way only, as the Mac does on its own/.test(stepA) && /three times/.test(stepA) && /lifting your fingers/.test(stepA) && /1 of 15/.test(stepA) && /tracks at the top/.test(stepA) && /thin bar at the right or bottom edge/.test(stepA) && (await has("[data-probe=yes]")),
   `it says plainly that the camera is off in round A, so a diagonal swipe goes one way only; it asks for three swipes, says where, and asks about the scrollbar, saying what it is: ${stepA}`,
 );
 await lintIn(panel, "round A's step");
@@ -308,11 +308,45 @@ await goTo("A13");
   check(await until(async () => Math.abs((await clipW()) - w0) < 1, 3000), `after the pinch step the probe puts its zoom back: ${w0} → ${await clipW()}`);
 }
 
+// A15: a pinch let go of while the fingers still move (the drawn zoom's note, §2.7): the report says
+// how fast it zoomed in its last 100 ms. Sent over time, each event a task 8 ms apart, its own time
+// the page's clock: out from 1 to 0.5 in 20 changes, then the lift 8 ms after the last.
+await goTo("A15");
+{
+  const step = await text(panel);
+  check(/Step 15 of 15/.test(step) && /Pinch out quickly/.test(step) && /lift your fingers while they still move/.test(step), `after the pinches comes a pinch let go of, the round's last step, which asks to lift the fingers while they still move: ${step}`);
+  await page.evaluate(
+    (sel) =>
+      new Promise((done) => {
+        const el = document.querySelector(sel);
+        const send = (type, scale) => {
+          const e = new UIEvent(type, { bubbles: true, cancelable: true });
+          Object.defineProperty(e, "scale", { value: scale });
+          Object.defineProperty(e, "clientX", { value: 700 });
+          el.dispatchEvent(e);
+        };
+        send("gesturestart", 1);
+        let i = 0;
+        const one = () => {
+          if (++i <= 20) {
+            send("gesturechange", 1 - (0.5 * i) / 20);
+            return setTimeout(one, 8);
+          }
+          send("gestureend", 0.5);
+          done();
+        };
+        setTimeout(one, 8);
+      }),
+    tl,
+  );
+  await sleep(300);
+}
+
 // Round B.
 await goTo("B1");
 const stepB = await text(panel);
 check(
-  /Round B/.test(stepB) && /Cancel the swipe/.test(stepB) && /1 of 14/.test(stepB) && /window's own scrolling/.test(stepB) && /diagonal swipes work again/.test(stepB) && !/browser/i.test(stepB) && (await has("[data-probe=no]")),
+  /Round B/.test(stepB) && /Cancel the swipe/.test(stepB) && /1 of 15/.test(stepB) && /window's own scrolling/.test(stepB) && /diagonal swipes work again/.test(stepB) && !/browser/i.test(stepB) && (await has("[data-probe=no]")),
   `round B's first step says diagonal swipes work again, and asks about the scrollbar: ${stepB}`,
 );
 await lintIn(panel, "round B's step");
@@ -357,7 +391,7 @@ await goTo("B13");
 
 // The last step, after round B: the probe replays the owner's pinch (A13) by itself, over the
 // timeline and then the Graph, with the zoom bench measuring each frame.
-await goTo("B14");
+await goTo("B15");
 await advance();
 {
   const last = await text(panel);
@@ -423,14 +457,23 @@ check(copied.length > 0 && copied.length < 60_000, `and it stays under 60 KB: ${
     head.test(copied) && row("timeline").test(copied) && row("Graph").test(copied) && zoom.test(copied),
     `the report has the replayed pinch's split for the timeline and the Graph: each part's median, 95th percentile and slowest, the frames over 8.3 and 16.7 ms, and each zoom's way out and back: ${copied.slice(copied.indexOf("The replayed pinch"), copied.indexOf("The replayed pinch") + 1600)}`,
   );
-  // The timeline's live zoom (taste.md VIEW-5) apart, as zoom-bench gives it: its frames only a
-  // transform apart from the frame before (stretched), those laid out at a new zoom, and the frame
-  // after each. So the owner's Mac says what a stretched frame costs there.
+  // The timeline's zoom (taste.md VIEW-5) apart, as zoom-bench gives it: its frames its picture drew
+  // at the zoom shown, the one laid out at the zoom's end, and the frame after it. So the owner's Mac
+  // says what a drawn frame costs there.
   const n = "[\\d.]+|–";
+  // The timeline's frames drawn by its picture (a drawn zoom, VIEW-5) apart from the one laid out at
+  // the end and the frame after it: A13 comes back to the zoom it started at, so only its way out
+  // alone is laid out at its end.
   const live = new RegExp(
-    `\\nA live zoom's frames, in ms: median / 95th percentile[^\\n]*\\n\\| View \\| stretched frames \\| their work \\| of it input \\| of it paint and commit \\| laid out \\| a laid-out frame's work \\| the frame after it \\|\\n\\|[-|]+\\n\\| timeline \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} [\\d.]+ \\|( (${n}) / (${n}) \\|){2}\\n`,
+    `\\nA zoom by the hand's frames, in ms: median / 95th percentile[^\\n]*\\n\\| View \\| drawn frames \\| their work \\| of it input \\| of it paint and commit \\| laid out \\| a laid-out frame's work \\| the frame after it \\|\\n\\|[-|]+\\n\\| timeline \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} 0 \\| – / – \\| – / – \\|\\n\\| timeline, its way out alone \\| [1-9]\\d* \\|( (${n}) / (${n}) \\|){3} 1 \\|( [\\d.]+ / [\\d.]+ \\|){2}\\n`,
   );
-  check(live.test(copied), `and the timeline's live zoom apart: its stretched frames, its laid-out ones and the frame after each: ${copied.slice(copied.indexOf("A live zoom"), copied.indexOf("A live zoom") + 600) || "none"}`);
+  check(live.test(copied), `and the timeline's zoom apart: its frames drawn by its picture, its laid-out one and the frame after it: ${copied.slice(copied.indexOf("A zoom by the hand's frames"), copied.indexOf("A zoom by the hand's frames") + 700) || "none"}`);
+  // The pinch let go of: how fast it zoomed as the fingers lifted, by the events' own times: in its
+  // last 100 ms from about 0.8 to 0.5, ×0.6 or so, some -4.5 a second (ln).
+  const letGo = /\nPinches let go of \(step 15\): [^\n]*\n {2}A15 1: scale 1 to 0\.5 in \d+(\.\d)? ms; its last 100 ms ×0\.(5[5-9]|6\d|7[0-3])\d*, -[3-6](\.\d+)? a second \(ln\); its last change [\d.]+ ms before the lift\n/;
+  check(letGo.test(copied), `the report says how fast the pinch let go of zoomed in its last 100 ms: ${copied.slice(copied.indexOf("Pinches let go of"), copied.indexOf("Pinches let go of") + 300) || "none"}`);
+  // Whether the timeline's picture ever failed to paint, and why (the drawn zoom never freezes).
+  check(/\nThe timeline's picture \(its drawn zoom\): painted [1-9]\d* times; it never failed to paint\n/.test(copied), `and how often the timeline's picture painted, and that it never failed: ${copied.slice(copied.indexOf("The timeline's picture"), copied.indexOf("The timeline's picture") + 200) || "none"}`);
 }
 // Where the clipboard refuses (as a web view may), the report shows in a field, selected for ⌘C.
 await page.evaluate(() => (navigator.clipboard.writeText = () => Promise.reject(new Error("refused"))));

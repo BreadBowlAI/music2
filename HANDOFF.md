@@ -5,6 +5,18 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **The drawn zoom (track `drawn-zoom`, 2026-11-15).** A pinch or ⌘-scroll over the arrangement draws it into a
+  picture over the view, sharp at the zoom shown each frame (`web/src/camera/picture.ts`,
+  `web/src/components/zoomPicture/`), and lays the page out once at the end, where the picture hides; nothing
+  stretches anywhere: Notes and the beat grid are laid out each frame until track `drawn-zoom-2` draws them, and
+  Z1's stretch code is gone. A press while the picture shows only ends the zoom; a paint that throws lays each
+  frame out instead. A ⌘-scroll run ends after G counted in frames, not by a timer (main's CI failure at
+  `d06bb743`). Rules VIEW-5, VIEW-8, VIEW-13 (taste.md); numbers in `docs/designs/camera/drawn-zoom.md` §1.
+  After review T: no CSS hover anywhere while a camera moves, nor after it until the pointer moves (the root's
+  `data-camera-moved`, `index.css`'s `hover:` variant); the picture asks for peaks the page never did, paints
+  once a frame, and lists what it drew from its own brushes; a press beside it does what it says.
+  **Owed on the owner's Mac:** the swipe probe's Replay a pinch and its new step "a pinch let go of" (frame
+  cost at 120 Hz in WKWebView, and how fast fingers leave a pinch, for a glide).
 - **0.2.0 is made, as a draft** (#97, 2026-11-07). The tag `v0.2.0` and `release.yml`'s run (42391434245) built the
   Linux and Mac files and made the draft pre-release (five files). **Publishing it is the owner's.** Its notes are
   [docs/releases/0.2.0.md](docs/releases/0.2.0.md). The server has no `file` program, which linuxdeploy's AppImage
@@ -400,12 +412,14 @@ whether it is one of these or a real failure, and fixes the real ones (most were
    reference closer to their work would bring them back. The capture's clock
    could keep the wall clock's pace as the silent player does; then `nx-click` and `st-record` might leave the sleeps
    list.
-6. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
+6. **The zoom:** track `drawn-zoom-2` (Notes and the beat grid drawn as the arrangement is), then a glide once the
+   owner's probe says how fast a pinch is let go of (the drawn zoom's note §5).
+7. **Then the top gaps** in [docs/gaps.md](docs/gaps.md)'s order (slicing #52, more effects #55, MIDI learn #56,
    macro knobs #57, the rest of #62: Bake to notes, note repeat in a kit, generators), each inside a pack where it
    can be; the beat grid's gaps (a sound when a step is clicked, copying a pattern, cut groups across a kit's tracks,
    D3).
-7. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
-8. **Open owner decisions** (below).
+8. **Windows, as its own step** ([PLAT-1](docs/architecture.md#platforms)): `core/os/src/windows/` and the build.
+9. **Open owner decisions** (below).
 
 The owner wants music2 to be a novel, type-safe DAW built from first principles, simple yet elegant, with std as
 small as possible and most sounds in packs (2026-10-31).

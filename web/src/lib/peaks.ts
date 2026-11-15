@@ -75,6 +75,21 @@ export function usePeaks(clip: Pick<AudioClip, "asset" | "hash">): Peaks | typeo
   return got.get(key) ?? null;
 }
 
+/**
+ * The peaks of the file clip `clip` plays, as they are now (`usePeaks`'s, outside React: the
+ * arrangement's zoom picture). Peaks no one asked for yet are asked for now: a zoom out shows clips
+ * the page never drew (VIEW-12), and their waveforms come as the picture shows (`onPeaks`).
+ */
+export function peaksNow(clip: Pick<AudioClip, "asset" | "hash">): Peaks | typeof MISSING | null {
+  const session = useStore.getState().graph?.session;
+  const key = `${session}\n${clip.asset}\n${clip.hash ?? ""}`;
+  if (session != null && !got.has(key)) void ask(session, clip.asset, key);
+  return got.get(key) ?? null;
+}
+
+/** Hear each answer to a request for peaks: the zoom picture paints again with them. */
+export const onPeaks = (f: () => void) => useArrived.subscribe(f);
+
 /** A tempo map as the timeline gives it: from `beat` on, `bpm` (FMT-13), the first at beat 0. */
 export type Tempo = readonly { beat: number; bpm: number }[];
 

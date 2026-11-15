@@ -24,16 +24,21 @@
 //                  events render it at most once a frame, and its grid and take once, not once a
 //                  track; a pinch keeps the beat; a zoom renders no clip's mini drawing; each clip's
 //                  canvas drawn at the zoom, sharp, its notes each at its own alpha (its pixels read),
-//                  the 2 px marks only where a note is under 2 px; a zoom by the hand stretching the
-//                  canvases and drawing each once as it settles, ⌘= at once; a long clip's canvas
-//                  bounded around what shows at 192 px a beat, drawn again only past it; a click's
-//                  scroll taken in; agents' `seen` follows; a swipe, a key's scroll and a write to `scrollLeft`
-//                  pause Follow, a swipe straight down doesn't, and Follow never takes a swipe back to
-//                  the playhead; a drag holds the camera and Follow; the camera's own glide with
-//                  Linux's flag, stopped by an edge, and none after a mouse's notches
+//                  the 2 px marks only where a note is under 2 px; a zoom by the hand drawn by the
+//                  arrangement's picture (VIEW-5, VIEW-13): every frame painted at the zoom shown, the
+//                  page under it unmoved, nothing rendered, laid out once at its end, the canvases
+//                  drawn then; a press on the picture, a paint that throws, the song changing, a reveal,
+//                  the song's start and end, a run of ⌘-scroll with a long frame in it; ⌘= at once; a
+//                  long clip's canvas bounded around what shows at 192 px a beat, drawn again only
+//                  past it; a click's scroll taken in; agents' `seen` follows; a swipe, a key's scroll
+//                  and a write to `scrollLeft` pause Follow, a swipe straight down doesn't, and Follow
+//                  never takes a swipe back to the playhead; a drag holds the camera and Follow; the
+//                  camera's own glide with Linux's flag, stopped by an edge, and none after a mouse's
+//                  notches
 //     notes        a diagonal swipe 1:1; no more notes than the view and its margins show; 120 events
 //                  over a note render nothing; 30 ⌘-scroll events at most once a frame; ⌘-scroll and a
-//                  pinch keep the beat under the pointer
+//                  pinch keep the beat under the pointer, each frame laid out at the zoom shown, nothing
+//                  stretched
 //
 //   node e2e/camera.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -45,7 +50,7 @@ import { drawings, rgb } from "./drawlib.mjs";
 import { expand } from "./graphlib.mjs";
 
 // At 2 device px a px, as the owner's Mac draws: the canvases' checks read the screen's own pixels (VIEW-12).
-const { browser, page, errors, api, state, key, box, show, view } = await open(1440, 900, { dpr: 2 });
+const { browser, page, errors, posts, api, state, key, box, show, view } = await open(1440, 900, { dpr: 2 });
 
 const near = (a, b, d = 1) => Math.abs(a - b) <= d;
 const json = (o) => JSON.stringify(o);
@@ -183,6 +188,51 @@ const zoomFrames = (x, y, n, dy) =>
     dy,
   );
 /**
+ * A run of `n` ⌘-scroll events at (x, y), one a frame (`dy` each), where right after event `late` the
+ * page is busy 80 ms, and the next event, made 16 ms after that one, is heard only after the task
+ * that ran long, behind a timer due 60 ms after it (VIEW-5): as on a busy machine, or a big song's
+ * layout, where the trackpad's events wait in a queue. Before each event after the first, whether
+ * the camera `name` was laid out already, its zoom ended (`ended`, by the event's number); and how
+ * many ms after the last event it was laid out (`end`).
+ */
+const zoomLate = (name, x, y, n, dy, late) =>
+  page.evaluate(
+    (name, x, y, n, dy, late) =>
+      new Promise((done) => {
+        const face = window.m2canvas.camera;
+        const ended = [];
+        let k = 0, made = 0;
+        const one = (queued) => {
+          if (k > 0 && face.now(name)?.laid === null) ended.push(k + 1);
+          const e = new WheelEvent("wheel", { deltaY: dy, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true });
+          // Its own time: when the trackpad made it, 16 ms after the one before it, however late it is heard.
+          made = queued === true ? made + 16 : performance.now();
+          Object.defineProperty(e, "timeStamp", { value: made });
+          (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(e);
+          if (++k === late) {
+            setTimeout(() => one(true), 60);
+            for (const end = performance.now() + 80; performance.now() < end; );
+            return;
+          }
+          if (k < n) return requestAnimationFrame(one);
+          const last = performance.now();
+          const wait = () => {
+            const end = performance.now() - last;
+            if (face.now(name)?.laid === null || end > 3000) done({ ended, end: Math.round(end) });
+            else requestAnimationFrame(wait);
+          };
+          requestAnimationFrame(wait);
+        };
+        requestAnimationFrame(one);
+      }),
+    name,
+    x,
+    y,
+    n,
+    dy,
+    late,
+  );
+/**
  * A pinch at (x, y) over time, as WebKit sends one: `gesturestart`, a `gesturechange` every 8 ms with
  * each of `scales`, and (with `end`) its `gestureend` 8 ms after, each event a task of its own on
  * whatever is under (x, y) then. Resolves once the last is sent.
@@ -223,12 +273,23 @@ const pinchEnd = (x, y, scale) =>
     scale,
   );
 /**
- * What the camera `name` stretches (VIEW-5): each marked element's transform. A stretch scales
- * (`scale(…)`); after one, an element keeps a transform that moves nothing a moment, with its layer.
+ * What is stretched in the view of the camera `name` (VIEW-5): each element in its box whose own style
+ * scales it around an origin of its own, as Z1's stretch did (`transform-origin`, `scale(…)`): not
+ * the Graph's own zoom, which lays its nodes out scaled. Nothing is, since the drawn zoom: a zoom by
+ * the hand is drawn by the view's picture, or laid out each frame.
  */
-const stretched = (name) => page.evaluate((name) => window.m2canvas?.camera?.stretched?.(name) ?? [], name);
+const STRETCHED = '[style*="transform-origin"][style*="scale"]';
+const stretched = (name) =>
+  page.evaluate(
+    (name, sel) => {
+      const box = document.querySelector(`[data-view-box="${name.startsWith("graph:") ? "graph" : name}"]`);
+      return box ? [...box.querySelectorAll(sel)].map((e) => ({ transform: e.style.transform })) : [];
+    },
+    name,
+    STRETCHED,
+  );
 /**
- * Until the camera `name` keeps one zoom again: its live zoom laid out (VIEW-5). Two frames first: a
+ * Until the camera `name` keeps one zoom again: a drawn zoom laid out (VIEW-5). Two frames first: a
  * zoom's events start it in the frame after them.
  */
 const laidOut = async (name, ms = 3000) => {
@@ -237,8 +298,9 @@ const laidOut = async (name, ms = 3000) => {
 };
 /**
  * Every frame as it is painted (a ResizeObserver hears each, after its layout), until the function
- * this returns is called, which gives them: whether the camera `name` stretched its view then (its
- * `laid`, and the zoom laid out), how many of what it marks carried a transform, how many renders it
+ * this returns is called, which gives them: whether a zoom by the hand was under way then, its view
+ * laid out at another zoom under its picture (its `laid`, and the zoom laid out), how many elements in
+ * its box a transform scaled (a stretch: none, since the drawn zoom), how many renders it
  * put on the page, how far the middles of the items `sel` in its box `boxSel` (each with
  * `data-start` and `data-length`, in beats) were, at most, from where the zoom shown puts them
  * (items too thin to tell, under 8 px, or out of the clear view don't count), and whether the items
@@ -250,8 +312,14 @@ const laidOut = async (name, ms = 3000) => {
  *   each frame's own camera, so a frame where the camera itself jumps shows it.
  * - `fill`: an element that must reach the clear view's right edge (`covers`): nothing blank past it.
  * - `canvases`: how many of the lanes' canvases holding any clip were not drawn at the zoom laid out,
- *   or are not as wide on screen as that drawing stretched by the live zoom's stretch (`cv`): drawn
- *   anew in the frame a zoom is laid out, and stretched once, by the camera, never twice (VIEW-5).
+ *   or are not as wide on screen as they drew (`cv`): drawn anew in the frame a zoom is laid out,
+ *   never stretched (VIEW-5).
+ *
+ * Where the view draws its zoom (the arrangement, VIEW-5): whether its picture showed (`shown`) and
+ * painted at the zoom shown in that frame (`painted`); the items are then what it drew (each clip's
+ * box, in its list), their middles judged against the zoom shown as the page's are, and `full` and
+ * the held point read from them too; `page` is how far the page's own items under it were, at most,
+ * from where the zoom laid out puts them: the page laid out as it was, not moved, not stretched.
  */
 const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvases = false } = {}) => {
   await page.evaluate(
@@ -262,7 +330,7 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvas
       document.body.appendChild(probe);
       const seen = [];
       const renders = () => Object.values(window.m2canvas.frames().total).reduce((a, n) => a + n, 0);
-      let drawn = renders();
+      let rendered = renders();
       let beat0 = null;
       /** [beat, screen x] of what is drawn in the clear part [lo, hi], by `hold.kind`. */
       const anchors = (box, lo, hi) => {
@@ -290,18 +358,35 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvas
         const b = box.getBoundingClientRect();
         const lo = b.left + box.clientLeft + c.margins.left, hi = b.left + box.clientLeft + c.view.w;
         const zero = b.left + box.clientLeft + c.origin.x - Math.round(c.x);
+        const pic = face.picture?.(name) ?? null;
+        // What the picture drew in this frame, where it shows: its clips' boxes, on screen.
+        const drawn = pic?.shown ? pic.drawn.clips.map((d) => ({ start: d.start, length: d.length, r: { left: lo + d.x, right: lo + d.x + d.w, width: d.w } })) : null;
+        const items = drawn ?? [...box.querySelectorAll(sel)].map((e) => ({ start: Number(e.dataset.start), length: Number(e.dataset.length), r: e.getBoundingClientRect() }));
         let worst = 0, n = 0, left = Infinity, right = -Infinity;
-        for (const e of box.querySelectorAll(sel)) {
-          const r = e.getBoundingClientRect();
+        for (const { start, length, r } of items) {
           if (r.width > 0) (left = Math.min(left, r.left)), (right = Math.max(right, r.right));
           if (r.width < 8 || r.left < lo || r.right > hi) continue;
-          const mid = Number(e.dataset.start) + Number(e.dataset.length) / 2;
-          worst = Math.max(worst, Math.abs(r.left + r.width / 2 - (zero + mid * c.zoom)));
+          worst = Math.max(worst, Math.abs(r.left + r.width / 2 - (zero + (start + length / 2) * c.zoom)));
           n++;
+        }
+        // The page under a picture: its items where the zoom laid out puts them.
+        let page = null;
+        if (drawn) {
+          const l = c.laid ?? c;
+          const zeroLaid = b.left + box.clientLeft + c.origin.x - Math.round(l.x);
+          page = 0;
+          for (const e of box.querySelectorAll(sel)) {
+            const r = e.getBoundingClientRect();
+            if (r.width < 8 || r.left < lo || r.right > hi) continue;
+            page = Math.max(page, Math.abs(r.left + r.width / 2 - (zeroLaid + (Number(e.dataset.start) + Number(e.dataset.length) / 2) * l.zoom)));
+          }
+          page = Math.round(page * 100) / 100;
         }
         let off = null;
         if (hold) {
-          const a = anchors(box, lo, hi);
+          const a = drawn
+            ? drawn.filter((d) => d.r.width > 6 && d.r.left + d.r.width / 2 >= lo && d.r.left + d.r.width / 2 <= hi).map((d) => [d.start + d.length / 2, d.r.left + d.r.width / 2]).sort((p, q) => p[1] - q[1])
+            : anchors(box, lo, hi);
           if (a.length >= 2 && a.at(-1)[0] !== a[0][0]) {
             const ppb = (a.at(-1)[1] - a[0][1]) / (a.at(-1)[0] - a[0][0]);
             const beat = a[0][0] + (hold.x - a[0][1]) / ppb;
@@ -313,12 +398,28 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvas
         let cv = null;
         if (canvases) {
           const laid = c.laid?.zoom ?? c.zoom;
-          cv = [...box.querySelectorAll("canvas[data-drawing=lane]")].filter((e) => e.drawn && e.drawn.w > 0 && e.getClientRects().length).filter((e) => e.drawn.zoom !== laid || Math.abs(e.getBoundingClientRect().width - (e.drawn.w * c.zoom) / laid) > 1).length;
+          cv = [...box.querySelectorAll("canvas[data-drawing=lane]")].filter((e) => e.drawn && e.drawn.w > 0 && e.getClientRects().length).filter((e) => e.drawn.zoom !== laid || Math.abs(e.getBoundingClientRect().width - e.drawn.w) > 1).length;
         }
-        const st = face.stretched?.(name) ?? [];
+        // Each element in the box its own style scales around an origin of its own: a stretch (none since the drawn zoom).
+        const st = [...box.querySelectorAll('[style*="transform-origin"][style*="scale"]')].map((e) => ({ transform: e.style.transform }));
         const now = renders();
-        seen.push({ live: !!c.laid, laid: c.laid?.zoom ?? c.zoom, stretched: st.filter((s) => s.transform.includes("scale")).length, drew: now - drawn, worst: Math.round(worst * 100) / 100, n, full: left <= lo + 2 && right >= hi - 2, off, covers, cv, zoom: c.zoom });
-        drawn = now;
+        seen.push({
+          live: !!c.laid,
+          laid: c.laid?.zoom ?? c.zoom,
+          stretched: st.filter((s) => s.transform.includes("scale")).length,
+          drew: now - rendered,
+          worst: Math.round(worst * 100) / 100,
+          n,
+          full: left <= lo + 2 && right >= hi - 2,
+          off,
+          covers,
+          cv,
+          zoom: c.zoom,
+          shown: pic ? pic.shown : null,
+          painted: pic ? pic.shown && pic.drawn?.zoom === c.zoom : null,
+          page,
+        });
+        rendered = now;
       });
       ro.observe(probe);
       let on = true, wide = false;
@@ -345,49 +446,48 @@ const watchFrames = async (name, boxSel, sel, { hold = null, fill = null, canvas
   );
   return () => page.evaluate(() => window.__watch());
 };
-/**
- * Whether the frames from `watchFrames` render only where a live zoom may (VIEW-8): at a frame laid
- * out (its end, or an early layout), or in a stretched frame after an early layout in that gesture,
- * where the new window it asked for lands between frames (VIEW-12); never in another stretched frame.
- */
-const rendersAllowed = (fs) => {
-  let first = null, early = false;
-  for (const f of fs) {
-    if (f.live) {
-      if (first === null) first = f.laid;
-      else if (f.laid !== first) early = true;
-      if (f.drew && !early) return false;
-    } else if (first !== null) early = true;
-  }
-  return true;
-};
 /** Whether every frame from `watchFrames` with a held point kept it within a px of where it was at the start. */
 const pointHeld = (fs) => fs.length > 0 && fs.every((f) => f.off !== null && f.off <= 1);
 /**
- * What frames from `watchFrames` prove of a live zoom (VIEW-5, VIEW-8): some showed it stretched,
- * every stretched one carried the transform and rendered only where VIEW-8 allows (`rendersAllowed`),
- * every other carried none (no frame shows both the stretch and the new layout), the last was laid
- * out, and in each the items sat where the zoom shown puts them (unless `items` is false: a view whose
- * items have no length, as the beat grid's steps); with the lanes' canvases watched, each drawn at the
- * zoom laid out and stretched once, in every frame; with a held point, it stayed put in
- * every frame, the end's too (`pointHeld`).
+ * What frames from `watchFrames` prove of a zoom by the hand in a view that doesn't draw it (Notes, the
+ * beat grid, the Graph: VIEW-5): it zoomed (`zooms` zooms shown at least); every frame was laid out at
+ * the zoom shown, nothing stretched; in each the items sat where that zoom puts them (unless `items` is
+ * false: a view whose items have no length, as the beat grid's steps); with a held point, it stayed
+ * put in every frame, the end's too (`pointHeld`).
  */
-const liveFrames = (fs, { items = true } = {}) => {
+const laidFrames = (fs, { items = true, zooms = 3 } = {}) =>
+  fs.length > 0 &&
+  new Set(fs.map((f) => f.zoom)).size >= zooms &&
+  fs.every((f) => !f.live && f.stretched === 0 && f.laid === f.zoom) &&
+  (!items || fs.every((f) => f.n > 0 && f.worst <= 1)) &&
+  (fs[0].off === null || pointHeld(fs));
+/**
+ * What frames from `watchFrames` prove of a drawn zoom (VIEW-5, VIEW-8, VIEW-13), the arrangement's:
+ * some were zoomed by the hand; in each of those the picture showed, painted at the zoom shown, nothing
+ * on the page stretched, nothing rendered, and the page stayed laid out at the zoom the gesture began
+ * at (never laid out before the end), its items where that zoom puts them; in every other the
+ * picture was hidden; the last was laid out; in every frame each item (the picture's, or the page's)
+ * sat within a px of where the zoom shown puts it, each lane's canvas was drawn at the zoom laid out
+ * and not stretched, and the held point stayed put (`pointHeld`); and (`full`) every frame drew
+ * clips across the whole view.
+ */
+const drawnFrames = (fs, { full = false } = {}) => {
   const live = fs.filter((f) => f.live);
+  const first = live[0]?.laid;
   return (
     live.length >= 2 &&
-    live.every((f) => f.stretched > 0) &&
-    rendersAllowed(fs) &&
-    fs.filter((f) => !f.live).every((f) => f.stretched === 0) &&
-    !!fs.length &&
+    live.every((f) => f.shown && f.painted && f.stretched === 0 && !f.drew && f.laid === first && f.page !== null && f.page <= 1) &&
+    fs.filter((f) => !f.live).every((f) => f.shown === false && f.stretched === 0) &&
     !fs.at(-1).live &&
-    (!items || fs.every((f) => f.n > 0 && f.worst <= 1)) &&
-    (fs[0].off === null || pointHeld(fs)) &&
-    fs.every((f) => !f.cv)
+    fs.every((f) => f.n > 0 && f.worst <= 1 && !f.cv && (!full || f.full)) &&
+    (fs[0].off === null || pointHeld(fs))
   );
 };
-/** Frames from `watchFrames`, briefly: stretched (S) or laid out (L), its transforms, its renders (+n), its items and their worst px off, and the held point's px off (@). */
-const brief = (fs) => fs.map((f) => `${f.live ? "S" : "L"}${f.stretched}${f.drew ? `+${f.drew}` : ""}/${f.n}/${f.worst}${f.off === null ? "" : `@${f.off}`}${f.covers === false ? "!" : ""}${f.cv ? `~${f.cv}` : ""}`).join(" ");
+/** Frames from `watchFrames`, briefly: the picture (P), stretched (S) or laid out (L), its transforms, its renders (+n), its items and their worst px off, the page's under a picture (^), and the held point's px off (@). */
+const brief = (fs) =>
+  fs
+    .map((f) => `${f.shown ? "P" : f.live ? "S" : "L"}${f.stretched}${f.drew ? `+${f.drew}` : ""}/${f.n}/${f.worst}${f.page ? `^${f.page}` : ""}${f.off === null ? "" : `@${f.off}`}${f.covers === false ? "!" : ""}${f.cv ? `~${f.cv}` : ""}${f.shown && !f.painted ? "?" : ""}`)
+    .join(" ");
 
 // ================================================================ the library, in the page
 
@@ -462,15 +562,14 @@ const lib = await page.evaluate(() => {
   box.left += 40;
   out.theirs = wr.theirs();
   out.clamped = wr.write({ x: 5000, y: -10, zoom: 1 });
-  // A live zoom (VIEW-5): a view laid out at 24 px a beat and scrolled 100 px, shown at 36 px a beat
-  // from 130.6 px. Stretched ×1.5 across around its origin, and moved to where its end will scroll it.
+  // A drawn zoom (VIEW-5): a view laid out at 24 px a beat and scrolled 100 px, its picture showing it
+  // at 36 px a beat from 130.6 px. What it is laid out at is its `laid`; with no zoom by the hand, itself.
   const shown = { ...arr, x: 130.6, y: 40, zoom: 36, laid: { x: 100, y: 40, zoom: 24 } };
-  out.stretch = c.stretchOf
-    ? [c.stretchOf(shown), c.stretchOf({ ...shown, laid: null }), c.shownAt(shown, 10), c.shownAt({ ...shown, laid: null, zoom: 24 }, 10), c.laidOf(shown), c.laidOf({ ...shown, laid: null }).zoom]
-    : null;
-  // Where the box shows the content while it is stretched, in the zoom shown's px: the box scrolled
-  // to 100 shows from 131 (the stretch moves it 31 px); with no live zoom, from where it is scrolled.
-  out.scrolled = c.shownScroll ? [c.shownScroll(shown, { x: 100, y: 40 }), c.shownScroll({ ...shown, laid: null }, { x: 100, y: 40 })] : null;
+  out.laid = [c.laidOf(shown), c.laidOf({ ...shown, laid: null }).zoom];
+  // Which views draw their zoom: the arrangement's picture, not yet shown; none for the Graph's camera.
+  out.pictures = [c.picture?.("arrangement") ?? "none", c.picture?.(c.names().find((n) => n.startsWith("graph:")) ?? "") ?? null];
+  // Nothing of the library stretches any more (Z1 went): its face has no stretch.
+  out.noStretch = ["stretchOf", "shownAt", "shownScroll", "stretched"].filter((k) => k in c);
   return out;
 });
 check(
@@ -518,12 +617,12 @@ check(
   `the writer on a box that keeps whole pixels: 30 moves of 0.3 px reach 9 (${json(lib?.slow)}), 1 px off is its own (${json(lib?.slack)}), 40 more the browser's (${json(lib?.theirs)}), stopped at the box's edges (${json(lib?.clamped)})`,
 );
 check(
-  json(lib?.stretch) === json([{ scale: { x: 1.5, y: 1 }, shift: { x: -31, y: 0 } }, null, 329, 240, { x: 100, y: 40, zoom: 24 }, 36]),
-  `stretchOf, shownAt and laidOf: laid out at 24 px a beat, shown at 36, it is stretched ×1.5 across and moved 31 px; beat 10 shows 329 px from the origin (240 with no live zoom); the camera laid out is its laid, else itself: ${json(lib?.stretch)}`,
+  json(lib?.laid) === json([{ x: 100, y: 40, zoom: 24 }, 36]) && json(lib?.noStretch) === "[]",
+  `laidOf: under a drawn zoom's picture, laid out at 24 px a beat and shown at 36, the camera laid out is its laid, else itself (${json(lib?.laid)}); nothing of the library stretches: ${json(lib?.noStretch)}`,
 );
 check(
-  json(lib?.scrolled) === json([{ x: 131, y: 40 }, { x: 100, y: 40 }]),
-  `shownScroll: a box scrolled to 100 under that stretch shows the content from 131 px of the zoom shown (reveal reads one zoom), and from 100 with none: ${json(lib?.scrolled)}`,
+  lib?.pictures?.[0] !== "none" && lib?.pictures?.[0]?.shown === false && lib?.pictures?.[1] === null,
+  `the arrangement draws its zoom, its picture hidden at rest; the Graph doesn't: ${json(lib?.pictures?.map((p) => (p && typeof p === "object" ? { shown: p.shown, paints: p.paints } : p)))}`,
 );
 
 // ================================================================ the Graph, on first-song
@@ -781,33 +880,51 @@ const beatX = (x) =>
   await frames();
   const p = await beatX(at.x);
   check(near(p.ppb, z.ppb * 0.8, 0.5) && near(p.beat * p.ppb, a.beat * p.ppb, 1.5), `and a pinch out (WebKit's gesture events), around it too: beat ${p.beat.toFixed(3)}, ${p.ppb.toFixed(1)} px a beat`);
-  // A live zoom (VIEW-5, VIEW-8): a pinch over time stretches the grid, renders nothing, keeps the
-  // step under the fingers, and is laid out once when it ends.
+  // A zoom by the hand (VIEW-5): the beat grid doesn't draw its zoom yet, and nothing stretches: a
+  // pinch over time is laid out each frame at the zoom shown, the step under the fingers kept; its
+  // gestureend changes nothing, as it is laid out there already.
   await laidOut("beat");
   await sleep(300);
   const z0 = (await cam("beat"))?.zoom;
   const a2 = await beatX(at.x);
-  const r0 = await renders();
   await pinchOver(at.x, at.y, [0.95, 0.9], false);
   await frames(2);
   const mid = await cam("beat");
   const st = await stretched("beat");
   const m = await beatX(at.x);
-  const r = since(r0, await renders());
   check(
-    !!z0 && mid?.laid?.zoom === z0 && near(mid.zoom, z0 * 0.9, 0.01) && st.length > 0 && st.every((s) => s.transform.includes("scale")) && Object.keys(r).length === 0 && near(m.ppb, z0 * 0.9, 0.5) && near(m.beat * m.ppb, a2.beat * m.ppb, 1.5),
-    `the beat grid mid-pinch: stretched (${st.length} layers), nothing rendered (${json(r)}), beat ${a2.beat.toFixed(3)} still under the fingers (${m.beat.toFixed(3)}), its camera showing ${mid?.zoom?.toFixed(2)} px a beat, laid out at ${mid?.laid?.zoom?.toFixed(2)}`,
+    !!z0 && mid?.laid === null && near(mid.zoom, z0 * 0.9, 0.01) && st.length === 0 && near(m.ppb, z0 * 0.9, 0.5) && near(m.beat * m.ppb, a2.beat * m.ppb, 1.5),
+    `the beat grid mid-pinch: laid out at the zoom shown (${mid?.zoom?.toFixed(2)} px a beat; its grid ${m.ppb.toFixed(2)}), nothing stretched (${st.length}), beat ${a2.beat.toFixed(3)} still under the fingers (${m.beat.toFixed(3)})`,
   );
+  const r0 = await renders();
   await pinchEnd(at.x, at.y, 0.9);
-  await laidOut("beat");
-  await frames();
+  await frames(3);
   const e = since(r0, await renders());
-  const st2 = await stretched("beat");
   const p2 = await beatX(at.x);
   check(
-    e.beat === 1 && st2.length > 0 && st2.every((s) => !s.transform.includes("scale")) && near(p2.ppb, z0 * 0.9, 0.5) && near(p2.beat * p2.ppb, a2.beat * p2.ppb, 1.5),
-    `its gestureend lays it out once (${json(e)}), the stretch gone, the beat still under the fingers (${p2.beat.toFixed(3)})`,
+    !e.beat && (await stretched("beat")).length === 0 && near(p2.ppb, z0 * 0.9, 0.5) && near(p2.beat * p2.ppb, a2.beat * p2.ppb, 1.5),
+    `its gestureend changes nothing: no render (${json(e)}), nothing stretched, the beat still under the fingers (${p2.beat.toFixed(3)})`,
   );
+  // A run of ⌘-scroll with the page busy 80 ms in its middle, an event waiting behind it (VIEW-5):
+  // the beat grid doesn't draw its zoom, so each frame is laid out at the zoom its events asked, the
+  // event that waited too, nothing stretched.
+  {
+    await laidOut("beat");
+    await sleep(300);
+    const z0 = (await cam("beat"))?.zoom ?? 0;
+    const l = await zoomLate("beat", at.x, at.y, 12, -3, 5);
+    await frames(2);
+    const z1 = (await cam("beat"))?.zoom ?? 0;
+    const st = await stretched("beat");
+    // Back to the zoom it had, laid out at once (all in one task), for what comes after.
+    if (z0 && z1) await pinch(at.x, at.y, [z0 / z1]);
+    await frames(2);
+    const want = z0 * 1.5 ** (36 / 100);
+    check(
+      Math.abs(z1 - want) <= want * 0.01 && l.ended.length === 11 && st.length === 0,
+      `the beat grid: a run of 12 ⌘-scroll events, one a frame, the page busy 80 ms after the fifth and the sixth heard after a timer due 60 ms on, is laid out at each zoom asked, never stretched (${l.ended.length} of 11 events after the first found it laid out): it ends at all 12 events' zoom (${z0} → ${z1.toFixed(3)}, ${want.toFixed(3)} asked)`,
+    );
+  }
   // Near its right edge (VIEW-5, VIEW-6): at its least zoom, from its start, its content no wider than
   // the view. A pinch in ×1.6, held at the middle and near the right, keeps the step under the
   // fingers in every frame, the end's too: the grid keeps room where the zoom looked.
@@ -831,8 +948,8 @@ const beatX = (x) =>
     await frames(3);
     const fs = await stop();
     check(
-      c?.zoom === 16 && room < 100 && liveFrames(fs, { items: false }),
-      `the beat grid at its least zoom (${c?.zoom}), its content as wide as the view (${room} px of room): a pinch in ×1.6 at ${fx} across keeps the step under the fingers in every frame, the end's too (${brief(fs)})`,
+      c?.zoom === 16 && room < 100 && laidFrames(fs, { items: false }),
+      `the beat grid at its least zoom (${c?.zoom}), its content as wide as the view (${room} px of room): a pinch in ×1.6 at ${fx} across is laid out at the zoom shown in every frame, nothing stretched, the step under the fingers kept in every frame, the end's too (${brief(fs)})`,
     );
   }
 }
@@ -920,8 +1037,8 @@ const clipsOff = () =>
   await frames();
   const after = await page.$eval("[data-zoom]", (e) => e.dataset.zoom);
   check(before === "1.00" && after === "1.50", `the new song's Graph zooms by ⌘-scroll (${before} → ${after})`);
-  // A view that marks nothing zooms as before the live zoom (VIEW-5): the Graph. ⌘-scroll over ten
-  // frames lands each frame's zoom in that frame, laid out, with nothing stretched.
+  // A view that doesn't draw its zoom (VIEW-5): the Graph. ⌘-scroll over ten frames lands each
+  // frame's zoom in that frame, laid out, with nothing stretched.
   {
     const name = (await graphCam())?.name;
     await sleep(200);
@@ -932,7 +1049,7 @@ const clipsOff = () =>
     const zooms = new Set(fs.map((f) => f.zoom));
     check(
       !!name && fs.length >= 10 && fs.every((f) => !f.live && f.stretched === 0) && zooms.size >= 8 && (await stretched(name)).length === 0,
-      `a view that marks nothing (the Graph) zooms as before: ${zooms.size} zooms over ${fs.length} frames, each laid out in its frame, nothing stretched (${json([...zooms].map((z) => Math.round(z * 1000) / 1000))})`,
+      `a view that doesn't draw its zoom (the Graph): ${zooms.size} zooms over ${fs.length} frames, each laid out in its frame, nothing stretched (${json([...zooms].map((z) => Math.round(z * 1000) / 1000))})`,
     );
   }
   // Off the Graph again, as before the switch (first-song's beat grid has no tab in the big song:
@@ -1291,7 +1408,7 @@ const clipsShown = () =>
   const at = await lanes();
   const r0 = await renders();
   await feed(at.x, at.y, Array.from({ length: 30 }, (_, i) => ({ t: i * 4, dy: -3, meta: true })));
-  // A live zoom: laid out once, G after its last event (VIEW-5).
+  // A run of ⌘-scroll: the picture until G after its last event, then laid out once (VIEW-5).
   await laidOut("arrangement");
   await frames(4);
   const r = since(r0, await renders());
@@ -1405,10 +1522,10 @@ const clipsShown = () =>
     `a clip's notes on its lane's canvas: every clip in the beats it holds, each with all its notes there; at the zoom, sharp, each clip's box on the screen's pixels and its notes inside it, each at its own alpha in the track's ink, the 2 px marks only where the shortest note is under 2 px (${json({ a, b })})`,
   );
 }
-// A zoom by the hand stretches each lane's canvas with the view (the live zoom's one transform) and
-// draws none again until the zoom is laid out (no ⌘-scroll for G); then it draws each once, at the new
-// zoom, in the frame it is laid out in. A zoom by the app (⌘=) draws them in the frame it lands in
-// (VIEW-5, VIEW-12).
+// A zoom by the hand shows the arrangement's picture, painted at the zoom shown each frame, and leaves
+// each lane's canvas under it as it drew, not stretched, drawing none again until the zoom is laid out
+// (no ⌘-scroll for G); then it draws each once, at the new zoom, in the frame it is laid out in, and
+// the picture hides. A zoom by the app (⌘=) draws them in the frame it lands in (VIEW-5, VIEW-12).
 {
   await setScroll(tl, 0, 0);
   await frames();
@@ -1431,8 +1548,10 @@ const clipsShown = () =>
           requestAnimationFrame(() =>
             setTimeout(() => {
               const els = window.__canvases.filter((e) => e.isConnected);
+              const pic = window.m2canvas.camera.picture?.("arrangement");
               done({
                 zoom: window.m2canvas.camera.now("arrangement").zoom,
+                picture: pic && { shown: pic.shown, zoom: pic.drawn?.zoom ?? null, paints: pic.paints },
                 kept: els.length,
                 // Those holding any of their clip (one far from the view may hold none of it).
                 drawn: els.filter((e) => e.drawn.w > 0).length,
@@ -1459,12 +1578,12 @@ const clipsShown = () =>
     return { zoom: z, n: els.length, at: els.filter((e) => e.drawn.zoom === z && Math.abs(e.getBoundingClientRect().width - e.drawn.w) < 0.5).length };
   });
   check(
-    n0 > 0 && mid.zoom > z0 * 1.2 && mid.kept === n0 && json(mid.at) === json([z0]) && mid.drawn > 0 && mid.stretched === mid.drawn && !r1["arrangement.canvas"],
-    `while 20 ⌘-scroll events zoom in (${z0} → ${mid.zoom?.toFixed(2)} px a beat), the ${n0} lanes' canvases stretch with the view (${mid.stretched} of the ${mid.drawn} holding any of their lane), each still as drawn at ${json(mid.at)}, none drawn again: ${json(r1)}`,
+    n0 > 0 && mid.zoom > z0 * 1.2 && !!mid.picture?.shown && mid.picture.zoom === mid.zoom && mid.kept === n0 && json(mid.at) === json([z0]) && mid.drawn > 0 && mid.stretched === 0 && !r1["arrangement.canvas"],
+    `while 20 ⌘-scroll events zoom in (${z0} → ${mid.zoom?.toFixed(2)} px a beat), the arrangement's picture shows, painted at the zoom shown (${json(mid.picture)}); the ${n0} lanes' canvases under it stay as drawn (${mid.stretched} of the ${mid.drawn} holding any of their lane stretched), each still at ${json(mid.at)}, none drawn again: ${json(r1)}`,
   );
   check(
-    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0 && fs.some((f) => f.live) && !fs.at(-1).live && fs.every((f) => !f.cv),
-    `once it is laid out, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at}): in every frame, each lane's canvas drawn at the zoom laid out and stretched once, the frame it is laid out in too (${brief(fs)})`,
+    n0 > 0 && end.zoom === mid.zoom && end.at === end.n && end.n === n0 && (r2["arrangement.canvas"] ?? 0) === n0 && fs.some((f) => f.live) && !fs.at(-1).live && fs.every((f) => !f.cv && f.shown === f.live && (!f.live || f.painted)),
+    `once it is laid out, each is drawn again once (${r2["arrangement.canvas"] ?? 0} of ${n0}), at the new zoom and its box (${end.at}): in every frame, each lane's canvas drawn at the zoom laid out and as wide as it drew, the picture showing exactly while the zoom was not laid out, painted at the zoom shown, the frame it is laid out in too (${brief(fs)})`,
   );
   const r3 = await renders();
   await key("Meta+Equal");
@@ -1586,11 +1705,12 @@ const beatAt = async (x) =>
   await frames();
 }
 
-// ---------------------------------------------------------------- the live zoom (VIEW-5, VIEW-8)
-// A pinch over time: the camera stretches what the arrangement marks (its lanes and grid, its ruler,
-// the loop's shade, the selected bars) with one transform, renders nothing, keeps the beat under the
-// fingers and says the zoom shown, and what is drawn over the tracks lines up with it; its gestureend
-// lays it out once, in the frame the stretch goes, as a direct zoom to the same zoom and place does.
+// ---------------------------------------------------------------- the drawn zoom (VIEW-5, VIEW-8, VIEW-13)
+// A pinch over time: the arrangement's picture shows, painted at the zoom shown; the page under it
+// stays laid out as it was (nothing stretched, nothing rendered); the beat under the fingers holds
+// and the camera says the zoom shown; what the picture draws over the tracks lines up with it. Its
+// gestureend lays the page out once, in the frame the picture hides, as a direct zoom to the same zoom
+// and place does.
 /** Each overlay of the arrangement, how many px it is off where the zoom shown puts it (null: not drawn). */
 const overlays = (marker) =>
   page.evaluate(
@@ -1625,6 +1745,55 @@ const overlays = (marker) =>
     tl,
     marker,
   );
+/**
+ * What the arrangement's picture drew over the tracks, each how many px off where the zoom shown puts
+ * it (null: not drawn): its last paint's list, the camera's `x` its box's scroll at the zoom's end.
+ */
+const drawnOverlays = (marker) =>
+  page.evaluate((marker) => {
+    const face = window.m2canvas.camera;
+    const c = face.now("arrangement"), d = face.picture?.("arrangement")?.drawn;
+    if (!d) return null;
+    const X = Math.max(0, Math.round(c.x)), z = c.zoom;
+    const loop = window.__loop, bars = window.__bars;
+    const off = {};
+    const one = (what, got, from, to) => {
+      if (got === null || got === undefined || Number.isNaN(got)) return void (off[what] = null);
+      const [x, w] = typeof got === "number" ? [got, null] : [got.x, got.w];
+      off[what] = Math.round(Math.max(Math.abs(x - (from * z - X)), w === null || to === undefined ? 0 : Math.abs(w - (to - from) * z)) * 100) / 100;
+    };
+    one("loop's shade", d.loop, ...loop);
+    one("loop in the ruler", d.brace, ...loop);
+    one("Song row's loop", d.songLoop, ...loop);
+    one("bars selected", d.section, ...bars);
+    one("bars in the ruler", d.band, ...bars);
+    one("Song row's bars", d.songSection, ...bars);
+    one("marker", d.marks.find((m) => m.name === marker.name)?.x, marker.beat);
+    const beat = Number(document.querySelector("[data-testid=playhead]")?.dataset.beat);
+    one("playhead", d.playhead, beat);
+    one("Song row's playhead", d.songPlayhead, beat);
+    one("playhead's cap", d.cap, beat);
+    one("grid", d.grid?.x, d.grid?.beat);
+    return off;
+  }, marker);
+/** The beat under screen x from the middles of two of Kick 1's clips the arrangement's picture drew in view, and its px a beat. */
+const beatDrawn = (x) =>
+  page.evaluate(
+    (tl, x) => {
+      const face = window.m2canvas.camera;
+      const c = face.now("arrangement"), d = face.picture?.("arrangement")?.drawn;
+      const e = document.querySelector(tl), b = e.getBoundingClientRect();
+      const lo = b.left + e.clientLeft + c.margins.left;
+      const cs = (d?.clips ?? []).filter((k) => k.lane === "kick-1.hits" && k.w > 0 && k.x > 0 && lo + k.x + k.w < b.right);
+      if (cs.length < 2) return { beat: NaN, ppb: NaN };
+      const [p, q] = [cs[0], cs.at(-1)];
+      const at = (k) => lo + k.x + k.w / 2;
+      const ppb = (at(q) - at(p)) / (q.start + q.length / 2 - (p.start + p.length / 2));
+      return { beat: p.start + p.length / 2 + (x - at(p)) / ppb, ppb };
+    },
+    tl,
+    x,
+  );
 /** Every clip drawn, by its lane and id: its left in the timeline's box and its width. */
 const clipBoxes = () =>
   page.$$eval(
@@ -1635,10 +1804,7 @@ const clipBoxes = () =>
     },
     tl,
   );
-/**
- * The beat under screen x, from the middles of two of Kick 1's clips drawn in view: as true of a view
- * stretched by a live zoom as of one laid out (a clip's 1 px inset stretches with it; its middle not).
- */
+/** The beat under screen x, from the middles of two of Kick 1's clips the page drew in view. */
 const beatMid = (x) =>
   page.$eval(
     tl,
@@ -1679,7 +1845,11 @@ const beatMid = (x) =>
   await page.mouse.move(at.x, at.y);
   await sleep(400);
   const before = await overlays(marker);
+  await page.evaluate((loop, bars) => ((window.__loop = loop), (window.__bars = bars)), [first + 8, first + 16], await page.$eval("[data-testid=section]", (e) => [Number(e.dataset.start), Number(e.dataset.end)]));
   const a = await beatMid(at.x);
+  const boxes0 = await clipBoxes();
+  const head = () => page.$eval(`${tl} [data-testid=playhead]`, (e) => e.style.transform);
+  const head0 = await head();
   const r0 = await renders();
   const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" }, canvases: true });
   await pinchOver(at.x, at.y, [1.1, 1.2, 1.3, 1.4, 1.5], false);
@@ -1687,15 +1857,19 @@ const beatMid = (x) =>
   const r = since(r0, await renders());
   const mid = await arr();
   const st = await stretched("arrangement");
-  const b = await beatMid(at.x);
+  const pic = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement"));
+  const b = await beatDrawn(at.x);
+  const boxes1 = await clipBoxes();
+  const kept = Object.keys(boxes0).filter((k) => json(boxes0[k]) === json(boxes1[k])).length;
+  const head1 = await head();
   check(
-    Object.keys(r).length === 0 && mid?.laid?.zoom === 24 && mid?.zoom === 36 && st.length > 0 && st.every((s) => s.transform.includes("scale")) && near(b.ppb, 36, 0.05) && near(b.beat * 36, a.beat * 36, 1),
-    `mid-pinch the arrangement is stretched (${st.length} layers), nothing rendered (${json(r)}), beat ${a.beat.toFixed(3)} still under the fingers (${b.beat.toFixed(3)}); its camera says the zoom shown, ${mid?.zoom}, laid out at ${mid?.laid?.zoom}`,
+    Object.keys(r).length === 0 && mid?.laid?.zoom === 24 && mid?.zoom === 36 && !!pic?.shown && pic.drawn?.zoom === 36 && st.every((s) => !s.transform) && kept === Object.keys(boxes0).length && kept > 50 && head1 === head0 && near(b.ppb, 36, 0.05) && near(b.beat * 36, a.beat * 36, 1),
+    `mid-pinch the arrangement's picture shows, painted at the zoom shown (${pic?.drawn?.zoom}); the page under it is as it was laid out: nothing stretched (${st.filter((s) => s.transform).length} transforms), ${kept} of ${Object.keys(boxes0).length} clip boxes unmoved, its playhead where it was (${head1}; ${head0}), nothing rendered (${json(r)}); beat ${a.beat.toFixed(3)} still under the fingers in the picture (${Number(b.beat).toFixed(3)}); its camera says the zoom shown, ${mid?.zoom}, laid out at ${mid?.laid?.zoom}`,
   );
-  const o = await overlays(marker);
+  const o = await drawnOverlays(marker);
   check(
-    Object.values(before).every((v) => v !== null && v <= 1) && Object.values(o).every((v) => v !== null && v <= 1),
-    `and what is drawn over the tracks lines up with it, each within a px of where the zoom shown puts it: ${json(o)} (before: ${json(before)})`,
+    Object.values(before).every((v) => v !== null && v <= 1) && !!o && Object.values(o).every((v) => v !== null && v <= 1),
+    `and what the picture draws over the tracks lines up with it, each within a px of where the zoom shown puts it: ${json(o)} (the page's before: ${json(before)})`,
   );
   // Agents see the zoom shown too (their `seen` is sent 200 ms after a change).
   await sleep(500);
@@ -1709,8 +1883,8 @@ const beatMid = (x) =>
   const fs = await stop();
   const e = since(r0, await renders());
   check(
-    liveFrames(fs) && e.arrangement === 1 && (await stretched("arrangement")).every((s) => !s.transform.includes("scale")),
-    `its gestureend lays it out once (${json(e)}), the stretch gone in that frame: every frame, stretched (S) or laid out (L), showed each clip within a px of where the zoom shown put it, and the beat under the fingers within a px of where it was at the start (@) (${brief(fs)})`,
+    drawnFrames(fs) && e.arrangement === 1 && (await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown)) === false,
+    `its gestureend lays it out once (${json(e)}), the picture hidden in that frame: every frame, the picture (P) or laid out (L), showed each clip within a px of where the zoom shown put it, the page under the picture where the zoom laid out put it (^), and the beat under the fingers within a px of where it was at the start (@) (${brief(fs)})`,
   );
   // The same pinch laid out at once (all its events in one task): the same boxes.
   await sleep(500);
@@ -1733,9 +1907,9 @@ const beatMid = (x) =>
   await api("/loop", { method: "POST", body: json({ start: first + 8, end: first + 16, on: false }) });
   await page.keyboard.press("Escape");
 }
-// Laid out early (VIEW-5): a pinch out past what the window drawn keeps is laid out while the
-// pinch goes on, before what shows leaves that window, so no frame shows past what is drawn; a
-// pinch in as far is laid out only at its end.
+// Never laid out before the end (VIEW-5): a pinch out to a quarter, far past what the page's window
+// holds, is drawn whole by the picture in every frame, the page under it laid out only at its end;
+// so is a pinch in as far.
 {
   await sleep(300);
   const at = await lanes();
@@ -1747,11 +1921,12 @@ const beatMid = (x) =>
   await laidOut("arrangement");
   await frames(3);
   const fo = await out();
-  // The zooms the stretched frames were laid out at: the start's, and those laid out early since.
-  const early = [...new Set(fo.filter((f) => f.live).map((f) => f.laid))];
+  // The zooms the frames under the picture were laid out at: the start's alone.
+  const laidOut0 = [...new Set(fo.filter((f) => f.live).map((f) => f.laid))];
+  const zEnd = (await arr())?.zoom ?? 0;
   check(
-    early.length >= 2 && Math.min(...early) < (z0 ?? 0) && fo.every((f) => f.full && f.worst <= 1 && !f.cv && (f.live ? f.stretched > 0 : f.stretched === 0)) && pointHeld(fo) && rendersAllowed(fo),
-    `a pinch out to a quarter is laid out early as it goes (stretched from ${early.length} zooms laid out, ${z0} down to ${Math.min(...early).toFixed(2)}), every frame drawn across the whole view, each clip within a px of the zoom shown, the beat under the fingers held (@), and renders only at a layout or in the frames of the new window one asked for (${brief(fo)})`,
+    json(laidOut0) === json([z0]) && zEnd < (z0 ?? 0) * 0.3 && drawnFrames(fo, { full: true }),
+    `a pinch out to a quarter (${z0} → ${zEnd.toFixed(2)} px a beat) is never laid out before its end: under the picture, laid out at ${json(laidOut0)} alone; every frame drawn across the whole view, each clip within a px of the zoom shown, the beat under the fingers held (@), nothing stretched, nothing rendered but at the end (${brief(fo)})`,
   );
   await sleep(300);
   const z1 = (await arr())?.zoom;
@@ -1762,42 +1937,256 @@ const beatMid = (x) =>
   const fi = await inn();
   const laidIn = new Set(fi.filter((f) => f.live).map((f) => f.laid));
   check(
-    laidIn.size === 1 && [...laidIn][0] === z1 && liveFrames(fi),
-    `a pinch in ×4 is laid out only at its end: stretched from ${json([...laidIn])} (${z1} before) (${brief(fi)})`,
+    laidIn.size === 1 && [...laidIn][0] === z1 && drawnFrames(fi, { full: true }),
+    `a pinch in ×4 is laid out only at its end: under the picture, laid out at ${json([...laidIn])} (${z1} before) (${brief(fi)})`,
   );
 }
-// A press while the view is stretched lands on the clip shown under it, and lays the zoom out first,
-// in the same task: the clip is picked where it showed (VIEW-5).
+// A pinch out at the song's start, and back in (VIEW-5, VIEW-6): the picture stops at the start, as
+// the page does, never showing past it; so the way back in starts from what showed, the clips in
+// every frame where the zoom shown puts them, and the camera never looks before the start.
+{
+  await sleep(300);
+  await setScroll(tl, 0, null);
+  await frames(2);
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom ?? 0;
+  const xs = [];
+  const watch = await watchFrames("arrangement", tl, "[data-clip]");
+  const seen = page.evaluate(
+    () =>
+      new Promise((done) => {
+        const xs = [];
+        const one = () => {
+          xs.push(window.m2canvas.camera.now("arrangement").x);
+          if (xs.length < 90) requestAnimationFrame(one);
+          else done(xs);
+        };
+        requestAnimationFrame(one);
+      }),
+  );
+  await pinchOver(at.x, at.y, [...Array.from({ length: 12 }, (_, i) => 1 - (0.5 * (i + 1)) / 12), ...Array.from({ length: 12 }, (_, i) => 0.5 + (0.5 * (i + 1)) / 12)]);
+  await laidOut("arrangement");
+  xs.push(...(await seen));
+  await frames(3);
+  const fs = await watch();
+  const end = await arr();
+  check(
+    drawnFrames(fs) && Math.min(...xs) >= 0 && near(end?.zoom ?? 0, z0, 0.01),
+    `a pinch out at the song's start and back in stops at the start, as the page does: the camera never before it (its least x ${Math.min(...xs).toFixed(2)}), each clip in every frame where the zoom shown puts it (${brief(fs)})`,
+  );
+}
+// A pinch out at the song's end and back in to the zoom it began at (VIEW-5, VIEW-6): back in, the
+// zoom looks further right than the song's room went at that zoom, and the view keeps room where it
+// looked, so its end shows what the last picture did: the beat under the fingers held in every frame,
+// the end's too.
+{
+  await sleep(300);
+  const s0 = await scroll(tl);
+  await setScroll(tl, s0.room.x, null);
+  await frames(2);
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom ?? 0;
+  const watch = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  await pinchOver(at.x, at.y, [...Array.from({ length: 12 }, (_, i) => 1 - (0.5 * (i + 1)) / 12), ...Array.from({ length: 12 }, (_, i) => 0.5 + (0.5 * (i + 1)) / 12)]);
+  await laidOut("arrangement");
+  await frames(3);
+  const fs = await watch();
+  const end = await arr();
+  check(
+    drawnFrames(fs) && near(end?.zoom ?? 0, z0, 0.01),
+    `a pinch out at the song's end and back in to its zoom (${z0}) ends where its last picture showed, the view keeping room where the zoom looked: each clip in every frame where the zoom shown puts it, the beat under the fingers held (${brief(fs)})`,
+  );
+}
+// The song changing in the middle of a zoom (Kick 1's clip in view taken out of its file, as an
+// agent might): the picture reads its scene again, and draws the song as it is now, the zoom still
+// under way. Then put back.
+{
+  await sleep(300);
+  const at = await lanes();
+  const file = path.join(big, "data/kick-1/hits.json");
+  const was = fs.readFileSync(file, "utf8");
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const gone = await page.evaluate(() => {
+    const face = window.m2canvas.camera;
+    const c = face.now("arrangement"), d = face.picture?.("arrangement")?.drawn;
+    const k = (d?.clips ?? []).find((k) => k.lane === "kick-1.hits" && k.x > 100 && k.x + k.w < c.view.w - c.margins.left - 100);
+    return k ? k.id : null;
+  });
+  const lane = JSON.parse(was);
+  fs.writeFileSync(file, JSON.stringify({ ...lane, clips: lane.clips.filter((c) => c.id !== gone) }, null, 2));
+  const redrawn = await until(
+    () =>
+      page.evaluate((gone) => {
+        const face = window.m2canvas.camera;
+        const p = face.picture?.("arrangement");
+        return !!face.now("arrangement").laid && !!p?.shown && p.drawn.clips.some((k) => k.lane === "kick-1.hits") && !p.drawn.clips.some((k) => k.lane === "kick-1.hits" && k.id === gone);
+      }, gone),
+    8000,
+  );
+  check(!!gone && redrawn, `the song changing mid-zoom (Kick 1's clip ${gone} taken out of its file): the picture draws the song as it is now, the zoom still under way`);
+  await pinchEnd(at.x, at.y, 1.2);
+  await laidOut("arrangement");
+  fs.writeFileSync(file, was);
+  await until(() => has(`${tl} [data-track="kick-1"] [data-clip="${gone}"]`), 8000);
+  await pinch(at.x, at.y, [1 / 1.2]);
+  await frames(2);
+}
+// The page's playhead, scrolled past (left of the view, under the headers), shows nowhere: not
+// through the lines between the tracks' headers, where nothing covers it.
+{
+  await sleep(300);
+  const beat = Number(await page.$eval(`${tl} [data-testid=playhead]`, (e) => e.dataset.beat));
+  const z = (await arr())?.zoom ?? 0;
+  const seen = () => page.$eval(`${tl} [data-testid=playhead]`, (e) => getComputedStyle(e).visibility);
+  await setScroll(tl, Math.round(beat * z + 300), null);
+  await frames(3);
+  const past = await seen();
+  await setScroll(tl, Math.max(0, Math.round(beat * z - 300)), null);
+  await frames(3);
+  const inView = await seen();
+  check(past === "hidden" && inView === "visible", `the page's playhead scrolled past, under the headers, is hidden (${past}), and shows again in view (${inView})`);
+}
+// Revealing an element in the middle of a zoom (Show, a lane made: VIEW-9) moves from where it shows
+// at the zoom shown, not from where the page under the picture is laid out: a clip near the view's
+// right edge, which the zoom in carries out past it, comes into view at the zoom shown.
+{
+  await sleep(300);
+  const at = await lanes();
+  const target = await page.$$eval(
+    `${tl} [data-track="kick-1"] [data-clip]`,
+    (els, tl) => {
+      const b = document.querySelector(tl).getBoundingClientRect();
+      // The last clip wholly in view: the zoom in carries it out past the right edge.
+      const e = els.filter((e) => {
+        const r = e.getBoundingClientRect();
+        return r.width > 0 && r.left > b.left + 300 && r.right < b.right - 20;
+      }).at(-1);
+      return e?.dataset.clip ?? null;
+    },
+    tl,
+  );
+  await pinchOver(at.x, at.y, [1.2, 1.4, 1.6], false);
+  await frames(2);
+  const mid = await arr();
+  if (target) await page.evaluate((tl, id) => window.m2canvas.camera.controls("arrangement").reveal(document.querySelector(`${tl} [data-clip="${id}"]`), { ways: "x" }), tl, target);
+  await laidOut("arrangement");
+  await frames(3);
+  const shown = await page.evaluate(
+    (tl, id) => {
+      const c = window.m2canvas.camera.now("arrangement");
+      const box = document.querySelector(tl), b = box.getBoundingClientRect();
+      const r = document.querySelector(`${tl} [data-clip="${id}"]`)?.getBoundingClientRect();
+      return r ? { left: r.left - b.left - c.margins.left, right: r.right - b.left - c.margins.left, clear: c.view.w - c.margins.left, zoom: c.zoom } : null;
+    },
+    tl,
+    target,
+  );
+  check(
+    !!target && !!mid?.laid && !!shown && near(shown.zoom, mid.zoom, 0.001) && shown.left >= -1 && shown.right <= shown.clear + 1 && shown.right > shown.clear - 40,
+    `a clip revealed in the middle of a zoom comes into view at the zoom shown, by the least move: ${json({ target, shown })}`,
+  );
+  await pinchEnd(at.x, at.y, 1.6);
+  await pinch(at.x, at.y, [1 / 1.6]);
+  await frames(2);
+}
+// A press while the picture shows ends the zoom and does nothing else (VIEW-5), as a touch stops a
+// glide: the zoom is laid out at the zoom shown, the picture hides, and the clip shown under the press
+// isn't picked, the playhead doesn't move, nothing is written. A press after it, on the page laid
+// out, picks that clip.
 {
   await sleep(300);
   const at = await lanes();
   await pinchOver(at.x, at.y, [1.1, 1.2, 1.3], false);
   await frames(2);
   const mid = await arr();
-  const target = await page.$$eval(
-    `${tl} [data-track="kick-1"] [data-clip]`,
-    (els, tl) => {
-      const b = document.querySelector(tl).getBoundingClientRect();
-      for (const e of els) {
-        const r = e.getBoundingClientRect();
-        if (r.left > b.left + 400 && r.right < b.right - 100 && r.width > 20) return { id: e.dataset.clip, x: r.left + r.width / 2, y: r.top + r.height / 2 };
-      }
-      return null;
-    },
-    tl,
-  );
+  const target = await page.evaluate((tl) => {
+    const face = window.m2canvas.camera;
+    const c = face.now("arrangement"), d = face.picture?.("arrangement")?.drawn;
+    const e = document.querySelector(tl), b = e.getBoundingClientRect();
+    const lo = b.left + e.clientLeft + c.margins.left;
+    const row = e.querySelector('[data-track="kick-1"] [data-row="first"]')?.getBoundingClientRect();
+    const k = (d?.clips ?? []).find((k) => k.lane === "kick-1.hits" && lo + k.x > b.left + 400 && lo + k.x + k.w < b.right - 100 && k.w > 20);
+    return k && row ? { id: k.id, x: lo + k.x + k.w / 2, y: row.top + row.height / 2 } : null;
+  }, tl);
+  const beat0 = (await api("/status")).body.beat;
+  const posts0 = posts.length;
   if (target) await page.mouse.click(target.x, target.y);
   await frames(2);
   const after = await arr();
-  const picked = await page.$$eval(`${tl} [data-track="kick-1"] [data-clip][data-picked]`, (els) => els.map((e) => e.dataset.clip));
+  const shown = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown);
+  const picked = await page.$$eval(`${tl} [data-clip][data-picked]`, (els) => els.map((e) => e.dataset.clip));
+  const beat1 = (await api("/status")).body.beat;
+  const wrote = posts.slice(posts0).map((p) => p.url);
   check(
-    !!mid?.laid && !!target && after?.laid === null && near(after.zoom, mid.zoom, 0.001) && json(picked) === json([target.id]) && (await stretched("arrangement")).every((s) => !s.transform.includes("scale")),
-    `a press while stretched picks the clip shown under it (${target?.id}: ${json(picked)}) and lays the zoom out first, at the zoom shown (${mid?.zoom?.toFixed(2)}, laid out at ${after?.zoom?.toFixed(2)})`,
+    !!mid?.laid && !!target && after?.laid === null && near(after.zoom, mid.zoom, 0.001) && shown === false && picked.length === 0 && beat1 === beat0 && wrote.length === 0,
+    `a press while the picture shows ends the zoom, laid out at the zoom shown (${mid?.zoom?.toFixed(2)}, laid out at ${after?.zoom?.toFixed(2)}, the picture ${shown ? "showing" : "hidden"}), and does nothing else: the clip shown under it (${target?.id}) not picked (${json(picked)}), the playhead still at ${beat1} (${beat0}), nothing written (${json(wrote)})`,
   );
   await pinchEnd(at.x, at.y, 1.3);
+  await frames(2);
+  const again = target && (await page.evaluate((tl, id) => {
+    const el = document.querySelector(`${tl} [data-track="kick-1"] [data-clip="${id}"]`)?.getBoundingClientRect();
+    return el ? { x: el.left + el.width / 2, y: el.top + el.height / 2 } : null;
+  }, tl, target.id));
+  if (again) await page.mouse.click(again.x, again.y);
+  await frames(2);
+  const picked2 = await page.$$eval(`${tl} [data-clip][data-picked]`, (els) => els.map((e) => e.dataset.clip));
+  check(!!again && json(picked2) === json([target.id]), `the next press, on the page laid out, picks that clip: ${json(picked2)}`);
   await page.keyboard.press("Escape");
 }
-// ⌘-scroll over time: stretched until no ⌘-scroll for G, then laid out once.
+// A press beside the picture (the ruler's Follow: its tools aren't under the picture) ends the zoom
+// and does what it says, mid-pinch and in the G after a run of ⌘-scroll, when the picture still shows.
+{
+  await sleep(300);
+  const at = await lanes();
+  const follow = async () => page.$eval(`${tl} [data-testid=follow]`, (e) => e.getAttribute("aria-pressed"));
+  const fb = await (await page.$(`${tl} [data-testid=follow]`)).boundingBox();
+  const f0 = await follow();
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const mid = await arr();
+  await page.mouse.click(fb.x + fb.width / 2, fb.y + fb.height / 2);
+  await frames(2);
+  const f1 = await follow(), after = await arr();
+  await pinchEnd(at.x, at.y, 1.2);
+  await frames(2);
+  for (let i = 0; i < 4; i++) {
+    await page.evaluate((x, y) => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: 20, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), at.x, at.y);
+    await frames(1);
+  }
+  // The run kept going while the click is sent (⌘-scrolls of 0), so it lands while the picture shows.
+  await page.evaluate((x, y) => {
+    window.__stillScroll = setInterval(() => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: 0, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), 8);
+  }, at.x, at.y);
+  const shown = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown);
+  await page.mouse.click(fb.x + fb.width / 2, fb.y + fb.height / 2);
+  await page.evaluate(() => clearInterval(window.__stillScroll));
+  await frames(2);
+  const f2 = await follow();
+  check(
+    !!mid?.laid && after?.laid === null && f1 !== f0 && shown === true && f2 === f0,
+    `a press beside the picture (the ruler's Follow) ends the zoom and does what it says: mid-pinch Follow ${f0} → ${f1} (laid out: ${after?.laid === null}), and a frame after a run of ⌘-scroll, the picture showing (${shown}), ${f1} → ${f2}`,
+  );
+  await page.mouse.move(5, 5);
+  await sleep(300);
+}
+// The window losing focus mid-pinch (⌘-Tab: the pinch's gestureend may never come) lays the zoom out.
+{
+  const at = await lanes();
+  await pinchOver(at.x, at.y, [1.1, 1.2], false);
+  await frames(2);
+  const mid = await arr();
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await frames(2);
+  const after = await arr();
+  const shown = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement")?.shown);
+  check(!!mid?.laid && after?.laid === null && shown === false && near(after.zoom, mid.zoom, 0.001), `the window losing focus mid-pinch lays the zoom out at the zoom shown (${mid?.zoom?.toFixed(2)} → ${after?.zoom?.toFixed(2)}), the picture hidden (${shown})`);
+  await pinchEnd(at.x, at.y, 1.2);
+  await frames(2);
+}
+// ⌘-scroll over time: the picture until no ⌘-scroll for G, then laid out once.
 {
   await sleep(300);
   const at = await lanes();
@@ -1812,10 +2201,11 @@ const beatMid = (x) =>
         const one = () => {
           send();
           if (++k < 12) return requestAnimationFrame(one);
-          // Read in the same task as the last event, so no frame or timer comes between: the view
-          // stretched by the frames before it, and nothing rendered. Then when it is laid out.
+          // Read in the same task as the last event, so no frame or timer comes between: the
+          // picture painted by the frames before it, and nothing rendered. Then when it is laid out.
           const last = performance.now();
-          const mid = { laid: face.now("arrangement")?.laid ?? null, renders: window.m2canvas.frames().total };
+          const pic = face.picture?.("arrangement");
+          const mid = { laid: face.now("arrangement")?.laid ?? null, renders: window.m2canvas.frames().total, picture: !!pic?.shown && pic.drawn?.zoom === face.now("arrangement")?.zoom };
           const wait = () => {
             const end = performance.now() - last;
             if (face.now("arrangement")?.laid === null || end > 3000) done({ mid, end });
@@ -1834,14 +2224,34 @@ const beatMid = (x) =>
   const G = (await page.evaluate(() => window.m2canvas.camera.numbers.SWIPE_GAP)) ?? 50;
   const quiet = since(r0, t.mid.renders);
   check(
-    !!t.mid.laid && Object.keys(quiet).length === 0 && t.end >= G - 1 && t.end <= G + 1000,
-    `⌘-scroll is stretched at its last event (laid out at ${t.mid.laid?.zoom}), nothing rendered (${json(quiet)}), and laid out ${Math.round(t.end)} ms after it: never before G (${G} ms)`,
+    !!t.mid.laid && t.mid.picture && Object.keys(quiet).length === 0 && t.end >= G - 1 && t.end <= G + 1000,
+    `⌘-scroll shows the picture at its last event, painted at the zoom shown (${t.mid.picture}; laid out at ${t.mid.laid?.zoom}), nothing rendered (${json(quiet)}), and is laid out ${Math.round(t.end)} ms after it: never before G (${G} ms)`,
   );
-  check(liveFrames(fs) && e.arrangement === 1, `laid out once (${json(e)}), every frame showing each clip within a px of the zoom shown, the beat under the pointer held (@) (${brief(fs)})`);
+  check(drawnFrames(fs) && e.arrangement === 1, `laid out once (${json(e)}), every frame showing each clip within a px of the zoom shown, the beat under the pointer held (@) (${brief(fs)})`);
+  // A run of ⌘-scroll with the page busy 80 ms in its middle, an event waiting behind it (VIEW-5):
+  // its end is counted in the frames after its last event, each at most G/2, never by a timer, so
+  // the late frame never ends it early.
+  {
+    const G = await page.evaluate(() => window.m2canvas.camera.numbers.SWIPE_GAP);
+    await laidOut("arrangement");
+    await sleep(300);
+    const z0 = (await cam("arrangement"))?.zoom;
+    const l = await zoomLate("arrangement", at.x, at.y, 12, -3, 5);
+    await frames(2);
+    // Back to the zoom it had, laid out at once (all in one task), for what comes after.
+    await laidOut("arrangement");
+    const z1 = (await cam("arrangement"))?.zoom;
+    if (z0 && z1) await pinch(at.x, at.y, [z0 / z1]);
+    await frames(2);
+    check(
+      l.ended.length === 0 && l.end >= G - 1 && l.end <= G + 1000,
+      `the arrangement: a run of 12 ⌘-scroll events, one a frame, the page busy 80 ms after the fifth and the sixth heard after a timer due 60 ms on, is never laid out before its last event (laid out before events ${json(l.ended)}), and laid out ${l.end} ms after it (G ${G} ms)`,
+    );
+  }
 }
-// The browser's own move of the box while it is stretched (VIEW-9): a write to scrollLeft, as a
-// scrollbar's drag or a key's scroll makes, is taken in from where the stretch shows the view, as
-// before the live zoom: the zoom shown is laid out, 120 px on.
+// The browser's own move of the box while the picture shows (VIEW-9): a write to scrollLeft, as a
+// scrollbar's drag or a key's scroll makes, is taken in from where the picture shows the view, as
+// with no zoom by the hand: the zoom shown is laid out, 120 px on.
 {
   await sleep(300);
   const at = await lanes();
@@ -1855,12 +2265,37 @@ const beatMid = (x) =>
   const s1 = await scroll(tl);
   check(
     !!mid?.laid && c?.laid === null && near(c.zoom, mid.zoom, 0.001) && near(c.x, mid.x + 120, 1) && near(s1.x, Math.round(mid.x + 120), 1),
-    `a write to scrollLeft mid-stretch moves the view 120 px from where the stretch showed it, laid out at the zoom shown: ${json({ shown: mid && [mid.x, mid.zoom], laid: mid?.laid, now: c && [c.x, c.zoom], box: [s0.x, s1.x] })}`,
+    `a write to scrollLeft while the picture shows moves the view 120 px from where the picture showed it, laid out at the zoom shown: ${json({ shown: mid && [mid.x, mid.zoom], laid: mid?.laid, now: c && [c.x, c.zoom], box: [s0.x, s1.x] })}`,
   );
   await pinchEnd(at.x, at.y, 1.3);
   // The zoom as it was, for what comes after.
   await laidOut("arrangement");
   await pinch(at.x, at.y, [1 / 1.3]);
+  await frames(2);
+}
+// A picture that can't paint (it throws: a browser without a canvas feature it uses) never freezes the
+// view (VIEW-5): the zoom is laid out each frame instead, the clips where the zoom shown puts them in
+// every frame, and the picture keeps why, for the swipe probe's report.
+{
+  await sleep(300);
+  const at = await lanes();
+  const z0 = (await arr())?.zoom ?? 0;
+  await page.evaluate(() => window.m2canvas.camera.pictureFails?.("arrangement", true));
+  const stop = await watchFrames("arrangement", tl, "[data-clip]", { hold: { x: at.x, kind: "clips" } });
+  // A change a frame: each laid out in a frame of its own (8 ms apart, two could share one).
+  await pinchFrames(at.x, at.y, [1.1, 1.2, 1.3, 1.4]);
+  await laidOut("arrangement");
+  await frames(3);
+  const fs = await stop();
+  const pic = await page.evaluate(() => window.m2canvas.camera.picture?.("arrangement"));
+  await page.evaluate(() => window.m2canvas.camera.pictureFails?.("arrangement", false));
+  const z1 = (await arr())?.zoom ?? 0;
+  const zooms = new Set(fs.map((f) => f.zoom));
+  check(
+    near(z1, z0 * 1.4, 0.01) && fs.length > 3 && zooms.size >= 4 && fs.every((f) => f.shown === false && !f.live && f.n > 0 && f.worst <= 1) && pointHeld(fs) && /throws/.test(pic?.failed?.why ?? ""),
+    `a picture that can't paint (it throws) never freezes the view: every frame laid out at the zoom shown (${zooms.size} zooms, ${z0} → ${z1.toFixed(2)}), each clip where it puts it, the beat under the fingers held (${brief(fs)}); the picture says why: ${json(pic?.failed?.why)}`,
+  );
+  await pinch(at.x, at.y, [z0 / z1]);
   await frames(2);
 }
 
@@ -2167,7 +2602,7 @@ const rollBeat = (x) =>
   const a = await rollBeat(at.x);
   await sleep(120);
   await feed(at.x, at.y, [{ t: 0, dy: -100, ctrl: true }]);
-  // Read from what the grid draws (its `data-ppb`), so once the live zoom is laid out (VIEW-5).
+  // Read from what the grid draws (its `data-ppb`), so once the zoom is laid out (VIEW-5).
   await laidOut("notes");
   await frames();
   const b = await rollBeat(at.x);
@@ -2177,9 +2612,9 @@ const rollBeat = (x) =>
   const p = await rollBeat(at.x);
   check(near(p.ppb, b.ppb * 0.75, 0.5) && near(p.beat * p.ppb, a.beat * p.ppb, 1.5), `and a pinch out, around it too (${p.beat.toFixed(3)}, ${p.ppb.toFixed(1)} px a beat)`);
 }
-// Notes' live zoom (VIEW-5, VIEW-8): mid-pinch its grid and ruler are stretched and nothing renders;
-// its notes, and their velocity bars under the roll, sit where the zoom shown puts them; its
-// gestureend lays it out once.
+// Notes' zoom by the hand (VIEW-5): Notes doesn't draw its zoom yet, and nothing stretches: mid-pinch
+// it is laid out at the zoom shown, its notes and their velocity bars under the roll where that zoom
+// puts them; every frame laid out so, the beat under the fingers held; its gestureend changes nothing.
 {
   const r = await box(roll);
   const at = { x: r.x + r.width * 0.5, y: r.y + r.height * 0.5 };
@@ -2203,25 +2638,45 @@ const rollBeat = (x) =>
       const bar = document.querySelector(`[data-testid=velocity] [data-velocity="${e.dataset.note}"]`);
       if (!bar || r.left < b.left + c.margins.left || r.right > b.right) continue;
       const want = b.left + box.clientLeft + c.origin.x - Math.round(c.x) + Number(e.dataset.start) * c.zoom;
-      // A velocity bar's box starts 5 px before its note, at the zoom drawn: stretched, 5 px times the stretch.
+      // A velocity bar's box starts 5 px before its note (`s`, the zoom shown over the zoom laid out: 1, Notes laid out each frame).
       worst = Math.max(worst, Math.abs(r.left - want), Math.abs(bar.getBoundingClientRect().left + 5 * s - want));
       n++;
     }
     return { n, worst: Math.round(worst * 100) / 100 };
   }, roll);
   check(
-    Object.keys(q).length === 0 && !!z0 && mid?.laid?.zoom === z0 && near(mid.zoom, z0 * 1.3, 0.01) && st.length > 0 && st.every((s) => s.transform.includes("scale")) && lined.n > 0 && lined.worst <= 1,
-    `Notes mid-pinch: stretched (${st.length} layers), nothing rendered (${json(q)}), ${lined.n} notes and their velocity bars within ${lined.worst} px of where the zoom shown puts them (${mid?.zoom?.toFixed(2)} px a beat, laid out at ${mid?.laid?.zoom?.toFixed(2)})`,
+    (q.notes ?? 0) >= 1 && !!z0 && mid?.laid === null && near(mid.zoom, z0 * 1.3, 0.01) && st.length === 0 && lined.n > 0 && lined.worst <= 1,
+    `Notes mid-pinch: laid out at the zoom shown (${mid?.zoom?.toFixed(2)} px a beat; it rendered ${q.notes ?? 0} times), nothing stretched (${st.length}), ${lined.n} notes and their velocity bars within ${lined.worst} px of where that zoom puts them`,
   );
+  const r1 = await renders();
   await pinchEnd(at.x, at.y, 1.3);
-  await laidOut("notes");
   await frames(3);
   const fs = await stop();
-  const e = since(r0, await renders());
+  const e = since(r1, await renders());
   check(
-    liveFrames(fs) && e.notes === 1 && (await stretched("notes")).every((s) => !s.transform.includes("scale")),
-    `its gestureend lays Notes out once (${json(e)}), the stretch gone in that frame, every frame showing each note within a px of the zoom shown, the beat under the fingers held (@) (${brief(fs)})`,
+    laidFrames(fs) && !e.notes && (await stretched("notes")).length === 0,
+    `every frame of the pinch laid Notes out at the zoom shown, each note within a px of it, nothing stretched, the beat under the fingers held (@); its gestureend changes nothing (${json(e)}) (${brief(fs)})`,
   );
+  // A run of ⌘-scroll with the page busy 80 ms in its middle, an event waiting behind it (VIEW-5):
+  // Notes doesn't draw its zoom, so each frame is laid out at the zoom its events asked, the
+  // event that waited too, nothing stretched.
+  {
+    await laidOut("notes");
+    await sleep(300);
+    const z0 = (await cam("notes"))?.zoom ?? 0;
+    const l = await zoomLate("notes", at.x, at.y, 12, -3, 5);
+    await frames(2);
+    const z1 = (await cam("notes"))?.zoom ?? 0;
+    const st = await stretched("notes");
+    // Back to the zoom it had, laid out at once (all in one task), for what comes after.
+    if (z0 && z1) await pinch(at.x, at.y, [z0 / z1]);
+    await frames(2);
+    const want = z0 * 1.5 ** (36 / 100);
+    check(
+      Math.abs(z1 - want) <= want * 0.01 && l.ended.length === 11 && st.length === 0,
+      `Notes: a run of 12 ⌘-scroll events, one a frame, the page busy 80 ms after the fifth and the sixth heard after a timer due 60 ms on, is laid out at each zoom asked, never stretched (${l.ended.length} of 11 events after the first found it laid out): it ends at all 12 events' zoom (${z0} → ${z1.toFixed(3)}, ${want.toFixed(3)} asked)`,
+    );
+  }
 }
 /** Open Bass 1's clip `clip` in Notes, by a double-click in the timeline; its zoom as it opens. */
 const openBass = async (clip) => {
@@ -2262,7 +2717,7 @@ const openBass = async (clip) => {
     await frames(3);
     const fs = await stop();
     check(
-      near(c?.zoom ?? 0, fit, 0.001) && room < 100 && liveFrames(fs),
+      near(c?.zoom ?? 0, fit, 0.001) && room < 100 && laidFrames(fs),
       `Notes on a bar fitted (${fit} px a beat, ${room} px of room): a pinch in ×1.6 at ${fx} across keeps the beat under the fingers in every frame, the end's too (${brief(fs)})`,
     );
   }
@@ -2305,7 +2760,7 @@ const openBass = async (clip) => {
   );
   await pinchEnd(at.x, at.y, 1.3);
   await laidOut("notes");
-  check(!!mid?.laid && near(mid.at, mid.want, 1), `mid-pinch, the hint on an empty clip is where the zoom shown puts it: ${json(mid)}`);
+  check(!!mid && near(mid.at, mid.want, 1), `mid-pinch, the hint on an empty clip is where the zoom shown puts it: ${json(mid)}`);
 }
 
 // ================================================================ clips laid over each other (VIEW-12)

@@ -61,13 +61,23 @@ export const check = (ok, what) => {
  * suite's own reads (`api`, `state`) never wait.
  *
  * `dpr`: device px a px (1 by default; 2 as the owner's Mac draws, for a suite that reads what the
- * screen's own pixels show: taste.md VIEW-12's canvases).
+ * screen's own pixels show: taste.md VIEW-12's canvases, VIEW-13's picture). A real one, as a Mac's
+ * screen has (Chrome's `--force-device-scale-factor`), not puppeteer's emulated `deviceScaleFactor`:
+ * the emulation lays boxes on whole px, not on the screen's own, so what it shows isn't what a Mac
+ * shows (the drawn zoom's note, §4). Its text is grey, as a Mac draws text, never with the colour
+ * fringes Chrome gives text on Linux where it can (`--disable-lcd-text`): which it does or doesn't
+ * there turns on how it makes its layers, so the same page would draw its text two ways.
  */
 export async function open(width = 1440, height = 900, { browser: side = false, pc = false, late = Number(process.env.E2E_LATE_READS ?? 0), dpr = 1 } = {}) {
-  const browser = await puppeteer.launch({ executablePath: pc ? real : exe, args: ["--no-sandbox"] });
-  const page = await browser.newPage();
+  const real2 = dpr !== 1;
+  const browser = await puppeteer.launch({
+    executablePath: pc ? real : exe,
+    args: ["--no-sandbox", ...(real2 ? [`--force-device-scale-factor=${dpr}`, `--window-size=${width},${height}`, "--disable-lcd-text"] : [])],
+    defaultViewport: real2 ? null : undefined,
+  });
+  const page = real2 ? ((await browser.pages())[0] ?? (await browser.newPage())) : await browser.newPage();
   if (pc) await page.setUserAgent(pcAgent);
-  await page.setViewport({ width, height, deviceScaleFactor: dpr });
+  if (!real2) await page.setViewport({ width, height, deviceScaleFactor: dpr });
   // The page's requests, intercepted only while some are held back: its own reads (`late`), or
   // those a suite's `hold` names.
   const holders = new Set();

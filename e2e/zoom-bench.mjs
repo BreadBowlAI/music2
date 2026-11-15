@@ -8,12 +8,12 @@
 // and splits every frame into script (and the layout it forced), style and layout, paint and
 // commit, and input; the plan and the page's side are zoomlib.mjs's, which the WebKit tool shares.
 //
-// It prints a table for each song, and one of the live zoom's frames (taste.md VIEW-5: those only a
-// transform apart from the frame before, those laid out, and the frame after each; `zoomLive`), and
-// writes every frame as JSON beside its log
+// It prints a table for each song, and one of a zoom by the hand's frames apart (taste.md VIEW-5:
+// those the timeline's picture drew, the one laid out at the end, and the frame after it;
+// `zoomLive`), and writes every frame as JSON beside its log
 // (<out>/zoom-bench-fix.json, the run's folder's name and .json). It judges no speed: its checks
 // prove only that it measured: each run saw frames while its gesture lasted, every part was timed,
-// and the zoom went out and came back.
+// and the zoom went out and came back (but A13's way out alone, the timeline's pinch out).
 //
 //   node e2e/zoom-bench.mjs <root> <home> <project>     (the `fix` kind: examples/first-song open)
 import fs from "node:fs";
@@ -21,7 +21,7 @@ import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { ROOT, check, done, open, sleep, until } from "./fixlib.mjs";
-import { GESTURES, PLAN, measured, rowsOf, zoomLive, zoomRun, zoomTable } from "./zoomlib.mjs";
+import { comesBack, GESTURES, PLAN, measured, rowsOf, zoomLive, zoomRun, zoomTable } from "./zoomlib.mjs";
 
 const { browser, page, errors, api } = await open(1440, 900);
 // The owner's Mac: a window of 1440×900 px at 2 device px a px.
@@ -63,7 +63,7 @@ for (const s of SONGS) {
       framesOk,
       `${s.song} song, ${g}: each of its ${runs.length} runs saw frames while the gesture lasted, every part of each frame timed, and its input: ${JSON.stringify(seen.map(({ frames, untimed, input }) => ({ frames, untimed, input })))}`,
     );
-    check(zoomOk, `${s.song} song, ${g}: each run's zoom went out and came back to where it started: ${JSON.stringify(seen.map((x) => x.zoom))}`);
+    if (comesBack(g)) check(zoomOk, `${s.song} song, ${g}: each run's zoom went out and came back to where it started: ${JSON.stringify(seen.map((x) => x.zoom))}`);
   }
   songs.push({ song: s.song, what: s.what, results });
 }

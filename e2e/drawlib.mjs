@@ -3,15 +3,15 @@
 // drew last (`drawn`): for each clip, its notes, their 2 px marks and an automation curve's line, in px
 // of the canvas's box, with the zoom and the beats it holds. `drawings` runs in the page
 // (`page.$$eval(clips, drawings)`), reads nothing outside itself, and places a clip's part of that list
-// on screen as the canvas shows it now (stretched since it drew, if a zoom by the hand hasn't
-// settled), each note with the canvas's own pixel at its middle.
+// on screen as the canvas shows it now, each note with the canvas's own pixel at its middle.
 
 /**
  * In the page: the drawing of each clip element of `clips`, or null for one no canvas drew. `kind` is
  * "lane" for a lane's canvas, else the clip's own ("notes", "curve"); `start` and `length` are the
  * clip's (its `data-start`, `data-length`); `from` and `to` the beats the canvas holds; `k` the
  * clip's px a beat on screen; `box` the canvas on screen and `clip` the clip's box; `bitmap` its
- * device px across and down; `stretch` how far a zoom has stretched it since it drew (1: not at all).
+ * device px across and down; `stretch` its box now against the box it drew (1: as it drew; nothing
+ * stretches a canvas since the drawn zoom, and the suites check it stays 1).
  */
 export function drawings(clips) {
   return clips.map((clip) => {

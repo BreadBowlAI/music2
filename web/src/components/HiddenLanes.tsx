@@ -29,7 +29,7 @@ export function HiddenRow({
 }) {
   const n = lanes.length;
   return (
-    <div data-testid="hidden-lanes" data-module={module} className="flex" style={{ height: HIDDEN_ROW_H }}>
+    <div data-testid="hidden-lanes" data-row="hidden" data-module={module} className="flex" style={{ height: HIDDEN_ROW_H }}>
       <div
         className={clsx("sticky left-0 z-20 shrink-0 flex items-center border-r border-line text-xs text-fg-muted", selected ? "bg-accent-soft" : "bg-chrome")}
         style={{ width: headerW }}

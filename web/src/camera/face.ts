@@ -7,7 +7,7 @@ import * as numbers from "./numbers";
 import { rigs } from "./rig";
 import { cameraNames, cameraNow, laidOf } from "./store";
 import { movingNow, setGlide } from "./state";
-import { markedOf, shownAt, shownScroll, stretchOf } from "./stretch";
+import { failPicture, pictureOf } from "./picture";
 import { Writer, type ScrollBox } from "./writer";
 
 export const face = {
@@ -21,9 +21,6 @@ export const face = {
   toBox,
   cull,
   cullPlan,
-  stretchOf,
-  shownAt,
-  shownScroll,
   laidOf,
   /** The cameras mounted now. */
   names: cameraNames,
@@ -33,13 +30,21 @@ export const face = {
     return cam ? { ...cam.getState() } : null;
   },
   /**
-   * What the camera mounted as `name` stretches in a live zoom (VIEW-5): each marked element's
-   * transform as the camera wrote it ("" where it wrote none).
+   * The picture of the view of the camera mounted as `name`, where it draws its zoom (VIEW-5): whether
+   * it shows, how many times it painted, what it drew last (the view's own list) and why it last
+   * couldn't paint; null where none.
    */
-  stretched: (name: string) => {
+  picture: (name: string) => {
     const cam = cameraNow(name);
-    return cam ? [...markedOf(cam)].map((el) => ({ transform: el.style.transform })) : [];
+    return cam ? pictureOf(cam) : null;
   },
+  /** Make the picture of the view of the camera `name` throw as it paints (`on`), as a browser without a canvas feature would. */
+  pictureFails: (name: string, on: boolean) => {
+    const cam = cameraNow(name);
+    if (cam) failPicture(cam, on);
+  },
+  /** The app's moves of the camera `name` (VIEW-9), while a view uses it: `reveal`, `to`, `fit`… */
+  controls: (name: string) => rigs.get(name)?.controls ?? null,
   /** Whether a camera moved in the last QUIET ms (VIEW-8). */
   moving: movingNow,
   /** A writer on `box`: a box of the suite's own, which keeps whole pixels as WebKit does. */

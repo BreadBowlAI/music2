@@ -13,10 +13,14 @@
 //
 // Its last step, after round B, replays the owner's pinch (A13) over the timeline and the Graph by
 // itself, and the zoom bench (`zoomBench.ts`, loaded then) measures each frame's split, so the Mac's
-// numbers compare one for one with the bench's (the zoom note's §6 step 1).
+// numbers compare one for one with the bench's (the zoom note's §6 step 1): the timeline's frames
+// drawn by its picture (the drawn zoom) apart from the one that lays it out at the end. The step
+// before it, "a pinch let go of", says how fast the fingers zoomed as they lifted (the drawn zoom's
+// note, §2.7: whether a pinch should glide on).
 
 import { create } from "zustand";
-import { cameraNow, controlsOf, NO_EDGES, pauseSwipes, type Edges } from "../camera";
+import { cameraNow, controlsOf, NO_EDGES, pauseSwipes, pictureOf, type Edges } from "../camera";
+
 import { measureFrames } from "./frames";
 import { native } from "./native";
 import { canvas, useShell, type DockView } from "./shell";
@@ -47,9 +51,12 @@ const MOVES: Omit<Step, "box" | "view">[] = [
   { words: "two flicks held", how: "Flick across quickly, then put your fingers straight back down to stop the glide. Do it twice.", kind: "hold", count: 2 },
 ];
 const PINCH = { words: "a pinch", how: "Pinch in and out a few times.", kind: "pinch" as const };
+/** How fast fingers leave a pinch: whether a pinch should glide on once let go of (the drawn zoom's note, §2.7). */
+const LET_GO = { words: "a pinch let go of", how: "Pinch out quickly, and lift your fingers while they still move, as you would flick. Do it three times.", kind: "pinch" as const, count: 3 };
 const TIMELINE = { box: "arrangement", view: "timeline" } as const;
 const GRAPH = { box: "graph", view: "Graph" } as const;
-export const STEPS: Step[] = [...MOVES.map((m) => ({ ...m, ...TIMELINE })), ...MOVES.map((m) => ({ ...m, ...GRAPH })), { ...PINCH, ...TIMELINE }, { ...PINCH, ...GRAPH }];
+const LET_GO_STEP: Step = { ...LET_GO, ...TIMELINE };
+export const STEPS: Step[] = [...MOVES.map((m) => ({ ...m, ...TIMELINE })), ...MOVES.map((m) => ({ ...m, ...GRAPH })), { ...PINCH, ...TIMELINE }, { ...PINCH, ...GRAPH }, LET_GO_STEP];
 /** Whether a step asks about the scrollbar: every swipe and flick step, in both rounds. */
 export const asks = (s: Step) => s.kind !== "pinch";
 
@@ -123,6 +130,8 @@ interface Wheel {
 }
 interface Gesture {
   t: number;
+  /** The event's own time, as `Wheel`'s. */
+  own: number;
   at: string;
   type: string;
   scale: number;
@@ -155,7 +164,7 @@ const heard = {
   frames: [] as number[],
   steps: new Map<string, StepLog>(),
   /** The last step's: what the zoom bench measured over each view. */
-  replay: null as { timeline: Run; graph: Run } | null,
+  replay: null as { timeline: Run; out: Run; graph: Run } | null,
 };
 /** What the panel counts, kept as it hears: round B's scrolls in swipe and flick steps not the probe's are `theirs`. */
 const tally = { wheels: 0, scrolls: 0, gestures: 0, cancelled: 0, theirs: 0 };
@@ -240,8 +249,9 @@ function onWheel(e: WheelEvent) {
 
 function onGesture(e: Event) {
   const g = e as Event & { scale?: number; clientX?: number };
-  zoomedAt = performance.now();
-  heard.gestures.push({ t: now(), at: here(), type: e.type.replace("gesture", ""), scale: g.scale ?? NaN, x: g.clientX ?? NaN });
+  const heardAt = (zoomedAt = performance.now());
+  const late = Math.abs(heardAt - e.timeStamp) < 10_000 ? heardAt - e.timeStamp : 0;
+  heard.gestures.push({ t: now(), own: now() - late, at: here(), type: e.type.replace("gesture", ""), scale: g.scale ?? NaN, x: g.clientX ?? NaN });
   tally.gestures++;
 }
 
@@ -468,8 +478,13 @@ function pointIn(el: HTMLElement, m: Edges, fx: number, fy: number) {
   return [Math.round(r.left + el.clientLeft + m.left + (el.clientWidth - m.left - m.right) * fx), Math.round(r.top + el.clientTop + m.top + (el.clientHeight - m.top - m.bottom) * fy)] as const;
 }
 const zoomOfCamera = (name: string) => () => cameraNow(name)?.getState().zoom ?? null;
-/** The zoom a camera's view is laid out at while a live zoom stretches it (taste.md VIEW-5); null when none does. */
+/** The zoom a camera's view is laid out at while a drawn zoom's picture shows it (taste.md VIEW-5); null when none does. */
 const laidOfCamera = (name: string) => () => cameraNow(name)?.getState().laid?.zoom ?? null;
+/** Whether the view of the camera `name` showed its picture (a drawn zoom), for the bench. */
+const drawnOfCamera = (name: string) => () => {
+  const cam = cameraNow(name);
+  return cam ? (pictureOf(cam)?.shown ?? null) : null;
+};
 const SONG_GRAPH = "graph:song";
 /** The zoom bench, once the last step has loaded it. */
 let bench: typeof import("./zoomBench") | null = null;
@@ -488,7 +503,7 @@ export async function replayPinch() {
     await frames(3);
     await new Promise((r) => setTimeout(r, 800));
   };
-  let done: { timeline: Run; graph: Run } | null = null;
+  let done: { timeline: Run; out: Run; graph: Run } | null = null;
   try {
     const b = (bench = await import("./zoomBench"));
     keep();
@@ -496,7 +511,15 @@ export async function replayPinch() {
     await settle();
     const tl = boxEl("arrangement");
     if (!tl || !alive()) return;
-    const timeline = await b.replay(...pointIn(tl, cameraNow(ARRANGEMENT)?.getState().margins ?? NO_EDGES, 0.4, 0.3), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(ARRANGEMENT), laid: laidOfCamera(ARRANGEMENT) });
+    const at = pointIn(tl, cameraNow(ARRANGEMENT)?.getState().margins ?? NO_EDGES, 0.4, 0.3);
+    const timelineOpts = { zoom: zoomOfCamera(ARRANGEMENT), laid: laidOfCamera(ARRANGEMENT), drawn: drawnOfCamera(ARRANGEMENT) };
+    // A13's way out alone first: its end lays the timeline out at a new zoom, which A13's way back doesn't.
+    const out = await b.replay(...at, { kind: "pinch", scales: b.pinchScales([Math.min(...b.A13)], 55) }, timelineOpts);
+    if (!alive()) return;
+    controlsOf(ARRANGEMENT)?.to(0, 0, ZOOM.start);
+    await settle();
+    if (!alive()) return;
+    const timeline = await b.replay(...at, { kind: "pinch", scales: b.A13 }, timelineOpts);
     if (!alive()) return;
     await songGraph(alive);
     canvas.graphZoom?.(null);
@@ -504,7 +527,7 @@ export async function replayPinch() {
     const gr = boxEl("graph");
     if (!gr || !alive()) return;
     const graph = await b.replay(...pointIn(gr, NO_EDGES, 0.5, 0.5), { kind: "pinch", scales: b.A13 }, { zoom: zoomOfCamera(SONG_GRAPH), laid: laidOfCamera(SONG_GRAPH) });
-    done = heard.replay = { timeline, graph };
+    done = heard.replay = { timeline, out, graph };
     const med = (r: Run) => b.split([r]).work?.med ?? null;
     useProbe.setState({ replay: { timeline: med(timeline), graph: med(graph) } });
   } finally {
@@ -699,6 +722,33 @@ export function report(): string {
       ? `Gesture events: ${gestures.length} (${kind("start")} start, ${kind("change")} change, ${kind("end")} end); scale from ${num(Math.min(...scales))} to ${num(Math.max(...scales))}`
       : "Gesture events: none (no gesturestart, gesturechange or gestureend)",
   );
+  // How fast the fingers zoomed as they left each pinch of the step that asks for it (the drawn
+  // zoom's note, §2.7): by the events' own times, the scale's change over the last 100 ms before
+  // the lift, as a factor and in ln a second (0: still; 3: ×20 a second).
+  const letGo = STEPS.findIndex((st) => st === LET_GO_STEP) + 1;
+  line(`Pinches let go of (step ${letGo}): how fast the fingers zoomed in their last 100 ms before they lifted, by the events' own times`);
+  for (const r of rounds) {
+    const at = `${r}${letGo}`;
+    const pinches: Gesture[][] = [];
+    for (const g of gestures.filter((x) => x.at === at)) {
+      if (g.type === "start" || !pinches.length) pinches.push([]);
+      pinches.at(-1)!.push(g);
+    }
+    let k = 0;
+    for (const p of pinches) {
+      const changes = p.filter((g) => g.type === "change" && Number.isFinite(g.scale));
+      const end = p.find((g) => g.type === "end");
+      if (!changes.length || !end) continue;
+      const last = changes.at(-1)!;
+      const from = changes.filter((g) => g.own <= end.own - 100).at(-1) ?? { own: p[0].own, scale: 1 };
+      const ratio = last.scale / from.scale;
+      const span = (end.own - from.own) / 1000;
+      line(
+        `  ${at} ${++k}: scale 1 to ${num(last.scale)} in ${ms(end.own - p[0].own)}; its last 100 ms ×${num(ratio)}, ${span > 0 ? num(Math.log(ratio) / span, 2) : "–"} a second (ln); its last change ${ms(end.own - last.own)} before the lift`,
+      );
+    }
+    if (!k) line(`  ${at}: none`);
+  }
   line("Wheel events");
   for (const r of rounds) {
     const ws = inRound(wheels, r);
@@ -722,10 +772,22 @@ export function report(): string {
     );
     line(bench.table("View", [["timeline", [r.timeline]], ["Graph", [r.graph]]]));
     line(`  The zoom: timeline ${way(r.timeline)}; Graph ${way(r.graph)}`);
-    // The timeline's live zoom apart (VIEW-5), as zoom-bench gives it: what a stretched frame costs
-    // here, and what the frame that lays the zoom out costs.
-    line(bench.liveTable("View", [["timeline", [r.timeline]]]));
+    // The timeline's zoom apart (VIEW-5), as zoom-bench gives it: what a frame its picture draws costs
+    // here, and what the frame that lays the zoom out at its end costs.
+    line(bench.liveTable("View", [["timeline", [r.timeline]], ["timeline, its way out alone", [r.out]]]));
   } else line("The replayed pinch: not run (the last step's Replay wasn't pressed)");
+  // The timeline's drawn zoom (VIEW-5): how often its picture painted, and why it last couldn't, if
+  // it couldn't (a browser without a canvas feature it uses): then each such zoom was laid out each
+  // frame instead.
+  const pic = (() => {
+    const cam = cameraNow(ARRANGEMENT);
+    return cam ? pictureOf(cam) : null;
+  })();
+  line(
+    pic
+      ? `The timeline's picture (its drawn zoom): painted ${pic.paints} times; ${pic.failed ? `it couldn't paint ${num((performance.now() - pic.failed.at) / 1000, 1)} s ago, so that zoom was laid out each frame instead: ${pic.failed.why}` : "it never failed to paint"}`
+      : "The timeline's picture (its drawn zoom): none (no timeline open)",
+  );
   line();
 
   line(`Raw events: for each step, its first ${RAW_WHEELS} wheel events and ${RAW_GESTURES} gesture events, and in round B the scrolls that weren't the probe's (the first ${RAW_SCROLLS}); times in ms from the step's start`);
