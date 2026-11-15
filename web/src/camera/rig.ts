@@ -83,6 +83,14 @@ export function onViewMoved(f: () => void): () => void {
   moves.add(f);
   return () => void moves.delete(f);
 }
+/**
+ * The room a view needs for the camera at `c` (VIEW-6): as far as it looks, in whole px. The box is
+ * scrolled to whole px (the writer rounds), and a box rounds its content's width to whole px too: room
+ * cut at a fraction stops the box short of where the camera looks, and the camera with it, a part of
+ * a px a frame of a zoom near the content's end.
+ */
+const roomFor = (c: { x: number; y: number }, s: CameraState) => ({ w: Math.ceil(c.x + s.view.w), h: Math.ceil(c.y + s.view.h) });
+
 const moved_ = () => {
   for (const f of moves) f();
 };
@@ -346,7 +354,7 @@ export class Rig {
     const zoom = c.zoom !== s.zoom;
     if (zoom) this.zoomed = true;
     // A zoom asks for room to look where it put the camera: the view sizes its content by it.
-    const asked = zoom ? { w: c.x + s.view.w, h: c.y + s.view.h } : s.asked;
+    const asked = zoom ? roomFor(c, s) : s.asked;
     this.cam.setState({ x: c.x, y: c.y, zoom: c.zoom, by, asked });
     if (!this.zoomed) this.write();
     else this.schedule();
@@ -577,7 +585,7 @@ export class Rig {
     const s = this.cam.getState();
     // A zoom asks for room to look where it put the camera, as `set` does: one that came back to the
     // zoom it began at may look further on than the view had room for (its start stopped the way out).
-    const asked = { w: s.x + s.view.w, h: s.y + s.view.h };
+    const asked = roomFor(s, s);
     if (s.zoom === s.laid?.zoom && asked.w <= s.asked.w && asked.h <= s.asked.h) {
       // The zoom drawn already, and room for it: the box moves to what shows, and the picture goes, now.
       this.cam.setState({ laid: null });

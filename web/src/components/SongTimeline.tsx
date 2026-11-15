@@ -3265,7 +3265,10 @@ const Steps = memo(function Steps({ clip, options, color, picked }: { clip: Step
             style={{ left: `${(from / length) * 100}%`, width: `${(Math.max(0, to - from) / length) * 100}%` }}
           >
             <span aria-hidden className={clsx("absolute inset-y-0", i === picked ? "w-0.5 bg-fg-strong" : "w-px")} style={{ left: `${(Math.max(0, b - from) / Math.max(to - from, 1e-9)) * 100}%`, background: i === picked ? undefined : color.ink }} />
-            <span className={clsx("pl-1.5 text-xs truncate", !known && "line-through")} style={{ color: color.ink }}>
+            {/* A name the choice no longer has: struck through by a line of its own, 7 px down its line,
+                not CSS's line-through, whose place each font sets (the drawn zoom's picture strikes it the
+                same way, VIEW-13). */}
+            <span className={clsx("pl-1.5 text-xs truncate", !known && "relative after:absolute after:left-1.5 after:right-0 after:top-[7px] after:h-px after:bg-current")} style={{ color: color.ink }}>
               {stepLabel(options, v)}
             </span>
           </div>
