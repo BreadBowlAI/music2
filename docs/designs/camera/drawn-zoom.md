@@ -100,7 +100,7 @@ Track `drawn-zoom` against main at `d06bb743` (Z1), on this server (Linux, no GP
 | Beat song | 7.5 / 10.7 | 12.0 / 16.8 | 8.2 / 10.8 |
 | Big song | 11.1 / 13.7 | 18.7 / 28.6 | 13.1 / 20.7 |
 
-On the beat song the frames between stay at 16.7 ms playing (33.2 at the 95th percentile before). What is left on the big song is the page's own while it plays (its playhead and meters), and a layout or two a run where Follow pages to the playhead, which lays a drawn zoom out first (VIEW-5).
+On the beat song the frames between stay at 16.7 ms playing (33.2 at the 95th percentile before). What is left on the big song is the page's own while it plays (its playhead and meters). Playing, a run laid out 1.7 to 2.3 times (stopped: none): most likely Follow paging to the playhead, which lays a drawn zoom out first (VIEW-5); not looked into further.
 
 **What VIEW-13's check sees.** Beside the pixels over 32 apart (at most 200), the mean difference of each 8 × 8 device px cell: at most 8 of 255, or 20 where the picture lists a word (glyphs fall a sub-pixel apart in the page's text, and only there). Measured on the suite's song: at most 3.8, and 12.8 where a word lies. A faint wash moved or a small shape left out differs by under 32 in each pixel but is dense in its cells. Each of review T's mutants, built from this source, against the suite's eight zooms (pixels over 32 / cells over the limit, the zooms that fail):
 
