@@ -33,7 +33,7 @@ What works today:
 | Turn knobs, drag pictures, add effects (a sidechain too) and note effects (an arpeggiator, chords), connect wires | **Graph** (⌥1) |
 | Mix: faders, pans, mute, solo, meters, loudness, buses and sends | **Mix** (⌥3) |
 | Play a MIDI keyboard or the computer's keys; record notes or audio, with takes and comping | ⌘K, or plug a keyboard in; R records |
-| Tune a voice, change it, make a synth talk with it, and fix its notes one by one | **+** on its wire in the **Graph** ▸ **Tune**, **Voice changer** or **Vocoder**; **Find notes** on its clip |
+| Tune a voice, change it, or make a synth talk with it; fix its notes one by one | **+** on a wire in the **Graph** ▸ **Tune**, **Voice changer** or **Vocoder**; **Find notes** on its clip |
 | Bring in WAV, FLAC and MIDI files | drag them onto the window |
 | Play CLAP plugins, and open their own windows | the browser's **Plugins** |
 | Export the song, its stems, or the notes as MIDI | **Export** (⇧⌘E) |
