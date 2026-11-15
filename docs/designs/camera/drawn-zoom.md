@@ -12,7 +12,7 @@
 - **The drawn zoom:** while the hand zooms, the view is drawn into a canvas laid over it. Every frame is sharp at the zoom shown, drawn from the song itself. The page under the canvas doesn't move. When the fingers stop, the page is laid out once, and the canvas hides in that same frame.
 - **Nothing changes when the fingers stop.** The prototype's last picture and the page after it differ only by anti-aliasing: in Chrome, 0 to 3 pixels of 2.5 million differ by more than 32 of 255. Z1 changes 40,000 to 250,000 pixels at that moment.
 - **Text matches.** Canvas 2D draws text with the page's own font engine: the same glyphs in the same places.
-- **Speed:** the picture's own script costs 1.5 to 4 ms a frame. The rest is the browser turning the canvas into pixels. On a Mac, WebKit does that in its GPU process, not on the page's thread. Whether Canvas 2D reaches 120 frames a second there is measured on the owner's Mac (§6). If it doesn't, the lanes are drawn with WebGL.
+- **Speed:** the picture's own script costs 1.5 to 4 ms a frame. The rest is the browser turning the canvas into pixels. On a Mac, WebKit does that in its GPU process, not on the page's thread. On the owner's Mac it does: a drawn frame's work is 2 ms, and none was over 8.3 ms (§6, "Answered by the owner's Mac"). So no WebGL.
 
 ## 1. What the prototype measured
 
@@ -128,7 +128,7 @@ The hatching is the closest: 9.3 against the limit's 8 and the song's own 3.8.
    - The camera library owns the picture's life. It shows the canvas when a zoom by the hand begins, asks the view to paint at each move of the camera, and hides the canvas in the same task that lays the view out at the end.
    - The view owns what is drawn. It gives a scene, read once as the zoom begins from what the view renders from, and a paint function of the zoom shown.
    - While the picture shows, nothing on the page is stretched, laid out early or given a layer of its own.
-2. **Canvas 2D**, one canvas the size of the view, plus one for the ruler. It shares the paint code of Z2's lane canvases (`paintNotes`, `paintCurve`, `spanBox`), so notes land on the same device pixels. WebGL draws the lanes only if the owner's Mac misses 120 frames a second with 2D. Text is always drawn with 2D: WebGL's glyph atlas blurs it.
+2. **Canvas 2D**, one canvas the size of the view, plus one for the ruler. It shares the paint code of Z2's lane canvases (`paintNotes`, `paintCurve`, `spanBox`), so notes land on the same device pixels. WebGL draws the lanes only if the owner's Mac misses 120 frames a second with 2D. *Measured: it doesn't* (§6). Text is always drawn with 2D: WebGL's glyph atlas blurs it.
 3. **The picture draws everything the arrangement can show.** It never falls back to a stretch. That covers clips, notes, curves, audio waves, lanes of names, takes (also while recording), hidden and faded rows, bus words, hatching, tempo and meter changes, the grid, the ruler, markers, the loop, the selected bars, picked clips, the playhead and the Song row. *Built:* VIEW-13's check (`drawn-zoom`) fails a picture that leaves any one of those out, of the kinds tried: each of the review's mutants fails at least one of its eight zooms (§1, "What VIEW-13's check sees"). It can't see a kind its song doesn't show: a take of notes recording (it records audio), a lane just made, lit for a moment (not drawn, gaps.md).
 4. **The page under the picture stays as it was laid out.** The scroll bar was to be the exception, if it was cheap: the scroll room and position following the zoom shown under the picture, so the scroll bar's thumb doesn't jump at the end. *Built: not kept.* The room has to lay the page's content out at a new width each frame: in Chrome a drawn frame went from 7.9 to 9.5 ms on the beat song and from 11.1 to 17.3 ms on the big song (§1, "Measured after the build"). So the thumb jumps at the end, as with Z1 (gaps.md).
 5. **A press while the picture shows ends the zoom and does nothing else,** as a touch stops a glide on an iPhone. The picture shows with no fingers on only for G (50 ms) after the last ⌘-scroll, and during a glide.
@@ -172,6 +172,13 @@ Each track has a builder, a skeptic's review and the full check.
 - How fast the owner's fingers leave a pinch.
 
 To measure it, the owner builds `maps-try`, then for each way of drawing (⇧⌘P ▸ Zoom drawing): ⇧⌘P ▸ Swipe probe ▸ the last step, Replay a pinch ▸ Copy report. The report names the way it drew. Read "between frames": 8.3 ms is 120 a second.
+
+**Answered by the owner's Mac, 2026-11-15.** A MacBook Pro with ProMotion, the app built from `main` at `c8f99c06`, the song Beat Pack (10 tracks), the swipe probe's report:
+- **120 frames a second: yes, with Canvas 2D.** The page ran at 125 frames a second (8 ms between frames, the median). The replayed pinch drew 106 frames over the timeline. A frame's work: 2 ms median, 3 ms at the 95th percentile, 6 ms the slowest. None was over 8.3 ms. So the lanes stay Canvas 2D (§2.2).
+- **The one layout at the end:** 23 ms (the replay's way out alone), and 1 ms for the frame after it. Nothing moves on that frame, since the last picture equals the page (VIEW-13). Only a moving playhead, or a swipe started at once, would be about 2 frames late.
+- **The picture painted 2,080 times and never failed:** no fallback to a layout each frame.
+- **How fast fingers leave a pinch** (step 15, asked to let go): 6 of 9 left quickly, at 4.0 to 8.4 a second (the scale's ln). Their last 100 ms zoomed ×0.52 to ×0.66 out, or ×1.57 in once. The other 3 left slowly, at 0.02 to 1.9. The last change came 4 to 8 ms before the fingers lifted. The pinches of the other steps slowed nearly to a stop before the lift. The glide starts from these numbers (§5).
+- **Canvas text against the page's text:** for the owner's eyes; the report can't say.
 
 **Known from the prototype, fixed in the build** (each with a check that failed first):
 - In WebKit, far zoomed out, Z2's lane canvas drew notes 1 device px right of where the picture puts them. The cause: WebKit draws a canvas into its box rounded to whole CSS px, and a lane's canvas lay on a half px (on the screen's own pixels, not whole px). A lane's canvas lies on whole px now (`ClipDrawing.tsx`). WebKit, beat song, a pinch far out: 16,895 pixels over 32 apart at the end, 4,058 after (§1).
