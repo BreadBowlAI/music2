@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| **Status** | Accepted, 2026-11-14, by the lead: the owner leaves look-and-feel calls to the lead. It replaces Z1, the live zoom of [zoom.md](zoom.md). The arrangement comes first, then Notes and the beat grid (§5). |
+| **Status** | Accepted, 2026-11-14, by the lead: the owner leaves look-and-feel calls to the lead. It replaces Z1, the live zoom of [zoom.md](zoom.md). The arrangement comes first, then Notes and the beat grid (§5). **Built** by track `drawn-zoom` (§1, "Measured after the build"): the arrangement draws its zoom, Notes and the beat grid are laid out each frame, and Z1 went. |
 | **Written** | 2026-11-14, from `main` at `d06bb743`, after the owner tried Z1 on their Mac: "I hate the pinch to zoom on the timeline, ew ew ew. It should be like apple maps smooth". |
 | **Measured on** | Branch `maps-zoom` (a prototype, not for merge, at `adea9ca3`), in Chrome and WebKitGTK on a server with no graphics chip. The branch `maps-try` is the same with the picture on, to try on the owner's Mac. |
 | **Beside it** | [design.md](design.md), the camera note, and [zoom.md](zoom.md), Z1 and Z2. This note changes VIEW-5 and VIEW-8, and adds VIEW-13. |
@@ -49,6 +49,49 @@ The bench sends a pinch or a run of ⌘-scroll through the camera's real listene
 
 The one layout at the end costs about what one of Z1's layouts does (beat song: 28 ms in Chrome, 51 in WebKit). Nothing moves while it runs: the picture stays on screen until the page is drawn, and the page drawn is the same picture.
 
+### Measured after the build
+
+Track `drawn-zoom` against main at `d06bb743` (Z1), on this server (Linux, no GPU): `zoom-bench` in Chrome 133 and the WebKit tool (`e2e/webkit/`, WebKitGTK 2.50), each at 2 device px a px, three runs of each gesture, one at a time. "Pinch out" is the probe's A13 way out alone (to a third), which only the end lays out at a new zoom. Each cell is median / 95th percentile in ms, frames counted in brackets. A run's layout: how many frames a run laid out, then that frame's work. Pictures (mid-pinch, the last frame, the frame after, the diff): `~/m2-runs/drawn-zoom/look/`.
+
+**WebKitGTK**
+
+| Song, gesture | Z1: a stretched frame's work | Z1: layouts a run × their work | Z1: between frames | Drawn: a frame's work | Drawn: layouts a run × their work | Drawn: between frames |
+|---|---|---|---|---|---|---|
+| Beat song, pinch | 6 / 10 (124) | 1 × 38 / 64 | 18 / 26 | 20 / 27 (95) | 0 | 26 / 32 |
+| Beat song, ⌘-scroll | 6 / 11 (147) | 1.7 × 32 / 78 | 18 / 29 | 21 / 27 (115) | 0.7 × 27 | 27 / 32 |
+| Beat song, pinch out | 6 / 13 (43) | 2.3 × 38 / 41 | 19 / 70 | 21 / 27 (51) | 1 × 40 / 74 | 25 / 32 |
+| Big song, pinch | 20 / 28 (67) | 1 × 90 / 113 | 26 / 97 | 25 / 33 (84) | 0 | 29 / 37 |
+| Big song, ⌘-scroll | 20 / 35 (59) | 2.7 × 95 / 119 | 29 / 136 | 25 / 30 (104) | 0.7 × 53 | 29 / 36 |
+| Big song, pinch out | 15 / 33 (16) | 2.7 × 71 / 91 | 37 / 135 | 25 / 31 (47) | 1 × 130 | 29 / 37 |
+
+**Chrome 133**
+
+| Song, gesture | Z1: a stretched frame's work | Z1: layouts a run × their work | Z1: between frames | Drawn: a frame's work | Drawn: layouts a run × their work | Drawn: between frames |
+|---|---|---|---|---|---|---|
+| Beat song, pinch | 2.7 / 5.1 (154) | 1 × 29 / 33 | 16.7 / 16.7 | 7.9 / 10.6 (158) | 0 | 16.7 / 16.8 |
+| Beat song, ⌘-scroll | 2.4 / 3.3 (173) | 2 × 27 / 28 | 16.7 / 16.8 | 8.1 / 11.0 (180) | 0.7 × 24 | 16.7 / 16.8 |
+| Beat song, pinch out | 2.6 / 10.3 (64) | 3 × 25 / 35 | 16.7 / 16.7 | 8.0 / 10.4 (78) | 1 × 29 / 31 | 16.7 / 16.8 |
+| Big song, pinch | 7.5 / 19.8 (135) | 3 × 59 / 91 | 16.7 / 33.3 | 11.1 / 15.4 (158) | 0 | 16.7 / 16.7 |
+| Big song, ⌘-scroll | 8.1 / 11.2 (147) | 3.3 × 61 / 95 | 16.7 / 33.3 | 11.7 / 14.3 (180) | 0.7 × 58 | 16.7 / 16.7 |
+| Big song, pinch out | 7.3 / 26.4 (50) | 3 × 41 / 61 | 16.7 / 33.4 | 11.7 / 14.6 (78) | 1 × 107 / 115 | 16.7 / 16.7 |
+
+- The bench's pinch and ⌘-scroll end at the zoom they began at (the probe's A13 in and back out), so their end lays out little or nothing new (⌘-scroll's 0.7: one layout in two of three runs). The pinch out's end is the one layout of a zoom: 29 ms (beat) and 107 ms (big) in Chrome, 40 and 130 in WebKit. Z1 laid out in the middle of a gesture 1 to 3.3 times a run, at about the same cost each.
+- A drawn frame costs more than a stretched one (it paints the view: in Chrome 8 against 2.7 ms on the beat song), but never lays out, so its 95th percentile is flat: the frames between stay at Chrome's 16.7 ms (its headless frame) on the big song, where Z1 dropped to 33. In WebKit here a drawn frame is 20 to 25 ms: most of it is software raster on this server (a blank canvas the size of the view costs 4 to 12 ms, §1 above); a Mac rasters on its GPU. Only the owner's Mac can say if it makes 120 frames a second (§6).
+- **The scroll room tried, not kept** (§2.4): following the zoom shown under the picture made a Chrome drawn frame 7.9 → 9.5 ms on the beat song and 11.1 → 17.3 ms on the big song (each frame lays the content's width out again), and 20 → 35 and 25 → 51 ms in WebKit.
+
+**The end** (VIEW-13: the last frame, fingers still on, against the page laid out after it; pixels more than 32 of 255 apart, the arrangement's clear part):
+
+| Zoom | Chrome, the `drawn-zoom` suite's song, 3.95 million px | WebKitGTK, beat song, by hand (`wklook`), 6.3 million px | WebKitGTK, big song, by hand |
+|---|---|---|---|
+| Out to the song's start and back in | 0 | – | – |
+| In | 53 | 266 | 160 |
+| Out | 112 | 7 | 41 |
+| Far out | 135 | 4,058 | 4,395 |
+| ⌘-scroll | 30 | – | – |
+
+- Chrome's are the same in each of three runs: text a sub-pixel apart (marker names, a lane of names' steps), where Chrome places the page's glyphs on its own grid. The suite's limit is 200.
+- WebKit's are compared by hand: the WebKit tool drives no suite. Nearly all its pixels over 32 are WebKitGTK's overlay scroll bars, which show after the end's scroll write (the vertical one: 266 of the beat song's 266 in; the horizontal one: 4,006 of its 4,058 far out). The rest differ by under 32 (grid lines' anti-aliasing). Before the lane canvas lay on whole px, the beat song's far out was 16,895 (§6).
+
 ## 2. The decisions
 
 1. **A picture, not a stretch.**
@@ -57,12 +100,12 @@ The one layout at the end costs about what one of Z1's layouts does (beat song: 
    - While the picture shows, nothing on the page is stretched, laid out early or given a layer of its own.
 2. **Canvas 2D**, one canvas the size of the view, plus one for the ruler. It shares the paint code of Z2's lane canvases (`paintNotes`, `paintCurve`, `spanBox`), so notes land on the same device pixels. WebGL draws the lanes only if the owner's Mac misses 120 frames a second with 2D. Text is always drawn with 2D: WebGL's glyph atlas blurs it.
 3. **The picture draws everything the arrangement can show.** It never falls back to a stretch. That covers clips, notes, curves, audio waves, lanes of names, takes (also while recording), hidden and faded rows, bus words, hatching, tempo and meter changes, the grid, the ruler, markers, the loop, the selected bars, picked clips, the playhead and the Song row. If it misses something, VIEW-13's check fails.
-4. **The page under the picture stays as it was laid out.** The scroll bar is the exception, if it is cheap: the scroll room and position follow the zoom shown under the opaque picture, so the scroll bar's thumb doesn't jump at the end. If that costs too much, the thumb jumps, as with Z1, and that goes into gaps.md.
+4. **The page under the picture stays as it was laid out.** The scroll bar was to be the exception, if it was cheap: the scroll room and position following the zoom shown under the picture, so the scroll bar's thumb doesn't jump at the end. *Built: not kept.* The room has to lay the page's content out at a new width each frame: in Chrome a drawn frame went from 7.9 to 9.5 ms on the beat song and from 11.1 to 17.3 ms on the big song (§1, "Measured after the build"). So the thumb jumps at the end, as with Z1 (gaps.md).
 5. **A press while the picture shows ends the zoom and does nothing else,** as a touch stops a glide on an iPhone. The picture shows with no fingers on only for G (50 ms) after the last ⌘-scroll, and during a glide.
 6. **One layout at the end.** Its cost on a big song is the open "laid-out frame cost" (HANDOFF.md). It can be felt only as a moving playhead stopping for a frame, or a swipe started at once waiting for it.
 7. **No glide yet.** The owner's logged pinch slows nearly to a stop before the fingers lift, so a glide would rarely start. First the swipe probe gets a step "pinch and let go" to measure how fast fingers leave. Then a glide, if wanted (the prototype has one: the zoom's speed kept at 0.996 a ms).
 8. **No switch.** The prototype's palette switch was for measuring. The build has the picture only.
-9. **Then Notes and the beat grid,** through the same library. After that, Z1's stretch goes from the camera library (`useStretch`, the kept layers, early layout), which makes it smaller.
+9. **No stretch anywhere** (the owner, of Notes and the beat grid too: "I don't like how the timeline stretches when I'm trying to pinch in and out. It should be like updating in real time, just using best practices"). Notes and the beat grid are laid out at the zoom shown each frame, as the Graph is, until the second track draws them as pictures through the same library. Z1's code went with the first track (`useStretch`, `stretchOf`, `shownAt`, `shownScroll`, the kept layers, the early layout): the camera library is smaller, and keeps `laid` for the drawn zoom alone.
 
 **Why, in one line each:**
 - The owner judges motion against Maps: "sharp every frame, nothing changes when the fingers stop, 120 Hz". A shortcut that shows on screen is not acceptable, however good its numbers.
@@ -72,7 +115,7 @@ The one layout at the end costs about what one of Z1's layouts does (beat song: 
 
 | Rule | Today (Z1) | After |
 |---|---|---|
-| VIEW-5 | A zoom by the hand stretches what the view marks, and lays the view out at its end, or early near the edge of what is drawn. A press lays the zoom out first and lands on what shows. | In a view that draws its zoom, a zoom by the hand shows in the frame it was asked in, drawn sharp at the zoom shown. The page under it is laid out only at the end. A press while the picture shows ends the zoom and does nothing else. Notes and the beat grid keep Z1 until §5's second track. |
+| VIEW-5 | A zoom by the hand stretches what the view marks, and lays the view out at its end, or early near the edge of what is drawn. A press lays the zoom out first and lands on what shows. | In a view that draws its zoom, a zoom by the hand shows in the frame it was asked in, drawn sharp at the zoom shown. The page under it is laid out only at the end. A press while the picture shows ends the zoom and does nothing else. A view that doesn't draw its zoom yet (Notes, the beat grid, the Graph) is laid out at the zoom shown each frame. Nothing stretches. A run of ⌘-scroll ends after G counted in frames, each at most G/2, never by a timer. |
 | VIEW-8 | No React component renders on a frame of a live zoom. | The same for a drawn zoom: the picture paints from the camera's subscription. |
 | VIEW-13 (new) | – | The last frame of a drawn zoom and the page laid out after it MUST look the same, within anti-aliasing. Nothing on screen changes when the fingers stop. |
 
@@ -85,8 +128,8 @@ The one layout at the end costs about what one of Z1's layouts does (beat song: 
 
 ## 5. Build order
 
-1. **`drawn-zoom`:** the library's part, the arrangement drawn whole, the rules and the tests. WebGL for the lanes goes in this track only if the owner's Mac asks for it by then.
-2. **`drawn-zoom-2`:** Notes and the beat grid drawn the same way, and Z1's stretch removed.
+1. **`drawn-zoom`:** the library's part, the arrangement drawn whole, the rules and the tests; Notes and the beat grid laid out each frame, and Z1's stretch removed (§2.9). WebGL for the lanes goes in this track only if the owner's Mac asks for it by then.
+2. **`drawn-zoom-2`:** Notes and the beat grid drawn the same way.
 3. **The glide,** after the probe measures release speeds.
 
 Each track has a builder, a skeptic's review and the full check.
@@ -100,8 +143,12 @@ Each track has a builder, a skeptic's review and the full check.
 
 To measure it, the owner builds `maps-try`, then for each way of drawing (⇧⌘P ▸ Zoom drawing): ⇧⌘P ▸ Swipe probe ▸ the last step, Replay a pinch ▸ Copy report. The report names the way it drew. Read "between frames": 8.3 ms is 120 a second.
 
-**Known from the prototype, to fix in the build:**
-- In WebKit, far zoomed out, Z2's lane canvas draws notes up to 1 device px right of where the picture puts them. The likely cause is a lane canvas whose width ends on a half px; not proven.
-- `reveal()` reads the page's places with the stretch's maths.
-- The scene isn't read again if the song changes mid-zoom.
-- The page's playhead shows through the rows' borders under the headers mid-zoom (Z1 too).
+**Known from the prototype, fixed in the build** (each with a check that failed first):
+- In WebKit, far zoomed out, Z2's lane canvas drew notes 1 device px right of where the picture puts them. The cause: WebKit draws a canvas into its box rounded to whole CSS px, and a lane's canvas lay on a half px (on the screen's own pixels, not whole px). A lane's canvas lies on whole px now (`ClipDrawing.tsx`). WebKit, beat song, a pinch far out: 16,895 pixels over 32 apart at the end, 4,058 after (§1).
+- `reveal()` read the page's places with the stretch's maths. Under the picture it carries the page's place to the zoom shown (`rig.ts`).
+- The scene wasn't read again if the song changed mid-zoom. Each render of the arrangement and of a track's rows says what it draws (`Said`), and the stores the scene reads are heard: the picture reads its scene again.
+- The page's playhead showed through the lines between the tracks' headers, mid-zoom and at rest when scrolled past. The page's playhead keeps to the zoom laid out, and hides when scrolled past.
+
+**Found in the build, fixed:**
+- A run of ⌘-scroll ended by a timer, which a long frame could fire before the events queued behind it (main's CI). It ends by frames now.
+- A zoom back at the zoom it began at, its way out stopped by the view's start, looked further on than the view had room for: its end jumped back. It asks for its room as any zoom's end does.

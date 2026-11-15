@@ -18,13 +18,14 @@ import zlib from "node:zlib";
 import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixlib.mjs";
 
 /**
- * How many of the clear part's pixels may differ by more than 32 of 255 in a colour (of 2.5 million
- * at 1440 × 900, here 1440 × 1200: 3.3 million). Measured on this song in Chrome 133 at a real 2 device
- * px a px, the picture and the page differ only by anti-aliasing: text's and a curve's edges, a
- * waveform's column a device px over, where the canvas and the page round a part of a px apart. The
- * pixels over 32 apart were 0 to 40 a zoom (drawn-zoom.md §1, "Measured after the build"). A picture
- * that leaves out one kind of thing (the audio waves) differs by thousands, and one moved 1 px across
- * by tens of thousands. 200 lies well above the anti-aliasing and far below either fault.
+ * How many of the clear part's pixels may differ by more than 32 of 255 in a colour (of 3.95 million:
+ * 1440 × 1200 at 2 device px a px, right of the headers). Measured on this song in Chrome 133 at a
+ * real 2 device px a px, the picture and the page differ only by where text's glyphs fall: a marker's
+ * name, a lane of names' steps, a sub-pixel apart, as Chrome places the page's glyphs on its own grid.
+ * The pixels over 32 apart were 0, 53, 112, 135 and 30 for the five zooms below, the same in each of
+ * three runs (drawn-zoom.md §1, "Measured after the build"). A picture that leaves out the audio waves
+ * differs by 1,536 to 17,800, and one moved 1 px across by 45,268 to 217,539: each fails all five.
+ * 200 lies above the glyphs and 7 times under the smaller fault.
  */
 const LIMIT = 200;
 const W = 1440, H = 1200;
@@ -207,6 +208,8 @@ const tag = process.env.DRAWN_ZOOM_TAG ?? "";
 async function compare(name, last, before) {
   const lastAt = await shown();
   const a = await shot(`${tag}${name}-last.png`);
+  // Still the picture after the shot: the shot is of it, not of the page after an end.
+  const still = await shown();
   await last();
   await page.waitForFunction(() => window.m2canvas.camera.now("arrangement").laid === null, { timeout: 3000 }).catch(() => null);
   await frames(3);
@@ -214,8 +217,8 @@ async function compare(name, last, before) {
   const b = await shot(`${tag}${name}-after.png`);
   const d = differ(a, b, region, dpr);
   check(
-    !!lastAt.cam.laid && lastAt.pic?.shown && lastAt.pic.drawn?.zoom === lastAt.cam.zoom && lastAt.cam.laid.zoom === before && after.cam.laid === null && !after.pic?.shown && after.cam.zoom === lastAt.cam.zoom && d.over <= LIMIT,
-    `${name} (${before} → ${lastAt.cam.zoom.toFixed(2)} px a beat): its last picture (the fingers still on, the page laid out at ${lastAt.cam.laid?.zoom}) and the page laid out after it differ by more than 32 of 255 in ${d.over} of ${region.w * region.h} pixels (at most ${LIMIT}; the most ${d.max}; where: ${JSON.stringify(d.cells)})`,
+    !!lastAt.cam.laid && lastAt.pic?.shown && lastAt.pic.drawn?.zoom === lastAt.cam.zoom && lastAt.cam.laid.zoom === before && !!still.cam.laid && still.pic?.shown && still.cam.zoom === lastAt.cam.zoom && after.cam.laid === null && !after.pic?.shown && after.cam.zoom === lastAt.cam.zoom && d.over <= LIMIT,
+    `${name} (${before} → ${lastAt.cam.zoom.toFixed(2)} px a beat): its last picture (the fingers still on, the page laid out at ${lastAt.cam.laid?.zoom}, the picture ${still.pic?.shown ? "still shown" : "gone"} after the shot) and the page laid out after it differ by more than 32 of 255 in ${d.over} of ${region.w * region.h} pixels (at most ${LIMIT}; the most ${d.max}; where: ${JSON.stringify(d.cells)})`,
   );
   await sleep(400);
 }
@@ -260,13 +263,21 @@ await pinch("a pinch out", await pointIn(0.3, 0.4), 0.65);
 }
 await pinch("a pinch far out", await pointIn(0.2, 0.5), 0.3);
 {
-  // A run of ⌘-scroll, an event a frame; compared at its last, before G passes.
+  // A run of ⌘-scroll, an event a frame; compared at its last, before G passes. A shot takes longer
+  // than G, so while it is taken the run goes on with events that zoom by nothing (a ⌘-scroll of 0,
+  // as a trackpad's last events can be), then stops.
   const at = await pointIn(0.4, 0.4);
   const before = (await shown()).cam.zoom;
   for (let i = 0; i < 8; i++) {
     await page.evaluate((x, y) => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: -6, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), at.x, at.y);
     await frames(1);
   }
-  await compare("a run of ⌘-scroll", () => sleep(150), before);
+  await page.evaluate((x, y) => {
+    window.__stillScroll = setInterval(() => (document.elementFromPoint(x, y) ?? document.body).dispatchEvent(new WheelEvent("wheel", { deltaY: 0, clientX: x, clientY: y, metaKey: true, bubbles: true, cancelable: true })), 8);
+  }, at.x, at.y);
+  await compare("a run of ⌘-scroll", async () => {
+    await page.evaluate(() => clearInterval(window.__stillScroll));
+    await sleep(150);
+  }, before);
 }
 done(errors);
