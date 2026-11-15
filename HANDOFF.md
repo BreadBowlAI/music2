@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 being made; the 0.2.0 draft unpublished) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 drafted, the nightly green; the 0.2.0 draft unpublished) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -15,12 +15,13 @@ design for whatever you pick up. Older versions of this page, with each track's 
   After review T: no CSS hover anywhere while a camera moves, nor after it until the pointer moves (the root's
   `data-camera-moved`, `index.css`'s `hover:` variant); the picture asks for peaks the page never did, paints
   once a frame, and lists what it drew from its own brushes; a press beside it does what it says.
-  **Owed on the owner's Mac:** the swipe probe's Replay a pinch and its new step "a pinch let go of" (frame
-  cost at 120 Hz in WKWebView, and how fast fingers leave a pinch, for a glide).
-- **0.3.0 is being made (branch `release-0.3.0`, 2026-11-15)**, from `main` after #127: version 0.3.0 everywhere
-  `ci/release.sh version` reads it, and [docs/releases/0.3.0.md](docs/releases/0.3.0.md), which says what is new
-  since 0.1.0. Once it merges, the tag `v0.3.0` on `main` runs `release.yml`, which makes the draft pre-release;
-  **publishing it is the owner's.**
+  **Answered on the owner's Mac** (2026-11-15, the drawn-zoom note's §6): a drawn frame costs 2 ms at 120 a second
+  in WKWebView, so no WebGL; and how fast fingers leave a pinch, for a glide. The owner: "it felt good".
+- **0.3.0 is made, as a draft (2026-11-15).** #130 set version 0.3.0 everywhere `ci/release.sh version` reads it,
+  with [docs/releases/0.3.0.md](docs/releases/0.3.0.md), which says what is new since 0.1.0. The nightly passed on
+  both machines at `27e0f22a` (run 43750781682, by hand, after #129 to #131 fixed its failures). The tag `v0.3.0`
+  there ran `release.yml` (run 43757711546), which made the draft pre-release with its five files.
+  **Publishing it is the owner's.**
   - **The 0.2.0 draft** (#97, tag `v0.2.0`, run 42391434245) was never published, and 0.3.0 replaces it: the owner
     may delete the draft. The tag stays, as pushed tags aren't moved.
   - The server has no `file` program, which linuxdeploy's AppImage tool needs: a build here puts an unpacked copy on
@@ -388,11 +389,11 @@ whether it is one of these or a real failure, and fixes the real ones (most were
 
 ## What comes next
 
-1. **Release 0.3.0** (the owner's): merge `release-0.3.0`, tag `v0.3.0` on `main`, check the draft `release.yml`
-   makes, publish it. Delete the unpublished 0.2.0 draft if wanted.
+1. **Publish 0.3.0** (the owner's): try the draft's Mac zip as `docs/mac-run.md` steps 137 to 141 say, then publish
+   the draft. Delete the unpublished 0.2.0 draft if wanted.
 2. **After the release, the zoom:** track `drawn-zoom-2` (Notes and the beat grid drawn as the timeline is; work in
-   progress on the local branch `drawn-zoom-2`, worktree `~/m2-runs/wt-drawn-zoom-2`), then the glide once the
-   owner's probe says how fast a pinch is let go of, then the scroll bar's thumb that jumps at a zoom's end (gaps.md,
+   progress on the local branch `drawn-zoom-2`, worktree `~/m2-runs/wt-drawn-zoom-2`), then the glide, from the
+   release speeds in the note's §6, then the scroll bar's thumb that jumps at a zoom's end (gaps.md,
    Timeline and clips). The drawn zoom's note §5.
 3. **Small, left by the last tracks** (each in gaps.md):
    - the keyed compressor's dot rides its own input, not what it listens to (M2-21: it needs a look at the sidechain,
