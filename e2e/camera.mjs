@@ -136,10 +136,15 @@ const pinch = (x, y, scales) =>
     y,
     scales,
   );
-/** A pinch at (x, y) across frames, as WebKit sends one: a `gesturechange` a frame, each scale from its start. Then three frames more. */
-const pinchFrames = (x, y, scales) =>
+/**
+ * A pinch at (x, y) across frames, as WebKit sends one: a `gesturechange` a frame, each scale from its
+ * start, so each is laid out or drawn in a frame of its own however slow the frames (GitHub's Mac
+ * draws one in up to 100 ms, where changes 8 ms apart fall in one frame). Then (with `end`) its
+ * `gestureend`, and three frames more.
+ */
+const pinchFrames = (x, y, scales, end = true) =>
   page.evaluate(
-    (x, y, scales) =>
+    (x, y, scales, end) =>
       new Promise((done) => {
         const el = document.elementFromPoint(x, y);
         const send = (type, scale) => {
@@ -152,6 +157,7 @@ const pinchFrames = (x, y, scales) =>
         const one = () => {
           send("gesturechange", scales[i]);
           if (++i < scales.length) return requestAnimationFrame(one);
+          if (!end) return requestAnimationFrame(done);
           send("gestureend", scales.at(-1));
           requestAnimationFrame(() => requestAnimationFrame(() => requestAnimationFrame(done)));
         };
@@ -160,6 +166,7 @@ const pinchFrames = (x, y, scales) =>
     x,
     y,
     scales,
+    end,
   );
 /**
  * `n` frames of ⌘-scroll at (x, y), two events in each (`dy` each), each event a task of its own, as
@@ -943,7 +950,7 @@ const beatX = (x) =>
     const room = (await scroll(beat)).room.x;
     const q = { x: Math.round(b.x + c.margins.left + (c.view.w - c.margins.left) * fx), y: b.y + 60 };
     const stop = await watchFrames("beat", beat, "[data-none]", { hold: { x: q.x, kind: "steps" } });
-    await pinchOver(q.x, q.y, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6]);
+    await pinchFrames(q.x, q.y, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6]);
     await laidOut("beat");
     await frames(3);
     const fs = await stop();
@@ -2623,7 +2630,7 @@ const rollBeat = (x) =>
   const z0 = (await cam("notes"))?.zoom;
   const r0 = await renders();
   const stop = await watchFrames("notes", roll, "[data-note]", { hold: { x: at.x, kind: "notes" } });
-  await pinchOver(at.x, at.y, [1.1, 1.2, 1.3], false);
+  await pinchFrames(at.x, at.y, [1.1, 1.2, 1.3], false);
   await frames(2);
   const q = since(r0, await renders());
   const mid = await cam("notes");
@@ -2712,7 +2719,7 @@ const openBass = async (clip) => {
     const room = (await scroll(roll)).room.x;
     const at = { x: Math.round(r.x + c.margins.left + (c.view.w - c.margins.left) * fx), y: Math.round(r.y + r.height / 2) };
     const stop = await watchFrames("notes", roll, "[data-note]", { hold: { x: at.x, kind: "notes" } });
-    await pinchOver(at.x, at.y, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6]);
+    await pinchFrames(at.x, at.y, [1.1, 1.2, 1.3, 1.4, 1.5, 1.6]);
     await laidOut("notes");
     await frames(3);
     const fs = await stop();
