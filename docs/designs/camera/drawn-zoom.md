@@ -91,6 +91,35 @@ Track `drawn-zoom` against main at `d06bb743` (Z1), on this server (Linux, no GP
 
 - Chrome's are the same in each of three runs: text a sub-pixel apart (marker names, a lane of names' steps), where Chrome places the page's glyphs on its own grid. The suite's limit is 200.
 - On the beat song in Chrome, every pixel over 32 apart is in the ruler's bar numbers (the most 67 of 255): where a number's left falls on a fraction of a device px, the picture's glyphs sit up to half a device px left of the page's. Both are placed at the same px (within a hundredth of a device px); how Chrome rasters the page's text there is what differs, and on the suite's song it doesn't. The cause isn't found (gaps.md); WebKit draws them alike.
+- **After review T**, the suite also compares with the playhead in view, a lane glowing (AGENT-5) with its clip picked, the pointer resting on a clip with the Mac's hover rules on, a clip far on whose peaks the page never asked for, and a pinch while a take records and the song plays (the columns the playhead crossed between the two shots left out). Its eight zooms: 0, 40, 87, 31, 87, 91, 30 and 0 pixels over 32 apart.
+
+**While the song plays** (review T4), the bench's timeline pinch (A13 in and back), three runs stopped and three playing, Chrome, at `28f96595` (the picture painted on the clock's frames and again in the camera's: about twice a frame) and after (once a frame, in the camera's frame). A drawn frame's work, median / 95th percentile in ms:
+
+| Song | Stopped | Playing, before | Playing, after |
+|---|---|---|---|
+| Beat song | 7.5 / 10.7 | 12.0 / 16.8 | 8.2 / 10.8 |
+| Big song | 11.1 / 13.7 | 18.7 / 28.6 | 13.1 / 20.7 |
+
+On the beat song the frames between stay at 16.7 ms playing (33.2 at the 95th percentile before). What is left on the big song is the page's own while it plays (its playhead and meters), and a layout or two a run where Follow pages to the playhead, which lays a drawn zoom out first (VIEW-5).
+
+**What VIEW-13's check sees.** Beside the pixels over 32 apart (at most 200), the mean difference of each 8 × 8 device px cell: at most 8 of 255, or 20 where the picture lists a word (glyphs fall a sub-pixel apart in the page's text, and only there). Measured on the suite's song: at most 3.8, and 12.8 where a word lies. A faint wash moved or a small shape left out differs by under 32 in each pixel but is dense in its cells. Each of review T's mutants, built from this source, against the suite's eight zooms (pixels over 32 / cells over the limit, the zooms that fail):
+
+| Mutant | Fails | The most apart |
+|---|---|---|
+| No strike-through on a name the choice lost | 5 of 8 | words' cells 28 |
+| No playhead cap | 5 of 8 | cells 115 |
+| The loop's shade drawn a beat right (and `camera` fails: the shade 24 px off) | 6 of 8 | 2,109 cells over, each 16 |
+| No curve points | 7 of 8 | cells 44 |
+| No step ticks in the lane of names | 5 of 8 | cells 36 |
+| No fade handles on the picked audio clip | 4 of 8 | cells 83, words' 105 |
+| No hatching on the track muted in the song | 7 of 8 | cells 9.3 to 12 |
+| No marker ticks | 8 of 8 | cells 28 |
+| No tempo or meter words | 8 of 8 | cells 74 |
+| No audio waves | 7 of 8 | 19,975 px |
+| The picture 1 px across | 8 of 8 | 232,355 px |
+
+The hatching is the closest: 9.3 against the limit's 8 and the song's own 3.8.
+
 - WebKit's are compared by hand: the WebKit tool drives no suite. Nearly all its pixels over 32 are WebKitGTK's overlay scroll bars, which show after the end's scroll write (the vertical one: 266 of the beat song's 266 in; the horizontal one: 4,006 of its 4,058 far out). The rest differ by under 32 (grid lines' anti-aliasing). Before the lane canvas lay on whole px, the beat song's far out was 16,895 (§6).
 
 ## 2. The decisions
@@ -100,7 +129,7 @@ Track `drawn-zoom` against main at `d06bb743` (Z1), on this server (Linux, no GP
    - The view owns what is drawn. It gives a scene, read once as the zoom begins from what the view renders from, and a paint function of the zoom shown.
    - While the picture shows, nothing on the page is stretched, laid out early or given a layer of its own.
 2. **Canvas 2D**, one canvas the size of the view, plus one for the ruler. It shares the paint code of Z2's lane canvases (`paintNotes`, `paintCurve`, `spanBox`), so notes land on the same device pixels. WebGL draws the lanes only if the owner's Mac misses 120 frames a second with 2D. Text is always drawn with 2D: WebGL's glyph atlas blurs it.
-3. **The picture draws everything the arrangement can show.** It never falls back to a stretch. That covers clips, notes, curves, audio waves, lanes of names, takes (also while recording), hidden and faded rows, bus words, hatching, tempo and meter changes, the grid, the ruler, markers, the loop, the selected bars, picked clips, the playhead and the Song row. If it misses something, VIEW-13's check fails.
+3. **The picture draws everything the arrangement can show.** It never falls back to a stretch. That covers clips, notes, curves, audio waves, lanes of names, takes (also while recording), hidden and faded rows, bus words, hatching, tempo and meter changes, the grid, the ruler, markers, the loop, the selected bars, picked clips, the playhead and the Song row. *Built:* VIEW-13's check (`drawn-zoom`) fails a picture that leaves any one of those out, of the kinds tried: each of the review's mutants fails at least one of its eight zooms (§1, "What VIEW-13's check sees"). It can't see a kind its song doesn't show: a take of notes recording (it records audio), a lane just made, lit for a moment (not drawn, gaps.md).
 4. **The page under the picture stays as it was laid out.** The scroll bar was to be the exception, if it was cheap: the scroll room and position following the zoom shown under the picture, so the scroll bar's thumb doesn't jump at the end. *Built: not kept.* The room has to lay the page's content out at a new width each frame: in Chrome a drawn frame went from 7.9 to 9.5 ms on the beat song and from 11.1 to 17.3 ms on the big song (§1, "Measured after the build"). So the thumb jumps at the end, as with Z1 (gaps.md).
 5. **A press while the picture shows ends the zoom and does nothing else,** as a touch stops a glide on an iPhone. The picture shows with no fingers on only for G (50 ms) after the last ⌘-scroll, and during a glide.
 6. **One layout at the end.** Its cost on a big song is the open "laid-out frame cost" (HANDOFF.md). It can be felt only as a moving playhead stopping for a frame, or a swipe started at once waiting for it.

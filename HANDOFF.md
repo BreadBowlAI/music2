@@ -12,6 +12,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
   Z1's stretch code is gone. A press while the picture shows only ends the zoom; a paint that throws lays each
   frame out instead. A ⌘-scroll run ends after G counted in frames, not by a timer (main's CI failure at
   `d06bb743`). Rules VIEW-5, VIEW-8, VIEW-13 (taste.md); numbers in `docs/designs/camera/drawn-zoom.md` §1.
+  After review T: no CSS hover anywhere while a camera moves, nor after it until the pointer moves (the root's
+  `data-camera-moved`, `index.css`'s `hover:` variant); the picture asks for peaks the page never did, paints
+  once a frame, and lists what it drew from its own brushes; a press beside it does what it says.
   **Owed on the owner's Mac:** the swipe probe's Replay a pinch and its new step "a pinch let go of" (frame
   cost at 120 Hz in WKWebView, and how fast fingers leave a pinch, for a glide).
 - **0.2.0 is made, as a draft** (#97, 2026-11-07). The tag `v0.2.0` and `release.yml`'s run (42391434245) built the

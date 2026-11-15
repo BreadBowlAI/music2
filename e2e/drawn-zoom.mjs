@@ -19,15 +19,20 @@ import { PROJ, ROOT, check, done, open, read, sleep, until, write } from "./fixl
 
 /**
  * How many of the clear part's pixels may differ by more than 32 of 255 in a colour (of 3.95 million:
- * 1440 × 1200 at 2 device px a px, right of the headers). Measured on this song in Chrome 133 at a
- * real 2 device px a px, the picture and the page differ only by where text's glyphs fall: a marker's
- * name, a lane of names' steps, a sub-pixel apart, as Chrome places the page's glyphs on its own grid.
- * The pixels over 32 apart were 0, 53, 112, 135 and 30 for the five zooms below, the same in each of
- * three runs (drawn-zoom.md §1, "Measured after the build"). A picture that leaves out the audio waves
- * differs by 1,536 to 17,800, and one moved 1 px across by 45,268 to 217,539: each fails all five.
- * 200 lies above the glyphs and 7 times under the smaller fault. It is this song's: on the beat song
- * Chrome rasters the page's bar numbers at a fraction of a device px half a px apart from the picture's,
- * 288 to 846 pixels (gaps.md, "What the zoom's picture may still miss").
+ * 1440 × 1200 at 2 device px a px, right of the headers), and how far an 8 × 8 device px cell may
+ * differ on average: CELL, or TEXT_CELL where the picture lists a word. Measured on this song in Chrome
+ * 133 at a real 2 device px a px, the picture and the page differ only by where text's glyphs fall, a
+ * sub-pixel apart (a marker's name, a lane of names' steps), as Chrome places the page's glyphs on its
+ * own grid: 0 to 91 pixels over 32 for the eight zooms below, cells at most 3.8 apart, 12.8 where a
+ * word lies (drawn-zoom.md §1, "What VIEW-13's check sees"). A faint wash moved or a small shape left
+ * out differs by under 32 a pixel but is dense in its cells. Review T's mutants each fail some of the
+ * zooms: no strike-through (words' cells 28), no playhead cap (cells 115), the loop's shade a beat
+ * right (cells 16), no curve points (44), no step ticks (36), no fade handles (83), no hatching (9.3
+ * to 12, the closest), no marker ticks, no tempo words, no waves (19,975 px), 1 px across (232,355 px).
+ * So: 200 pixels, above the glyphs' 91; 8 a cell, twice the song's own and under the hatching's 9.3;
+ * 20 where a word lies, above the glyphs' 12.8 and under the strike's 25. They are this song's: on the
+ * beat song Chrome rasters the page's bar numbers at a fraction of a device px half a px apart from
+ * the picture's, 288 to 846 pixels (gaps.md, "What the zoom's picture may still miss").
  */
 const LIMIT = 200;
 /** The most an 8 × 8 device px cell may differ on average, of 255, and where a word lies (why: above). */

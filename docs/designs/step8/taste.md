@@ -1541,10 +1541,14 @@ the selected bars, picked clips, the playhead and the Song row. It never falls b
   canvas into its box's whole device px, text's glyphs, a cut name's ellipsis, the strike through a
   name it no longer has, a muted track's grey, the loop's shade multiplied in). Tested by `drawn-zoom`
   at a real 2 device px a px (Chrome's own scale, not an emulated one): a song with every kind of
-  thing above; a pinch in, out, far out, out and back at the song's start, and a run of ⌘-scroll;
-  each last picture against the page after it, at most 200 pixels more than 32 of 255 apart (measured
-  0 to 135: glyphs a sub-pixel apart; a picture without the audio waves differs by 1,536 or more, one
-  1 px off by 45,268 or more). `camera` reads each frame's list of what the picture drew. WebKit is
+  thing above, the playhead in view, a lane glowing (AGENT-5) with its clip picked, a clip far on
+  whose waveform the page never asked for; a pinch in, out, far out, out and back at the song's
+  start, in and out with the pointer resting on a clip (the Mac's hover rules on), a run of
+  ⌘-scroll, and a pinch while a take records and the song plays; each last picture against the page
+  after it: at most 200 pixels more than 32 of 255 apart, and no 8 × 8 device px cell more than 8
+  apart on average (20 where a word lies), measured 0 to 91, 3.8 and 12.8; each of review T's
+  mutants fails some zooms (the drawn zoom's note §1, "What VIEW-13's check sees"). `camera` reads
+  each frame's list of what the picture drew, which its brushes make from the numbers they drew at. WebKit is
   compared by hand (`wklook`, the drawn zoom's note §1). Not yet as the page draws it: gaps.md,
   "What the zoom's picture may still miss" (in Chrome, on the beat song, the bar numbers at a
   fraction of a device px, up to half a device px apart).
