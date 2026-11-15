@@ -12,7 +12,7 @@ import { attach, release, strike, useAudition } from "../lib/audition";
 import { on } from "../lib/events";
 import { beatNow, playingNow } from "../lib/clock";
 import { useExpanded } from "../lib/expanded";
-import { useLook, useLooking, type LookKind, type Seen } from "../lib/taps";
+import { useLook, useLooking, type Look, type LookKind, type Seen } from "../lib/taps";
 import { barAt, controlLabel, graphApi, inSentence, picks, stepValue, type CardView, type Knob, type NumberKnob } from "../lib/graph";
 import { shown as showing, showsOwn } from "../lib/history";
 import { useStore } from "../lib/store";
@@ -638,7 +638,7 @@ const drawn = (s: Seen) => ((s.unit === "db" || s.unit === "switch") && s.most !
  * the picture shows (`useLook`, one ask for each look in this window), and is drawn as its reads
  * come. A layer that can't come says why, small, in the corner; the shapes stay.
  */
-function Live({ view, shapes, looking, size, session, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean; size: { w: number; h: number } }) {
+function Live({ view, shapes, looking, size, session, revision, module, node }: ViewProps & { view: PictureView; shapes: Shape[]; looking: boolean; size: { w: number; h: number } }) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const seen = useRef(new Map<number, Seen[]>());
   const [why, setWhy] = useState<string | null>(null);
@@ -822,7 +822,7 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
         return look ? (
           <LayerLook
             key={i}
-            look={{ session, module, node: node.id, ...look }}
+            look={{ session, revision, module, node: node.id, ...look }}
             looking={looking}
             seen={(s) => {
               const kept = seen.current.get(i) ?? [];
@@ -842,7 +842,7 @@ function Live({ view, shapes, looking, size, session, module, node }: ViewProps 
 }
 
 /** One live layer's look (TAP-16): a component, so each layer's ask is its own hook. */
-function LayerLook({ look, looking, seen, why }: { look: { session: number; module: string; node: string; kind: LookKind; at: string }; looking: boolean; seen: (s: Seen) => void; why: (w: string | null) => void }) {
+function LayerLook({ look, looking, seen, why }: { look: Look; looking: boolean; seen: (s: Seen) => void; why: (w: string | null) => void }) {
   useLook(look, looking, seen, why);
   return null;
 }

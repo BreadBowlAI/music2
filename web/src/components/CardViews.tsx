@@ -277,11 +277,11 @@ function ScopeView(p: ViewProps) {
   const [why, setWhy] = useState<string | null>(null);
   const count = useRef(0);
   const box = useRef<HTMLDivElement>(null);
-  const { session, module } = p;
+  const { session, revision, module } = p;
   const node = p.node.id;
   // Looked at: the card on screen, in a window that shows (TAP-16; TAP-4: looking costs nothing otherwise).
   const looking = useLooking(box);
-  useLook({ session, module, node, kind: "scope", at: "out" }, looking, (seen) => {
+  useLook({ session, revision, module, node, kind: "scope", at: "out" }, looking, (seen) => {
     const frames = seen.frames ?? [];
     const c = canvas.current;
     if (!c || !frames.length || !frames[0].length) return;

@@ -287,11 +287,27 @@ function ahead(own?: Editing): object[] {
 const going = (e: object) => onItsWay.has(e as Editing) || flying.has(e);
 
 /**
- * Whether `graph` shows this window's own changes: none of `before` (by default, its changes on
- * their way now) is on its way still, and `graph` shows the newest revision its changes made.
+ * Whether a view of `session` drawn at `revision` shows this window's own changes: none of `before`
+ * (by default, its changes on their way now) is on its way still, and `revision` is the newest
+ * revision they made, or newer.
  */
+export function drawnAfterOwn(session: number, revision: number, before: readonly object[] = ahead()): boolean {
+  return !before.some(going) && (mine.session !== session || revision >= mine.revision);
+}
+
+/** Whether `graph` shows this window's own changes (`drawnAfterOwn`). */
 export function showsOwn(graph: GraphState, before: readonly object[] = ahead()): boolean {
-  return !before.some(going) && (mine.session !== graph.session || graph.view.revision >= mine.revision);
+  return drawnAfterOwn(graph.session, graph.view.revision, before);
+}
+
+/**
+ * Hear each moment `drawnAfterOwn` may have come true (a change of the window's own landed, or the
+ * window shows a new state), until the function it gives back is called: for what waits without
+ * being a gesture, so it never gives up nor says anything (a look, TAP-16).
+ */
+export function hearOwn(f: () => void): () => void {
+  waiters.add(f);
+  return () => void waiters.delete(f);
 }
 
 /**
