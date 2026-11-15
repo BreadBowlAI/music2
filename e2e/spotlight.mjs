@@ -36,6 +36,22 @@ const hold = (part, answer, every = false) => {
     go();
   };
 };
+// The page's plugin list and searches as they go and come, said when a wait for an answer runs out
+// (GitHub's Mac, 11-15: one such wait ran out 10 s in, once; its retry passed).
+const traffic = [];
+const t0 = Date.now();
+const listed = (r) => /\/api\/(plugins|library\?)/.test(r.url());
+const short = (r) => r.url().replace(/^.*\/api/, "/api");
+page.on("request", (r) => listed(r) && traffic.push(`${Date.now() - t0} ms asked ${short(r)}`));
+page.on("response", (r) => listed(r) && traffic.push(`${Date.now() - t0} ms ${r.status()} ${short(r)}`));
+page.on("requestfailed", (r) => listed(r) && traffic.push(`${Date.now() - t0} ms failed ${short(r)}`));
+/** The page's next answer whose URL has `part`, within `ms`; else it says what came and what the field holds, and throws. */
+const answered = (part, ms = 10000) =>
+  page.waitForResponse((r) => r.url().includes(part), { timeout: ms }).catch(async (e) => {
+    const field = await page.$eval("[data-spotlight] input", (e) => e.value).catch(() => null);
+    console.log(`no answer for ${part} in ${ms / 1000} s; the field holds ${JSON.stringify(field)}; the plugin list and the searches: ${traffic.join(", ")}`);
+    throw e;
+  });
 const playing = () => page.evaluate(async (t) => (await (await fetch("/api/graph/status", { headers: { "x-m2-token": t } })).json()).playing, sess.page_token);
 const said = () => page.$eval("[data-spotlight-said]", (e) => e.textContent).catch(() => null);
 const toasted = (text) => until(async () => (await toasts()).some((t) => t.includes(text)), 10000);
@@ -48,9 +64,9 @@ const find = async (words) => {
   await page.evaluate(() => document.activeElement instanceof HTMLElement && document.activeElement.blur());
   await key("Meta+KeyF");
   await until(panel, 5000);
-  const answered = page.waitForResponse((r) => r.url().includes(`/api/library?q=${encodeURIComponent(words)}`), { timeout: 10000 });
+  const came = answered(`/api/library?q=${encodeURIComponent(words)}`);
   await page.type("[data-spotlight] input", words);
-  await answered;
+  await came;
   await until(async () => (await rows()).length > 0 || (await page.$eval("[data-spotlight]", (e) => e.textContent)).includes("Nothing matches"), 5000);
 };
 
@@ -70,7 +86,7 @@ await key("ArrowDown");
 await key("ArrowDown");
 await key("ArrowDown");
 const picked = await activeRow();
-const again = page.waitForResponse((r) => r.url().includes("/api/library?q=synth"), { timeout: 10000 });
+const again = answered("/api/library?q=synth");
 pluginsCome();
 await again;
 await sleep(300);
