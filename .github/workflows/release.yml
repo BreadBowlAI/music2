@@ -1,5 +1,5 @@
 # .github/workflows/release.yml: music2's downloads (PLAT-8). A pushed tag v<version> builds the
-# Mac and Linux files and makes a draft pre-release of them; the owner publishes it by hand.
+# Mac and Linux files and makes a draft release of them; the owner publishes it by hand.
 #
 # In short: each platform's job runs ci/release.sh, the same script anyone can run on their own
 # machine: build (the Tauri CLI from web/, never a third-party action), check (unpack each file,
@@ -199,9 +199,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-  # On a tag: one draft pre-release with every file, SHA256SUMS and the notes, and each file's
+  # On a tag: one draft release with every file, SHA256SUMS and the notes, and each file's
   # signed provenance. Run again, it refuses while that tag's draft is there: delete the draft
-  # first (each run signs the files it built).
+  # first (each run signs the files it built). Not a pre-release, though the title says alpha:
+  # once published it is the Latest release, which the repo's page shows in its side panel (with
+  # only pre-releases, that panel shows just a count of tags).
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: [linux, mac]
@@ -232,5 +234,5 @@ jobs:
           TAG: ${{ github.ref_name }}
         run: |
           v=$(ci/release.sh version "$TAG")
-          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --prerelease \
+          gh release create "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft \
             --title "music2 $v (alpha)" --notes-file "docs/releases/$v.md"

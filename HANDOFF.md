@@ -17,13 +17,16 @@ design for whatever you pick up. Older versions of this page, with each track's 
   once a frame, and lists what it drew from its own brushes; a press beside it does what it says.
   **Answered on the owner's Mac** (2026-11-15, the drawn-zoom note's §6): a drawn frame costs 2 ms at 120 a second
   in WKWebView, so no WebGL; and how fast fingers leave a pinch, for a glide. The owner: "it felt good".
-- **0.3.0 is published (2026-11-15), as a pre-release.** #130 set version 0.3.0 everywhere `ci/release.sh version` reads it,
+- **0.3.0 is published (2026-11-15), and is the Latest release.** #130 set version 0.3.0 everywhere `ci/release.sh version` reads it,
   with [docs/releases/0.3.0.md](docs/releases/0.3.0.md), which says what is new since 0.1.0. The nightly passed on
   both machines at `27e0f22a` (run 43750781682, by hand, after #129 to #131 fixed its failures). The tag `v0.3.0`
   there ran `release.yml` (run 43757711546), which made the draft pre-release with its five files. The owner
   tried it and approved, and the lead published it.
   - **The 0.2.0 draft** (#97, tag `v0.2.0`, run 42391434245) was never published, and 0.3.0 replaces it: the owner
     may delete the draft. The tag stays, as pushed tags aren't moved.
+  - **Not pre-releases any more** (2026-11-16): with only pre-releases, the repo page's side panel showed just
+    "4 tags". The lead marked 0.3.0 a full release and Latest, and `release.yml` no longer marks its drafts
+    pre-release. Its title still says alpha. 0.1.0 stays a pre-release; so does `test-plugins`, so it is never Latest.
   - The server has no `file` program, which linuxdeploy's AppImage tool needs: a build here puts an unpacked copy on
     `PATH` (`apt-get download file`); `release.yml` installs it, and `ci/release.sh build` says at once when it is
     missing.
