@@ -1298,3 +1298,24 @@ fn the_takes_gesture_is_off_the_wire() {
         serde_json::json!({"op": "record", "takes": [{"module": "kick", "lane": "hits", "clip": take(0.0, 4.0, &[]), "how": "replace"}]});
     assert!(serde_json::from_value::<Gesture>(asked).is_err(), "refused");
 }
+
+// The guide's clip gestures (api.md, "Clip gestures as JSON", which `m2 clips --help` names): each
+// example reads as the gesture it shows, so what an agent copies from it is what `m2 clips <song>
+// json` takes (the docs check of 2026-11-16: no example, five tries for a stamp).
+#[test]
+fn the_guides_clip_gesture_examples_read() {
+    let page = include_str!("../../../docs/guide/api.md");
+    let from = page.find("\n## Clip gestures as JSON\n").expect("api.md has the section");
+    let section = &page[from + 1..];
+    let section = &section[..section[3..].find("\n## ").map_or(section.len(), |i| i + 3)];
+    let blocks: Vec<&str> = section.split("```json\n").skip(1).map(|b| &b[..b.find("```").unwrap()]).collect();
+    let mut ops = BTreeSet::new();
+    for b in &blocks {
+        let g: Gesture = serde_json::from_str(b).unwrap_or_else(|e| panic!("{e}: {b}"));
+        ops.insert(serde_json::to_value(&g).unwrap()["op"].as_str().unwrap().to_string());
+    }
+    // Every gesture an agent sends: the take thread's and the Takes route's never come from outside.
+    let every = "audio create delete duplicate groove hits join move notes paste points quantize resize set split stamp";
+    let every: BTreeSet<String> = every.split(' ').map(String::from).collect();
+    assert_eq!(ops, every, "api.md shows an example of each gesture ({} blocks)", blocks.len());
+}

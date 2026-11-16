@@ -14,6 +14,7 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | K | K | Metronome on or off |
 | R | R | Record (again: stop recording) |
 | M / S | M / S | Mute / solo the selected track |
+| ⌥-click S | Alt-click S | Solo only that track |
 | ⌘L | Ctrl+L | Loop the selected clips, or the bar the playhead is in (in the code editor, its own: select the line) |
 | ⌘. | Ctrl+. | Stop all sound (in the code editor, its own: quick fix) |
 | ⌘Z / ⇧⌘Z | Ctrl+Z / Ctrl+Shift+Z | Undo / redo |
@@ -42,16 +43,18 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ↑ ↓ (⇧: an octave) | ↑ ↓ (Shift: an octave) | Move the selected notes a semitone (with **Lock to key** on, to the next note of the key; on the drum machine's folded rows, to the next row shown) |
 | ⌘1 / ⌘2 / ⌘3 / ⌘4 | Ctrl+1 / 2 / 3 / 4 | Narrower grid / wider grid / triplets / snap on or off |
 | Delete | Backspace | Remove the selected clip or notes, or empty the selected bars |
+| ⇧-click / ⌘-click | Shift-click / Ctrl-click | Select more clips / take one clip in or out of the selection |
 | Escape | Escape | Deselect |
 | ⌘= / ⌘− | Ctrl+= / Ctrl+− | Zoom in / out: the timeline, or the roll while it has the keyboard |
+| ⌘-scroll, or a pinch | Ctrl-scroll | Zoom around the pointer: the timeline, Notes, the beat grid or the Graph (a pinch on a Mac only, for now) |
 | Z | Z | Fit the selected clips, or the song; again to go back |
 | ⌘↓ / ⌘↑ | Ctrl+↓ / Ctrl+↑ | Taller / shorter tracks: the selected one, or all; in Notes, its rows |
 | ⇧⌘F | Ctrl+Shift+F | Follow the playhead on or off |
 | ⌥← / ⌥→ | Alt+← / Alt+→ | Go to the marker before / after |
 | Q | Q | Quantize: in Notes the selected notes (or with none, every note), else the selected clips' notes |
 | B | B | Draw mode: notes, and automation points |
-| ⌥-drag | Alt-drag | In Draw mode in Notes: paint a note in each grid step |
-| ⌘-drag | Ctrl-drag | In Notes: place a note off the grid while drawing, dragging or resizing it |
+| ⌥-drag | Alt-drag | In the timeline: copy the clip you drag. In Draw mode in Notes: paint a note in each grid step |
+| ⌘-drag | Ctrl-drag | Place a clip off the grid while dragging it; in Notes, a note while drawing, dragging or resizing it |
 | I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Graph / Notes / Mix / Code (X: Mix) |

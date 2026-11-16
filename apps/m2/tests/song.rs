@@ -70,3 +70,43 @@ fn the_tempo_meter_and_title_are_set_from_the_terminal() {
     }
     assert_eq!(read("data/arrangement.json"), before, "nothing written");
 }
+
+// VOX-10: the song's key from the terminal, as the song bar sets it, verified; `none` takes it out.
+// What isn't a key is refused in the key's own words, writing nothing.
+#[test]
+fn the_songs_key_is_set_from_the_terminal() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-song-key-{}", std::process::id())));
+    let song = temp.0.join("first-song");
+    copy(&Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &song);
+    let dir = song.to_str().unwrap();
+    let read = |p: &str| std::fs::read_to_string(song.join(p)).unwrap();
+
+    let said = ok(&["key", dir, "A", "minor"]);
+    assert!(said.contains("data/arrangement.json: no key → A minor"), "{said}");
+    assert!(
+        read("data/arrangement.json").contains("\"key\": {\"root\": \"A\", \"scale\": \"minor\"}"),
+        "{}",
+        read("data/arrangement.json")
+    );
+    let said = ok(&["key", dir, "C#", "harmonic-minor"]);
+    assert!(said.contains("A minor → C♯ harmonic minor"), "{said}");
+    let said = ok(&["key", dir, "C#", "harmonic-minor"]);
+    assert!(said.contains("already C♯ harmonic minor; nothing to write"), "{said}");
+
+    let before = read("data/arrangement.json");
+    for (args, says) in [
+        (vec!["key", dir, "H", "minor"], "H isn't a key's root"),
+        (vec!["key", dir, "A", "sad"], "sad"),
+        (vec!["key", dir, "A"], "a key is a root and a scale, such as `m2 key <project> A minor`"),
+        (vec!["key", dir, "none", "minor"], "none isn't a key's root"),
+    ] {
+        let out = m2(&args);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert!(!out.status.success() && err.contains(says), "{args:?}: {err}");
+    }
+    assert_eq!(read("data/arrangement.json"), before, "nothing written");
+
+    let said = ok(&["key", dir, "none"]);
+    assert!(said.contains("C♯ harmonic minor → no key"), "{said}");
+    assert!(!read("data/arrangement.json").contains("\"key\""));
+}

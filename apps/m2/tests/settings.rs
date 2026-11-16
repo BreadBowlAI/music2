@@ -207,6 +207,34 @@ fn m2_graph_prints_a_face_and_the_code() {
     assert!(line("code: tone({ shape: \"saw\" })") < at("Face"), "{out}");
 }
 
+// CARD-41: a card with a face and no groups shows its face, then every value when expanded;
+// `m2 graph` prints both under their headings, Face and All, so a value printed twice says why
+// (the docs check of 2026-11-16: the duck's depth printed twice, the second time with no heading).
+#[test]
+fn m2_graph_prints_a_face_without_groups_over_all_its_values() {
+    let temp = Temp(std::env::temp_dir().join(format!("m2-face-all-cli-{}", std::process::id())));
+    let song = temp.0.join("song");
+    put(
+        &song,
+        "music2.toml",
+        "[project]\nname = \"s\"\nformat = 1\nsample_rate = 48000\n\n[dependencies]\n\"@m2/core\" = \"2\"\nstd = \"0.10\"\n",
+    );
+    let text = TONE.replace(r#"groups: { Sound: ["shape", "sub"], Amp: ["amp", "attack"] }"#, r#"face: ["amp", "release"]"#);
+    assert_ne!(text, TONE);
+    put(&song, "song.ts", &text);
+    let o = m2(&["graph", song.to_str().unwrap()]);
+    let out = said(&o);
+    assert!(o.status.success(), "{out}");
+    let at = |word: &str| out.lines().position(|l| l.trim() == word).unwrap_or_else(|| panic!("no heading {word} in {out}"));
+    let lines: Vec<&str> = out.lines().collect();
+    let face: Vec<&str> = lines[at("Face") + 1..at("All")].iter().map(|l| l.split_whitespace().next().unwrap()).collect();
+    assert_eq!(face, ["amp", "release"], "{out}");
+    // Its rows, up to the next node's line.
+    let all: Vec<&str> =
+        lines[at("All") + 1..].iter().take_while(|l| l.starts_with("      ")).map(|l| l.split_whitespace().next().unwrap()).collect();
+    assert_eq!(all, ["shape", "sub", "attack", "decay", "sustain", "release", "amp"], "{out}");
+}
+
 // CARD-74: `m2 graph` prints each picture by its name and its axes, and runs no pack's code: a
 // picture whose code would hang every load is printed at once (review G1, G8).
 #[test]

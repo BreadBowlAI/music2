@@ -11,7 +11,7 @@
 
 *The Starter beat, with its Bass clip open in the piano roll (Linux).*
 
-The app shows the song's folder as a timeline, a piano roll, knobs and cables, and a code editor.
+The app shows the song's folder as a timeline, a piano roll, a graph of its sounds, and a code editor.
 Every change you make there is written into the files at once. music2 is made for people new to
 making music, and it aims to stay simple yet elegant enough for a producer.
 

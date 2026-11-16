@@ -461,15 +461,16 @@ fn m2_undo_with_no_name_never_takes_back_the_musicians_step() {
     assert!(a.read("song.ts").contains("pan: 0.4"));
 }
 
-// AGENT-4: undo lives in the open app; with it closed, `m2 undo` says so.
+// AGENT-4, WRITE-23: with the app closed, `m2 undo` reads the history kept with the song; a song
+// with none has nothing to undo, and says so, changing nothing (undo.rs takes a step back).
 #[test]
-fn m2_undo_with_the_app_closed_says_undo_lives_in_the_app() {
+fn m2_undo_with_the_app_closed_and_no_history_has_nothing_to_undo() {
     let temp = Temp::new("fwd-undo-closed");
     let song = temp.0.join("song");
     copy(&example("first-song"), &song);
     let o = m2_in(&temp.0.join("home"), &["undo", song.to_str().unwrap()], &[]);
     assert_eq!(o.status.code(), Some(1), "{}", said(&o));
-    assert!(said(&o).contains("nothing to undo: undo lives in the open app"), "{}", said(&o));
+    assert!(said(&o).contains("nothing was undone: there is nothing to undo"), "{}", said(&o));
 }
 
 // AGENT-1 (the review's F6): every Tx carries its bases' whole text, so a change to a big file is a

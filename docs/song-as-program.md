@@ -196,37 +196,7 @@ poly(notes, n => voice(n), { voices: 16 })
 
 **In short:** a bus is a track that plays what other tracks send it. All routing lives in one place, the mixer in `song.ts` ([RENDER-34](architecture.md#buses)).
 
-| Word | Meaning |
-|---|---|
-| bus | a track with no notes or clips; its sound comes from other tracks: a shared reverb, a delay, a group |
-| send | a copy of a track's sound going to a bus, at its own level |
-| after the fader | the send follows the track's pan and fader (the default) |
-| before the fader | `pre: true`: the send ignores the pan and fader |
-| group | a bus that tracks go *to* instead of the master |
-
-A bus file. `input` is what the song feeds it:
-
-```ts
-import { bus } from "@m2/core";
-import { reverb } from "@m2/effects";
-
-export default bus("verb", { name: "Reverb" }, ({ input }) => reverb(input, { mix: 1 }));
-```
-
-`song.ts`. Sends and groups are written on the channels; a bus has a channel too:
-
-```ts
-master(
-  mixer({
-    kick: { in: kick.out, to: "drums" },                       // into the Drums group
-    snare: { in: snare.out, db: db(-3), to: "drums" },
-    drums: drums.out,                                          // the group's own strip
-    vox: { in: vox.out, db: db(-3), sends: { verb: db(-12) } }, // after the fader
-    keys: { in: keys.out, sends: { verb: { db: db(-18), pre: true } } }, // before the fader
-    verb: verb.out,                                            // the reverb's strip
-  }),
-)
-```
+How a song writes them (a bus file, `sends` with `pre`, `to` for a group, a shared reverb) is in the guide, in one place: [Buses, sends and groups](guide/code.md#buses-sends-and-groups). How they work:
 
 - The graph still only pulls. The song feeds a bus with `feed(verb, x)` (once, from song code), and the bus reads it as an import of the song's export `bus:verb`. std's mixer does this for every channel that reads a bus (`verb: verb.out`): the sum of what is sent to it and what goes to it, or silence.
 - So the song and its buses read each other both ways. The planner splits them by crossings ([RENDER-2](architecture.md#offline)): the strips run with their tracks, then the feeds (song), then the buses, each in parallel, then the master sum.

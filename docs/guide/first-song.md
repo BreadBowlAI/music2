@@ -11,7 +11,7 @@ Press **Space** to play. It's an 8-bar pop beat at 116 BPM: kick, clap, hi-hats,
 Things to try:
 
 1. **Add a track.** Click **+ Track** above the track names (or press ⌘T), type to find an instrument such as Synth pluck, and press Enter. The new track appears below the selected one, ready to play.
-2. **Turn a knob.** Click the **Song** row at the foot of the timeline. The dock below shows the mix as boxes with knobs. Drag a knob while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
+2. **Turn a knob.** Click the **Song** row at the foot of the timeline, then **Graph** in the dock below (or press ⌥1). The dock shows the mix as a graph: a box (a node) for each part, with its values as bars. Drag a bar up or down while the song plays and you hear it change. Let go, and the new number is written into `song.ts`.
 3. **Add a clip.** In the timeline, double-click the Bass row past the end of the song. A one-bar clip appears, and opens in the dock's **Notes** view (a piano roll).
 4. **Draw notes.** Double-click the grid to add a note (or press B for Draw mode, where a click adds one, a drag draws one as long as you drag, and ⌥-drag paints one in each grid step), drag a note to move it, and drag its right edge to make it longer.
 5. **Add an effect.** Press ⌥1 (or click **Graph**), then press **+** on the wire after the sound (point at the wire, or click the sound's node, and a small **+** shows on it) and pick an effect such as reverb. Or drag one from the browser on the left onto a track.

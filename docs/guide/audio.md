@@ -177,5 +177,5 @@ The **Vocoder** makes a synth talk with a voice: the synth plays the notes, and 
 - **Split a clip, and each piece keeps its notes.** A note across the cut is in both pieces.
 - **One voice at a time.** Find notes doesn't hear chords, or a voice with a loud band behind it.
 - **Find notes needs the clip played forwards, at its own pitch.** If edited notes can't play (the clip turned around, or its pitch changed by hand), the song's problems say so, and they play as sung.
-- **An older song** may play `@m2/vocals` 1.0.0, which can't find notes: Find notes says so, and `m2 pack update @m2/vocals` updates it.
+- **An older song** may play `@m2/vocals` 1.0.0, which can't find notes: Find notes says so, and `m2 pack update <song> @m2/vocals` updates it.
 - **Agents:** the notes are the clip's `sung` field in its lane file, `{"at", "length", "pitch", "move", "straighten"}` (seconds of the file; MIDI numbers with cents), with `"render": "@m2/vocals:voice"`. Find notes is the clip gesture `{"op": "find_notes", "clip", "measure": "@m2/vocals:notes", "render": "@m2/vocals:voice"}`; `GET /api/graph/clip/measure` gives the pitch line, as bytes ([routes](routes.md)). A `set` of the clip from an older `revision` is refused when another changed the lane since.

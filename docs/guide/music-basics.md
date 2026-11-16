@@ -30,7 +30,7 @@ This is the most important difference in music software.
 | Can you change it? | Completely: any note, or the whole instrument | Mostly as a whole: cut, move, stretch |
 | Makes sound by | Being played by an **instrument** | Just playing back |
 
-**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. You can keep a take each time round a loop, punch in, and record several tracks at once. Comping (one take built from the best parts of several) is still to come ([gap #25](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
+**In music2:** a notes lane holds clips of notes, and an audio lane holds clips that play a WAV file. Bring a WAV (or a FLAC, which comes in as a WAV) in with **File ▸ Import Audio…** (⇧⌘I), or drag it onto a track or below the tracks. It is copied into the song's `assets/` folder. On the timeline you see its waveform. Move it, trim it, fade it in and out, make it louder or quieter, or play it backwards. To record your voice or a guitar, select an audio track and press R. You can keep a take each time round a loop, punch in, record several tracks at once, and build one take from the best parts of several (comping: [Comp](audio.md#comp-the-best-parts-of-several-takes)).
 
 ## Time: tempo, beats, bars and the grid
 
@@ -83,7 +83,7 @@ An **arpeggiator** plays a chord you hold one note at a time, in a pattern, in t
 | **Counter-melody** | A second tune that answers the melody in its gaps | Plucks, strings |
 | **Arp** (arpeggio) | A chord played one note at a time, fast and repeating | Sparkly 16th-note patterns |
 
-**In music2:** **+ Track** (⌘T) lists every sound, drums first. A **Drum kit** is several tracks at once, a drum on each (Kick, Snare, Hats…) and a bus they all go to ([Drum kits](sounds.md#drum-kits)); a **Drum** is one drum on one track, picked from its menu. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.drum`, `synth.sub` and so on ([`packs/@m2/drums/src/index.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/drums/src/index.ts), [`packs/@m2/synths/src/synth.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/synth.ts), [`packs/@m2/synths/src/fm.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) uses them all.
+**In music2:** **+ Track** (⌘T) lists every sound, drums first. A **Drum kit** is several tracks at once, a drum on each (Kick, Snare, Hats…) and a bus they all go to ([Drum kits](sounds.md#drum-kits)); a **Drum** is one drum on one track, picked from its menu. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **Wavetable** (a synth that slides through tables of waveforms, from soft to bright), **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.drum`, `synth.sub` and so on ([`packs/@m2/drums/src/index.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/drums/src/index.ts), [`packs/@m2/synths/src/synth.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/synth.ts), [`packs/@m2/synths/src/fm.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) uses them all.
 
 ## How a synthesizer makes sound
 
@@ -106,12 +106,12 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Delay** (echo) | Repeats the sound, fading away | `delay` |
 | **Chorus** | Slightly detuned copies: wider and dreamier | `chorus` |
 | **Distortion** (drive, saturation) | Pushes the sound until it breaks up: gritty, and louder-feeling | `drive`, `bitcrush` |
-| **EQ** (equalizer) | Turns ranges of frequencies up or down (more bass, less harshness) | `eq3` |
+| **EQ** (equalizer) | Turns ranges of frequencies up or down (more bass, less harshness) | `eq3`; `eq`, the Parametric EQ (`@m2/mixing`) |
 | **Filter** | A filter used as an effect, good for sweeps and "next room" muffling | `lowpass`, `highpass`, `bandpass`, `notch` |
 | **Compressor** | Turns loud moments down, so everything is more even and punchy | `compress` |
 | **Limiter** | A very strict compressor at the end that stops anything getting too loud | `limit` |
 
-**In music2:** add an effect with the **+** on a wire in the Graph (⌥1): point at the wire after a sound, or select its node, and click the **+**. Or drag one from the side browser onto a track. Its ⏻ turns it off and on, and its **⋯** menu moves it before or after its neighbour, or removes it. There are also `phaser`, `tremolo`, `widen`, `gain` and `pan`. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`. Pump (ducking on every beat) isn't back yet ([gap #21](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#must-have-for-a-pop-producer)).
+**In music2:** add an effect with the **+** on a wire in the Graph (⌥1): point at the wire after a sound, or select its node, and click the **+**. Or drag one from the side browser onto a track. Its ⏻ turns it off and on, and its **⋯** menu moves it before or after its neighbour, or removes it. There are also `phaser`, `tremolo`, the Flanger (`flanger`, a jet's whoosh), Grains (`grains`, the sound broken into tiny pieces), the Clipper (`clip`, louder without going over), `widen`, `gain` and `pan`; the mixing tools (a gate, a transient shaper, a de-esser, a multiband compressor and Pump, which dips the sound on every beat); and the tools for a voice (Tune, the Voice changer and the Vocoder: [Tune a voice](audio.md#tune-a-voice)). [Sounds and effects](sounds.md) says what each knob does. If you used the old music2: Space is now `reverb`, Echo is `delay`, Shimmer is `chorus`, Tone is `eq3` and Glue is `compress`.
 
 ## Mixing: making the parts fit together
 
@@ -132,7 +132,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 
 **In music2:**
 - Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
-- A sidechain is a Duck: add it after the bass's sound in the song (the **song** tab: the **+** on the wire from **Bass.out**, then **Duck**), then pick **Kick** in its node's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
+- A sidechain is a Duck: add it after the bass's sound in the song (select the **Song** row at the foot of the timeline, then the Graph (⌥1): the **+** on the wire from **Bass.out**, then **Duck**), then pick **Kick** in its node's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
 - For the pump with no kick at all, add **Pump** (Dynamics): it dips the sound on every beat by itself.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
 - Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).
@@ -147,7 +147,7 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 | **Pitch-shift** | Change pitch without changing speed | `pitch` on audio clips (with warp markers) |
 | **Warp** | Stretching parts of a recording so it lines up with the beat | `warp` markers on audio clips |
 | **Chop** or **slice** | Cut a recording into short pieces and replay them as a new rhythm | Audio clips with an `offset` into the file |
-| **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | Not in music2 |
+| **Formant** | The "vowel" character of a voice; shifting it makes a voice sound smaller or bigger without changing the note | **Formant** on Tune, the Voice changer and the Vocoder ([Change a voice](audio.md#change-a-voice)) |
 | **Latency** | A delay some effects add; the software has to make up for it so everything stays in time | music2 makes up for a plugin's latency, so every track stays in time, live and in exports |
 | **True peak** | The real loudest point of the audio, which streaming services check | **Peak** on Master's strip in the Mix view, the loudest of the last 3 seconds; `m2 listen` measures it too, for agents |
 | **LUFS** | Loudness as ears hear it; streaming services play songs at about −14 LUFS | On Master's strip in the Mix view (the last 3 seconds), and in the Export dialog (the whole song, after an export) |

@@ -37,7 +37,7 @@ records, or has unsaved code in its file, the app refuses it: `m2` waits up to 3
 changing nothing. Don't write the song's files directly while the app has it open: the app can't \
 refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files \
 itself, each write an undo step of the song's history, yours by `--as`, which the app reads back \
-when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without \
+when it opens the song, and `m2 undo` takes back from here too. Reading, rendering and `bounce` without \
 `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while \
 listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can \
 do: `m2 call` refuses it, and `m2 point` shows them where instead.
@@ -278,6 +278,16 @@ pub const COMMANDS: &[Command] = &[
         more: "",
     },
     Command {
+        name: "key",
+        also: &[],
+        usage: "m2 key <project> <root> [<scale>]",
+        words: "set the song's key in `data/arrangement.json` (`A minor`: a root, C to B with # or b, and a scale), \
+                or take it out with `none` alone, verified",
+        more: "The scales: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, \
+               major-pentatonic, minor-pentatonic, blues and chromatic. Tune, Chord and Lock to key follow it, and \
+               Notes shades the notes out of it.",
+    },
+    Command {
         name: "title",
         also: &[],
         usage: "m2 title <project> <name>",
@@ -462,8 +472,8 @@ pub const COMMANDS: &[Command] = &[
                `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the \
                song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a \
                Drum's lane: `{\"op\": \"hits\", \"module\": \"kick\", \"lane\": \"hits\", \"at\": [0, 1], \"step\": 0.25, \
-               \"to\": \"on\"}`, `to` being `on`, `off` or `{\"velocity\": 0.5}`). `m2 call <song> /api/theory` lists \
-               the chords and grooves.",
+               \"to\": \"on\"}`, `to` being `on`, `off` or `{\"velocity\": 0.5}`). [Clip gestures as JSON](api.md#clip-gestures-as-json) \
+               shows each, with the chords, scales and grooves.",
     },
     Command {
         name: "sections",
@@ -512,9 +522,9 @@ pub const COMMANDS: &[Command] = &[
         name: "undo",
         also: &[],
         usage: "m2 undo <project>",
-        words: "take back your own newest change in the open app (by `--as`): never the musician's, nor another \
-                agent's",
-        more: "With the app closed there is nothing to undo: undo lives in the open app.",
+        words: "take back your own newest change (by `--as`): never the musician's, nor another agent's",
+        more: "In the open app while it has the song open; with it closed, from the undo history kept with the song, \
+               which the app reads back when it opens it.",
     },
     Command {
         name: "focus",

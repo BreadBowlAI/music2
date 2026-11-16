@@ -35,3 +35,34 @@ fn m2s_notes_say_a_write_with_the_app_closed_is_kept_for_undo() {
     assert!(!notes.contains("undo isn't kept"), "the notes still say undo isn't kept");
     assert!(notes.contains("an undo step of the song's history"), "{notes}");
 }
+
+// AGENT-4, WRITE-23: with the app closed, `m2 undo` takes back the agent's own newest step from the
+// song's history, by the rule the app keeps: another agent's step is refused, changing nothing.
+#[test]
+fn m2_undo_with_the_app_closed_takes_back_only_its_own_newest_step() {
+    let home = std::env::temp_dir().join(format!("m2-undo-closed-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&home);
+    let song = home.join("song");
+    let dir = song.to_str().unwrap();
+    let o = m2_in(&home, &["new", dir, "--example", "first-song"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    let read = || std::fs::read_to_string(song.join("data/arrangement.json")).unwrap();
+    let before = read();
+    let o = m2_in(&home, &["tempo", dir, "128", "--as", "Claude", "--why", "faster"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    let after = read();
+    assert_ne!(after, before);
+
+    let o = m2_in(&home, &["undo", dir, "--as", "Codex"], &[]);
+    assert!(!o.status.success() && said(&o).contains("Claude's (faster), not Codex's"), "{}", said(&o));
+    assert_eq!(read(), after, "another agent's step stays");
+
+    let o = m2_in(&home, &["undo", dir, "--as", "Claude"], &[]);
+    assert!(o.status.success(), "{}", said(&o));
+    assert!(String::from_utf8_lossy(&o.stdout).contains("undid faster"), "{}", said(&o));
+    assert_eq!(read(), before, "undone, byte for byte");
+
+    let o = m2_in(&home, &["undo", dir, "--as", "Claude"], &[]);
+    assert!(!o.status.success() && said(&o).contains("nothing to undo"), "{}", said(&o));
+    let _ = m2_song::pack::remove_tree(&home);
+}
