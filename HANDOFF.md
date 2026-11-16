@@ -1,10 +1,17 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 published; the 0.2.0 draft never was) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note accepted, and the Graph landed). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-16 (the docs checked by a fresh agent; `m2 undo` with the app closed, `m2 key`; releases are full releases), 2026-11-15 (0.3.0 published; the 0.2.0 draft never was) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note accepted, and the Graph landed). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
 
+- **The docs teach an agent (#134, 2026-11-16).** The owner asked that the docs be current and that Claude know how
+  to use music2. A fresh agent with only a song and the released `m2` did seven musician requests (a beat, an arp
+  and a shared reverb, a mix check, a second part, a render, an undo) and hit dead ends; a sweep found about 40
+  stale lines. Fixed: the guide (clip gestures as JSON, buses and sends, the app closed), the song's `AGENTS.md`
+  (`templates/song-agents.md`), and two commands: `m2 undo` works with the app closed (AGENT-4), and `m2 key`
+  sets the key (VOX-10). A second fresh agent then did all seven with no failed command. What it still found is
+  code, in gaps.md's "Scripts, agents and the command line". Run the same test after a big agent-facing change.
 - **The drawn zoom (track `drawn-zoom`, 2026-11-15).** A pinch or ⌘-scroll over the arrangement draws it into a
   picture over the view, sharp at the zoom shown each frame (`web/src/camera/picture.ts`,
   `web/src/components/zoomPicture/`), and lays the page out once at the end, where the picture hides; nothing
@@ -480,7 +487,7 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | Pictures for the owner | `$SCRATCH/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `$SCRATCH/logs/` |
 | The Mac's pasted runs | `$SCRATCH/mac-runs/` |
-| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub (2026-11-16) three branches are left beside `main`, and no Dependabot branch: `canvas-clips` and `design-drums`, both already in `main`, and `maps-try`, the drawn zoom's try build for the owner's Mac (not for merge; track `drawn-zoom` landed the zoom) |
+| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub (2026-11-16) three branches are left beside `main`, and no Dependabot branch: `canvas-clips` and `design-drums`, both already in `main`, and `maps-try`, the drawn zoom's try build for the owner's Mac (not for merge; track `drawn-zoom` landed the zoom). Locally, `drawn-zoom-2` is work in progress (What comes next, 2) |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
