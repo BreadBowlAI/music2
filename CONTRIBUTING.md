@@ -65,7 +65,7 @@ cargo run --locked --release -p music2-desktop
 
 | Tier | When | What |
 |---|---|---|
-| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, the kernels and every committed `.wasm` (std's and music2's own packs'), the browser suites in 2 parts, the 14 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
+| **Pull request** | every pull request and each push to `main` (and the merge queue, if one is on) | fmt, clippy, the Rust tests in 3 parts, the pool's models, the web build, the kernels and every committed `.wasm` (std's and music2's own packs'), the browser suites in 2 parts, the 26 renders, licences (cargo-deny, npm), the workflow files (actionlint, and zizmor for their security), and the checks' own cases. Security advisories (RustSec) only when a `Cargo.lock` or `deny.toml` changes. Only checks that give the same answer every time, on any day. |
 | **Nightly** | every day on `main`, on GitHub's machines, once the repository is public | the full check without the timing gates: every pull request check, with the browser suites one at a time, the tests the pull request tier leaves out, and the security advisories. On macOS too: the Rust tests, the pool's models, the browser suites and the renders, less the few whose clock is a sleep (GitHub's Mac's sleeps run long: `ci/sleeps-tests.txt`, and the suites `e2e/run.mjs` tags `sleeps`) and three speed tests its shared CPU misjudges (`ci/shared-cpu-tests.txt`). |
 | **Timing gates** | every night on a quiet machine of a maintainer's | the gates that time real-time audio. A shared cloud machine can't judge them. |
 
@@ -118,17 +118,17 @@ cargo run --locked --release -p music2-desktop
 | `core/pool` | The thread pool that renders on several cores |
 | `core/os` | Everything that differs between macOS, Linux and (later) Windows (`m2-os`) |
 | `std/`, `std/kernels-src` | The standard package, and its kernels' Rust source |
-| `packs/` | music2's own sounds, the packs it ships: `@m2/synths`, `@m2/drums`, `@m2/effects`; `versions.toml` records every version's hash |
+| `packs/` | music2's own sounds, the packs it ships: `@m2/synths`, `@m2/drums`, `@m2/effects`, `@m2/mixing`, `@m2/notes`, `@m2/vocals`, `@m2/wavetable`; `versions.toml` records every version's hash |
 | `apps/m2` | The command line |
 | `apps/music2-desktop` | The desktop app (Tauri), on the Mac and Linux: window, menus, dialogs |
 | `crates/server` | The app's local server: `graph.rs` (the open song), `files.rs` (the code editor's files), `project.rs` (new songs and the songs folder), `export.rs` (Export), `resources.rs` (finding std, the packs it ships, the templates and the examples, and installing those packs), `api.rs` (the one route table) and the `routes*.rs` files (the API) |
 | `web/` | The UI: `StartScreen`, `NewSongDialog`, `GraphCanvas` (the window's shell), `TopBar`, `Status`, `Browser`, `SongTimeline`, `Dock` (`NodeGraph`, `NoteView`, `CodeView`), `EffectBrowser`, `Shortcuts`; `lib/shell.ts` holds the dock's view and the selection |
 | `templates/` | What new songs start from: `starter` and `empty`, each a whole song plus a `template.toml` (its name and description) |
-| `examples/` | `first-song`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
+| `examples/` | `first-song`, `arp`, `resample`, `with-plugins`, `sounds` and `sampler`, each with an `example.toml` for the start screen (and the plugins it needs) |
 | `e2e/` | The browser suites |
 | `crates/gates` | The timing gates (`m2-gates`) that `ci/check.sh` runs |
 | `ci/` | `check.sh` (the full check; `--pr` the pull request tier), `pr.sh` (one CI job's part), `nightly.sh` (the timing gates on a quiet machine), `nightly-tests.txt` (the Rust tests only the nightly tier runs), `sleeps-tests.txt` (the Rust tests GitHub's Mac leaves out, as its sleeps run long), `shared-cpu-tests.txt` (the speed tests it leaves out, as its shared CPU misjudges them) and `nightly-list.sh` (the lists as cargo-nextest sees them), `docs-only.sh` (the docs-only rule), `guide.sh` and `links.mjs` (the docs check and the guide's website), the checks' own cases (`docs-only-test.sh`, `gates-auto-test.sh`, `pr-test.sh`, `nightly-test.sh`, `nightly-issue-test.sh`), `tools.sh`, `apt.sh` and `plugins.sh` (what the checks need), `gates.txt`, `sweep.sh` (a Mac's thread sweep) |
-| `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`; `pages.yml`, the guide's website), Dependabot's settings, and the issue and pull request forms |
+| `.github/` | The workflows (`ci.yml`, the pull request tier; `nightly.yml`; `pages.yml`, the guide's website; `release.yml`, the downloads), Dependabot's settings, and the issue and pull request forms |
 | `.config/nextest.toml` | How cargo-nextest runs the Rust tests in CI |
 | `deny.toml` | cargo-deny's rules for the Rust dependencies: the licences allowed, security advisories, crates.io only |
 | `docs/` | `guide/`, the user guide (one page a topic; `SUMMARY.md` is its menu; also the website and `m2 docs`); then, for contributors, the goals, the contract, the design notes and the gap list |

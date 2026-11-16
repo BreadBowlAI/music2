@@ -1,6 +1,6 @@
 # Handoff
 
-Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 published; the 0.2.0 draft never was) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note waits for the owner). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
+Written 2026-10-18, brought up to date 2026-11-15 (0.3.0 published; the 0.2.0 draft never was) and 2026-11-08 (note effects, the small measuring steps, the mixing meters, the Voice changer, the Clipper, the Vocoder, the Flanger and Grains landed; the nightly's failures since 11-06 fixed, its speed tests scaled by the machine's speed, three left out of GitHub's Mac job, whose shared CPU misjudges them; the graph note accepted, and the Graph landed). Read this first, then [docs/architecture.md](docs/architecture.md) (the contract), then the
 design for whatever you pick up. Older versions of this page, with each track's full story, are in git.
 
 ## In short
@@ -470,14 +470,14 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | What | Where |
 |---|---|
 | The contract, and the order of work | `docs/architecture.md` |
-| What each step and track built, decided and left | `docs/designs/cards2/`, `vocals/`, `drums/`, `cards/`, `packs/` (the designs since 0.1.0, each with its accepted decisions); `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `agents/` (the agents design and its five tracks' build notes); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/` |
+| What each step and track built, decided and left | `docs/designs/camera/`, `graph/`, `events/`, `measure2/`, `cards2/`, `vocals/`, `drums/`, `cards/`, `packs/` (the designs since 0.1.0, each with its accepted decisions); `release/` (0.1.0's downloads), `docs/` (the guide and `m2 docs`); `docs/designs/step9/` (`<track>-plan.md`, `build-notes-<track>.md` for `io`, `ab`, `ph`, `sx`, `pm`, `ex`, `br`, `bus`); `step8/` (taste, 8a, 8b, polish, next, macfix, studio); `agents/` (the agents design and its five tracks' build notes); `step7/`, `sounds/`, `platform/`, `kernel-layout/`, `step6/`; `workflows/` (old workflow scripts, kept as a record). `docs/designs/README.md` lists every folder |
 | Kernel ABI v1 | `docs/kernel-abi.md` |
 | The look | `docs/designs/step8/taste.md` |
 | Each check's logs and summary | `$SCRATCH/check-<label>/` and `.tgz` (step 9's finals: `check-io`, `-ab`, `-ph`, `-sx`, `-pm`, `-ex`, `-br`, `-bus`) |
 | Pictures for the owner | `$SCRATCH/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `$SCRATCH/logs/` |
 | The Mac's pasted runs | `$SCRATCH/mac-runs/` |
-| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub only Dependabot's branches are left beside `main` |
+| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub (2026-11-16) three branches are left beside `main`, and no Dependabot branch: `canvas-clips` and `design-drums`, both already in `main`, and `maps-try`, the drawn zoom's try build for the owner's Mac (not for merge; track `drawn-zoom` landed the zoom) |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
@@ -525,7 +525,7 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 
 | Tier | Where and when | The command | What |
 |---|---|---|---|
-| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, std's kernels and `std.wasm`, the browser suites in 2 parts, the 12 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, the kernels and every committed `.wasm` (std's `std.wasm` and the packs', `packs/@m2/*/kernels/*.wasm`: `std/build.sh --check`), the browser suites in 2 parts, the 26 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
 | Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed"; a test or suite that passed only on its retry is named in another, "Flaky tests", with the number of nights it was named on. |
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
 | Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |

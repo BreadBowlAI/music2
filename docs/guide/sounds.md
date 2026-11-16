@@ -8,7 +8,7 @@
 | Word | Meaning |
 |---|---|
 | **std** | music2's toolbox, in `std/`: what sounds are made of. TypeScript in `std/src`, kernels (the code that makes the sound) in `std/kernels/std.wasm`, built from Rust in `std/kernels-src` |
-| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, nine of `@m2/effects`' effects, `@m2/mixing`'s tools and `@m2/wavetable`'s whole synth, built from Rust beside them). They come with the app and with `m2` |
+| **`@m2/` packs** | music2's own sounds, in `packs/@m2/`: ordinary [packs](packs.md) that call std's kernels, and their own (the synth, FM and drum voices, nine of `@m2/effects`' effects, `@m2/mixing`'s tools, `@m2/wavetable`'s whole synth, `@m2/notes`' four note effects and `@m2/vocals`' voice tools, built from Rust beside them). They come with the app and with `m2` |
 
 A song that plays them lists them, as the templates do:
 
@@ -28,7 +28,7 @@ import { reverb } from "@m2/effects";
 
 When you add one of their sounds from + Track or the browser, music2 writes those lines for you, and `music2.lock` too.
 
-A song made before std 0.8 is told, in words, what to change: first its std line, to `std = "0.10"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. Code that calls the kernel `std:bitcrush` itself is told it is `@m2/effects:bitcrush` since std 0.8, and a song locked to `@m2/effects` 1.0.0 that plays `bitcrush` moves with `m2 pack update <song> @m2/effects`. The moves changed no sound: the song plays the same bits as before.
+A song made before std 0.8 is moved to the packs in one step by **Upgrade it** in the status pill, or `m2 upgrade <song>` ([Opening a song made with an older music2](songs.md#opening-a-song-made-with-an-older-music2)). To make the changes by hand, it is told in words what to change: first its std line, to `std = "0.10"`; then, for each import of `std/synth`, `std/fm`, `std/drums` or `std/instruments`, or of `std/fx`'s `reverb` and the other effects that colour a sound, which pack it is in now and the line to add. Code that calls the kernel `std:bitcrush` itself is told it is `@m2/effects:bitcrush` since std 0.8, and a song locked to `@m2/effects` 1.0.0 that plays `bitcrush` moves with `m2 pack update <song> @m2/effects`. The moves changed no sound: the song plays the same bits as before.
 
 **Instruments.** Each takes a notes lane and returns sound. The `voices` setting is how many notes can sound at once (`synth.lead(notes, { voices: 4 })` plays chords). A typical note, at velocity 0.8, peaks between -15 and -12 dBFS, so a four-note chord still has room, and the drums sit as on a drum machine: the kick near -6, snare and clap near -9, hats near -16. Notes played harder are louder, and most sounds get brighter too. On the synths and FM sounds, `velSens` ("vel sens") is how much: the level follows velocity^(2 × velSens), so a note at velocity 0 is silent, and at 0.5 a note at 0.3 is 10 dB below one at 1. The keys start widest (0.8), the 808 narrowest (0.3).
 
@@ -177,7 +177,7 @@ Each effect's card shows a picture of what it does, worked out from the effect's
 | **depth** | how far down a duck or a pump turns the sound, in dB |
 | **rate** | how often Pump dips: every `1/4` note (each beat), `1/8`, `1/16` or `1/2` |
 
-- **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs). A band moved while it plays crossfades to its new setting, so a change never clicks or booms; a big change on a very resonant band (a high Q, a low frequency) waits up to a second for the new filter to settle before you hear it. A small move, a knob's drag or a lane's line, is heard at once. The card draws no curve yet.
+- **The EQ** starts flat: band 1 (a low cut at 30 Hz) and band 8 (a high cut at 18 kHz) are off, the six between at 0 dB, so adding it changes nothing until you turn a knob. Its card shows each band under its own heading, `Band 1` to `Band 8`. A cut takes out 12 dB more each octave further away; its `gain` does nothing. Every band is the standard filter of its shape (RBJ's, as in most EQs). A band moved while it plays crossfades to its new setting, so a change never clicks or booms; a big change on a very resonant band (a high Q, a low frequency) waits up to a second for the new filter to settle before you hear it. A small move, a knob's drag or a lane's line, is heard at once.
 - **The gate** opens when the sound reaches `threshold`, and closes once it has stayed 6 dB under it for `hold` (at least 25 ms, so a low note's waves don't close it). Keyed by another track, `gate(pad.out, kick.out)` opens the pad only while the kick plays: the kick is its sidechain, so muting the kick doesn't change it. Its card's **Listens to** picks the track, or **No other track** for its own sound.
 - **The transient shaper** turns a hit's start by up to `attack` dB, and its tail by up to `sustain` dB. The faster a tail fades, the more of `sustain` it gets: a snare's short ring all of it, a piano's long fade a quarter or so in its first half second, more as it goes on. A steady sound passes as it is.
 - **The de-esser** turns down the band around `freq` (5 to 8 kHz for most voices), a bell about an octave and a half wide, deepest at `freq`, and only while that band is louder than `threshold`, by at most `amount` dB. While it works, a loud tone an octave away loses a dB or so; a voice's body, two octaves and more below, is left alone.
@@ -193,7 +193,7 @@ A **sidechain** is one track's sound steering an effect on another. The famous o
 
 To make the bass duck under the kick:
 
-1. In the Graph (⌥1), open the **song** tab: the nodes there are how the tracks are mixed.
+1. Select the **Song** row at the foot of the timeline, then the Graph (⌥1): the nodes there are how the tracks are mixed.
 2. Point at the wire from **Bass.out** (the bass's sound, where the song mixes it) into its Duck or the mixer, click its **+**, and pick **Duck** (Dynamics).
 3. On the Duck's card, click **Listens to: None** and pick **Kick**.
 4. Play. The bass dips on each kick. Turn **depth** for more or less (−8 dB is a good start).
@@ -211,9 +211,9 @@ That writes `duck(bass.out, kick.env, { depth: -8 })` into `song.ts`, each step 
 - Want the pump with no kick at all? Use **Pump**: it dips on every beat by itself.
 - An effect written in a track's own file lists the other tracks too: a pick adds an import of the track it listens to at the top of that file. Only a track written in `song.ts`, or in the effect's own file, can't be picked there: give it a file of its own.
 
-**`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](https://github.com/BreadBowlAI/music2/blob/main/docs/song-as-program.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
+**`mixer` and `master`** (`std/mix`): `mixer` adds tracks together. Each channel has a level, `db` (0 when left out), and can have a `pan`, `sends` to buses and a `to` (a group bus instead of the master): see [Buses, sends and groups](code.md#buses-sends-and-groups). `master` has a level too, then a limiter, so the song never clips. A level of −96 dB or lower is silence.
 
-**Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how.
+**Building blocks** (std): `std/dsp` (oscillators, noise, envelopes, filters, gain, pan, and `mono` for a voice of your own), `std/math` (add, scale, blend, sum, pitch to frequency, ranges), `std/control` (`lfo`, `when`, `choose`) and `std/filter`. A pack's sound is built from these and from std's kernels: `@m2/synths`' code is a good place to read how: it comes with music2 ([where](changes.md#try-it-on-a-copy)).
 
 `m2 kernels` lists every kernel with its typed inputs and outputs, and `m2 effects <song>` lists the effects (by their ids, such as `@m2/effects:delay` or `std:eq3`) and where they can go.
 
