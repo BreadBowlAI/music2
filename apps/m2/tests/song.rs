@@ -97,7 +97,8 @@ fn the_songs_key_is_set_from_the_terminal() {
     for (args, says) in [
         (vec!["key", dir, "H", "minor"], "H isn't a key's root"),
         (vec!["key", dir, "A", "sad"], "sad"),
-        (vec!["key", dir, "A"], "m2 key <project> <root> <scale>"),
+        (vec!["key", dir, "A"], "a key is a root and a scale, such as `m2 key <project> A minor`"),
+        (vec!["key", dir, "none", "minor"], "none isn't a key's root"),
     ] {
         let out = m2(&args);
         let err = String::from_utf8_lossy(&out.stderr);

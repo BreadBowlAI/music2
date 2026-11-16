@@ -1042,9 +1042,10 @@ change that code first",
         Some("key") => {
             // The song's key, as the song bar sets it (VOX-10): a root and a scale, or none.
             let mut s = session(Path::new(&arg(1)?))?;
-            let key = match arg(2)?.as_str() {
-                "none" => None,
-                root => Some(m2_editor::songkey::SongKey::new(root, &arg(3)?).map_err(|e| anyhow!("{e}"))?),
+            let key = match (arg(2)?.as_str(), args.get(3)) {
+                ("none", None) => None,
+                (root, Some(scale)) => Some(m2_editor::songkey::SongKey::new(root, scale).map_err(|e| anyhow!("{e}"))?),
+                (_, None) => bail!("a key is a root and a scale, such as `m2 key <project> A minor`; `none` alone takes it out"),
             };
             let asked = key.as_ref().map_or(String::new(), m2_editor::songkey::SongKey::name);
             let e = m2_editor::songkey::set(&mut s, key).map_err(|e| anyhow!("{e}"))?;

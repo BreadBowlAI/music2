@@ -13,7 +13,7 @@
 | Path | What it is |
 |---|---|
 | `song.ts`, `tracks/`, `lib/` | the code: how the song sounds (instruments, effects, the mix) |
-| `data/` | what plays: notes, automation (knob moves over time) and audio clips; `data/arrangement.json` holds the tempo, the time signature and the song's key |
+| `data/` | what plays: notes, automation (knob moves over time) and audio clips; `data/arrangement.json` holds the tempo, the time signature (none written is 4/4) and the song's key. Times are in beats |
 | `assets/` | audio files. Never overwritten |
 | `music2.toml` | the song's name, format, sample rate, and the packs its code uses (`[dependencies]`) |
 | `music2.lock` | the exact version of each pack the song uses, made by music2. Never edit it by hand |
@@ -33,7 +33,7 @@ Below, `.` is this song's folder.
 | Command | What it does |
 |---|---|
 | `m2 check .` | build the song, and say what is wrong |
-| `m2 controls .` | every knob, with its id |
+| `m2 controls .` | every knob, with its id. A level written `db(…)` shows no name, and a choice its number: `m2 graph` names both. A write can renumber the ids after it in its file: list them again |
 | `m2 set . <id> <value>` | turn one knob |
 | `m2 tempo . 80`, `m2 key . A minor` | set the tempo, or the song's key (`m2 key . none` takes it out) |
 | `m2 search <words>` | find instruments, sounds, effects and samples, each with the id that adds it |

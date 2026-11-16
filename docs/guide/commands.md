@@ -191,11 +191,10 @@ Set the song's time signature (`7/8`: 1 to 64 beats of a 1, 2, 4, 8, 16 or 32 no
 ## m2 key
 
 ```
-m2 key <project> <root> <scale>
-m2 key <project> none
+m2 key <project> <root> [<scale>]
 ```
 
-Set the song's key in `data/arrangement.json` (`A minor`: a root, C to B with # or b, and a scale), or take it out with `none`, verified. The scales: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, major-pentatonic, minor-pentatonic, blues and chromatic. Tune, Chord and Lock to key follow it, and Notes shades the notes out of it.
+Set the song's key in `data/arrangement.json` (`A minor`: a root, C to B with # or b, and a scale), or take it out with `none` alone, verified. The scales: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, major-pentatonic, minor-pentatonic, blues and chromatic. Tune, Chord and Lock to key follow it, and Notes shades the notes out of it.
 
 ## m2 title
 

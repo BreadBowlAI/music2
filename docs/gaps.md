@@ -429,6 +429,9 @@ Each line is one small gap, without a number.
 - **No `m2` command adds a bus or a send**: an agent writes them into `song.ts` with `m2 edit` ([Buses, sends and groups](guide/code.md#buses-sends-and-groups)), where the app has **Add bus** in the Mix.
 - **`m2 call` needs the app open, even for a route that reads nothing of the song** (`GET /api/theory`): the guide lists the scales, chords and grooves instead ([Clip gestures as JSON](guide/api.md#clip-gestures-as-json)).
 - **With the app closed, each `m2` write says "(revision 2)"**: each run opens the song afresh, so its revisions count from 1 again. True, but it says nothing: the step's name would say more.
+- **A write can renumber the knob ids after it in its file, and `m2 set` doesn't say so** (the second docs check, 2026-11-16): setting a level the code doesn't write yet wraps it in `db(…)`, a call, so every later call's number moves, and an id listed before then names another knob. The routes say what moved (`moved`); `m2`'s words don't. The song's AGENTS.md says to list the ids again.
+- **`m2 sections` names one file on its first line**, though it changes every lane whose bars it moves.
+- **No `m2` command prints what plays**: the tempo, the key, the meter, the length and each lane's clips. An agent reads `data/` itself.
 
 ### Releases and installing
 

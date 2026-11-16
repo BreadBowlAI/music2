@@ -280,10 +280,9 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "key",
         also: &[],
-        usage: "m2 key <project> <root> <scale>\n\
-                m2 key <project> none",
+        usage: "m2 key <project> <root> [<scale>]",
         words: "set the song's key in `data/arrangement.json` (`A minor`: a root, C to B with # or b, and a scale), \
-                or take it out with `none`, verified",
+                or take it out with `none` alone, verified",
         more: "The scales: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, \
                major-pentatonic, minor-pentatonic, blues and chromatic. Tune, Chord and Lock to key follow it, and \
                Notes shades the notes out of it.",
