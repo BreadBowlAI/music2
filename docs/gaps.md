@@ -425,6 +425,10 @@ Each line is one small gap, without a number.
 - **`m2 listen` has no loudness range** (LRA, EBU Tech 3342) and no momentary loudness: integrated and the short-term maximum only, as the design asks.
 - **`m2 listen` stops at the song's last clip**: bars past it are refused, so a song with no clips (a drone in code) can't be listened to by bars.
 - **G13 measures the gate's own player, not the app's**: the app in its process takes the forwarded edits and compiles them beside the live run, but what plays is G12's player (G12 through the app's server, `--server`, isn't built). Its listens of `examples/with-plugins` run their plugin host beside it only when the test plugins are installed.
+- **`m2 controls` names a value written inside `db()` by its call alone** (the docs check of 2026-11-16): `song.ts#7/0 -10` names neither the track nor the knob, so two levels in the mixer are told apart only by their values, or by `m2 graph`'s code line. It also prints a choice as its number (`@octaves 0`) where `m2 graph` prints its name.
+- **No `m2` command adds a bus or a send**: an agent writes them into `song.ts` with `m2 edit` ([Buses, sends and groups](guide/code.md#buses-sends-and-groups)), where the app has **Add bus** in the Mix.
+- **`m2 call` needs the app open, even for a route that reads nothing of the song** (`GET /api/theory`): the guide lists the scales, chords and grooves instead ([Clip gestures as JSON](guide/api.md#clip-gestures-as-json)).
+- **With the app closed, each `m2` write says "(revision 2)"**: each run opens the song afresh, so its revisions count from 1 again. True, but it says nothing: the step's name would say more.
 
 ### Releases and installing
 

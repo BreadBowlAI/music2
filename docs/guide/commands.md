@@ -12,7 +12,7 @@ From source, `cargo build --locked --release -p m2` builds `m2` as `target/relea
 
 Every command that reads a project prints what needs attention in it, such as data no lane reads, with the commands that fix it.
 
-One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, each write an undo step of the song's history, yours by `--as`, which the app reads back when it opens the song (`m2 undo` needs the app open). Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
+One program writes a project at a time (its lock is `.music2/lock`). While the app has the song open, a command that writes it hands its edit to the app, which makes it one undo step, named by `--as <name>` (or `M2_AS`) and `--why <words>`, which go last, after the command's own arguments: the musician sees it there, and `m2 undo` takes it back. While the musician drags what it changes, records, or has unsaved code in its file, the app refuses it: `m2` waits up to 30 s, then exits 3, changing nothing. Don't write the song's files directly while the app has it open: the app can't refuse that, and it ends a drag on what it changes. With the app closed, `m2` writes the files itself, each write an undo step of the song's history, yours by `--as`, which the app reads back when it opens the song, and `m2 undo` takes back from here too. Reading, rendering and `bounce` without `--place` work all the same. What is the musician's own (play, stop, seek, the loop, record, mute and solo while listening, the view, plugin windows, redo, exports, settings, opening and closing songs) no agent can do: `m2 call` refuses it, and `m2 point` shows them where instead.
 
 std, the templates and the examples are found at `$M2_STD`, `$M2_TEMPLATES` and `$M2_EXAMPLES`, in the app or package `m2` came in (`music2.app/Contents/Resources`, or `lib/music2` beside the `bin` that holds `m2` on Linux, as in `/usr/lib/music2`), or else in the source tree it was built from.
 
@@ -188,6 +188,15 @@ m2 meter <project> <n/d> [--at <bar>]
 
 Set the song's time signature (`7/8`: 1 to 64 beats of a 1, 2, 4, 8, 16 or 32 note), or with `--at` a change from bar N, verified.
 
+## m2 key
+
+```
+m2 key <project> <root> <scale>
+m2 key <project> none
+```
+
+Set the song's key in `data/arrangement.json` (`A minor`: a root, C to B with # or b, and a scale), or take it out with `none`, verified. The scales: major, minor, dorian, phrygian, lydian, mixolydian, locrian, harmonic-minor, melodic-minor, major-pentatonic, minor-pentatonic, blues and chromatic. Tune, Chord and Lock to key follow it, and Notes shades the notes out of it.
+
 ## m2 title
 
 ```
@@ -351,7 +360,7 @@ m2 clips <project> delete <clip>… [--beats]
 m2 clips <project> json <gesture.json | ->
 ```
 
-One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a Drum's lane: `{"op": "hits", "module": "kick", "lane": "hits", "at": [0, 1], "step": 0.25, "to": "on"}`, `to` being `on`, `off` or `{"velocity": 0.5}`). `m2 call <song> /api/theory` lists the chords and grooves.
+One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a Drum's lane: `{"op": "hits", "module": "kick", "lane": "hits", "at": [0, 1], "step": 0.25, "to": "on"}`, `to` being `on`, `off` or `{"velocity": 0.5}`). [Clip gestures as JSON](api.md#clip-gestures-as-json) shows each, with the chords, scales and grooves.
 
 ## m2 sections
 
@@ -396,7 +405,7 @@ Write a whole text file of the song (from a file, or standard input), as one edi
 m2 undo <project>
 ```
 
-Take back your own newest change in the open app (by `--as`): never the musician's, nor another agent's. With the app closed there is nothing to undo: undo lives in the open app.
+Take back your own newest change (by `--as`): never the musician's, nor another agent's. In the open app while it has the song open; with it closed, from the undo history kept with the song, which the app reads back when it opens it.
 
 ## m2 focus
 

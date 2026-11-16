@@ -69,7 +69,7 @@ mod rekey;
 pub mod scope;
 mod sections;
 mod songkey;
-pub(crate) mod steps;
+pub mod steps;
 mod take_audio;
 mod tempo_lease;
 pub mod view_file;

@@ -713,6 +713,11 @@ fn run(args: Vec<String>) -> Result<()> {
                         }
                     }
                     if n.groups.is_empty() {
+                        // Every value, as the expanded card shows them: under a heading of its own
+                        // when the face came first (CARD-41).
+                        if !n.face.is_empty() {
+                            println!("    All");
+                        }
                         for k in &n.knobs {
                             println!("{}", knob_line(k)?);
                         }
@@ -1034,6 +1039,21 @@ change that code first",
                 false => println!("{}: {} → {} (revision {})", e.file, e.before, e.after, e.revision),
             }
         }
+        Some("key") => {
+            // The song's key, as the song bar sets it (VOX-10): a root and a scale, or none.
+            let mut s = session(Path::new(&arg(1)?))?;
+            let key = match arg(2)?.as_str() {
+                "none" => None,
+                root => Some(m2_editor::songkey::SongKey::new(root, &arg(3)?).map_err(|e| anyhow!("{e}"))?),
+            };
+            let asked = key.as_ref().map_or(String::new(), m2_editor::songkey::SongKey::name);
+            let e = m2_editor::songkey::set(&mut s, key).map_err(|e| anyhow!("{e}"))?;
+            let said = |name: &str| if name.is_empty() { "no key".to_string() } else { name.to_string() };
+            match e.before == e.after {
+                true => println!("{}: already {}; nothing to write", e.file, said(&asked)),
+                false => println!("{}: {} → {} (revision {})", e.file, said(&e.before), said(&e.after), e.revision),
+            }
+        }
         Some("title") => {
             let mut s = session(Path::new(&arg(1)?))?;
             let e = m2_editor::song::title(&mut s, &arg(2)?).map_err(|e| anyhow!("{e}"))?;
@@ -1246,14 +1266,29 @@ change that code first",
         Some("edit") => text::edit(&args)?,
         Some("write") => text::write(&args)?,
         Some("undo") => {
-            // Undo lives in the open app (AGENT-4): the one writer of the song's history, kept with
-            // the song (WRITE-23); with it closed, there is nothing to take back from here.
+            // An agent takes back only its own newest step (AGENT-4): in the open app, the writer of
+            // the song's history; with it closed, from the history kept with the song (WRITE-23).
             let dir = PathBuf::from(arg(1)?);
-            let Some(holder) = app::holder(&dir) else {
-                bail!("nothing to undo: undo lives in the open app, and music2 doesn't have this song open");
-            };
-            let v = app::reach(&dir, &holder, "")?.undo()?;
-            println!("undid {} in the open app", v["name"].as_str().unwrap_or("the newest change"));
+            if let Some(holder) = app::holder(&dir) {
+                let v = app::reach(&dir, &holder, "")?.undo()?;
+                println!("undid {} in the open app", v["name"].as_str().unwrap_or("the newest change"));
+                return Ok(());
+            }
+            let mut s = locked(&dir, "")?;
+            let who = app::who();
+            let me = m2_server::caller::Caller::agent(who.by.as_deref(), None).source();
+            let top = s.step_names().0;
+            let name = top.as_ref().map(|t| t.name.clone().unwrap_or_else(|| t.file.clone()));
+            if top.as_ref().map(|t| &t.source) != Some(&me) {
+                let newest = top.map_or(
+                    serde_json::Value::Null,
+                    |t| serde_json::json!({"name": name, "source": t.source.as_str(), "by": t.source.by()}),
+                );
+                let agent = me.by().unwrap_or("agent").to_string();
+                return Err(m2_server::graph::steps::NotTheirs { newest, agent }.into());
+            }
+            let e = m2_editor::undo(&mut s).map_err(|e| anyhow!("{e}"))?;
+            println!("undid {} (revision {})", name.unwrap_or_default(), e.revision);
         }
         Some("listen") => listen::listen(&args)?,
         Some("focus") => see::focus(&args)?,
