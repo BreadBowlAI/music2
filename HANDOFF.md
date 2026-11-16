@@ -487,7 +487,7 @@ it, or run `m2 upgrade <song>`. It moves the song to today's music2 in one step,
 | Pictures for the owner | `$SCRATCH/app-shots/<track>-<commit>/` |
 | Logs of long jobs | `$SCRATCH/logs/` |
 | The Mac's pasted runs | `$SCRATCH/mac-runs/` |
-| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub (2026-11-16) three branches are left beside `main`, and no Dependabot branch: `canvas-clips` and `design-drums`, both already in `main`, and `maps-try`, the drawn zoom's try build for the owner's Mac (not for merge; track `drawn-zoom` landed the zoom). Locally, `drawn-zoom-2` is work in progress (What comes next, 2) |
+| Branches | Everything is on `main`. A track's branch and worktree are deleted once it lands. On GitHub (2026-11-16) only `main` is left, and no Dependabot branch: the owner had the old ones deleted. Locally, `drawn-zoom-2` is work in progress (What comes next, 2) |
 
 Engine and tooling items left by steps 7 and 8 that are not user gaps are in each build notes' "Left" or "For the
 lead" sections. The ones a next session most needs:
