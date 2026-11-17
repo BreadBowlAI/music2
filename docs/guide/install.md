@@ -79,10 +79,14 @@ sudo apt install pkg-config build-essential libasound2-dev libwebkit2gtk-4.1-dev
 Then, on either:
 
 ```bash
-(cd web && npm ci && npm run build)                                      # the window's UI: once, and after UI changes
+git clone https://github.com/BreadBowlAI/music2.git && cd music2
+(cd web && npm ci && npm run build)                                      # the window's UI
+cargo build --locked --release -p m2                                     # m2, the command line
 cargo run --locked --release -p music2-desktop                           # the app, on its start screen
 cargo run --locked --release -p music2-desktop -- ~/Music/music2/Demo    # or opened on a song folder
 ```
+
+To get the newest version later, run `git checkout main && git pull` in the `music2` folder. Then build the UI and `m2`, and run the app, as above. Do all three: skip one, and that part stays old.
 
 ## The start screen
 
