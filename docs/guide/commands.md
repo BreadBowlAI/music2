@@ -361,6 +361,18 @@ m2 clips <project> json <gesture.json | ->
 
 One clip gesture, as one edit that undo takes back. A clip is `track/lane:id` (`bass/notes:k3f9q2zt`), or `track/lane@place` for the clip that starts there. Places are bar.beat.sixteenth (`9.3.1`), or beats with `--beats`; `--by`, `--length` and `--grid` are beats. `json` takes any gesture, as the app sends it. Besides the gestures above, `json` takes the others `POST /api/graph/clips` takes: `paste` (with `into`, copied notes into a clip), `notes`, `points`, `audio`, `set`, `stamp` (a chord built on the song's key), `groove` (swing, laid back, pushed or accents) and `hits` (the beat grid's steps on a Drum's lane: `{"op": "hits", "module": "kick", "lane": "hits", "at": [0, 1], "step": 0.25, "to": "on"}`, `to` being `on`, `off` or `{"velocity": 0.5}`). [Clip gestures as JSON](api.md#clip-gestures-as-json) shows each, with the chords, scales and grooves.
 
+## m2 versions
+
+```
+m2 versions <project> list [<clip>] [--json]
+m2 versions <project> add <clip> <name> <notes.json | ->
+m2 versions <project> play|star|unstar|remove <clip> <name>
+m2 versions <project> rename <clip> <name> <new-name>
+m2 versions <project> keep <clip>
+```
+
+A notes clip's versions: several takes on its notes, kept in the clip. One plays; the others wait, and are never heard or rendered. `list` shows the clips that have versions, or one clip's (`--json` with their notes). `add` adds one that waits, its notes a JSON list; `play` makes one the clip's notes; `star` marks one; `keep` removes all but the one that plays. Each is one edit that undo takes back. A clip is named as `m2 clips` names it (`bass/notes:k3f9q2zt`). The notes are as a lane's file writes them, times in beats from the clip's start: `[{"pitch": "A1", "start": 0, "length": 0.5}]`. The first `add` names what plays `original`. `remove` takes a waiting version out; the one that plays is refused. Split and Join refuse a clip whose versions wait: `keep` first. See [Versions](versions.md).
+
 ## m2 sections
 
 ```

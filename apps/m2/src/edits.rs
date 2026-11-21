@@ -219,7 +219,7 @@ fn lane_addr(text: &str) -> Result<m2_song::LaneAddr> {
 }
 
 /// `track/lane:id`, or `track/lane@place` for the first clip that starts there.
-fn clip_ref(text: &str, place: &dyn Fn(&str) -> Result<f64>) -> Result<m2_editor::clips::ClipRef> {
+pub(crate) fn clip_ref(text: &str, place: &dyn Fn(&str) -> Result<f64>) -> Result<m2_editor::clips::ClipRef> {
     let (lane, id, at) = match (text.split_once(':'), text.split_once('@')) {
         (Some((lane, id)), _) => (lane, Some(id.to_string()), None),
         (None, Some((lane, at))) => (lane, None, Some((place(at)?, 0))),

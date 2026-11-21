@@ -24,6 +24,7 @@ There's no AI inside the app. Scripts and AI agents (such as a Claude Code sessi
 | Play a pattern, a chord or echoes from each note you play: an arpeggiator, Chord, Note echo and Lock to key | **+** on the notes wire into the instrument, in its **Graph** ([how](sounds.md#note-effects)) |
 | Edit clips: move, copy, trim, split, join, repeat | the timeline |
 | Copy a chorus, or insert and delete bars, on every track at once | drag across the ruler, then ⌘C and ⌘V, or right-click ([Sections](sections.md)) |
+| Keep several ideas for one clip's notes, and pick one | `m2 versions` in a terminal; an agent proposes ideas this way ([Versions](versions.md)) |
 | Change values, add effects, connect wires | **Graph** (⌥1) |
 | Mix: faders, pans, mute, solo, meters, and how loud the song is (LUFS) | **Mix** (⌥3), and each track's header |
 | Share a reverb or a delay, or group tracks under one fader | **Mix** (⌥3) ▸ **Add bus** |

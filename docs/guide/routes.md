@@ -98,7 +98,7 @@ Its query, as JSON:
 
 ### `POST /api/graph/clips`
 
-A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove, hits (the beat grid's steps) or find_notes (a voice's notes). It writes the song: one undo step.
+A clip gesture: create, move, resize, split, join, duplicate, paste, delete, quantize, notes, points, audio, set, stamp (a chord), groove, hits (the beat grid's steps), find_notes (a voice's notes) or versions (a notes clip's versions: add, play, star, rename, remove, keep). It writes the song: one undo step.
 
 An example body:
 

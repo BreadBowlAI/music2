@@ -476,6 +476,24 @@ pub const COMMANDS: &[Command] = &[
                shows each, with the chords, scales and grooves.",
     },
     Command {
+        name: "versions",
+        also: &[],
+        usage: "m2 versions <project> list [<clip>] [--json]\n\
+                m2 versions <project> add <clip> <name> <notes.json | ->\n\
+                m2 versions <project> play|star|unstar|remove <clip> <name>\n\
+                m2 versions <project> rename <clip> <name> <new-name>\n\
+                m2 versions <project> keep <clip>",
+        words: "a notes clip's versions: several takes on its notes, kept in the clip. One plays; the others wait, \
+                and are never heard or rendered. `list` shows the clips that have versions, or one clip's (`--json` \
+                with their notes). `add` adds one that waits, its notes a JSON list; `play` makes one the clip's \
+                notes; `star` marks one; `keep` removes all but the one that plays. Each is one edit that undo takes \
+                back. A clip is named as `m2 clips` names it (`bass/notes:k3f9q2zt`)",
+        more: "The notes are as a lane's file writes them, times in beats from the clip's start: \
+               `[{\"pitch\": \"A1\", \"start\": 0, \"length\": 0.5}]`. The first `add` names what plays `original`. \
+               `remove` takes a waiting version out; the one that plays is refused. Split and Join refuse a clip \
+               whose versions wait: `keep` first. See [Versions](versions.md).",
+    },
+    Command {
         name: "sections",
         also: &[],
         usage: "m2 sections <project> duplicate <bars> [--to <bar>]\n\
