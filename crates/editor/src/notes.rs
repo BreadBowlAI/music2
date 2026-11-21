@@ -923,7 +923,7 @@ mod tests {
         let mut s = fixture.open();
         let id = clips(&s, "bass", "notes")[0].id.clone().unwrap();
         let clip = ClipRef { lane: LaneAddr::new("bass", "notes").unwrap(), id: Some(id), at: None, sha: None };
-        let add = Act::Add { versions: vec![NewVersion { name: "busy".into(), notes: vec![note(45.0, 0.0, 0.25, 0.8)] }] };
+        let add = Act::Add { versions: vec![NewVersion { name: "busy".into(), notes: vec![note(45.0, 0.0, 0.25, 0.8)] }], play: false };
         crate::clips::edit(&mut s, &Gesture::Versions { clip, act: add, by: Some("Claude".into()) }).unwrap();
         let had = clips(&s, "bass", "notes");
         assert_eq!(had[0].versions.len(), 2);

@@ -16,9 +16,12 @@ pub const ORIGINAL: &str = "original";
 #[serde(tag = "act", rename_all = "lowercase")]
 pub enum Act {
     /// Adds versions, which wait: what plays doesn't change. On a clip with none yet, what plays
-    /// is first named `original`.
+    /// is first named `original`. With `play`, the last one added then plays, in the same step
+    /// (the Playground's Duplicate, VER-6).
     Add {
         versions: Vec<NewVersion>,
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        play: bool,
     },
     /// Makes `name` the one that plays: its notes become the clip's, and the notes that played
     /// wait under their name.
@@ -84,11 +87,21 @@ fn free(c: &NoteClip, name: &str) -> Result<(), EditError> {
     }
 }
 
+/// Makes `c`'s `i`th version the one that plays: its notes become the clip's, and the notes that
+/// played wait under their name. Nothing changes when it plays already.
+fn play_at(c: &mut NoteClip, i: usize) {
+    if let Some(notes) = c.versions[i].notes.take() {
+        let played = std::mem::replace(&mut c.notes, notes);
+        let was = (0..c.versions.len()).find(|&j| j != i && c.versions[j].notes.is_none()).expect("one version plays (VER-1)");
+        c.versions[was].notes = Some(played);
+    }
+}
+
 /// `act` on `c`. `by` is who sends it, for the versions an `add` makes: an agent's name, none
 /// for the musician. An act that changes nothing leaves `c` as it was.
 pub(crate) fn apply(c: &mut NoteClip, act: &Act, by: Option<&str>) -> Result<(), EditError> {
     match act {
-        Act::Add { versions } => {
+        Act::Add { versions, play } => {
             if versions.is_empty() {
                 return Err(EditError::Rejected("Give a version to add: a name and its notes.".into()));
             }
@@ -101,14 +114,13 @@ pub(crate) fn apply(c: &mut NoteClip, act: &Act, by: Option<&str>) -> Result<(),
                 let by = by.map(str::trim).filter(|b| !b.is_empty()).map(str::to_string);
                 c.versions.push(Version { name: new.name.clone(), star: false, by, notes: Some(new.notes.clone()) });
             }
+            if *play {
+                play_at(c, c.versions.len() - 1);
+            }
         }
         Act::Play { name } => {
             let i = find(c, name)?;
-            if let Some(notes) = c.versions[i].notes.take() {
-                let played = std::mem::replace(&mut c.notes, notes);
-                let was = c.versions.iter().position(|v| v.notes.is_none() && v.name != *name).expect("one version plays (VER-1)");
-                c.versions[was].notes = Some(played);
-            }
+            play_at(c, i);
         }
         Act::Star { name, star } => {
             let i = find(c, name)?;

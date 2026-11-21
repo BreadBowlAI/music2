@@ -98,6 +98,23 @@ fn focus_is_memory_only_and_goes_with_the_song() {
     assert_eq!(files(&fixture.0), before, "still no file changed");
 }
 
+// AGENT-6, VER-6: while the Playground is open the record names its clip and the beats it spans;
+// closed, `playground` is null.
+#[test]
+fn the_focus_record_names_the_playground() {
+    let (_fixture, graph) = first_song();
+    let t = token(&graph);
+    let closed = graph.post_focus(serde_json::from_value(record(t, 1)).unwrap()).unwrap();
+    assert_eq!(closed["playground"], Value::Null, "closed: {closed}");
+    let mut open = record(t, 1);
+    open["playground"] = json!({"track": "bass", "lane": "notes", "id": "b1", "from": 0.0, "to": 32.0});
+    let served = graph.post_focus(serde_json::from_value(open.clone()).unwrap()).unwrap();
+    assert_eq!(served["playground"], open["playground"], "{served}");
+    assert_eq!(graph.focus()["playground"], open["playground"], "GET /api/focus says it");
+    graph.post_focus(serde_json::from_value(record(t, 1)).unwrap()).unwrap();
+    assert_eq!(graph.focus()["playground"], Value::Null, "closed again");
+}
+
 // AGENT-6: a focus for another song than the open one is refused, and changes nothing; the tools
 // key's posts are refused at the route (`routes_see_tests`).
 #[test]
