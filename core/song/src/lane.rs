@@ -55,6 +55,91 @@ pub struct NoteClip {
     pub start: f64,
     pub length: f64,
     pub notes: Vec<Note>,
+    /// Every version of the clip's notes, in the order they were added (VER-1): none, or two
+    /// or more, of which exactly one has no notes of its own: the one that plays, whose notes
+    /// are `notes`. Nothing that plays the song reads it (VER-2).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "versions")]
+    pub versions: Vec<Version>,
+}
+
+/// One version of a notes clip's notes (VER-1).
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Version {
+    /// What it is called: 1 to 40 characters, unique in its clip ([`version_name`]).
+    pub name: String,
+    /// The musician likes it. Written only when so.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub star: bool,
+    /// Who added it: an agent's name, and none for the musician.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub by: Option<String>,
+    /// Its notes while it waits, times from the clip's start. None for the one that plays.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notes: Option<Vec<Note>>,
+}
+
+/// The most characters a version's name has.
+pub const VERSION_NAME: usize = 40;
+
+/// Why `name` can't name a version, if it can't (VER-1): it is 1 to 40 characters, every one of
+/// them shown, with no space at either end.
+pub fn version_name(name: &str) -> Result<(), String> {
+    match name.chars().count() {
+        1..=VERSION_NAME => {}
+        _ => return Err(format!("a version's name is 1 to {VERSION_NAME} characters")),
+    }
+    if name.trim() != name {
+        return Err("a version's name can't start or end with a space".into());
+    }
+    if name.chars().any(|c| c.is_control() || crate::tx::hidden(c)) {
+        return Err("a version's name can't hold characters that don't show".into());
+    }
+    Ok(())
+}
+
+/// Why `versions` can't be a clip's versions, if they can't (VER-1): each name fits and is
+/// used once, and exactly one version plays (has no notes of its own).
+pub fn versions_fit(versions: &[Version]) -> Result<(), String> {
+    for (i, v) in versions.iter().enumerate() {
+        version_name(&v.name).map_err(|why| format!("version {}: {why}", i + 1))?;
+        if versions[..i].iter().any(|w| w.name == v.name) {
+            return Err(format!("two versions are named `{}`", v.name));
+        }
+    }
+    let plays: Vec<&str> = versions.iter().filter(|v| v.notes.is_none()).map(|v| v.name.as_str()).collect();
+    match plays[..] {
+        [_] => Ok(()),
+        [] => Err("no version plays: exactly one has no `notes`".into()),
+        [a, b, ..] => Err(format!("two versions play (`{a}` and `{b}`): only one has no `notes`")),
+    }
+}
+
+/// A clip's `versions` as written: each read on its own, so an error names the version, and for
+/// a note, the note; then held to [`versions_fit`]. A list of one version is none (VER-1).
+fn versions<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Vec<Version>, D::Error> {
+    let err = |why: String| serde::de::Error::custom(why);
+    let Value::Array(list) = Value::deserialize(d)? else { return Err(err("`versions` must be a list".into())) };
+    let mut out = Vec::with_capacity(list.len());
+    for (i, v) in list.iter().enumerate() {
+        let mut read = Version::deserialize(v).map_err(|e| {
+            let named = v.get("name").and_then(Value::as_str).map(|n| format!(" (`{n}`)")).unwrap_or_default();
+            let note = v
+                .get("notes")
+                .and_then(Value::as_array)
+                .and_then(|ns| ns.iter().enumerate().find_map(|(j, n)| Note::deserialize(n).err().map(|e| format!("note {}: {e}", j + 1))));
+            err(format!("version {}{named}: {}", i + 1, note.unwrap_or_else(|| e.to_string())))
+        })?;
+        if let Some(notes) = &mut read.notes {
+            notes.sort_by(note_order);
+        }
+        out.push(read);
+    }
+    if out.is_empty() {
+        return Ok(out);
+    }
+    versions_fit(&out).map_err(err)?;
+    Ok(if out.len() == 1 { vec![] } else { out })
 }
 
 #[derive(Clone, Debug, PartialEq, Deserialize, Serialize)]
@@ -636,9 +721,12 @@ impl LaneData {
         let neg = |x: &f64| !x.is_finite() || (*x == 0.0 && x.is_sign_negative());
         let pairs = |ps: &[(f64, f64)]| ps.iter().any(|(a, b)| neg(a) || neg(b));
         match self {
-            LaneData::Notes(c) => c.iter().any(|c| {
-                neg(&c.start) || neg(&c.length) || c.notes.iter().any(|n| [n.pitch, n.start, n.length, n.velocity].iter().any(neg))
-            }),
+            LaneData::Notes(c) => {
+                let notes = |notes: &[Note]| notes.iter().any(|n| [n.pitch, n.start, n.length, n.velocity].iter().any(neg));
+                // A list of one version is never written (VER-1).
+                let versions = |v: &[Version]| v.len() == 1 || v.iter().any(|v| v.notes.as_deref().is_some_and(notes));
+                c.iter().any(|c| neg(&c.start) || neg(&c.length) || notes(&c.notes) || versions(&c.versions))
+            }
             LaneData::Control { clips, .. } => clips.iter().any(|c| neg(&c.start) || neg(&c.length) || pairs(&c.points)),
             LaneData::Steps { clips, .. } => clips.iter().any(|c| neg(&c.start) || neg(&c.length) || c.points.iter().any(|(b, _)| neg(b))),
             LaneData::Audio(c) => {
@@ -701,6 +789,9 @@ impl LaneData {
             LaneData::Notes(c) => {
                 for c in c.iter_mut() {
                     c.notes.sort_by(note_order);
+                    for notes in c.versions.iter_mut().filter_map(|v| v.notes.as_mut()) {
+                        notes.sort_by(note_order);
+                    }
                 }
                 *c = sorted(std::mem::take(c), |c| (c.start, c.id.as_deref()));
             }
@@ -891,26 +982,55 @@ fn pairs(out: &mut String, pairs: &[(f64, f64)]) {
 }
 
 impl Clip for NoteClip {
-    /// The clip's opening line and one line per note.
+    /// The clip's opening line and one line per note; then, when it has versions, one line per
+    /// version and per note of each (VER-1).
     fn write_line(&self, out: &mut String) {
         out.push('{');
         id_field(out, &self.id, &self.other_id);
         span(out, self.start, self.length);
-        out.push_str(", \"notes\": [");
-        if self.notes.is_empty() {
-            out.push_str("]}");
-            return;
+        out.push_str(", \"notes\": ");
+        note_lines(out, &self.notes, "    ");
+        if self.versions.len() > 1 {
+            out.push_str(", \"versions\": [");
+            for (i, v) in self.versions.iter().enumerate() {
+                out.push_str(if i == 0 { "\n    {\"name\": " } else { ",\n    {\"name\": " });
+                write_string(out, &v.name);
+                if v.star {
+                    out.push_str(", \"star\": true");
+                }
+                if let Some(by) = &v.by {
+                    out.push_str(", \"by\": ");
+                    write_string(out, by);
+                }
+                if let Some(n) = &v.notes {
+                    out.push_str(", \"notes\": ");
+                    note_lines(out, n, "      ");
+                }
+                out.push('}');
+            }
+            out.push_str("\n  ]");
         }
-        for (i, n) in self.notes.iter().enumerate() {
-            out.push_str(if i == 0 { "\n    " } else { ",\n    " });
-            note(out, n);
-        }
-        out.push_str("\n  ]}");
+        out.push('}');
     }
 
     fn other_id(&mut self) -> &mut Option<Value> {
         &mut self.other_id
     }
+}
+
+/// `[`, each note on a line of its own after `indent`, and `]` one step back; `[]` for none.
+fn note_lines(out: &mut String, notes: &[Note], indent: &str) {
+    out.push('[');
+    for (i, n) in notes.iter().enumerate() {
+        out.push_str(if i == 0 { "\n" } else { ",\n" });
+        out.push_str(indent);
+        note(out, n);
+    }
+    if !notes.is_empty() {
+        out.push('\n');
+        out.push_str(&indent[2..]);
+    }
+    out.push(']');
 }
 
 fn note(out: &mut String, n: &Note) {
@@ -1477,6 +1597,109 @@ mod tests {
         assert_eq!(lane.value_at(8.0, 9.0), 9.0);
     }
 
+    /// The design note's clip: three versions, of which `walks up` plays, and one more.
+    const VERSIONS: &str = "{\"clips\": [\n  {\"id\": \"k3f9q2zt\", \"start\": 32, \"length\": 16, \"notes\": [\n    \
+        {\"pitch\": \"A1\", \"start\": 0, \"length\": 0.5, \"velocity\": 0.8}\n  ], \"versions\": [\n    \
+        {\"name\": \"original\", \"notes\": [\n      {\"pitch\": \"E1\", \"start\": 0, \"length\": 1, \"velocity\": 0.8},\n      \
+        {\"pitch\": \"G1\", \"start\": 1, \"length\": 1, \"velocity\": 0.8}\n    ]},\n    \
+        {\"name\": \"walks up\"},\n    \
+        {\"name\": \"busy\", \"star\": true, \"by\": \"Claude\", \"notes\": [\n      \
+        {\"pitch\": \"A1\", \"start\": 0, \"length\": 0.25, \"velocity\": 0.8}\n    ]},\n    \
+        {\"name\": \"rest\", \"notes\": []}\n  ]}\n]}\n";
+
+    // VER-1: a clip's versions read, and write back byte for byte: one version a line, its
+    // fields in order, its notes one a line and in the notes' order.
+    #[test]
+    fn versions_read_and_write_in_canonical_form() {
+        let data = LaneData::read(VERSIONS, &notes_kind()).unwrap();
+        assert!(data.reads_back(&notes_kind()));
+        assert_eq!(canonical(&data), VERSIONS);
+        let LaneData::Notes(c) = &data else { panic!() };
+        let v = &c[0].versions;
+        assert_eq!(v.iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["original", "walks up", "busy", "rest"], "in the order added");
+        assert!(v[1].notes.is_none() && !v[1].star && v[1].by.is_none(), "the one that plays has no notes of its own");
+        assert!(v[2].star && v[2].by.as_deref() == Some("Claude"));
+        assert_eq!(v[0].notes.as_ref().unwrap().len(), 2);
+        // Written by hand, in any order and spacing: the same clip, and the same bytes out.
+        let loose = r#"{"clips": [{"versions": [
+            {"notes": [{"pitch": 31, "start": 1, "length": 1}, {"pitch": "E1", "start": 0, "length": 1}], "name": "original"},
+            {"name": "walks up", "star": false},
+            {"by": "Claude", "star": true, "name": "busy", "notes": [{"pitch": "A1", "start": 0, "length": 0.25}]},
+            {"name": "rest", "notes": []}],
+            "notes": [{"pitch": "A1", "start": 0, "length": 0.5}], "length": 16, "start": 32, "id": "k3f9q2zt"}]}"#;
+        let read = LaneData::read(loose, &notes_kind()).unwrap();
+        assert_eq!(read, data);
+        assert_eq!(canonical(&read), VERSIONS);
+        // The clip as a gesture sends and gets it (JSON through serde) is the same clip.
+        let sent = serde_json::to_value(&c[0]).unwrap();
+        assert_eq!(sent["versions"][1], serde_json::json!({"name": "walks up"}));
+        assert_eq!(serde_json::from_value::<NoteClip>(sent).unwrap(), c[0]);
+    }
+
+    // VER-1: a clip without versions is today's clip, byte for byte, in the file and as JSON.
+    #[test]
+    fn a_clip_without_versions_is_unchanged() {
+        let text = "{\"clips\": [\n  {\"id\": \"k3f9q2zt\", \"start\": 0, \"length\": 16, \"notes\": [\n    \
+                    {\"pitch\": \"A1\", \"start\": 0, \"length\": 0.5, \"velocity\": 0.9}\n  ]}\n]}\n";
+        let data = LaneData::read(text, &notes_kind()).unwrap();
+        assert!(data.reads_back(&notes_kind()));
+        assert_eq!(canonical(&data), text);
+        let LaneData::Notes(c) = &data else { panic!() };
+        assert!(c[0].versions.is_empty());
+        assert!(serde_json::to_value(&c[0]).unwrap().get("versions").is_none());
+    }
+
+    // VER-1: a list of one version is never written: it reads as none, and so does an empty list.
+    #[test]
+    fn one_version_is_never_written() {
+        let with = |versions: &str| format!(r#"{{"clips": [{{"start": 0, "length": 4, "notes": [], "versions": {versions}}}]}}"#);
+        for versions in [r#"[{"name": "original"}]"#, "[]"] {
+            let data = LaneData::read(&with(versions), &notes_kind()).unwrap();
+            let LaneData::Notes(c) = &data else { panic!() };
+            assert!(c[0].versions.is_empty(), "{versions}");
+            assert_eq!(canonical(&data), "{\"clips\": [\n  {\"start\": 0, \"length\": 4, \"notes\": []}\n]}\n");
+        }
+    }
+
+    // VER-1: a list that breaks a rule makes the lane fail to read, saying which clip and which
+    // version (FMT-9).
+    #[test]
+    fn broken_versions_are_refused_in_words() {
+        let with = |versions: &str| format!(r#"{{"clips": [{{"start": 8, "length": 4, "notes": [], "versions": [{versions}]}}]}}"#);
+        let note = r#"{"pitch": 60, "start": 0, "length": 1}"#;
+        let ok = format!(r#"{{"name": "a"}}, {{"name": "b", "notes": [{note}]}}"#);
+        assert!(LaneData::read(&with(&ok), &notes_kind()).is_ok());
+        let long = "x".repeat(41);
+        for (versions, says) in [
+            (r#"{"name": "a"}, {"name": "b"}"#.to_string(), "two versions play (`a` and `b`): only one has no `notes`"),
+            (r#"{"name": "a", "notes": []}, {"name": "b", "notes": []}"#.into(), "no version plays: exactly one has no `notes`"),
+            (r#"{"name": "a", "notes": []}"#.into(), "no version plays: exactly one has no `notes`"),
+            (r#"{"name": "a"}, {"name": "a", "notes": []}"#.into(), "two versions are named `a`"),
+            (r#"{"name": "a"}, {"name": "", "notes": []}"#.into(), "version 2: a version's name is 1 to 40 characters"),
+            (format!(r#"{{"name": "a"}}, {{"name": "{long}", "notes": []}}"#), "version 2: a version's name is 1 to 40 characters"),
+            (r#"{"name": "a"}, {"name": " b", "notes": []}"#.into(), "version 2: a version's name can't start or end with a space"),
+            (r#"{"name": "a"}, {"name": "b​c", "notes": []}"#.into(), "version 2: a version's name can't hold characters that don't show"),
+            (r#"{"name": "a"}, {"notes": []}"#.into(), "version 2: missing field `name`"),
+            (r#"{"name": "a"}, {"name": "b", "notes": [], "stars": 1}"#.into(), "version 2 (`b`): unknown field `stars`"),
+            (r#"{"name": "a"}, {"name": "b", "notes": [], "star": "yes"}"#.into(), "version 2 (`b`): "),
+            (
+                r#"{"name": "a"}, {"name": "b", "notes": [{"pitch": 60, "start": 0}]}"#.into(),
+                "version 2 (`b`): note 1: missing field `length`",
+            ),
+            (r#"{"name": "a"}, {"name": "b", "notes": [{"pitch": "H9", "start": 0, "length": 1}]}"#.into(), "version 2 (`b`): note 1: "),
+        ] {
+            let why = invalid(&with(&versions), &notes_kind());
+            assert!(why.starts_with("clip 1 (at beat 8): ") && why.contains(says), "{versions}: {why}");
+        }
+        assert!(invalid(&with("5").replace("[5]", "5"), &notes_kind()).contains("`versions` must be a list"));
+        // Only notes clips have versions.
+        let points = r#"{"unit": "hz", "clips": [{"start": 0, "length": 4, "points": [[0, 1]], "versions": []}]}"#;
+        assert!(invalid(points, &hz()).contains("versions"));
+        // A clip a gesture sends is held to the same rules.
+        let sent = serde_json::json!({"start": 0, "length": 4, "notes": [], "versions": [{"name": "a"}, {"name": "a", "notes": []}]});
+        assert!(serde_json::from_value::<NoteClip>(sent).unwrap_err().to_string().contains("two versions are named `a`"));
+    }
+
     // FMT-8a: the canonical form, and reading then writing it gives the same bytes.
     #[test]
     fn canonical_form() {
@@ -1612,6 +1835,7 @@ mod tests {
         let c = NoteClip {
             id: None,
             other_id: None,
+            versions: vec![],
             start: 4.0,
             length: 2.0,
             notes: vec![

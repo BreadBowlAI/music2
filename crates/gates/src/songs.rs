@@ -37,7 +37,7 @@ pub fn note(pitch: f64, start: f64, length: f64) -> Note {
 }
 
 pub fn clip(id: Option<&str>, start: f64, length: f64, notes: Vec<Note>) -> NoteClip {
-    NoteClip { id: id.map(str::to_string), other_id: None, start, length, notes }
+    NoteClip { id: id.map(str::to_string), other_id: None, versions: vec![], start, length, notes }
 }
 
 /// What rings after the tone in [`tail`].
