@@ -50,6 +50,9 @@ const GROUPS: { name: string; keys: [string, string][] }[] = [
       ["A chord stamp's next inversion", "I"],
       ["Quantize the notes in Notes", "Q"],
       ["Note tools: swing, grooves, legato…", "right-click a note"],
+      ["Open / close the Playground: a clip's versions", opt("P")],
+      ["Playground: play the version before / after", "← / →"],
+      ["Playground: star the version that plays", "S"],
     ],
   },
   {

@@ -5,13 +5,15 @@
 // keeps it in memory only, never in a file, a revision or undo. Its fields: the dock's view, the
 // selected track, the timeline's picked clips and a marquee's bars, the roll's selected notes (by
 // pitch, start and length: notes have no ids), the knob last touched, the beats the timeline shows,
-// and the code view's file and cursor line. The server adds where playback is, the loop, unsaved
+// the code view's file and cursor line, and the Playground's clip and beats while it is open (VER-6).
+// The server adds where playback is, the loop, unsaved
 // code, Compare and the MIDI keyboard's target.
 
 import { create } from "zustand";
 import { useClipSelection } from "./clips";
-import { dockView } from "./graph";
+import { dockView, findNoteClip } from "./graph";
 import { token } from "./native";
+import { usePlayground } from "./playground";
 import { useShell } from "./shell";
 import { useStore } from "./store";
 import { http } from "./http";
@@ -56,6 +58,8 @@ function record() {
   const sel = useClipSelection.getState();
   const l = useLooked.getState();
   const view = dockView(graph, shell.view, shell.module);
+  const at = usePlayground.getState().clip;
+  const tried = at && findNoteClip(graph.timeline, at);
   return {
     session: graph.session,
     revision: graph.view.revision,
@@ -68,6 +72,8 @@ function record() {
     knob: l.knob,
     seen: l.seen ? [beat(l.seen[0]), beat(l.seen[1])] : null,
     code: view === "code" ? l.code : null,
+    // The Playground's clip and its beats, while it is open (VER-6).
+    playground: at && tried ? { track: at.module, lane: at.lane, id: at.id, from: beat(tried.start), to: beat(tried.start + tried.length) } : null,
   };
 }
 
@@ -106,6 +112,7 @@ export function followFocus(): () => void {
     useShell.subscribe((s, was) => (s.view !== was.view || s.selected !== was.selected) && soon()),
     useClipSelection.subscribe(soon),
     useLooked.subscribe(soon),
+    usePlayground.subscribe((s, was) => s.clip !== was.clip && soon()),
     useStore.subscribe((s, was) => (s.graph?.session !== was.graph?.session || s.graph?.view.revision !== was.graph?.view.revision) && soon()),
   ];
   window.addEventListener("pointerdown", touched, true);

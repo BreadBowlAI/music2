@@ -41,6 +41,8 @@ export const keepFocus = (e: React.MouseEvent) => e.preventDefault();
 
 /** The popovers open now, oldest first. */
 const open: HTMLElement[] = [];
+/** Whether a popover or a menu is open: Escape is its own then. */
+export const popoverOpen = () => open.length > 0;
 
 /**
  * The one popover and menu surface (taste.md §2.14): `raised`, `rounded-md`, `shadow-pop`, 4px in,

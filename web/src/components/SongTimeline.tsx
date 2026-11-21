@@ -63,6 +63,7 @@ import { HIDDEN_ROW_H, HiddenRow } from "./HiddenLanes";
 import { TakeRows } from "./TakeRows";
 import { useTakesOpen } from "../lib/takes";
 import { chord, keyName, mod, opt } from "../lib/native";
+import { openPlayground, waiting } from "../lib/playground";
 import { ARRANGEMENT, followNow, keepZoom, kept, roundZoom, setFollow, stepped, useFollow, useZoom, ZOOM, zoomNow } from "../lib/zoom";
 import { CameraScope, laidOf, onCamera, useCamera, useCameraOf, useCameraState, useCull, useNear, useSpan, useZoomOf, within, type CameraState, type Window } from "../camera";
 import { useStatus } from "../lib/status";
@@ -78,7 +79,7 @@ import { RulerMarkers, useShownMarkers } from "./Markers";
 import { Said, SaidScope, useSaidTrack } from "./zoomPicture/said";
 import { ZoomPicture } from "./zoomPicture/ZoomPicture";
 import { barCount, barsWords, clearBars, copyBars, onBarLine, selectBars, sendSection, snapBars, useSection, type SectionGesture } from "../lib/sections";
-import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, Curve, LaneDrawing, Notes, useKept, type StillClip } from "./ClipDrawing";
+import { BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, VERSIONS_MARK, Curve, LaneDrawing, Notes, useKept, type StillClip } from "./ClipDrawing";
 import { Hatch, usePatternId, VLines } from "./draw";
 import GridChip from "./GridChip";
 import PointMenu, { unautomate, type MenuItem } from "./ClipMenu";
@@ -2819,6 +2820,8 @@ function TimelineMenu({
       "line",
       { id: "loop", label: picked.length > 1 ? "Loop these clips" : "Loop this clip", shortcut: chord("L"), run: edits.loop },
       picked.length === 1 && picked[0].lane.kind === "notes" ? { id: "open", label: "Open in Notes", run: () => onOpenClip(picked[0].ref) } : null,
+      // The clip's versions, beside the roll (VER-6).
+      picked.length === 1 && picked[0].lane.kind === "notes" ? { id: "playground", label: "Open Playground", shortcut: opt("P"), run: () => void openPlayground(picked[0].ref) } : null,
     ];
   } else {
     const taken = lane.clips.some((c: AnyClip) => c.start <= at.beat && at.beat < c.start + c.length);
@@ -3062,6 +3065,7 @@ function LaneClips({
         editable={editable}
         painting={painting}
         glow={glows}
+        versions={"notes" in c ? waiting(c) : 0}
         onDoubleClick={lane.kind === "notes" ? () => handlers.current.onOpen(i) : undefined}
         onPointerDown={(e) => handlers.current.onDown(ref, e)}
         onContextMenu={(e) => handlers.current.onMenu(ref, e)}
@@ -3147,6 +3151,7 @@ const Clip = memo(function Clip({
   editable,
   painting,
   glow,
+  versions = 0,
   onDoubleClick,
   onPointerDown,
   onContextMenu,
@@ -3173,6 +3178,8 @@ const Clip = memo(function Clip({
   painting?: boolean;
   /** Its lane changed elsewhere just now (AGENT-5). */
   glow?: boolean;
+  /** How many versions wait in it (VER-6): a small mark says so. */
+  versions?: number;
   onDoubleClick?: () => void;
   /** Given, the clip can be selected (and, editable, dragged by its body or either edge). */
   onPointerDown?: (e: React.PointerEvent<HTMLElement>) => void;
@@ -3226,6 +3233,17 @@ const Clip = memo(function Clip({
         <div className={clsx("absolute inset-0 pointer-events-none", byLane && "z-[2]")}>
           <Hatch />
         </div>
+      )}
+      {/* Versions wait in it (VER-6): how many, at its top right; the Playground shows them. */}
+      {versions > 0 && !ghost && (
+        <span
+          data-versions={versions}
+          title={`${versions} ${versions === 1 ? "version waits" : "versions wait"} in this clip: Open Playground (${opt("P")}) shows them`}
+          className={clsx("absolute grid place-items-center rounded-full px-1 text-xs font-medium text-white", byLane && "z-[2]")}
+          style={{ top: VERSIONS_MARK.inset, right: VERSIONS_MARK.inset, height: VERSIONS_MARK.size, minWidth: VERSIONS_MARK.size, background: color.ink }}
+        >
+          {versions}
+        </span>
       )}
       {/* Either edge resizes: 6 px each (design-8b §7.5). */}
       {handles && (

@@ -348,7 +348,12 @@ export const keyNote = (name: string, key: string) => (name.toLowerCase() === ke
  * without one, or whose id breaks the rule or is another clip's too, is anonymous: see `ClipRef`.
  * Note starts and control point beats are relative to their clip's start.
  */
-export interface NoteClip { id?: string; start: number; length: number; notes: Note[] }
+export interface NoteClip { id?: string; start: number; length: number; notes: Note[]; versions?: Version[] }
+/**
+ * One of a notes clip's versions (VER-1): the one without `notes` plays, and its notes are the
+ * clip's; the others wait with theirs. `by`: the agent that added it, as it named itself.
+ */
+export interface Version { name: string; star?: boolean; by?: string; notes?: Note[] }
 /** `pitch` in semitones (60 is middle C); `velocity` 0..1. */
 export interface Note { pitch: number; start: number; length: number; velocity: number }
 export interface ControlClip { id?: string; start: number; length: number; points: [number, number][] }

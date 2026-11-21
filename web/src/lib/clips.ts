@@ -75,7 +75,15 @@ export type Gesture =
    */
   | ({ op: "hits"; at: number[]; step: number; to: "on" | "off" | { velocity: number } } & LaneAddr)
   /** An audio clip's volume (dB), fades (seconds), direction and Follow tempo: those given (lane A's A3, sx's D11). */
-  | { op: "audio"; clip: ServerRef; gain_db?: number; fade_in?: number; fade_out?: number; reverse?: boolean; follow?: boolean };
+  | { op: "audio"; clip: ServerRef; gain_db?: number; fade_in?: number; fade_out?: number; reverse?: boolean; follow?: boolean }
+  /** A notes clip's versions (VER-3): add some (with `play`, the last one added plays), play, star, rename or remove one, or keep the one that plays. */
+  | ({ op: "versions"; clip: ServerRef } & (
+      | { act: "add"; versions: { name: string; notes: { pitch: number; start: number; length: number; velocity: number }[] }[]; play?: boolean }
+      | { act: "play" | "remove"; name: string }
+      | { act: "star"; name: string; star: boolean }
+      | { act: "rename"; name: string; to: string }
+      | { act: "keep" }
+    ));
 
 /** The server's answer to a gesture: the edit, and the clips it put on a lane they weren't on. */
 export interface Done {
