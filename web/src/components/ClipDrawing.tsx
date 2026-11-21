@@ -44,6 +44,8 @@ export const CLIP_INSET = 4;
 export const CLIP_END = 1;
 export const CLIP_MIN = 4;
 export const BORDER = 1;
+/** The mark of a clip's waiting versions (VER-6): its height (and least width), and its room from the clip's inside top right corner; the page and the zoom picture draw it alike. */
+export const VERSIONS_MARK = { size: 14, inset: 2 };
 export const BODY_TOP = 4;
 export const BODY_BOTTOM = 4;
 /** A clip's drawing area inside its box. */

@@ -552,7 +552,8 @@ pub const COMMANDS: &[Command] = &[
                 the knob last touched, the bars shown, the code's file and line, where playback is",
         more: "In full: the dock's view, the selected track by its key, the clips picked (`{track, lane, id}`) and a \
                marquee's bars (`range`), the roll's selected notes by `pitch`, `start` and `length`, the knob last \
-               touched, the beats the timeline shows (`seen`), the code view's file and line; and from the app, \
+               touched, the beats the timeline shows (`seen`), the code view's file and line, and the clip the \
+               Playground is open on (`playground`: `{track, lane, id, from, to}`, null when it is closed); and from the app, \
                `playing`, `beat`, `loop`, the files with unsaved code, what V compares (`comparing`) and the MIDI \
                keyboard's target (`midi`). Fields the window hasn't said yet are null. It writes nothing.",
     },

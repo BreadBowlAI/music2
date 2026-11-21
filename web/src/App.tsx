@@ -24,6 +24,7 @@ import { canvas, useShell, VIEWS, type GridOp } from "./lib/shell";
 import { deleteTrack, duplicateTrack, newTrack } from "./components/Tracks";
 import { toggleMetronome } from "./lib/metronome";
 import { togglePiano } from "./lib/piano";
+import { togglePlayground } from "./lib/playground";
 // MIDI keyboards: the window tells the server what they play.
 import "./lib/midi";
 import KeyboardPiano from "./components/KeyboardPiano";
@@ -68,6 +69,8 @@ function key(e: KeyboardEvent): string | null {
     if (n) return `view_${VIEWS[Number(n[1]) - 1]}`;
     // ⌥← and ⌥→: Transport ▸ Previous and Next Marker.
     if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && !e.shiftKey) return e.key === "ArrowLeft" ? "prev_marker" : "next_marker";
+    // ⌥P: the Playground on the selected notes clip (VER-6). By the key's place: ⌥P types π on a Mac.
+    if (e.code === "KeyP" && !e.shiftKey) return "playground";
     return e.code === "KeyK" ? "shortcuts" : null;
   }
   if (e.code === "Space" && !e.shiftKey) return "play";
@@ -206,7 +209,7 @@ export default function App() {
       // V held is one V: its repeats would flip it back and forth (D2).
       if (id === "compare" && e.repeat) return;
       // ⌥← and ⌥→ never go back a page in WebKitGTK.
-      if (id === "play" || id.startsWith("view_") || id === "shortcuts" || id.endsWith("_marker")) e.preventDefault();
+      if (id === "play" || id.startsWith("view_") || id === "shortcuts" || id === "playground" || id.endsWith("_marker")) e.preventDefault();
       appCommand(id);
     };
     // Off the Mac, Ctrl+Backspace in a field deletes the word before, by the code the app's menu
@@ -505,6 +508,9 @@ export function appCommand(id: string) {
     case "guide":
       // Help ▸ Make Your First Song (the studio plan's Q47).
       return openGuide();
+    case "playground":
+      // ⌥P (VER-6): the versions of the selected notes clip, beside the roll; again closes it.
+      return togglePlayground();
     case "compare":
       // V (D2): before and after the newest change an agent or another program made.
       return void compare();

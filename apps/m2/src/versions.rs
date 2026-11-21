@@ -33,7 +33,7 @@ pub fn run(args: &[String]) -> Result<()> {
             let notes: Vec<Note> = serde_json::from_str(&text).map_err(|e| {
                 anyhow!("the notes don't read ({e}): give a list, such as [{{\"pitch\": \"A1\", \"start\": 0, \"length\": 0.5}}]")
             })?;
-            Act::Add { versions: vec![NewVersion { name: name(), notes }] }
+            Act::Add { versions: vec![NewVersion { name: name(), notes }], play: false }
         }
         "play" => Act::Play { name: name() },
         "star" => Act::Star { name: name(), star: true },

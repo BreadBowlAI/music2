@@ -29,7 +29,7 @@
 | `events/` | sounds that make notes: note effects (an arpeggiator, chords, note echo, scale) before the instrument, a kernel that gives notes, and Bake to notes (accepted, with a mockup) |
 | `graph/` | the graph: one view of a sound, each node collapsed until you expand it, five primitives, one value control (the bar), and + on a wire to put a sound there (accepted and built: the Graph, ⌥1; revised after review, with a mockup) |
 | `camera/` | the camera: the arrangement, the Graph, Notes and the beat grid move as the hand does, every swipe in any direction, the browser still thinks they scroll and the camera tells it where; a probe on the Mac first; with an inventory of what depends on the scroll boxes today (proposed, revised after review); `zoom.md`, zooming at the screen's rate: a live zoom by stretching, and clips drawn on a canvas (accepted, 2026-11-14) |
-| `versions/` | versions of a notes clip: one plays, the others wait; anyone adds one, the musician or an agent through `m2 versions`; and the Playground, a panel that loops a clip's bars and flips through them (accepted, 2026-11-21) |
+| `versions/` | versions of a notes clip: one plays, the others wait; anyone adds one, the musician or an agent through `m2 versions`; and the Playground, a panel that loops a clip's bars and flips through them (accepted, 2026-11-21; built, with `build.md` saying where the panel lives and what is left) |
 | `docs/` | the docs plan: the guide in `docs/guide/`, `m2 docs`, the website, and the `AGENTS.md` every new song gets |
 | `workflows/` | the scripts that ran the AI agents who wrote many of these notes. They are kept as a record; nothing runs them |
 

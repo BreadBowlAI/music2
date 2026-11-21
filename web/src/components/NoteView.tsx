@@ -42,11 +42,12 @@ import GridChip from "./GridChip";
 import NoteMenu, { type NoteTool } from "./NoteMenu";
 import { Hatch, HBands, VLines } from "./draw";
 import { Button, EmptyState, keepFocus, MenuRow, Popover, Segment } from "./ui";
-import { afterLaneWrites, hasOwnId } from "../lib/graph";
+import { afterLaneWrites, hasOwnId, sameClip } from "../lib/graph";
 import { editing, goesFrom, lanesOf, showsOwn } from "../lib/history";
 import { playhead, send as sendGesture, serverRef, useClipboard, type Copied, type Gesture as ClipGesture, type ServerRef } from "../lib/clips";
 import { begin as leaseDrag, type LaneLease } from "../lib/laneLease";
 import { look } from "../lib/focus";
+import { playingOf, usePlayground } from "../lib/playground";
 
 // The roll's sizes (taste.md §3.5); its ruler is the arrangement's, 28px. The key column is 56 px,
 // or 88 where its keys say drum names (`keysWidth`, polish A4). A row is 14 px unless the view
@@ -252,6 +253,16 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
   const pitchOfRow = (r: number) => (rows ? rows[clamp(r, 0, rows.length - 1)] : clamp(TOP - r, 0, TOP));
   // A new note is a grid step long, snapped or not (as in Live).
   const step = gridStep;
+
+  // The Playground open on this clip (VER-6): its waiting versions show faintly behind the notes.
+  const versioned = usePlayground((s) => sameClip(s.clip, ref));
+  // Another version plays: the notes are others, so the selection ends.
+  const plays = server ? playingOf(server) : undefined;
+  const played = useRef(plays);
+  useEffect(() => {
+    if (plays !== played.current) setSelected(new Set());
+    played.current = plays;
+  }, [plays]);
 
   // Once this view's writes have come back in the graph, show the clip as the graph has it.
   // A change made elsewhere (undo, the code editor) that adds or removes notes ends the selection.
@@ -1141,7 +1152,7 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
       data-grid-view="notes"
       tabIndex={0}
       onKeyDown={onKeyDown}
-      className="flex-1 min-h-0 flex flex-col bg-canvas outline-none"
+      className="flex-1 min-w-0 min-h-0 flex flex-col bg-canvas outline-none"
       aria-label={`Notes of ${title}'s ${laneName} clip at bar ${firstBar}`}
     >
       {/* The clip's place and the roll's tools sit in the dock's header: the roll itself is edge to edge (taste.md §3.5). */}
@@ -1302,6 +1313,24 @@ export default function NoteView({ graph, clip: ref }: { graph: GraphState; clip
                 <div className="absolute top-0 bottom-0 right-0 pointer-events-none border-l-2 bg-chrome/70" style={{ left: clip.length * ppb, borderColor: tone.bar }}>
                   <Hatch />
                 </div>
+                {/* The versions that wait (VER-6), while the Playground is open: faint, behind the notes, never clicked. */}
+                {versioned &&
+                  server?.versions?.map((v) =>
+                    v.notes?.map((n, k) => {
+                      const row = rowOf(n.pitch);
+                      if (row < 0 || !(within(cull.x, n.start, n.start + n.length) && within(cull.y, row * rowH, (row + 1) * rowH))) return null;
+                      return (
+                        <div
+                          key={`${v.name}/${k}`}
+                          data-waiting={v.name}
+                          data-pitch={n.pitch}
+                          data-start={n.start}
+                          className="absolute rounded-xs pointer-events-none opacity-20"
+                          style={{ left: n.start * ppb, top: row * rowH + 1, width: Math.max(n.length * ppb - 1, 4), height: rowH - 2, background: tone.ink }}
+                        />
+                      );
+                    }),
+                  )}
                 {clip.notes.map((n, i) => {
                   const row = rowOf(n.pitch);
                   if (row < 0) return null;

@@ -1338,7 +1338,10 @@ fn version(name: &str, notes: &[(f64, f64, f64)]) -> NewVersion {
 
 /// The two versions the tests add: `busy` and `sparse`.
 fn two() -> Act {
-    Act::Add { versions: vec![version("busy", &[(45.0, 4.0, 0.25), (33.0, 0.0, 0.25)]), version("sparse", &[(33.0, 0.0, 4.0)])] }
+    Act::Add {
+        versions: vec![version("busy", &[(45.0, 4.0, 0.25), (33.0, 0.0, 0.25)]), version("sparse", &[(33.0, 0.0, 4.0)])],
+        play: false,
+    }
 }
 
 /// The bass clip's versions: each one's name, with `*` when starred, `by <who>`, and how many
@@ -1373,7 +1376,7 @@ fn each_versions_act_is_one_step() {
     assert_eq!(new[0], "  ], \"versions\": [", "the clip's own lines are as they were: {new:?}");
     assert_eq!(new[1], "    {\"name\": \"original\"},");
     // The page's add says no one, and the playing one keeps its name.
-    go(&mut s, act(Act::Add { versions: vec![version("mine", &[])] }));
+    go(&mut s, act(Act::Add { versions: vec![version("mine", &[])], play: false }));
     assert_eq!(versions_of(&s, BASS_CLIP)[3], "mine 0");
     s.undo().unwrap();
     assert_eq!(f.read("data/bass/notes.json"), added);
@@ -1414,7 +1417,7 @@ fn each_versions_act_is_one_step() {
         g,
         Gesture::Versions {
             clip: by_id(BASS, BASS_CLIP),
-            act: Act::Add { versions: vec![version("busy", &[(33.0, 0.0, 0.25)])] },
+            act: Act::Add { versions: vec![version("busy", &[(33.0, 0.0, 0.25)])], play: false },
             by: None
         }
     );
@@ -1448,6 +1451,37 @@ fn playing_a_version_there_and_back_gives_the_first_bytes() {
     assert_eq!(notes(&s, BASS), heard);
 }
 
+// VER-3: an `add` with `play` adds the version and plays it in one step (the Playground's
+// Duplicate, VER-6): the notes that played wait under their name, and one undo takes both back.
+#[test]
+fn adding_and_playing_is_one_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (before, n) = (f.read("data/bass/notes.json"), s.accepted().number);
+    let add = |name: &str, play: bool| -> Gesture {
+        serde_json::from_value(serde_json::json!({"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": BASS_CLIP},
+            "act": "add", "play": play, "versions": [{"name": name, "notes": [{"pitch": "A1", "start": 0, "length": 4}]}]}))
+        .unwrap()
+    };
+    let done = go(&mut s, add("copy", true));
+    assert_eq!(s.accepted().number, n + 1, "added and played in one step");
+    assert_eq!(versions_of(&s, BASS_CLIP), ["original 48", "copy plays"]);
+    assert_eq!(notes_by_id(&s, BASS), [(BASS_CLIP.to_string(), 0.0, 32.0, vec![(33.0, 0.0, 4.0)])], "the copy's notes play");
+    assert_eq!(done.edited.after, "2 versions, `copy` plays");
+    let played = f.read("data/bass/notes.json");
+    // On a clip with versions: the one that played waits, in its place.
+    go(&mut s, add("again", true));
+    assert_eq!(versions_of(&s, BASS_CLIP), ["original 48", "copy 1", "again plays"]);
+    s.undo().unwrap();
+    assert_eq!(f.read("data/bass/notes.json"), played, "one undo takes the add and the play back");
+    // Without `play`, or with it false, what plays stays.
+    go(&mut s, add("waits", false));
+    assert_eq!(versions_of(&s, BASS_CLIP), ["original 48", "copy plays", "waits 1"]);
+    s.undo().unwrap();
+    s.undo().unwrap();
+    assert_eq!(f.read("data/bass/notes.json"), before, "two undos: the two steps made");
+}
+
 // VER-3: `keep` leaves today's clip: no field, and the bytes of the clip that never had versions.
 #[test]
 fn keep_leaves_todays_clip() {
@@ -1477,9 +1511,9 @@ fn versions_acts_are_refused_in_words() {
     // On a clip with no versions.
     let why = refused(&mut s, act(Act::Play { name: name("busy") }));
     assert!(why.contains("no version `busy`") && why.contains("no versions yet"), "{why}");
-    let why = refused(&mut s, act(Act::Add { versions: vec![version("original", &[])] }));
+    let why = refused(&mut s, act(Act::Add { versions: vec![version("original", &[])], play: false }));
     assert!(why.contains("has a version `original` already"), "what plays takes that name: {why}");
-    let why = refused(&mut s, act(Act::Add { versions: vec![] }));
+    let why = refused(&mut s, act(Act::Add { versions: vec![], play: false }));
     assert!(why.contains("a name and its notes"), "{why}");
     assert_eq!(go(&mut s, act(Act::Keep)).edited.after, "no change");
     let why = refused(&mut s, Gesture::Versions { clip: by_id("bass/cutoff", "adp0sw76"), act: two(), by: None });
@@ -1492,11 +1526,11 @@ fn versions_acts_are_refused_in_words() {
         (Act::Star { name: name("nope"), star: true }, "no version `nope`"),
         (Act::Remove { name: name("nope") }, "no version `nope`"),
         (Act::Rename { name: name("nope"), to: name("x") }, "no version `nope`"),
-        (Act::Add { versions: vec![version("busy", &[])] }, "has a version `busy` already"),
-        (Act::Add { versions: vec![version("a", &[]), version("a", &[])] }, "has a version `a` already"),
-        (Act::Add { versions: vec![version("", &[])] }, "a version's name is 1 to 40 characters"),
-        (Act::Add { versions: vec![version(&"x".repeat(41), &[])] }, "a version's name is 1 to 40 characters"),
-        (Act::Add { versions: vec![version("bad", &[(60.0, 0.0, 0.0)])] }, "A note needs a pitch, a start, a length above 0"),
+        (Act::Add { versions: vec![version("busy", &[])], play: false }, "has a version `busy` already"),
+        (Act::Add { versions: vec![version("a", &[]), version("a", &[])], play: false }, "has a version `a` already"),
+        (Act::Add { versions: vec![version("", &[])], play: false }, "a version's name is 1 to 40 characters"),
+        (Act::Add { versions: vec![version(&"x".repeat(41), &[])], play: false }, "a version's name is 1 to 40 characters"),
+        (Act::Add { versions: vec![version("bad", &[(60.0, 0.0, 0.0)])], play: false }, "A note needs a pitch, a start, a length above 0"),
         (Act::Rename { name: name("busy"), to: name("sparse") }, "has a version `sparse` already"),
         (Act::Rename { name: name("busy"), to: name(" ") }, "can't start or end with a space"),
         (Act::Remove { name: name("original") }, "`original` is the version that plays. Play another first"),

@@ -57,6 +57,16 @@ pub struct Code {
     pub line: u32,
 }
 
+/// The clip the Playground is open on (VER-6), and the beats it spans.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Playground {
+    pub track: String,
+    pub lane: String,
+    pub id: String,
+    pub from: f64,
+    pub to: f64,
+}
+
 /// The focus record, as the page posts it (the design's 5.9): what the musician looks at, read
 /// against the revision the page drew. Fields the page leaves out are null.
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -87,6 +97,9 @@ pub struct Focus {
     pub seen: Option<[f64; 2]>,
     #[serde(default)]
     pub code: Option<Code>,
+    /// The Playground's clip while it is open; null when it is closed.
+    #[serde(default)]
+    pub playground: Option<Playground>,
 }
 
 /// What is kept: the page's focus record and one pointer, each for the song its token names.

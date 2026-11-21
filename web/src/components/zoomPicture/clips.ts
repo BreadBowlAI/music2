@@ -10,13 +10,14 @@ import { audibleOf } from "../../lib/arrangement";
 import { beatNow } from "../../lib/clock";
 import { clipRef, hasOwnId, sameClip, type AudioClip, type ControlClip, type NoteClip, type StepClip, type TimelineLane } from "../../lib/graph";
 import { isPicked } from "../../lib/clips";
+import { waiting } from "../../lib/playground";
 import { laneScale, type LaneScale } from "../../lib/laneScale";
 import { MISSING, beatAt, peaksNow, secondsAt } from "../../lib/peaks";
 import { pickedIn } from "../../lib/points";
 import { useRecord } from "../../lib/record";
 import { pickedStep, stepLabel } from "../../lib/steps";
 import { compsOf, takeClip } from "../../lib/takes";
-import { AREA_TOP, areaHeight, BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, fineAt, paintCurve, paintNotes, shortestOf, type Pen } from "../ClipDrawing";
+import { AREA_TOP, areaHeight, BODY_BOTTOM, BODY_TOP, BORDER, CLIP_END, CLIP_INSET, CLIP_MIN, VERSIONS_MARK, fineAt, paintCurve, paintNotes, shortestOf, type Pen } from "../ClipDrawing";
 import { audioLabel, INSET, paintFades, paintWave, shapeOf, STRIP, TILE } from "../Wave";
 import { mixOklab, rrect, type Brush } from "./brush";
 import type { Row, Scene } from "./scene";
@@ -264,6 +265,18 @@ function handles(p: Brush, sc: Scene, c: AudioClip, px: number, pt: number, z: n
   }
 }
 
+/** The mark of a clip's waiting versions (the page's, `Clip`): a round box in the track's ink with their number, `right` and `top` its clip's inside corner. */
+function versionsMark(p: Brush, sc: Scene, n: number, right: number, top: number, ink: string) {
+  const { size, inset } = VERSIONS_MARK;
+  const font = sc.type.font(500, 11);
+  p.g.font = font;
+  const tw = p.g.measureText(String(n)).width;
+  const w = Math.max(size, tw + 8);
+  const x = right - inset - w, y = top + inset;
+  p.round(x, y, w, size, size / 2, ink);
+  p.text(String(n), x + (w - tw) / 2, y + sc.type.baseline(500, 11, size), font, "#ffffff");
+}
+
 /** The take recording on this lane, if one is (lane B, Q24), at the zoom shown and the playhead now. */
 function recording(p: Brush, sc: Scene, row: Row, z: number, X: number, top: number, bottom: number) {
   const take = useRecord.getState().take;
@@ -426,6 +439,9 @@ export function laneClips(p: Brush, sc: Scene, row: Row, z: number, X: number, t
       if (own) hatch(p, sc, x, bt, w, bh);
       else later.over.push(() => hatch(p, sc, x, bt, w, bh));
     }
+    // Versions wait in it (VER-6): the page's mark, how many, at its top right.
+    const more = "notes" in c ? waiting(c) : 0;
+    if (more) later.over.push(() => mineNow(() => versionsMark(p, sc, more, x + w - BORDER, bt + BORDER, ink)));
   });
   for (const f of later.canvas) f();
   for (const f of later.over) f();

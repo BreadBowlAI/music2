@@ -2,7 +2,7 @@ import clsx from "clsx";
 import { ChevronDown, ChevronUp, CodeXml, Drum, Piano, SlidersVertical, Workflow } from "lucide-react";
 import { createContext, memo, useContext, useEffect, useState } from "react";
 import { createPortal } from "react-dom";
-import { dockView, findLane, findNoteClip, kitOf, moduleName, type GraphState } from "../lib/graph";
+import { dockView, findLane, findNoteClip, kitOf, moduleName, sameClip, type GraphState } from "../lib/graph";
 import { opt } from "../lib/native";
 import { GRAPHITE, trackColors } from "../lib/palette";
 import { clampDock, useShell, VIEWS, type DockView } from "../lib/shell";
@@ -12,6 +12,8 @@ import CodeView from "./CodeView";
 import Mix from "./Mix";
 import { NodeGraph } from "./NodeGraph";
 import NoteView from "./NoteView";
+import Playground from "./Playground";
+import { usePlayground } from "../lib/playground";
 import SungView from "./SungView";
 import TrackName from "./TrackName";
 import { Button, EmptyState, keepFocus, Segment } from "./ui";
@@ -148,12 +150,17 @@ const Body = memo(function Body({ graph, module, view, open }: { graph: GraphSta
   // An audio clip's voice's notes (VOX-46).
   const voice = clip && !live && findLane(graph.timeline, clip.module, clip.lane)?.kind === "audio" ? clip : null;
   const track = graph.timeline.tracks.find((t) => t.module === module)?.label ?? module;
+  // The Playground (VER-6), open on the clip Notes shows: its list at the roll's left.
+  const versions = usePlayground((s) => !!live && sameClip(s.clip, live));
   return (
     <>
       {open && view === "graph" && <NodeGraph graph={graph} module={module} />}
       {open && view === "notes" &&
         (live ? (
-          <NoteView key={`${live.module}:${live.lane}:${live.id}`} graph={graph} clip={live} />
+          <div className="flex-1 min-h-0 flex">
+            {versions && <Playground graph={graph} clip={live} />}
+            <NoteView key={`${live.module}:${live.lane}:${live.id}`} graph={graph} clip={live} />
+          </div>
         ) : voice ? (
           <SungView key={`${voice.module}:${voice.lane}:${voice.id}`} graph={graph} clip={voice} track={track} />
         ) : (
