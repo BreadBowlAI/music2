@@ -1315,7 +1315,7 @@ fn the_guides_clip_gesture_examples_read() {
         ops.insert(serde_json::to_value(&g).unwrap()["op"].as_str().unwrap().to_string());
     }
     // Every gesture an agent sends: the take thread's and the Takes route's never come from outside.
-    let every = "audio create delete duplicate groove hits join move notes paste points quantize resize set split stamp";
+    let every = "audio create delete duplicate groove hits join move notes paste points quantize resize set split stamp versions";
     let every: BTreeSet<String> = every.split(' ').map(String::from).collect();
     assert_eq!(ops, every, "api.md shows an example of each gesture ({} blocks)", blocks.len());
 }

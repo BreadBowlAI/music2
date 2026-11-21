@@ -231,6 +231,36 @@ echo '{"op": "delete", "clips": [{"module": "hats", "lane": "hits", "id": "92gr2
 {"op": "audio", "clip": {"module": "chops", "lane": "clips", "id": "a3s9vpxb"}, "gain_db": -3, "fade_out": 0.05}
 ```
 
+`versions`: one act on a notes clip's versions ([Versions](versions.md)): several sets of notes kept in the clip, of which one plays and the others wait, never heard. `act` says which. `add` adds versions that wait, several in one undo step; on a clip with none yet, the notes that play are first named `original`. A version you add carries your name (`--as`); a `by` in the gesture is never read.
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "add", "versions": [{"name": "busy", "notes": [{"pitch": "A1", "start": 0, "length": 0.25}, {"pitch": "A2", "start": 0.5, "length": 0.25}]}, {"name": "sparse", "notes": [{"pitch": "A1", "start": 0, "length": 4}]}]}
+```
+
+`play` makes a version the one that plays: its notes become the clip's, and the notes that played wait under their name. `star` marks one (`"star": false` takes the mark off), `rename` names it `to`, and `remove` takes out one that waits.
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "play", "name": "busy"}
+```
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "star", "name": "busy"}
+```
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "rename", "name": "busy", "to": "busy 2"}
+```
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "remove", "name": "sparse"}
+```
+
+`keep` removes every version but the one that plays, and the clip is a plain clip again. `m2 versions` sends each of these, and lists a clip's versions.
+
+```json
+{"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "keep"}
+```
+
 `find_notes` finds the notes of a sung audio clip, for Tune's note editing: [Edit a voice's notes](audio.md#edit-a-voices-notes).
 
 What the gestures name, so you needn't ask the app (`GET /api/theory` lists the same, while it runs):

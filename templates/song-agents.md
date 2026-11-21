@@ -42,6 +42,7 @@ Below, `.` is this song's folder.
 | `m2 add-effect . <call> <effect>` | add an effect (`@m2/effects:delay`) after a sound, or a note effect (`@m2/notes:arp`) before an instrument |
 | `m2 clips . <gesture> <clip>…` | make, move, split, join or delete clips |
 | `m2 clips . json -` | any clip gesture, as JSON: a clip's notes (`notes`), a chord on the song's key (`stamp`), a feel (`groove`), a drum's steps (`hits`)… Each, with an example: `m2 docs api`, "Clip gestures as JSON" |
+| `m2 versions . add <clip> <name> -` | propose an idea for a clip's notes as a version that waits in the clip (rule 8) |
 | `m2 sections . duplicate 9-16 --to 25` | copy, move, empty, insert or delete whole bars on every track |
 | `m2 edit . <file> --old <text> --new <text>` | change text in one file of the song |
 | `m2 write . <file> -` | write a whole file, from standard input |
@@ -75,3 +76,5 @@ the roll. A part the musician should see and edit is notes written into a clip (
 6. Exit status 3 means the musician is busy with that part: wait, then try again. Exit status 2 means
    `m2` didn't take a word: it says which, and how to call the command.
 7. Playing, recording, mute and solo while listening, and the view are the musician's. Ask.
+8. Proposing ideas: asked for ideas for a part, add each as a version of the clip (`m2 versions`), never
+   over the notes that play. Which one plays, and which is kept, is the musician's: `m2 docs versions`.

@@ -5,6 +5,14 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **A clip's versions (track `versions`, 2026-11-21).** A notes clip can hold several versions of its notes: one
+  plays, and its notes are the clip's; the others wait in the clip and are never heard or rendered (rules VER-1 to
+  VER-5, [the design](docs/designs/versions/design.md)). Built: the lane format's optional `versions` (`format`
+  stays 1), one clip gesture `versions` (add, play, star, rename, remove, keep; `crates/editor/src/versions.rs`),
+  every other gesture keeping or refusing (Split and Join say "Keep one version first"), `m2 versions`, and the
+  guide's [Versions](docs/guide/versions.md) page with the song's `AGENTS.md` telling agents to propose by adding
+  versions. **Next: track `playground`**, the panel in the app that flips between versions while the loop plays;
+  until then nothing in the window shows them. What is left is in gaps.md, "Notes".
 - **The docs teach an agent (#134, 2026-11-16).** The owner asked that the docs be current and that Claude know how
   to use music2. A fresh agent with only a song and the released `m2` did seven musician requests (a beat, an arp
   and a shared reverb, a mix check, a second part, a render, an undo) and hit dead ends; a sweep found about 40
