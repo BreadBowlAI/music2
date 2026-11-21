@@ -150,6 +150,7 @@ fn named(g: &Gesture) -> Vec<LaneAddr> {
         }
         Gesture::Resize { clip, .. }
         | Gesture::Notes { clip, .. }
+        | Gesture::Versions { clip, .. }
         | Gesture::Points { clip, .. }
         | Gesture::Audio { clip, .. }
         | Gesture::Comp { clip, .. }
