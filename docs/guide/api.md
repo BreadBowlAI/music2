@@ -231,7 +231,7 @@ echo '{"op": "delete", "clips": [{"module": "hats", "lane": "hits", "id": "92gr2
 {"op": "audio", "clip": {"module": "chops", "lane": "clips", "id": "a3s9vpxb"}, "gain_db": -3, "fade_out": 0.05}
 ```
 
-`versions`: one act on a notes clip's versions ([Versions](versions.md)): several sets of notes kept in the clip, of which one plays and the others wait, never heard. `act` says which. `add` adds versions that wait, several in one undo step; on a clip with none yet, the notes that play are first named `original`. A version you add carries your name (`--as`); a `by` in the gesture is never read.
+`versions`: one act on a notes clip's versions ([Versions](versions.md)): several sets of notes kept in the clip, of which one plays and the others wait, never heard. `act` says which. `add` adds versions that wait, several in one undo step; on a clip with none yet, the notes that play are first named `original`. A version you add carries your name (`--as`); a `by` in the gesture is never read. With `"play": true`, the last version added then plays, in the same undo step: how the Playground's **Duplicate** makes a copy. Leave it out when you propose ideas: which one plays is the musician's choice.
 
 ```json
 {"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": "db9f9t5s"}, "act": "add", "versions": [{"name": "busy", "notes": [{"pitch": "A1", "start": 0, "length": 0.25}, {"pitch": "A2", "start": 0.5, "length": 0.25}]}, {"name": "sparse", "notes": [{"pitch": "A1", "start": 0, "length": 4}]}]}

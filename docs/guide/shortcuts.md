@@ -57,6 +57,8 @@ Every key is listed in the app too: Help → Keyboard Shortcuts (⌥K on a Mac, 
 | ⌘-drag | Ctrl-drag | Place a clip off the grid while dragging it; in Notes, a note while drawing, dragging or resizing it |
 | I | I | In Notes, with a chord picked: its next inversion |
 | A | A | Show or hide the selected track's automation (every track's, with none selected) |
+| ⌥P | Alt+P | Open the Playground on the selected notes clip, or close it ([Versions](versions.md#the-playground)) |
+| ← / →, S | ← / →, S | In the Playground: play the version before / after; star the one that plays |
 | ⌥1 / ⌥2 / ⌥3 / ⌥4 | Alt+1 / Alt+2 / Alt+3 / Alt+4 | Graph / Notes / Mix / Code (X: Mix) |
 | ⌥5 | Alt+5 | Beat, the beat grid, while a drum kit's track is selected ([The beat grid](window.md#the-beat-grid)) |
 | E | E | Show or hide the dock |

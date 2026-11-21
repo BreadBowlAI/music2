@@ -11,8 +11,13 @@ design for whatever you pick up. Older versions of this page, with each track's 
   stays 1), one clip gesture `versions` (add, play, star, rename, remove, keep; `crates/editor/src/versions.rs`),
   every other gesture keeping or refusing (Split and Join say "Keep one version first"), `m2 versions`, and the
   guide's [Versions](docs/guide/versions.md) page with the song's `AGENTS.md` telling agents to propose by adding
-  versions. **Next: track `playground`**, the panel in the app that flips between versions while the loop plays;
-  until then nothing in the window shows them. What is left is in gaps.md, "Notes".
+  versions. What is left is in gaps.md, "Notes".
+- **The Playground (track `playground`, 2026-11-21).** The panel for a clip's versions (VER-6): a list at the left
+  of the roll in Notes (`web/src/components/Playground.tsx`, `web/src/lib/playground.ts`), opened by ⌥P or the
+  clip's menu. It loops the clip's bars, ← → flip, S stars, Duplicate (one `add` with `play`), Keep this one; a
+  clip with waiting versions shows their count on the timeline; the focus record says `playground`. Suite
+  `playground`. Why it lives there, and what is left (opening on selected bars is not built):
+  [the build note](docs/designs/versions/build.md).
 - **The docs teach an agent (#134, 2026-11-16).** The owner asked that the docs be current and that Claude know how
   to use music2. A fresh agent with only a song and the released `m2` did seven musician requests (a beat, an arp
   and a shared reverb, a mix check, a second part, a render, an undo) and hit dead ends; a sweep found about 40
