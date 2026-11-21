@@ -1678,7 +1678,7 @@ mod tests {
             (r#"{"name": "a"}, {"name": "", "notes": []}"#.into(), "version 2: a version's name is 1 to 40 characters"),
             (format!(r#"{{"name": "a"}}, {{"name": "{long}", "notes": []}}"#), "version 2: a version's name is 1 to 40 characters"),
             (r#"{"name": "a"}, {"name": " b", "notes": []}"#.into(), "version 2: a version's name can't start or end with a space"),
-            (r#"{"name": "a"}, {"name": "b​c", "notes": []}"#.into(), "version 2: a version's name can't hold characters that don't show"),
+            (r#"{"name": "a"}, {"name": "b\u200bc", "notes": []}"#.into(), "version 2: a version's name can't hold characters that don't show"),
             (r#"{"name": "a"}, {"notes": []}"#.into(), "version 2: missing field `name`"),
             (r#"{"name": "a"}, {"name": "b", "notes": [], "stars": 1}"#.into(), "version 2 (`b`): unknown field `stars`"),
             (r#"{"name": "a"}, {"name": "b", "notes": [], "star": "yes"}"#.into(), "version 2 (`b`): "),
