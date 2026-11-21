@@ -609,7 +609,7 @@ pub fn import_into(
         )));
     }
     let length = clip_length(&s.accepted().project.arrangement, at, part.end());
-    let clip = NoteClip { id: None, other_id: None, start: at, length, notes: part.notes.clone() };
+    let clip = NoteClip { id: None, other_id: None, versions: vec![], start: at, length, notes: part.notes.clone() };
     let lane = m2_song::LaneAddr {
         module: m2_song::Key::new(module).map_err(EditError::Rejected)?,
         lane: m2_song::Key::new(lane).map_err(EditError::Rejected)?,
@@ -669,7 +669,7 @@ pub fn import_tracks(s: &mut Session, file: &Smf, name: &str, place: &Place, cho
         return Err(EditError::Rejected(format!("{name} has a note past bar 9,999: music2 brings in notes up to there.")));
     }
     let clip_of = |notes: Vec<Note>, end: f64| {
-        let clip = NoteClip { id: None, other_id: None, start: at, length: clip_length(timing, at, end), notes };
+        let clip = NoteClip { id: None, other_id: None, versions: vec![], start: at, length: clip_length(timing, at, end), notes };
         serde_json::to_value(&clip).map_err(|e| EditError::Io(e.to_string()))
     };
     // The drums, every part on channel 10, by start: one kit. A part of open hats alone (an Open

@@ -80,7 +80,11 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
         return Err(EditError::Rejected(crate::data::there_already(&file, &by)));
     }
     let id = m2_song::tx::random_id();
-    let clips = tidy(clips, &addr, &id)?;
+    let old = match rev.compiled.data.lane(module, lane).map(|d| &**d) {
+        Some(LaneData::Notes(c)) => c.clone(),
+        _ => vec![],
+    };
+    let clips = tidy(&waiting_kept(clips, &old), &addr, &id)?;
     let new = LaneData::Notes(clips.clone());
     let text = canonical(&new);
     let same = || {
@@ -90,10 +94,6 @@ pub fn write_notes(s: &mut Session, at: u64, module: &str, lane: &str, clips: &[
     if now.as_deref() == Some(text.as_str()) {
         return same();
     }
-    let old = match rev.compiled.data.lane(module, lane).map(|d| &**d) {
-        Some(LaneData::Notes(c)) => c.clone(),
-        _ => vec![],
-    };
     let (before, after) = describe(&old, &clips, &rev.project.arrangement);
     let path = TxPath::lane(&addr);
     // The text the accepted revision read is that read, shared: a client planned on an older
@@ -166,6 +166,25 @@ pub fn file(addr: &LaneAddr) -> PathBuf {
     DataPath::lane(addr).path()
 }
 
+/// `clips` as a window that doesn't know of versions sends them, with the versions that wait in
+/// the lane's clips `old` (VER-4): a clip sent without versions that has the id of a clip with
+/// some keeps them. Only the first clip of an id is that clip; a copy after it is a new one
+/// (FMT-12). A clip sent with versions is left as sent.
+fn waiting_kept(clips: &[NoteClip], old: &[NoteClip]) -> Vec<NoteClip> {
+    let mut seen = BTreeSet::new();
+    let mut clips = clips.to_vec();
+    for c in &mut clips {
+        let Some(id) = c.id.as_deref() else { continue };
+        if seen.insert(id.to_string())
+            && c.versions.is_empty()
+            && let Some(was) = old.iter().find(|o| o.id.as_deref() == Some(id))
+        {
+            c.versions = was.versions.clone();
+        }
+    }
+    clips
+}
+
 /// The clips as they are written: checked, each with an id, in canonical order.
 fn tidy(clips: &[NoteClip], addr: &LaneAddr, tx: &str) -> Result<Vec<NoteClip>, EditError> {
     let mut clips = clips.to_vec();
@@ -179,6 +198,13 @@ fn tidy(clips: &[NoteClip], addr: &LaneAddr, tx: &str) -> Result<Vec<NoteClip>, 
                     "a note needs a pitch, a start, a length above 0 and a velocity of 0 or more, not {n:?}"
                 )));
             }
+        }
+        if c.versions.is_empty() {
+            continue;
+        }
+        m2_song::lane::versions_fit(&c.versions).map_err(|why| EditError::Rejected(format!("a clip's versions don't fit: {why}")))?;
+        for v in c.versions.iter().filter_map(|v| v.notes.as_ref()) {
+            crate::clips::notes_fit(v)?;
         }
     }
     // A clip keeps its id. A new clip, or a copy that came with the id of a clip before it, gets
@@ -421,11 +447,12 @@ mod tests {
             NoteClip {
                 id: None,
                 other_id: None,
+                versions: vec![],
                 start: 4.0,
                 length: 4.0,
                 notes: vec![note(24.0, 1.0, 0.25, 0.8), note(25.0, 0.0, 0.25, 1.0)],
             },
-            NoteClip { id: Some("a1".into()), other_id: None, start: 0.0, length: 2.0, notes: vec![] },
+            NoteClip { id: Some("a1".into()), other_id: None, versions: vec![], start: 0.0, length: 2.0, notes: vec![] },
         ];
         let e = s.write_notes(1, "kick", "hits", &written).unwrap();
         assert_eq!((e.before.as_str(), e.after.as_str()), ("no clip", "2 clips"));
@@ -462,13 +489,15 @@ mod tests {
         let fixture = Fixture::first_song();
         let mut s = fixture.open();
         let before = fixture.read("data/bass/cutoff.json").unwrap();
-        let one = [NoteClip { id: None, other_id: None, start: 0.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] }];
+        let one =
+            [NoteClip { id: None, other_id: None, versions: vec![], start: 0.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] }];
         assert!(matches!(s.write_notes(1, "bass", "cutoff", &one), Err(EditError::Rejected(why)) if why.contains("automation lane")));
         assert!(matches!(s.write_notes(1, "bass", "melody", &one), Err(EditError::NotFound(_))));
         assert!(matches!(s.write_notes(1, "nobody", "notes", &one), Err(EditError::NotFound(_))));
-        let silent = [NoteClip { id: None, other_id: None, start: 0.0, length: 0.0, notes: vec![] }];
+        let silent = [NoteClip { id: None, other_id: None, versions: vec![], start: 0.0, length: 0.0, notes: vec![] }];
         assert!(matches!(s.write_notes(1, "bass", "notes", &silent), Err(EditError::Rejected(_))));
-        let bad = [NoteClip { id: None, other_id: None, start: 0.0, length: 4.0, notes: vec![note(f64::NAN, 0.0, 1.0, 0.8)] }];
+        let bad =
+            [NoteClip { id: None, other_id: None, versions: vec![], start: 0.0, length: 4.0, notes: vec![note(f64::NAN, 0.0, 1.0, 0.8)] }];
         assert!(matches!(s.write_notes(1, "bass", "notes", &bad), Err(EditError::Rejected(_))));
         assert_eq!(fixture.read("data/bass/cutoff.json").unwrap(), before);
         assert!(fixture.read("data/bass/melody.json").is_none());
@@ -507,7 +536,14 @@ mod tests {
         // A change to another clip merges with the edit.
         assert!(s.refresh());
         let mut two = clips(&s, "bass", "notes");
-        two.push(NoteClip { id: Some("later".into()), other_id: None, start: 64.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] });
+        two.push(NoteClip {
+            id: Some("later".into()),
+            other_id: None,
+            versions: vec![],
+            start: 64.0,
+            length: 4.0,
+            notes: vec![note(45.0, 0.0, 1.0, 0.8)],
+        });
         s.write_notes(s.accepted().number, "bass", "notes", &two).unwrap();
         let at = s.accepted().number;
         let other = fixture.read("data/bass/notes.json").unwrap().replacen("\"start\": 64", "\"start\": 72", 1);
@@ -543,7 +579,14 @@ mod tests {
         let fixture = Fixture::first_song();
         let mut s = fixture.open();
         let mut two = clips(&s, "bass", "notes");
-        two.push(NoteClip { id: Some("later".into()), other_id: None, start: 64.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] });
+        two.push(NoteClip {
+            id: Some("later".into()),
+            other_id: None,
+            versions: vec![],
+            start: 64.0,
+            length: 4.0,
+            notes: vec![note(45.0, 0.0, 1.0, 0.8)],
+        });
         s.write_notes(s.accepted().number, "bass", "notes", &two).unwrap();
         let mut moved = clips(&s, "bass", "notes");
         moved[0].notes[0].velocity = 0.5;
@@ -610,7 +653,8 @@ mod tests {
         std::fs::rename(fixture.0.join("data/bass"), fixture.0.join("data/Bass")).unwrap();
         let mut s = fixture.open();
         assert!(s.problems().iter().any(|d| d.code == "file.unknown" && d.src.as_deref() == Some("data/Bass/notes.json")));
-        let one = [NoteClip { id: None, other_id: None, start: 0.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] }];
+        let one =
+            [NoteClip { id: None, other_id: None, versions: vec![], start: 0.0, length: 4.0, notes: vec![note(45.0, 0.0, 1.0, 0.8)] }];
         let refused = s.write_notes(1, "bass", "notes", &one);
         let why = match &refused {
             Err(EditError::Rejected(why)) => why,
@@ -701,7 +745,8 @@ mod tests {
 
     #[test]
     fn an_edit_is_described_by_what_it_changed() {
-        let clip = |start: f64, length: f64, notes: Vec<Note>| NoteClip { id: None, other_id: None, start, length, notes };
+        let clip =
+            |start: f64, length: f64, notes: Vec<Note>| NoteClip { id: None, other_id: None, versions: vec![], start, length, notes };
         let c4 = note(60.0, 1.0, 0.25, 0.8);
         let one = [clip(4.0, 8.0, vec![c4.clone()])];
         let d = |a: &[NoteClip], b: &[NoteClip]| {
@@ -764,6 +809,7 @@ mod tests {
                 .map(|_| NoteClip {
                     id: [None, Some("a"), Some("b"), Some("c")][below(4) as usize].map(str::to_string),
                     other_id: None,
+                    versions: vec![],
                     start: numbers[below(numbers.len() as u64) as usize],
                     length: numbers[below(numbers.len() as u64) as usize],
                     notes: (0..below(3))
@@ -866,5 +912,47 @@ mod tests {
         assert_eq!(place(&three, 0.0), "bar 1 beat 1");
         assert_eq!(place(&three, 4.5), "bar 2 beat 2.5");
         assert_eq!(place(&Arrangement::default(), 4.5), "bar 2 beat 1.5");
+    }
+
+    // VER-4: the roll writes a lane's clips whole and doesn't know of versions; a clip it sends
+    // without them keeps the ones that wait in it. A clip sent with versions is put as sent.
+    #[test]
+    fn the_rolls_write_keeps_waiting_versions() {
+        use crate::clips::{Act, ClipRef, Gesture, NewVersion};
+        let fixture = Fixture::first_song();
+        let mut s = fixture.open();
+        let id = clips(&s, "bass", "notes")[0].id.clone().unwrap();
+        let clip = ClipRef { lane: LaneAddr::new("bass", "notes").unwrap(), id: Some(id), at: None, sha: None };
+        let add = Act::Add { versions: vec![NewVersion { name: "busy".into(), notes: vec![note(45.0, 0.0, 0.25, 0.8)] }] };
+        crate::clips::edit(&mut s, &Gesture::Versions { clip, act: add, by: Some("Claude".into()) }).unwrap();
+        let had = clips(&s, "bass", "notes");
+        assert_eq!(had[0].versions.len(), 2);
+
+        // As the page sends them: the clips it read, without the field, one note moved, one clip new.
+        let mut sent: Vec<NoteClip> = had.iter().map(|c| NoteClip { versions: vec![], ..c.clone() }).collect();
+        sent[0].notes[0].pitch += 12.0;
+        sent.push(NoteClip { id: None, other_id: None, versions: vec![], start: 64.0, length: 4.0, notes: vec![] });
+        s.write_notes(s.accepted().number, "bass", "notes", &sent).unwrap();
+        let now = clips(&s, "bass", "notes");
+        assert_eq!(now[0].versions, had[0].versions, "the versions wait as they did");
+        assert_eq!(now[0].notes[0].pitch, had[0].notes[0].pitch + 12.0, "and the edit landed");
+        assert!(now[1].versions.is_empty());
+        assert!(fixture.read("data/bass/notes.json").unwrap().contains("{\"name\": \"busy\", \"by\": \"Claude\", \"notes\": ["));
+
+        // A copy the roll makes under the same id gets its own id, and no versions.
+        let mut copied = now.clone();
+        copied.push(NoteClip { start: 96.0, versions: vec![], ..now[0].clone() });
+        s.write_notes(s.accepted().number, "bass", "notes", &copied).unwrap();
+        let now = clips(&s, "bass", "notes");
+        assert_eq!(now.iter().map(|c| c.versions.len()).collect::<Vec<_>>(), [2, 0, 0]);
+
+        // Sent with versions, a clip has the ones it is sent with; ones that don't fit are refused.
+        let mut other = now.clone();
+        other[0].versions[1].star = true;
+        s.write_notes(s.accepted().number, "bass", "notes", &other).unwrap();
+        assert!(clips(&s, "bass", "notes")[0].versions[1].star);
+        other[0].versions[1].name = "original".into();
+        let why = s.write_notes(s.accepted().number, "bass", "notes", &other).unwrap_err().to_string();
+        assert!(why.contains("two versions are named `original`"), "{why}");
     }
 }

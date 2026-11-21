@@ -71,6 +71,7 @@ pub mod timeline;
 pub mod tracks;
 pub mod upgrade;
 pub mod value;
+pub mod versions;
 pub mod view;
 pub mod views;
 pub mod voices;

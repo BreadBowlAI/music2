@@ -276,6 +276,7 @@ fn a_hit_is_a_render_of_one_note_bit_for_bit() {
         let one = m2_song::lane::LaneData::Notes(vec![m2_song::lane::NoteClip {
             id: None,
             other_id: None,
+            versions: vec![],
             start: 0.0,
             length: beats,
             notes: vec![m2_song::lane::Note { pitch: 36.0, start: 0.0, length: beats, velocity: m2_song::lane::VELOCITY }],

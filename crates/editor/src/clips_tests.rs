@@ -1319,3 +1319,317 @@ fn the_guides_clip_gesture_examples_read() {
     let every: BTreeSet<String> = every.split(' ').map(String::from).collect();
     assert_eq!(ops, every, "api.md shows an example of each gesture ({} blocks)", blocks.len());
 }
+
+// A notes clip's versions (VER-1 to VER-4), on the first song's bass clip.
+
+const BASS: &str = "bass/notes";
+const BASS_CLIP: &str = "db9f9t5s";
+
+/// A versions act on the bass clip, as the page sends it (no name).
+fn act(act: Act) -> Gesture {
+    Gesture::Versions { clip: by_id(BASS, BASS_CLIP), act, by: None }
+}
+
+/// A version to add: its name, and notes `(pitch, start, length)`.
+fn version(name: &str, notes: &[(f64, f64, f64)]) -> NewVersion {
+    let notes = notes.iter().map(|(pitch, start, length)| Note { pitch: *pitch, start: *start, length: *length, velocity: 0.8 }).collect();
+    NewVersion { name: name.into(), notes }
+}
+
+/// The two versions the tests add: `busy` and `sparse`.
+fn two() -> Act {
+    Act::Add { versions: vec![version("busy", &[(45.0, 4.0, 0.25), (33.0, 0.0, 0.25)]), version("sparse", &[(33.0, 0.0, 4.0)])] }
+}
+
+/// The bass clip's versions: each one's name, with `*` when starred, `by <who>`, and how many
+/// notes wait in it (`plays` for the one that plays).
+fn versions_of(s: &Session, id: &str) -> Vec<String> {
+    let Some(LaneData::Notes(c)) = data(s, BASS) else { panic!() };
+    let c = c.iter().find(|c| c.id.as_deref() == Some(id)).unwrap();
+    c.versions
+        .iter()
+        .map(|v| {
+            let notes = v.notes.as_ref().map_or("plays".to_string(), |n| n.len().to_string());
+            format!("{}{}{} {notes}", v.name, if v.star { "*" } else { "" }, v.by.as_ref().map(|b| format!(" by {b}")).unwrap_or_default())
+        })
+        .collect()
+}
+
+// VER-3: every act is one step that undo takes back to the byte; `add` takes several versions in
+// one step, names what plays `original` first, and says who added them; what plays doesn't change
+// until `play`.
+#[test]
+fn each_versions_act_is_one_step() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let (before, heard, n) = (f.read("data/bass/notes.json"), notes(&s, BASS), s.accepted().number);
+    let done = go(&mut s, Gesture::Versions { clip: by_id(BASS, BASS_CLIP), act: two(), by: Some("Claude".into()) });
+    assert_eq!(s.accepted().number, n + 1, "two versions, one step");
+    assert_eq!(versions_of(&s, BASS_CLIP), ["original plays", "busy by Claude 2", "sparse by Claude 1"]);
+    assert_eq!((done.edited.before.as_str(), done.edited.after.as_str()), ("no versions", "3 versions, `original` plays"));
+    assert_eq!(notes(&s, BASS), heard, "what plays doesn't change");
+    let added = f.read("data/bass/notes.json");
+    let new = changed_lines(&before, &added);
+    assert_eq!(new[0], "  ], \"versions\": [", "the clip's own lines are as they were: {new:?}");
+    assert_eq!(new[1], "    {\"name\": \"original\"},");
+    // The page's add says no one, and the playing one keeps its name.
+    go(&mut s, act(Act::Add { versions: vec![version("mine", &[])] }));
+    assert_eq!(versions_of(&s, BASS_CLIP)[3], "mine 0");
+    s.undo().unwrap();
+    assert_eq!(f.read("data/bass/notes.json"), added);
+
+    let name = |n: &str| n.to_string();
+    for (what, shows, label) in [
+        (Act::Play { name: name("busy") }, vec!["original 48", "busy by Claude plays", "sparse by Claude 1"], "3 versions, `busy` plays"),
+        (
+            Act::Star { name: name("busy"), star: true },
+            vec!["original plays", "busy* by Claude 2", "sparse by Claude 1"],
+            "`busy`, starred",
+        ),
+        (
+            Act::Rename { name: name("busy"), to: name("wild") },
+            vec!["original plays", "wild by Claude 2", "sparse by Claude 1"],
+            "version `wild`",
+        ),
+        (Act::Remove { name: name("sparse") }, vec!["original plays", "busy by Claude 2"], "2 versions, `original` plays"),
+        (Act::Keep, vec![], "no versions"),
+    ] {
+        let n = s.accepted().number;
+        let done = go(&mut s, act(what.clone()));
+        assert_eq!(s.accepted().number, n + 1, "{what:?} is one step");
+        assert_eq!(versions_of(&s, BASS_CLIP), shows, "{what:?}");
+        assert_eq!(done.edited.after, label, "{what:?}");
+        assert_ne!(done.edited.before, done.edited.after, "{what:?}");
+        s.undo().unwrap();
+        assert_eq!(f.read("data/bass/notes.json"), added, "undo takes {what:?} back to the byte");
+    }
+    s.undo().unwrap();
+    assert_eq!(f.read("data/bass/notes.json"), before);
+
+    // As JSON (`POST /api/graph/clips`): the act beside the clip; who sends it is never read from it.
+    let sent = serde_json::json!({"op": "versions", "clip": {"module": "bass", "lane": "notes", "id": BASS_CLIP}, "act": "add", "by": "Mallory",
+        "versions": [{"name": "busy", "notes": [{"pitch": "A1", "start": 0, "length": 0.25}]}]});
+    let g: Gesture = serde_json::from_value(sent).unwrap();
+    assert_eq!(
+        g,
+        Gesture::Versions {
+            clip: by_id(BASS, BASS_CLIP),
+            act: Act::Add { versions: vec![version("busy", &[(33.0, 0.0, 0.25)])] },
+            by: None
+        }
+    );
+    for (json, is) in [
+        (serde_json::json!({"act": "play", "name": "busy"}), Act::Play { name: name("busy") }),
+        (serde_json::json!({"act": "star", "name": "busy"}), Act::Star { name: name("busy"), star: true }),
+        (serde_json::json!({"act": "star", "name": "busy", "star": false}), Act::Star { name: name("busy"), star: false }),
+        (serde_json::json!({"act": "rename", "name": "busy", "to": "wild"}), Act::Rename { name: name("busy"), to: name("wild") }),
+        (serde_json::json!({"act": "remove", "name": "busy"}), Act::Remove { name: name("busy") }),
+        (serde_json::json!({"act": "keep"}), Act::Keep),
+    ] {
+        assert_eq!(serde_json::from_value::<Act>(json).unwrap(), is);
+    }
+}
+
+// VER-3: playing another version and then the first again gives the first bytes; in between, the
+// clip plays the other's notes and the first's wait under its name.
+#[test]
+fn playing_a_version_there_and_back_gives_the_first_bytes() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let heard = notes(&s, BASS);
+    go(&mut s, act(two()));
+    let first = f.read("data/bass/notes.json");
+    go(&mut s, act(Act::Play { name: "busy".into() }));
+    let now: Vec<(f64, f64)> = notes(&s, BASS).iter().map(|n| (n.pitch, n.start)).collect();
+    assert_eq!(now, [(33.0, 0.0), (45.0, 4.0)], "busy's notes play");
+    assert_eq!(versions_of(&s, BASS_CLIP), ["original 48", "busy plays", "sparse 1"], "the order stays");
+    go(&mut s, act(Act::Play { name: "original".into() }));
+    assert_eq!(f.read("data/bass/notes.json"), first);
+    assert_eq!(notes(&s, BASS), heard);
+}
+
+// VER-3: `keep` leaves today's clip: no field, and the bytes of the clip that never had versions.
+#[test]
+fn keep_leaves_todays_clip() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let before = f.read("data/bass/notes.json");
+    go(&mut s, act(two()));
+    go(&mut s, act(Act::Keep));
+    assert_eq!(f.read("data/bass/notes.json"), before);
+    // Kept while another plays: that one's notes, and nothing else.
+    go(&mut s, act(two()));
+    go(&mut s, act(Act::Play { name: "sparse".into() }));
+    go(&mut s, act(Act::Keep));
+    let after = f.read("data/bass/notes.json");
+    assert!(!after.contains("versions") && !after.contains("sparse"), "{after}");
+    assert_eq!(notes_by_id(&s, BASS), [(BASS_CLIP.to_string(), 0.0, 32.0, vec![(33.0, 0.0, 4.0)])]);
+}
+
+// VER-3: an act that can't be done is refused in words, and nothing is written; one that would
+// change nothing makes no step.
+#[test]
+fn versions_acts_are_refused_in_words() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let n = s.accepted().number;
+    let name = |n: &str| n.to_string();
+    // On a clip with no versions.
+    let why = refused(&mut s, act(Act::Play { name: name("busy") }));
+    assert!(why.contains("no version `busy`") && why.contains("no versions yet"), "{why}");
+    let why = refused(&mut s, act(Act::Add { versions: vec![version("original", &[])] }));
+    assert!(why.contains("has a version `original` already"), "what plays takes that name: {why}");
+    let why = refused(&mut s, act(Act::Add { versions: vec![] }));
+    assert!(why.contains("a name and its notes"), "{why}");
+    assert_eq!(go(&mut s, act(Act::Keep)).edited.after, "no change");
+    let why = refused(&mut s, Gesture::Versions { clip: by_id("bass/cutoff", "adp0sw76"), act: two(), by: None });
+    assert!(why.ends_with("Only a notes clip has versions."), "{why}");
+    assert_eq!(s.accepted().number, n, "nothing was written");
+
+    go(&mut s, act(two()));
+    for (what, says) in [
+        (Act::Play { name: name("nope") }, "no version `nope`. It has `original`, `busy` and `sparse`"),
+        (Act::Star { name: name("nope"), star: true }, "no version `nope`"),
+        (Act::Remove { name: name("nope") }, "no version `nope`"),
+        (Act::Rename { name: name("nope"), to: name("x") }, "no version `nope`"),
+        (Act::Add { versions: vec![version("busy", &[])] }, "has a version `busy` already"),
+        (Act::Add { versions: vec![version("a", &[]), version("a", &[])] }, "has a version `a` already"),
+        (Act::Add { versions: vec![version("", &[])] }, "a version's name is 1 to 40 characters"),
+        (Act::Add { versions: vec![version(&"x".repeat(41), &[])] }, "a version's name is 1 to 40 characters"),
+        (Act::Add { versions: vec![version("bad", &[(60.0, 0.0, 0.0)])] }, "A note needs a pitch, a start, a length above 0"),
+        (Act::Rename { name: name("busy"), to: name("sparse") }, "has a version `sparse` already"),
+        (Act::Rename { name: name("busy"), to: name(" ") }, "can't start or end with a space"),
+        (Act::Remove { name: name("original") }, "`original` is the version that plays. Play another first"),
+    ] {
+        let why = refused(&mut s, act(what.clone()));
+        assert!(why.contains(says), "{what:?}: {why}");
+    }
+    for same in [
+        Act::Play { name: name("original") },
+        Act::Star { name: name("busy"), star: false },
+        Act::Rename { name: name("busy"), to: name("busy") },
+    ] {
+        assert_eq!(go(&mut s, act(same)).edited.after, "no change");
+    }
+    assert_eq!(s.accepted().number, n + 1, "only the add was written");
+}
+
+// VER-4: Split and Join refuse a clip whose versions wait, and so does a section edit that would
+// cut it; with one version kept, they work again.
+#[test]
+fn split_and_join_refuse_waiting_versions() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let done = go(&mut s, Gesture::Split { clips: vec![by_id(BASS, BASS_CLIP)], at: 16.0 });
+    let second = done.made[0].1.clone();
+    go(&mut s, act(two()));
+    let n = s.accepted().number;
+    let why = refused(&mut s, Gesture::Split { clips: vec![by_id(BASS, BASS_CLIP)], at: 8.0 });
+    assert!(why.contains("Keep one version first"), "{why}");
+    for clips in [vec![by_id(BASS, BASS_CLIP), by_id(BASS, &second)], vec![by_id(BASS, &second), by_id(BASS, BASS_CLIP)]] {
+        let why = refused(&mut s, Gesture::Join { clips });
+        assert!(why.contains("Keep one version first"), "{why}");
+    }
+    let cut = crate::sections::Gesture::Delete { start: 8.0, end: 12.0 };
+    let why = crate::sections::edit(&mut s, &cut).unwrap_err().to_string();
+    assert!(why.contains("Bass's notes clip at bar 1") && why.contains("Keep one version first"), "{why}");
+    assert_eq!(s.accepted().number, n, "nothing was written");
+    // A section edit that takes the clip whole carries its versions.
+    crate::sections::edit(&mut s, &crate::sections::Gesture::Duplicate { start: 0.0, end: 16.0, to: Some(32.0) }).unwrap();
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    assert_eq!(c.iter().filter(|c| c.versions.len() == 3).map(|c| c.start).collect::<Vec<_>>(), [0.0, 32.0]);
+    s.undo().unwrap();
+    go(&mut s, act(Act::Keep));
+    go(&mut s, Gesture::Split { clips: vec![by_id(BASS, BASS_CLIP)], at: 8.0 });
+}
+
+// VER-4: a move, a copy, a duplicate, a paste and the right edge carry the versions untouched.
+#[test]
+fn a_move_and_a_copy_keep_the_versions() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(&mut s, act(two()));
+    go(&mut s, act(Act::Star { name: "busy".into(), star: true }));
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    let (was, clip) = (c[0].versions.clone(), serde_json::to_value(&c[0]).unwrap());
+    let all = |s: &Session| {
+        let Some(LaneData::Notes(c)) = data(s, BASS) else { panic!() };
+        assert!(c.iter().all(|c| c.versions == was), "{c:?}");
+        c.len()
+    };
+    go(&mut s, Gesture::Move { clips: vec![by_id(BASS, BASS_CLIP)], by: 32.0, to: None, copy: false });
+    assert_eq!(all(&s), 1);
+    go(&mut s, Gesture::Move { clips: vec![by_id(BASS, BASS_CLIP)], by: -32.0, to: None, copy: true });
+    assert_eq!(all(&s), 2, "a copy has them too");
+    go(&mut s, Gesture::Duplicate { clips: vec![by_id(BASS, BASS_CLIP)], range: None, grid: None, times: None });
+    assert_eq!(all(&s), 3);
+    go(&mut s, Gesture::Paste { clips: vec![Copied { from: addr(BASS), clip }], to: None, at: 96.0, into: None, fit: false });
+    assert_eq!(all(&s), 4);
+    go(&mut s, Gesture::Resize { clip: by_id(BASS, BASS_CLIP), start: 32.0, length: 16.0 });
+    assert_eq!(all(&s), 4, "the right edge");
+    // The notes change; the ones that wait don't.
+    go(&mut s, Gesture::Notes { clip: by_id(BASS, BASS_CLIP), notes: vec![], length: None });
+    go(&mut s, Gesture::Quantize { clips: vec![by_id(BASS, BASS_CLIP)], notes: None, grid: 1.0, ends: false });
+    assert_eq!(all(&s), 4);
+    // Onto another notes lane.
+    go(&mut s, Gesture::Move { clips: vec![by_id(BASS, BASS_CLIP)], by: 0.0, to: Some(addr("hats/hits")), copy: false });
+    let Some(LaneData::Notes(c)) = data(&s, "hats/hits") else { panic!() };
+    assert_eq!(c.iter().find(|c| c.id.as_deref() == Some(BASS_CLIP)).unwrap().versions, was);
+}
+
+// VER-4: when the left edge moves, each waiting version's notes move against it as the playing
+// notes do, so each still sounds where it would; moving it back gives the first bytes.
+#[test]
+fn a_left_edge_moves_waiting_notes_too() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(&mut s, act(two()));
+    let first = f.read("data/bass/notes.json");
+    go(&mut s, Gesture::Resize { clip: by_id(BASS, BASS_CLIP), start: 4.0, length: 28.0 });
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    let busy: Vec<(f64, f64)> = c[0].versions[1].notes.as_ref().unwrap().iter().map(|n| (n.pitch, n.start)).collect();
+    assert_eq!(busy, [(33.0, -4.0), (45.0, 0.0)], "still at beats 0 and 4 of the song");
+    go(&mut s, act(Act::Play { name: "busy".into() }));
+    assert_eq!(notes(&s, BASS).iter().map(|n| (n.pitch, n.start)).collect::<Vec<_>>(), [(45.0, 4.0)], "what the edge hides stays silent");
+    go(&mut s, act(Act::Play { name: "original".into() }));
+    go(&mut s, Gesture::Resize { clip: by_id(BASS, BASS_CLIP), start: 0.0, length: 32.0 });
+    assert_eq!(f.read("data/bass/notes.json"), first);
+}
+
+// VER-2: a song with waiting versions renders the same bits as the song without them; the bits
+// change only when another version plays.
+#[test]
+fn waiting_versions_render_the_same_bits() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    let plain = rendered(&s);
+    assert!(plain.iter().any(|x| x[0] != 0.0), "the song sounds");
+    go(&mut s, act(two()));
+    go(&mut s, act(Act::Star { name: "busy".into(), star: true }));
+    assert!(f.read("data/bass/notes.json").contains("\"versions\""));
+    assert_eq!(rendered(&s), plain, "the same samples");
+    go(&mut s, act(Act::Play { name: "sparse".into() }));
+    assert_ne!(rendered(&s), plain, "another version plays: another sound");
+    go(&mut s, act(Act::Play { name: "original".into() }));
+    assert_eq!(rendered(&s), plain);
+}
+
+// VER-4: a recording into a clip (overdub) adds to what plays and leaves the waiting versions; one
+// that would cut the clip (replace) leaves it whole.
+#[test]
+fn a_recording_keeps_waiting_versions() {
+    let f = fixture("examples/first-song");
+    let mut s = f.open();
+    go(&mut s, act(two()));
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    let (was, heard) = (c[0].versions.clone(), c[0].notes.len());
+    let t = Taken { lane: addr(BASS), clip: take(8.0, 4.0, &[(57.0, 0.25, 0.5)]), how: How::Into };
+    go(&mut s, Gesture::Record { takes: vec![t] });
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    assert_eq!((c.len(), c[0].notes.len(), &c[0].versions), (1, heard + 1, &was), "the take is in what plays");
+    let t = Taken { lane: addr(BASS), clip: take(8.0, 4.0, &[(57.0, 0.25, 0.5)]), how: How::Replace };
+    go(&mut s, Gesture::Record { takes: vec![t] });
+    let Some(LaneData::Notes(c)) = data(&s, BASS) else { panic!() };
+    let whole = c.iter().find(|c| c.id.as_deref() == Some(BASS_CLIP)).unwrap();
+    assert_eq!((c.len(), whole.start, whole.length, whole.notes.len(), &whole.versions), (2, 0.0, 32.0, heard + 1, &was), "not cut");
+}

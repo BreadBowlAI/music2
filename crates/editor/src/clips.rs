@@ -29,6 +29,7 @@ use crate::grooves::{self, Groove};
 use crate::plan;
 use crate::scales::Chord;
 use crate::songkey::SongKey;
+pub use crate::versions::{Act, NewVersion};
 use crate::{EditError, Edited, ready};
 
 /// The shortest a clip can be: 1/64 of a beat.
@@ -226,8 +227,19 @@ pub enum Gesture {
         #[serde(skip)]
         found: Option<std::sync::Arc<m2_runtime::measure::Measured>>,
     },
+    /// One act on a notes clip's versions (VER-3): `add`, `play`, `star`, `rename`, `remove` or
+    /// `keep`, beside the clip (`{"op": "versions", "clip": …, "act": "play", "name": "busy"}`).
+    Versions {
+        clip: ClipRef,
+        #[serde(flatten)]
+        act: Act,
+        /// Who sends it, for the versions an `add` makes: an agent's name, none for the musician.
+        /// Whoever takes the gesture in sets it; it is never read from the gesture.
+        #[serde(skip)]
+        by: Option<String>,
+    },
     /// The general form, for agents: whole clips put (each replacing the clip with its id, or
-    /// added) and clips deleted by id.
+    /// added) and clips deleted by id. A notes clip is put with the versions it is sent with.
     Set {
         #[serde(flatten)]
         lane: LaneAddr,
@@ -357,7 +369,9 @@ fn apply_then(
             lasts(length)?;
             let l = w.lane(lane)?;
             let clip = match &l.kind {
-                LaneKind::Notes => Clip::Notes(NoteClip { id: None, other_id: None, start: *start, length, notes: vec![] }),
+                LaneKind::Notes => {
+                    Clip::Notes(NoteClip { id: None, other_id: None, versions: vec![], start: *start, length, notes: vec![] })
+                }
                 LaneKind::Control { .. } => {
                     let v = l.value_at(*start);
                     Clip::Control(ControlClip { id: None, other_id: None, start: *start, length, points: vec![(0.0, v), (length, v)] })
@@ -771,6 +785,9 @@ fn apply_then(
                 })
                 .collect::<Result<_, _>>()
                 .map_err(|why| EditError::Rejected(why.into()))?;
+            if notes.iter().any(|c| !c.versions.is_empty()) {
+                return Err(EditError::Rejected(format!("A clip with versions that wait can't be joined. {KEEP_ONE}.")));
+            }
             let joined = joined(&notes);
             for i in &picked[1..] {
                 l.keep[*i] = None;
@@ -789,6 +806,15 @@ fn apply_then(
             };
             c.notes = notes.clone();
             c.length = length.unwrap_or(c.length);
+            l.keep[i] = Some(Clip::Notes(c));
+        }
+        Gesture::Versions { clip, act, by } => {
+            let (lane, i) = w.resolve(clip)?;
+            let l = w.lanes.get_mut(&lane).expect("resolved");
+            let Clip::Notes(mut c) = l.was[i].clone() else {
+                return Err(EditError::Rejected("Only a notes clip has versions.".into()));
+            };
+            crate::versions::apply(&mut c, act, by.as_deref())?;
             l.keep[i] = Some(Clip::Notes(c));
         }
         Gesture::Points { clip, points } => {
@@ -995,7 +1021,8 @@ fn hits(l: &mut Lane, steps: &[(f64, f64)], to: Hit, sound: Option<&str>, bar: i
                                 hi = hi.min(c.start());
                             }
                         }
-                        let mut c = NoteClip { id: None, other_id: None, start: lo, length: clean(hi - lo), notes: vec![] };
+                        let mut c =
+                            NoteClip { id: None, other_id: None, versions: vec![], start: lo, length: clean(hi - lo), notes: vec![] };
                         c.notes.push(hit(&c));
                         l.added.push((Clip::Notes(c), true));
                     }
@@ -1048,9 +1075,13 @@ fn pitch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
     }
 }
 
+/// What a gesture that would cut a clip's versions, or merge them, tells the musician to do
+/// first (VER-4).
+pub(crate) const KEEP_ONE: &str = "Keep one version first";
+
 /// Notes as the lane format holds them: each a pitch, a start, a length above 0 and a velocity of 0
 /// or more.
-fn notes_fit(notes: &[Note]) -> Result<(), EditError> {
+pub(crate) fn notes_fit(notes: &[Note]) -> Result<(), EditError> {
     match notes
         .iter()
         .find(|n| ![n.pitch, n.start, n.length, n.velocity].iter().all(|x| x.is_finite()) || n.length <= 0.0 || n.velocity < 0.0)
@@ -1109,7 +1140,7 @@ fn joined(clips: &[&NoteClip]) -> NoteClip {
             }
         }
     }
-    NoteClip { id: clips[0].id.clone(), other_id: None, start, length: end - start, notes }
+    NoteClip { id: clips[0].id.clone(), other_id: None, versions: vec![], start, length: end - start, notes }
 }
 
 /// A clip of any kind, as the lane format holds it.
@@ -1194,13 +1225,23 @@ impl Clip {
         self.id().filter(|id| !other && ClipId::valid(id))
     }
 
+    /// Whether it is a notes clip with versions that wait (VER-4): one Split and Join refuse.
+    pub(crate) fn versions_wait(&self) -> bool {
+        matches!(self, Clip::Notes(c) if !c.versions.is_empty())
+    }
+
     /// Move the left edge to `start`, keeping what is inside where it plays: notes and points
     /// shift the other way; an audio clip starts later or earlier in its asset, by the seconds the
     /// edge moved under `tempo`, and never before the asset's start.
     fn move_left_edge(&mut self, start: f64, tempo: &m2_song::TempoMap) -> Result<(), EditError> {
         let by = self.start() - start;
         match self {
-            Clip::Notes(c) => c.notes.iter_mut().for_each(|n| n.start += by),
+            // The versions that wait move as the one that plays, so each stays where it would
+            // sound (VER-4).
+            Clip::Notes(c) => {
+                let waiting = c.versions.iter_mut().filter_map(|v| v.notes.as_mut());
+                std::iter::once(&mut c.notes).chain(waiting).flatten().for_each(|n| n.start += by);
+            }
             Clip::Control(c) => c.points.iter_mut().for_each(|p| p.0 += by),
             // A lane of names keeps what plays: the points left before the clip's start become one
             // at its start, holding the name playing there (review V13).
@@ -1237,6 +1278,9 @@ impl Clip {
     /// audio clip's second part starts later in its asset; the first keeps the fade in, the
     /// second the fade out.
     pub(crate) fn split(&self, at: f64, tempo: &m2_song::TempoMap) -> Result<(Clip, Clip), EditError> {
+        if self.versions_wait() {
+            return Err(EditError::Rejected(format!("A clip with versions that wait can't be split. {KEEP_ONE}.")));
+        }
         let cut = at - self.start();
         let (mut first, mut second) = (self.clone(), self.clone());
         first.set_length(cut);
@@ -1867,6 +1911,7 @@ pub fn pinned(rev: &Revision, g: &Gesture) -> Result<Gesture, EditError> {
         | Gesture::Quantize { clips, .. } => clips.iter_mut().try_for_each(&mut pin)?,
         Gesture::Resize { clip, .. }
         | Gesture::Notes { clip, .. }
+        | Gesture::Versions { clip, .. }
         | Gesture::Points { clip, .. }
         | Gesture::Audio { clip, .. }
         | Gesture::Comp { clip, .. }
@@ -2021,7 +2066,9 @@ fn describe(rev: &Revision, edits: &[LaneEdit]) -> (String, String) {
             let lane = m.and_then(|m| m.lanes.iter().find(|l| l.key == key)).map_or(key, |l| l.label());
             let name = format!("{} {lane}", m.map_or(module, |m| m.label()));
             let said = match (&was, &e.data) {
-                (LaneData::Notes(a), LaneData::Notes(b)) => crate::notes::describe(a, b, arr),
+                (LaneData::Notes(a), LaneData::Notes(b)) => {
+                    crate::versions::described(a, b).unwrap_or_else(|| crate::notes::describe(a, b, arr))
+                }
                 (a, b) => spans_described(a, b, arr),
             };
             (name, said)

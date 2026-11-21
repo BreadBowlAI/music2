@@ -304,7 +304,7 @@ fn plan(rev: &Revision, module: &str) -> Result<Plan, EditError> {
             if mine.is_empty() {
                 continue;
             }
-            let clip = NoteClip { id: None, other_id: None, start: c.start, length: c.length, notes: mine };
+            let clip = NoteClip { id: None, other_id: None, versions: vec![], start: c.start, length: c.length, notes: mine };
             let place = GM.iter().position(|g| g.sound == sound).expect("a sound of the table");
             by_sound.entry(place).or_default().push(serde_json::to_value(&clip).expect("a clip serialises"));
         }
