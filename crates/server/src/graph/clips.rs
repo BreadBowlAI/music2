@@ -29,6 +29,17 @@ impl Graph {
     /// [`Graph::clips`] for a gesture that goes from revision `since` (AGENT-2): a clip it names, or
     /// the Beat grid's lane, changed after it is refused, saying who changed it.
     pub fn clips_since(&self, token: u64, gesture: Gesture, since: Option<u64>) -> Result<Answer> {
+        // A version is added by whoever asks (VER-3): an agent's name, none for the page.
+        let gesture = match gesture {
+            Gesture::Versions { clip, act, .. } => {
+                let by = match crate::caller::now() {
+                    crate::caller::Caller::Agent { name, .. } => Some(name),
+                    crate::caller::Caller::Page => None,
+                };
+                Gesture::Versions { clip, act, by }
+            }
+            other => other,
+        };
         let (gesture, name) = self.measured(token, gesture)?;
         let answer = match self.clips_why_since(token, gesture, None, since) {
             (Ok(v), _) => Answer::Done(v),

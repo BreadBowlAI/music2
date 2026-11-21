@@ -532,6 +532,7 @@ fn one_note(pitch: f64, from: f64, to: f64) -> LaneData {
     LaneData::Notes(vec![NoteClip {
         id: None,
         other_id: None,
+        versions: vec![],
         start: 0.0,
         length: to,
         notes: vec![Note { pitch, start: from, length: to - from, velocity: VELOCITY }],

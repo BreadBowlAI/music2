@@ -27,6 +27,9 @@ struct OldNoteClip {
     start: f64,
     length: f64,
     notes: Vec<OldNote>,
+    /// Newer than the oracle (VER-1), which has no older way to read or write it: the lane's own.
+    #[serde(default, deserialize_with = "super::versions")]
+    versions: Vec<super::Version>,
 }
 
 fn pitch<'de, D: serde::Deserializer<'de>>(d: D) -> Result<f64, D::Error> {
@@ -53,10 +56,13 @@ impl Old for NoteClip {
     fn parse(v: Value) -> Result<NoteClip, serde_json::Error> {
         let c = serde_json::from_value::<OldNoteClip>(v)?;
         let notes = c.notes.into_iter().map(|n| Note { pitch: n.pitch, start: n.start, length: n.length, velocity: n.velocity }).collect();
-        Ok(NoteClip { id: c.id, other_id: None, start: c.start, length: c.length, notes })
+        Ok(NoteClip { id: c.id, other_id: None, versions: c.versions, start: c.start, length: c.length, notes })
     }
 
     fn line(&self) -> String {
+        if !self.versions.is_empty() {
+            return super::Clip::line(self);
+        }
         let id = id_field(&self.id, &self.other_id);
         let head = format!("{{{id}\"start\": {}, \"length\": {}, \"notes\": [", number(self.start), number(self.length));
         if self.notes.is_empty() {

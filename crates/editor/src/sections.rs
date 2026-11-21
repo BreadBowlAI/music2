@@ -188,6 +188,14 @@ impl Edge<'_> {
             };
             return Err(EditError::Rejected(format!("{track}'s audio clip at bar {bar} {why}, or move it off bar {edge}.")));
         }
+        // A clip whose versions wait isn't cut (VER-4).
+        if c.versions_wait() {
+            let (bar, edge) = (self.arr.bar_at(c.start()).0 + 1, self.arr.bar_at(at).0 + 1);
+            return Err(EditError::Rejected(format!(
+                "{track}'s notes clip at bar {bar} has versions that wait, so it can't be cut at bar {edge}. {}, or move it off bar {edge}.",
+                clips::KEEP_ONE
+            )));
+        }
         c.split(at, self.tempo)
     }
 

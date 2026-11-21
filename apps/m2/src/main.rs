@@ -21,6 +21,7 @@ mod listen;
 mod search;
 mod see;
 mod text;
+mod versions;
 mod words;
 
 fn main() -> ExitCode {
@@ -1298,6 +1299,7 @@ change that code first",
         Some("routes") => call::routes(&args)?,
         Some("call") => call::call(&args)?,
         Some("search") => search::search(&args)?,
+        Some("versions") => versions::run(&args)?,
         Some(cmd) if edits::handles(cmd) => edits::run(cmd, &args)?,
         // main refused every word the table doesn't hold, and a test holds the table to these arms.
         _ => bail!("m2 has no command `{cmd}`"),
