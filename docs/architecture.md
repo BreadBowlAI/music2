@@ -722,7 +722,7 @@ Export renders the accepted revision, as it does for code.
             "offset": 0, "gain_db": -3, "fade_in": 0.01, "fade_out": 0.05, "reverse": false, "pitch": 0, "warp": []}]}
 ```
 
-Notes, control (masks are control lanes in `unit01`) and audio lanes, in that order. Fields are format 0's plus `id`, `unit` and `hash` (the first 16 hex digits of the asset's SHA-256), and an audio clip's `render` and `sung` since track `sung` ([VOX-40](#a-voices-notes)). They are read and written in `core/song/src/lane.rs`.
+Notes, control (masks are control lanes in `unit01`) and audio lanes, in that order. Fields are format 0's plus `id`, `unit` and `hash` (the first 16 hex digits of the asset's SHA-256), an audio clip's `render` and `sung` since track `sung` ([VOX-40](#a-voices-notes)), and a notes clip's `versions` since track `versions` ([VER-1](#a-clips-versions)). They are read and written in `core/song/src/lane.rs`.
 
 **FMT-11.** A clip id is chosen by whoever builds the op that writes the clip, and travels in the Tx; core never mints one during `check` or `commit`. Ids are 8 characters from the lowercase Crockford base32 alphabet (`0-9a-z` without `i`, `l`, `o`, `u`). A builder outside a sandbox MAY draw them at random. A sandboxed package tool, the CLI and a fix derive them: the first 8 Crockford characters of SHA-256(`tx.id` ‖ lane address ‖ n), so `tx.id` is the only random input. Readers MUST accept any id matching `^[0-9a-z]{1,16}$`.
 - *Why:* random ids survive merges, other processes and git. A sandbox has no randomness, `check` and `commit` must write the same bytes, and a scripted run given its `tx.id` must be reproducible.
@@ -736,6 +736,64 @@ Notes, control (masks are control lanes in `unit01`) and audio lanes, in that or
 - A builder that writes a lane gives every clip of it without a usable id (none, one that breaks the rule, or one an earlier clip of the lane has) a fresh one, so `clip.anonymous` clears where the producer edits.
 - *Why:* one hand edit must never make a lane unreadable.
 - *Today:* matches since 8b.5 for clip gestures (`crates/editor/src/clips.rs`; `touching_a_lane_gives_its_anonymous_clips_ids`, `a_move_onto_a_taken_id_mints_one`, `every_copy_mints`). A gesture names an anonymous clip by where it starts and its rank there (`at`). The piano roll's whole-lane write (`notes.rs`) gives ids only to the clips it was sent without one.
+
+### A clip's versions
+
+**In short:** a notes clip can hold several versions of its notes: one plays, the others wait. From the [versions note](designs/versions/design.md) (accepted by the owner on 2026-11-21). It is one optional field of a notes clip, one clip gesture and one `m2` command; the engine, the runtime, std and `@m2/core` gain nothing. The Playground, the panel that flips through them, is the next track (`playground`).
+
+```json
+{"id": "k3f9q2zt", "start": 32, "length": 16,
+ "notes": [{"pitch": "A1", "start": 0, "length": 0.5}],
+ "versions": [
+   {"name": "original", "notes": [{"pitch": "E1", "start": 0, "length": 1}]},
+   {"name": "walks up"},
+   {"name": "busy", "star": true, "by": "Claude", "notes": [{"pitch": "A1", "start": 0, "length": 0.25}]}
+ ]}
+```
+
+**VER-1.** A notes clip MAY hold **`versions`**: every version of its notes, in the order they were added. Each is `{"name", "star", "by", "notes"}`. Exactly one has no `notes`: it is the one that plays, and its notes are the clip's `notes`, written once. `name` is 1 to 40 characters, with no control or invisible characters and no space at either end, and unique in the clip. `star` (only ever `true`) marks one the musician likes. `by` is who added it: an agent's name ([AGENT-10](#agents)), and none for the musician. A waiting version's `notes` are a clip's notes: the same fields, times from the clip's start. The lane file writes the field after `notes`, only when there are two versions or more, one version a line, its fields in that order and its notes one a line; so a clip without it reads and writes as before, byte for byte ([FMT-8a](#strictness)). A list of one version is never written: it reads as none. A list that breaks a rule (two names the same, none or two that play, a name too long, a field it doesn't know) makes the lane file fail to read, as any wrong field does ([FMT-9](#strictness)), saying which clip and which version. Only notes clips have versions. `format` stays 1.
+- *Why:* an idea for a few bars must be able to sit beside what plays, so the musician can compare; the playing notes written once can never differ from a second copy; a name is enough to name a version, so there is no new kind of id. `format` stays 1 as it did for `render` and `sung` ([VOX-40](#a-voices-notes)): the field is written only where a clip has versions, so every song without them is unchanged and still opens in an older music2. An older music2 reads a lane that has them strictly: that one lane fails to read, saying the field it doesn't know, and nothing is dropped in silence. A new number would close every song to an older music2 and need a migrator with nothing to move ([FMT-3a](#manifest-and-versions)), before 1.0.
+- *Today:* since track `versions` (`core/song/src/lane.rs`: `versions_read_and_write_in_canonical_form`, `a_clip_without_versions_is_unchanged`, `one_version_is_never_written`, `broken_versions_are_refused_in_words`).
+
+**VER-2.** What plays is the clip's `notes`, and nothing else. The compiler, the runtime, the engine, export and `m2 listen` MUST NOT read `versions`: a song with waiting versions renders the same bits as the song without them.
+- *Why:* the core stays small; choosing a version is a write of `notes` (VER-3), so there is one way to play data, the song's.
+- *Today:* since track `versions`: the field is read and written by `core/song` and changed by `crates/editor` only (`waiting_versions_render_the_same_bits`, `crates/editor/src/clips_tests.rs`).
+
+**VER-3.** One clip gesture, `versions`, on one notes clip, with one **act**, changes them:
+
+| Act | What it does |
+|---|---|
+| `add` | Adds one version or more, each with a name and notes. They wait; what plays doesn't change. On a clip with no versions yet, what plays is first named `original` |
+| `play` | Makes the named version the one that plays: its notes become the clip's, and the notes that played go back under their name. The order stays |
+| `star` | Sets or clears a version's star |
+| `rename` | Changes a version's name |
+| `remove` | Removes a waiting version. The one that plays is refused: play another first. When one is left, the field goes |
+| `keep` | Removes every version but the one that plays, and the field with them |
+
+Each MUST be one undo step, through the path of every clip gesture (`POST /api/graph/clips`, `m2 clips <song> json -`), so [AGENT-1](#agents) to [AGENT-5](#agents) hold with nothing new. An act that would change nothing (playing the one that plays, `keep` on a clip with no versions) makes no step. A name the clip hasn't got, a name taken, a name that breaks VER-1 and notes that aren't notes are refused in words, and nothing is written. `add` sets `by` from who sends the gesture, never from what the gesture says: an agent's name, none for the page.
+- *Why:* choosing a version is a write, as choosing an audio take is: ⌘Z goes back to the version heard before, the choice is still there when the app opens again, and there is no second way to play. Several versions in one `add` are one undo step and one notice.
+- *Today:* since track `versions` (`crates/editor/src/clips.rs`, `Gesture::Versions`; `each_versions_act_is_one_step`, `playing_a_version_there_and_back_gives_the_first_bytes`, `keep_leaves_todays_clip`, `versions_acts_are_refused_in_words`, `crates/editor/src/clips_tests.rs`). The server names the agent (`crates/server/src/graph/clips.rs`), and `m2` does from `--as`.
+
+**VER-4.** Every other write of a notes clip MUST keep its waiting versions, or refuse:
+
+| Gesture | Versions |
+|---|---|
+| Move, copy, duplicate, paste, sections | Go with the clip. A copy has them too |
+| Resize | Go with the clip. When the left edge moves, each waiting version's notes move against it as the playing notes do, so each still sounds where it would |
+| Split, Join, and a section edit that would cut the clip | Refused while the clip has versions that wait: "Keep one version first" |
+| The piano roll's edits, and every gesture that changes the notes (`notes`, `stamp`, `groove`, `quantize`, a paste into the clip) | Change what plays, and leave the waiting ones as they are |
+| Recording into the clip (overdub) | The same. A recording that would cut the clip (replace) leaves it whole |
+| Delete | The clip goes, its versions with it; Undo brings them back |
+| `set` | Puts the clips as sent, their versions with them |
+
+The piano roll's whole-lane write names a clip by its id: a clip it sends without `versions` keeps the ones the lane holds for that id.
+- *Why:* a version that waits is the musician's work, and a tool that doesn't know the field must not lose it. Cutting six sets of notes at once would surprise; it can be loosened later.
+- *Today:* since track `versions` (`a_move_and_a_copy_keep_the_versions`, `split_and_join_refuse_waiting_versions`, `a_left_edge_moves_waiting_notes_too`, `crates/editor/src/clips_tests.rs`; `the_rolls_write_keeps_waiting_versions`, `crates/editor/src/notes.rs`). Make it a kit ([KIT-1](#drum-kits)) splits a clip's notes over several tracks: its waiting versions don't follow ([gaps](gaps.md)).
+
+**VER-5.** `m2 versions` MUST list a song's versions and send each act of VER-3: `m2 versions <song>` (the clips that have versions), and on one clip `list` (`--json` with the notes), `add <name> -` (the notes as JSON from standard input), `play`, `star`, `unstar`, `remove`, `rename` and `keep`. A clip is named as `m2 clips` names it (`bass/notes:k3f9q2zt`). It writes as every `m2` command does: handed to the app while the app has the song open ([AGENT-1](#agents)), one undo step by the agent's name, refused with status 3 while the musician holds the lane ([AGENT-3](#agents)).
+- An agent proposes by adding versions. Which one plays and which is kept is the musician's choice: the guide and a song's `AGENTS.md` tell an agent to add, and to leave `play` and `keep` to the musician unless asked. Nothing refuses them: they are song changes like any other, shown as they land and undone with ⌘Z.
+- *Why:* the app has no AI in it ([AGENT-9](#agents)); an agent proposes through the same door as any tool, and each idea no longer destroys the last.
+- *Today:* since track `versions` (`apps/m2/src/versions.rs`; `apps/m2/tests/versions.rs`: `add_with_the_app_open_is_one_step_by_the_agent`, `the_acts_with_the_app_closed`).
 
 ### Arrangement
 
