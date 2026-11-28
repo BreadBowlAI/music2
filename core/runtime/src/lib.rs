@@ -2998,8 +2998,9 @@ impl Renderer {
             .zip(&used)
             .map(|(n, &u)| if u && !n.is_note_effect() { Shape::of(n, packages, &assets) } else { None })
             .collect();
-        // A note delay's room is its lane's, or its note effect's.
-        let caps_of = |lanes: &LanePlan, slot: usize| lanes.caps.get(slot).copied().unwrap_or_default();
+        // A note delay's room is its lane's, its feed's included (FEED-2), or its note effect's.
+        let rooms: Vec<Caps> = (0..lanes.caps.len()).map(|s| lanes.room(s)).collect();
+        let caps_of = |_: &LanePlan, slot: usize| rooms.get(slot).copied().unwrap_or_default();
         let slot_of = |src: usize| notes_slot(&flat.nodes, src, &lanes.lanes.refs, &lanes.effects);
         for (i, n) in flat.nodes.iter().enumerate() {
             if let FOp::NoteDelay { lane, .. } = n.op
@@ -3035,7 +3036,7 @@ impl Renderer {
             data,
             sample_rate: rate,
             slots: &lanes.lanes.refs,
-            caps: &lanes.caps,
+            caps: &rooms,
             effects: &lanes.effects,
             owner,
             mode,

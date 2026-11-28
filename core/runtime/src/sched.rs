@@ -83,6 +83,12 @@ impl Caps {
         Caps { sounding: self.sounding.max(o.sounding), ons: self.ons.max(o.ons) }
     }
 
+    /// These and a feed's room (FEED-2): what a notes lane's buffer can hold, and so what each of
+    /// its consumers is sized for (ABI-8, RENDER-42).
+    pub fn with_feed(self) -> Caps {
+        Caps { sounding: self.sounding + FEED.sounding, ons: self.ons + FEED.ons }
+    }
+
     /// Whether data that needs `needs` fits these.
     pub fn fits(&self, needs: Caps) -> bool {
         needs.sounding <= self.sounding && needs.ons <= self.ons
@@ -405,7 +411,7 @@ impl NoteScheduler {
             cursor: 0,
             sounding: Vec::with_capacity(caps.sounding + FEED.sounding),
             swapped: false,
-            events: Events::with_capacity(caps.events() + FEED.events() + LIVE_ROOM + WHEEL_EVENTS),
+            events: Events::with_capacity(caps.with_feed().events() + LIVE_ROOM + WHEEL_EVENTS),
             caps,
             live: Box::new([None; LIVE_ROOM]),
             wheels: Wheel::AT_REST,

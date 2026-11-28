@@ -648,7 +648,7 @@ impl LanePlan {
             let FOp::Kernel { kernel, .. } = &n.op else { continue };
             let fan = m2_ir::Kernels::kernel(packages, kernel).map_or(1, |s| s.fan as usize);
             let room = |x: usize, floor: usize| ((x + LIVE_ROOM) * fan).min((x + LIVE_ROOM).max(8 * floor));
-            let c = self.caps[from];
+            let c = self.room(from);
             let caps = Caps { sounding: room(c.sounding, Caps::FLOOR.sounding), ons: room(c.ons, Caps::FLOOR.ons) };
             // Its address: its source's, then its own shape, its source's room and its own, and its
             // place among equals (RENDER-26a).
@@ -673,6 +673,17 @@ impl LanePlan {
             self.effects.push((i, to));
         }
         self.lanes.live = self.lanes.slots.len();
+    }
+
+    /// The room what reads slot `slot` is sized for: a notes lane's clips' room and its feed's
+    /// (FEED-2), a note effect's own. `caps` stays the clips' room alone: what new clip data must fit
+    /// to be swapped in.
+    pub(crate) fn room(&self, slot: usize) -> Caps {
+        let c = self.caps.get(slot).copied().unwrap_or_default();
+        match self.lanes.slots.get(slot) {
+            Some(LaneSlot::Notes(_)) => c.with_feed(),
+            _ => c,
+        }
     }
 
     /// The slot a ghost reads lane `r` through: the live one when the new plan has it, else the
