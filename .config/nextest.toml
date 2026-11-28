@@ -82,3 +82,12 @@ success-output = "final"
 [[profile.default.overrides]]
 filter = '(binary_id(m2-session) & (test(=tx::kill_tests::killed_at_every_commit_step_the_project_recovers) | test(=tx::kill_tests::killed_at_every_commit_step_without_a_swap_the_project_recovers))) | (binary_id(m2-play::bit_identity) & (test(=every_pure_fixture_renders_the_same_bits_on_1_and_n_threads) | test(=live_on_n_threads_is_the_export_on_1) | test(=p16_renders_the_same_bits_on_1_and_4_threads)))'
 slow-timeout = { period = "60s", terminate-after = 10 }
+
+# A test that renders std's 71 previews on a thread a CPU (crates/editor/src/library_tests.rs,
+# `at_once`), alone: a preview's thread runs at background priority (nice 10 on Linux), so beside
+# busy tests it got a small part of a CPU. Measured 2026-11-28: alone on 4 cores 12.8 s; with 4
+# threads among the other tests on 32 threads (load 40) 79 s; one at a time before, 68 to 75 s
+# alone and past the 3 minutes three times beside the others.
+[[profile.default.overrides]]
+filter = 'binary_id(m2-editor) & test(=library::tests::previews::every_std_item_with_a_preview_renders_one)'
+threads-required = "num-cpus"

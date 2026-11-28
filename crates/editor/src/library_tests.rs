@@ -442,36 +442,69 @@ mod previews {
         assert!(text.contains(r#""size": 0.6"#), "what adding it writes: {text}");
     }
 
+    /// How many previews [`every_std_item_with_a_preview_renders_one`] renders at once, each on a
+    /// thread of its own: one a CPU it may use, 8 at most. `.config/nextest.toml` runs it alone,
+    /// as a preview's thread runs at background priority (nice 10 on Linux) and beside busy tests
+    /// would get a small part of a CPU.
+    fn at_once() -> usize {
+        std::thread::available_parallelism().map_or(1, |n| n.get()).min(8)
+    }
+
+    /// A preview as it was heard (its loudness and peak), or why it wasn't rendered.
+    type Heard = Result<(f64, f64), String>;
+
     // LIB-3: every std instrument, effect and sound that says it has a preview renders one, and
     // it is heard: at −23 LUFS, or as near as a peak of −1 dBFS lets it, within 3 dB. Never silence.
+    // Several are rendered at a time ([`at_once`]), each in a folder of its own, and judged in the
+    // items' order: one after another, the 71 took 68 to 75 s on 4 cores (2026-11-28).
     #[test]
     fn every_std_item_with_a_preview_renders_one() {
+        use std::sync::Mutex;
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let (catalog, all) = std_items();
         let dir = std::env::temp_dir().join(format!("m2-preview-all-{}", std::process::id()));
         let packages = std_packages();
+        let previewed: Vec<&Item> = all.iter().filter(|i| i.preview).collect();
+        let heard_as: Vec<Mutex<Option<Heard>>> = previewed.iter().map(|_| Mutex::new(None)).collect();
+        let next = AtomicUsize::new(0);
+        std::thread::scope(|s| {
+            for worker in 0..at_once() {
+                let (catalog, packages, previewed, heard_as, next) = (&catalog, &packages, &previewed, &heard_as, &next);
+                let (work, out) = (dir.join(format!("work-{worker}")), dir.join(format!("out-{worker}.wav")));
+                s.spawn(move || {
+                    loop {
+                        let n = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = previewed.get(n) else { break };
+                        let values = match &item.preset {
+                            Some(p) => {
+                                crate::presets::read(
+                                    &crate::presets::factory(&package_dir(&item.component), &item.component).unwrap(),
+                                    &item.component,
+                                    &p.name,
+                                )
+                                .unwrap()
+                                .values
+                            }
+                            None => BTreeMap::new(),
+                        };
+                        let made = preview::song(item, catalog, &values)
+                            .map_err(anyhow::Error::msg)
+                            .and_then(|song| preview::render(&song, packages, &work, &out));
+                        *heard_as[n].lock().unwrap() = Some(made.map(|()| heard(&out)).map_err(|e| format!("{e:#}")));
+                    }
+                });
+            }
+        });
         let mut failed = vec![];
         let mut under = vec![];
-        for item in all.iter().filter(|i| i.preview) {
-            let values = match &item.preset {
-                Some(p) => {
-                    crate::presets::read(
-                        &crate::presets::factory(&package_dir(&item.component), &item.component).unwrap(),
-                        &item.component,
-                        &p.name,
-                    )
-                    .unwrap()
-                    .values
+        for (item, heard_as) in previewed.iter().zip(heard_as) {
+            let (loudness, peak) = match heard_as.into_inner().unwrap().expect("every item was rendered") {
+                Ok(h) => h,
+                Err(e) => {
+                    failed.push(format!("{}: {e}", item.id));
+                    continue;
                 }
-                None => BTreeMap::new(),
             };
-            let made = preview::song(item, &catalog, &values)
-                .map_err(anyhow::Error::msg)
-                .and_then(|song| preview::render(&song, &packages, &dir.join("work"), &dir.join("out.wav")));
-            if let Err(e) = made {
-                failed.push(format!("{}: {e:#}", item.id));
-                continue;
-            }
-            let (loudness, peak) = heard(&dir.join("out.wav"));
             let at_target = (loudness - preview::LUFS).abs() < 0.5;
             let peak_held = (peak - preview::PEAK_DB).abs() < 0.05 && loudness > preview::LUFS - 3.0;
             if !(at_target || peak_held) {
