@@ -1436,6 +1436,8 @@ impl Actor {
         // Lane leases (WRITE-22a): a new plan, or new data for a lane a drag plays, hears the drag
         // again, after this settle's own sends; a change to a dragged clip ends it.
         super::lanes::settled(&mut cp, token, dev);
+        // Feeds (FEED-2): a new plan, or a new tempo, gets each feed's notes again.
+        super::feeds::settled(&mut cp, token, dev);
         // A tempo drag's value is heard from this plan on (RENDER-27a).
         if let (true, Some((_, bpm))) = (renderer, &leased) {
             super::tempo_lease::heard(&mut cp, token, *bpm);

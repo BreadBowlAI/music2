@@ -2280,3 +2280,35 @@ fn a_rewired_plugin_lets_the_old_lanes_pedal_up() {
     let rest = [midi([0xE0, 0, 0x40]), midi([0xB0, 1, 0]), midi([0xB0, 64, 0])];
     assert_eq!(sent, rest.map(|m| (at, Note::Midi, m)), "the old lane's wheels and pedal at rest, at the activation");
 }
+
+// FEED-2: a lane's feed moves with its scheduler into a new plan: the feed note that sounds goes on
+// through the activation, and the feed's later note still plays.
+#[test]
+fn a_feed_crosses_an_activation_with_its_scheduler() {
+    let pk = own_packages();
+    let a = flat(&synth(0.1, json!([]), "v"));
+    let data = |p: u32| {
+        with_notes(json!({"clips": [{"start": 0, "length": 16, "notes": [{"pitch": p, "start": 8, "length": 1}]}]}), at_bpm(120.0))
+    };
+    let mut rig = playing(&a, &data(60), &pk, BLOCK);
+    let generation = rig.e.current().unwrap().generation();
+    let notes = [
+        m2_song::Note { pitch: 69.0, start: 0.5, length: 4.0, velocity: 0.8 },
+        m2_song::Note { pitch: 72.0, start: 2.0, length: 0.5, velocity: 0.8 },
+    ];
+    let feed = NotesData::feed(&notes, &m2_song::TempoMap::constant(120.0), SR as f64);
+    rig.send(Msg::SwapLane { generation, slot: 0, data: LaneSwap::Feed(Arc::new(feed)) });
+    rig.run(BEAT as usize);
+    assert_eq!(rig.e.current().unwrap().held_notes(), 1, "the feed's first note sounds");
+    let r = rig.prepare(&a, &data(62), &pk);
+    rig.send(Msg::Activate { renderer: Box::new(r) });
+    rig.run(BEAT as usize / 2);
+    let cur = rig.e.current().unwrap();
+    assert_eq!(cur.stats().kept.polys, 1);
+    assert_eq!(cur.held_notes(), 1, "it goes on through the activation");
+    rig.run(BEAT as usize * 3 / 4); // beat 2.25
+    assert_eq!(rig.e.current().unwrap().held_notes(), 2, "the feed's later note plays in the new plan");
+    rig.run(BEAT as usize * 3); // past beat 4.5
+    assert_eq!(rig.e.current().unwrap().held_notes(), 0, "and both end");
+    assert!(rig.e.current().unwrap().gates_are_owned());
+}

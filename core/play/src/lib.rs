@@ -1574,6 +1574,11 @@ impl Player {
         now_ns()
     }
 
+    /// The device's rate, which its buffers count in (the engine's may differ, RENDER-31).
+    pub fn device_rate(&self) -> u32 {
+        self.device_rate
+    }
+
     /// The device's buffer, in frames, as its last callback asked: None before the first.
     pub fn frames(&self) -> Option<u32> {
         Some(self.shared.frames.load(Ordering::Relaxed)).filter(|&n| n > 0)

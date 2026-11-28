@@ -5,7 +5,8 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild; from 8b, overlay cell writes, live notes, and the taps (meters and rings, TAP-3) and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
+//! rebuild; from 8b, overlay cell writes, live notes, and the taps; since track `feeds`, a feed's
+//! swaps (FEED-2); and (meters and rings, TAP-3) and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
 //! (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
@@ -299,6 +300,19 @@ fn trap_run(device_rate: u32) {
     player.swap_lane(gen_a, 0, LaneSwap::Notes(more)).unwrap();
     player.swap_lane(gen_a, 0, LaneSwap::Notes(Arc::new(notes_a()))).unwrap();
     step(s(0.3), true);
+    // A feed (FEED-2): its notes swapped in while others sound, rewritten, then closed (an empty
+    // feed), which ends what it sounds.
+    let fed = |n: usize| {
+        let notes: Vec<m2_song::Note> =
+            (0..n).map(|k| m2_song::Note { pitch: 60.0 + (k % 12) as f64, start: k as f64 * 0.25, length: 0.75, velocity: 0.8 }).collect();
+        Arc::new(NotesData::feed(&notes, a.data.tempo(), SR as f64))
+    };
+    player.swap_lane(gen_a, 0, LaneSwap::Feed(fed(64))).unwrap();
+    step(s(0.3), true);
+    player.swap_lane(gen_a, 0, LaneSwap::Feed(fed(40))).unwrap();
+    step(s(0.2), true);
+    player.swap_lane(gen_a, 0, LaneSwap::Feed(Arc::new(NotesData::empty()))).unwrap();
+    step(s(0.2), true);
     player.activate(rb).unwrap();
     // In the window: its ghost and fades reset with the plan.
     player.panic().unwrap();
@@ -336,7 +350,8 @@ fn trap_run(device_rate: u32) {
     steps.send(Step::Done).unwrap();
     let (mut d, kept) = audio.join().unwrap();
     let lanes = kept.iter().filter(|g| matches!(g, Gone::Engine(Retired::Lane(_)))).count();
-    assert_eq!(lanes, 124, "every swap was taken and retired, none dropped");
+    // Four swaps of notes, three of a feed and the 120.
+    assert_eq!(lanes, 127, "every swap was taken and retired, none dropped");
     let old: Vec<&Renderer> =
         kept.iter().filter_map(|g| if let Gone::Engine(Retired::Renderer(r)) = g { Some(&**r) } else { None }).collect();
     assert_eq!(old.iter().map(|r| r.generation()).collect::<Vec<_>>()[..1], [gen_a]);

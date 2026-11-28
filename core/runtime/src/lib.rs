@@ -89,7 +89,7 @@ pub use packages::{Package, PackageSet, View};
 pub use plan::{Basis, Continues, Count, Keep, LaneInfo, Leftovers, PlanInfo, PluginAt, Shape, Stats};
 pub use plugins::PluginInstance;
 pub use sandbox::{OutOfMemory, TooManySounds};
-pub use sched::{Caps, LaneSwap, LiveEv, NotesData};
+pub use sched::{Caps, FEED, LaneSwap, LiveEv, NotesData};
 pub use taps::{Copies, Copying, METERS, Peaks, RING, RINGS, Reading, TapAt, TapSlots};
 pub use trace::{TraceEntry, TraceKind};
 pub use transport::{Cmd, Jump, Loop, MAX_RUNS, Run, Runs, Transport};
@@ -3811,13 +3811,15 @@ impl Renderer {
         &self.lanes.refs[..self.lanes.live]
     }
 
-    /// Replace one lane's data at the next block line, touching no kernel (RENDER-26). Returns
-    /// the data replaced, to retire, or `data` itself when it doesn't fit the slot (another
-    /// kind, more notes than its scheduler holds, or audio renders, which an activation brings).
+    /// Replace one lane's data at the next block line, touching no kernel (RENDER-26), or a notes
+    /// lane's feed (FEED-2). Returns the data replaced, to retire, or `data` itself when it doesn't
+    /// fit the slot (another kind, more notes than its scheduler holds, or audio renders, which an
+    /// activation brings).
     /// Never allocates.
     pub fn swap_lane(&mut self, slot: usize, data: LaneSwap) -> Result<LaneSwap, LaneSwap> {
         let swapped = match (self.lanes.slots[..self.lanes.live].get_mut(slot), data) {
             (Some(LaneSlot::Notes(Some(s))), LaneSwap::Notes(d)) => s.swap(d).map(LaneSwap::Notes).map_err(LaneSwap::Notes),
+            (Some(LaneSlot::Notes(Some(s))), LaneSwap::Feed(d)) => s.swap_feed(d).map(LaneSwap::Feed).map_err(LaneSwap::Feed),
             (Some(LaneSlot::Control(Some(c))), LaneSwap::Control(d)) => Ok(LaneSwap::Control(std::mem::replace(c, d))),
             (_, d) => Err(d),
         };
