@@ -230,7 +230,7 @@ export const SUITES = [
   // The Graph zooms around the pointer (taste.md VIEW-5): ⌘-scroll, a pinch, the zoom bar.
   ["graph-zoom", "fix", { expect: 11, s: 10 }],
   // Track camera: every view on its camera (taste.md VIEW-1 to VIEW-12), on first-song and the big song.
-  ["camera", "fix", { expect: 126, s: 75 }],
+  ["camera", "fix", { expect: 129, s: 75 }],
   // Track drawn-zoom: the last picture of a zoom by the hand against the page after it (taste.md VIEW-13).
   ["drawn-zoom", "fix", { expect: 28, s: 40 }],
   // Track zoom-bench: what a zoom's frames cost, split into their parts (the zoom note's §6 step 1).
