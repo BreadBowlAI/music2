@@ -106,7 +106,8 @@ jobs:
           path: ~/m2-check/
           retention-days: 7
 
-  # clippy on every target of the workspace, every warning an error.
+  # clippy on every target of the workspace, every warning an error; and the web engine's crates
+  # built and linted for wasm32 (ci/pr.sh wasm32).
   clippy:
     needs: changes
     if: needs.changes.outputs.docs_only != 'true'

@@ -1,5 +1,6 @@
-//! PLAT-2: code that differs between operating systems lives in `m2-os`. Outside it, code other
-//! than tests names no OS: no `cfg` on the OS, no `libc`, no `std::os`, no `extern "C"` block, no
+//! PLAT-2: code that differs between operating systems, or between them and the web, lives in
+//! `m2-os`. Outside it, code other than tests names no OS: no `cfg` on the OS or on the web's
+//! target (`target_arch = "wasm32"`; `target_family` counts anywhere), no `libc`, no `std::os`, no `extern "C"` block, no
 //! `$HOME`. This reads every `.rs` file under `core/`, `crates/` and `apps/m2/`, skipping
 //! `core/os/`, `tests/` folders, test files (`tests.rs`, `*_tests.rs`, and modules declared under
 //! `#[cfg(test)]`) and `#[cfg(test)]` items, matched by braces. Comments don't count.
@@ -10,8 +11,9 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-const NAMES_AN_OS: [&str; 11] = [
+const NAMES_AN_OS: [&str; 12] = [
     "target_os",
+    "target_arch = \"wasm",
     "cfg(unix)",
     "cfg!(unix)",
     "cfg(not(unix))",
@@ -303,11 +305,17 @@ fn a_cfg_names_an_os_anywhere_in_its_condition() {
             "#[cfg_attr(test, path = \"unix.rs\")]\n",
             "#[cfg(feature = \"windows\")]\n",
             "mod unix;\n",
+            "#[cfg(not(target_arch = \"wasm32\"))]\n",
+            "#[cfg(target_arch = \"x86_64\")]\n",
         ),
     )
     .unwrap();
     let src = Source::read(&file);
     let seen: Vec<_> = src.hits().iter().map(|&(at, p)| (src.line_of(at), p)).collect();
-    assert_eq!(seen, [(1, "a cfg on the OS"), (2, "a cfg on the OS"), (3, "a cfg on the OS")], "not a feature or a path named unix");
+    assert_eq!(
+        seen,
+        [(1, "a cfg on the OS"), (2, "a cfg on the OS"), (3, "a cfg on the OS"), (7, "target_arch = \"wasm")],
+        "not a feature or a path named unix, nor a CPU: the web's target is a platform"
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
