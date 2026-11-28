@@ -14,6 +14,50 @@ How to reach the app, its keys and its answers: [The local API](api.md). The son
 
 The sound inputs there are, the default first.
 
+### `GET /api/feed`
+
+Every open feed's state, as its feed events say it: the playhead, the lock, written_to, the buffer in beats, bars and seconds, empties and late.
+
+### `POST /api/feed/close`
+
+Close a feed: its notes end at once; what played stays for Keep until the song closes.
+
+An example body:
+
+```json
+{"session": 7, "feed": "bass"}
+```
+
+### `POST /api/feed/keep`
+
+Keep what played on a feed in the song, as one undo step: into a new clip (into: clip), or a version of the notes clip under it (into: version); without into, a version when that clip has versions. It writes the song: one undo step.
+
+An example body:
+
+```json
+{"session": 7, "feed": "bass", "into": "clip"}
+```
+
+### `POST /api/feed/open`
+
+Open a feed on a track: an agent writes its notes ahead of the playhead and music2 plays them, with the track's clips, while the musician plays the song; low_bars (4 unless given) is the buffer under which it says low.
+
+An example body:
+
+```json
+{"session": 7, "track": "bass", "low_bars": 4}
+```
+
+### `POST /api/feed/put`
+
+Write a feed's notes from beat `from` to beat `to` (song beats; each note's start too): they replace what it held there past the lock; notes before the lock are left out and counted late. Answers taken, late, lock, written_to and playhead.
+
+An example body:
+
+```json
+{"session": 7, "feed": "bass", "from": 64, "to": 80, "notes": [{"pitch": "A1", "start": 64, "length": 0.5, "velocity": 0.9}]}
+```
+
 ### `GET /api/focus`
 
 What the musician looks at, as m2 focus prints it: the view, the selected track, clips and notes, the knob last touched, the bars shown, where playback is.

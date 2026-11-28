@@ -434,6 +434,19 @@ m2 watch <project> [--meters]
 
 Follow the open app: each change, undo, toast, focus, pointer and transport change as one JSON object a line, `t` first, until the app quits (then `closed`); meters too with `--meters`. First it prints `{"t":"watch","session":…}`, then each event the window hears, one JSON object a line with `t` first and the song's `session`: a change landed, an undo or a redo, a toast, the focus, a pointer, the Compare pill ([the local API](api.md#events) lists them), and `transport` when it plays or stops, the loop changes or the playhead jumps (read every quarter second). The meters only with `--meters`. When the app quits it prints `{"t":"closed","why":"app"}` and exits 0; when the app opens another song or closes this one, `{"t":"closed","why":"song"}`, and it prints nothing of the other song. While whoever reads it doesn't, it keeps 1,024 lines and drops the rest, then says `{"t":"lagged","missed":n,"by":"m2"}`; when they go away (`m2 watch … | head -1`), it ends quietly. It writes nothing, and it never takes a message from the musician's window.
 
+## m2 feed
+
+```
+m2 feed <project> open <track> [--low <bars>]
+m2 feed <project> put <track> <from> <to> <notes.json | ->
+m2 feed <project> status [--json]
+m2 feed <project> wait [<track>] [--for EVENT] --timeout <seconds>
+m2 feed <project> keep <track> [--into KIND]
+m2 feed <project> close <track>
+```
+
+Play a track live in the open app: write its notes ahead of the playhead, and the app plays them, with the track's clips, while the musician plays the song. `open` opens a feed (the track shows Live, with your name); `put` writes the notes from beat `<from>` to `<to>` (song beats), replacing what was there past the lock; `wait` waits for the buffer to run low (or empty, or a jump) and prints the feed's state; `keep` writes what played into the song, one edit that undo takes back; `close` ends it. Notes are as a lane's file writes them, but `start` is in song beats: `[{"pitch": "A1", "start": 64, "length": 0.5}]`. `put` prints the app's answer as one JSON line: `taken`, `late` (notes that started before the lock, left out), `lock`, `written_to` and `playhead`. The lock is the playhead plus at least 50 ms; a `<to>` more than 64 bars past the playhead is refused. `wait` prints one `feed` event as a JSON line and exits 0, at once when the feed is already low. `--for` is `low` (which takes `empty` too), `empty` or `jump`. It exits 1 when `--timeout` passes first. `keep --into version` (`KIND` is `clip` or `version`) adds what played as a version of the notes clip under it. Play, stop and the loop stay the musician's. See [Playing live](live.md).
+
 ## m2 point
 
 ```
