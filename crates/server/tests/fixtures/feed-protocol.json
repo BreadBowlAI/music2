@@ -42,7 +42,7 @@
     {"say": "the song itself isn't a track", "act": "open", "body": {"track": "song"},
      "refused": "song isn't a track: a feed plays a track's notes, which shows Live on its header."},
     {"say": "no such track", "act": "open", "body": {"track": "drums"},
-     "refused": "The song has no track `drums`: `m2 timeline` lists its tracks."},
+     "refused": "The song has no track `drums`: `m2 check` lists its tracks and their lanes."},
     {"say": "a lane that isn't a notes lane", "act": "open", "body": {"track": "bass", "lane": "cutoff"},
      "refused": "bass has no notes lane `cutoff`: it has notes."},
     {"say": "a low mark of 0", "act": "open", "body": {"track": "bass", "low_bars": 0},

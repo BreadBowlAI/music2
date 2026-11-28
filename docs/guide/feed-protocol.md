@@ -34,7 +34,7 @@ A field with `?` may be left out.
 
 | Body field | Meaning |
 |---|---|
-| `track` | the track to open a feed on: its key, as `m2 timeline` lists it. At most one feed a track |
+| `track` | the track to open a feed on: its key, as `m2 check` lists it. At most one feed a track |
 | `lane` | which notes lane, when the track has more than one. Left out: its only one |
 | `low_bars` | the low mark, in bars: above 0, at most 64. Left out: 4 |
 | `as` | the agent's name, shown on the track's Live mark: the name of whoever opened it or put last. Send it on every put. Left out, the app uses the name in the request's `x-m2-as` header, else `agent` |
@@ -157,7 +157,7 @@ A refusal is answered `{"error": "<words>"}`, in the app with the status 400. No
 | Act | When | The words |
 |---|---|---|
 | `open` | the track is `song` (or a part shown with no track header) | `<track> isn't a track: a feed plays a track's notes, which shows Live on its header.` |
-| `open` | no such track | ``The song has no track `<track>`: `m2 timeline` lists its tracks.`` |
+| `open` | no such track | ``The song has no track `<track>`: `m2 check` lists its tracks and their lanes.`` |
 | `open` | it has no notes lane | `<track> plays no notes lane: a feed plays a track's notes.` |
 | `open` | `lane` isn't one of its notes lanes | ``<track> has no notes lane `<lane>`: it has <lanes>.`` |
 | `open` | it has several and no `lane` | ``<track> has more than one notes lane: say which, as `lane` (<lanes>).`` |
