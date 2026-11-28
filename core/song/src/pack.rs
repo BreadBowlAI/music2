@@ -883,7 +883,7 @@ pub fn relock(manifest: &Manifest, lock: &Lock, store: Option<&Store>, app: &App
 
 mod bundled;
 mod install;
-pub use bundled::{bundled, comes_with, install_bundled, move_on, own, recorded};
+pub use bundled::{bundled, comes_with, install_bundled, move_on, own, recorded, std_listing};
 #[cfg(any(test, feature = "testing"))]
 pub use bundled::{source_packs, test_home, test_packs, test_store};
 pub use install::{Install, read_only_inside, remove_tree, set_read_only};

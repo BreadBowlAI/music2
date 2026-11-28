@@ -106,6 +106,18 @@ pub const COMMANDS: &[Command] = &[
                for half a second. 3 hours at most. If a part breaks while it renders, it fails and names it.",
     },
     Command {
+        name: "export",
+        also: &[],
+        usage: "m2 export <project> --web <folder>",
+        words: "write a web bundle into a new, empty `<folder>` outside the song: what a web page needs to play the song \
+                (its compiled graph, its data files as they are, the samples it plays, and std's and music2's own packs' \
+                kernels it plays), with `m2web.json`, a list of every file's size and hash. It prints that file's own hash, \
+                for a page's `integrity`, and each sample's licence, since anyone who opens the page can download them. A \
+                song with a plugin, or with a pack that isn't std or music2's own, is refused",
+        more: "No song code goes in: a page plays the song, it doesn't edit it. The same song exports to the same files \
+               on any computer. [New songs, the songs folder and export](songs.md#export-for-a-web-page) says more.",
+    },
+    Command {
         name: "listen",
         also: &[],
         usage: "m2 listen <project> [--bars 9-16] [--tracks kick,bass] [--as-heard] [--with <tx.json | ->] [--png out.png] [--json]",

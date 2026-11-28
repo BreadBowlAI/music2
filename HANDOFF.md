@@ -5,6 +5,15 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **The web bundle (track `bundle`, 2026-11-28).** `m2 export <song> --web <folder>` writes what a web page needs
+  to play a song (the IR, `controls.json`, the song's data files and samples as they are, std's and music2's own
+  packs' kernels), with `m2web.json` listing every file's size and hash, the same bytes on any computer; it
+  refuses plugins, a stranger's pack's kernels, a changed std and a song with errors, and warns about samples'
+  licences with each credit (WEB-1 to WEB-6). std's hashes are recorded now, in `packs/versions.toml` (PACK-17a).
+  Code: `crates/editor/src/web.rs`; tests `apps/m2/tests/export.rs`. Guide: [songs.md](docs/guide/songs.md#export-for-a-web-page).
+  Departures from [the note](docs/designs/live/web-player.md): its build table's `bundle` row. Next on the web:
+  `feed-protocol`, then `web-net` once Part 2's `web-node` is in.
+
 - **Live feeds (track `feeds`, 2026-11-28).** An agent plays a track live: it writes the track's notes ahead of
   the playhead (`m2 feed`, `POST /api/feed/*`), and music2 plays them with the track's clips, says when the buffer
   runs low, refuses what comes too late, and keeps what played as one undo step when asked (rules FEED-1 to
