@@ -5,9 +5,9 @@
 //! ghost lane while its edges fade, a panic in that window, the window's end and its leftovers, a
 //! stale activation refused, stop, idle, play, panic, and a full retire channel; and, from step 5,
 //! cell writes from another thread all along (a step, a ramp and a cell in voices), with no
-//! rebuild; from 8b, overlay cell writes, live notes, and the taps; since track `feeds`, a feed's
-//! swaps (FEED-2); and (meters and rings, TAP-3) and the callback's timer. Kernel memory never grows either: a reset on the audio thread would grow a delay's
-//! (§1.5 of the step 3a design).
+//! rebuild; from 8b, overlay cell writes, live notes, the taps (meters and rings, TAP-3) and the
+//! callback's timer; since track `feeds`, a feed's swaps (FEED-2). Kernel memory never grows
+//! either: a reset on the audio thread would grow a delay's (§1.5 of the step 3a design).
 //!
 //! Everything is built and sent on the test's thread; only the callback runs under the trap.
 //! Only debug builds' callbacks mark their thread for it (a release callback touches no
@@ -679,8 +679,11 @@ fn taps_and_the_load_never_allocate() {
     player.open(r).unwrap();
     player.play();
     let reading = Arc::new(AtomicBool::new(true));
+    // The reader's turns: the fills wait for its first, so what it points at is filled however
+    // late its thread is scheduled (a busy Mac ran all 40 fills first, and it read nothing).
+    let turns = Arc::new(AtomicUsize::new(0));
     let reader = {
-        let (player, reading) = (player.clone(), reading.clone());
+        let (player, reading, turns) = (player.clone(), reading.clone(), turns.clone());
         std::thread::spawn(move || {
             let (mut seen, mut longest, mut framed, mut read) = (vec![0.0f32; 3], 0.0f32, 0, 0);
             let points: Vec<TapAt> = std::iter::once(TapAt::Out).chain(sound).collect();
@@ -705,6 +708,7 @@ fn taps_and_the_load_never_allocate() {
                     *s = s.max(x);
                 }
                 longest = longest.max(player.load().longest);
+                turns.fetch_add(1, Ordering::Release);
                 if last {
                     break;
                 }
@@ -714,6 +718,11 @@ fn taps_and_the_load_never_allocate() {
         })
     };
     let mut data = vec![0.0f32; 2 * 4096];
+    let started = std::time::Instant::now();
+    while turns.load(Ordering::Acquire) == 0 {
+        assert!(started.elapsed().as_secs() < 30, "the reader never took a turn");
+        std::thread::yield_now();
+    }
     let mut allocs = 0;
     for n in SIZES.iter().cycle().take(40) {
         allocs += trapped(|| d.fill(&mut data[..2 * n], 2));
