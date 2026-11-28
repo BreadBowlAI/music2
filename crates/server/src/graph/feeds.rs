@@ -674,7 +674,7 @@ impl Graph {
             .modules
             .iter()
             .find(|m| m.key == o.track.as_str())
-            .ok_or_else(|| anyhow!("The song has no track `{}`: `m2 timeline` lists its tracks.", o.track))?;
+            .ok_or_else(|| anyhow!("The song has no track `{}`: `m2 check` lists its tracks and their lanes.", o.track))?;
         let notes: Vec<String> =
             module.lanes.iter().filter(|l| m2_runtime::lane_kind(l.kind) == LaneKind::Notes).map(|l| l.key.as_str().to_string()).collect();
         let lane = match (&o.lane, &notes[..]) {

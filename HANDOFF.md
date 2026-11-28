@@ -5,6 +5,15 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **The web bundle (track `bundle`, 2026-11-28).** `m2 export <song> --web <folder>` writes what a web page needs
+  to play a song (the IR, `controls.json`, the song's data files and samples as they are, std's and music2's own
+  packs' kernels), with `m2web.json` listing every file's size and hash, the same bytes on any computer; it
+  refuses plugins, a stranger's pack's kernels, a changed std and a song with errors, and warns about samples'
+  licences with each credit (WEB-1 to WEB-6). std's hashes are recorded now, in `packs/versions.toml` (PACK-17a).
+  Code: `crates/editor/src/web.rs`; tests `apps/m2/tests/export.rs`. Guide: [songs.md](docs/guide/songs.md#export-for-a-web-page).
+  Departures from [the note](docs/designs/live/web-player.md): its build table's `bundle` row. Next on the web:
+  `feed-protocol`, then `web-net` once Part 2's `web-node` is in.
+
 - **The CLAP host is a feature (track `plugins-off`, 2026-11-28).** The web engine's first runtime track
   ([the note](docs/designs/live/web-engine.md)): `m2-runtime`'s default feature `plugins` turns on `m2-plugins`'
   `clap` (plugin loading, both hosts, windows, presets, the probe). Without it the runtime has `PluginHost` and its
@@ -19,6 +28,16 @@ design for whatever you pick up. Older versions of this page, with each track's 
   is the track menu's Let an agent play this track and the Live mark (`web/src/components/Live.tsx`). Guide:
   [Playing live](docs/guide/live.md). Departures and what is left: [the build note](docs/designs/live/build.md).
   Parts 2 to 4 of the note (music2 on the web) are gap #64.
+- **The web engine, track `web-os` (2026-11-28).** Part 2's first track ([the note](docs/designs/live/web-engine.md)):
+  the web, `wasm32-unknown-unknown`, is a third platform (PLAT-1, PLAT-2, PLAT-3, RENDER-2a). `m2-os` has a `web/`
+  folder: no files (`Unsupported`, in words), no folders, one thread and one core, and the float mode measured, not
+  set. `m2-ir`, `m2-os`, `m2-pool` and `m2-song` build and lint for it (`ci/pr.sh wasm32`, in the clippy job).
+  Nothing runs there yet: next is `kernel-host`, then `plugins-off` and `runtime-web`.
+- **`feed/1` (track `feed-protocol`, 2026-11-28).** The feed routes' bodies, answers and refusal words, written up
+  as a protocol a web page's player will speak too: [The feed protocol](docs/guide/feed-protocol.md), FEED-8. Its
+  fixture, `crates/server/tests/fixtures/feed-protocol.json`, runs against the app's routes
+  (`crates/server/src/feed_protocol_tests.rs`); track `web-feeds` runs it through the page's relay. A body that
+  doesn't read is now `{"error"}` on the feed routes. Departures: [the web player note](docs/designs/live/web-player.md#the-build-in-small-tracks).
 - **A clip's versions (track `versions`, 2026-11-21).** A notes clip can hold several versions of its notes: one
   plays, and its notes are the clip's; the others wait in the clip and are never heard or rendered (rules VER-1 to
   VER-5, [the design](docs/designs/versions/design.md)). Built: the lane format's optional `versions` (`format`

@@ -5,6 +5,7 @@
 - That stream of notes is a **feed**. music2 plays it, says when it runs low, and refuses notes that come too late. The agent decides what to play: music2 has no AI in it.
 - The track shows a **Live** mark with the agent's name. Mute, solo and the fader work on it as on any track. Nothing sounds until you press Play.
 - A feed is never written to the song, unless you **keep what played**: then it is one change, which ⌘Z takes back.
+- Writing a player or an agent? The messages are written up as a protocol, `feed/1`: [The feed protocol](feed-protocol.md).
 
 ## The words
 
@@ -108,3 +109,5 @@ Each feed's state is an event on the app's socket (`m2 watch`, `GET /api/ws`), a
 | none | the state, at most every quarter second while playing |
 
 The routes, open to agents: `POST /api/feed/open`, `POST /api/feed/put`, `GET /api/feed`, `POST /api/feed/keep` and `POST /api/feed/close` ([API routes](routes.md)).
+
+Every body, answer field and refusal's words, as a protocol any player can speak: [The feed protocol](feed-protocol.md).

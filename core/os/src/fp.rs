@@ -15,9 +15,18 @@
 //! It lives here, not in the runtime, so the plugin host process (HOST-3) puts the same mode back
 //! after each plugin call as the engine does (`m2_runtime::fpenv` re-exports it). The mode is the
 //! CPU's, the same on every OS.
+//!
+//! On the web the mode is WebAssembly's own, which no code can set, and a thread of the browser's
+//! may flush subnormals anyway (Chrome's AudioWorklet thread does). There `web/fp.rs` measures what
+//! the calling thread does: [`canon`] and [`Canon`] change nothing, [`is_canon`] says whether the
+//! thread keeps subnormals, so the engine can refuse one that doesn't, and the test helpers can't
+//! make a thread flush.
 
-#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64")))]
-compile_error!("RENDER-2a: music2 sets the floating-point mode of x86-64 and arm64 CPUs only (fp.rs)");
+#[cfg(not(any(target_arch = "x86_64", target_arch = "aarch64", target_arch = "wasm32")))]
+compile_error!("RENDER-2a: music2 sets the floating-point mode of x86-64 and arm64 CPUs, and measures the web's, only (fp.rs)");
+
+#[cfg(target_arch = "wasm32")]
+use crate::os::fp as cpu;
 
 #[cfg(target_arch = "x86_64")]
 mod cpu {
@@ -126,9 +135,9 @@ impl Drop for Canon {
 }
 
 /// The calling thread's floating-point register as it is: MXCSR on x86-64, FPCR on arm64 (G12
-/// prints the device thread's as found).
+/// prints the device thread's as found); on the web 0 when it keeps subnormals, 1 when it flushes.
 #[inline]
-#[allow(clippy::useless_conversion)] // a u32 on x86-64, a u64 on arm64
+#[allow(clippy::useless_conversion)] // a u32 on x86-64 and the web, a u64 on arm64
 pub fn mode() -> u64 {
     u64::from(cpu::get())
 }
