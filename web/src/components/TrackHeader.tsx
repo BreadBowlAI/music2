@@ -7,6 +7,7 @@ import { useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { compsOf, useTakesOpen } from "../lib/takes";
 import Arm from "./Arm";
+import Live from "./Live";
 import MuteSolo from "./MuteSolo";
 import TrackMeter from "./TrackMeter";
 import { TrackMenuButton } from "./Tracks";
@@ -86,6 +87,7 @@ export default function TrackHeader({
           className={clsx("text-base", selected ? "font-semibold" : "font-medium", tone)}
         />
         {mine && hasTakes && <TakesButton module={module} name={name} />}
+        {mine && <Live module={module} name={name} />}
         {track.bus && (
           <span data-testid="bus-tag" className="shrink-0 px-1 rounded-xs bg-hover text-xs text-fg-muted" title="A bus: it plays what other tracks send it">
             Bus
