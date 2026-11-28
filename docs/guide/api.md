@@ -306,6 +306,7 @@ Every route is in one table, declared once with its method, its path, the larges
 | `meters` | the meters, about 30 times a second while the song sounds, to a window's socket, and to an agent's that asks for them (`m2 watch --meters`): each track's (`tracks`) and each mixer channel's (`channels`) loudest sample, linear, after its fader; the song's (`out`); and its `loudness` (`short`, the last 3 s in LUFS, and `true_peak` in dBTP) while someone asks for it with `POST /api/graph/loudness`; and `dsp`, the load and the dropouts. A message that heard no whole block of sound (the engine ran late) holds only `dsp` |
 | `looks` | with the meters, to the window that asked for looks with `POST /api/graph/look` alone: each look's `module`, `node`, `kind` and `at`, and what it saw ([Looks](#looks)), or `why` it can't show now. An agent gets the same in each answer to its ask |
 | `audition` | why a note this window asked to hear plays nothing |
+| `feed` | a feed's state ([Playing live](live.md#events)): with `why` `low` when its buffer drops under the low mark, `empty` when it runs out, `jump` at Stop, a seek or the loop going round, `open` and `closed`; with none, at most every quarter second while playing |
 
 ## Looks
 

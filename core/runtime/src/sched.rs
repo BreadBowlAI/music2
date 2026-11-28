@@ -19,7 +19,7 @@
 
 use std::sync::Arc;
 
-use m2_song::{ClipId, ControlLane, NoteClip, TempoMap};
+use m2_song::{ClipId, ControlLane, Note, NoteClip, TempoMap};
 
 use crate::event::{Event, Events};
 use crate::transport::{Jump, Run, Runs};
@@ -29,6 +29,8 @@ use crate::transport::{Jump, Run, Runs};
 pub enum ClipKey {
     Id([u8; 16], u8),
     Start(u64),
+    /// A feed's note (FEED-2): no clip, its own data.
+    Feed,
 }
 
 impl ClipKey {
@@ -79,6 +81,12 @@ impl Caps {
 
     pub fn max(self, o: Caps) -> Caps {
         Caps { sounding: self.sounding.max(o.sounding), ons: self.ons.max(o.ons) }
+    }
+
+    /// These and a feed's room (FEED-2): what a notes lane's buffer can hold, and so what each of
+    /// its consumers is sized for (ABI-8, RENDER-42).
+    pub fn with_feed(self) -> Caps {
+        Caps { sounding: self.sounding + FEED.sounding, ons: self.ons + FEED.ons }
     }
 
     /// Whether data that needs `needs` fits these.
@@ -159,6 +167,28 @@ impl NotesData {
         NotesData::default()
     }
 
+    /// A feed's notes (FEED-2), `start` in song beats, at `rate` in `tempo`: each keyed by its pitch
+    /// and start, as a clip's are, in the order a lane's would play them.
+    pub fn feed(notes: &[Note], tempo: &TempoMap, rate: f64) -> NotesData {
+        let at = |beat: f64| (tempo.seconds_at(beat) * rate).round().max(0.0) as u64;
+        let mut notes: Vec<SchedNote> = notes
+            .iter()
+            .filter(|n| n.length > 0.0 && n.start >= 0.0)
+            .map(|n| SchedNote {
+                start: at(n.start),
+                end: at(n.start + n.length),
+                end_beat: n.start + n.length,
+                pitch: n.pitch as f32,
+                velocity: n.velocity.clamp(0.0, 1.0) as f32,
+                key: NoteKey { clip: ClipKey::Feed, pitch: n.pitch.to_bits(), start: n.start.to_bits() },
+                ord: 0,
+            })
+            .filter(|n| n.end > n.start)
+            .collect();
+        notes.sort_by(|a, b| a.start.cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)).then(a.end.cmp(&b.end)));
+        NotesData::from_notes(notes)
+    }
+
     pub fn needs(&self) -> Caps {
         self.needs
     }
@@ -189,6 +219,8 @@ impl NotesData {
 #[derive(Clone, Debug)]
 pub enum LaneSwap {
     Notes(Arc<NotesData>),
+    /// A notes lane's feed half (FEED-2).
+    Feed(Arc<NotesData>),
     Control(Arc<ControlLane>),
     Audio(Arc<crate::audio::AudioLane>),
 }
@@ -201,6 +233,18 @@ struct Sounding {
     end_beat: f64,
     key: NoteKey,
     ord: u16,
+}
+
+/// The room a scheduler has for its feed (FEED-2), beside its clips': a feed that needs more is
+/// refused.
+pub const FEED: Caps = Caps { sounding: 128, ons: 64 };
+
+/// The feed of a scheduler that has none: one for every scheduler, held here, so the audio thread
+/// can drop a count of it and never free it (RENDER-28): a scheduler that grows takes the feed of
+/// the one it replaces in place of this one.
+fn no_feed() -> Arc<NotesData> {
+    static NONE: std::sync::OnceLock<Arc<NotesData>> = std::sync::OnceLock::new();
+    NONE.get_or_init(|| Arc::new(NotesData::empty())).clone()
 }
 
 /// Live notes one lane holds at once (MON-7): more than two hands, few enough to scan each block.
@@ -351,6 +395,11 @@ pub struct NoteScheduler {
     live: Box<[Option<LiveNote>; LIVE_ROOM]>,
     /// The pitch wheel, the mod wheel and the pedal, as live input last set them.
     wheels: [Wheel; WHEELS],
+    /// Its feed's notes (FEED-2), in [`FEED`]'s room, and the next of them to turn on.
+    feed: Arc<NotesData>,
+    feed_cursor: usize,
+    /// A new feed arrived: match the sounding feed notes to it in the next block.
+    feed_swapped: bool,
 }
 
 impl NoteScheduler {
@@ -360,12 +409,15 @@ impl NoteScheduler {
         NoteScheduler {
             data,
             cursor: 0,
-            sounding: Vec::with_capacity(caps.sounding),
+            sounding: Vec::with_capacity(caps.sounding + FEED.sounding),
             swapped: false,
-            events: Events::with_capacity(caps.events() + LIVE_ROOM + WHEEL_EVENTS),
+            events: Events::with_capacity(caps.with_feed().events() + LIVE_ROOM + WHEEL_EVENTS),
             caps,
             live: Box::new([None; LIVE_ROOM]),
             wheels: Wheel::AT_REST,
+            feed: no_feed(),
+            feed_cursor: 0,
+            feed_swapped: false,
         }
     }
 
@@ -468,8 +520,9 @@ impl NoteScheduler {
             return Some((n.pitch, n.velocity));
         }
         let s = self.sounding.iter().find(|s| s.id == id)?;
-        let i = *self.data.group(&s.key).get(s.ord as usize)?;
-        let n = &self.data.notes[i as usize];
+        let data = if s.key.clip == ClipKey::Feed { &self.feed } else { &self.data };
+        let i = *data.group(&s.key).get(s.ord as usize)?;
+        let n = &data.notes[i as usize];
         Some((n.pitch, n.velocity))
     }
 
@@ -480,6 +533,10 @@ impl NoteScheduler {
     pub(crate) fn take_state(&mut self, small: &NoteScheduler) {
         *self.live = *small.live;
         self.wheels = small.wheels;
+        // Its feed too (FEED-2): a count taken, nothing allocated; `small` leaves off the audio
+        // thread with its own.
+        self.feed = small.feed.clone();
+        self.feed_swapped = true;
         for s in &small.sounding {
             if self.sounding.len() == self.sounding.capacity() {
                 debug_assert!(false, "a grown scheduler has less room than the one it replaces");
@@ -500,15 +557,27 @@ impl NoteScheduler {
         Ok(std::mem::replace(&mut self.data, data))
     }
 
+    /// Play `data` as its feed from the next block on (FEED-2). Returns the feed replaced, to retire
+    /// off the audio thread, or `data` itself when it needs more room than [`FEED`].
+    pub fn swap_feed(&mut self, data: Arc<NotesData>) -> Result<Arc<NotesData>, Arc<NotesData>> {
+        if !FEED.fits(data.needs) {
+            return Err(data);
+        }
+        self.feed_swapped = true;
+        Ok(std::mem::replace(&mut self.feed, data))
+    }
+
     /// Back to the state after building, without Offs: the voices they would reach were reset.
     /// Live notes end too (a panic, A10). Ids are the engine's, so none is reused. A wheel away
     /// from rest goes back, and says so at the next block: a plugin may keep it through a reset.
     pub fn reset(&mut self) {
         self.cursor = 0;
+        self.feed_cursor = 0;
         self.sounding.clear();
         *self.live = [None; LIVE_ROOM];
         self.wheels.iter_mut().for_each(Wheel::rest_later);
         self.swapped = false;
+        self.feed_swapped = false;
         self.events.clear();
     }
 
@@ -534,11 +603,16 @@ impl NoteScheduler {
                     self.events.push(Event::Midi { frame: run.off, bytes });
                 }
                 self.cursor = self.data.seek(run.at);
+                self.feed_cursor = self.feed.seek(run.at);
             }
-            if self.swapped && i == 0 {
+            if (self.swapped || self.feed_swapped) && i == 0 {
                 self.reconcile(run);
-                self.cursor = self.data.seek(run.at);
-                self.swapped = false;
+                if std::mem::take(&mut self.swapped) {
+                    self.cursor = self.data.seek(run.at);
+                }
+                if std::mem::take(&mut self.feed_swapped) {
+                    self.feed_cursor = self.feed.seek(run.at);
+                }
             }
             if run.moving {
                 self.play(run, next);
@@ -550,24 +624,33 @@ impl NoteScheduler {
     /// RENDER-26a: a sounding note the new data no longer has, or whose new end is at or before
     /// the transport, ends now; one whose end moved is rescheduled. Equal keys are matched by
     /// their place among equals.
+    /// A feed's notes are matched against the feed, a clip's against the lane's data, each only when
+    /// it was swapped (FEED-2).
     fn reconcile(&mut self, run: &Run) {
-        let Self { data, sounding, events, .. } = self;
-        sounding.retain_mut(|s| match data.group(&s.key).get(s.ord as usize) {
-            Some(&i) if data.notes[i as usize].end > run.at => {
-                let n = &data.notes[i as usize];
-                (s.end, s.end_beat) = (n.end, n.end_beat);
-                true
+        let Self { data, feed, sounding, events, swapped, feed_swapped, .. } = self;
+        sounding.retain_mut(|s| {
+            let fed = s.key.clip == ClipKey::Feed;
+            if (fed && !*feed_swapped) || (!fed && !*swapped) {
+                return true;
             }
-            _ => {
-                events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
-                false
+            let data = if fed { &*feed } else { &*data };
+            match data.group(&s.key).get(s.ord as usize) {
+                Some(&i) if data.notes[i as usize].end > run.at => {
+                    let n = &data.notes[i as usize];
+                    (s.end, s.end_beat) = (n.end, n.end_beat);
+                    true
+                }
+                _ => {
+                    events.push(Event::Off { frame: run.off, id: s.id, velocity: 0.0 });
+                    false
+                }
             }
         });
     }
 
     fn play(&mut self, run: &Run, next_id: &mut u32) {
         let end = run.at + run.n as u64;
-        let Self { data, cursor, sounding, events, .. } = self;
+        let Self { data, cursor, sounding, events, feed, feed_cursor, .. } = self;
         sounding.retain(|s| {
             if s.end >= end {
                 return true;
@@ -576,6 +659,17 @@ impl NoteScheduler {
             events.push(Event::Off { frame: run.off + s.end.saturating_sub(run.at) as u32, id: s.id, velocity: 0.0 });
             false
         });
+        // The clips' notes, then the feed's (FEED-2).
+        start_notes(data, cursor, run, sounding, events, next_id);
+        start_notes(feed, feed_cursor, run, sounding, events, next_id);
+    }
+}
+
+/// Turn on `data`'s notes that start in `run`, from `cursor` on: each with the next id, and its Off
+/// when it ends in the run, else a place among the sounding. Never allocates.
+fn start_notes(data: &NotesData, cursor: &mut usize, run: &Run, sounding: &mut Vec<Sounding>, events: &mut Events, next_id: &mut u32) {
+    let end = run.at + run.n as u64;
+    {
         while *cursor < data.notes.len() && data.notes[*cursor].start < end {
             let n = data.notes[*cursor];
             *cursor += 1;
@@ -876,6 +970,150 @@ mod tests {
             engine += 128;
         }
         assert_eq!(&frames[..4], [(12_000, true), (24_000, false), (36_000, true), (48_000, false)].as_slice());
+    }
+}
+
+#[cfg(test)]
+mod feed_tests {
+    use m2_song::{LaneData, LaneKind, Note};
+    use serde_json::json;
+
+    use super::*;
+    use crate::transport::{Cmd, Transport};
+
+    const RATE: f64 = 48_000.0;
+    /// Frames in a beat at 120 bpm.
+    const BEAT: u64 = 24_000;
+
+    fn clips(v: serde_json::Value) -> Arc<NotesData> {
+        let LaneData::Notes(c) = LaneData::read(&v.to_string(), &LaneKind::Notes).unwrap() else { unreachable!() };
+        Arc::new(NotesData::build(&c, &TempoMap::constant(120.0), RATE))
+    }
+
+    /// A feed's notes, each `(pitch, start, length)` in song beats.
+    fn feed(notes: &[(f64, f64, f64)]) -> Arc<NotesData> {
+        let notes: Vec<Note> = notes.iter().map(|&(pitch, start, length)| Note { pitch, start, length, velocity: 0.8 }).collect();
+        Arc::new(NotesData::feed(&notes, &TempoMap::constant(120.0), RATE))
+    }
+
+    /// Every On and Off of `blocks` blocks: its transport frame, whether it is an On, its pitch
+    /// (an Off's is 0) and its id.
+    fn drive(s: &mut NoteScheduler, t: &mut Transport, next: &mut u32, blocks: usize) -> Vec<(u64, bool, f32, u32)> {
+        let mut out = vec![];
+        for _ in 0..blocks {
+            let runs = t.advance();
+            s.run(&runs, next);
+            for e in s.events().as_slice() {
+                match *e {
+                    Event::On { frame, pitch, id, .. } => out.push((runs.frame(frame), true, pitch, id)),
+                    Event::Off { frame, id, .. } => out.push((runs.frame(frame), false, 0.0, id)),
+                    _ => {}
+                }
+            }
+        }
+        out
+    }
+
+    // FEED-2: a feed's notes play with the clips' notes, each on its own frame, in song beats.
+    #[test]
+    fn a_feed_plays_with_the_clips_on_its_frames() {
+        let mut s =
+            NoteScheduler::new(clips(json!({"clips": [{"start": 0, "length": 8, "notes": [{"pitch": 60, "start": 0, "length": 1}]}]})));
+        assert!(s.swap_feed(feed(&[(64.0, 1.0, 0.5), (67.0, 2.25, 0.25)])).is_ok());
+        let (mut t, mut next) = (Transport::new(0, true), 1);
+        let ev = drive(&mut s, &mut t, &mut next, 700);
+        let ons: Vec<(u64, f32)> = ev.iter().filter(|e| e.1).map(|e| (e.0, e.2)).collect();
+        assert_eq!(ons, [(0, 60.0), (BEAT, 64.0), (2 * BEAT + BEAT / 4, 67.0)]);
+        let offs: Vec<u64> = ev.iter().filter(|e| !e.1).map(|e| e.0).collect();
+        assert_eq!(offs, [BEAT, BEAT + BEAT / 2, 2 * BEAT + BEAT / 2]);
+        assert_eq!(s.held(), 0);
+    }
+
+    // FEED-2, RENDER-26a: a feed swap ends a sounding feed note it no longer has, at the swap's
+    // frame, keeps one it still has, and reschedules one whose end moved; a clip note is untouched.
+    // A clip swap never ends a feed note.
+    #[test]
+    fn a_feed_swap_ends_a_removed_note_and_keeps_the_rest() {
+        let mut s = NoteScheduler::new(clips(
+            json!({"clips": [{"id": "a", "start": 0, "length": 8, "notes": [{"pitch": 48, "start": 0, "length": 4}]}]}),
+        ));
+        s.swap_feed(feed(&[(60.0, 0.0, 4.0), (64.0, 0.0, 4.0), (67.0, 0.0, 4.0)])).unwrap();
+        let (mut t, mut next) = (Transport::new(0, true), 1);
+        drive(&mut s, &mut t, &mut next, 100); // beat 0.53
+        assert_eq!(s.held(), 4);
+        let at = t.pos();
+        // 64 gone, 67 shortened to end at beat 1.
+        s.swap_feed(feed(&[(60.0, 0.0, 4.0), (67.0, 0.0, 1.0)])).unwrap();
+        let ev = drive(&mut s, &mut t, &mut next, 1);
+        assert_eq!(ev.len(), 1, "{ev:?}");
+        assert_eq!((ev[0].0, ev[0].1), (at, false), "the removed note ends at the swap's frame");
+        assert_eq!(s.held(), 3);
+        let ev = drive(&mut s, &mut t, &mut next, 100); // past beat 1
+        assert_eq!(ev.iter().filter(|e| !e.1).map(|e| e.0).collect::<Vec<_>>(), [BEAT], "the shortened one ends at its new end");
+        // A clip swap that keeps the clip's note ends no feed note.
+        s.swap(clips(json!({"clips": [{"id": "a", "start": 0, "length": 8, "notes": [{"pitch": 48, "start": 0, "length": 4}]}]}))).unwrap();
+        assert!(drive(&mut s, &mut t, &mut next, 1).is_empty());
+        assert_eq!(s.held(), 2);
+        // An empty feed (Close) ends every feed note at once, and leaves the clip's.
+        let at = t.pos();
+        s.swap_feed(Arc::new(NotesData::empty())).unwrap();
+        let ev = drive(&mut s, &mut t, &mut next, 1);
+        assert_eq!(ev.iter().map(|e| (e.0, e.1)).collect::<Vec<_>>(), [(at, false)]);
+        assert_eq!(s.held(), 1);
+    }
+
+    // FEED-2, RENDER-9: a jump ends sounding feed notes and seeks the feed too: back over a loop,
+    // what was written there plays again.
+    #[test]
+    fn a_jump_ends_feed_notes_and_seeks_them() {
+        let tempo = TempoMap::constant(120.0);
+        let mut s = NoteScheduler::new(Arc::new(NotesData::empty()));
+        s.swap_feed(feed(&[(60.0, 0.5, 2.0)])).unwrap();
+        let (mut t, mut next) = (Transport::new(0, true), 1);
+        t.apply(Cmd::Loop(Some((0.0, 2.0))), &tempo, RATE);
+        let ev = drive(&mut s, &mut t, &mut next, 1200); // three laps and more
+        let ons: Vec<u64> = ev.iter().filter(|e| e.1).map(|e| e.0).collect();
+        assert_eq!(ons, [BEAT / 2, BEAT / 2, BEAT / 2], "once a lap");
+        assert_eq!(ev.iter().filter(|e| !e.1).count(), 3, "each lap's ends at the wrap");
+        t.apply(Cmd::Seek(1.0), &tempo, RATE);
+        drive(&mut s, &mut t, &mut next, 1);
+        assert_eq!(s.held(), 0, "a note sounding at the target isn't chased");
+    }
+
+    // FEED-2: a feed has room of its own, beside the clips'; a feed that needs more is refused and
+    // changes nothing.
+    #[test]
+    fn a_feed_outgrowing_its_room_is_refused() {
+        let mut s = NoteScheduler::new(Arc::new(NotesData::empty()));
+        let many: Vec<(f64, f64, f64)> = (0..FEED.sounding + 1).map(|k| (k as f64 % 128.0, k as f64 * 0.001, 8.0)).collect();
+        assert!(s.swap_feed(feed(&many)).is_err());
+        let fits: Vec<(f64, f64, f64)> = (0..FEED.sounding).map(|k| (k as f64 % 128.0, k as f64 * 0.01, 8.0)).collect();
+        assert!(s.swap_feed(feed(&fits)).is_ok());
+        // With the clips' room full too, every note still sounds.
+        let clip: Vec<serde_json::Value> =
+            (0..Caps::FLOOR.sounding).map(|k| json!({"pitch": k % 128, "start": k as f64 * 0.01, "length": 6})).collect();
+        s.swap(clips(json!({"clips": [{"start": 0, "length": 8, "notes": clip}]}))).unwrap();
+        let (mut t, mut next) = (Transport::new(0, true), 1);
+        drive(&mut s, &mut t, &mut next, 600); // beat 3.2: every note started
+        assert_eq!(s.held(), FEED.sounding + Caps::FLOOR.sounding);
+        assert_eq!(s.events().dropped_ons(), 0);
+    }
+
+    // FEED-2: a scheduler that grows at an activation takes the feed with it, and its notes.
+    #[test]
+    fn a_grown_scheduler_keeps_the_feed() {
+        let mut small = NoteScheduler::new(Arc::new(NotesData::empty()));
+        small.swap_feed(feed(&[(60.0, 0.0, 4.0), (62.0, 2.0, 1.0)])).unwrap();
+        let (mut t, mut next) = (Transport::new(0, true), 1);
+        drive(&mut small, &mut t, &mut next, 100);
+        assert_eq!(small.held(), 1);
+        let many: Vec<serde_json::Value> = (0..300).map(|k| json!({"pitch": k % 100, "start": 6, "length": 1})).collect();
+        let mut big = NoteScheduler::new(clips(json!({"clips": [{"start": 0, "length": 8, "notes": many}]})));
+        big.take_state(&small);
+        t.enter();
+        let ev = drive(&mut big, &mut t, &mut next, 500);
+        assert_eq!(ev.iter().filter(|e| e.1).map(|e| (e.0, e.2)).collect::<Vec<_>>(), [(2 * BEAT, 62.0)], "the feed plays on");
+        assert!(ev.iter().any(|e| !e.1 && e.0 == 2 * BEAT + BEAT), "its own note ends where it does");
     }
 }
 

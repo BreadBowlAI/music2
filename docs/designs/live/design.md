@@ -5,7 +5,7 @@
 - music2 has no AI in it ([AGENT-9](../../architecture.md#agents)). It only plays, reports the buffer, and refuses a write that comes too late. The agent decides what to play.
 - The engine change is small: a feed is a second set of notes on a notes lane, swapped in as an edit's notes are ([RENDER-26](../../architecture.md#plans-data-and-arrangement-swaps)), and never written to the song.
 - Later, the same engine runs **in a web browser**: the same Rust, built to WebAssembly, playing the same kernels, so a song sounds the same, bit for bit, in the app and on a web page. Feeds work there with the same messages.
-- Status: accepted by the owner, 2026-11-28, with all three decisions as proposed ("Yes, yes, yes"). Part 1 (feeds in the app) is designed here in full. Parts 2 to 4 (the web) are sketched; each gets its own note before it is built. The owner first asked for both: "agents should play live music… a buffer… like video playback", and "the core should serve on the web… professional, not a toy… open source".
+- Status: Part 1 is built (track `feeds`, rules FEED-1 to FEED-8): see [what was built](build.md), where it departs from this note. Accepted by the owner, 2026-11-28, with all three decisions as proposed ("Yes, yes, yes"). Part 1 (feeds in the app) is designed here in full. Parts 2 to 4 (the web) are sketched; each gets its own note before it is built. The owner first asked for both: "agents should play live music… a buffer… like video playback", and "the core should serve on the web… professional, not a toy… open source".
 
 ## Why
 

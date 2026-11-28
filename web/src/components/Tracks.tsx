@@ -1,5 +1,5 @@
 import clsx from "clsx";
-import { ArrowLeftRight, AudioWaveform, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
+import { ArrowLeftRight, AudioWaveform, Check, CodeXml, Copy, Drum, Ellipsis, Pencil, Radio, Search, SlidersHorizontal, Trash2, VolumeX } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { create } from "zustand";
 import { automation as isAutomation, graphApi, lockReason, moduleName, type Dependent, type GraphState, type Instrument, type KitPreset } from "../lib/graph";
@@ -12,6 +12,7 @@ import { isPlugin, pluginInstruments, usePluginList, wantPlugins } from "../lib/
 import { canvas, useShell } from "../lib/shell";
 import { useStore } from "../lib/store";
 import { editing } from "../lib/history";
+import { feedable, feedsOf, openFeed } from "../lib/feeds";
 import DeleteDialog from "./DeleteDialog";
 import { undoAction } from "./GraphCanvas";
 import { MenuRow, Popover } from "./ui";
@@ -270,6 +271,22 @@ export async function muteInSong(module: string, muted: boolean) {
   try {
     const r = await muteInSongCall(graph.session, [module], muted);
     if (r.before !== r.after) toast(`${name} ${muted ? "muted" : "unmuted"} in the song`, undoAction(graph.session, r.step));
+  } catch (error) {
+    toast(message(error));
+  }
+}
+
+/**
+ * Let an agent play `module` live (FEED-1): a feed opens on its notes lane, and its header shows
+ * the Live mark. No undo step: a feed is playback. The toast says how an agent finds it.
+ */
+export async function letAgentPlay(module: string) {
+  const graph = useStore.getState().graph;
+  if (!graph) return;
+  const toast = useStore.getState().toast;
+  try {
+    await openFeed(graph.session, module);
+    toast(`${nameOf(graph, module)} is open for an agent to play live: it writes with m2 feed, and plays when you press Play`);
   } catch (error) {
     toast(message(error));
   }
@@ -712,6 +729,17 @@ function TrackMenu({ graph, module, anchor, onClose }: { graph: GraphState; modu
         </MenuRow>
       )}
       {!inSong && songMute}
+      {/* FEED-1: an agent plays it live; its Live mark on the header keeps or closes it. */}
+      {feedable(graph, module) && !feedsOf(graph).some((f) => f.track === module) && (
+        <MenuRow
+          icon={<Radio size={14} />}
+          data-testid="let-agent-play"
+          detail="An agent writes its notes as the song plays"
+          onClick={run(() => void letAgentPlay(module))}
+        >
+          Let an agent play this track
+        </MenuRow>
+      )}
       {sep}
       <MenuRow
         icon={<CodeXml size={14} />}

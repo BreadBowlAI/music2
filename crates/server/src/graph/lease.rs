@@ -386,6 +386,10 @@ pub struct PlaysView {
     /// The tempo map of a tempo drag it plays in place of the accepted one's (RENDER-27a): lane
     /// data sent to it is timed in this map (NX-S4). None: the accepted revision's.
     pub tempo: Option<Arc<m2_song::TempoMap>>,
+    /// The tempo map it plays in: a tempo drag's, else the revision's it was built from (Compare's
+    /// Before, the plan that plays on when a newer one didn't build), which may not be the accepted
+    /// one's. A feed is timed in it (FEED-2).
+    pub timing: Arc<m2_song::TempoMap>,
     /// Whose each of its meters is (TAP-5).
     pub(crate) meters: Arc<super::meters::Layout>,
 }

@@ -5,6 +5,14 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **Live feeds (track `feeds`, 2026-11-28).** An agent plays a track live: it writes the track's notes ahead of
+  the playhead (`m2 feed`, `POST /api/feed/*`), and music2 plays them with the track's clips, says when the buffer
+  runs low, refuses what comes too late, and keeps what played as one undo step when asked (rules FEED-1 to
+  FEED-8, and AGENT-11: an agent may open a feed). The engine change is the scheduler's second source,
+  `LaneSwap::Feed` (`core/runtime/src/sched.rs`); the server's part is `crates/server/src/graph/feeds.rs`; the page's
+  is the track menu's Let an agent play this track and the Live mark (`web/src/components/Live.tsx`). Guide:
+  [Playing live](docs/guide/live.md). Departures and what is left: [the build note](docs/designs/live/build.md).
+  Parts 2 to 4 of the note (music2 on the web) are gap #64.
 - **A clip's versions (track `versions`, 2026-11-21).** A notes clip can hold several versions of its notes: one
   plays, and its notes are the clip's; the others wait in the clip and are never heard or rendered (rules VER-1 to
   VER-5, [the design](docs/designs/versions/design.md)). Built: the lane format's optional `versions` (`format`
@@ -346,7 +354,7 @@ Seen, not fixed. Linux timings are information only (PLAT-1): the gates are judg
 | `pl-sounds-fix` | "one revision, and song.ts as it was" right after Return in Change instrument | once, 2026-10-30, track F's check; passed on the retry. The check reads the revision as soon as `tracks/hats.ts` is written, so the file may land before its revision is counted |
 | `st-audio-fix` | "and adds nothing": the revision moved after an MP3 was refused | once, passed on its retry |
 | `a_second_session_is_read_only` (`core/session`) | its `refresh` after the lock came back | once, under load; alone 3 of 3 pass |
-| `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read": its reader thread wasn't scheduled within 40 callbacks | once each in three checks at load 50 to 70 (2026-10-31); moved to the nightly tier unchanged (`ci/nightly-tests.txt`). Once more on 2026-11-08 (ci-flakes, six crates' tests at once, load 4 to 12), "the meter slots were read", the same cause; passed on its retry |
+| `taps_and_the_load_never_allocate` (`core/play`) | "the rings' frames were read" or "the meter slots were read": its reader thread wasn't scheduled within 40 callbacks | at load 50 to 70 (2026-10-31), once under load (2026-11-08), twice on a Mac nightly (2026-11-28). Fixed 2026-11-28: the fills wait for the reader's first turn (a reader held back 300 ms failed before, passes now), and the test is back in the PR tier |
 | `pl-notes` | "the focus is back in the roll" after two Escapes | under heavy load, on main too (4 of 8 at load 60); cause not found |
 | `pl-zoom-fix`, `ag-notice-fix`, `notes-proj`, `start-proj` (and `spotlight-fix`, `s8-songbar-fix`, `ports-proj`, each with one race site fixed in #72) | one check each, under load beside other agents' builds | each passed on its retry, 2026-10-31 |
 | `the_samples_of_std_and_a_pack_are_found_and_fit_the_song` (`routes_library`) | a search right after a song opens found nothing | twice, passed on retry; more packs to load may widen it |

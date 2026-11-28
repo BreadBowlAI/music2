@@ -125,6 +125,7 @@ export const SUITES = [
   ["rec-takes", "fix", { expect: 41, s: 12 }],
   ["comp", "fix", { expect: 27, s: 3 }],
   ["playground", "fix", { expect: 72, s: 6 }],
+  ["live", "fix", { expect: 23, s: 8 }],
   ["sung", "fix", { expect: 30, s: 8 }],
   ["pl-notes", "fix", { expect: 104, s: 16 }],
   ["nt-notes", "fix", { expect: 63, s: 10 }],
@@ -209,7 +210,7 @@ export const SUITES = [
   ["mixing", "fix", { expect: 29, s: 5 }],
   ["tune", "fix", { expect: 38, s: 16 }],
   // Track voice2: the Voice changer's and the Clipper's cards, and the three new cards shot live.
-  ["voice", "fix", { expect: 38, s: 30 }],
+  ["voice", "fix", { expect: 39, s: 30 }],
   // Track vocoder: the Vocoder added after a synth, its Talks with row picking a vocal track, its picture moving with the song.
   ["vocoder", "fix", { expect: 25, s: 20 }],
   ["flanger-grains", "fix", { expect: 42, s: 40 }],
