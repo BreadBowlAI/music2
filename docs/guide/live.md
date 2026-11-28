@@ -51,7 +51,7 @@ m2 feed . close bass --as Claude
 | `m2 feed . open <track> [--low <bars>]` | open a feed on the track's notes lane |
 | `m2 feed . put <track> <from> <to> <notes.json \| ->` | the notes from beat `<from>` to beat `<to>` are these. It replaces what the feed held there past the lock. Prints the answer as JSON: `taken`, `late`, `lock`, `written_to`, `playhead` |
 | `m2 feed . status [--json]` | every open feed: the playhead, written to, the buffer, empties, late notes |
-| `m2 feed . wait [<track>] [--for low\|empty\|jump] --timeout <seconds>` | wait for the buffer to run low (`low` takes `empty` too), to run out, or for a jump (Stop, a seek, the loop going round). Prints the event, exits 0. At once when the feed is already low. The time limit is required; past it, it exits 1 |
+| `m2 feed . wait [<track>] [--for low\|empty\|jump] --timeout <seconds>` | wait for the buffer to run low (`low` takes `empty` too), to run out, or for a jump (Stop, a seek, the loop going round). Prints the event, exits 0. At once when the feed is already low. The time limit is required, at most 86400 seconds (a day); past it, it exits 1 |
 | `m2 feed . keep <track> [--into clip\|version]` | write what played into the song, one undo step: a new clip, or a version of the clip under it |
 | `m2 feed . close <track>` | end the feed: its notes stop at once |
 
@@ -62,7 +62,7 @@ A note is a lane file's note, but its `start` is in **song beats**, not beats fr
  {"pitch": "E2", "start": 65, "length": 0.5}]
 ```
 
-Each note starts inside `[from, to)`. A put that writes nothing (`[]`) makes those beats a rest.
+Each note starts inside `[from, to)`. A put that writes nothing (`[]`) makes those beats a rest. A feed holds at most 4,096 notes, and plays at most 128 at once and 64 starting in the same 128 samples (about 3 ms): a put past either is refused, and changes nothing.
 
 ### What a put does
 
@@ -86,6 +86,8 @@ You are slower than the music. A bar at 120 BPM is 2 seconds; a model may take 5
 | Rewrite only past the lock | before it, notes are final. Rewriting later bars is fine: it is the same act as writing ahead |
 | Set the low mark to your answer time | at 120 BPM, 4 bars is 8 seconds. If you take 15 seconds, open with `--low 8` |
 | Re-plan after `jump` | the musician stopped, sought or the loop went round: the playhead moved |
+| When `wait` exits 1, wait again | its time limit passed with nothing to write: the buffer is full enough |
+| On a loop, write inside it | the low mark is at most the loop's length, so once the loop is all written `wait --for low` waits. `written_to` is past the loop's end then, where nothing plays until the loop is off: rewrite bars inside the loop ahead of the playhead instead, and `wait --for jump` to hear each time round |
 
 ## Events
 
@@ -94,12 +96,12 @@ Each feed's state is an event on the app's socket (`m2 watch`, `GET /api/ws`), a
 ```json
 {"t": "feed", "feed": "bass", "why": "low", "playing": true, "playhead": 51.9, "lock": 52.0,
  "written_to": 64, "buffer": {"beats": 12.1, "bars": 3.0, "seconds": 5.9},
- "low_bars": 4, "empties": 0, "late": 0, "writer": "Claude"}
+ "low_bars": 4, "low_mark": {"beats": 16, "bars": 4}, "empties": 0, "late": 0, "writer": "Claude"}
 ```
 
 | `why` | When |
 |---|---|
-| `low` | the buffer dropped under the low mark while playing: once, until it is above it again |
+| `low` | the buffer dropped under `low_mark` while playing: once, until it is above it again. `low_mark` is `low_bars`, but never more than the loop's length while the loop is on |
 | `empty` | the playhead reached written to while playing: once, and counted in `empties` |
 | `jump` | Stop, a seek, or the loop going round |
 | `open`, `closed` | the feed opened or closed |

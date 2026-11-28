@@ -37,6 +37,26 @@ Tests (each names its rule): `sched.rs`'s `feed_tests`, `a_feed_crosses_an_activ
 | the musician opens a feed for "Claude" | "Live" with no writer until an agent writes | the page doesn't know which agent will |
 | a put needing more room is not described | refused in words (128 at once, 64 starting in 128 samples) | the feed's room is fixed when the scheduler is made, so the audio thread never grows it |
 
+## After the review
+
+A fresh reviewer read the branch; its findings, and what was done:
+
+| Finding | Done |
+|---|---|
+| `wait --for low` answered at once, for ever, on a loop shorter than the low mark | the state says `low_mark` (capped by the loop), and `wait` judges by it; the guide says to write inside a loop (`wait_on_a_short_loop_all_written_waits`, `a_short_loop_all_written_is_never_low`) |
+| the limits didn't bound a feed, and heavy work ran under the control plane's lock | at most 4,096 notes a feed (refused in words) and 65,536 kept as what played; what played is kept by start and by arrival, so a pass replaces a range and the oldest go first, never a scan of all; notes behind leave in 4-bar steps, so a look sends nothing most of the time. Under the lock a put sorts and builds at most 4,096 notes |
+| a lane's readers were sized for its clips alone | `LanePlan::room`: the clips' room and the feed's, for every reader; a kernel's `cap` is 1,196 at its smallest (`a_full_lane_and_a_dense_feed_lose_nothing_through_a_plan`) |
+| the compile test was void here | `a_put_never_waits_for_the_session` holds the actor busy, no clock; the old test, with its 20 ms bound, is in the nightly tier unchanged |
+| a second writer didn't reach the page | the put route tells the page whenever the writer changes (`a_new_writer_is_told_to_the_page`) |
+| a huge `--timeout` panicked | at most a day, refused in words |
+| a feed was timed in the accepted tempo | in the tempo of what plays, `PlaysView::timing` (`a_feed_is_timed_in_the_tempo_that_plays`, with Compare's Before) |
+| a resend never checked the room | one too dense for the tempo is sent empty and says `silent` (`a_feed_too_dense_for_a_new_tempo_goes_silent_and_says_so`) |
+| Keep could take out a note written since | only notes exactly as kept leave the feed, and what played by its own ids (`keep_leaves_a_note_written_since_at_the_same_beat`) |
+| state changed before a send that failed | open, put and close change the feed only after the send went (`a_put_that_cant_be_sent_changes_nothing`) |
+| `m2_listen_never_hears_a_feed` couldn't fail | it now also keeps the notes and sees `m2 listen` measure them: a feed that reached a file would be heard |
+| a feed could open on a module with no header | only a track the timeline shows with a header takes one (`only_a_track_with_a_header_takes_a_feed`) |
+| route work under the lock on async workers | `GET /api/feed` and a put's writer check run in `blocking` |
+
 ## What is left
 
 - Parts 2 to 4, the web (gap #64).
