@@ -163,6 +163,8 @@ The song's `AGENTS.md` and the guide get a short "Playing live" section with thi
 
 ## Parts 2 to 4: music2 on the web (sketch)
 
+Each part now has a note of its own: Part 2, the engine in a browser, is [web-engine.md](web-engine.md); Parts 3 and 4, `@m2/web` with songs as web bundles and feeds in a page, are [web-player.md](web-player.md) (proposed). Where they differ from this sketch, they win.
+
 ### The aim
 
 A developer adds music2 to a web page and plays a real song in it: the same sounds as the app, the same mix, the same bits. Not a toy synth. And an agent can play live into it, with the same feed messages.
@@ -195,6 +197,8 @@ A developer adds music2 to a web page and plays a real song in it: the same soun
    ```
 
    The page owns its agent: `@m2/web` calls no model and sends nothing anywhere but the song's and the library's URLs ([NET-2](../../architecture.md#network) holds on the web too).
+
+   Parts 3 and 4 are designed in [web-player.md](web-player.md): songs reach a page as a web bundle that `m2 export --web` writes, so the first player needs neither song code in the page nor the library; feeds there speak `feed/1`, the app's feed messages.
 4. **Big samples on the web:** a pack can name a smaller "web" set of its samples, and the Sampler loads samples as they are needed, not all at open. The grand piano (260 MB) needs this.
 
 ### What the web leaves out at first
@@ -217,5 +221,5 @@ Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written u
 |---|---|---|
 | `feeds` | Part 1: the contract (a FEED family of rules), the scheduler's second source, the routes, `m2 feed`, events, the Live mark, Keep, the guide | the owner's yes |
 | `web-engine` | Part 2: the kernel host interface, `core/os` for the web, the engine in an AudioWorklet, the renders matched in Chrome | its own note |
-| `web-player` | Part 3: `@m2/web`, songs by URL, packs from the library, web sample sets | the library live (R2) |
-| `web-feeds` | Part 4: feeds in `@m2/web`, the same messages | `feeds` and `web-player` |
+| `web-player` | Part 3: `@m2/web`, songs by URL as web bundles ([web-player.md](web-player.md)); packs from the library and web sample sets later | `web-engine`; the library (R2) only for packs from it |
+| `web-feeds` | Part 4: feeds in `@m2/web`, the same messages, as `feed/1` ([web-player.md](web-player.md)) | `feeds` and `web-player` |
