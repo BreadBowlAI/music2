@@ -2,6 +2,7 @@
 //! `process` on the test's own thread. The tests with real plugins need Surge XT or Airwindows
 //! Consolidated on `CLAP_PATH`, and skip with a message without them; the probe's run everywhere.
 
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 

@@ -6,13 +6,25 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["clap"]
+# The CLAP host (HOST-1): plugins found and loaded, the in-process host, the host process, windows,
+# presets and the probe. Without it, as on the web, only `PluginHost` and the types the engine
+# names: nothing loads or runs plugin code. m2-runtime's `plugins` feature turns it on.
+clap = ["dep:m2-os", "dep:libloading"]
+
 [dependencies]
-m2-os.workspace = true
+m2-os = { workspace = true, optional = true }
 anyhow.workspace = true
+# CLAP's own layouts: the events `Events` holds are CLAP's, with the feature or without.
 clap-sys = "0.5"
-libloading = "0.9"
+libloading = { version = "0.9", optional = true }
 crossbeam-channel.workspace = true
 sha2.workspace = true
+
+[[bin]]
+name = "m2-plugin-host"
+required-features = ["clap"]
 
 # HOST-2: this test owns the process's real main thread, so libtest can't run it.
 [[test]]

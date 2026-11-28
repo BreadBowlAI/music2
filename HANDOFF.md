@@ -5,6 +5,12 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **The CLAP host is a feature (track `plugins-off`, 2026-11-28).** The web engine's first runtime track
+  ([the note](docs/designs/live/web-engine.md)): `m2-runtime`'s default feature `plugins` turns on `m2-plugins`'
+  `clap` (plugin loading, both hosts, windows, presets, the probe). Without it the runtime has `PluginHost` and its
+  types but no host, and each plugin a song uses is `plugin.missing`, said as "plugins can't play here" (HOST-1,
+  FMT-18a); `core/runtime/tests/no_plugins.rs` checks it, run by `ci/pr.sh rust` (part 1) and linted by
+  `ci/pr.sh clippy`. Every program music2 ships keeps the feature on.
 - **Live feeds (track `feeds`, 2026-11-28).** An agent plays a track live: it writes the track's notes ahead of
   the playhead (`m2 feed`, `POST /api/feed/*`), and music2 plays them with the track's clips, says when the buffer
   runs low, refuses what comes too late, and keeps what played as one undo step when asked (rules FEED-1 to

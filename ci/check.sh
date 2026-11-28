@@ -2,15 +2,16 @@
 # ci/check.sh: the full check of music2, the same script on macOS and Linux (PLAT-6).
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
-# clippy, the pool's models, the web build, every browser suite, std's checks and the offline
-# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences,
-# the CI scripts' own cases; RustSec's advisories; the nightly list), so it passes only where every
-# tier would; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
-# G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
-# ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short summary to paste back. It changes
-# nothing in the repo, never opens the app on a screen you can see, never plays sound (G12 opens the
-# Mac's output muted: it plays zeros), and never touches your ~/Music or ~/.music2. If one line says
-# "running" for over 30 minutes, press Ctrl-C once: it stops and prints the summary anyway.
+# clippy, the pool's models, the runtime without its CLAP host, the web build, every browser suite,
+# std's checks and the offline renders, and every check of the PR tier besides (ci/pr.sh lint:
+# rustfmt, actionlint, zizmor, licences, the CI scripts' own cases; RustSec's advisories; the
+# nightly list), so it passes only where every tier would; on a Mac it also times the gates
+# ci/gates.txt names. First it builds the old engine G7f compares with (S), in a folder of its own:
+# ~/m2-check/s-8aa301e on a Mac, ~/.cache/m2-check/s-8aa301e on Linux. Then it prints a short
+# summary to paste back. It changes nothing in the repo, never opens the app on a screen you can
+# see, never plays sound (G12 opens the Mac's output muted: it plays zeros), and never touches your
+# ~/Music or ~/.music2. If one line says "running" for over 30 minutes, press Ctrl-C once: it stops
+# and prints the summary anyway.
 #
 #   ci/check.sh                  everything (on a Mac, the timing gates too)
 #   ci/check.sh --gates          on Linux, the timing gates too (recorded for information, PLAT-1)
@@ -745,6 +746,20 @@ else
   tally "$OUT/pool-models.log" pool- > /dev/null
   failures pool- "$OUT/pool-models.log" >> "$OUT/failed"
   first "$OUT/pool-lint.log" '^ *--> ' | sed 's/^ *--> /pool lint: /' >> "$OUT/failed"
+fi
+
+# 6c. HOST-1: the runtime built without its CLAP host, as the web builds it: its test that a song
+#     with a plugin is told in words (core/runtime/tests/no_plugins.rs), and its lint (as ci/pr.sh's
+#     "no plugins" and "no plugins lint" rows). Its unit tests need the host, so they aren't built.
+begin "no plugins" "1 min"
+if quiet no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --test no_plugins &&
+   quiet no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --lib --test no_plugins -- -D warnings; then
+  record "no plugins" PASS "$(tally "$OUT/no-plugins.log" no-plugins-)"
+else
+  record "no plugins" FAIL "see no-plugins.log and no-plugins-lint.log"
+  tally "$OUT/no-plugins.log" no-plugins- > /dev/null
+  failures no-plugins- "$OUT/no-plugins.log" >> "$OUT/failed"
+  first "$OUT/no-plugins-lint.log" '^ *--> ' | sed 's/^ *--> /no plugins lint: /' >> "$OUT/failed"
 fi
 
 # 7. The kernels' own workspace, std's and music2's own packs' (tests and lints), and every kernel
