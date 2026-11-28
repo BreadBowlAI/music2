@@ -2,8 +2,8 @@
 # ci/check.sh: the full check of music2, the same script on macOS and Linux (PLAT-6).
 #
 # In short: run it in the repo with no arguments. It builds everything, runs every Rust test,
-# clippy, the pool's models, the web build, every browser suite, std's checks and the offline
-# renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences,
+# clippy, the web engine's crates for wasm32, the pool's models, the web build, every browser
+# suite, std's checks and the offline renders, and every check of the PR tier besides (ci/pr.sh lint: rustfmt, actionlint, zizmor, licences,
 # the CI scripts' own cases; RustSec's advisories; the nightly list), so it passes only where every
 # tier would; on a Mac it also times the gates ci/gates.txt names. First it builds the old engine
 # G7f compares with (S), in a folder of its own: ~/m2-check/s-8aa301e on a Mac,
@@ -32,7 +32,7 @@
 #
 # --pr: the checks every pull request must pass, and nothing else: rustfmt, actionlint, the gates
 # and docs rules, licences, the pool's models, the web build, the kernels and their wasm, clippy,
-# the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
+# the web engine's crates built for wasm32, the Rust tests and browser suites not tagged nightly (ci/nightly-tests.txt, e2e/run.mjs), and the
 # 26 renders; RustSec's advisories only when the change touches a Cargo.lock or deny.toml
 # (ci/pr.sh changes). When git proves your committed change is documentation only
 # (ci/docs-only.sh, on a clean tree), it runs only the docs rule's cases, as CI does. It builds into
@@ -729,6 +729,10 @@ else
   record clippy FAIL "$n findings: see clippy.log"
   first "$OUT/clippy.log" '^ *--> ' | sed 's/^ *--> /clippy: /' >> "$OUT/failed"
 fi
+
+# 6a. The crates the web engine runs, built and linted for wasm32-unknown-unknown (PLAT-1): ci/pr.sh's
+#     wasm32 step, which names them.
+pr "wasm32 crates" "1 min; 2 the first time" wasm32
 
 # 6b. The pool's models: m2-pool's protocol under a sync shim that yields and spins at random before
 #     each atomic step and each ring and wait of the caller's wake, in release, thousands of times

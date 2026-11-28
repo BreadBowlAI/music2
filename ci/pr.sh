@@ -42,7 +42,11 @@
 #   ci/pr.sh advisories         RustSec's advisories for both workspaces (cargo-deny; it fetches
 #                               their database): on a pull request when changes says deps=true, and
 #                               every night
-#   ci/pr.sh clippy             clippy on every target, every warning an error
+#   ci/pr.sh clippy             clippy on every target, every warning an error, and the wasm32 step
+#   ci/pr.sh wasm32             the crates the web engine runs (m2-ir, m2-os, m2-pool, m2-song),
+#                               built and linted for wasm32-unknown-unknown (PLAT-1): the web engine
+#                               note's tracks add theirs. Their libraries only: their tests run on
+#                               this machine
 #   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
 #                               part 1 also runs the three tests that own their main thread
@@ -89,7 +93,7 @@ ALL=
 BASE=
 case $STEP in
   changes) if [ $# -gt 1 ]; then usage; fi; BASE=${1:-} ;;
-  docs|toolchain|lint|quick|models|advisories|clippy|renders) if [ $# -gt 0 ]; then usage; fi ;;
+  docs|toolchain|lint|quick|models|advisories|clippy|wasm32|renders) if [ $# -gt 0 ]; then usage; fi ;;
   rust|suites)
     while [ $# -gt 0 ]; do
       case $1 in
@@ -263,6 +267,13 @@ models() {
   cargo test --locked --release -p m2-pool --features models &&
     cargo clippy --locked -p m2-pool --features models --all-targets -- -D warnings
 }
+# wasm32: the crates the web engine runs, for wasm32-unknown-unknown (rust-toolchain.toml installs
+# the target): built, then linted, every warning an error. Libraries only: a test can't run there.
+wasm32() {
+  set -- -p m2-ir -p m2-os -p m2-pool -p m2-song
+  cargo build --locked --target wasm32-unknown-unknown "$@" &&
+    cargo clippy --locked --target wasm32-unknown-unknown "$@" -- -D warnings
+}
 
 # toolchain: the one rust-toolchain.toml names, installed if missing (rustup 1.28 and later take
 # no arguments for that; an older one installs it when asked what is active), then checked.
@@ -304,7 +315,11 @@ case $STEP in
 
   clippy)
     check "web build" web.log web &&
-      check clippy clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings ;;
+      check clippy clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings
+    check "wasm32 crates" wasm32.log wasm32 ;;
+
+  wasm32)
+    check "wasm32 crates" wasm32.log wasm32 ;;
 
   rust)
     filter="not (binary(=main_thread) | binary(=app_main_thread) | binary(=frame_rate))"

@@ -22,6 +22,11 @@ design for whatever you pick up. Older versions of this page, with each track's 
   is the track menu's Let an agent play this track and the Live mark (`web/src/components/Live.tsx`). Guide:
   [Playing live](docs/guide/live.md). Departures and what is left: [the build note](docs/designs/live/build.md).
   Parts 2 to 4 of the note (music2 on the web) are gap #64.
+- **The web engine, track `web-os` (2026-11-28).** Part 2's first track ([the note](docs/designs/live/web-engine.md)):
+  the web, `wasm32-unknown-unknown`, is a third platform (PLAT-1, PLAT-2, PLAT-3, RENDER-2a). `m2-os` has a `web/`
+  folder: no files (`Unsupported`, in words), no folders, one thread and one core, and the float mode measured, not
+  set. `m2-ir`, `m2-os`, `m2-pool` and `m2-song` build and lint for it (`ci/pr.sh wasm32`, in the clippy job).
+  Nothing runs there yet: next is `kernel-host`, then `plugins-off` and `runtime-web`.
 - **`feed/1` (track `feed-protocol`, 2026-11-28).** The feed routes' bodies, answers and refusal words, written up
   as a protocol a web page's player will speak too: [The feed protocol](docs/guide/feed-protocol.md), FEED-8. Its
   fixture, `crates/server/tests/fixtures/feed-protocol.json`, runs against the app's routes
