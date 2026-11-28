@@ -90,6 +90,7 @@ impl KernelHost for Wasmtime {
         let host = Host { sealed: false, refused: false, memory: None, assets: Assets::default(), deadline: 0 };
         let mut store = Store::new(module.engine(), host);
         store.limiter(|l| l);
+        debug_assert!(module.imports().all(|i| (i.module(), i.name()) == ("m2", "asset_read")), "ABI-3's checks ran first");
         let ext: Vec<Extern> = module.imports().map(|_| Func::wrap(&mut store, asset_read).into()).collect();
         let (checked, ticks) = (Wasmtime::checked(module), limit::ticks(limit));
         if checked {

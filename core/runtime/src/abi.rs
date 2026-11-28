@@ -262,9 +262,14 @@ impl Reader<'_> {
 
     /// A value type: its first byte. A reference type of the GC proposal (`ref`, `ref null`)
     /// is followed by its heap type, a signed number.
+    /// Proposals this build's engines leave off (shared-everything's 0x65, exact heap types'
+    /// 0x62) are refused, never misread.
     fn val(&mut self) -> Result<u8> {
         let t = self.byte()?;
         if matches!(t, 0x63 | 0x64) {
+            if let Some(&h @ (0x62 | 0x65)) = self.0.first() {
+                bail!("its types use a heap type music2 can't read ({h:#04x})");
+            }
             self.leb(33)?;
         }
         Ok(t)
@@ -275,13 +280,13 @@ impl Reader<'_> {
         (0..self.u32()?).map(|_| self.val()).collect()
     }
 
-    /// A limits' flags, its minimum and its maximum when it has one.
+    /// A limits' flags, its minimum and its maximum when it has one. Each number is read as
+    /// wasmtime reads it, up to 64 bits in a padded form: wasmtime has checked its range.
     fn limits(&mut self) -> Result<u8> {
         let flags = self.byte()?;
-        let bits = if flags & 0x04 != 0 { 64 } else { 32 };
-        self.leb(bits)?;
+        self.leb(64)?;
         if flags & 0x01 != 0 {
-            self.leb(bits)?;
+            self.leb(64)?;
         }
         Ok(flags)
     }
@@ -354,6 +359,23 @@ impl Reader<'_> {
 mod tests {
     use super::*;
     use crate::tests::{kernel_v1, module_v1, out_v1, wasm};
+
+    // ABI-3, review of track kernel-host: a limit's numbers are read as wasmtime reads them, up
+    // to 64 bits in a padded form (10 bytes), as the old check through wasmtime took them; and
+    // encodings of proposals this build's engines leave off (shared-everything's 0x65, exact heap
+    // types' 0x62) are refused in words, never misread.
+    #[test]
+    fn a_limit_reads_as_wasmtime_reads_it_and_off_proposals_are_refused() {
+        // A 32-bit memory's minimum of 1, padded to 6 bytes (0x81 0x80 0x80 0x80 0x80 0x00).
+        let mut r = Reader(&[0x00, 0x81, 0x80, 0x80, 0x80, 0x80, 0x00]);
+        assert_eq!(r.memory().unwrap().is_64, false);
+        assert!(r.0.is_empty(), "the whole limit is read");
+        for heap in [0x62u8, 0x65] {
+            let mut r = Reader(&[0x63, heap, 0x70]);
+            let why = format!("{:#}", r.val().expect_err("refused"));
+            assert!(why.contains("music2 can't read"), "{heap:#04x}: {why}");
+        }
+    }
 
     /// ABI-3's checks of `wat`'s module, from its bytes alone, in the loader's order.
     fn check(wat: &str) -> Result<()> {
