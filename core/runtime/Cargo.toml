@@ -30,3 +30,9 @@ m2-song = { workspace = true, features = ["testing"] }
 wat.workspace = true
 serde_json.workspace = true
 m2-std-kernels = { path = "../../std/kernels-src" }
+
+# The web engine's probe (docs/designs/live/web-engine.md): every live kernel music2 ships, under
+# wasmtime, for a browser's WebAssembly to match. Nothing of the app's runs it.
+[[example]]
+name = "web-probe"
+path = "../../docs/designs/live/probe/wasmtime.rs"
