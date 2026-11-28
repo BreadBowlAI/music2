@@ -662,6 +662,44 @@ fn every_bundled_pack_is_the_version_its_record_names() {
     assert!(!own(&PackName::new("@m2/synths").unwrap(), &Version(1, 0, 0), &Sha::of(b"another")), "the name alone isn't music2's");
 }
 
+// PACK-17a: std's listing (its m2pkg.toml and its module, the files of std that run) is the one
+// packs/versions.toml records for its version. A changed module is another std, which the record
+// doesn't hold: a page would refuse it (WEB-4).
+#[test]
+fn std_is_the_version_its_record_names() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../std");
+    let m = PkgManifest::at(&dir).unwrap();
+    let (name, v) = (&m.package.name, m.package.version);
+    let listing = std_listing(&dir).unwrap();
+    let paths: Vec<&str> = listing.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(paths, ["kernels/std.wasm", "m2pkg.toml"], "std's listing names the files of std that run, and no other");
+    let hash = listing.hash();
+    let next = Version(v.0, v.1, v.2 + 1);
+    match recorded().iter().find(|(n, rv, _)| n == name && *rv == v) {
+        Some((.., h)) => assert!(
+            *h == hash,
+            "std changed under {v}: packs/versions.toml records {h}, its m2pkg.toml and module are now {hash} (PACK-17a). When a \
+             release shipped std {v} (`git tag --contains` names one), move std to {next} in std/m2pkg.toml and record {next}; else \
+             change the line \"std {v}\" to \"{hash}\""
+        ),
+        None => panic!("packs/versions.toml doesn't record std {v}: add the line \"std {v}\" = \"{hash}\""),
+    }
+    assert!(own(name, &v, &hash));
+
+    // A module with one more byte (a custom section, so it still loads) is another std.
+    let copy = scratch("std-changed");
+    std::fs::create_dir_all(copy.join("kernels")).unwrap();
+    std::fs::copy(dir.join(PKG_MANIFEST), copy.join(PKG_MANIFEST)).unwrap();
+    let mut wasm = std::fs::read(dir.join("kernels/std.wasm")).unwrap();
+    wasm.extend([0u8, 2, 1, b'x']);
+    std::fs::write(copy.join("kernels/std.wasm"), wasm).unwrap();
+    assert!(!own(name, &v, &std_listing(&copy).unwrap().hash()), "a changed std isn't std as music2 ships it");
+    // A pack's folder isn't std's.
+    let pack = scratch("std-pack");
+    pack_at(&pack, "@alice/std", "0.10.0");
+    assert!(std_listing(&pack).is_err());
+}
+
 // PACK-6 (review S3): a version's folder with no listing in it is no installed version: an install
 // puts the version in its place, and a remove takes it out. Install and remove agree.
 #[test]
