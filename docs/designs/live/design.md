@@ -207,7 +207,7 @@ Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written u
 
 ## Decisions (the owner said yes to each, 2026-11-28)
 
-1. **May an agent open a feed itself, or only the musician?** Either: either, because the Live mark shows it at once, mute silences it, and nothing sounds until the musician presses Play. This widens [AGENT-11](../../architecture.md#agents) a little: today "what a MIDI keyboard would send" is only the musician's.
+1. **May an agent open a feed itself, or only the musician?** Either, because the Live mark shows it at once, mute silences it, and nothing sounds until the musician presses Play. This widens [AGENT-11](../../architecture.md#agents) a little: today "what a MIDI keyboard would send" is only the musician's.
 2. **A feed plays with the track's clips**, rather than instead of them.
 3. **Feed time is song beats**, so a feed works with the loop and the Playground. The other choice is a clock that never wraps, which suits endless jams but needs a map to the song's bars.
 
