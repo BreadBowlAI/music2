@@ -8,7 +8,7 @@
 //! It writes `cases.json` (each kernel's ports and what each input gets, for `host.mjs`) and
 //! `wasmtime.json` (or `wasmtime-flush.json`): each kernel's sha256 of its outputs, block by block,
 //! the sha256 of its inputs, and its time per 128-frame block. The engine is the runtime's own,
-//! `m2_runtime::packages::engine(false)`: std's, with no time checks. `--flush` runs with
+//! `m2_runtime::host::wasmtime::engine(false)`: std's, with no time checks. `--flush` runs with
 //! flush-to-zero on, as a thread whose owner set it would (RENDER-2a says the app never does).
 //! `--normal` feeds no subnormal inputs: any subnormal then is one a kernel made itself.
 //!
@@ -443,7 +443,7 @@ fn main() -> Result<()> {
     let subnormals = !args.iter().any(|a| a == "--normal");
     std::fs::create_dir_all(&dir)?;
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..").canonicalize()?;
-    let engine = m2_runtime::packages::engine(false);
+    let engine = m2_runtime::host::wasmtime::engine(false);
     m2_runtime::fpenv::canon();
     m2_runtime::fpenv::flush_for_tests(flush);
     let cases = cases(&root, subnormals)?;
@@ -503,7 +503,7 @@ fn main() -> Result<()> {
         }));
     }
     // Which modules need SIMD at all: each compiled again by an engine without it. The runtime's
-    // engine already refuses relaxed SIMD (`packages::engine`), so every module here is free of it.
+    // engine already refuses relaxed SIMD (`host::wasmtime::engine`), so every module here is free of it.
     let mut plain = wasmtime::Config::new();
     plain.wasm_simd(false).wasm_relaxed_simd(false);
     let plain = wasmtime::Engine::new(&plain)?;

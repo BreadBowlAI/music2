@@ -15,13 +15,20 @@ m2-pool.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true
-wasmtime.workspace = true
+# The kernel host the app runs (RENDER-32), behind the default feature `wasmtime`.
+wasmtime = { workspace = true, optional = true }
 bytemuck.workspace = true
 hound.workspace = true
 claxon.workspace = true
 libm.workspace = true
 # The kit's one rule for a latency in seconds (VOX-24), which the kernels count by too.
 m2-kernel.workspace = true
+
+[features]
+default = ["wasmtime"]
+# wasmtime, the kernel host (`src/host/wasmtime.rs`). Without it the runtime has no host and loads
+# no package with kernels: what a build for the web starts from (docs/designs/live/web-engine.md).
+wasmtime = ["dep:wasmtime"]
 
 [dev-dependencies]
 wasmtime = { workspace = true, features = ["wat"] }
