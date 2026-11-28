@@ -1,6 +1,9 @@
 //! `PluginHost` (P11, HOST-1): the one way the engine reaches a plugin, and the types its calls
 //! carry. Nothing here assumes the plugin shares this process or its threads: the in-process host
 //! ([`crate::InProcess`]) is one implementation, and the host process (HOST-3) will be another.
+//!
+//! Without the `clap` feature, the crate's helpers here that only a host calls go unused.
+#![cfg_attr(not(feature = "clap"), allow(dead_code))]
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
@@ -278,8 +281,8 @@ pub enum Reply {
     /// A preset loaded ([`MainCall::LoadPreset`]).
     Loaded,
     /// Tests (debug builds): its window's handle, as the plugin was given it (to compare only),
-    /// and whether the window is shown; None when it has no window.
-    #[cfg(debug_assertions)]
+    /// and whether the window is shown; None when it has no window. Only a host has windows.
+    #[cfg(all(debug_assertions, feature = "clap"))]
     Shown(Option<(m2_os::window::Native, bool)>),
 }
 
