@@ -254,7 +254,7 @@ fn music2s_own_pack_runs_unchecked_and_a_changed_copy_is_checked() {
         let mut pk = std_packages();
         let said = pk.load(at).unwrap_or_else(|e| panic!("{}: {e:#}", at.display())).checked;
         let (module, ..) = pk.module_for(id).expect("its kernel");
-        assert_eq!(crate::packages::checks(module), said, "{}: compiled as it says", at.display());
+        assert_eq!(<crate::host::Host as crate::host::KernelHost>::checked(module), said, "{}: compiled as it says", at.display());
         said
     };
     assert!(!checked(&installed), "installed, it is music2's own");

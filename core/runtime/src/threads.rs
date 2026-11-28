@@ -1,4 +1,4 @@
-//! How a render's worker threads start (8a): wasmtime's per-thread state made at once, the one
+//! How a render's worker threads start (8a): the kernel host's per-thread state made at once, the one
 //! floating-point mode (RENDER-2a), and, beside playback, the OS's background priority. A live
 //! player's workers are engine threads too: real time at the device's period, in its workgroup
 //! (RENDER-28a, [`live`]).
@@ -9,6 +9,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
 use m2_os::rt::Group;
+
+use crate::host::{Host, KernelHost};
 
 /// A worker was refused the background priority it asked for.
 static REFUSED: AtomicBool = AtomicBool::new(false);
@@ -21,7 +23,7 @@ static LIVE: AtomicUsize = AtomicUsize::new(0);
 /// 50 µs for the next block before they sleep.
 pub fn setup(background: bool) -> m2_pool::Setup {
     let start = move |_worker: usize| {
-        wasmtime::Engine::tls_eager_initialize();
+        Host::thread_start();
         crate::fpenv::canon();
         if background && m2_os::thread::background().is_err() {
             REFUSED.store(true, Ordering::Relaxed);
@@ -45,7 +47,7 @@ pub struct Joins {
     pub cancelled: AtomicUsize,
 }
 
-/// A live player's workers (8a's live half, RENDER-28a): each makes wasmtime's per-thread state,
+/// A live player's workers (8a's live half, RENDER-28a): each makes the kernel host's per-thread state,
 /// enters the one floating-point mode and becomes an engine thread of `group` (real time at its
 /// period, in its workgroup), counted in the [`Joins`]; then `mark(true)` (tests: the allocation
 /// trap) until `mark(false)` before it leaves the workgroup and exits. Each holds `group` until it
@@ -69,7 +71,7 @@ pub fn live(group: Arc<Group>, spin: bool, mark: Option<fn(bool)>) -> (m2_pool::
     let start = {
         let joins = joins.clone();
         move |_worker: usize| {
-            wasmtime::Engine::tls_eager_initialize();
+            Host::thread_start();
             crate::fpenv::canon();
             let j = m2_os::rt::engine_thread(&group);
             for (n, yes) in [(&joins.real_time, j.real_time), (&joins.joined, j.workgroup), (&joins.cancelled, j.cancelled)] {

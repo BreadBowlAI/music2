@@ -44,10 +44,10 @@
 #                               every night
 #   ci/pr.sh clippy             clippy on every target, every warning an error, the runtime built
 #                               without its CLAP host (HOST-1: the web's build), and the wasm32 step
-#   ci/pr.sh wasm32             the crates the web engine runs (m2-ir, m2-os, m2-pool, m2-song),
-#                               built and linted for wasm32-unknown-unknown (PLAT-1): the web engine
-#                               note's tracks add theirs. Their libraries only: their tests run on
-#                               this machine
+#   ci/pr.sh wasm32             the crates the web engine runs (m2-ir, m2-os, m2-pool, m2-song, and
+#                               m2-runtime with neither wasmtime nor its CLAP host), built and linted
+#                               for wasm32-unknown-unknown (PLAT-1): the web engine note's tracks add
+#                               theirs. Their libraries only: their tests run on this machine
 #   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
 #                               part 1 also runs the three tests that own their main thread
@@ -271,10 +271,15 @@ models() {
 }
 # wasm32: the crates the web engine runs, for wasm32-unknown-unknown (rust-toolchain.toml installs
 # the target): built, then linted, every warning an error. Libraries only: a test can't run there.
+# The runtime is built as the web will build it: no kernel host yet (RENDER-32) and no CLAP host
+# (HOST-1), so with none of its features.
 wasm32() {
   set -- -p m2-ir -p m2-os -p m2-pool -p m2-song
+  runtime="-p m2-runtime --no-default-features"
   cargo build --locked --target wasm32-unknown-unknown "$@" &&
-    cargo clippy --locked --target wasm32-unknown-unknown "$@" -- -D warnings
+    cargo clippy --locked --target wasm32-unknown-unknown "$@" -- -D warnings &&
+    cargo build --locked --target wasm32-unknown-unknown $runtime &&
+    cargo clippy --locked --target wasm32-unknown-unknown $runtime -- -D warnings
 }
 
 # toolchain: the one rust-toolchain.toml names, installed if missing (rustup 1.28 and later take
@@ -319,7 +324,7 @@ case $STEP in
     check "web build" web.log web &&
       check clippy clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings
     # HOST-1: the runtime without its CLAP host, as the web builds it (its unit tests need the host).
-    check "no plugins lint" no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --lib --test no_plugins -- -D warnings
+    check "no plugins lint" no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --features wasmtime --lib --test no_plugins -- -D warnings
     check "wasm32 crates" wasm32.log wasm32 ;;
 
   wasm32)
@@ -355,7 +360,7 @@ case $STEP in
       if [ "${PART%/*}" = 1 ]; then
         check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread --test frame_rate
         # HOST-1: the runtime built without its CLAP host tells a plugin song in words.
-        check "no plugins" no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --test no_plugins
+        check "no plugins" no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --features wasmtime --test no_plugins
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
         if [ $OS = linux ]; then

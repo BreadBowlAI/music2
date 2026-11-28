@@ -8,9 +8,9 @@ use anyhow::{Context, Result, bail};
 use m2_ir::{Diagnostic, Ir, KernelSig, Kernels, Node, Op, PortKind, PortSig, Severity};
 use m2_plugins::PluginHost;
 use serde::Deserialize;
-use wasmtime::{Engine, ExternType, Module, ValType};
 
-use crate::WasmContext;
+use crate::abi::Declared;
+use crate::host::{Host, KernelHost, Module};
 use crate::limit::Limits;
 
 /// A `[[kernel]]` of `m2pkg.toml`, read strictly (PACK-2): the rest of the file is
@@ -205,54 +205,6 @@ fn listed(dir: &Path, read: &[(&str, m2_song::Sha)]) -> Option<m2_song::Sha> {
     read.iter().all(names).then(|| m2_song::Sha::of(&text))
 }
 
-/// The engine every kernel runs in.
-///
-/// WebAssembly floating point is bit-exact on every machine except for the bits
-/// inside NaNs. Canonicalising those costs about 4.6× in the M1 benchmark, so instead
-/// the renderer silences non-finite output (a NaN means a kernel is broken anyway).
-/// Relaxed SIMD is off because its results may differ between CPUs.
-///
-/// Memories take wasmtime's default reservation, 4 GiB with guards, so the hardware catches a
-/// stray access: no access is bounds-checked, and Cranelift's Spectre guard stays on, at no cost
-/// (RENDER-32). A sandbox has one memory, and a box one sandbox (one a package for a voice pool),
-/// so two renderers of p50 hold about 1.2% of the address space. A sealed memory never grows, so it
-/// never moves, and a sandbox keeps its address.
-///
-/// Two engines, the same but for one switch (ABI-6): a `checked` one compiles the time checks into
-/// a pack's kernels, at each function's start and each loop's turn, and has a ticker
-/// ([`crate::limit::start`]) that starts with it, on the first pack loaded, and lives as long as it
-/// does; std's has none, so std's kernels cost what they did before the limit. [`checked`] says which
-/// a package's module is compiled by, and a sandbox runs on its module's own engine.
-///
-/// One of each for the process, as wasmtime intends: a module one package set loaded can be played
-/// through any other (a render of a revision plays its view through a copy of the session's set,
-/// and the gates' lab compiles with one set and plays with another).
-pub fn engine(checked: bool) -> Engine {
-    ENGINES[checked as usize]
-        .get_or_init(|| {
-            let mut config = wasmtime::Config::new();
-            config.cranelift_nan_canonicalization(false);
-            config.wasm_relaxed_simd(false);
-            config.memory_may_move(false);
-            config.epoch_interruption(checked);
-            let engine = Engine::new(&config).expect("wasmtime engine");
-            if checked {
-                crate::limit::start(&engine);
-            }
-            engine
-        })
-        .clone()
-}
-
-/// The two [`engine`]s, std's first, each made when first asked for.
-static ENGINES: [std::sync::OnceLock<Engine>; 2] = [std::sync::OnceLock::new(), std::sync::OnceLock::new()];
-
-/// Whether `module` was compiled with the time checks: by the [`engine`] of a pack's modules (none
-/// was, while no pack has been loaded).
-pub(crate) fn checks(module: &Module) -> bool {
-    ENGINES[1].get().is_some_and(|e| Engine::same(e, module.engine()))
-}
-
 impl Default for PackageSet {
     fn default() -> Self {
         PackageSet {
@@ -396,9 +348,8 @@ impl PackageSet {
         let (module, module_sha) = match wasm {
             Some((_, wasm_path, bytes, sha)) => {
                 check_abi(&bytes).with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
-                let engine = engine(is_checked);
-                let module = Module::new(&engine, &bytes).wctx(|| format!("compiling {}", wasm_path.display()))?;
-                let verified = verify_module(&module, &kernels, self.limits.offline);
+                let module = Host::compile(&bytes, is_checked).with_context(|| format!("compiling {}", wasm_path.display()))?;
+                let verified = verify_module(&bytes, &module, &kernels, self.limits.offline);
                 verified.with_context(|| format!("package `{name}`: {}", wasm_path.display()))?;
                 (Some(module), Some(sha))
             }
@@ -963,45 +914,17 @@ fn check_abi(bytes: &[u8]) -> Result<()> {
 }
 
 /// A package's module, built for this ABI ([`check_abi`], before it was compiled), checked before
-/// any kernel of it is made (ABI-3): its one import, if any, is `m2.asset_read`; its memory is a
-/// defined 32-bit memory of 64 KiB pages, not shared, which the hardware checks can guard
-/// (RENDER-32); and it has the ABI's exports, with their signatures. Its start function, if any,
-/// may run for `limit` (ABI-6).
-fn verify_module(module: &Module, kernels: &[KernelDecl], limit: std::time::Duration) -> Result<()> {
-    let exports: HashMap<&str, ExternType> = module.exports().map(|e| (e.name(), e.ty())).collect();
-    let func = |name: &str, params: &[ValType], results: &[ValType]| -> Result<()> {
-        match exports.get(name) {
-            Some(ExternType::Func(f)) => {
-                let same = |a: &mut dyn ExactSizeIterator<Item = ValType>, b: &[ValType]| {
-                    a.len() == b.len() && a.zip(b).all(|(x, y)| ValType::eq(&x, y))
-                };
-                if same(&mut f.params(), params) && same(&mut f.results(), results) {
-                    Ok(())
-                } else {
-                    bail!("export `{name}` has the wrong signature")
-                }
-            }
-            _ => bail!("missing export `{name}`"),
-        }
-    };
-    match exports.get("memory") {
-        Some(ExternType::Memory(m)) if m.is_64() || m.is_shared() || m.page_size() != 1 << 16 => {
-            bail!("its memory must be a 32-bit memory of 64 KiB pages, not shared (docs/kernel-abi.md)")
-        }
-        Some(ExternType::Memory(_)) => {}
-        _ => bail!("missing export `memory`"),
-    }
-    crate::sandbox::instantiate(module, limit)?;
-    func("m2_alloc", &[ValType::I32, ValType::I32], &[ValType::I32])?;
-    for k in kernels {
-        let n = &k.name;
-        func(&format!("{n}_ports"), &[], &[ValType::I32])?;
-        func(&format!("{n}_new"), &[ValType::I32], &[ValType::I32])?;
-        func(&format!("{n}_reset"), &[ValType::I32], &[])?;
-        func(&format!("{n}_process"), &[ValType::I32, ValType::I32, ValType::I32, ValType::I32], &[])?;
-        func(&format!("{n}_active"), &[ValType::I32], &[ValType::I32])?;
-    }
-    Ok(())
+/// any kernel of it is made (ABI-3), from its bytes ([`Declared`]), so every kernel host refuses
+/// it in the same words: its memory is a defined 32-bit memory of 64 KiB pages, not shared, which
+/// the hardware checks can guard (RENDER-32); its one import, if any, is `m2.asset_read`; and it
+/// has the ABI's exports, with their signatures. Its start function, if any, may run for `limit`
+/// (ABI-6): `module` is instantiated once, between.
+fn verify_module(bytes: &[u8], module: &Module, kernels: &[KernelDecl], limit: std::time::Duration) -> Result<()> {
+    let declared = Declared::read(bytes)?;
+    declared.memory()?;
+    declared.imports()?;
+    Host::instantiate(module, limit)?;
+    declared.exports(kernels.iter().map(|k| k.name.as_str()))
 }
 
 #[cfg(test)]
@@ -1045,10 +968,14 @@ mod tests {
     // modules, so each set compiles std with std's one engine, and a pack with the packs' one.
     #[test]
     fn every_set_shares_one_engine() {
+        use wasmtime::Engine;
+        let checks = Host::checked;
         let (a, b) = (std_set(), std_set());
         let engine = |set: &PackageSet, id| set.module_for(id).unwrap().0.engine().clone();
         assert!(Engine::same(&engine(&a, "std:sine"), &engine(&b, "std:sine")), "two package sets, two engines");
-        assert!(Engine::same(&engine(&a, "std:sine"), &super::engine(false)) && !checks(a.module_for("std:sine").unwrap().0));
+        assert!(
+            Engine::same(&engine(&a, "std:sine"), &crate::host::wasmtime::engine(false)) && !checks(a.module_for("std:sine").unwrap().0)
+        );
         let mut a = a;
         a.load(&pack("@test/a", "1.0.0", "")).unwrap();
         let mut b = b;

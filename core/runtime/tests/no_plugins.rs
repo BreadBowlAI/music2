@@ -1,8 +1,8 @@
 //! HOST-1, FMT-18a: a runtime built without its `plugins` feature has no CLAP host, as the web
 //! player's will be (docs/designs/live/web-engine.md). A song that uses a plugin still builds and
 //! plays: each plugin is `plugin.missing`, in words that say plugins can't play here, and its node
-//! plays as a missing one does. Run by `cargo test -p m2-runtime --no-default-features --test
-//! no_plugins` (`ci/pr.sh rust`, `ci/check.sh`); with the feature on, this file is empty.
+//! plays as a missing one does. Run by `cargo test -p m2-runtime --no-default-features --features
+//! wasmtime --test no_plugins` (`ci/pr.sh rust`, `ci/check.sh`); with the feature on, this file is empty.
 #![cfg(not(feature = "plugins"))]
 
 use std::path::Path;

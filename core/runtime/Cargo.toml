@@ -7,10 +7,13 @@ license.workspace = true
 publish.workspace = true
 
 [features]
-default = ["plugins"]
+default = ["plugins", "wasmtime"]
 # The CLAP host (HOST-1): `m2-plugins`' `clap`. Without it, as on the web, the runtime has no
 # plugin host: each plugin a song uses is `plugin.missing`, said as one that can't play here.
 plugins = ["m2-plugins/clap"]
+# wasmtime, the kernel host (`src/host/wasmtime.rs`). Without it the runtime has no host and loads
+# no package with kernels: what a build for the web starts from (docs/designs/live/web-engine.md).
+wasmtime = ["dep:wasmtime"]
 
 [dependencies]
 m2-ir.workspace = true
@@ -22,7 +25,8 @@ m2-pool.workspace = true
 anyhow.workspace = true
 serde.workspace = true
 toml.workspace = true
-wasmtime.workspace = true
+# The kernel host the app runs (RENDER-32), behind the default feature `wasmtime`.
+wasmtime = { workspace = true, optional = true }
 bytemuck.workspace = true
 hound.workspace = true
 claxon.workspace = true

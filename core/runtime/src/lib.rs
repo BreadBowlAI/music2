@@ -35,6 +35,11 @@
 //!   Every port has its own memory, checked when an instance is built; debug builds also check
 //!   that input memory is unchanged by every call into a kernel (ABI-1, RENDER-24).
 
+// A build with no kernel host (no `wasmtime` feature, `host::none`) has no module, so what makes and
+// calls sandboxes can't run, and the compiler says so; that build is warned of nothing else.
+#![cfg_attr(not(feature = "wasmtime"), allow(dead_code, unreachable_code, unused_variables))]
+
+mod abi;
 pub mod audio;
 pub mod cells;
 pub mod click;
@@ -48,6 +53,7 @@ pub mod fault;
 pub mod fpenv;
 #[doc(hidden)]
 pub mod gauge;
+pub mod host;
 mod keep;
 pub mod latency;
 pub(crate) mod limit;
@@ -265,9 +271,10 @@ struct KernelInst {
     in_names: Vec<String>,
 }
 
-/// One call's view of a kernel's memory: its bytes, the ports in them, and the instance's name.
+/// One call's view of a kernel's memory: its sandbox, which copies in and out of it, the ports in
+/// it, and the instance's name.
 struct Ports<'a> {
-    data: &'a mut [u8],
+    sb: &'a mut Sandbox,
     ins: &'a [usize],
     outs: &'a [usize],
     out_channels: &'a [u8],
@@ -325,9 +332,9 @@ fn give(ins: &[NotesIn], r: &impl Reads, lanes: &[LaneSlot], p: &mut Ports) {
         let head = p.ins[*input];
         for (k, e) in events.iter().enumerate() {
             let at = head + NOTES_HEAD + k * EVENT_BYTES;
-            p.data[at..at + EVENT_BYTES].copy_from_slice(bytemuck::cast_slice(&e.words()));
+            p.sb.write(at, bytemuck::cast_slice(&e.words()));
         }
-        p.data[head..head + 4].copy_from_slice(&(events.len() as u32).to_le_bytes());
+        p.sb.write(head, &(events.len() as u32).to_le_bytes());
     }
 }
 
@@ -390,10 +397,9 @@ impl KernelInst {
             }
         };
         // Unconnected and constant inputs are written once; kernels never write inputs.
-        let data = sandbox.data_born();
         for (inp, &ptr) in inputs.iter().zip(&state.ins) {
             if let Input::Const(v) = inp {
-                floats(data, ptr, 2 * BLOCK).fill(*v as f32);
+                sandbox.write_floats(ptr, &[*v as f32; 2 * BLOCK]);
             }
         }
         #[cfg(debug_assertions)]
@@ -437,7 +443,7 @@ impl KernelInst {
             Some(own) => (own, &self.state),
             None => (&mut pool[self.at], &self.state),
         };
-        let done = state.process(sb, frames).wctx(|| format!("{name} crashed"));
+        let done = state.process(sb, frames).with_context(|| format!("{name} crashed"));
         done.map_err(|e| sb.ran_out(name, e))?;
         #[cfg(debug_assertions)]
         self.check_inputs(pool, false)?;
@@ -475,25 +481,23 @@ impl KernelInst {
         self.reset(pool)
     }
 
-    /// Its memory's bytes for one call's copies, with its ports and its name, without asking the
-    /// store (RENDER-32).
+    /// Its sandbox for one call's copies, with its ports and its name (RENDER-32).
     fn ports<'a>(&'a mut self, pool: &'a mut [Sandbox]) -> Ports<'a> {
         let (out_channels, name) = (&self.out_channels, &self.name);
         let (sb, s) = match &mut self.own {
             Some(own) => (own, &self.state),
             None => (&mut pool[self.at], &self.state),
         };
-        Ports { data: sb.data(), ins: &s.ins, outs: &s.outs, out_channels, name }
+        Ports { sb, ins: &s.ins, outs: &s.outs, out_channels, name }
     }
 
     #[cfg(debug_assertions)]
     fn keep_inputs(&mut self, pool: &mut [Sandbox]) {
         let mut before = std::mem::take(&mut self.before);
         let (sb, state) = self.sandbox(pool);
-        let data = sb.bytes();
         let mut at = 0;
         for (&ptr, &len) in state.ins.iter().zip(&state.in_len) {
-            before[at..at + len].copy_from_slice(&data[ptr..ptr + len]);
+            sb.read(ptr, &mut before[at..at + len]);
             at += len;
         }
         self.before = before;
@@ -503,11 +507,16 @@ impl KernelInst {
     fn check_inputs(&mut self, pool: &mut [Sandbox], reset: bool) -> Result<()> {
         let before = std::mem::take(&mut self.before);
         let (sb, state) = self.sandbox(pool);
-        let data = sb.bytes();
         let mut at = 0;
+        // Compared a piece at a time, copied out into a buffer on the stack: never allocates.
+        let mut now = [0u8; 512];
         let changed = state.ins.iter().zip(&state.in_len).position(|(&ptr, &len)| {
             at += len;
-            data[ptr..ptr + len] != before[at - len..at]
+            before[at - len..at].chunks(now.len()).enumerate().any(|(i, was)| {
+                let now = &mut now[..was.len()];
+                sb.read(ptr + i * 512, now);
+                now != was
+            })
         });
         self.before = before;
         if let Some(k) = changed {
@@ -553,7 +562,7 @@ impl KernelNode {
                 let (off, len) = if version == COPY { (seg.off, n) } else { (0, BLOCK) };
                 for c in 0..*channels as usize {
                     let sc = if c < *src_channels as usize { c } else { 0 };
-                    floats(p.data, ptr + c * BLOCK * 4, len).copy_from_slice(&s[sc * BLOCK + off..sc * BLOCK + off + len]);
+                    p.sb.write_floats(ptr + c * BLOCK * 4, &s[sc * BLOCK + off..sc * BLOCK + off + len]);
                 }
                 *seen = version;
             }
@@ -563,7 +572,7 @@ impl KernelNode {
         for (o, (&ptr, &ch)) in out.iter_mut().zip(p.outs.iter().zip(p.out_channels)) {
             for c in 0..ch as usize {
                 let dst = &mut o[seg.range(c)];
-                dst.copy_from_slice(floats(p.data, ptr + c * BLOCK * 4, n));
+                p.sb.read_floats(ptr + c * BLOCK * 4, dst);
                 if b.strict
                     && let Some(at) = dst.iter().position(|x| !x.is_finite())
                 {
@@ -1901,17 +1910,7 @@ fn releases(old: &FNode, new: &FNode, packages: &PackageSet) -> bool {
     sig.inputs.iter().zip(was.iter().zip(now)).any(|(port, (a, b))| param(&port.name) && *a != Input::Unset && *b == Input::Unset)
 }
 
-/// `with_context` for wasmtime's own error type.
-pub(crate) trait WasmContext<T> {
-    fn wctx<C: std::fmt::Display + Send + Sync + 'static>(self, f: impl FnOnce() -> C) -> Result<T>;
-}
-
-impl<T> WasmContext<T> for wasmtime::Result<T> {
-    fn wctx<C: std::fmt::Display + Send + Sync + 'static>(self, f: impl FnOnce() -> C) -> Result<T> {
-        self.map_err(|e| anyhow::Error::from(e).context(f()))
-    }
-}
-
+#[cfg(test)]
 fn floats(data: &mut [u8], ptr: usize, len: usize) -> &mut [f32] {
     bytemuck::cast_slice_mut(&mut data[ptr..ptr + len * 4])
 }

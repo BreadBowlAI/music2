@@ -10,12 +10,12 @@
 
 use anyhow::{Context, Result};
 use m2_song::Sha;
-use wasmtime::Module;
 
+use crate::host::Module;
 use crate::limit::Deadline;
 use crate::packages::PackageSet;
 use crate::sandbox::{Held, Sandbox, Spec};
-use crate::{BLOCK, WasmContext, fpenv};
+use crate::{BLOCK, fpenv};
 
 /// The kernel that stretches warped clips: always the song's std's (the sx plan's D9).
 pub(crate) const STRETCH: &str = "std:stretch";
@@ -97,11 +97,10 @@ pub(crate) fn run(k: &Kernel, r: &Run, sink: &mut dyn FnMut(&[&[f32]]) -> Result
     let mut done = 0;
     while done < r.frames {
         let n = (r.frames - done).min(BLOCK);
-        let made = state.process(&mut sb, n).wctx(|| format!("`{name}` crashed at frame {done}"));
+        let made = state.process(&mut sb, n).with_context(|| format!("`{name}` crashed at frame {done}"));
         made.map_err(|e| sb.ran_out(name, e))?;
-        let data = sb.data();
         for (b, &at) in block.iter_mut().zip(&from) {
-            b[..n].copy_from_slice(bytemuck::cast_slice(&data[at..at + 4 * n]));
+            sb.read_floats(at, &mut b[..n]);
         }
         let parts: Vec<&[f32]> = block.iter().map(|b| &b[..n]).collect();
         sink(&parts)?;
