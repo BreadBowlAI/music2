@@ -106,7 +106,7 @@ pub fn replace(to: &Path, bytes: &[u8]) -> io::Result<()> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static N: AtomicU64 = AtomicU64::new(0);
     let name = to.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = to.with_file_name(format!(".{name}.{}.{}.part", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+    let tmp = to.with_file_name(format!(".{name}.{}.{}.part", os::pid(), N.fetch_add(1, Ordering::Relaxed)));
     let done = (|| {
         let mut f = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp)?;
         f.write_all(bytes)?;

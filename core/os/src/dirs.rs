@@ -1,16 +1,17 @@
 //! The folders music2 uses outside a project. What it writes there is under `$HOME` when it is set
 //! (PLAT-7), so a test isolates itself by setting `HOME`; the system's CLAP folders it only reads.
 //! The cache folder is only a program's: none until its `main` calls [`keep_cache`], so no test
-//! writes the cache of the `HOME` it runs with.
+//! writes the cache of the `HOME` it runs with. The web has no folders: no home, so none of these,
+//! and no CLAP folder.
 
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::os;
 
-/// `$HOME`, when set and not empty.
+/// `$HOME`, when set and not empty. None on the web, which has no folders.
 pub fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+    os::home()
 }
 
 /// Where New Song puts songs: `~/Music/music2`, on Linux too (`XDG_MUSIC_DIR` waits for Linux

@@ -6,7 +6,7 @@ use std::io::{self, ErrorKind};
 use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::fs::FileId;
@@ -247,6 +247,15 @@ pub(crate) fn alive(pid: u32) -> bool {
     // SAFETY: signal 0 sends nothing: it only asks whether the process exists. A process of
     // another user exists too (EPERM).
     unsafe { libc::kill(pid, 0) == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM) }
+}
+
+/// `$HOME`, when set and not empty.
+pub(crate) fn home() -> Option<PathBuf> {
+    std::env::var_os("HOME").filter(|h| !h.is_empty()).map(PathBuf::from)
+}
+
+pub(crate) fn pid() -> u32 {
+    std::process::id()
 }
 
 pub(crate) fn exit_now(code: i32) -> ! {
