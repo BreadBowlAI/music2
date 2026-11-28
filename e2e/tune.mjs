@@ -168,9 +168,13 @@ check(await until(() => files() === before), "⌘Z takes it back, byte for byte"
 const pic = `${card} [data-picture="pitch"]`;
 check(!!(await until(() => page.$(`${pic} svg`), 15000)), "Tune's face draws its pitch line");
 const said = () => page.$eval(`${pic} canvas[data-live]`, (e) => JSON.parse(e.dataset.said ?? "[]")).catch(() => []);
+const words = async () => (await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null)) ?? "";
+// Its words at Natural's glide, which the ⌘Z above put back. The picture was drawn at Robot's (glide 0:
+// "at once"), and the svg is still there: the words follow a moment after the file, once the server
+// draws the picture again at the values put back and sends it (CARD-68), so they are waited for.
 check(
-  /^Faint: how far your voice is from its note\. Solid: how far it is after Tune, which moves it onto the note in about 100 ms\./.test((await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => "")) ?? ""),
-  `its words: ${await page.$eval(`${pic} [role=group]`, (e) => e.getAttribute("aria-label")).catch(() => null)}`,
+  await until(async () => /^Faint: how far your voice is from its note\. Solid: how far it is after Tune, which moves it onto the note in about 100 ms\./.test(await words())),
+  `its words: ${await words()}`,
 );
 await api("/loop", { method: "POST", body: JSON.stringify({ start: 0, end: 3, on: true }) });
 await seen(pic);
