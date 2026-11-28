@@ -14,7 +14,7 @@ import { PROJ, ROOT, check, done, open, read, sess, sleep, until, write } from "
 import { expand } from "./graphlib.mjs";
 import { lint } from "./lintlib.mjs";
 
-const { page, errors, api, view, box } = await open(1440, 900);
+const { page, errors, api, view, box, caughtUp } = await open(1440, 900);
 
 /** A request from outside the page: an agent's. */
 const agent = (path, body) =>
@@ -140,7 +140,11 @@ check(await until(async () => read("tracks/tone.ts") !== code, 8000), "the relea
 const cutoff = Number(/cutoff: (\d+)/.exec(read("tracks/tone.ts"))?.[1]);
 check(cutoff > 2000, `the drag moved the cutoff up: ${cutoff}`);
 
-// An agent reads the same points, as numbers (CARD-80).
+// An agent reads the same points, as numbers (CARD-80), by the card's id at the revision the
+// release made. The server writes the file before it publishes that revision, and its engine has the
+// new code by then: an ask by the revision before is refused ("the song's code changed since
+// revision …", CARD-67). So the state is read once the server has published it (caughtup.mjs).
+await caughtUp();
 const state = (await api("")).body;
 const node = state.view.modules.find((m) => m.key === "tone").nodes.find((n) => n.title === "Tone");
 const asked = await agent("/api/graph/picture", { session: state.session, revision: state.view.revision, client: "reader", module: "tone", node: node.id, view: "curve", on: true });
