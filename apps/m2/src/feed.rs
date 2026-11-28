@@ -98,6 +98,9 @@ pub fn run(args: &[String]) -> Result<()> {
     Ok(())
 }
 
+/// The longest `wait`, in seconds: a day.
+const LONGEST: f64 = 86_400.0;
+
 /// `text` as a number, for `what`.
 fn number(text: &str, what: &str) -> Result<f64> {
     text.parse::<f64>().ok().filter(|x| x.is_finite()).ok_or_else(|| anyhow!("{what} is a number, not `{text}`"))
@@ -153,8 +156,8 @@ fn wait(app: &App, track: Option<&str>, args: &[String]) -> Result<()> {
         bail!("`--for` is `low`, `empty` or `jump`, not `{w}`");
     }
     let secs = value(args, "--timeout").map(|t| number(&t, "--timeout")).transpose()?.unwrap_or(0.0);
-    if secs <= 0.0 {
-        bail!("`--timeout` is a number of seconds above 0: every wait has a time limit");
+    if !(secs > 0.0 && secs <= LONGEST) {
+        bail!("`--timeout` is a number of seconds above 0 and at most {LONGEST} (a day): every wait has a time limit, not {secs}");
     }
     let deadline = Instant::now() + Duration::from_secs_f64(secs);
     // Listening first, so nothing told between the look and the socket is missed.
@@ -169,10 +172,11 @@ fn wait(app: &App, track: Option<&str>, args: &[String]) -> Result<()> {
     // Already so: said at once.
     if matches!(what.as_deref(), Some("low" | "empty")) {
         for f in &feeds {
-            let (bars, beats) = (f["buffer"]["bars"].as_f64().unwrap_or(0.0), f["buffer"]["beats"].as_f64().unwrap_or(0.0));
+            // Judged as the server judges it: by the low mark it says, which a loop can make shorter.
+            let (beats, low) = (f["buffer"]["beats"].as_f64().unwrap_or(0.0), f["low_mark"]["beats"].as_f64().unwrap_or(0.0));
             let why = if beats <= 1e-9 {
                 Some("empty")
-            } else if bars < f["low_bars"].as_f64().unwrap_or(0.0) {
+            } else if beats < low - 1e-9 {
                 Some("low")
             } else {
                 None

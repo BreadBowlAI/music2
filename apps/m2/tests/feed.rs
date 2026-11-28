@@ -94,6 +94,10 @@ fn wait_answers_at_once_when_low_and_times_out() {
     let out = child.wait_with_output().unwrap();
     let jump: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|e| panic!("{e}: {}", said(&out)));
     assert_eq!(jump["why"], "jump", "{jump}");
+    // A time limit past a day is refused in words, never a panic.
+    let huge = feed(&a, &["wait", "--for", "jump", "--timeout", "1e20"]);
+    assert_eq!(huge.status.code(), Some(1), "{}", said(&huge));
+    assert!(said(&huge).contains("86400"), "{}", said(&huge));
     // No timeout is refused before anything is asked.
     let bare = a.m2(&["feed", a.dir(), "wait"]);
     assert_eq!(bare.status.code(), Some(2), "{}", said(&bare));
@@ -118,7 +122,30 @@ fn m2_listen_never_hears_a_feed() {
     let path = notes(&a, "loud.json", json!(loud));
     line(&feed(&a, &["put", "keys", "0", "8", &path]));
     a.running.state.graph.transport("play").unwrap();
-    std::thread::sleep(Duration::from_millis(500));
+    std::thread::sleep(Duration::from_millis(1500));
     assert_eq!(listen(&a), before, "the same measures: the feed isn't in the song");
+    a.running.state.graph.transport("stop").unwrap();
+    // The same notes in the song change what it measures: so it would hear a feed that reached a file.
+    let kept = feed(&a, &["keep", "keys"]);
+    assert!(kept.status.success(), "{}", said(&kept));
+    assert_ne!(listen(&a), before, "kept, they are heard");
+}
+
+// FEED-5, FEED-6: on a loop shorter than the low mark, all written, `wait --for low` waits: the
+// state's low mark is the loop's length, as the server judges it, so an agent never spins.
+#[test]
+fn wait_on_a_short_loop_all_written_waits() {
+    let a = App::open("first-song", |_| {});
+    a.running.state.graph.set_loop(Some((0.0, 8.0)), Some(true)).unwrap();
+    assert!(feed(&a, &["open", "keys", "--low", "4"]).status.success());
+    let all = notes(&a, "loop.json", json!([{"pitch": "A4", "start": 0, "length": 1}, {"pitch": "C5", "start": 4, "length": 1}]));
+    line(&feed(&a, &["put", "keys", "0", "8", &all]));
+    a.running.state.graph.transport("play").unwrap();
+    let st = line(&feed(&a, &["status", "--json"]));
+    assert_eq!(st["feeds"][0]["low_mark"]["beats"], 8.0, "{st}");
+    let t = Instant::now();
+    let waited = feed(&a, &["wait", "keys", "--for", "low", "--timeout", "2"]);
+    assert_eq!(waited.status.code(), Some(1), "it waited, and nothing came: {}", said(&waited));
+    assert!(t.elapsed() >= Duration::from_secs(2), "{:?}", t.elapsed());
     a.running.state.graph.transport("stop").unwrap();
 }

@@ -592,7 +592,7 @@ pub const COMMANDS: &[Command] = &[
                line: `taken`, `late` (notes that started before the lock, left out), `lock`, `written_to` and \
                `playhead`. The lock is the playhead plus at least 50 ms; a `<to>` more than 64 bars past the playhead \
                is refused. `wait` prints one `feed` event as a JSON line and exits 0, at once when the feed is already \
-               low. `--for` is `low` (which takes `empty` too), `empty` or `jump`. It exits 1 when `--timeout` passes first. `keep --into version` \
+               low (by the state's `low_mark`, never more than the loop's length). `--for` is `low` (which takes `empty` too), `empty` or `jump`. It exits 1 when `--timeout` (at most 86400 s) passes first. `keep --into version` \
                (`KIND` is `clip` or `version`) adds what played as a version of the notes clip under it. Play, stop and the loop stay the \
                musician's. See [Playing live](live.md).",
     },
