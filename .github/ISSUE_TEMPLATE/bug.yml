@@ -7,7 +7,7 @@ body:
       value: |
         **In short:** say what you did, what you expected, and what happened instead. Short and plain is best.
 
-        A security problem? Please don't report it here: see [SECURITY.md](https://github.com/BreadBowlAI/music2/blob/main/SECURITY.md).
+        A security problem? Please don't report it here: see [SECURITY.md](https://github.com/BreadBowl-AI/music2/blob/main/SECURITY.md).
   - type: textarea
     id: what
     attributes:

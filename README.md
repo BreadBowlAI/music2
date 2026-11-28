@@ -45,7 +45,7 @@ Keys are shown as on a Mac. On Linux, Ctrl does what ⌘ does, and Alt what ⌥ 
 
 ### Download
 
-Get the file for your computer from the [Releases page](https://github.com/BreadBowlAI/music2/releases):
+Get the file for your computer from the [Releases page](https://github.com/BreadBowl-AI/music2/releases):
 
 | Your computer | The file |
 |---|---|
@@ -68,7 +68,7 @@ sudo apt install pkg-config build-essential libasound2-dev libwebkit2gtk-4.1-dev
 **2. Get the code, build it, and run the app:**
 
 ```bash
-git clone https://github.com/BreadBowlAI/music2.git
+git clone https://github.com/BreadBowl-AI/music2.git
 cd music2
 (cd web && npm ci && npm run build)               # the window's UI
 cargo build --locked --release -p m2              # m2, the command line (agents use it)
@@ -106,13 +106,13 @@ Other ways to run it (the UI with hot reload, the app and packages built yoursel
 | See what is missing | [What music2 can't do yet](docs/gaps.md) |
 | Read the rules every part is built to | [The contract](docs/architecture.md) |
 
-The guide (`docs/guide/`) is also a website, <https://breadbowlai.github.io/music2/>, once the repo is public, and `m2 docs` prints it in the terminal.
+The guide (`docs/guide/`) is also a website, <https://breadbowl-ai.github.io/music2/>, once the repo is public, and `m2 docs` prints it in the terminal.
 
 ## Help build it
 
 You are welcome, and so are AI coding agents. Read [CONTRIBUTING.md](CONTRIBUTING.md) first: the goals, the rules, and the one command to run before a pull request. Agents start at [AGENTS.md](AGENTS.md).
 
-- Found a bug, or have an idea? [Open an issue](https://github.com/BreadBowlAI/music2/issues/new/choose).
+- Found a bug, or have an idea? [Open an issue](https://github.com/BreadBowl-AI/music2/issues/new/choose).
 - Found a security problem? Please report it in private: [SECURITY.md](SECURITY.md).
 - Everyone follows the [Code of Conduct](CODE_OF_CONDUCT.md). Who decides what: [GOVERNANCE.md](GOVERNANCE.md).
 
@@ -120,10 +120,10 @@ You are welcome, and so are AI coding agents. Read [CONTRIBUTING.md](CONTRIBUTIN
 
 How many people starred music2 on GitHub, day by day (drawn by [star-history.com](https://star-history.com)).
 
-<a href="https://star-history.com/#BreadBowlAI/music2&Date">
+<a href="https://star-history.com/#BreadBowl-AI/music2&Date">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=BreadBowlAI/music2&type=Date&theme=dark">
-    <img alt="A chart of music2's GitHub stars over time" src="https://api.star-history.com/svg?repos=BreadBowlAI/music2&type=Date">
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=BreadBowl-AI/music2&type=Date&theme=dark">
+    <img alt="A chart of music2's GitHub stars over time" src="https://api.star-history.com/svg?repos=BreadBowl-AI/music2&type=Date">
   </picture>
 </a>
 

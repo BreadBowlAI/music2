@@ -14,9 +14,9 @@ create-missing = false
 
 [output.html]
 site-url = "/music2/"
-git-repository-url = "https://github.com/BreadBowlAI/music2"
+git-repository-url = "https://github.com/BreadBowl-AI/music2"
 # {path} is the page's path from this folder: guide/window.md.
-edit-url-template = "https://github.com/BreadBowlAI/music2/edit/main/docs/{path}"
+edit-url-template = "https://github.com/BreadBowl-AI/music2/edit/main/docs/{path}"
 
 [output.html.search]
 enable = true

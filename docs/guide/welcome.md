@@ -37,7 +37,7 @@ no network. `m2 docs <page>` prints one page: a link to `window.md` is `m2 docs 
 ## Help build music2
 
 music2 is open source. To build it, run its checks and send a change, read
-[CONTRIBUTING.md](https://github.com/BreadBowlAI/music2/blob/main/CONTRIBUTING.md). The rules every
-part is built to are in [the contract](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md).
-What music2 can't do yet is in [the gap list](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md),
-and where it is going in [the goals](https://github.com/BreadBowlAI/music2/blob/main/docs/goals.md).
+[CONTRIBUTING.md](https://github.com/BreadBowl-AI/music2/blob/main/CONTRIBUTING.md). The rules every
+part is built to are in [the contract](https://github.com/BreadBowl-AI/music2/blob/main/docs/architecture.md).
+What music2 can't do yet is in [the gap list](https://github.com/BreadBowl-AI/music2/blob/main/docs/gaps.md),
+and where it is going in [the goals](https://github.com/BreadBowl-AI/music2/blob/main/docs/goals.md).

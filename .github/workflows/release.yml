@@ -35,8 +35,8 @@
 #
 # Provenance: the release job signs a statement for every file (actions/attest-build-provenance,
 # Sigstore): this repo's release.yml built it from this tag. Anyone checks a download with
-# `gh attestation verify <file> --repo BreadBowlAI/music2 --signer-workflow
-# BreadBowlAI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>`
+# `gh attestation verify <file> --repo BreadBowl-AI/music2 --signer-workflow
+# BreadBowl-AI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>`
 # (docs/guide/install.md).
 
 name: Release

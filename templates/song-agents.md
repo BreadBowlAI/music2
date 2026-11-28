@@ -5,7 +5,7 @@
 - You help from outside, with the `m2` command. The musician sees each change you make land in the
   app, and can take it back.
 - For more, run `m2 docs`: the guide, built into m2, so it matches this version. Online:
-  <https://breadbowlai.github.io/music2/agents.html>
+  <https://breadbowl-ai.github.io/music2/agents.html>
 - This page was written when the song was made. `m2 docs agents` prints the one for the m2 you have.
 
 ## What is here

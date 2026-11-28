@@ -8,9 +8,9 @@
 // issue forms (.github/ISSUE_TEMPLATE/*.yml, for their full URLs alone), and checks
 //   - every relative link names a file or folder that is there, and every #anchor in it a heading
 //     of that Markdown file (GitHub's ids, which mdBook makes the same for plain headings);
-//   - every https://github.com/BreadBowlAI/music2/blob/main/<path> (or /tree/main/) names a path
+//   - every https://github.com/BreadBowl-AI/music2/blob/main/<path> (or /tree/main/) names a path
 //     that is there, and its #anchor a heading too;
-//   - every https://breadbowlai.github.io/music2/<page>.html names a page of the guide;
+//   - every https://breadbowl-ai.github.io/music2/<page>.html names a page of the guide;
 //   - the guide (docs/guide/): every page is in SUMMARY.md once, SUMMARY.md names only pages that
 //     are there, each page starts with "# Title" (after one comment line, on a page made from code)
 //     and then **In short**, a page links out of the
@@ -27,8 +27,8 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const REPO = "https://github.com/BreadBowlAI/music2/";
-const SITE = "https://breadbowlai.github.io/music2/";
+const REPO = "https://github.com/BreadBowl-AI/music2/";
+const SITE = "https://breadbowl-ai.github.io/music2/";
 const GUIDE = "docs/guide/";
 const AGENTS = "templates/song-agents.md";
 const AGENTS_MAX = 80;
@@ -179,7 +179,7 @@ for (const file of [...markdown, ...forms]) {
         }
         continue;
       }
-      const repo = /^https:\/\/github\.com\/BreadBowlAI\/music2\/(?:blob|tree)\/main\/([^?#]*)(?:#(.*))?$/.exec(link);
+      const repo = /^https:\/\/github\.com\/BreadBowl-AI\/music2\/(?:blob|tree)\/main\/([^?#]*)(?:#(.*))?$/.exec(link);
       if (repo) {
         checkTarget(file, n, decodeURIComponent(repo[1]), repo[2] ?? null, link);
         continue;

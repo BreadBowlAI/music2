@@ -1,8 +1,8 @@
 # The music2 pack registry
 
-**In short:** the list of packs anyone can get in [music2](https://github.com/BreadBowlAI/music2): instruments, effects, sounds and samples. One small file a pack, in `packs/`. To list your pack, open a pull request that adds its file. A robot checks it, plays it, and copies its files into music2's storage, where the app finds them.
+**In short:** the list of packs anyone can get in [music2](https://github.com/BreadBowl-AI/music2): instruments, effects, sounds and samples. One small file a pack, in `packs/`. To list your pack, open a pull request that adds its file. A robot checks it, plays it, and copies its files into music2's storage, where the app finds them.
 
-This folder is a template, kept in music2's own repo at `registry/`. The owner copies it into its own repo, `BreadBowlAI/music2-registry`, once the storage is set up (see [Setting it up](#setting-it-up)).
+This folder is a template, kept in music2's own repo at `registry/`. The owner copies it into its own repo, `BreadBowl-AI/music2-registry`, once the storage is set up (see [Setting it up](#setting-it-up)).
 
 | Word | Meaning |
 |---|---|
@@ -44,7 +44,7 @@ You need `m2` from a music2 release that has `m2 registry` (the first is the one
 
 | Step | What you do |
 |---|---|
-| 1. Make your pack | `m2 pack new felt-piano --name @alice/felt-piano`, then your instruments, sounds and samples ([Making a pack](https://github.com/BreadBowlAI/music2/blob/main/docs/guide/making-a-pack.md)) |
+| 1. Make your pack | `m2 pack new felt-piano --name @alice/felt-piano`, then your instruments, sounds and samples ([Making a pack](https://github.com/BreadBowl-AI/music2/blob/main/docs/guide/making-a-pack.md)) |
 | 2. Check it | `m2 pack check felt-piano`: every problem in words |
 | 3. Say where its code is | in `m2pkg.toml`, under `[package]`: `repository = "https://github.com/alice/felt-piano"` |
 | 4. List it | fork this repo and clone your fork, then `m2 registry add music2-registry felt-piano --source https://github.com/alice/felt-piano/releases/download/v1.2.0/felt-piano-1.2.0.tar.gz` (the address its `.tar.gz` will have). It checks the pack again, writes its `m2pack.json`, and writes your pack's file in `packs/` |
@@ -105,7 +105,7 @@ After a take-down, the owner purges the deleted files from Cloudflare's cache to
 
 For the owner, once: the storage (decision D1: Cloudflare R2) and its web address (decision D10).
 
-1. Make the repo `BreadBowlAI/music2-registry` from this folder.
+1. Make the repo `BreadBowl-AI/music2-registry` from this folder.
 2. Make an R2 bucket. Give it a public address of our own for the app (`packs.<our domain>`), and turn on its own `r2.dev` address for the robot: `--from` must read the bucket itself, never a cache in front of it, or it could take a deleted file for one still there.
 3. In the repo's settings, make an environment `bucket` that only `main` may use, with three secrets: `R2_ENDPOINT` (`https://<account>.r2.cloudflarestorage.com`), `R2_ACCESS_KEY_ID` and `R2_SECRET_ACCESS_KEY` (a key that may read and write that one bucket).
 4. In both workflows, set `M2_VERSION` and `M2_SHA256` to the first music2 release with `m2 registry` and the SHA-256 of its `m2-<version>-linux-x86_64.tar.gz` (from its `SHA256SUMS`), `BUCKET_URL` to the bucket's `r2.dev` address, and in `main.yml` `R2_BUCKET` to its name.
@@ -122,4 +122,4 @@ For the owner, once: the storage (decision D1: Cloudflare R2) and its web addres
 
 The robot reads the bucket over https (`--from`) with music2's download module, from the first music2 release that has it.
 
-The rules for the robot and the bucket's files are music2's contract, [REG-1 to REG-10](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md#registry), and the design behind them is [the packs design](https://github.com/BreadBowlAI/music2/blob/main/docs/designs/packs/design.md).
+The rules for the robot and the bucket's files are music2's contract, [REG-1 to REG-10](https://github.com/BreadBowl-AI/music2/blob/main/docs/architecture.md#registry), and the design behind them is [the packs design](https://github.com/BreadBowl-AI/music2/blob/main/docs/designs/packs/design.md).
