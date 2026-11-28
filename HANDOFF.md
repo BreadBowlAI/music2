@@ -5,6 +5,14 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **Live feeds (track `feeds`, 2026-11-28).** An agent plays a track live: it writes the track's notes ahead of
+  the playhead (`m2 feed`, `POST /api/feed/*`), and music2 plays them with the track's clips, says when the buffer
+  runs low, refuses what comes too late, and keeps what played as one undo step when asked (rules FEED-1 to
+  FEED-8, and AGENT-11: an agent may open a feed). The engine change is the scheduler's second source,
+  `LaneSwap::Feed` (`core/runtime/src/sched.rs`); the server's part is `crates/server/src/graph/feeds.rs`; the page's
+  is the track menu's Let an agent play this track and the Live mark (`web/src/components/Live.tsx`). Guide:
+  [Playing live](docs/guide/live.md). Departures and what is left: [the build note](docs/designs/live/build.md).
+  Parts 2 to 4 of the note (music2 on the web) are gap #64.
 - **A clip's versions (track `versions`, 2026-11-21).** A notes clip can hold several versions of its notes: one
   plays, and its notes are the clip's; the others wait in the clip and are never heard or rendered (rules VER-1 to
   VER-5, [the design](docs/designs/versions/design.md)). Built: the lane format's optional `versions` (`format`

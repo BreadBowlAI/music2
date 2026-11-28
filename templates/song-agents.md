@@ -49,8 +49,8 @@ Below, `.` is this song's folder.
 | `m2 listen . --bars 9-16` | measure how it sounds: loudness, peaks, bands, masking |
 | `m2 render . ../mix.wav` | the song as a WAV. Write it outside this folder: a WAV in here isn't part of the song |
 | `m2 undo .` | take back your own newest change, with the app open or closed |
-| `m2 focus .` ¹ | what the musician looks at now |
-| `m2 point . bars:9-16 "<words>"` ¹ | show the musician where to listen |
+| `m2 focus .` ¹, `m2 point . bars:9-16 "<words>"` ¹ | what the musician looks at now; show them where to listen |
+| `m2 feed . open <track>` ¹ | play a track live, writing its notes ahead of the playhead as the song plays: `m2 docs live` |
 | `m2 call . <path>` ¹ | every other change the app can make (`m2 routes` lists them) |
 
 ¹ Only while the app has this song open, as `m2 watch`; else they say "music2 doesn't have this song

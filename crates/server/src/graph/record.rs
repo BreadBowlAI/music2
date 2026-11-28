@@ -249,14 +249,14 @@ pub(super) enum Audio {
 }
 
 /// The bar line at or before `beat`.
-fn bar_before(a: &Arrangement, beat: f64) -> f64 {
+pub(super) fn bar_before(a: &Arrangement, beat: f64) -> f64 {
     let (_, into) = a.bar_at(beat.max(0.0));
     let bar = a.meter_at(beat.max(0.0)).bar();
     if bar - into < 1e-9 { beat.max(0.0) - into + bar } else { beat.max(0.0) - into }
 }
 
 /// The bar line at or after `beat`.
-fn bar_after(a: &Arrangement, beat: f64) -> f64 {
+pub(super) fn bar_after(a: &Arrangement, beat: f64) -> f64 {
     let line = bar_before(a, beat);
     if beat - line < 1e-9 { line } else { line + a.meter_at(line).bar() }
 }

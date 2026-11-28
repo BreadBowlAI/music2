@@ -525,6 +525,24 @@ fn every_change_answers_its_revision_step_and_moved() {
     r.change("POST", "/api/graph/undo", PAGE, json!({}), Made::TookBack(Some(false)));
     r.change("POST", "/api/graph/redo", PAGE, json!({}), Made::TookBack(Some(false)));
 
+    // FEED-7: an agent keeps what played on a feed: one revision, its step, no ids moved (a lane's
+    // data alone).
+    let feed = |path: &str, body: Value| ask(&r.url, "POST", path, TOOLS, &body);
+    assert_eq!(feed("/api/feed/open", json!({"session": r.session, "track": "bass"})).0, 200);
+    let notes = json!([{"pitch": 36, "start": 0.25, "length": 0.25}, {"pitch": 40, "start": 0.5, "length": 0.25}]);
+    let (status, put) = feed("/api/feed/put", json!({"session": r.session, "feed": "bass", "from": 0, "to": 8, "notes": notes}));
+    assert_eq!((status, &put["taken"]), (200, &json!(2)), "{put}");
+    assert_eq!(ask(&r.url, "POST", "/api/graph/transport", PAGE, &json!({"action": "play"})).0, 200);
+    let played = std::time::Instant::now();
+    while ask(&r.url, "GET", "/api/feed", TOOLS, &Value::Null).1["feeds"][0]["playhead"].as_f64().unwrap_or(0.0) < 1.0 {
+        assert!(played.elapsed() < std::time::Duration::from_secs(20), "the song never played past beat 1");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    // The feeds' thread looks every 50 ms: what played is kept by then.
+    std::thread::sleep(std::time::Duration::from_millis(200));
+    assert_eq!(ask(&r.url, "POST", "/api/graph/transport", PAGE, &json!({"action": "stop"})).0, 200);
+    r.change("POST", "/api/feed/keep", TOOLS, json!({"feed": "bass"}), Made::Revision(Some(false)));
+
     // Every write route of the table: run above, or named with why it answers no change.
     let exempt: BTreeSet<&str> = NO_CHANGE.iter().map(|(p, _)| *p).collect();
     let missing: Vec<String> = api::all()

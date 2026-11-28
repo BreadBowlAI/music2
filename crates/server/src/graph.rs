@@ -46,6 +46,7 @@ mod drafts;
 mod events;
 pub(crate) mod exchange;
 mod faults;
+pub mod feeds;
 pub mod focus;
 mod fx;
 mod import;
@@ -364,6 +365,8 @@ struct ControlPlane {
     leases: Leases,
     /// The windows that play notes live (MON-7).
     audition: audition::Sources,
+    /// Tracks agents play live, written ahead of the playhead (FEED-1).
+    feeds: feeds::Feeds,
     /// The DSP load of the last second, read by the meters (8b.8).
     meters: meters::Meters,
     /// The MIDI keyboards plugged in, and what they play (8b.10).
@@ -869,6 +872,8 @@ impl Inner {
         state["local"] = local;
         // The code files with text left unsaved when the song last closed (WRITE-27).
         state["drafts"] = drafts;
+        // The feeds open, for their Live marks (FEED-1).
+        state["feeds"] = feeds::listed(&self.control.lock());
         state["midi"] = self.midi_state();
         state["record"] = self.record_state();
         state["arm"] = self.arm_state();
@@ -910,6 +915,7 @@ impl Inner {
         }
         lanes::end_all(cp);
         tempo_lease::end_all(cp);
+        feeds::end_all(cp);
     }
 
     /// Register a lease on `control`, read in the published accepted revision, which the request
@@ -1232,6 +1238,7 @@ impl Graph {
             bail!("can't seek to beat {beat}");
         }
         self.record_jump();
+        self.feeds_jump(Some(beat.max(0.0)));
         self.midi_pedals_up();
         if self.inner.timing.lock().is_none() {
             bail!("no project is open");
@@ -2221,7 +2228,13 @@ impl Graph {
             "restart" => return self.seek(0.0),
             other => bail!("unknown transport action {other}"),
         };
+        if cmd == Cmd::Stop && st.playing {
+            self.feeds_jump(None);
+        }
         player.transport(cmd)?;
+        if cmd == Cmd::Play {
+            self.feeds_play();
+        }
         if cmd == Cmd::Stop && st.playing {
             self.midi_pedals_up();
         }

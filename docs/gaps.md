@@ -58,6 +58,7 @@ The old engine, with its own song files and screens, was removed in October 2026
 | 33 | **VST3 and AU plugins: not planned.** The owner chose CLAP only (2026-10-19), as the open format. As far as we know, Auto-Tune, Melodyne and Serum don't ship as CLAP plugins: that is why pitch correction (#50) and editing a vocal's notes (#51) are to be music2's own, as its wavetable synth is. | Many popular synths, vocal tools and mastering plugins come only as AU or VST3 on the Mac. | No | large |
 | 40 | **The guide from inside the app**: Help ▸ music2 Guide, opening the guide's website (it is public once the repo is), the site in the app's look (one CSS file for mdBook), and a copy of the site for each release once there are releases (today it follows `main`, and `m2 docs` its own version). | A musician looks for help in the Help menu, not on GitHub. | No | small |
 | 42 | **`m2` on your PATH on a Mac**: a link in `/usr/local/bin` to the `m2` inside `music2.app` (or from source, `target/release/m2`), or a menu row that makes one. The Linux `.deb` installs `/usr/bin/m2` since 0.1.0. Today a song's `AGENTS.md` names its `m2` by its full path, so an agent needs no PATH, but you type the whole path. | Typing `m2` alone in Terminal. | No | small |
+| 64 | **music2 on the web** (the [live feeds note](designs/live/design.md)'s Parts 2 to 4): the same engine, built to WebAssembly, playing a song in a web page with the same kernels and bits, `@m2/web` on npm, and feeds there with the same messages. Built: Part 1, feeds in the app ([Playing live](guide/live.md), FEED-1 to FEED-8). | A developer can put a real song on a page, and an agent can play live into it. | No | large |
 
 - **Built for these rows**: the registry's format, its robot and `m2 registry check`, `add`, `pending` and `build` ([REG-1 to REG-10](architecture.md#registry), the repo's template in `registry/`); packs from a folder, `m2 pack install`, `music2.lock` and scoped names ([Packs](guide/packs.md)); the library in the app, with previews, Get, Cancel and `m2 pack get` ([REG-11 to REG-17](architecture.md#registry), [Getting packs from the library](guide/library.md)); the downloads ([NET-1](architecture.md#network) to NET-6); a time limit on every call into a pack's kernel ([ABI-6, ABI-7](architecture.md#kernel-abi-reservations)).
 
@@ -95,6 +96,10 @@ Each line is one small gap, without a number.
 
 ### Recording and playing live
 
+- **A feed's notes aren't drawn** on the timeline or in the roll: you hear what an agent plays, and see it only once it is kept (FEED-1).
+- **One feed a track**, and a track with two notes lanes needs its lane named (`lane` in `POST /api/feed/open`): `m2 feed open` and the track's menu take its first.
+- **A feed doesn't follow a track's new key**: renamed, the track plays nothing of its feed (`heard: false`) until it is closed and opened again.
+- **A feed's `low` and `empty` come from a look every 50 ms**, so up to about 50 ms after the buffer crossed.
 - **The pedal isn't recorded** (#24): a take keeps each of a keyboard's notes as long as its pedal held it, but a note from the computer's keys only as long as its key (RENDER-36).
 - **Arms and each track's input channels last only while the song is open**: they aren't kept with it, and every window shares them.
 - **One notes track records at a time**: the keyboards play one track, so arming a second notes track disarms the first. Audio tracks, any number.

@@ -34,6 +34,7 @@
 - [Working on a music2 song](agents.md)
 - [How your changes reach the song](changes.md)
 - [Listening](listening.md)
+- [Playing live](live.md)
 - [The local API](api.md)
 
 # Reference

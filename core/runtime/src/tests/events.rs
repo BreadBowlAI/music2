@@ -108,7 +108,7 @@ fn load(pkg: &Path) -> PackageSet {
 }
 
 // ABI-8: each block the kernel gets its lane's events in the reserved shape: the header's count,
-// its cap (its lane's room: 812 at its smallest) and where its events start (just after it, at 16), then 24 bytes an event: the
+// its cap (its lane's room, its feed's included: 1196 at its smallest) and where its events start (just after it, at 16), then 24 bytes an event: the
 // kind, the frame in the block (never counted across blocks), the note's id, and its values (an
 // On's pitch, velocity and no `from_pitch`; an Off's release velocity). In RENDER-14's order: at one
 // frame the Off that ends a note before the Ons that start there.
@@ -129,7 +129,7 @@ fn a_kernel_reads_its_lanes_events() {
         blocks[0],
         Read {
             count: 5.0,
-            cap: 812.0,
+            cap: 1196.0,
             at: 16.0,
             ons: 3.0,
             offs: 2.0,
@@ -143,7 +143,7 @@ fn a_kernel_reads_its_lanes_events() {
         }
     );
     assert_eq!(blocks[1].events, [[off, 52.0, 2.0, 0.0, 0.0, 0.0]], "the next block's frames start at 0 again");
-    assert_eq!((blocks[2].count, blocks[2].cap), (0.0, 812.0), "a block with none");
+    assert_eq!((blocks[2].count, blocks[2].cap), (0.0, 1196.0), "a block with none");
     std::fs::remove_dir_all(pkg).ok();
 }
 
@@ -196,11 +196,12 @@ fn crowded(n: usize, first: usize) -> DataSet {
 
 // ABI-8 (review E3): a kernel's events input holds what its lane's buffer can bring in a block, so
 // none is ever left out: 1100 notes heard starting over two blocks, all ending at one frame, are
-// 1100 Ons and 1100 Offs. Its `cap` is its lane's room; a quiet lane's is the smallest, 812.
+// 1100 Ons and 1100 Offs. Its `cap` is its lane's room, its feed's included (FEED-2); a quiet
+// lane's is the smallest, 1196.
 #[test]
 fn every_event_of_a_crowded_lane_reaches_the_kernel() {
-    let smallest = sched::Caps::FLOOR.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS;
-    assert_eq!(smallest, 812);
+    let smallest = sched::Caps::FLOOR.with_feed().events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS;
+    assert_eq!(smallest, 1196);
     let pkg = probe("");
     let pk = load(&pkg);
     let data = crowded(1100, 600);
@@ -209,7 +210,7 @@ fn every_event_of_a_crowded_lane_reaches_the_kernel() {
     let (ons, offs): (f32, f32) = (reads.iter().map(|x| x.ons).sum(), reads.iter().map(|x| x.offs).sum());
     assert_eq!((ons, offs), (1100.0, 1100.0), "every On and every Off");
     assert_eq!(reads.iter().map(|x| x.count).collect::<Vec<_>>(), [600.0, 500.0, 0.0, 1100.0]);
-    let needs = crate::notes_data(&data, "song", "notes", SR as f64).needs().max(sched::Caps::FLOOR);
+    let needs = crate::notes_data(&data, "song", "notes", SR as f64).needs().max(sched::Caps::FLOOR).with_feed();
     assert_eq!(reads[0].cap, (needs.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS) as f32, "its lane's room");
     std::fs::remove_dir_all(pkg).ok();
 }
@@ -961,7 +962,7 @@ fn the_guard_ends_the_oldest_note_when_its_room_is_full() {
     let (pk, pkg) = with_effects(&[]);
     let one = json!([{"id": "c", "op": "const", "value": 1}]);
     let mut r = live_one(&through("flood", json!({"n": "c"}), one), &lane(json!({"clips": []})), &pk);
-    let room = sched::Caps::FLOOR.sounding + sched::LIVE_ROOM;
+    let room = sched::Caps::FLOOR.with_feed().sounding + sched::LIVE_ROOM;
     let got = given(&mut r, room + 2);
     assert!(got[..room].iter().all(|b| matches!(b[..], [Event::On { .. }])), "one On a block while there is room");
     let first = |b: &[Event]| b.iter().find_map(|e| if let Event::On { id, .. } = e { Some(*id) } else { None }).unwrap();
@@ -973,26 +974,27 @@ fn the_guard_ends_the_oldest_note_when_its_room_is_full() {
 }
 
 // RENDER-42: past its room in one block, it keeps the first: as many Ons as its consumers can start
-// in a block (here three a frame, each ending a frame later), the rest left out, and said; and at
+// in a block (here four a frame, each ending a frame later: more than a lane and its feed bring),
+// the rest left out, and said; and at
 // one frame, as many notes as it has room to sound, as none of them sounds yet to make room.
 #[test]
 fn the_guard_keeps_the_first_events_of_a_full_block() {
     let (pk, pkg) = with_effects(&[]);
     let ons =
         |got: &[Event]| -> Vec<u32> { got.iter().filter_map(|e| if let Event::On { id, .. } = e { Some(*id) } else { None }).collect() };
-    let three = json!([{"id": "c", "op": "const", "value": 3}]);
-    let mut r = live_one(&through("burst", json!({"n": "c"}), three), &lane(json!({"clips": []})), &pk);
+    let four = json!([{"id": "c", "op": "const", "value": 4}]);
+    let mut r = live_one(&through("burst", json!({"n": "c"}), four), &lane(json!({"clips": []})), &pk);
     let got = given(&mut r, 1).remove(0);
-    let most = 2 * (sched::Caps::FLOOR.ons + sched::LIVE_ROOM) + sched::LIVE_ROOM;
+    let most = 2 * (sched::Caps::FLOOR.with_feed().ons + sched::LIVE_ROOM) + sched::LIVE_ROOM;
     assert_eq!(ons(&got), (1..=most as u32).collect::<Vec<_>>(), "the first {most}");
     assert!(
         got.len() <= r.info().lanes[fx_slot(&r)].caps.map_or(0, |c| c.events() + sched::LIVE_ROOM + sched::WHEEL_EVENTS),
         "within its room"
     );
     assert_eq!(faults(&r).len(), 1, "said");
-    let many = json!([{"id": "c", "op": "const", "value": 400}]);
+    let many = json!([{"id": "c", "op": "const", "value": 500}]);
     let mut r = live_one(&through("flood", json!({"n": "c"}), many), &lane(json!({"clips": []})), &pk);
-    let room = sched::Caps::FLOOR.sounding + sched::LIVE_ROOM;
+    let room = sched::Caps::FLOOR.with_feed().sounding + sched::LIVE_ROOM;
     assert_eq!(ons(&given(&mut r, 1)[0]), (1..=room as u32).collect::<Vec<_>>(), "at one frame, the first {room}");
     assert_eq!(faults(&r).len(), 1, "said");
     std::fs::remove_dir_all(pkg).ok();
@@ -1441,4 +1443,32 @@ fn a_fan_is_a_note_effects_alone() {
         let e = load(k, up).unwrap_err();
         assert!(e.contains(says), "{k} {up}: {e}");
     }
+}
+
+// ABI-8, RENDER-42, FEED-2: what reads a notes lane has room for its clips and its feed, through a
+// real plan: a lane at its clips' room and a feed at its own, all sounding at once and some starting
+// in one block, reach a one-for-one note effect whole: it holds every note, cuts none and leaves
+// none out.
+#[test]
+fn a_full_lane_and_a_dense_feed_lose_nothing_through_a_plan() {
+    let (pk, pkg) = with_effects(&[]);
+    let (c, f) = (sched::Caps::FLOOR, sched::FEED);
+    // At 120 bpm and 48 kHz a block is 0.0053 beats: two notes a block, from either source.
+    let clip: Vec<Value> = (0..c.sounding).map(|k| json!({"pitch": 20 + k % 60, "start": k as f64 * 0.0026, "length": 4})).collect();
+    let data = lane(json!({"clips": [{"start": 0, "length": 8, "notes": clip}]}));
+    let mut r = live_one(&through("up", json!({}), json!([])), &data, &pk);
+    let feed: Vec<m2_song::Note> = (0..f.sounding)
+        .map(|k| m2_song::Note { pitch: 40.0 + (k % 60) as f64, start: k as f64 * 0.0052, length: 4.0, velocity: 0.8 })
+        .collect();
+    let feed = NotesData::feed(&feed, &m2_song::TempoMap::constant(120.0), SR as f64);
+    assert!(r.swap_lane(0, LaneSwap::Feed(std::sync::Arc::new(feed))).is_ok());
+    r.set_transport(Transport::new(0, true));
+    // Past the last start (beat 0.67), before the first end (beat 4).
+    let got = given(&mut r, 200);
+    let ons = got.iter().flatten().filter(|e| matches!(e, Event::On { .. })).count();
+    let offs = got.iter().flatten().filter(|e| matches!(e, Event::Off { .. })).count();
+    assert_eq!((ons, offs), (c.sounding + f.sounding, 0), "every On, the clips' and the feed's, and no note cut");
+    assert!(faults(&r).is_empty(), "nothing left out: {:?}", faults(&r));
+    assert_eq!(r.sounding_notes(), 2 * (c.sounding + f.sounding), "each held by the lane and by the note effect");
+    std::fs::remove_dir_all(pkg).ok();
 }
