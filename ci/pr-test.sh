@@ -5,7 +5,8 @@
 # In short: three tables. First, ci/pr.sh suites: what it says when e2e/run.mjs reports every run
 # ok, a run that failed (and then passed or failed again alone), a run that was PART (it passed,
 # but not in full), both at once, or a crash, and the list of what passed only on a retry it
-# writes (its flaky file; ci/pr.sh rust's too, from nextest's FLAKY lines). Second, ci/check.sh --pr: what its summary says for
+# writes (its flaky file; ci/pr.sh rust's too, from nextest's FLAKY lines), and that ci/pr.sh rust
+# --archive runs only at the paths its archive was built at, into a target folder with no build. Second, ci/check.sh --pr: what its summary says for
 # a change that is docs only (no plugins needed), the whole tier with the plugins, with
 # M2_NO_PLUGINS, with M2_LATE_SLEEPS, with a step that failed, and that its "passed only on a
 # retry" is ci/pr.sh's lists, not words in a step's output. Third, ci/pr.sh changes: whether it says a change
@@ -131,6 +132,44 @@ out=$TMP/rust-out-$n
 flaky_is "rust: nextest's FLAKY tests, its flaky list" "$out" "test m2-os tests::no_counter
 test m2-server graph::tests::a_failed_build_then_a_lane_edit_rebuilds
 test m2-song data::tests::once"
+
+# archive_case <name> <want: PASS|FAIL> <the row that says it> <words it holds> <where the
+#   archive says it was built: checkout|elsewhere> <what the target folder holds first: none|build>:
+#   ci/pr.sh rust 2/2 --archive on a made-up archive (a plain tar; tar reads either kind), with a
+#   stand-in cargo-nextest that prints $FAKE_TEST. Its paths must be this checkout's and target
+#   folder's, and the target folder must hold no build, or the step fails before any test runs.
+printf '#!/bin/sh\nif [ "$1" = nextest ]; then printf "%%b" "${FAKE_TEST:-}"; fi\nexit 0\n' > "$TMP/bin/cargo-nextest" &&
+  chmod +x "$TMP/bin/cargo-nextest" || exit 2
+archive_case() {
+  n=$((n + 1))
+  out=$TMP/archive-out-$n
+  tgt=$TMP/archive-target-$n
+  root=$(cd "$TMP/suites" && pwd -P)
+  if [ "$5" = checkout ]; then built=$root; else built=/elsewhere; fi
+  mkdir -p "$TMP/archive-$n/target/nextest" "$TMP/archive-$n/target/own-main" &&
+    printf '{"packages":[],"target_directory":"%s","workspace_root":"%s"}' "$tgt/pr" "$built" > "$TMP/archive-$n/target/nextest/cargo-metadata.json" &&
+    echo '{}' > "$TMP/archive-$n/target/nextest/binaries-metadata.json" &&
+    (cd "$TMP/archive-$n" && tar -cf "$TMP/archive-$n.tar.zst" target) || exit 2
+  if [ "$6" = build ]; then mkdir -p "$tgt/pr/debug" || exit 2; fi
+  (cd "$TMP/suites" && env PATH="$TMP/bin:$PATH0" CLAP_PATH="$TMP/clap" M2_PR_OUT="$out" CARGO_TARGET_DIR="$tgt" \
+    FAKE_TEST='     Summary [   1.000s] 10 tests run: 10 passed, 0 skipped\n' \
+    ci/pr.sh rust 2/2 --archive "$TMP/archive-$n.tar.zst") > "$TMP/archive-$n.log" 2>&1 < /dev/null
+  st=$?
+  row=$(awk -F'\t' -v r="$3" '$1 == r { print $2 "  " $3 }' "$out/results" 2> /dev/null)
+  said=$(cat "$out/archive.log" "$TMP/archive-$n.log" 2> /dev/null)
+  if [ "$2" = PASS ]; then want=0; else want=1; fi
+  case $st:$row in
+    "$want:$2"*) case $said in
+        *"$4"*) result "rust --archive: $1" 1 "$3: $row" ;;
+        *) result "rust --archive: $1" 0 "wanted the words \"$4\" (see below)"; tail -5 "$TMP/archive-$n.log" | sed 's/^/        /' ;;
+      esac ;;
+    *) result "rust --archive: $1" 0 "wanted $3 $2, got exit $st and \"${row:-no row}\" (see below)"
+       tail -5 "$TMP/archive-$n.log" | sed 's/^/        /' ;;
+  esac
+}
+archive_case "built at this checkout's paths" PASS "rust tests" "here too" checkout none
+archive_case "built in another checkout" FAIL archive "they run only there" elsewhere none
+archive_case "a build in the target folder already" FAIL archive "holds a build already" checkout build
 
 # changes_case <name> <want: true|false> <base> <commands that make the change>: whether
 #   ci/pr.sh changes <base> says deps=<want> (a Cargo.lock or deny.toml changed, or git can't

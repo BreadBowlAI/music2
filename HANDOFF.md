@@ -5,6 +5,14 @@ design for whatever you pick up. Older versions of this page, with each track's 
 
 ## In short
 
+- **CI builds the Rust tests once (track `ci-archive`, 2026-11-28).** The `rust-build` job builds every test program
+  of the PR tier into one cargo-nextest archive (`ci/pr.sh rust-build <file>`), and the three `rust` parts run
+  from it (`ci/pr.sh rust <i>/3 --archive <file>`), compiling nothing; before, each part compiled the whole
+  workspace's tests itself. The archive also carries the own-main tests and `no_plugins` (part 1 runs them
+  straight, as `cargo test` would). It runs only at the paths it was built at (228 `env!("CARGO_MANIFEST_DIR")`
+  in tests; every CI job checks out at the same path): the `archive` row says so when not. Without
+  `--archive`, `ci/pr.sh rust` and `ci/check.sh` build and run as before. Times: TIMES.
+
 - **The web bundle (track `bundle`, 2026-11-28).** `m2 export <song> --web <folder>` writes what a web page needs
   to play a song (the IR, `controls.json`, the song's data files and samples as they are, std's and music2's own
   packs' kernels), with `m2web.json` listing every file's size and hash, the same bytes on any computer; it
@@ -581,7 +589,7 @@ Every check runs from a script in `ci/`, so whatever CI runs, you run with the s
 
 | Tier | Where and when | The command | What |
 |---|---|---|---|
-| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests in 3 parts (cargo-nextest), the pool's models, the web build, the kernels and every committed `.wasm` (std's `std.wasm` and the packs', `packs/@m2/*/kernels/*.wasm`: `std/build.sh --check`), the browser suites in 2 parts, the 26 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
+| Pull request | GitHub, on every pull request, merge-queue group and push to `main` (`.github/workflows/ci.yml`). One required check: `ci-ok`. | `ci/check.sh --pr` (all of it, one step after another); `ci/pr.sh <step>` (one job) | fmt, clippy, the Rust tests (built once by `rust-build` into a cargo-nextest archive, then run in 3 parts from it, compiling nothing), the pool's models, the web build, the kernels and every committed `.wasm` (std's `std.wasm` and the packs', `packs/@m2/*/kernels/*.wasm`: `std/build.sh --check`), the browser suites in 2 parts, the 26 renders, licences, actionlint and zizmor, the checks' own cases. RustSec's advisories only when a `Cargo.lock` or `deny.toml` changes. A docs-only change runs the docs job alone. |
 | Nightly | GitHub, every day on `main`, only once the repo is public (`.github/workflows/nightly.yml`) | `ci/check.sh --nightly` | the full check without the timing gates (so every PR-tier check and the advisories too), the browser suites one at a time, the tests tagged nightly; and a Mac: the Rust tests, the pool's models, the browser suites, the renders. A failed or timed-out job opens or comments on one issue, "Nightly failed"; a test or suite that passed only on its retry is named in another, "Flaky tests", with the number of nights it was named on. |
 | Timing gates | a quiet maintainer machine, every night, by cron | `ci/nightly.sh --report` | `ci/check.sh --gates` on a fresh clone of `origin/main`; posts the status `nightly/gates`. It runs as an OS user of its own, with a fine-grained token that can only write commit statuses (docs/maintainers.md, part 5). Not set up yet. |
 | Full check | your machine; the server with `--gates=auto` | `ci/check.sh` | everything, below: every check of the other tiers. |

@@ -10,6 +10,10 @@
 # tests their file names, so a renamed test can't slip back in unseen. Run them in the repo's top
 # folder; the lists need cargo-nextest on PATH, and build the test binaries if they aren't built.
 
+# nextest_list <arguments>: cargo nextest list over the workspace, building what isn't built.
+# ci/pr.sh rust --archive puts its own in its place: the archive's tests, building nothing.
+nextest_list() { cargo nextest list --locked --workspace "$@"; }
+
 # list_filter <file>: its tests as a nextest filter that matches them (none() when it names none).
 list_filter() {
   awk '!/^#/ && NF >= 2 { printf "%s(binary_id(=%s) & test(=%s))", (n++ ? " | " : ""), $1, $2 } END { if (!n) printf "none()" }' "$1"
@@ -20,7 +24,7 @@ list_filter() {
 # returns 1 when they differ or nextest fails.
 list_check() {
   awk '!/^#/ && NF >= 2 { print $1, $2 }' "$1" | sort > "$2/$3-want.txt"
-  cargo nextest list --locked --workspace --message-format oneline -E "$(list_filter "$1")" 2> /dev/null | sort > "$2/$3-found.txt" || return 1
+  nextest_list --message-format oneline -E "$(list_filter "$1")" 2> /dev/null | sort > "$2/$3-found.txt" || return 1
   if cmp -s "$2/$3-want.txt" "$2/$3-found.txt"; then
     echo "all $(grep -c '' "$2/$3-want.txt") tests $1 names are there"
   else
