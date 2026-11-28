@@ -11,7 +11,9 @@ design for whatever you pick up. Older versions of this page, with each track's 
   workspace's tests itself. The archive also carries the own-main tests and `no_plugins` (part 1 runs them
   straight, as `cargo test` would). It runs only at the paths it was built at (228 `env!("CARGO_MANIFEST_DIR")`
   in tests; every CI job checks out at the same path): the `archive` row says so when not. Without
-  `--archive`, `ci/pr.sh rust` and `ci/check.sh` build and run as before. Times: TIMES.
+  `--archive`, `ci/pr.sh rust` and `ci/check.sh` build and run as before. On pull request #165's run: `rust-build` 7.9 min, the parts
+  8.7 to 9.5 min (their tests 7.7 to 8.4), the first job's start to ci-ok's end 17.9 min; main's run before:
+  parts 14.5 to 19.5 min, 20.2 min. A fourth part might cut about 2 minutes more (not tried).
 
 - **The web bundle (track `bundle`, 2026-11-28).** `m2 export <song> --web <folder>` writes what a web page needs
   to play a song (the IR, `controls.json`, the song's data files and samples as they are, std's and music2's own
