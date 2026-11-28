@@ -8,7 +8,7 @@
 - **The engine doesn't build for the web yet.** Two walls: `m2-os` has no web folder, so every crate but `m2-ir` stops there; and `wasmtime` can't build for `wasm32` (and couldn't compile machine code in a page if it did). Past them, the build would succeed, but the clock, threads and files would fail when the engine runs.
 - **The fix is one small trait**, a kernel host. wasmtime is one backend and the browser's `WebAssembly` the other. The runtime already copies each kernel's inputs in and its outputs out, so the trait needs only "make a sandbox, call an export, copy bytes in and out, seal".
 - **Song code is a separate problem.** V8's `Math` isn't the `libm` crate that song code's `Math` is in the app: up to 410 of 4,096 inputs differ, by 1 or 2 ulps (units in the last place). So song code must run in QuickJS built to WebAssembly, or the page must use music2's own math. Part 2 starts from the song's IR (its compiled graph) and leaves song code to Part 3.
-- Status: **proposed, for the owner's yes.** Nothing here changes the app. The probe is in [probe/](probe/); its one Rust file is an example of `m2-runtime` (`cargo run --example web-probe`), which nothing in the app runs.
+- Status: **accepted by the owner, 2026-11-28**, with all six decisions as proposed ("I like draft 150, and go ahead"). Its tracks are built in order, each its own pull request. Nothing in this note changes the app. The probe is in [probe/](probe/); its one Rust file is an example of `m2-runtime` (`cargo run --example web-probe`), which nothing in the app runs.
 
 ## Words used here
 
@@ -249,7 +249,7 @@ On the web there are no epochs, and nothing can stop a call on the AudioWorklet'
 - One core first. The renders are the same bits on any number of threads ([RENDER-2](../../architecture.md#offline)), so one core is enough for the proof.
 - Several cores later. Rust's standard library for `wasm32-unknown-unknown` is built without atomics (the target's features list none), so a shared-memory engine on several Workers needs a nightly `-Z build-std`, or another target such as `wasm32-wasip1-threads`. That is a decision for when a song needs it.
 
-## Decisions proposed
+## Decisions (the owner said yes, 2026-11-28)
 
 1. **The engine runs in a dedicated Worker, not in the AudioWorklet.** The worklet only copies the Worker's blocks to its output with `TypedArray.prototype.set`, never sample by sample: on a thread that flushes, a JavaScript read of a subnormal `f32` is 0. They talk through a ring in a SharedArrayBuffer, or through a `MessagePort` when the page isn't isolated (unmeasured).
    - *Why:* measured. A Worker gives wasmtime's bits for all 56 kernels; the audio thread doesn't, and no code can change its float mode. Keeping heavy WebAssembly off the audio thread, behind a ring, is also a known pattern for web audio.

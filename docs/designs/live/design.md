@@ -171,7 +171,7 @@ A developer adds music2 to a web page and plays a real song in it: the same soun
 
 | Part | In the app | In a browser |
 |---|---|---|
-| Engine (`core/runtime`, `core/play`'s engine) | Rust | the same Rust, built for `wasm32`, run in an AudioWorklet (the browser's audio thread) |
+| Engine (`core/runtime`, `core/play`'s engine) | Rust | the same Rust, built for `wasm32`, run in a Worker; the AudioWorklet (the browser's audio thread) only copies its blocks, as its float mode would change the bits ([web-engine.md](web-engine.md)) |
 | Sound kernels | WebAssembly, run by `wasmtime` | the same `.wasm` files, run by the browser's own WebAssembly |
 | The song's code | TypeScript in QuickJS, giving the IR | the page's JavaScript, with the same `@m2/core`, giving the same IR; the same Rust checker reads it |
 | Packs and samples | from disk | from the library over HTTPS (needs the library live: the R2 step) |
@@ -183,7 +183,7 @@ A developer adds music2 to a web page and plays a real song in it: the same soun
 ### The pieces to build
 
 1. **One kernel host interface** in `core/runtime`, with two backends: `wasmtime`, and the browser's WebAssembly. Today `wasmtime` is named in seven of the runtime's files; they move behind it. The time limit on a kernel ([the limit](../../architecture.md#kernel-abi-reservations)) needs a browser form (the browser has no epoch interrupt: a watchdog on the worklet's block time instead).
-2. **The web as a platform** in `core/os` ([PLAT-2](../../architecture.md#platforms)): no files, no threads by default, the clock and the audio device from the AudioWorklet.
+2. **The web as a platform** in `core/os` ([PLAT-2](../../architecture.md#platforms)): no files, no threads by default, the clock and the audio device from the AudioWorklet, which takes the Worker's blocks ([web-engine.md](web-engine.md)).
 3. **`@m2/web`**, an npm package: open a song folder (or its IR and lane files) by URL, play, stop, seek, set a knob, and feeds:
 
    ```js
@@ -216,6 +216,6 @@ Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written u
 | Track | What | Needs |
 |---|---|---|
 | `feeds` | Part 1: the contract (a FEED family of rules), the scheduler's second source, the routes, `m2 feed`, events, the Live mark, Keep, the guide | the owner's yes |
-| `web-engine` | Part 2: the kernel host interface, `core/os` for the web, the engine in an AudioWorklet, the renders matched in Chrome | its own note |
+| `web-engine` | Part 2: the kernel host interface, `core/os` for the web, the engine in a Worker (the AudioWorklet only copies its blocks: [web-engine.md](web-engine.md)), the renders matched in Chrome | its own note: [web-engine.md](web-engine.md), accepted |
 | `web-player` | Part 3: `@m2/web`, songs by URL, packs from the library, web sample sets | the library live (R2) |
 | `web-feeds` | Part 4: feeds in `@m2/web`, the same messages | `feeds` and `web-player` |
