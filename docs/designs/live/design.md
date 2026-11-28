@@ -163,7 +163,7 @@ The song's `AGENTS.md` and the guide get a short "Playing live" section with thi
 
 ## Parts 2 to 4: music2 on the web (sketch)
 
-Each part now has a note of its own: Part 2, the engine in a browser, is [web-engine.md](web-engine.md); Parts 3 and 4, `@m2/web` with songs as web bundles and feeds in a page, are [web-player.md](web-player.md) (proposed). Where they differ from this sketch, they win.
+Each part now has a note of its own: Part 2, the engine in a browser, is [web-engine.md](web-engine.md); Parts 3 and 4, `@music2/web` with songs as web bundles and feeds in a page, are [web-player.md](web-player.md) (proposed). Where they differ from this sketch, they win.
 
 ### The aim
 
@@ -186,17 +186,17 @@ A developer adds music2 to a web page and plays a real song in it: the same soun
 
 1. **One kernel host interface** in `core/runtime`, with two backends: `wasmtime`, and the browser's WebAssembly. Today `wasmtime` is named in seven of the runtime's files; they move behind it. The time limit on a kernel ([the limit](../../architecture.md#kernel-abi-reservations)) needs a browser form (the browser has no epoch interrupt: a watchdog on the worklet's block time instead).
 2. **The web as a platform** in `core/os` ([PLAT-2](../../architecture.md#platforms)): no files, no threads by default, the clock and the audio device from the AudioWorklet.
-3. **`@m2/web`**, an npm package: open a song folder (or its IR and lane files) by URL, play, stop, seek, set a knob, and feeds:
+3. **`@music2/web`**, an npm package: open a song folder (or its IR and lane files) by URL, play, stop, seek, set a knob, and feeds:
 
    ```js
-   import { open } from "@m2/web";
+   import { open } from "@music2/web";
    const song = await open("https://example.com/my-song/");
    await song.play();
    const bass = song.feed("bass", { lowBars: 4 });
    bass.on("low", async (s) => bass.put(s.writtenTo, s.writtenTo + 16, await nextBars()));
    ```
 
-   The page owns its agent: `@m2/web` calls no model and sends nothing anywhere but the song's and the library's URLs ([NET-2](../../architecture.md#network) holds on the web too).
+   The page owns its agent: `@music2/web` calls no model and sends nothing anywhere but the song's and the library's URLs ([NET-2](../../architecture.md#network) holds on the web too).
 
    Parts 3 and 4 are designed in [web-player.md](web-player.md): songs reach a page as a web bundle that `m2 export --web` writes, so the first player needs neither song code in the page nor the library; feeds there speak `feed/1`, the app's feed messages.
 4. **Big samples on the web:** a pack can name a smaller "web" set of its samples, and the Sampler loads samples as they are needed, not all at open. The grand piano (260 MB) needs this.
@@ -207,7 +207,7 @@ Recording, the code editor, plugins, the Playground: the web player plays songs 
 
 ## Open source
 
-Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written up in the guide as a protocol of their own (`feed/1`) so any player can speak it, and `@m2/web` on npm.
+Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written up in the guide as a protocol of their own (`feed/1`) so any player can speak it, and `@music2/web` on npm.
 
 ## Decisions (the owner said yes to each, 2026-11-28)
 
@@ -221,5 +221,5 @@ Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written u
 |---|---|---|
 | `feeds` | Part 1: the contract (a FEED family of rules), the scheduler's second source, the routes, `m2 feed`, events, the Live mark, Keep, the guide | the owner's yes |
 | `web-engine` | Part 2: the kernel host interface, `core/os` for the web, the engine in an AudioWorklet, the renders matched in Chrome | its own note |
-| `web-player` | Part 3: `@m2/web`, songs by URL as web bundles ([web-player.md](web-player.md)); packs from the library and web sample sets later | `web-engine`; the library (R2) only for packs from it |
-| `web-feeds` | Part 4: feeds in `@m2/web`, the same messages, as `feed/1` ([web-player.md](web-player.md)) | `feeds` and `web-player` |
+| `web-player` | Part 3: `@music2/web`, songs by URL as web bundles ([web-player.md](web-player.md)); packs from the library and web sample sets later | `web-engine`; the library (R2) only for packs from it |
+| `web-feeds` | Part 4: feeds in `@music2/web`, the same messages, as `feed/1` ([web-player.md](web-player.md)) | `feeds` and `web-player` |
