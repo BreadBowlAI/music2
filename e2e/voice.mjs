@@ -166,10 +166,20 @@ await linted(changer, "the Voice changer's card");
 
 // While the voice plays, an agent's look at the Voice changer's spectrum, in and out: Deep moves the
 // notes 5 semitones down, so the loudest band (a twelfth of an octave each) comes out about 5 lower.
+// A look can hold what played before: its lows are worked out at every fourth read, and kept until
+// its ring is full (TAP-13). So the song plays a beat first, and the move must hold for five looks
+// in a row: two stale looks agree too (a Mac nightly read 2, both looks from before Deep played).
 await post("/loop", { start: 0, end: 3, on: true });
 await seen(changerPic);
 await page.mouse.click(10, 10);
 await page.keyboard.press("Space");
+check(
+  await until(async () => {
+    const s = (await api("/status")).body;
+    return s.playing && s.beat >= 1;
+  }),
+  "Space plays the voice through Deep",
+);
 const node = await nodeOf("vox", "voiceChanger");
 const g = (await api("")).body;
 const look = async (at) => (await post("/look", { session: g.session, client: "agent:voice", module: "vox", node, kind: "spectrum", at, on: true })).body?.look;
@@ -180,21 +190,32 @@ const loudest = (l) => {
   for (let i = 0; i < bins.length; i++) if (k < 0 || bins[i] > bins[k]) k = i;
   return k < 0 || bins[k] < -80 ? -1 : k;
 };
-// The first look may still hold what played before Deep (review V1): a move two looks in a row agree on.
+// The first looks may still hold what played before Deep (review V1): a move five looks in a row agree on.
 let moved = null;
 let answered = null;
 let last = null;
+let streak = 0;
+// Each look's loudest band and its level, in and out: what a failure says.
+const trail = [];
 for (let i = 0; i < 40 && moved === null; i++) {
   await sleep(150);
   const [inn, out] = [await look("in"), await look("out")];
   answered = { in: Object.keys(inn ?? {}), node };
   const [a, b] = [loudest(inn), loudest(out)];
+  trail.push([a, inn?.bins?.[a]?.toFixed?.(1), b, out?.bins?.[b]?.toFixed?.(1)]);
   if (a > 0 && b > 0) {
-    if (last === a - b) moved = last;
+    streak = last === a - b ? streak + 1 : 1;
     last = a - b;
+    if (streak === 5) moved = last;
   }
 }
-check(moved !== null && moved >= 4 && moved <= 6, `while the voice plays through Deep, its loudest band comes out ${moved} bands (semitones) under the one going in${moved === null ? `: ${JSON.stringify(answered)}` : ""}`);
+const ok = moved !== null && moved >= 4 && moved <= 6;
+// On a failure, the looks (band in, its dB, band out, its dB) and how the engine kept up.
+const how = async () => {
+  const s = (await api("")).body ?? {};
+  return ` (looks ${JSON.stringify(trail.slice(-8))}; load ${s.load}, late ${s.late}, xruns ${s.xruns}, disk ${JSON.stringify(s.disk ?? null)})`;
+};
+check(ok, `while the voice plays through Deep, its loudest band comes out ${moved} bands (semitones) under the one going in${moved === null ? `: ${JSON.stringify(answered)}` : ""}${ok ? "" : await how()}`);
 const layers = await said(changerPic);
 check(layers.length === 2 && layers.every((l) => l && typeof l.v === "number"), `its picture draws the spectrum in and out as they come: ${JSON.stringify(layers)}`);
 await post("/look", { session: g.session, client: "agent:voice", module: "vox", node, kind: "spectrum", at: "in", on: false });

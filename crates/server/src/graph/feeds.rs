@@ -821,6 +821,9 @@ impl Graph {
     /// Play was pressed: what plays from here on is kept.
     pub(super) fn feeds_play(&self) {
         let mut cp = self.inner.control.lock();
+        if cp.feeds.open.is_empty() {
+            return;
+        }
         let Some((now, _)) = self.feed_now(&cp) else { return };
         for f in cp.feeds.open.values_mut() {
             f.cursor = Some(now.beat);
