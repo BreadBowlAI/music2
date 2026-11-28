@@ -463,7 +463,7 @@ whether it is one of these or a real failure, and fixes the real ones (most were
    - wires that show their level (a note of its own: it needs a tap on a wire);
 4. **The owner's own items**, open:
    - **The registry, live**: the Cloudflare R2 bucket and its address (D10), then the repo
-     `BreadBowlAI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
+     `BreadBowl-AI/music2-registry` from `registry/` (`registry/README.md`, "Setting it up"). Then a release with
      `DEFAULT_REGISTRY` set, `@m2/grand-piano` listed, then the `@m2/` packs.
    - **An Apple Developer ID** (gap #43): the repo's Apple secrets turn on signing and notarizing; the hardened
      runtime's entitlements have never been tried on a Mac.

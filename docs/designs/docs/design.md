@@ -9,7 +9,7 @@
   the gap list stay where they are, for contributors.
 - The website is made with **mdBook**: one pinned binary, menus from `SUMMARY.md`, search built in. A new
   workflow builds it on every push to main and puts it on GitHub Pages, at
-  https://breadbowlai.github.io/music2/ once the repo is public.
+  https://breadbowl-ai.github.io/music2/ once the repo is public.
 - `m2 docs` prints the same pages, built into `m2`, so they match its version and work offline.
 - Two pages are made from code, so they can't drift: every `m2` command (from one new command table)
   and every API route (from the route table). A test fails when the committed page differs.
@@ -155,7 +155,7 @@ with `# Title`, then **In short** (AGENTS.md rule 10). `###` headings move up to
 - **Stays where it is, contributor only:** `architecture.md`, `goals.md`, `gaps.md`, `kernel-abi.md`,
   `maintainers.md`, `mac-run.md`, `song-as-program.md`, `code-graph-editing-*.md`, `designs/`, and the
   top-level files. The guide links to them by full GitHub URL
-  (`https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md`), never by a relative path: the site
+  (`https://github.com/BreadBowl-AI/music2/blob/main/docs/gaps.md`), never by a relative path: the site
   serves only `docs/guide/`.
 - `docs/manual.md` is deleted, with no stub. `docs/designs/README.md` gets one line: notes before
   2026-10-25 say "the manual"; it is now the guide.
@@ -203,8 +203,8 @@ create-missing = false          # a page SUMMARY.md names but isn't there fails 
 
 [output.html]
 site-url = "/music2/"
-git-repository-url = "https://github.com/BreadBowlAI/music2"
-edit-url-template = "https://github.com/BreadBowlAI/music2/edit/main/docs/guide/{path}"
+git-repository-url = "https://github.com/BreadBowl-AI/music2"
+edit-url-template = "https://github.com/BreadBowl-AI/music2/edit/main/docs/guide/{path}"
 
 [output.html.search]
 enable = true
@@ -249,7 +249,7 @@ The keys are checked against the pinned version's own docs when it is pinned.
 3. Actions → Pages → **Run workflow**, once (or wait for the next push to main).
 4. Optional: on the repo's home page, the gear by About → tick "Use your GitHub Pages website".
 
-The site is then at **https://breadbowlai.github.io/music2/**. No custom domain was found (no CNAME).
+The site is then at **https://breadbowl-ai.github.io/music2/**. No custom domain was found (no CNAME).
 
 ## 5. Pages made from code
 
@@ -295,7 +295,7 @@ the WebSocket events, and std's sounds and their knobs.
 ```
 $ m2 docs
 music2's guide, built into this m2 (0.1.0). Print a page: m2 docs <topic>. All of it: m2 docs all.
-Online, for the newest music2: https://breadbowlai.github.io/music2/
+Online, for the newest music2: https://breadbowl-ai.github.io/music2/
 
 Getting started
   welcome            Welcome to music2
@@ -339,8 +339,8 @@ prints its page with includes filled in; `all` prints them all; an unknown topic
 | It checks | In |
 |---|---|
 | Every relative link names a file that is there, and every `#anchor` a heading in it (GitHub's ids; mdBook makes the same for plain headings) | every `.md` file git tracks |
-| A link to `https://github.com/BreadBowlAI/music2/blob/main/<path>` (or `/tree/main/`) names a path in the tree | every `.md` file |
-| A `https://breadbowlai.github.io/music2/<page>.html` link names a page of the guide | every `.md` file, and `templates/song-agents.md` |
+| A link to `https://github.com/BreadBowl-AI/music2/blob/main/<path>` (or `/tree/main/`) names a path in the tree | every `.md` file |
+| A `https://breadbowl-ai.github.io/music2/<page>.html` link names a page of the guide | every `.md` file, and `templates/song-agents.md` |
 | A guide page links out of `docs/guide/` only by full URL | `docs/guide/` |
 | Every `.md` file in `docs/guide/` is in `SUMMARY.md` once; names are unique; each page starts with `# Title` and **In short**; an include names a file that is there | `docs/guide/` |
 | `templates/song-agents.md` has no relative link, and is 80 lines at most | that file |

@@ -20,7 +20,7 @@ pub struct Page {
 include!(concat!(env!("OUT_DIR"), "/guide.rs"));
 
 /// Where the guide is online: it follows the newest music2, this `m2` its own version.
-pub const SITE: &str = "https://breadbowlai.github.io/music2/";
+pub const SITE: &str = "https://breadbowl-ai.github.io/music2/";
 
 /// `m2 docs [<page> | all]`, `args[0]` being `docs`.
 pub fn docs(args: &[String]) -> ExitCode {

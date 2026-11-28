@@ -1,5 +1,5 @@
 # .github/workflows/pages.yml: the guide's website (docs/guide/, built by mdBook) on GitHub Pages,
-# at https://breadbowlai.github.io/music2/.
+# at https://breadbowl-ai.github.io/music2/.
 #
 # In short: every push to main, and by hand (Actions → Pages → Run workflow), builds the site with
 # ci/guide.sh check (the link check, then mdBook, pinned in ci/tools.sh) and publishes it. It never

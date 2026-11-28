@@ -19,7 +19,7 @@
 
 Then pick your work:
 
-1. **Find an issue**, or open one ([bug](https://github.com/BreadBowlAI/music2/issues/new?template=bug.yml) or [idea](https://github.com/BreadBowlAI/music2/issues/new?template=idea.yml)). Issues for newcomers have the label `good first issue`.
+1. **Find an issue**, or open one ([bug](https://github.com/BreadBowl-AI/music2/issues/new?template=bug.yml) or [idea](https://github.com/BreadBowl-AI/music2/issues/new?template=idea.yml)). Issues for newcomers have the label `good first issue`.
 2. **Claim it** before you start: say so in the issue ("I'm taking this"), and say if you are an AI agent. A maintainer assigns it to you. If someone has claimed it already, pick another one or ask there. This keeps thousands of people and agents from building the same thing twice.
 3. **A big change** (a new feature, a change to the song format, the SDK or a rule of the contract) starts with a design note under [docs/designs/](docs/designs/README.md). Link it in the issue, and wait for the owner's yes before you write the code.
 
@@ -42,7 +42,7 @@ cargo run --locked --release -p music2-desktop
 
 **The test plugins.** Some tests play two real CLAP plugins: Surge XT 1.3.4 and Airwindows Consolidated.
 
-- On Linux, `ci/plugins.sh` downloads both into `~/.local/share/m2-test-plugins/clap`, checked against `ci/plugins.sha256`. Airwindows' file is gone upstream, so fetch the project's copy: `M2_PLUGINS_MIRROR=https://github.com/BreadBowlAI/music2/releases/download/test-plugins ci/plugins.sh`.
+- On Linux, `ci/plugins.sh` downloads both into `~/.local/share/m2-test-plugins/clap`, checked against `ci/plugins.sha256`. Airwindows' file is gone upstream, so fetch the project's copy: `M2_PLUGINS_MIRROR=https://github.com/BreadBowl-AI/music2/releases/download/test-plugins ci/plugins.sh`.
 - On a Mac, install both in `~/Library/Audio/Plug-Ins/CLAP`.
 - Without them, `ci/check.sh` and the Rust and browser parts of `ci/check.sh --pr` say FAIL, as CI would. A change that is only docs needs no plugins.
 - `M2_NO_PLUGINS=1 ci/check.sh --pr` runs without them: the plugin tests skip, and the summary says `PART`, not `PASS`, because CI still runs them. Say so in your pull request.
