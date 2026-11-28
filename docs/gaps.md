@@ -442,6 +442,7 @@ Each line is one small gap, without a number.
 - **With the app closed, each `m2` write says "(revision 2)"**: each run opens the song afresh, so its revisions count from 1 again. True, but it says nothing: the step's name would say more.
 - **A write can renumber the knob ids after it in its file, and `m2 set` doesn't say so** (the second docs check, 2026-11-16): setting a level the code doesn't write yet wraps it in `db(…)`, a call, so every later call's number moves, and an id listed before then names another knob. The routes say what moved (`moved`); `m2`'s words don't. The song's AGENTS.md says to list the ids again.
 - **`m2 sections` names one file on its first line**, though it changes every lane whose bars it moves.
+- **A body that doesn't read is answered in plain text** (track `feed-protocol`, 2026-11-28): a route whose JSON body misses a field or has one of the wrong type answers axum's 422 text, not `{"error": …}` as every other refusal. `m2` words it ("nothing was changed: the app answered 422 …"); the feed routes refuse it in `{"error"}` since `feed/1`. The rest could take the same `read` (`crates/server/src/routes_feed.rs`).
 - **No `m2` command prints what plays**: the tempo, the key, the meter, the length and each lane's clips. An agent reads `data/` itself.
 
 ### Releases and installing

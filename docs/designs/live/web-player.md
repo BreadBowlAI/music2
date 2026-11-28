@@ -366,7 +366,7 @@ Each track is one pull request with its own test, written first. Each track's co
 | Track | What | Its test | Needs |
 |---|---|---|---|
 | `bundle` | `m2 export <song> --web <dir>`: the folder, the manifest, `controls.json`, the refusals at export, the licence warning; the guide's commands page made again | exporting the starter writes the layout above, each hash right; twice gives the same bytes; a plugin song and a stranger's pack are refused in those words | the owner's yes. Not Part 2: it is app code |
-| `feed-protocol` | `docs/guide/feed-protocol.md`; a fixture of `feed/1` acts and the answers' fields; a Rust test that runs it against the app's routes | the fixture against the app: every answer has its fields and its refusal words | — |
+| `feed-protocol` (**built**, 2026-11-28) | `docs/guide/feed-protocol.md`; a fixture of `feed/1` acts and the answers' fields; a Rust test that runs it against the app's routes | the fixture against the app: every answer has its fields and its refusal words | — |
 | `feed-core` | the feed logic out of `crates/server/src/graph/feeds.rs` into a core crate, the clock from the caller | every feeds test and the `live` suite unchanged; the crate builds for `wasm32-unknown-unknown` | Part 2's `runtime-web` |
 | `web-net` | NET-7; `@music2/web`'s loader: the manifest, paths, limits, hashes, the cache | a suite on a local server: a changed byte, a path with `..`, a file over its size and a wrong `integrity` are each refused in words; a compressed answer is hashed after decoding; no cookie or referrer is sent; a second open fetches nothing | `bundle`, Part 2's `web-node` |
 | `web-player` | `@music2/web`'s API: open, play, stop, seek, loop, set, render, the events; the package in `core/web` | a browser suite: the starter's bundle opens, plays 30 s through the worklet, a `set` of a cell is heard at the next block, a setting is refused in words, `play()` outside a click is refused | `web-net`, Part 2's `web-chrome` |
@@ -376,3 +376,9 @@ Each track is one pull request with its own test, written first. Each track's co
 | later | `web-code`, `web-library`, `web-samples`, `app-export`, publish | [section 8](#8-later) | their own needs |
 
 `bundle` and `feed-protocol` can start now, beside Part 2's tracks.
+
+**Track `feed-protocol`, as built.** The page is [The feed protocol](../../guide/feed-protocol.md); the fixture is `crates/server/tests/fixtures/feed-protocol.json` (30 steps on first-song: each act, each refusal first-song can show, a put across the playhead while it plays), run by `the_feed_protocol_fixture_runs_against_the_app` (`crates/server/src/feed_protocol_tests.rs`), which also checks that no answer holds a field the fixture doesn't name. FEED-8 now names `feed/1`. Departures and what the fixture found:
+- The answers hold more than FEED-4 and FEED-5 listed: the state also has `track`, `lane`, `notes`, `heard` and `silent` (when it is so), the put's answer `ok` and `heard`. They are `feed/1` too, said in FEED-8 and on the page.
+- A body that didn't read (a field missing, a pitch with no name) was answered 422 in axum's plain text, which a relay can't pass on as `{"error"}`. The feed routes now refuse it as every refusal: 400, `{"error": "The body doesn't read: …"}`. The other routes still answer plain text (gaps.md).
+- A put with no `as` renames the writer to the request's own name, `agent` when the tools key gave none. The fixture sends `as` on each put, and the page says so.
+- Some words name the app's commands (`` `m2 feed open` ``, `` `m2 timeline` ``): a page's relay gives the same words, so they stay; `web-feeds` may change them in both, as a change to `feed/1`.

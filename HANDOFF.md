@@ -13,6 +13,11 @@ design for whatever you pick up. Older versions of this page, with each track's 
   is the track menu's Let an agent play this track and the Live mark (`web/src/components/Live.tsx`). Guide:
   [Playing live](docs/guide/live.md). Departures and what is left: [the build note](docs/designs/live/build.md).
   Parts 2 to 4 of the note (music2 on the web) are gap #64.
+- **`feed/1` (track `feed-protocol`, 2026-11-28).** The feed routes' bodies, answers and refusal words, written up
+  as a protocol a web page's player will speak too: [The feed protocol](docs/guide/feed-protocol.md), FEED-8. Its
+  fixture, `crates/server/tests/fixtures/feed-protocol.json`, runs against the app's routes
+  (`crates/server/src/feed_protocol_tests.rs`); track `web-feeds` runs it through the page's relay. A body that
+  doesn't read is now `{"error"}` on the feed routes. Departures: [the web player note](docs/designs/live/web-player.md#the-build-in-small-tracks).
 - **A clip's versions (track `versions`, 2026-11-21).** A notes clip can hold several versions of its notes: one
   plays, and its notes are the clip's; the others wait in the clip and are never heard or rendered (rules VER-1 to
   VER-5, [the design](docs/designs/versions/design.md)). Built: the lane format's optional `versions` (`format`
