@@ -35,6 +35,7 @@
 - [How your changes reach the song](changes.md)
 - [Listening](listening.md)
 - [Playing live](live.md)
+- [The feed protocol](feed-protocol.md)
 - [The local API](api.md)
 
 # Reference

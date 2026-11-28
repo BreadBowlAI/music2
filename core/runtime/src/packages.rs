@@ -143,8 +143,9 @@ pub struct PackageSet {
     /// one again shares it, and one no view holds is gone.
     loaded: HashMap<Key, Weak<Package>>,
     plugins: HashMap<String, Hosted>,
-    /// How plugins are reached (P11): the process's in-process host unless set.
-    host: Arc<dyn PluginHost>,
+    /// How plugins are reached (P11): the process's host unless set; none in a build without the
+    /// CLAP host (HOST-1).
+    host: Option<Arc<dyn PluginHost>>,
     /// Where installed packs are (PACK-6): none unless set, so only what asks for one reads a
     /// store; the app and `m2` give this computer's (`m2_os::dirs::packs()`).
     store: Option<m2_song::pack::Store>,
@@ -210,7 +211,7 @@ impl Default for PackageSet {
             view: Arc::default(),
             loaded: HashMap::new(),
             plugins: HashMap::new(),
-            host: m2_plugins::host(),
+            host: process_host(),
             store: None,
             limits: Limits::default(),
             stuck: Default::default(),
@@ -219,14 +220,15 @@ impl Default for PackageSet {
 }
 
 impl PackageSet {
-    /// The host its plugins are described and built through.
-    pub fn host(&self) -> Arc<dyn PluginHost> {
+    /// The host its plugins are described and built through: none in a build without the CLAP
+    /// host, unless one was set (HOST-1).
+    pub fn host(&self) -> Option<Arc<dyn PluginHost>> {
         self.host.clone()
     }
 
     /// Describe and build plugins through `host` instead of the process's.
     pub fn with_host(mut self, host: Arc<dyn PluginHost>) -> PackageSet {
-        self.host = host;
+        self.host = Some(host);
         self
     }
 
@@ -490,7 +492,7 @@ impl PackageSet {
             if matches!(self.plugins.get(id), Some(Hosted::Installed(..))) {
                 continue;
             }
-            match describe_plugin(&*self.host, id) {
+            match describe_plugin(self.host.as_deref(), id) {
                 Ok((sig, info, steps)) => {
                     self.plugins.insert(id.to_string(), Hosted::Installed(sig, Box::new((info, steps))));
                 }
@@ -555,10 +557,16 @@ impl PackageSet {
             if let Some(why) = self.describe_plugins([id.as_str()]).pop() {
                 self.plugins.insert(id.clone(), Hosted::Missing(missing_sig(id, ports)));
                 let (module, src) = users[id][0].clone();
-                let nodes = if users[id].len() == 1 { "its node".to_string() } else { format!("each of its {} nodes", users[id].len()) };
+                // Installing it is the fix, but where there is no host to install it in (HOST-1).
+                let nodes = match (users[id].len(), self.host.is_some()) {
+                    (1, true) => "Until it is installed, its node".to_string(),
+                    (1, false) => "Its node".to_string(),
+                    (n, true) => format!("Until it is installed, each of its {n} nodes"),
+                    (n, false) => format!("Each of its {n} nodes"),
+                };
                 // An effect (its `in` written) passes its input through; an instrument is silent (FMT-18a).
                 let plays = if ports.contains("in") { "passes its audio through unchanged" } else { "plays silence" };
-                let message = format!("{why}. Until it is installed, {nodes} {plays}; its code and saved state are kept as they are");
+                let message = format!("{why}. {nodes} {plays}; its code and saved state are kept as they are");
                 diags.push(Diagnostic::error("plugin.missing", message).module(module).at(src));
             }
         }
@@ -715,14 +723,13 @@ fn missing_sig(id: &str, written: &BTreeSet<String>) -> KernelSig {
 /// instance created and activated through the host (on the plugin main thread), then destroyed:
 /// activating is what measures its latency at its default state, which the check refuses inside a
 /// `poly` voice only (RENDER-21); a node's own instance measures its own (RENDER-17).
-fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plugins::Info, Steps)> {
+fn describe_plugin(host: Option<&dyn PluginHost>, id: &str) -> Result<(KernelSig, m2_plugins::Info, Steps)> {
     let Some(clap_id) = id.strip_prefix("clap:") else { bail!("plugin ids start with `clap:`, not `{id}`") };
+    let Some(host) = host else { bail!("{}", unhosted(clap_id)) };
     // Found by the host, which loads plugin code: the app never does (HOST-3).
     let (found, _) = host.scan();
-    let found = found
-        .into_iter()
-        .find(|f| f.id == clap_id)
-        .with_context(|| format!("no CLAP plugin `{clap_id}` is installed (looked in {:?})", m2_plugins::search_paths()))?;
+    let found =
+        found.into_iter().find(|f| f.id == clap_id).with_context(|| format!("no CLAP plugin `{clap_id}` is installed{}", looked_in()))?;
     let (h, mut info) = host.create(&found, None, &m2_plugins::Owner::discard())?;
     // Here, off the audio thread, once for the plugin: never while a card is drawn (CARD-6).
     let steps = steps_of(&info.params, &mut |id, v| match host.main_call(h, m2_plugins::MainCall::Text(id, v)) {
@@ -733,6 +740,36 @@ fn describe_plugin(host: &dyn PluginHost, id: &str) -> Result<(KernelSig, m2_plu
     host.destroy(h);
     info.latency = latency?;
     Ok((plugin_sig(id, &info)?, info, steps))
+}
+
+/// Why plugin `clap_id` (its CLAP id) can't play in a build without the CLAP host (HOST-1): it
+/// is missing there, as one not installed is (FMT-18a).
+pub(crate) fn unhosted(clap_id: &str) -> String {
+    format!("this song uses the CLAP plugin `{clap_id}`, and plugins can't play here: this build of music2 has no plugin host")
+}
+
+/// The process's plugin host (HOST-1): `m2_plugins::host()`, the host process in every program.
+#[cfg(feature = "plugins")]
+fn process_host() -> Option<Arc<dyn PluginHost>> {
+    Some(m2_plugins::host())
+}
+
+/// No CLAP host in this build (the web's): every plugin is missing, and said so ([`unhosted`]).
+#[cfg(not(feature = "plugins"))]
+fn process_host() -> Option<Arc<dyn PluginHost>> {
+    None
+}
+
+/// Where a plugin that isn't installed was looked for, as words after "is installed".
+#[cfg(feature = "plugins")]
+fn looked_in() -> String {
+    format!(" (looked in {:?})", m2_plugins::search_paths())
+}
+
+/// Nowhere this build can say: without the CLAP host it knows no plugin folders.
+#[cfg(not(feature = "plugins"))]
+fn looked_in() -> String {
+    String::new()
 }
 
 /// What the plugin calls each step of each stepped parameter of 2 to [`MOST_STEPS`] steps, by

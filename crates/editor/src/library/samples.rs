@@ -880,20 +880,27 @@ enum Origin {
 impl Origin {
     /// A package's: its name, version, author (its `authors`; music2 for std) and licence.
     fn package(name: &str, dir: &Path) -> Origin {
-        let m = m2_song::pack::PkgManifest::at(dir).ok();
-        let mut from = json!({ "pack": name });
-        if let Some(m) = &m {
-            from["version"] = json!(m.package.version.to_string());
-        }
-        let authors = m.as_ref().map(|m| m.package.authors.join(", ")).filter(|a| !a.is_empty());
-        if let Some(a) = authors.or_else(|| (name == m2_song::pack::STD).then(|| "music2".to_string())) {
-            from["author"] = json!(a);
-        }
-        if let Some(l) = m.and_then(|m| m.package.license) {
-            from["license"] = json!(l);
-        }
-        Origin::Package { name: name.to_string(), from, own: super::own(name, dir) }
+        Origin::Package { name: name.to_string(), from: package_from(name, dir), own: super::own(name, dir) }
     }
+}
+
+/// What a note says a sample of package `name`, in `dir`, came from (LIB-7), but its file: the
+/// package's name, version, author (its `authors`; music2 for std) and licence. A web bundle
+/// credits a package's file it carries with it, and its `file` (WEB-6).
+pub fn package_from(name: &str, dir: &Path) -> Value {
+    let m = m2_song::pack::PkgManifest::at(dir).ok();
+    let mut from = json!({ "pack": name });
+    if let Some(m) = &m {
+        from["version"] = json!(m.package.version.to_string());
+    }
+    let authors = m.as_ref().map(|m| m.package.authors.join(", ")).filter(|a| !a.is_empty());
+    if let Some(a) = authors.or_else(|| (name == m2_song::pack::STD).then(|| "music2".to_string())) {
+        from["author"] = json!(a);
+    }
+    if let Some(l) = m.and_then(|m| m.package.license) {
+        from["license"] = json!(l);
+    }
+    from
 }
 
 /// A word with its first letter a capital: `Kick`.

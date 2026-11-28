@@ -853,11 +853,17 @@ const graphCam = async () => {
 
 await show("hats");
 await key("Meta+t");
-await page.waitForSelector("[data-testid=instrument-list]", { timeout: 3000 }).catch(() => null);
+check(!!(await page.waitForSelector("[data-testid=instrument-list]", { timeout: 3000 }).catch(() => null)), "the beat grid's kit: ⌘T opens + Track's list");
 await page.keyboard.type("basic kit");
 await sleep(150);
+const typed = await page.$eval("[data-testid=instrument-list] [data-active]", (e) => e.dataset.instrument).catch(() => null);
+check(typed === "kit:@m2/drums:drum/Basic kit", `typing "basic kit" there leaves the Basic kit's row active (${typed})`);
 await page.keyboard.press("Enter");
-await until(async () => ((await state()).view.drum_kits ?? []).length === 1, 15000);
+// The server has the kit before the page reads it (e2e/README.md): its Kick 2's tab is the page's
+// own word that it shows the kit, so the suite clicks it only then.
+const kitMade = await until(async () => ((await state()).view.drum_kits ?? []).length === 1, 15000);
+const kitShown = kitMade && (await until(() => has('[data-module-tab="kick-2"]'), 15000));
+check(kitMade && kitShown, `"basic kit" and Enter make a kit, and the page shows its Kick 2 (${!kitMade ? "no kit made" : kitShown ? "shown" : "made, but not on the page"})`);
 await show("kick-2");
 await view("beat");
 const beat = "[data-testid=beat-scroller]";

@@ -6,10 +6,20 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[features]
+default = ["plugins", "wasmtime"]
+# The CLAP host (HOST-1): `m2-plugins`' `clap`. Without it, as on the web, the runtime has no
+# plugin host: each plugin a song uses is `plugin.missing`, said as one that can't play here.
+plugins = ["m2-plugins/clap"]
+# wasmtime, the kernel host (`src/host/wasmtime.rs`). Without it the runtime has no host and loads
+# no package with kernels: what a build for the web starts from (docs/designs/live/web-engine.md).
+wasmtime = ["dep:wasmtime"]
+
 [dependencies]
 m2-ir.workspace = true
 m2-song.workspace = true
-m2-plugins.workspace = true
+# Its types always: `PluginHost`, `Handle`, `Owner`, `Event`, `Blob`, `Found`, `RenderMode`.
+m2-plugins = { path = "../plugins", default-features = false }
 m2-os.workspace = true
 m2-pool.workspace = true
 anyhow.workspace = true
@@ -23,12 +33,6 @@ claxon.workspace = true
 libm.workspace = true
 # The kit's one rule for a latency in seconds (VOX-24), which the kernels count by too.
 m2-kernel.workspace = true
-
-[features]
-default = ["wasmtime"]
-# wasmtime, the kernel host (`src/host/wasmtime.rs`). Without it the runtime has no host and loads
-# no package with kernels: what a build for the web starts from (docs/designs/live/web-engine.md).
-wasmtime = ["dep:wasmtime"]
 
 [dev-dependencies]
 wasmtime = { workspace = true, features = ["wat"] }

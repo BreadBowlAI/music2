@@ -75,6 +75,7 @@ pub mod versions;
 pub mod view;
 pub mod views;
 pub mod voices;
+pub mod web;
 
 use std::collections::HashMap;
 use std::path::Path;

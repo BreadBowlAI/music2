@@ -1780,7 +1780,9 @@ fn make_plugin(
     shape: u64,
 ) -> Result<Arc<PluginInstance>> {
     let blob = state_blob(data, n)?;
-    PluginInstance::create(packages.host(), found, blob, owner, rate, shape, mode).with_context(|| n.name.clone())
+    // Only a plugin a host described is made (FMT-18a): without one, it is missing.
+    let host = packages.host().with_context(|| packages::unhosted(&found.id))?;
+    PluginInstance::create(host, found, blob, owner, rate, shape, mode).with_context(|| n.name.clone())
 }
 
 /// Each checked node's latency at `rate` (RENDER-17): a kernel's as its package declares it, a plugin's as its
@@ -3146,7 +3148,10 @@ impl Renderer {
         // kept plugin whose committed blob isn't the one it was last given, compared node by node.
         // The host skips a blob the instance holds already (HOME-6); after a load its node sends
         // the parameters code owns again (HOME-4).
-        if let Some(k) = keep {
+        // Kept instances are a host's: without one, there are none.
+        if let Some(k) = keep
+            && let Some(host) = packages.host()
+        {
             let (mut loads, mut released) = (vec![], vec![]);
             for (at, p) in plugins.iter().enumerate() {
                 let Some(j) = w.same[p.node].filter(|_| w.kept[p.node]) else { continue };
@@ -3161,7 +3166,6 @@ impl Renderer {
             }
             // A parameter the code stopped setting keeps its value (HOME-5a), which no file records.
             released.iter().for_each(|inst| inst.release());
-            let host = packages.host();
             for (at, blob) in loads {
                 let p = &plugins[at];
                 let loaded = host.load_state(p.handle, blob);

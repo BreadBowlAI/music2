@@ -7,6 +7,7 @@ use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
+use axum::extract::rejection::JsonRejection;
 use serde::Deserialize;
 use serde_json::Value;
 
@@ -35,6 +36,19 @@ crate::api::routes! {
         r#"{"session": 7, "feed": "bass"}"#;
 }
 
+/// A body as its act takes it, or a refusal in words, `{"error": …}`, as every feed refusal is
+/// (`feed/1`, FEED-8): never the extractor's own plain-text answer, which a relay can't read.
+fn read<T>(body: Result<Json<T>, JsonRejection>) -> Result<T, ApiError> {
+    body.map(|Json(t)| t).map_err(|e| {
+        // The innermost cause says what: `missing field `to` at line 1 column 47`.
+        let mut why: &dyn std::error::Error = &e;
+        while let Some(inner) = why.source() {
+            why = inner;
+        }
+        ApiError::from(anyhow::anyhow!("The body doesn't read: {why}."))
+    })
+}
+
 /// The open song's session is `session`, else the request is for a song gone.
 fn same(s: &AppState, session: u64) -> Result<(), ApiError> {
     match s.graph.session() {
@@ -54,7 +68,8 @@ struct OpenReq {
 }
 
 /// Open a feed (FEED-1): its state, `why: "open"`; every window hears it, and draws its Live mark.
-async fn feed_open(State(s): S, Json(r): Json<OpenReq>) -> ApiResult {
+async fn feed_open(State(s): S, body: Result<Json<OpenReq>, JsonRejection>) -> ApiResult {
+    let r = read(body)?;
     same(&s, r.session)?;
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
@@ -75,7 +90,8 @@ struct PutReq {
 /// A put (FEED-4): `{ok, taken, late, lock, written_to, playhead}`. When it changes who wrote last,
 /// every window hears the graph changed, so the Live mark names the newest writer (FEED-1). The
 /// control plane's lock is taken on a blocking thread, never here.
-async fn feed_put(State(s): S, Json(r): Json<PutReq>) -> ApiResult {
+async fn feed_put(State(s): S, body: Result<Json<PutReq>, JsonRejection>) -> ApiResult {
+    let r = read(body)?;
     same(&s, r.session)?;
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
@@ -112,7 +128,8 @@ struct FeedReq {
 }
 
 /// Keep what played (FEED-7): one Tx, one undo step. `{kept, as, step, revision, …}`.
-async fn feed_keep(State(s): S, Json(r): Json<FeedReq>) -> ApiResult {
+async fn feed_keep(State(s): S, body: Result<Json<FeedReq>, JsonRejection>) -> ApiResult {
+    let r = read(body)?;
     same(&s, r.session)?;
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
@@ -122,7 +139,8 @@ async fn feed_keep(State(s): S, Json(r): Json<FeedReq>) -> ApiResult {
 }
 
 /// Close a feed (FEED-1): its state, `why: "closed"`.
-async fn feed_close(State(s): S, Json(r): Json<FeedReq>) -> ApiResult {
+async fn feed_close(State(s): S, body: Result<Json<FeedReq>, JsonRejection>) -> ApiResult {
+    let r = read(body)?;
     same(&s, r.session)?;
     let state = s.clone();
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
@@ -216,3 +234,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "feed_protocol_tests.rs"]
+mod protocol_tests;

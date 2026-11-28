@@ -42,7 +42,8 @@
 #   ci/pr.sh advisories         RustSec's advisories for both workspaces (cargo-deny; it fetches
 #                               their database): on a pull request when changes says deps=true, and
 #                               every night
-#   ci/pr.sh clippy             clippy on every target, every warning an error, and the wasm32 step
+#   ci/pr.sh clippy             clippy on every target, every warning an error, the runtime built
+#                               without its CLAP host (HOST-1: the web's build), and the wasm32 step
 #   ci/pr.sh wasm32             the crates the web engine runs (m2-ir, m2-os, m2-pool, m2-song),
 #                               built and linted for wasm32-unknown-unknown (PLAT-1): the web engine
 #                               note's tracks add theirs. Their libraries only: their tests run on
@@ -50,7 +51,8 @@
 #   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
 #                               part 1 also runs the three tests that own their main thread
-#                               (main_thread, app_main_thread, frame_rate), which nextest can't list
+#                               (main_thread, app_main_thread, frame_rate), which nextest can't list,
+#                               and the runtime's test built without its CLAP host (no_plugins)
 #   ci/pr.sh suites [<i>/<n>]   the browser suites of the PR tier (e2e/run.mjs all --tier pr --shard),
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
 #                               alone, as in ci/check.sh, and is named if it passes then; a run
@@ -316,6 +318,8 @@ case $STEP in
   clippy)
     check "web build" web.log web &&
       check clippy clippy.log cargo clippy --locked --workspace --all-targets -- -D warnings
+    # HOST-1: the runtime without its CLAP host, as the web builds it (its unit tests need the host).
+    check "no plugins lint" no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --features wasmtime --lib --test no_plugins -- -D warnings
     check "wasm32 crates" wasm32.log wasm32 ;;
 
   wasm32)
@@ -350,6 +354,8 @@ case $STEP in
       fi
       if [ "${PART%/*}" = 1 ]; then
         check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread --test frame_rate
+        # HOST-1: the runtime built without its CLAP host tells a plugin song in words.
+        check "no plugins" no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --features wasmtime --test no_plugins
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
         if [ $OS = linux ]; then
