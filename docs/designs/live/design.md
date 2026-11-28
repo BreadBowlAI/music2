@@ -5,7 +5,7 @@
 - music2 has no AI in it ([AGENT-9](../../architecture.md#agents)). It only plays, reports the buffer, and refuses a write that comes too late. The agent decides what to play.
 - The engine change is small: a feed is a second set of notes on a notes lane, swapped in as an edit's notes are ([RENDER-26](../../architecture.md#plans-data-and-arrangement-swaps)), and never written to the song.
 - Later, the same engine runs **in a web browser**: the same Rust, built to WebAssembly, playing the same kernels, so a song sounds the same, bit for bit, in the app and on a web page. Feeds work there with the same messages.
-- Status: proposed, 2026-11-28. The owner asked for both ("agents should play live music… a buffer… like video playback"; "the core should serve on the web… professional, not a toy… open source"). Part 1 (feeds in the app) is designed here in full. Parts 2 to 4 (the web) are sketched; each gets its own note before it is built.
+- Status: accepted by the owner, 2026-11-28, with all three decisions as proposed ("Yes, yes, yes"). Part 1 (feeds in the app) is designed here in full. Parts 2 to 4 (the web) are sketched; each gets its own note before it is built. The owner first asked for both: "agents should play live music… a buffer… like video playback", and "the core should serve on the web… professional, not a toy… open source".
 
 ## Why
 
@@ -205,11 +205,11 @@ Recording, the code editor, plugins, the Playground: the web player plays songs 
 
 Everything here is MIT OR Apache-2.0, as music2 is: the feed messages, written up in the guide as a protocol of their own (`feed/1`) so any player can speak it, and `@m2/web` on npm.
 
-## Decisions for the owner
+## Decisions (the owner said yes to each, 2026-11-28)
 
-1. **May an agent open a feed itself, or only the musician?** Proposed: either, because the Live mark shows it at once, mute silences it, and nothing sounds until the musician presses Play. This widens [AGENT-11](../../architecture.md#agents) a little: today "what a MIDI keyboard would send" is only the musician's.
-2. **A feed plays with the track's clips** (proposed), rather than instead of them.
-3. **Feed time is song beats** (proposed), so a feed works with the loop and the Playground. The other choice is a clock that never wraps, which suits endless jams but needs a map to the song's bars.
+1. **May an agent open a feed itself, or only the musician?** Either: either, because the Live mark shows it at once, mute silences it, and nothing sounds until the musician presses Play. This widens [AGENT-11](../../architecture.md#agents) a little: today "what a MIDI keyboard would send" is only the musician's.
+2. **A feed plays with the track's clips**, rather than instead of them.
+3. **Feed time is song beats**, so a feed works with the loop and the Playground. The other choice is a clock that never wraps, which suits endless jams but needs a map to the song's bars.
 
 ## Order of work
 
