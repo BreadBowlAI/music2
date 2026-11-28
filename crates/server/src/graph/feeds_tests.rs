@@ -137,6 +137,11 @@ impl Rig {
         self.heard().iter().filter_map(|v| v["why"].as_str().map(str::to_string)).collect()
     }
 
+    /// The notes feed `feed` holds: (pitch, start, length).
+    fn notes(&self, feed: &str) -> Vec<(f64, f64, f64)> {
+        self.graph.feed_notes(feed).iter().map(|n| (n.pitch, n.start, n.length)).collect()
+    }
+
     fn state(&self, feed: &str) -> Value {
         let all = self.graph.feeds();
         all["feeds"].as_array().unwrap().iter().find(|f| f["feed"] == feed).cloned().unwrap_or(Value::Null)
@@ -256,9 +261,10 @@ fn a_put_too_far_ahead_is_refused_in_words() {
 }
 
 // FEED-4, FEED-7: notes that end more than 16 bars behind the playhead are dropped from the feed,
-// and still in what played.
+// in steps (once the oldest is 20 bars behind), so the feed isn't sent again at every look; and they
+// are still in what played.
 #[test]
-fn notes_far_behind_are_dropped_and_still_kept() {
+fn notes_far_behind_are_dropped_in_steps_and_still_kept() {
     let mut rig = Rig::new();
     rig.open("bass", None).unwrap();
     rig.put("bass", 0.0, 4.0, &[(36.0, 1.0, 1.0), (38.0, 2.0, 1.0)]).unwrap();
@@ -269,9 +275,72 @@ fn notes_far_behind_are_dropped_and_still_kept() {
     // Played from the start this time.
     rig.graph.seek(0.0).unwrap();
     rig.until(70.5);
-    assert_eq!(rig.state("bass")["notes"], 0, "more than 16 bars behind: dropped");
+    let sent = rig.graph.feed_seq("bass");
+    rig.until(82.0);
+    assert_eq!(rig.state("bass")["notes"], 2, "the oldest ends 19.75 bars behind: not yet");
+    assert_eq!(rig.graph.feed_seq("bass"), sent, "nor sent again at each look meanwhile");
+    rig.until(84.5);
+    assert_eq!(rig.state("bass")["notes"], 0, "20 bars behind: dropped, with every note more than 16 behind");
+    assert_ne!(rig.graph.feed_seq("bass"), sent, "and sent once");
     let kept = rig.graph.feed_keep("bass", Some(As::Clip)).unwrap();
     assert_eq!(kept["kept"], 2, "{kept}");
+}
+
+// FEED-4: a feed holds at most 4,096 notes: a put that would make it more is refused in words, and
+// changes nothing.
+#[test]
+fn a_feed_holds_at_most_4096_notes() {
+    let rig = Rig::new();
+    rig.open("bass", None).unwrap();
+    let many = |n: usize| -> Vec<(f64, f64, f64)> { (0..n).map(|k| (36.0 + (k % 24) as f64, k as f64 * 0.0624, 0.05)).collect() };
+    let over = rig.put("bass", 0.0, 256.0, &many(4097)).unwrap_err().to_string();
+    assert!(over.contains("4,096"), "{over}");
+    assert_eq!(rig.state("bass")["notes"], 0, "nothing taken");
+    let full = rig.put("bass", 0.0, 256.0, &many(4096)).unwrap();
+    assert_eq!(full["taken"], 4096);
+    // One more, from another put, is refused too.
+    let more = rig.put("bass", 255.99, 256.0, &[(40.0, 255.99, 0.005)]).unwrap_err().to_string();
+    assert!(more.contains("4,096"), "{more}");
+}
+
+// FEED-7: what played keeps the newest 65,536 notes, the oldest going first.
+#[test]
+fn what_played_keeps_the_newest_65536() {
+    let mut f = Feed::new("notes".into(), None, LOW_BARS);
+    let at = Instant::now();
+    for lap in 0..20 {
+        f.notes = (0..4096).map(|k| Note { pitch: 40.0, start: (lap * 4096 + k) as f64, length: 0.5, velocity: 0.8 }).collect();
+        f.passed((lap * 4096) as f64, ((lap + 1) * 4096) as f64, at);
+    }
+    let played = f.played_notes();
+    assert_eq!(played.len(), MAX_PLAYED);
+    assert_eq!(played.first().map(|n| n.start), Some((20 * 4096 - MAX_PLAYED) as f64), "the oldest went");
+}
+
+// FEED-5, FEED-6: inside a loop shorter than the low mark, all written, the feed is never low: its
+// low mark is the loop's length, which the state says.
+#[test]
+fn a_short_loop_all_written_is_never_low() {
+    let mut rig = Rig::new();
+    rig.open("bass", Some(4.0)).unwrap();
+    rig.graph.set_loop(Some((0.0, 8.0)), Some(true)).unwrap();
+    rig.put("bass", 0.0, 8.0, &[(36.0, 0.0, 1.0), (38.0, 4.0, 1.0)]).unwrap();
+    rig.heard();
+    rig.play();
+    rig.until(7.5);
+    let st = rig.state("bass");
+    assert_eq!((st["low_mark"]["beats"].as_f64(), st["low_mark"]["bars"].as_f64()), (Some(8.0), Some(2.0)), "{st}");
+    assert!(st["buffer"]["beats"].as_f64().unwrap() >= 8.0 - 1e-9, "a lap written ahead: {st}");
+    let mut n = 0;
+    while rig.graph.status().beat > 1.0 {
+        rig.fill(1);
+        n += 1;
+        assert!(n < 10_000);
+    }
+    rig.until(3.0);
+    let whys = rig.whys();
+    assert!(!whys.iter().any(|w| w == "low" || w == "empty"), "never low: {whys:?}");
+    assert!(whys.contains(&"jump".to_string()), "the wrap: {whys:?}");
 }
 
 // FEED-5: low, empty and jump are each told once, at the right moment: low when the buffer drops
@@ -539,4 +608,148 @@ fn a_put_never_waits_for_a_compile() {
     eprintln!("feed: put in {sent_ms:.2} ms, taken {:.0} ms into a {compile_ms:.0} ms compile", (heard - start) as f64 / 1e6);
     assert!(sent_ms < 20.0, "the put took {sent_ms:.1} ms");
     assert!(heard < end, "taken only after the compile ended");
+}
+
+// FEED-8, RENDER-29: while the session's actor is busy (held here until the put has reached the
+// engine), a put is taken and reaches the engine: it never waits for the session.
+#[test]
+fn a_put_never_waits_for_the_session() {
+    let fixture = Fixture::new();
+    fixture.put("song.ts", SONG);
+    let graph = std::sync::Arc::new(fixture.open());
+    graph.feed_open(Open { track: "bass".into(), lane: None, low_bars: None }).unwrap();
+    graph.transport("play").unwrap();
+    let (release, held) = std::sync::mpsc::channel::<()>();
+    let (busy, is_busy) = std::sync::mpsc::channel::<()>();
+    let holder = {
+        let g = graph.clone();
+        std::thread::spawn(move || {
+            g.call(move |_| {
+                busy.send(()).unwrap();
+                // Bounded: the test lets go long before.
+                let _ = held.recv_timeout(Duration::from_secs(60));
+                Ok(())
+            })
+        })
+    };
+    is_busy.recv_timeout(Duration::from_secs(30)).expect("the actor took the job");
+    let (done, answered) = std::sync::mpsc::channel();
+    {
+        let g = graph.clone();
+        std::thread::spawn(move || {
+            let beat = g.status().beat;
+            let notes = vec![Note { pitch: 36.0, start: beat + 0.5, length: 2.0, velocity: 0.8 }];
+            let _ = done.send(g.feed_put(Put { feed: "bass".into(), from: beat + 0.5, to: beat + 4.0, notes }));
+        });
+    }
+    let put = answered.recv_timeout(Duration::from_secs(10)).expect("the put answered while the actor was busy");
+    assert_eq!(put.unwrap()["taken"], 1);
+    let seq = graph.feed_seq("bass").expect("sent to the engine");
+    eventually("the engine takes it, the actor still busy", || graph.applied(seq).is_some());
+    release.send(()).unwrap();
+    holder.join().unwrap().unwrap();
+}
+
+// FEED-1: only a track with a header takes a feed: the song's own notes lane is refused in words, as
+// the page would show its Live mark nowhere.
+#[test]
+fn only_a_track_with_a_header_takes_a_feed() {
+    let song = "import { song, track } from '@m2/core';\nimport { bass } from '@m2/synths';\nimport { mixer } from 'std/mix';\n\
+                const b = track('bass', ({ lane }) => bass(lane.notes('notes')));\n\
+                export default song(({ lane }) => mixer({ bass: b.out, lead: bass(lane.notes('lead')) }));\n";
+    let fixture = Fixture::new();
+    fixture.put("song.ts", song);
+    let graph = fixture.open();
+    let e = graph.feed_open(Open { track: "song".into(), lane: None, low_bars: None }).unwrap_err().to_string();
+    assert!(e.contains("track"), "{e}");
+    assert!(graph.feed_open(Open { track: "bass".into(), lane: None, low_bars: None }).is_ok());
+}
+
+// FEED-2: a feed is timed in the tempo of what plays: with Compare's Before playing the tempo an
+// agent's step changed, a feed note sounds on its beat in Before's tempo.
+#[test]
+fn a_feed_is_timed_in_the_tempo_that_plays() {
+    let mut rig = Rig::new();
+    let step =
+        as_caller(Caller::agent(Some("Claude"), Some("slower")), || rig.graph.tempo(rig.token, 0.0, Some(60.0), false, false, false))
+            .unwrap()["step"]
+            .as_u64()
+            .unwrap();
+    rig.fill(4);
+    rig.graph.compare(rig.token, step, true, None).unwrap();
+    rig.fill(4);
+    rig.trace();
+    rig.open("bass", None).unwrap();
+    rig.put("bass", 0.0, 8.0, &[(36.0, 2.0, 0.5)]).unwrap();
+    rig.play();
+    rig.until(3.0);
+    let ons = rig.ons();
+    assert_eq!(ons, [(2 * BEAT, 36.0)], "at beat 2 of Before's 120 bpm");
+}
+
+// FEED-2: a feed that no longer fits its room at a new tempo is sent empty, plays nothing, and says
+// so; a put that fits makes it heard again.
+#[test]
+fn a_feed_too_dense_for_a_new_tempo_goes_silent_and_says_so() {
+    let mut rig = Rig::new();
+    rig.open("bass", None).unwrap();
+    // 100 notes over 0.016 beats: about 33 start in 128 frames at 120 bpm, 67 at 240.
+    let dense: Vec<(f64, f64, f64)> = (0..100).map(|k| (30.0 + (k % 40) as f64, 2.0 + k as f64 * 0.00016, 0.0005)).collect();
+    assert_eq!(rig.put("bass", 0.0, 8.0, &dense).unwrap()["taken"], 100);
+    rig.graph.tempo(rig.token, 0.0, Some(240.0), false, false, false).unwrap();
+    rig.fill(4);
+    rig.trace();
+    let st = rig.state("bass");
+    assert_eq!(st["heard"], false, "{st}");
+    assert!(st["silent"].as_str().is_some_and(|w| w.contains("at once")), "said in words: {st}");
+    rig.play();
+    rig.until(3.0);
+    assert!(rig.ons().is_empty(), "nothing plays, mistimed or not: {:?}", rig.ons());
+    // Stopped, the dense notes can be written over: fewer, and heard again.
+    rig.graph.transport("stop").unwrap();
+    rig.fill(2);
+    rig.put("bass", 0.0, 8.0, &[(36.0, 4.0, 0.5)]).unwrap();
+    assert_eq!(rig.state("bass")["heard"], true);
+}
+
+// FEED-7: Keep takes out of the feed only the notes as it kept them: one written since at the same
+// beat and pitch (the next time round a loop) stays.
+#[test]
+fn keep_leaves_a_note_written_since_at_the_same_beat() {
+    let mut rig = Rig::new();
+    rig.open("bass", None).unwrap();
+    rig.graph.set_loop(Some((0.0, 4.0)), Some(true)).unwrap();
+    rig.put("bass", 0.0, 4.0, &[(36.0, 1.0, 0.5)]).unwrap();
+    rig.play();
+    rig.until(2.0);
+    // For the next time round: before the playhead inside the loop, so taken.
+    assert_eq!(rig.put("bass", 0.0, 4.0, &[(36.0, 1.0, 0.25)]).unwrap()["taken"], 1);
+    let kept = rig.graph.feed_keep("bass", Some(As::Clip)).unwrap();
+    assert_eq!(kept["kept"], 1, "{kept}");
+    assert_eq!(rig.notes("bass"), [(36.0, 1.0, 0.25)], "the note written since stays");
+}
+
+// FEED-4, FEED-1: an open, a put and a close whose send fails (the player stalled) change nothing.
+#[test]
+fn a_put_that_cant_be_sent_changes_nothing() {
+    let rig = Rig::new();
+    rig.open("bass", None).unwrap();
+    // Nothing fills the player from here: its queue fills, then a send stalls.
+    let mut last = None;
+    let mut failed = None;
+    for k in 0..2000 {
+        match rig.put("bass", 0.0, 4.0, &[(30.0 + (k % 40) as f64, 1.0, 0.5)]) {
+            Ok(_) => last = Some(30.0 + (k % 40) as f64),
+            Err(e) => {
+                failed = Some(e.to_string());
+                break;
+            }
+        }
+    }
+    assert!(failed.is_some(), "the queue filled");
+    assert_eq!(rig.notes("bass"), [(last.unwrap(), 1.0, 0.5)], "the feed as the last put that went left it: {failed:?}");
+    assert!(rig.graph.feed_close("bass").is_err());
+    assert_eq!(rig.state("bass")["feed"], "bass", "still open");
+    assert!(rig.open("keys", None).is_err());
+    assert_eq!(rig.state("keys"), Value::Null, "not opened");
 }

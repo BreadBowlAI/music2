@@ -1374,6 +1374,7 @@ impl Actor {
                 o.origins()
             },
             tempo: p.tempo.as_ref().map(|a| Arc::new(a.tempo_map())),
+            timing: Arc::new(p.tempo.as_ref().map_or_else(|| p.revision.compiled.data.tempo().clone(), |a| a.tempo_map())),
             meters: p.meters.clone(),
         });
         let dev = device.as_ref().ok().filter(|d| plays.as_ref().is_some_and(|p| p.epoch == d.epoch));
@@ -1579,6 +1580,7 @@ impl Actor {
                     routes: plays.revision.compiled.flat.routes.clone(),
                     origins: None,
                     tempo: None,
+                    timing: Arc::new(plays.revision.compiled.data.tempo().clone()),
                     meters: plays.meters.clone(),
                 };
                 o.load(&device, r, plays, 0.0, None)?;

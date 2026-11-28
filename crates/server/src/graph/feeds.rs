@@ -17,7 +17,7 @@
 //! - **Keep** writes what played as one Tx, through the session: a clip, or a version of the clip
 //!   under it (FEED-7).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -45,6 +45,12 @@ pub const KEPT_FOR: Duration = Duration::from_secs(30 * 60);
 pub const EVERY: Duration = Duration::from_millis(250);
 /// How often the server looks at the feeds.
 pub const TICK: Duration = Duration::from_millis(50);
+/// The most notes a feed holds (FEED-4): a put that would make it more is refused.
+pub const MAX_NOTES: usize = 4096;
+/// The most notes what played keeps, the newest (FEED-7).
+pub const MAX_PLAYED: usize = 65_536;
+/// Notes behind leave the feed in steps of this many bars, so it isn't sent again at every look.
+const DROP_STEP_BARS: f64 = 4.0;
 /// Beats closer than this are one.
 const EPS: f64 = 1e-9;
 
@@ -83,7 +89,7 @@ pub enum As {
 pub(super) struct Feeds {
     open: BTreeMap<String, Feed>,
     /// What played on each feed closed since the song opened, for Keep.
-    closed: BTreeMap<String, Vec<Played>>,
+    closed: BTreeMap<String, History>,
 }
 
 /// One feed: a track's notes lane opened for live writing.
@@ -97,7 +103,7 @@ struct Feed {
     notes: Vec<Note>,
     /// The stretches of beats puts wrote, apart and in order.
     written: Vec<(f64, f64)>,
-    played: Vec<Played>,
+    played: History,
     empties: u64,
     late: u64,
     /// Said: under the low mark, empty.
@@ -111,14 +117,146 @@ struct Feed {
     told: Option<Instant>,
     /// Where its notes were last sent: the player, the plan, the tempo they were timed in, and the
     /// message.
-    sent: Option<(u64, u64, TempoMap, u64)>,
+    sent: Sent,
+    /// Why it plays nothing though it was sent: too dense for the tempo it was timed in (FEED-2).
+    silent: Option<String>,
 }
 
-/// A note that played, and when.
+/// Where a feed's notes were sent: the player, the plan, the tempo they were timed in and the
+/// message; None when its lane plays nowhere.
+type Sent = Option<(u64, u64, TempoMap, u64)>;
+
+/// A note that played, when, and its place in the order notes came (what goes first past the cap).
 #[derive(Clone, Debug)]
 struct Played {
     note: Note,
     at: Instant,
+    n: u64,
+}
+
+/// What played on a feed (FEED-7): by start (bits of a beat 0 or more, which order as the beats
+/// do), so a stretch the playhead passes again replaces what played there in a range, never a scan;
+/// and in the order it came, so the oldest go first past [`MAX_PLAYED`] or [`KEPT_FOR`].
+#[derive(Default)]
+struct History {
+    by_start: BTreeMap<u64, Vec<Played>>,
+    /// Each note's `n` and start, in the order they came: an entry already replaced is passed over.
+    order: VecDeque<(u64, u64)>,
+    len: usize,
+    next: u64,
+}
+
+impl History {
+    /// What played from `[from, to)` before goes; `notes` (by start) that start there played now.
+    fn passed(&mut self, notes: &[Note], from: f64, to: f64, at: Instant) {
+        // A stretch of no beats, or one that isn't a number, passed nothing.
+        if to.partial_cmp(&from) != Some(std::cmp::Ordering::Greater) {
+            return;
+        }
+        let (a, b) = (from.max(0.0).to_bits(), to.max(0.0).to_bits());
+        let mut mid = self.by_start.split_off(&a);
+        let mut after = mid.split_off(&b);
+        self.len -= mid.values().map(Vec::len).sum::<usize>();
+        self.by_start.append(&mut after);
+        let lo = notes.partition_point(|n| n.start < from);
+        for note in notes[lo..].iter().take_while(|n| n.start < to) {
+            self.next += 1;
+            let key = note.start.max(0.0).to_bits();
+            self.by_start.entry(key).or_default().push(Played { note: note.clone(), at, n: self.next });
+            self.order.push_back((self.next, key));
+            self.len += 1;
+        }
+        self.trim(at);
+    }
+
+    /// The oldest go while more than [`MAX_PLAYED`] are kept, or they played more than
+    /// [`KEPT_FOR`] ago.
+    fn trim(&mut self, now: Instant) {
+        while let Some(&(n, key)) = self.order.front() {
+            let found = self.by_start.get(&key).and_then(|v| v.iter().position(|p| p.n == n));
+            let Some(i) = found else {
+                self.order.pop_front();
+                continue;
+            };
+            let old = now.saturating_duration_since(self.by_start[&key][i].at) > KEPT_FOR;
+            if !old && self.len <= MAX_PLAYED {
+                break;
+            }
+            self.remove_at(key, i);
+            self.order.pop_front();
+        }
+        // Entries replaced since are passed over at the front; past twice what is kept, the order
+        // is made again from what is.
+        if self.order.len() > 2 * MAX_PLAYED.max(self.len) {
+            let mut all: Vec<(u64, u64)> = self.by_start.iter().flat_map(|(k, v)| v.iter().map(move |p| (p.n, *k))).collect();
+            all.sort_unstable();
+            self.order = all.into();
+        }
+    }
+
+    fn remove_at(&mut self, key: u64, i: usize) {
+        if let Some(v) = self.by_start.get_mut(&key) {
+            v.remove(i);
+            self.len -= 1;
+            if v.is_empty() {
+                self.by_start.remove(&key);
+            }
+        }
+    }
+
+    /// What played, by start, each with its `n`.
+    fn all(&self) -> Vec<(Note, u64)> {
+        self.by_start.values().flatten().map(|p| (p.note.clone(), p.n)).collect()
+    }
+
+    /// Take out the notes `ns` names (Keep kept them).
+    fn take_out(&mut self, ns: &[u64]) {
+        let keys: Vec<(u64, usize)> = self
+            .by_start
+            .iter()
+            .flat_map(|(k, v)| v.iter().enumerate().filter(|(_, p)| ns.contains(&p.n)).map(move |(i, _)| (*k, i)))
+            .collect();
+        for (k, i) in keys.into_iter().rev() {
+            self.remove_at(k, i);
+        }
+    }
+
+    /// Each note sounding at `beat` ends there: a close cut it.
+    fn cut_at(&mut self, beat: f64) {
+        for p in self.by_start.values_mut().flatten() {
+            if p.note.start <= beat && p.note.start + p.note.length > beat {
+                p.note.length = beat - p.note.start;
+            }
+        }
+        let empty: Vec<(u64, usize)> = self
+            .by_start
+            .iter()
+            .flat_map(|(k, v)| v.iter().enumerate().filter(|(_, p)| p.note.length <= 0.0).map(move |(i, _)| (*k, i)))
+            .collect();
+        for (k, i) in empty.into_iter().rev() {
+            self.remove_at(k, i);
+        }
+    }
+
+    /// `other`'s notes too (a feed closed, then opened again).
+    fn join(&mut self, other: History) {
+        for p in other.by_start.into_values().flatten() {
+            self.next += 1;
+            let key = p.note.start.max(0.0).to_bits();
+            self.order.push_back((self.next, key));
+            self.by_start.entry(key).or_default().push(Played { n: self.next, ..p });
+            self.len += 1;
+        }
+    }
+}
+
+/// What a put makes of a feed, before anything changes (FEED-4): its notes, what it took and left
+/// out, and what to send.
+struct Planned {
+    notes: Vec<Note>,
+    taken: usize,
+    late: usize,
+    data: NotesData,
 }
 
 /// The transport as a feed reads it at one moment.
@@ -186,7 +324,7 @@ impl Feed {
             low_bars,
             notes: vec![],
             written: vec![],
-            played: vec![],
+            played: History::default(),
             empties: 0,
             late: 0,
             low: false,
@@ -195,6 +333,7 @@ impl Feed {
             jumped: false,
             told: None,
             sent: None,
+            silent: None,
         }
     }
 
@@ -216,9 +355,9 @@ impl Feed {
         }
     }
 
-    /// Take `p` at `now`, its notes timed by `timed` (FEED-4): what it took and left out, and the
-    /// feed's notes to send. Nothing changes when it is refused.
-    fn put(&mut self, p: &Put, now: &Now, timed: (&TempoMap, f64)) -> Result<(usize, usize, NotesData)> {
+    /// What `p` would make of the feed at `now`, its notes timed by `timed` (FEED-4). Changes
+    /// nothing: [`Feed::take`] makes it so once its notes reached the engine.
+    fn plan(&self, p: &Put, now: &Now, timed: (&TempoMap, f64)) -> Result<Planned> {
         if !(p.from.is_finite() && p.to.is_finite()) || p.from < 0.0 || p.to <= p.from {
             bail!("A put's `from` and `to` are beats, `from` 0 or more and `to` after it: not {} to {}.", p.from, p.to);
         }
@@ -261,6 +400,12 @@ impl Feed {
             }
         }
         notes.retain(|n| !now.behind(n));
+        if notes.len() > MAX_NOTES {
+            bail!(
+                "A feed holds at most 4,096 notes: this put would make it {}. Write fewer, or let the bars behind play out first.",
+                notes.len()
+            );
+        }
         notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)));
         let data = NotesData::feed(&notes, timed.0, timed.1);
         if !FEED.fits(data.needs()) {
@@ -270,10 +415,14 @@ impl Feed {
                 FEED.ons
             );
         }
-        self.notes = notes;
+        Ok(Planned { notes, taken, late, data })
+    }
+
+    /// Make `p`'s plan so: its notes reached the engine (or its lane plays nowhere).
+    fn take(&mut self, p: &Put, planned: Planned) {
+        self.notes = planned.notes;
         self.write(p.from, p.to);
-        self.late += late as u64;
-        Ok((taken, late, data))
+        self.late += planned.late as u64;
     }
 
     /// Add the stretch `[from, to)` to what is written, joined with those it touches.
@@ -293,11 +442,13 @@ impl Feed {
     /// The notes whose start the playhead passed in `[from, to)`, kept as what played: what played
     /// there before (an earlier time round a loop) goes.
     fn passed(&mut self, from: f64, to: f64, at: Instant) {
-        if to <= from {
-            return;
-        }
-        self.played.retain(|p| p.note.start < from || p.note.start >= to);
-        self.played.extend(self.notes.iter().filter(|n| n.start >= from && n.start < to).map(|n| Played { note: n.clone(), at }));
+        self.played.passed(&self.notes, from, to, at);
+    }
+
+    /// What played, by start (tests).
+    #[cfg(test)]
+    fn played_notes(&self) -> Vec<Note> {
+        self.played.all().into_iter().map(|(n, _)| n).collect()
     }
 
     /// Look at the feed at `now`: what played since the last look, and what to say (FEED-5).
@@ -351,9 +502,13 @@ impl Feed {
                 self.told = Some(at);
             }
         }
-        self.played.retain(|p| at.saturating_duration_since(p.at) <= KEPT_FOR);
+        self.played.trim(at);
+        // Behind in steps: once the oldest is DROP_STEP_BARS past the line, every note past it goes.
         let before = self.notes.len();
-        self.notes.retain(|n| !now.behind(n));
+        let step = DROP_STEP_BARS * now.bar(now.beat);
+        if self.notes.iter().any(|n| now.behind(&Note { length: n.length + step, ..n.clone() })) {
+            self.notes.retain(|n| !now.behind(n));
+        }
         // Stretches wholly behind go too.
         let gone = now.beat - BEHIND_BARS * now.bar(now.beat);
         self.written.retain(|&(_, b)| b >= gone || now.looping.is_some());
@@ -362,16 +517,20 @@ impl Feed {
 
     /// The feed's state as the event and `GET /api/feed` say it (FEED-5).
     fn shown(&self, key: &str, now: &Now, why: Option<&str>, token: u64) -> Value {
-        let (written_to, beats, _) = self.ahead(now);
+        let (written_to, beats, low) = self.ahead(now);
         let bar = now.bar(now.beat);
         let seconds = now.tempo.seconds_at(now.beat + beats) - now.tempo.seconds_at(now.beat);
         let mut v = json!({
             "t": "feed", "session": token, "feed": key, "track": key, "lane": self.lane, "writer": self.writer,
             "playing": now.playing, "playhead": now.beat, "lock": now.lock(), "written_to": written_to,
             "buffer": {"beats": beats, "bars": beats / bar, "seconds": seconds},
-            "low_bars": self.low_bars, "notes": self.notes.len(), "empties": self.empties, "late": self.late,
-            "heard": self.sent.is_some(),
+            "low_bars": self.low_bars, "low_mark": {"beats": low, "bars": low / bar},
+            "notes": self.notes.len(), "empties": self.empties, "late": self.late,
+            "heard": self.sent.is_some() && self.silent.is_none(),
         });
+        if let Some(w) = &self.silent {
+            v["silent"] = json!(w);
+        }
         if let Some(w) = why {
             v["why"] = json!(w);
         }
@@ -391,24 +550,41 @@ fn slot_of(plays: &PlaysView, module: &str, lane: &str) -> Option<u32> {
     Some(at as u32)
 }
 
-/// Send feed `key`'s notes to what plays, timed as it plays them: its message, or None when its
-/// lane plays nowhere.
-fn send(cp: &mut ControlPlane, key: &str, device: Option<&Device>, data: Option<NotesData>) -> Result<Option<u64>> {
-    let Some(engine) = cp.open.as_ref().map(|p| p.engine.clone()) else { return Ok(None) };
-    let Some(f) = cp.feeds.open.get_mut(key) else { return Ok(None) };
-    let Some((p, d)) = playing(engine.plays.as_ref(), device) else {
-        f.sent = None;
-        return Ok(None);
-    };
-    let tempo = p.tempo.as_deref().unwrap_or(engine.accepted.compiled.data.tempo()).clone();
-    let Some(slot) = slot_of(p, key, &f.lane) else {
-        f.sent = None;
-        return Ok(None);
-    };
-    let data = data.unwrap_or_else(|| NotesData::feed(&f.notes, &tempo, engine.accepted.project.sample_rate() as f64));
+/// Send `notes` (or `data`, built from them) as feed `key`'s, on lane `lane`, to what plays, timed
+/// in the tempo of what plays (FEED-2): where it went, and why it plays nothing when the notes are
+/// too dense for that tempo (they are sent empty then). Changes no feed: the caller does, once this
+/// went (FEED-4).
+fn deliver(
+    engine: &super::EngineView,
+    device: Option<&Device>,
+    key: &str,
+    lane: &str,
+    notes: &[Note],
+    data: Option<NotesData>,
+) -> Result<(Sent, Option<String>)> {
+    let Some((p, d)) = playing(engine.plays.as_ref(), device) else { return Ok((None, None)) };
+    let Some(slot) = slot_of(p, key, lane) else { return Ok((None, None)) };
+    let tempo = (*p.timing).clone();
+    let mut data = data.unwrap_or_else(|| NotesData::feed(notes, &tempo, engine.accepted.project.sample_rate() as f64));
+    let mut silent = None;
+    if !FEED.fits(data.needs()) {
+        data = NotesData::empty();
+        silent = Some(format!(
+            "too many notes at once at this tempo: a feed plays at most {} sounding together and {} starting within 128 samples. Write them again, fewer.",
+            FEED.sounding, FEED.ons
+        ));
+    }
     let seq = d.player.swap_lane(p.generation, slot, LaneSwap::Feed(Arc::new(data)))?;
-    f.sent = Some((p.epoch, p.generation, tempo, seq));
-    Ok(Some(seq))
+    Ok((Some((p.epoch, p.generation, tempo, seq)), silent))
+}
+
+/// Send feed `key`'s notes again, as it holds them.
+fn resend(cp: &mut ControlPlane, key: &str, device: Option<&Device>) -> Result<()> {
+    let Some(engine) = cp.open.as_ref().map(|p| p.engine.clone()) else { return Ok(()) };
+    let Some(f) = cp.feeds.open.get_mut(key) else { return Ok(()) };
+    let (sent, silent) = deliver(&engine, device, key, &f.lane, &f.notes, None)?;
+    (f.sent, f.silent) = (sent, silent);
+    Ok(())
 }
 
 /// Carry every feed to what a settle just published (its first phase, under the control plane's
@@ -420,14 +596,11 @@ pub(super) fn settled(cp: &mut ControlPlane, token: u64, device: Option<&Device>
     let keys: Vec<String> = cp.feeds.open.keys().cloned().collect();
     for key in keys {
         let fresh = match (playing(engine.plays.as_ref(), device), &cp.feeds.open[&key].sent) {
-            (Some((p, _)), Some((epoch, generation, tempo, _))) => {
-                (p.epoch, p.generation) != (*epoch, *generation)
-                    || p.tempo.as_deref().unwrap_or(engine.accepted.compiled.data.tempo()) != tempo
-            }
+            (Some((p, _)), Some((epoch, generation, tempo, _))) => (p.epoch, p.generation) != (*epoch, *generation) || *p.timing != *tempo,
             (Some(_), None) => true,
             (None, _) => false,
         };
-        if fresh && let Err(e) = send(cp, &key, device, None) {
+        if fresh && let Err(e) = resend(cp, &key, device) {
             eprintln!("music2: couldn't carry the {key} feed to the new plan: {e:#}");
         }
     }
@@ -488,6 +661,12 @@ impl Graph {
         let writer = Graph::asker();
         let mut cp = self.inner.control.lock();
         let open = cp.open.as_ref().context("no project is open")?;
+        // A track with a header, where the page shows its Live mark (FEED-1).
+        let headed =
+            open.shown.timeline.tracks.iter().any(|t| t.module == o.track && t.head.get("track").and_then(Value::as_bool) == Some(true));
+        if o.track == "song" || (!headed && open.shown.timeline.tracks.iter().any(|t| t.module == o.track)) {
+            bail!("{} isn't a track: a feed plays a track's notes, which shows Live on its header.", o.track);
+        }
         let rev = open.engine.accepted.clone();
         let module = rev
             .compiled
@@ -509,11 +688,13 @@ impl Graph {
             bail!("{} already has a feed open: close it first, or write to it.", o.track);
         }
         let mut f = Feed::new(lane, writer, low_bars);
+        // Sent first: a feed that can't be sent isn't opened (FEED-4).
+        let device = self.inner.current_device();
+        let engine = cp.open.as_ref().context("no project is open")?.engine.clone();
+        (f.sent, f.silent) = deliver(&engine, device.as_ref(), &o.track, &f.lane, &f.notes, None)?;
         // What played before it closed is kept for Keep still.
         f.played = cp.feeds.closed.remove(&o.track).unwrap_or_default();
         cp.feeds.open.insert(o.track.clone(), f);
-        let device = self.inner.current_device();
-        send(&mut cp, &o.track, device.as_ref(), None)?;
         let (now, token) = self.feed_now(&cp).context("no project is open")?;
         let shown = cp.feeds.open[&o.track].shown(&o.track, &now, Some("open"), token);
         drop(cp);
@@ -529,20 +710,25 @@ impl Graph {
         let mut cp = self.inner.control.lock();
         let (now, _) = self.feed_now(&cp).context("no project is open")?;
         let engine = cp.open.as_ref().context("no project is open")?.engine.clone();
+        // Timed as what plays plays (FEED-2).
         let tempo = playing(engine.plays.as_ref(), device.as_ref())
-            .and_then(|(p, _)| p.tempo.as_deref().cloned())
+            .map(|(p, _)| (*p.timing).clone())
             .unwrap_or_else(|| engine.accepted.compiled.data.tempo().clone());
         let rate = engine.accepted.project.sample_rate() as f64;
         let f = cp.feeds.open.get_mut(&p.feed).ok_or_else(|| anyhow!("{} has no feed open: open one first (`m2 feed open`).", p.feed))?;
-        let (taken, late, data) = f.put(&p, &now, (&tempo, rate))?;
+        let mut planned = f.plan(&p, &now, (&tempo, rate))?;
+        let (taken, late) = (planned.taken, planned.late);
+        // Sent first: a put that can't be sent changes nothing (FEED-4).
+        let data = std::mem::replace(&mut planned.data, NotesData::empty());
+        (f.sent, f.silent) = deliver(&engine, device.as_ref(), &p.feed, &f.lane, &planned.notes, Some(data))?;
+        f.take(&p, planned);
         if writer.is_some() {
             f.writer = writer;
         }
-        send(&mut cp, &p.feed, device.as_ref(), Some(data))?;
-        let f = &cp.feeds.open[&p.feed];
         let (written_to, ..) = f.ahead(&now);
+        let heard = f.sent.is_some() && f.silent.is_none();
         Ok(
-            json!({"ok": true, "taken": taken, "late": late, "lock": now.lock(), "written_to": written_to, "playhead": now.beat, "heard": f.sent.is_some()}),
+            json!({"ok": true, "taken": taken, "late": late, "lock": now.lock(), "written_to": written_to, "playhead": now.beat, "heard": heard}),
         )
     }
 
@@ -555,24 +741,22 @@ impl Graph {
         if !cp.feeds.open.contains_key(key) {
             bail!("{key} has no feed open.");
         }
-        // What played up to now first.
-        let f = cp.feeds.open.get_mut(key).expect("open");
+        // An empty feed, sent first: its scheduler ends every note of it at the swap (FEED-2); a
+        // close that can't be sent changes nothing (FEED-4).
+        let engine = cp.open.as_ref().context("no project is open")?.engine.clone();
+        let lane = cp.feeds.open[key].lane.clone();
+        deliver(&engine, device.as_ref(), key, &lane, &[], None)?;
+        let mut f = cp.feeds.open.remove(key).expect("open");
+        // What played up to now, the notes sounding cut where they ended.
         if let Some(c) = f.cursor.filter(|_| now.playing) {
             f.passed(c, now.beat, Instant::now());
         }
-        // An empty feed: its scheduler ends every note of it at the swap (FEED-2).
-        f.notes.clear();
-        send(&mut cp, key, device.as_ref(), None)?;
-        let mut f = cp.feeds.open.remove(key).expect("open");
-        // The notes sounding, cut where they ended.
-        for p in &mut f.played {
-            if now.sounding(&p.note) {
-                p.note.length = now.beat - p.note.start;
-            }
+        if now.playing {
+            f.played.cut_at(now.beat);
         }
-        f.played.retain(|p| p.note.length > 0.0);
+        f.notes.clear();
         let shown = f.shown(key, &now, Some("closed"), token);
-        cp.feeds.closed.entry(key.to_string()).or_default().extend(f.played);
+        cp.feeds.closed.entry(key.to_string()).or_default().join(f.played);
         drop(cp);
         self.inner.tell(shown.clone());
         Ok(shown)
@@ -603,7 +787,7 @@ impl Graph {
                 let f = cp.feeds.open.get_mut(&key).expect("open");
                 let (whys, dropped) = f.look(&now, at);
                 told.extend(whys.into_iter().map(|w| f.shown(&key, &now, w, token)));
-                if dropped && let Err(e) = send(&mut cp, &key, device.as_ref(), None) {
+                if dropped && let Err(e) = resend(&mut cp, &key, device.as_ref()) {
                     eprintln!("music2: couldn't send the {key} feed: {e:#}");
                 }
             }
@@ -652,9 +836,11 @@ impl Graph {
             let open = cp.open.as_ref().context("no project is open")?;
             let (token, rev) = (open.engine.token, open.engine.accepted.clone());
             let label = super::record::label_of(&cp, key);
-            let at = Instant::now();
+            // Each with where it is kept: (0, n) on the open feed, (1, n) on the closed one.
             let (lane, writer, mut played) = match cp.feeds.open.get(key) {
-                Some(f) => (f.lane.clone(), f.writer.clone(), f.played.clone()),
+                Some(f) => {
+                    (f.lane.clone(), f.writer.clone(), f.played.all().into_iter().map(|(note, n)| (note, (0u8, n))).collect::<Vec<_>>())
+                }
                 None => {
                     let lane = rev
                         .compiled
@@ -667,13 +853,12 @@ impl Graph {
                     (lane.unwrap_or_default(), None, vec![])
                 }
             };
-            played.extend(cp.feeds.closed.get(key).into_iter().flatten().cloned());
-            played.retain(|p| at.saturating_duration_since(p.at) <= KEPT_FOR);
-            let mut notes: Vec<Note> = played.into_iter().map(|p| p.note).collect();
-            notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)));
-            notes.dedup_by(|a, b| a.start == b.start && a.pitch == b.pitch);
-            (token, lane, writer, label, notes, rev)
+            played.extend(cp.feeds.closed.get(key).into_iter().flat_map(|h| h.all()).map(|(note, n)| (note, (1u8, n))));
+            played.sort_by(|(a, _), (b, _)| a.start.total_cmp(&b.start).then(a.pitch.total_cmp(&b.pitch)));
+            played.dedup_by(|(a, _), (b, _)| a.start == b.start && a.pitch == b.pitch);
+            (token, lane, writer, label, played, rev)
         };
+        let (notes, ids): (Vec<Note>, Vec<(u8, u64)>) = notes.into_iter().unzip();
         if notes.is_empty() {
             bail!("Nothing has played on the {key} feed yet: Keep keeps what played.");
         }
@@ -692,12 +877,16 @@ impl Graph {
             (None, Some(c)) if !c.versions.is_empty() && c.id.is_some() => Some(c.clone()),
             _ => None,
         };
-        let kept: Vec<(u64, u64)>;
+        // Which of what played it kept.
+        let kept: Vec<usize>;
         let answer = match version {
             Some(clip) => {
-                let inside: Vec<Note> = notes
+                let within: Vec<usize> = (0..notes.len())
+                    .filter(|&i| notes[i].start >= clip.start - EPS && notes[i].start < clip.start + clip.length - EPS)
+                    .collect();
+                let inside: Vec<Note> = within
                     .iter()
-                    .filter(|n| n.start >= clip.start - EPS && n.start < clip.start + clip.length - EPS)
+                    .map(|&i| &notes[i])
                     .map(|n| Note { start: n.start - clip.start, length: n.length.min(clip.start + clip.length - n.start), ..n.clone() })
                     .collect();
                 let left_out = notes.len() - inside.len();
@@ -716,7 +905,7 @@ impl Graph {
                     super::clips::Answer::Done(v) => v,
                     super::clips::Answer::Changed(why) => bail!("{why}"),
                 };
-                kept = inside.iter().map(|n| ((n.start + clip.start).to_bits(), n.pitch.to_bits())).collect();
+                kept = within;
                 {
                     // The change's own answer first, as every change's (AGENT-2): revision, step, moved.
                     let mut a = v.clone();
@@ -751,7 +940,7 @@ impl Graph {
                 if let Err(e) = &named {
                     eprintln!("music2: couldn't name Keep's undo step: {e:#}");
                 }
-                kept = notes.iter().map(|n| (n.start.to_bits(), n.pitch.to_bits())).collect();
+                kept = (0..notes.len()).collect();
                 let made = v["made"].get(0).and_then(|m| m["id"].as_str()).map(String::from);
                 {
                     let mut a = v.clone();
@@ -772,15 +961,17 @@ impl Graph {
         let clip = answer["as"] == "clip";
         let device = self.inner.current_device();
         let mut cp = self.inner.control.lock();
-        let is = |n: &Note| kept.contains(&(n.start.to_bits(), n.pitch.to_bits()));
+        let of = |src: u8| -> Vec<u64> { kept.iter().filter(|&&i| ids[i].0 == src).map(|&i| ids[i].1).collect() };
         if let Some(c) = cp.feeds.closed.get_mut(key) {
-            c.retain(|p| !is(&p.note));
+            c.take_out(&of(1));
         }
         if let Some(f) = cp.feeds.open.get_mut(key) {
-            f.played.retain(|p| !is(&p.note));
-            if clip {
-                f.notes.retain(|n| !is(n));
-                if let Err(e) = send(&mut cp, key, device.as_ref(), None) {
+            f.played.take_out(&of(0));
+            // Only each note as it was kept: one written since at its beat and pitch stays (FEED-7).
+            let same = |a: &Note, b: &Note| a.start == b.start && a.pitch == b.pitch && a.length == b.length && a.velocity == b.velocity;
+            if clip && f.notes.iter().any(|n| kept.iter().any(|&i| same(n, &notes[i]))) {
+                f.notes.retain(|n| !kept.iter().any(|&i| same(n, &notes[i])));
+                if let Err(e) = resend(&mut cp, key, device.as_ref()) {
                     eprintln!("music2: couldn't send the {key} feed: {e:#}");
                 }
             }
@@ -792,6 +983,17 @@ impl Graph {
     #[cfg(test)]
     pub(super) fn feed_seq(&self, key: &str) -> Option<u64> {
         self.inner.control.lock().feeds.open.get(key)?.sent.as_ref().map(|s| s.3)
+    }
+
+    /// The notes feed `key` holds (tests).
+    #[cfg(test)]
+    pub(super) fn feed_notes(&self, key: &str) -> Vec<Note> {
+        self.inner.control.lock().feeds.open.get(key).map(|f| f.notes.clone()).unwrap_or_default()
+    }
+
+    /// The agent that wrote to feed `key` last, while it is open: what the page's Live mark names.
+    pub fn feed_writer(&self, key: &str) -> Option<Option<String>> {
+        Some(self.inner.control.lock().feeds.open.get(key)?.writer.clone())
     }
 }
 

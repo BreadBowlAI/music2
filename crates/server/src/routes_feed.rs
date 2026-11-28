@@ -72,15 +72,22 @@ struct PutReq {
     by: Option<String>,
 }
 
-/// A put (FEED-4): `{ok, taken, late, lock, written_to, playhead}`.
+/// A put (FEED-4): `{ok, taken, late, lock, written_to, playhead}`. When it changes who wrote last,
+/// every window hears the graph changed, so the Live mark names the newest writer (FEED-1). The
+/// control plane's lock is taken on a blocking thread, never here.
 async fn feed_put(State(s): S, Json(r): Json<PutReq>) -> ApiResult {
     same(&s, r.session)?;
     let state = s.clone();
-    // A first write by an agent names it on the Live mark.
-    let named =
-        s.graph.feeds()["feeds"].as_array().is_some_and(|f| f.iter().any(|f| f["feed"] == r.put.feed.as_str() && f["writer"].is_null()));
     let caller = crate::caller::now().saying(r.by.as_deref(), None);
-    let v = blocking(move || crate::caller::as_caller(caller, || state.graph.feed_put(r.put))).await?;
+    let (v, named) = blocking(move || {
+        crate::caller::as_caller(caller, || {
+            let before = state.graph.feed_writer(&r.put.feed);
+            let feed = r.put.feed.clone();
+            let v = state.graph.feed_put(r.put)?;
+            Ok((v, state.graph.feed_writer(&feed) != before))
+        })
+    })
+    .await?;
     if named {
         s.graph_changed();
     }
@@ -88,8 +95,9 @@ async fn feed_put(State(s): S, Json(r): Json<PutReq>) -> ApiResult {
 }
 
 /// Every open feed's state (FEED-5).
-async fn feed_get(State(s): S) -> Json<Value> {
-    Json(s.graph.feeds())
+async fn feed_get(State(s): S) -> ApiResult {
+    let state = s.clone();
+    Ok(Json(blocking(move || Ok(state.graph.feeds())).await?))
 }
 
 #[derive(Deserialize)]
@@ -126,6 +134,69 @@ async fn feed_close(State(s): S, Json(r): Json<FeedReq>) -> ApiResult {
 #[cfg(test)]
 mod tests {
     use crate::api;
+
+    use std::io::{Read, Write};
+
+    use serde_json::{Value, json};
+
+    /// `method path` with `body`, the tools key, as the agent `who`: the status and the answer.
+    fn ask(url: &str, method: &str, path: &str, who: &str, body: &Value) -> (u16, Value) {
+        let addr = url.trim_start_matches("http://");
+        let mut s = std::net::TcpStream::connect(addr).unwrap();
+        let body = if body.is_null() { String::new() } else { body.to_string() };
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {addr}\r\nx-m2-token: t00ls\r\nx-m2-as: {who}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        s.write_all(req.as_bytes()).unwrap();
+        let mut answer = String::new();
+        s.read_to_string(&mut answer).unwrap();
+        let status = answer[9..12].parse().unwrap();
+        (status, answer.split_once("\r\n\r\n").map_or(Value::Null, |(_, b)| serde_json::from_str(b).unwrap_or(Value::Null)))
+    }
+
+    fn copy(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for e in std::fs::read_dir(from).unwrap().flatten() {
+            let (f, t) = (e.path(), to.join(e.file_name()));
+            if f.is_dir() { copy(&f, &t) } else { std::fs::copy(&f, &t).map(drop).unwrap() }
+        }
+    }
+
+    // FEED-1: a put by another agent than the one that wrote last tells every window the graph
+    // changed, so the Live mark names the newest writer; one by the same agent doesn't.
+    #[test]
+    fn a_new_writer_is_told_to_the_page() {
+        let base = std::env::temp_dir().join(format!("m2-feed-writer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let dir = base.join("song");
+        copy(&std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/first-song"), &dir);
+        let options = crate::ServeOptions { port: 0, web_dir: base.join("no-web"), token: "t00ls".into(), page_token: "p4ge".into() };
+        let running = crate::start_with(options, crate::graph::Graph::silent().stored()).unwrap();
+        let session = running.state.graph.open(&dir).unwrap()["session"].as_u64().unwrap();
+        let url = running.url.clone();
+        assert_eq!(ask(&url, "POST", "/api/feed/open", "Ada", &json!({"session": session, "track": "keys"})).0, 200);
+        let put = |who: &str, pitch: u32| {
+            let body =
+                json!({"session": session, "feed": "keys", "from": 0, "to": 4, "notes": [{"pitch": pitch, "start": 1, "length": 0.5}]});
+            let (status, v) = ask(&url, "POST", "/api/feed/put", who, &body);
+            assert_eq!(status, 200, "{v}");
+        };
+        let (_, mut events, _) = running.state.subscribe(false);
+        let graph_events = |events: &mut tokio::sync::broadcast::Receiver<String>| {
+            let mut n = 0;
+            while let Ok(m) = events.try_recv() {
+                n += usize::from(serde_json::from_str::<Value>(&m).is_ok_and(|v| v["t"] == "graph"));
+            }
+            n
+        };
+        put("Ada", 60);
+        assert_eq!(graph_events(&mut events), 0, "the same writer: nothing for the mark to change");
+        put("Grace", 62);
+        assert_eq!(graph_events(&mut events), 1, "a new writer: the page reads the state again");
+        assert_eq!(running.state.graph.state().unwrap()["feeds"][0]["writer"], "Grace");
+        let _ = std::fs::remove_dir_all(&base);
+    }
 
     // AGENT-11, FEED-8: the feed routes are declared once, each open to agents; only Keep writes.
     #[test]

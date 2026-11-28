@@ -39,6 +39,7 @@ m2-runtime tests::events::a_flooded_guard_takes_a_small_part_of_a_block  speed: 
 m2-runtime tests::events::eight_note_effects_take_a_small_part_of_a_block  speed: the lane pass within a tenth of a block, 267 us (core/runtime/src/tests/events.rs)
 m2-server export::tests::an_export_renders_on_its_own_while_a_second_is_refused  speed: answered within 250 ms (crates/server/src/export.rs)
 m2-server graph::audition::tests::audition_never_waits_for_a_compile  speed: sent within 20 ms, heard before the compile ends (crates/server/src/graph/audition_tests.rs)
+m2-server graph::feeds::tests::a_put_never_waits_for_a_compile  speed: a put sent within 20 ms, taken before the compile ends (crates/server/src/graph/feeds_tests.rs); a_put_never_waits_for_the_session checks the same without a clock, in the PR tier
 m2-server graph::lanes::tests::lane_previews_never_wait_for_a_compile  speed: within 500 ms (crates/server/src/graph/lanes_tests.rs)
 m2-server graph::midi::tests::midi_never_waits_for_a_compile  speed: sent within 20 ms, heard before the compile ends (crates/server/src/graph/midi_tests.rs)
 m2-server graph::presets::tests::loading_a_plugin_preset_is_one_undo_step  speed: within 600 ms (crates/server/src/graph/presets_tests.rs)
