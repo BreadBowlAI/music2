@@ -1,7 +1,7 @@
 # Install and run music2
 
 **In short**
-- Download music2 from the [Releases page](https://github.com/BreadBowlAI/music2/releases): for a Mac with Apple silicon, or for Linux on an x86_64 PC. 0.3.0 is the newest release, an early test version (an alpha).
+- Download music2 from the [Releases page](https://github.com/BreadBowl-AI/music2/releases): for a Mac with Apple silicon, or for Linux on an x86_64 PC. 0.3.0 is the newest release, an early test version (an alpha).
 - On a Mac, the first time you open it, macOS asks you to allow it once in System Settings (below).
 - Or build music2 from source: you need [Rust](https://rustup.rs) and [Node.js](https://nodejs.org) 24, and on Linux some system libraries.
 
@@ -62,8 +62,8 @@ The release's `SHA256SUMS` file holds each file's checksum. In the folder you do
 Releases after 0.1.0 also carry a signed provenance for each file: a record, signed by GitHub, that music2's own release workflow built that file from the release's commit. With the [GitHub CLI](https://cli.github.com) (`gh`), check a file like this:
 
 ```sh
-gh attestation verify music2_<version>_amd64.deb --repo BreadBowlAI/music2 \
-  --signer-workflow BreadBowlAI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>
+gh attestation verify music2_<version>_amd64.deb --repo BreadBowl-AI/music2 \
+  --signer-workflow BreadBowl-AI/music2/.github/workflows/release.yml --source-ref refs/tags/v<version>
 ```
 
 Use the name of the file you downloaded, and put the release's version (for example `0.3.0`) in place of each `<version>`. `--signer-workflow` checks that music2's release workflow signed it, and `--source-ref` that it was built from that release's tag. When the file is the one the workflow built, it says `✓ Verification succeeded!`, then lists what it checked. If it says `Error` instead, don't open the file. (Provenance: where a file came from and how it was made.)
@@ -79,7 +79,7 @@ sudo apt install pkg-config build-essential libasound2-dev libwebkit2gtk-4.1-dev
 Then, on either:
 
 ```bash
-git clone https://github.com/BreadBowlAI/music2.git && cd music2
+git clone https://github.com/BreadBowl-AI/music2.git && cd music2
 (cd web && npm ci && npm run build)                                      # the window's UI
 cargo build --locked --release -p m2                                     # m2, the command line
 cargo run --locked --release -p music2-desktop                           # the app, on its start screen

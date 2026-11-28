@@ -19,4 +19,4 @@ const synth = plugin("clap:org.surge-synth-team.surge-xt", { notes: lane.notes("
 - **Open window** on a plugin's node in the Graph opens the plugin's own window. A knob turned there writes its number into the code (one undo step); a knob a lane drives stays where you put it ("Latched"; **Re-enable** gives it back to the lane); any other change saves the plugin's settings a second later (one undo step).
 - A plugin that plays late (a look-ahead limiter, say) is made up for: every other track waits for it, live and in exports.
 - Plugins can't go inside `poly` (an instrument plugin plays all the notes itself).
-- See [`examples/with-plugins`](https://github.com/BreadBowlAI/music2/tree/main/examples/with-plugins), which needs both plugins installed.
+- See [`examples/with-plugins`](https://github.com/BreadBowl-AI/music2/tree/main/examples/with-plugins), which needs both plugins installed.

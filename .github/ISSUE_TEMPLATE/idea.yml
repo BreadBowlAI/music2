@@ -8,8 +8,8 @@ body:
         **In short:** say what you would like to do in music2, and why.
 
         Before you write, please check two pages:
-        - [What music2 can't do yet](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md). Many ideas are listed there with a number (#18, #24…). If yours is, say its number below.
-        - [Goals](https://github.com/BreadBowlAI/music2/blob/main/docs/goals.md). Some things are not planned: AI features inside the app, and VST3 or AU plugins.
+        - [What music2 can't do yet](https://github.com/BreadBowl-AI/music2/blob/main/docs/gaps.md). Many ideas are listed there with a number (#18, #24…). If yours is, say its number below.
+        - [Goals](https://github.com/BreadBowl-AI/music2/blob/main/docs/goals.md). Some things are not planned: AI features inside the app, and VST3 or AU plugins.
   - type: textarea
     id: idea
     attributes:

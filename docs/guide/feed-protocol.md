@@ -53,7 +53,7 @@ Each note is a lane file's note, with `start` in **song beats**:
 
 In the app, each POST body also carries `session`, the open song's number from `GET /api/graph`. That is the app's envelope. A page's song is its own session, so a page's relay takes the body without it.
 
-`feed/1` has no play, stop or seek. Those are the musician's ([AGENT-11](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md#agents)). Keeping what played (`POST /api/feed/keep`, `m2 feed keep`) is the app's, not `feed/1`'s: it writes into the song as one undo step, and a page has no song files.
+`feed/1` has no play, stop or seek. Those are the musician's ([AGENT-11](https://github.com/BreadBowl-AI/music2/blob/main/docs/architecture.md#agents)). Keeping what played (`POST /api/feed/keep`, `m2 feed keep`) is the app's, not `feed/1`'s: it writes into the song as one undo step, and a page has no song files.
 
 ## The answers
 

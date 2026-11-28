@@ -222,7 +222,7 @@ own copies differ.
 
 | Data | Size | Changes | Needs | Home |
 |---|---|---|---|---|
-| **The list** | a few lines a pack | at each publish | review, history, who did what | a GitHub repo, `BreadBowlAI/music2-registry` |
+| **The list** | a few lines a pack | at each publish | review, history, who did what | a GitHub repo, `BreadBowl-AI/music2-registry` |
 | **The bytes**: pack files, previews | KB to GB | never | cheap, permanent, one file at a time | a storage bucket, by hash: `blobs/sha256/<hash>` |
 | **The catalog**: what search reads | a few MB | at each publish | fast to download | the same bucket, made by the robot |
 

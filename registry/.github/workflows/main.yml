@@ -65,7 +65,7 @@ jobs:
         run: |
           set -euo pipefail
           curl -fsSL --proto '=https' -o m2.tar.gz \
-            "https://github.com/BreadBowlAI/music2/releases/download/v${M2_VERSION}/m2-${M2_VERSION}-linux-x86_64.tar.gz"
+            "https://github.com/BreadBowl-AI/music2/releases/download/v${M2_VERSION}/m2-${M2_VERSION}-linux-x86_64.tar.gz"
           echo "${M2_SHA256}  m2.tar.gz" | sha256sum -c -
           tar xzf m2.tar.gz --no-same-owner
           echo "$PWD/m2-${M2_VERSION}-linux-x86_64/bin" >> "$GITHUB_PATH"

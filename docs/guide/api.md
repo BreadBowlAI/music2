@@ -49,7 +49,7 @@ Every change answers, at its top:
 
 A clip gesture (`/api/graph/clips`), bars (`/api/graph/sections`) and a take picked (`/api/graph/take`) may say the `revision` they were planned on: then they are refused, saying who, when what they name changed since (a clip, the bars, the Beat grid's lane), or when a change since moved beats. Markers (`/api/graph/markers`) and a track order (`/api/graph/layout`) may say the `base` list they were made from: then they are refused when that list changed since, so nothing is lost.
 
-An agent can also send any edit as a **Tx**: the files it reads, each with the hash (or the text) it was planned on, the changes, and what they may do to the song. The app checks it as it checks its own edits, writes it as one undo step, and refuses it if a file changed under it or the song would change in any other way ([WRITE-3](https://github.com/BreadBowlAI/music2/blob/main/docs/architecture.md#the-two-write-primitives)). For example, deleting a data file no lane reads:
+An agent can also send any edit as a **Tx**: the files it reads, each with the hash (or the text) it was planned on, the changes, and what they may do to the song. The app checks it as it checks its own edits, writes it as one undo step, and refuses it if a file changed under it or the song would change in any other way ([WRITE-3](https://github.com/BreadBowl-AI/music2/blob/main/docs/architecture.md#the-two-write-primitives)). For example, deleting a data file no lane reads:
 
 ```bash
 sha=$(shasum -a 256 data/kick/old.json | cut -d' ' -f1)       # in the song's folder

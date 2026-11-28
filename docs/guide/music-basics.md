@@ -83,7 +83,7 @@ An **arpeggiator** plays a chord you hold one note at a time, in a pattern, in t
 | **Counter-melody** | A second tune that answers the melody in its gaps | Plucks, strings |
 | **Arp** (arpeggio) | A chord played one note at a time, fast and repeating | Sparkly 16th-note patterns |
 
-**In music2:** **+ Track** (⌘T) lists every sound, drums first. A **Drum kit** is several tracks at once, a drum on each (Kick, Snare, Hats…) and a bus they all go to ([Drum kits](sounds.md#drum-kits)); a **Drum** is one drum on one track, picked from its menu. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **Wavetable** (a synth that slides through tables of waveforms, from soft to bright), **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.drum`, `synth.sub` and so on ([`packs/@m2/drums/src/index.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/drums/src/index.ts), [`packs/@m2/synths/src/synth.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/synth.ts), [`packs/@m2/synths/src/fm.ts`](https://github.com/BreadBowlAI/music2/blob/main/packs/@m2/synths/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowlAI/music2/tree/main/examples/sounds) uses them all.
+**In music2:** **+ Track** (⌘T) lists every sound, drums first. A **Drum kit** is several tracks at once, a drum on each (Kick, Snare, Hats…) and a bus they all go to ([Drum kits](sounds.md#drum-kits)); a **Drum** is one drum on one track, picked from its menu. For the rest: **808 sub** and **Synth bass** (bass), **Supersaw** and **Synth pad** (chords), **Lead** (a hook that glides), **Synth pluck** (arps), **Strings**, **Wavetable** (a synth that slides through tables of waveforms, from soft to bright), **FM keys**, **FM bell** and **FM metal** (metallic hits). To change a track's sound later, right-click it, then **Change instrument…**. In code they are `drums.drum`, `synth.sub` and so on ([`packs/@m2/drums/src/index.ts`](https://github.com/BreadBowl-AI/music2/blob/main/packs/@m2/drums/src/index.ts), [`packs/@m2/synths/src/synth.ts`](https://github.com/BreadBowl-AI/music2/blob/main/packs/@m2/synths/src/synth.ts), [`packs/@m2/synths/src/fm.ts`](https://github.com/BreadBowl-AI/music2/blob/main/packs/@m2/synths/src/fm.ts)); [`examples/sounds`](https://github.com/BreadBowl-AI/music2/tree/main/examples/sounds) uses them all.
 
 ## How a synthesizer makes sound
 
@@ -132,17 +132,17 @@ A **sampler** is the other kind of instrument: instead of building sound, it pla
 
 **In music2:**
 - Buses and sends: in **Mix** (⌥3), **Add bus** makes a Reverb, a Delay or a Group. Turn up a track's knob for a bus to send to it; set a track's output to a Group to put it through the Group's fader.
-- A sidechain is a Duck: add it after the bass's sound in the song (select the **Song** row at the foot of the timeline, then the Graph (⌥1): the **+** on the wire from **Bass.out**, then **Duck**), then pick **Kick** in its node's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowlAI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
+- A sidechain is a Duck: add it after the bass's sound in the song (select the **Song** row at the foot of the timeline, then the Graph (⌥1): the **+** on the wire from **Bass.out**, then **Duck**), then pick **Kick** in its node's **Listens to**. That writes `duck(bass.out, kick.env)` in `song.ts`, where `kick.env` is how loud the kick is right now. [`examples/first-song`](https://github.com/BreadBowl-AI/music2/tree/main/examples/first-song) does this. [Sounds: Sidechain](sounds.md#sidechain) has the steps.
 - For the pump with no kick at all, add **Pump** (Dynamics): it dips the sound on every beat by itself.
 - For a ghost kick, use `kick.env` in `duck` but leave the kick out of the `mixer`.
-- Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowlAI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).
+- Automation: right-click a knob, then **Automate**. It gets a lane on the timeline. Double-click the lane for a clip, then click its line to add points, or press B and paint. Curves between points are still to come ([gap #14](https://github.com/BreadBowl-AI/music2/blob/main/docs/gaps.md#what-ableton-and-logic-users-expect)).
 
 ## Production terms
 
 | Term | Meaning | In music2 |
 |---|---|---|
 | **Stems** | Separate audio files for each part (drums, bass, vocals…) of a finished song | **File ▸ Export…**, then **Stems**: each track as its own WAV file, before its volume and pan. Also `m2 bounce`, one track at a time |
-| **Bounce** or **resample** | Record a track's sound into a new audio clip, then change that recording further | `m2 bounce`; see [`examples/resample`](https://github.com/BreadBowlAI/music2/tree/main/examples/resample) |
+| **Bounce** or **resample** | Record a track's sound into a new audio clip, then change that recording further | `m2 bounce`; see [`examples/resample`](https://github.com/BreadBowl-AI/music2/tree/main/examples/resample) |
 | **Time-stretch** | Change a recording's speed without changing its pitch | `warp` markers on audio clips |
 | **Pitch-shift** | Change pitch without changing speed | `pitch` on audio clips (with warp markers) |
 | **Warp** | Stretching parts of a recording so it lines up with the beat | `warp` markers on audio clips |

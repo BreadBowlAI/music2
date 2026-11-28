@@ -118,7 +118,7 @@ What this means for the runner:
 | Way | Needs | Command |
 |---|---|---|
 | **Push to `check/mac`** (recommended) | git over ssh, which works today | `git push -f origin <commit>:refs/heads/check/mac` |
-| Dispatch | `gh`, logged in with Actions write | `gh workflow run mac.yml -R BreadBowlAI/music2 --ref <branch>` |
+| Dispatch | `gh`, logged in with Actions write | `gh workflow run mac.yml -R BreadBowl-AI/music2 --ref <branch>` |
 | GitHub's web page | the owner | Actions → mac → Run workflow |
 
 Rules:
@@ -138,16 +138,16 @@ The repo is private, so listing runs and fetching logs needs a token with read a
 
 | Command | Gives |
 |---|---|
-| `gh run list -R BreadBowlAI/music2 -w mac.yml -c <sha> --json databaseId,status,conclusion` | the run for a commit |
-| `gh run watch <id> -R BreadBowlAI/music2 --exit-status` | waits until it ends (not with a fine-grained token) |
-| `gh run view <id> -R BreadBowlAI/music2 --json jobs --jq '.jobs[].steps[] \| [.name,.conclusion] \| @tsv'` | each check's result |
-| `gh run view <id> -R BreadBowlAI/music2 --log-failed` | the failing steps' output |
-| `gh run download <id> -R BreadBowlAI/music2 -n mac-logs -D $SCRATCH/mac-<sha>` | every log as files |
+| `gh run list -R BreadBowl-AI/music2 -w mac.yml -c <sha> --json databaseId,status,conclusion` | the run for a commit |
+| `gh run watch <id> -R BreadBowl-AI/music2 --exit-status` | waits until it ends (not with a fine-grained token) |
+| `gh run view <id> -R BreadBowl-AI/music2 --json jobs --jq '.jobs[].steps[] \| [.name,.conclusion] \| @tsv'` | each check's result |
+| `gh run view <id> -R BreadBowl-AI/music2 --log-failed` | the failing steps' output |
+| `gh run download <id> -R BreadBowl-AI/music2 -n mac-logs -D $SCRATCH/mac-<sha>` | every log as files |
 
 The lead's whole loop, run through `$SCRATCH/tw` since it waits up to an hour:
 
 ```sh
-sha=$(git rev-parse HEAD); R=BreadBowlAI/music2
+sha=$(git rev-parse HEAD); R=BreadBowl-AI/music2
 git push -f origin "$sha:refs/heads/check/mac"
 until id=$(gh run list -R $R -w mac.yml -c "$sha" --json databaseId -q '.[0].databaseId') && [ -n "$id" ]; do sleep 15; done
 gh run watch "$id" -R $R --exit-status > /dev/null; echo "mac run $id: exit $?"
@@ -203,7 +203,7 @@ adds little power beyond that. B is the least-privilege choice if the owner pref
    - Or, for option B: create a fine-grained token (Settings → Developer settings → Fine-grained tokens):
      owner BreadBowlAI, only `music2`, Actions: Read. Approve it in the organization. Save it on the server
      as `~/.config/m2/gh-token` (mode 600). The lead then runs `GH_TOKEN=$(cat ~/.config/m2/gh-token) gh …`.
-6. Check: `gh run list -R BreadBowlAI/music2 --limit 1` prints without an error.
+6. Check: `gh run list -R BreadBowl-AI/music2 --limit 1` prints without an error.
 
 Then the lead does the rest: it adds the workflow to `main` with the platform layer and pushes `check/mac`.
 
