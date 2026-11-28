@@ -48,11 +48,20 @@
 #                               built and linted for wasm32-unknown-unknown (PLAT-1): the web engine
 #                               note's tracks add theirs. Their libraries only: their tests run on
 #                               this machine
-#   ci/pr.sh rust [<i>/<n>]     the Rust tests of the PR tier, part i of n (cargo-nextest's hash
+#   ci/pr.sh rust [<i>/<n>] [--archive <file>]
+#                               the Rust tests of the PR tier, part i of n (cargo-nextest's hash
 #                               partitions, so a new test lands in one part and the parts stay even);
 #                               part 1 also runs the three tests that own their main thread
 #                               (main_thread, app_main_thread, frame_rate), which nextest can't list,
-#                               and the runtime's test built without its CLAP host (no_plugins)
+#                               and the runtime's test built without its CLAP host (no_plugins).
+#                               With --archive, the tests rust-build put in <file>, building nothing:
+#                               unpacked into the target folder, which must not hold a build; the
+#                               checkout and that folder at the paths the file was built at (a test
+#                               has its own paths built in: env!("CARGO_MANIFEST_DIR"), 228 places)
+#   ci/pr.sh rust-build <file>  every Rust test of rust's parts built once, into <file> (a
+#                               cargo-nextest archive, .tar.zst: the test binaries, the programs they
+#                               run, the build scripts' output, and the own-main and no_plugins
+#                               tests' binaries), for rust --archive: CI builds once, its parts run
 #   ci/pr.sh suites [<i>/<n>]   the browser suites of the PR tier (e2e/run.mjs all --tier pr --shard),
 #                               M2_PR_JOBS at a time (default 2); a run that failed runs once more,
 #                               alone, as in ci/check.sh, and is named if it passes then; a run
@@ -86,6 +95,7 @@
 # Written for bash 3.2, which macOS ships.
 
 set -u -o pipefail
+CALLER=$PWD
 ROOT=$(cd "$(dirname "$0")/.." && pwd) && cd "$ROOT" || exit 2
 STEP=${1:-}
 [ $# -gt 0 ] && shift
@@ -93,13 +103,16 @@ usage() { sed -n '/^#   ci\/pr.sh changes/,/^#   rust and suites take/p' "$0" | 
 PART=1/1
 ALL=
 BASE=
+ARCHIVE=
 case $STEP in
   changes) if [ $# -gt 1 ]; then usage; fi; BASE=${1:-} ;;
   docs|toolchain|lint|quick|models|advisories|clippy|wasm32|renders) if [ $# -gt 0 ]; then usage; fi ;;
+  rust-build) if [ $# -ne 1 ]; then usage; fi; ARCHIVE=$1 ;;
   rust|suites)
     while [ $# -gt 0 ]; do
       case $1 in
         --all) ALL=1 ;;
+        --archive) if [ "$STEP" != rust ] || [ $# -lt 2 ]; then usage; fi; ARCHIVE=$2; shift ;;
         [1-9]*/[1-9]*) PART=$1 ;;
         *) usage ;;
       esac
@@ -124,6 +137,8 @@ export LIBC_FATAL_STDERR_=1
 export CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-$ROOT/target}/pr
 case $CARGO_TARGET_DIR in /*) ;; *) CARGO_TARGET_DIR=$ROOT/$CARGO_TARGET_DIR ;; esac
 TARGET=$CARGO_TARGET_DIR
+# rust-build's and rust --archive's file: a relative path is from the folder you ran this in.
+case $ARCHIVE in ''|/*) ;; *) ARCHIVE=$CALLER/$ARCHIVE ;; esac
 CHROME_VERSION=133.0.6943.141
 if [ $OS = macos ]; then CHROME_DIR=mac_arm-$CHROME_VERSION/chrome-headless-shell-mac-arm64; else CHROME_DIR=linux-$CHROME_VERSION/chrome-headless-shell-linux64; fi
 CHROME=${E2E_CHROME:-$HOME/.cache/puppeteer/chrome-headless-shell/$CHROME_DIR/chrome-headless-shell}
@@ -228,6 +243,82 @@ build() { cargo build --locked -p m2-server --example headless -p m2 -p m2-plugi
 # nightly_filter, nightly_list <dir>, sleeps_filter, sleeps_list <dir>: ci/nightly-tests.txt and
 # ci/sleeps-tests.txt as nextest sees them (ci/check.sh judges the lists with the same functions).
 . ci/nightly-list.sh || exit 2
+# The tests rust's part 1 runs with cargo test, not nextest: the three that own their process's
+# main thread (libtest can't run them, nor nextest list them), and no_plugins (the runtime built
+# without its CLAP host: other features than the rest of the workspace's).
+OWN_MAIN="main_thread app_main_thread frame_rate"
+FILTER_OWN="binary(=main_thread) | binary(=app_main_thread) | binary(=frame_rate)"
+# own_main_build: rust-build's copy of those four, built as cargo test builds them, in
+# <target>/own-main/ (the archive takes that folder: .config/nextest.toml's archive.include), with
+# list.tsv: each one's name and its package's folder, from the top of the checkout.
+own_main_build() {
+  rm -rf "$TARGET/own-main" && mkdir -p "$TARGET/own-main" || return 1
+  { cargo test --locked --workspace --no-run --message-format json-render-diagnostics --test main_thread --test app_main_thread --test frame_rate &&
+    cargo test --locked -p m2-runtime --no-default-features --no-run --message-format json-render-diagnostics --test no_plugins
+  } > "$OUT/own-main.json" || return 1
+  node ci/own-main.mjs "$OUT/own-main.json" "$ROOT" "$TARGET/own-main" $OWN_MAIN no_plugins
+}
+# own_main_run <names...>: those tests, from rust-build's copy, each run as cargo test runs it:
+# from its package's folder, in the scratch HOME. Every one runs, whichever fails.
+own_main_run() {
+  local name dir st=0
+  for name in "$@"; do
+    dir=$(awk -F"$TAB" -v n="$name" '$1 == n { print $2 }' "$TARGET/own-main/list.tsv" 2> /dev/null)
+    if [ -z "$dir" ] || [ ! -x "$TARGET/own-main/$name" ]; then
+      echo "$name isn't in the archive's own-main folder"
+      st=1
+      continue
+    fi
+    echo "=== $name, in $dir"
+    (cd "$ROOT/$dir" && env HOME="$OUT/home" CARGO_MANIFEST_DIR="$ROOT/$dir" "$TARGET/own-main/$name") || st=1
+  done
+  return $st
+}
+# unpack: rust --archive's start: rust-build's file unpacked into the target folder, then checked
+# to be built at this checkout's paths and this target folder's (the tests have them built in).
+# Only into a folder with no build in it, so no test of another build runs; one this unpacked
+# before is emptied first.
+unpack() {
+  local meta=$TARGET/nextest/cargo-metadata.json root target
+  if [ -e "$TARGET/.m2-archive" ]; then
+    rm -rf "$TARGET" || return 1
+  elif [ -n "$(ls -A "$TARGET" 2> /dev/null)" ]; then
+    echo "$TARGET holds a build already: run from an archive where there is none (CI's parts start with none),"
+    echo "or name another folder in CARGO_TARGET_DIR"
+    return 1
+  fi
+  mkdir -p "$TARGET" && : > "$TARGET/.m2-archive" || return 1
+  echo "unpacking $ARCHIVE into $TARGET"
+  # Every path in a nextest archive starts with target/, its target folder.
+  tar -xf "$ARCHIVE" -C "$TARGET" --strip-components 1 || return 1
+  root=$(grep -o '"workspace_root":"[^"]*"' "$meta" | head -1 | sed 's/^"workspace_root":"//; s/"$//')
+  target=$(grep -o '"target_directory":"[^"]*"' "$meta" | head -1 | sed 's/^"target_directory":"//; s/"$//')
+  if [ "$root" != "$ROOT" ] || [ "$target" != "$TARGET" ]; then
+    echo "the archive was built in $root, into $target; this is $ROOT, into $TARGET."
+    echo "Its tests have the paths they were built at in them (env!(\"CARGO_MANIFEST_DIR\") for their"
+    echo "files, CARGO_BIN_EXE_* for the programs they run), so they run only there: check out and"
+    echo "unpack at those paths (each CI job checks out at the same path)."
+    return 1
+  fi
+  echo "built in $root, into $target: here too"
+  ls "$TARGET/own-main"
+}
+# from_archive <nextest command> <arguments...>: cargo-nextest on the tests unpack unpacked (no
+# cargo, no build).
+from_archive() {
+  local sub=$1
+  shift
+  cargo-nextest nextest "$sub" --binaries-metadata "$TARGET/nextest/binaries-metadata.json" \
+    --cargo-metadata "$TARGET/nextest/cargo-metadata.json" --target-dir-remap "$TARGET" --workspace-remap "$ROOT" "$@"
+}
+# rust_tests <nextest run arguments...>: rust's nextest run, in the scratch HOME.
+rust_tests() {
+  if [ -n "$ARCHIVE" ]; then
+    (HOME=$OUT/home && export HOME && from_archive run "$@")
+  else
+    env HOME="$OUT/home" cargo nextest run --locked --workspace "$@"
+  fi
+}
 # late_sleeps <what>: with M2_LATE_SLEEPS, the row that says what this step leaves out and why.
 late_sleeps() {
   row "late sleeps" SKIP "M2_LATE_SLEEPS is set: this machine's sleeps run long, so what needs them on time is left out: $1"
@@ -325,8 +416,17 @@ case $STEP in
   wasm32)
     check "wasm32 crates" wasm32.log wasm32 ;;
 
+  rust-build)
+    # Every test binary but the own-main ones, the nightly tier's too (rust --all, and the lists'
+    # check, list them); built as rust builds them, so a cache of either serves both.
+    if tools nextest && check "web build" web.log web &&
+       check "build own-main" own-main.log own_main_build &&
+       check "build tests" build.log sh -c 'mkdir -p "$(dirname "$1")" && cargo nextest archive --locked --workspace -E "$2" --archive-file "$1"' - "$ARCHIVE" "not ($FILTER_OWN)"; then
+      row archive PASS "$(du -m "$ARCHIVE" | cut -f1) MB: $ARCHIVE"
+    fi ;;
+
   rust)
-    filter="not (binary(=main_thread) | binary(=app_main_thread) | binary(=frame_rate))"
+    filter="not ($FILTER_OWN)"
     if [ -z "$ALL" ]; then filter="$filter and not ($(nightly_filter))"; fi
     if [ -n "${M2_LATE_SLEEPS:-}" ]; then
       filter="$filter and not ($(sleeps_filter))"
@@ -336,11 +436,17 @@ case $STEP in
       filter="$filter and not ($(shared_filter))"
       row "shared cpu" SKIP "M2_SHARED_CPU is set: this machine's CPU time misjudges these speed tests, so they are left out: $(shared_names) (ci/shared-cpu-tests.txt)"
     fi
-    if tools nextest && plugins && check "web build" web.log web &&
-       check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; then
+    # ready: the tests built here, or unpacked from rust-build's archive (no web build: the
+    # desktop app's build script read web/dist, and the archive has what it made of it).
+    if [ -n "$ARCHIVE" ]; then
+      nextest_list() { from_archive list "$@"; }
+      ready() { check archive archive.log unpack; }
+    else
+      ready() { check "web build" web.log web && check "build tests" build.log cargo nextest run --locked --workspace --no-run -E "$filter"; }
+    fi
+    if tools nextest && plugins && ready; then
       ci/cache-left.sh --clear "$OUT/home"
-      check "rust tests" test.log env HOME="$OUT/home" cargo nextest run --locked --workspace --no-tests=warn \
-        --partition "hash:$PART" -E "$filter"
+      check "rust tests" test.log rust_tests --no-tests=warn --partition "hash:$PART" -E "$filter"
       # What nextest said: the counts, and each test that passed only when run again.
       sum=$(grep -E '^ *Summary \[' "$OUT/test.log" | tail -1 | sed 's/^ *//')
       if [ -n "$sum" ]; then echo "                       $sum"; fi
@@ -353,9 +459,14 @@ case $STEP in
         grep -E '^ *FLAKY ' "$OUT/test.log" | sed 's/^ */::warning title=Passed only on a retry::/'
       fi
       if [ "${PART%/*}" = 1 ]; then
-        check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread --test frame_rate
-        # HOST-1: the runtime built without its CLAP host tells a plugin song in words.
-        check "no plugins" no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --test no_plugins
+        if [ -n "$ARCHIVE" ]; then
+          check "own-main tests" main-thread.log own_main_run $OWN_MAIN
+          check "no plugins" no-plugins.log own_main_run no_plugins
+        else
+          check "own-main tests" main-thread.log env HOME="$OUT/home" cargo test --locked --workspace --test main_thread --test app_main_thread --test frame_rate
+          # HOST-1: the runtime built without its CLAP host tells a plugin song in words.
+          check "no plugins" no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --test no_plugins
+        fi
         # Every line of ci/nightly-tests.txt names a test that is there, so a renamed test can't
         # slip back into the PR tier unseen (Linux: some names are Linux's own modules).
         if [ $OS = linux ]; then
@@ -452,7 +563,7 @@ if [ -s "$OUT/tails" ]; then cat "$OUT/tails"; fi
 took=$(( $(date +%s) - START ))
 if awk -F"$TAB" '$2 == "FAIL" { bad = 1 } END { exit bad }' "$OUT/results"; then verdict=PASS; else verdict=FAIL; fi
 name=$STEP
-case $STEP in rust|suites) name="$name $PART${ALL:+ --all}" ;; esac
+case $STEP in rust|suites) name="$name $PART${ALL:+ --all}${ARCHIVE:+ --archive}" ;; esac
 line="ci/pr.sh $name: $verdict in $((took / 60)) min $((took % 60)) s"
 echo
 echo "$line (logs in $OUT)"
