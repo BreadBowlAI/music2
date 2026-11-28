@@ -15,7 +15,7 @@ use crate::fault::{Code, Failed, Reporter, Subject};
 use crate::plan::LaneSlot;
 use crate::sched::{Caps, LIVE_ROOM, PEDAL, WHEEL_EVENTS, WHEELS, Wheel, is_wheel, turn};
 use crate::transport::{Jump, Runs};
-use crate::{BLOCK, Block, COPY, EVENT_BYTES, Graph, KernelInst, NOTES_HEAD, control_of, floats, time_of};
+use crate::{BLOCK, Block, COPY, EVENT_BYTES, Graph, KernelInst, NOTES_HEAD, control_of, time_of};
 
 /// What one input of a note effect's kernel reads in the lane pass, other than its notes.
 pub(crate) enum Fed {
@@ -175,31 +175,39 @@ impl NoteEffect {
         let head = p.ins[self.notes];
         for (i, e) in events.iter().enumerate() {
             let at = head + NOTES_HEAD + i * EVENT_BYTES;
-            p.data[at..at + EVENT_BYTES].copy_from_slice(bytemuck::cast_slice(&e.words()));
+            p.sb.write(at, bytemuck::cast_slice(&e.words()));
         }
-        p.data[head..head + 4].copy_from_slice(&(events.len() as u32).to_le_bytes());
-        // Its other inputs, as their own nodes would read them.
+        p.sb.write(head, &(events.len() as u32).to_le_bytes());
+        // Its other inputs, as their own nodes would read them. A time or a lane is worked out in
+        // a block on the stack, from what its memory holds, and copied in.
+        let mut buf = [0.0f32; BLOCK];
         for (fed, &at) in self.inputs.iter_mut().zip(p.ins) {
             match fed {
-                Fed::Fixed(v) if fresh => floats(p.data, at, BLOCK).fill(*v),
+                Fed::Fixed(v) if fresh => p.sb.write_floats(at, &[*v; BLOCK]),
                 Fed::Fixed(_) | Fed::Notes => {}
                 Fed::Cell { node, seen } => {
                     let version = graph.versions[*node];
                     if version == COPY || *seen != version {
-                        floats(p.data, at, BLOCK).copy_from_slice(&graph.bufs[*node][0][..BLOCK]);
+                        p.sb.write_floats(at, &graph.bufs[*node][0][..BLOCK]);
                         *seen = version;
                     }
                 }
-                Fed::Time(t) => time_of(*t, b, 0, floats(p.data, at, BLOCK)),
+                Fed::Time(t) => {
+                    p.sb.read_floats(at, &mut buf);
+                    time_of(*t, b, 0, &mut buf);
+                    p.sb.write_floats(at, &buf);
+                }
                 Fed::Lane { slot, default } => {
                     let lane = before.get(*slot).unwrap_or(&LaneSlot::Control(None));
-                    control_of(lane, *default, &b.beats64, floats(p.data, at, BLOCK));
+                    p.sb.read_floats(at, &mut buf);
+                    control_of(lane, *default, &b.beats64, &mut buf);
+                    p.sb.write_floats(at, &buf);
                 }
             }
         }
         // ABI-15: the host sets `count` to 0 before each call.
         let out = p.outs[0];
-        p.data[out..out + 4].fill(0);
+        p.sb.write(out, &[0; 4]);
         if done.is_ok() {
             done = k.process(&mut [], BLOCK);
         }
@@ -217,13 +225,19 @@ impl NoteEffect {
         let p = k.ports(&mut []);
         // ABI-15: the count it says, read from where the host put its events, never from the
         // header's own address; past the room, a drop (RENDER-42).
-        let count = u32::from_le_bytes(p.data[out..out + 4].try_into().expect("4 bytes")) as usize;
-        let given = &p.data[out + NOTES_HEAD..out + NOTES_HEAD + count.min(guard.room) * EVENT_BYTES];
-        let dropped = guard.take(given, &b.runs, hush, next, b.live) | (count > guard.room);
+        let mut count = [0; 4];
+        p.sb.read(out, &mut count);
+        let count = u32::from_le_bytes(count) as usize;
+        // What it gave, copied out into the guard's own room for it.
+        let mut given = std::mem::take(&mut guard.given);
+        let len = count.min(guard.room) * EVENT_BYTES;
+        p.sb.read(out + NOTES_HEAD, &mut given[..len]);
+        let dropped = guard.take(&given[..len], &b.runs, hush, next, b.live) | (count > guard.room);
+        guard.given = given;
         // Its meters, for the window (ABI-13).
         for m in 0..self.meters {
             if let (Some(&at), Some(buf)) = (p.outs.get(1 + m), graph.bufs[self.node].get_mut(1 + m)) {
-                buf[..BLOCK].copy_from_slice(floats(p.data, at, BLOCK));
+                p.sb.read_floats(at, &mut buf[..BLOCK]);
             }
         }
         if dropped {
@@ -273,6 +287,8 @@ pub(crate) struct Guard {
     out: Events,
     /// The events a kernel may give in a block: its output header's `cap`.
     room: usize,
+    /// Room for the bytes of those events, copied out of its kernel's memory.
+    given: Box<[u8]>,
     /// The Ons it may start in a block, and those it started in this one.
     ons: usize,
     started: usize,
@@ -330,6 +346,7 @@ impl Guard {
         let mut g = Guard {
             out: Events::with_capacity(room),
             room,
+            given: vec![0; room * EVENT_BYTES].into_boxed_slice(),
             ons: 2 * caps.ons + LIVE_ROOM,
             started: 0,
             notes: vec![free; size].into_boxed_slice(),

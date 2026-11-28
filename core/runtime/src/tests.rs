@@ -458,8 +458,9 @@ fn every_std_kernel_resets_in_a_sealed_sandbox() {
         let sealed = k.own.as_ref().unwrap().size();
         let play = |k: &mut KernelInst| -> Vec<u8> {
             k.process(&mut [], BLOCK).unwrap_or_else(|e| panic!("{id}: {e:#}"));
-            let p = k.ports(&mut []);
-            p.outs.iter().flat_map(|&at| p.data[at..at + PORT_BYTES].to_vec()).collect()
+            let Ports { sb, outs, .. } = k.ports(&mut []);
+            let data = sb.data();
+            outs.iter().flat_map(|&at| data[at..at + PORT_BYTES].to_vec()).collect()
         };
         let first = play(&mut k);
         k.reset(&mut []).unwrap_or_else(|e| panic!("{id}: its reset in a sealed sandbox: {e:#}"));

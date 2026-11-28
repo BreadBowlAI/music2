@@ -756,8 +756,8 @@ fi
 #     with a plugin is told in words (core/runtime/tests/no_plugins.rs), and its lint (as ci/pr.sh's
 #     "no plugins" and "no plugins lint" rows). Its unit tests need the host, so they aren't built.
 begin "no plugins" "1 min"
-if quiet no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --test no_plugins &&
-   quiet no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --lib --test no_plugins -- -D warnings; then
+if quiet no-plugins.log env HOME="$OUT/home" cargo test --locked -p m2-runtime --no-default-features --features wasmtime --test no_plugins &&
+   quiet no-plugins-lint.log cargo clippy --locked -p m2-runtime --no-default-features --features wasmtime --lib --test no_plugins -- -D warnings; then
   record "no plugins" PASS "$(tally "$OUT/no-plugins.log" no-plugins-)"
 else
   record "no plugins" FAIL "see no-plugins.log and no-plugins-lint.log"

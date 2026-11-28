@@ -1,19 +1,16 @@
-//! The time limit on every call into a pack's kernel (ABI-6, ABI-7, `docs/kernel-abi.md`):
-//! wasmtime's epoch interruption. The compiled code checks, at each function's start and each
-//! loop's turn, whether the engine's epoch has reached the deadline its store was given, and traps
-//! once it has. One thread, the ticker, moves the epoch on with the clock, a tick every [`TICK`]
-//! ([`start`]). Each call into a pack's
-//! sandbox is given its deadline just before it starts ([`crate::sandbox`]), so a call still running
-//! at it stops, wherever it is. The checks cost a call about a fifth of its time, so std's modules,
-//! music2's own, are compiled without them, by an engine of their own
-//! ([`crate::packages::engine`]).
+//! The time limit on every call into a pack's kernel (ABI-6, ABI-7, `docs/kernel-abi.md`). The
+//! wasmtime host stops a call with its epoch interruption ([`crate::host::wasmtime`]): the compiled
+//! code checks, at each function's start and each loop's turn, whether the engine's epoch has
+//! reached the deadline its store was given, and traps once it has. One thread, the ticker, moves
+//! the epoch on with the clock, a tick every [`TICK`] ([`start`]). Each call into a pack's sandbox
+//! is given its deadline just before it starts, so a call still running at it stops, wherever it
+//! is. The checks cost a call about a fifth of its time, so std's modules, music2's own, are
+//! compiled without them, by an engine of their own ([`crate::host::wasmtime::engine`]).
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
-
-use wasmtime::Engine;
 
 /// How often the ticker moves the epoch on.
 pub(crate) const TICK: Duration = Duration::from_millis(10);
@@ -85,21 +82,20 @@ pub(crate) fn left(deadline: u64) -> u64 {
     deadline.saturating_sub(epoch())
 }
 
-/// Start `engine`'s ticker: a thread that moves its epoch on with the clock, a tick every
-/// [`TICK`], for as long as the engine lives. The epoch is the ticks due since the ticker started,
+/// Start an engine's ticker: a thread that moves its epoch on with the clock, a tick every
+/// [`TICK`] (`tick`), for as long as the engine lives (`engine`: it, while it does). The epoch is the ticks due since the ticker started,
 /// not the sleeps it made: a sleep that ends late (a busy machine, or GitHub's Mac, where a 10 ms
 /// sleep took about 54 ms) moves it on by every tick due, so a call is stopped at its limit's time,
 /// within a late sleep after it.
-pub(crate) fn start(engine: &Engine) {
-    let engine = engine.weak();
+pub(crate) fn start<E>(engine: impl Fn() -> Option<E> + Send + 'static, tick: impl Fn(&E) + Send + 'static) {
     let origin = *ORIGIN.get_or_init(Instant::now);
     let ticker = std::thread::Builder::new().name("m2-kernel-ticker".into()).spawn(move || {
         loop {
             let next = origin + Duration::from_nanos(TICK.as_nanos() as u64 * (epoch() + 1));
             std::thread::sleep(next.saturating_duration_since(Instant::now()) + late());
-            let Some(engine) = engine.upgrade() else { return };
+            let Some(engine) = engine() else { return };
             for _ in epoch()..now() {
-                engine.increment_epoch();
+                tick(&engine);
                 EPOCH.fetch_add(1, Ordering::Relaxed);
             }
         }
