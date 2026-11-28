@@ -11,7 +11,7 @@ use crate::hash::Sha;
 use crate::manifest::Version;
 
 /// `packs/versions.toml`: every version of music2's own packs the source tree has bundled, with
-/// its hash, compiled in (PACK-17, PACK-19).
+/// its hash, compiled in (PACK-17, PACK-19), and std's, by its listing's hash (PACK-17a).
 const VERSIONS: &str = include_str!("../../../../packs/versions.toml");
 
 /// Each version `packs/versions.toml` records, with its hash: `"@m2/synths 1.0.0" = "sha256:…"`.
@@ -37,6 +37,27 @@ pub fn recorded() -> &'static [(PackName, Version, Sha)] {
 /// `@m2/…`.
 pub fn own(name: &PackName, version: &Version, hash: &Sha) -> bool {
     recorded().iter().any(|(n, v, h)| n == name && v == version && h == hash)
+}
+
+/// std's listing (PACK-17a): its `m2pkg.toml` and the module it names, each by path, size and
+/// SHA-256, as a pack's listing names its files (PACK-6). Those are the files of std that run; its
+/// sources, samples and build script aren't in it, since std isn't installed as a pack. Its hash is
+/// what `packs/versions.toml` records for std's version, and a web bundle carries it as std's
+/// `m2pack.json` (WEB-4). Refused, in words, for a folder that isn't std's.
+pub fn std_listing(dir: &Path) -> Result<super::Listing, String> {
+    let manifest = std::fs::read(dir.join(PKG_MANIFEST)).map_err(|e| format!("its {PKG_MANIFEST} can't be read ({e})"))?;
+    let text = std::str::from_utf8(&manifest).map_err(|_| format!("its {PKG_MANIFEST} isn't UTF-8"))?;
+    let m = super::PkgManifest::read(text)?;
+    if !m.package.name.is_std() {
+        return Err(format!("{} isn't std's folder: its {PKG_MANIFEST} names {}", dir.display(), m.package.name));
+    }
+    let mut files = vec![super::Listed { path: PKG_MANIFEST.into(), size: manifest.len() as u64, sha256: Sha::of(&manifest) }];
+    if let Some(w) = &m.package.wasm {
+        let module = std::fs::read(dir.join(w)).map_err(|e| format!("its module {w} can't be read ({e})"))?;
+        files.push(super::Listed { path: w.clone(), size: module.len() as u64, sha256: Sha::of(&module) });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(super::Listing { files })
 }
 
 /// The `m2pkg.toml` of each pack this source tree bundles, compiled in: what music2 comes with.
