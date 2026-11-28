@@ -72,7 +72,7 @@ The runtime names `m2_plugins` in 67 lines, for its types (`Handle`, `Owner`, `E
 
 ### `core/play` stays the app's
 
-`m2-play` is the device, its threads, the input rings, the disk thread and the resampler. On the web, those are a Worker, a ring, and the AudioWorklet ([decision 1](#decisions-proposed)). The engine the web needs is `m2-runtime`'s `Renderer` and `Engine`. At 48 kHz the AudioContext can run at the song's rate (`new AudioContext({ sampleRate })`), so the device-rate converter ([RENDER-31](../../architecture.md#sample-rate)) isn't needed there either.
+`m2-play` is the device, its threads, the input rings, the disk thread and the resampler. On the web, those are a Worker, a ring, and the AudioWorklet ([decision 1](#decisions-the-owner-said-yes-to-each-2026-11-28)). The engine the web needs is `m2-runtime`'s `Renderer` and `Engine`. At 48 kHz the AudioContext can run at the song's rate (`new AudioContext({ sampleRate })`), so the device-rate converter ([RENDER-31](../../architecture.md#sample-rate)) isn't needed there either.
 
 ## 2. The kernel host interface
 
@@ -144,7 +144,7 @@ Two checks move out of wasmtime and into the runtime's own code, so both backend
 - **ABI-3's signatures.** The browser's `WebAssembly.Module.exports()` lists names and kinds, not signatures. The runtime already reads a module's custom sections from its bytes (`check_abi`). It would read the type, import, function and export sections the same way: about a hundred lines, or `wasmparser`, which is in `Cargo.lock` already as wasmtime's, but whose use by a core crate would be a dependency change.
 - **The memory cap while a sandbox is born.** It is checked after each birth call, by size.
 
-The wasmtime backend stays the default (a Cargo feature), so the app is unchanged, and the runtime chooses its backend by feature, not by target: it names no platform ([PLAT-2](../../architecture.md#platforms)). The browser backend needs `extern "C"` imports from the page, which PLAT-2 allows only in `m2-os`, so it lives in a new crate, `core/web`: the web's shell, an exception as the desktop shell is ([decision 2](#decisions-proposed)).
+The wasmtime backend stays the default (a Cargo feature), so the app is unchanged, and the runtime chooses its backend by feature, not by target: it names no platform ([PLAT-2](../../architecture.md#platforms)). The browser backend needs `extern "C"` imports from the page, which PLAT-2 allows only in `m2-os`, so it lives in a new crate, `core/web`: the web's shell, an exception as the desktop shell is ([decision 2](#decisions-the-owner-said-yes-to-each-2026-11-28)).
 
 ## 3. Bits: the probe
 
@@ -233,7 +233,7 @@ So V8's `Math` isn't `libm`, and two V8 versions don't even agree with each othe
 - **QuickJS built to WebAssembly, running the same `m2-script`.** Then the IR is the same by construction: QuickJS's own number printing, `libm`, `oxc`'s rewrites. `oxc` builds for `wasm32-unknown-unknown`, and so does `rquickjs-sys` 0.14, which ships a WebAssembly shim and a libc. It leaves 74 symbols to the page: 45 WASI calls to stub, 23 compiler helpers for 128-bit numbers and complex products, the linker's 4, and a clock hook. It isn't linked or run yet.
 - Or V8 with `Math` replaced by `libm` from the engine's module, plus a new way to find source places. That is a second implementation of the build, and the IR would have to be compared against the app's for every song.
 
-Part 2 needs neither: it renders from the IR the app makes. The choice is Part 3's ([decision 4](#decisions-proposed)).
+Part 2 needs neither: it renders from the IR the app makes. The choice is Part 3's ([decision 4](#decisions-the-owner-said-yes-to-each-2026-11-28)).
 
 ### Samples and packs over HTTP
 
@@ -249,7 +249,7 @@ On the web there are no epochs, and nothing can stop a call on the AudioWorklet'
 - One core first. The renders are the same bits on any number of threads ([RENDER-2](../../architecture.md#offline)), so one core is enough for the proof.
 - Several cores later. Rust's standard library for `wasm32-unknown-unknown` is built without atomics (the target's features list none), so a shared-memory engine on several Workers needs a nightly `-Z build-std`, or another target such as `wasm32-wasip1-threads`. That is a decision for when a song needs it.
 
-## Decisions (the owner said yes, 2026-11-28)
+## Decisions (the owner said yes to each, 2026-11-28)
 
 1. **The engine runs in a dedicated Worker, not in the AudioWorklet.** The worklet only copies the Worker's blocks to its output with `TypedArray.prototype.set`, never sample by sample: on a thread that flushes, a JavaScript read of a subnormal `f32` is 0. They talk through a ring in a SharedArrayBuffer, or through a `MessagePort` when the page isn't isolated (unmeasured).
    - *Why:* measured. A Worker gives wasmtime's bits for all 56 kernels; the audio thread doesn't, and no code can change its float mode. Keeping heavy WebAssembly off the audio thread, behind a ring, is also a known pattern for web audio.
