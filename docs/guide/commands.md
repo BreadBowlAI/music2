@@ -42,6 +42,14 @@ m2 render <project> <out.wav> [--from S | --from-bar N] [--seconds N] [--preroll
 
 Render to a 24-bit WAV, as the app's Export Audio does: to the last clip's end and on until it falls silent (10 s more at most, where a sound still playing fades out over the last 50 ms), at the project's `sample_rate`. `--from` starts S seconds in, or `--from-bar` at bar N (counted from 1), replaying the song up to there; `--seconds` renders exactly N seconds. `--preroll` starts only P seconds earlier instead of replaying: fast for listening late in a long song, but approximate (notes held from before then, and the tails of what played earlier, are missing), so it is never written into `assets/`. `--threads` renders on N threads (1 to 64, or `M2_THREADS`), the same file on any number. It is the same file the app's Export (Song) writes, which falls silent when the sound has been silent for half a second. 3 hours at most. If a part breaks while it renders, it fails and names it.
 
+## m2 export
+
+```
+m2 export <project> --web <folder>
+```
+
+Write a web bundle into a new, empty `<folder>` outside the song: what a web page needs to play the song (its compiled graph, its data files as they are, the samples it plays, and std's and music2's own packs' kernels it plays), with `m2web.json`, a list of every file's size and hash. It prints that file's own hash, for a page's `integrity`, and each sample's licence, since anyone who opens the page can download them. A song with a plugin, or with a pack that isn't std or music2's own, is refused. No song code goes in: a page plays the song, it doesn't edit it. The same song exports to the same files on any computer. [New songs, the songs folder and export](songs.md#export-for-a-web-page) says more.
+
 ## m2 listen
 
 ```
