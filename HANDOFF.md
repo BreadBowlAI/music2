@@ -34,7 +34,7 @@ design for whatever you pick up. Older versions of this page, with each track's 
   set. `m2-ir`, `m2-os`, `m2-pool` and `m2-song` build and lint for it (`ci/pr.sh wasm32`, in the clippy job).
   Nothing runs there yet. Then track `kernel-host`: the runtime reaches its kernels through one trait,
   `KernelHost` (`core/runtime/src/host.rs`), with wasmtime behind the default feature `wasmtime`, and ABI-3's checks
-  read from a module's bytes (`abi.rs`); without the feature it builds natively and refuses every kernel in words.
+  read from a module's bytes (`abi.rs`); without it (and without `plugins`) it builds and lints for `wasm32` too (`ci/pr.sh wasm32`), and refuses every kernel in words.
   Next: `runtime-web`.
 - **`feed/1` (track `feed-protocol`, 2026-11-28).** The feed routes' bodies, answers and refusal words, written up
   as a protocol a web page's player will speak too: [The feed protocol](docs/guide/feed-protocol.md), FEED-8. Its
