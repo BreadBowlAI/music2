@@ -20,6 +20,7 @@ mod routes;
 mod routes_8b;
 mod routes_audio;
 mod routes_exchange;
+mod routes_feed;
 mod routes_fx;
 mod routes_leases;
 mod routes_library;
@@ -359,6 +360,7 @@ pub fn start_with(opts: ServeOptions, graph: graph::Graph) -> Result<Running> {
     spawn_pictures(&state);
     spawn_midi(&state);
     spawn_takes(&state);
+    spawn_feeds(&state);
 
     let listener = std::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], opts.port)))?;
     listener.set_nonblocking(true)?;
@@ -534,6 +536,23 @@ fn spawn_takes(state: &Arc<AppState>) {
             }
         })
         .expect("spawn the takes");
+}
+
+/// `music2-feeds` (FEED-5): every 50 ms, each open feed is looked at: what played is kept, and its
+/// low, empty and jump events, and its state every quarter second while playing, go to every window
+/// and agent. Never waits for the session. Ends once the state is dropped.
+fn spawn_feeds(state: &Arc<AppState>) {
+    let weak = Arc::downgrade(state);
+    std::thread::Builder::new()
+        .name("music2-feeds".into())
+        .spawn(move || {
+            loop {
+                std::thread::sleep(graph::feeds::TICK);
+                let Some(state) = weak.upgrade() else { return };
+                state.graph.feeds_tick();
+            }
+        })
+        .expect("spawn the feeds");
 }
 
 /// Listen to every MIDI keyboard (`m2_os::midi`), unless [`listens_to_midi`] says not to. Stops

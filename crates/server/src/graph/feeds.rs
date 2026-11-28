@@ -717,7 +717,20 @@ impl Graph {
                     super::clips::Answer::Changed(why) => bail!("{why}"),
                 };
                 kept = inside.iter().map(|n| ((n.start + clip.start).to_bits(), n.pitch.to_bits())).collect();
-                json!({"kept": inside.len(), "as": "version", "version": name, "clip": clip.id, "left_out": left_out, "step": v["step"], "revision": v["revision"]})
+                {
+                    // The change's own answer first, as every change's (AGENT-2): revision, step, moved.
+                    let mut a = v.clone();
+                    for (k, x) in [
+                        ("kept", json!(inside.len())),
+                        ("as", json!("version")),
+                        ("version", json!(name)),
+                        ("clip", json!(clip.id)),
+                        ("left_out", json!(left_out)),
+                    ] {
+                        a[k] = x;
+                    }
+                    a
+                }
             }
             None => {
                 let start = super::record::bar_before(arrangement, first);
@@ -740,7 +753,19 @@ impl Graph {
                 }
                 kept = notes.iter().map(|n| (n.start.to_bits(), n.pitch.to_bits())).collect();
                 let made = v["made"].get(0).and_then(|m| m["id"].as_str()).map(String::from);
-                json!({"kept": notes.len(), "as": "clip", "clip": made, "start": start, "length": end - start, "step": v["step"], "revision": v["revision"]})
+                {
+                    let mut a = v.clone();
+                    for (k, x) in [
+                        ("kept", json!(notes.len())),
+                        ("as", json!("clip")),
+                        ("clip", json!(made)),
+                        ("start", json!(start)),
+                        ("length", json!(end - start)),
+                    ] {
+                        a[k] = x;
+                    }
+                    a
+                }
             }
         };
         // What it kept leaves what played; as a clip, it leaves the feed too, as the clip plays it.

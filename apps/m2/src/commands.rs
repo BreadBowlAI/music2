@@ -574,6 +574,29 @@ pub const COMMANDS: &[Command] = &[
                quietly. It writes nothing, and it never takes a message from the musician's window.",
     },
     Command {
+        name: "feed",
+        also: &[],
+        usage: "m2 feed <project> open <track> [--low <bars>]\n\
+                m2 feed <project> put <track> <from> <to> <notes.json | ->\n\
+                m2 feed <project> status [--json]\n\
+                m2 feed <project> wait [<track>] [--for EVENT] --timeout <seconds>\n\
+                m2 feed <project> keep <track> [--into KIND]\n\
+                m2 feed <project> close <track>",
+        words: "play a track live in the open app: write its notes ahead of the playhead, and the app plays them, with \
+                the track's clips, while the musician plays the song. `open` opens a feed (the track shows Live, with \
+                your name); `put` writes the notes from beat `<from>` to `<to>` (song beats), replacing what was there \
+                past the lock; `wait` waits for the buffer to run low (or empty, or a jump) and prints the feed's \
+                state; `keep` writes what played into the song, one edit that undo takes back; `close` ends it",
+        more: "Notes are as a lane's file writes them, but `start` is in song beats: \
+               `[{\"pitch\": \"A1\", \"start\": 64, \"length\": 0.5}]`. `put` prints the app's answer as one JSON \
+               line: `taken`, `late` (notes that started before the lock, left out), `lock`, `written_to` and \
+               `playhead`. The lock is the playhead plus at least 50 ms; a `<to>` more than 64 bars past the playhead \
+               is refused. `wait` prints one `feed` event as a JSON line and exits 0, at once when the feed is already \
+               low. `--for` is `low` (which takes `empty` too), `empty` or `jump`. It exits 1 when `--timeout` passes first. `keep --into version` \
+               (`KIND` is `clip` or `version`) adds what played as a version of the notes clip under it. Play, stop and the loop stay the \
+               musician's. See [Playing live](live.md).",
+    },
+    Command {
         name: "point",
         also: &[],
         usage: "m2 point <project> <target> [<words>]\nm2 point <project> --clear",

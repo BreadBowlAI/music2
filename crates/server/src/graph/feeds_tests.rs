@@ -380,7 +380,9 @@ fn mute_and_solo_silence_a_feed() {
     mute(&rig, false).unwrap();
     rig.until(4.0);
     assert!(rms(&rig.until(5.0)) > 1e-3, "unmuted");
-    rig.graph.overlay(rig.token, super::super::overlay::Change { solo: [("keys".to_string(), true)].into(), ..Default::default() }).unwrap();
+    rig.graph
+        .overlay(rig.token, super::super::overlay::Change { solo: [("keys".to_string(), true)].into(), ..Default::default() })
+        .unwrap();
     rig.until(6.0);
     assert_eq!(rms(&rig.until(7.0)), 0.0, "another track soloed");
 }

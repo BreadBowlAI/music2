@@ -16,6 +16,7 @@ mod call;
 mod commands;
 mod docs;
 mod edits;
+mod feed;
 mod get;
 mod listen;
 mod search;
@@ -1296,6 +1297,7 @@ change that code first",
         Some("focus") => see::focus(&args)?,
         Some("watch") => see::watch(&args)?,
         Some("point") => see::point(&args)?,
+        Some("feed") => feed::run(&args)?,
         Some("routes") => call::routes(&args)?,
         Some("call") => call::call(&args)?,
         Some("search") => search::search(&args)?,
