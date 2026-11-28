@@ -368,7 +368,7 @@ mod tests {
     fn a_limit_reads_as_wasmtime_reads_it_and_off_proposals_are_refused() {
         // A 32-bit memory's minimum of 1, padded to 6 bytes (0x81 0x80 0x80 0x80 0x80 0x00).
         let mut r = Reader(&[0x00, 0x81, 0x80, 0x80, 0x80, 0x80, 0x00]);
-        assert_eq!(r.memory().unwrap().is_64, false);
+        assert!(!r.memory().unwrap().is_64);
         assert!(r.0.is_empty(), "the whole limit is read");
         for heap in [0x62u8, 0x65] {
             let mut r = Reader(&[0x63, heap, 0x70]);
