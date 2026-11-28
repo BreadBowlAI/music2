@@ -1,6 +1,6 @@
 //! RENDER-28: a wake never allocates, locks or does I/O, so the audio thread may ring and wait on
-//! it. Each OS's wake is a file of its own (`mac/wake.rs`, `linux/wake.rs`); this reads both whole
-//! and fails on any word that would do one of those. Comments don't count.
+//! it. Each platform's wake is a file of its own (`mac/wake.rs`, `linux/wake.rs`, `web/wake.rs`);
+//! this reads each whole and fails on any word that would do one of those. Comments don't count.
 
 const BANNED: [&str; 30] = [
     // Allocation.
@@ -44,7 +44,7 @@ const BANNED: [&str; 30] = [
 fn the_wake_never_blocks() {
     let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut found = vec![];
-    for file in ["mac/wake.rs", "linux/wake.rs"] {
+    for file in ["mac/wake.rs", "linux/wake.rs", "web/wake.rs"] {
         let text = std::fs::read_to_string(dir.join(file)).unwrap();
         for (i, line) in text.lines().enumerate() {
             let code = line.split("//").next().unwrap_or("");
