@@ -410,6 +410,36 @@ fn run(args: Vec<String>) -> Result<()> {
             }
             summary(&project, &c.ir, &c.flat);
         }
+        Some("export") => {
+            // WEB-1 to WEB-6: the accepted revision, read as `m2 controls` reads it; refused in
+            // words before anything is written.
+            let dir = PathBuf::from(arg(1)?);
+            let s = reader(&dir)?;
+            let to = PathBuf::from(flag(&args, "--web").ok_or_else(|| anyhow!("missing --web: {}", usage_of(cmd)))?);
+            let plan = m2_editor::web::plan(&s)?;
+            let credits = plan.credits.clone();
+            let w = plan.write(&dir, &to)?;
+            if !credits.is_empty() {
+                let n = credits.len();
+                eprintln!(
+                    "warning: {} {} into the bundle, and anyone who opens the page can download {}. Their licences:",
+                    count(n, "sample"),
+                    if n == 1 { "goes" } else { "go" },
+                    if n == 1 { "it" } else { "them" }
+                );
+                for c in &credits {
+                    eprintln!("  {}: {}", c.path, c.words());
+                }
+            }
+            println!(
+                "exported {} to {}: {}, {}",
+                s.accepted().project.manifest.project.name,
+                to.display(),
+                count(w.files, "file"),
+                m2_editor::web::size(w.bytes)
+            );
+            println!("integrity {}", w.integrity);
+        }
         Some("render") => {
             let mut pk = packages()?;
             let dir = PathBuf::from(arg(1)?);

@@ -5,6 +5,10 @@
 # are music2's (PACK-19); `every_bundled_pack_is_the_version_its_record_names` checks it against
 # packs/@m2/*. The tag v0.2.0 built one version of each (a draft release, never published), so
 # those lines stay; a pack changed since has one more line, the version 0.3.0 ships.
+# std's versions too (PACK-17a): the hash of std's listing, its m2pkg.toml and its module, the files
+# of std that run (`m2_song::pack::std_listing`). A web page trusts a bundle's std only when it is
+# one of these (WEB-4); `std_is_the_version_its_record_names` checks it against std/. The record
+# starts at std 0.10.0, the std 0.3.0 ships.
 "@m2/drums 2.2.0" = "sha256:17b1b6f494b25c7fe99f54b4a09a023d10ef660886733816c12fcc2d4605ec3d"
 "@m2/effects 1.3.0" = "sha256:fded980dde2058f04326b18f06064bd2dfdfedc77faa7ccdb0a04b9273e1eaf3"
 "@m2/effects 1.4.0" = "sha256:2e7c419bf8d58a7a8dc4aea7c49467e30f30f7467fcfd80ea2104804237358aa"
@@ -17,3 +21,4 @@
 "@m2/vocals 1.2.0" = "sha256:32269ea7b43e0cf06c21a81a085803f8fbedc93337032ce9dc7b6536e6bf8f74"
 "@m2/wavetable 1.2.0" = "sha256:dfc122d7ff2dde76d2f171d8648fc8ef8fba9525f82ec1d44823dcf6a4eef1cb"
 "@m2/wavetable 1.2.1" = "sha256:18210873294e02b10305ec5d17378558b7a1cfd1ef74977a827ed8e1843121d4"
+"std 0.10.0" = "sha256:7e6ce6d4435ea4ffc73c5141bff93e731a4fb8f602240388f9e47a9944bccc4b"

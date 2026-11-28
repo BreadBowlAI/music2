@@ -4,6 +4,7 @@
 - New songs go in `~/Music/music2`, each in its own folder. Nothing is ever replaced.
 - Save As makes a copy; Settings picks the sound output, the input and where songs go.
 - Export writes the song as a WAV file, each track as stems, or the notes as MIDI.
+- `m2 export <song> --web <folder>` writes the song for a web page to play ([below](#export-for-a-web-page)).
 - A song made with an older music2 says so: **Upgrade it** moves it to this music2 in one step ([below](#opening-a-song-made-with-an-older-music2)).
 
 - **New Song…** (the start screen, or File → New Song…, ⌘N, even while a song is open) asks for a name, a tempo (the template's until you type one; Tab moves to it) and how the song starts:
@@ -28,6 +29,37 @@
   - The file is written under a hidden name and renamed when it's complete. A hidden file left by an export that was cut off (the app was killed) is removed by the next export into that folder.
   - When it's done, a message gives the file's name and length, with **Show in Finder** (**Show in Folder** on Linux; in a browser, it says which folder).
   - `m2 render` writes the same file.
+
+## Export for a web page
+
+`m2 export <song> --web <folder>` writes a **web bundle**: a folder of files a web page can play the song from, with `@music2/web` (a code library for web pages, not built yet). Put the folder on any web host that serves plain files.
+
+```bash
+m2 export ~/Music/music2/"My song" --web ~/Desktop/my-song-web
+```
+
+| What it writes | What it is |
+|---|---|
+| `m2web.json` | the list of every other file, with its size and hash (a fingerprint of its bytes), and what the song is: name, sample rate, length, tracks |
+| `ir.json` | the song's sound graph, as `m2 check --json` prints it |
+| `controls.json` | every knob a page can turn, as `m2 controls` lists them |
+| `music2.toml`, `music2.lock`, `data/` | the song's own files, as they are |
+| `assets/` | the samples the song plays, each with its note (where it came from) |
+| `packs/` | the kernels (the compiled sound code) of std and of music2's own packs the song plays |
+
+- No code goes in: a page plays the song, it can't change it. Turning a knob works; changing a setting or the code doesn't.
+- The same song gives the same files, byte for byte, on any computer. `m2 export` prints a hash of `m2web.json`, `integrity sha256-…`: a page can give it to check it got exactly these files.
+- The folder must be new, or empty, and not inside the song. Otherwise nothing is written: "Export to a new, empty folder outside the song."
+
+It refuses, and writes nothing, when the song:
+
+| Has | What to do |
+|---|---|
+| a CLAP plugin | A web page can't load plugins. In a copy of the song (**Save As**), bounce the track to audio (the track's menu, **Bounce to audio**), delete the track with the plugin, then export the copy. Bounce to audio alone keeps the track (muted), so its plugin is still there. |
+| a sound from a pack that isn't std or music2's own | A web page can't yet stop another pack's code if it hangs. Use music2's own sounds on that track, or do as for a plugin. |
+| a problem `m2 check` calls an error (a lane file that doesn't read, a sample that is missing) | Fix it first: the page would play something else than the app. |
+
+**Samples' licences.** Anyone who opens the page can download every sample in the bundle. Many sample licences let you use a sample in your music but not hand out the file. So `m2 export` lists each sample with its credit: the pack, its version, its author and its licence, or "no licence on record" for your own recordings and bounces. It doesn't refuse: you decide. `m2web.json` keeps the credits too.
 
 ## Opening a song made with an older music2
 
